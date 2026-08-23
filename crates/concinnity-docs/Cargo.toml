@@ -23,7 +23,8 @@ name = "concinnity_docs"
 [dependencies]
 
 [build-dependencies]
-syn = { version = "2", features = ["full", "parsing"] }
+concinnity-asset = { workspace = true }
+concinnity-core = { workspace = true }
 concinnity-world = { workspace = true }
 
 [lints]

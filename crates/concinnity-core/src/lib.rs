@@ -22,6 +22,7 @@ extern crate alloc;
 extern crate std;
 
 include!(concat!(env!("OUT_DIR"), "/component_schema_hash.rs"));
+include!(concat!(env!("OUT_DIR"), "/runtime_asset_docs.rs"));
 
 /// Hash of the postcard-visible schema this build was compiled against, stamped
 /// into every blob header. A blob whose stored hash differs was written by a

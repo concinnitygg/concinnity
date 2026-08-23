@@ -27,6 +27,8 @@
 //! directives. The probe/copy/directive logic itself lives in the `sdks`
 //! module, which never touches the environment or stdout.
 
+#[cfg(feature = "doc-extract")]
+pub mod doc_extract;
 #[cfg(feature = "fetch")]
 pub mod fetch;
 

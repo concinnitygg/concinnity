@@ -18,6 +18,9 @@ extern crate alloc;
 extern crate std;
 
 include!(concat!(env!("OUT_DIR"), "/source_hash.rs"));
+include!(concat!(env!("OUT_DIR"), "/asset_docs.rs"));
+
+pub mod doc_model;
 
 mod handle;
 mod id;

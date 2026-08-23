@@ -22,7 +22,7 @@
 | `concinnity-eas`       | lib       | :white_check_mark: | Entity/archetype storage backing the ECS.                            |
 | `concinnity-memory`    | lib       | :white_check_mark: | Allocation layer: tracking allocator, tagged budgets, arenas, pools. |
 | `concinnity-docs`      | lib       | :white_check_mark: | Asset reference, extracted at build time and embedded.               |
-| `concinnity-toolchain` | build-dep |                    | Build-time codegen for the binary and graphics crates.               |
+| `concinnity-toolchain` | build-dep |                    | Build-script support: cfgs, SDKs, source hashing, doc extraction.    |
 
 [kira]: https://docs.rs/kira/latest/kira
 [rapier3d]: https://docs.rs/rapier3d/latest/rapier3d

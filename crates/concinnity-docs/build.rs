@@ -1,11 +1,14 @@
-//! Extracts the asset reference and bakes it into $OUT_DIR/assets_doc.rs as the
+//! Assembles the asset reference and bakes it into $OUT_DIR/assets_doc.rs as the
 //! static ASSET_DOCS table the library serves.
 //!
-//! The asset sources are split across two crates: the plain data schema
-//! (structs, their rustdoc, `Default`s, and enums) lives in concinnity-asset,
-//! while the `impl Component` blocks (carrying NAME / ORIGIN / Args) live in
-//! concinnity-core. Both are parsed into one file set so a struct and its impl
-//! rejoin by name.
+//! The asset schema is split across two crates: the plain data schema (structs,
+//! their rustdoc, `Default`s, and enums) lives in concinnity-asset, while the
+//! `impl Component` blocks (carrying NAME / ORIGIN / Args) live in
+//! concinnity-core. Each of the two extracts its own sources at its own build
+//! time and emits a `doc_model` table (`concinnity_asset::ASSET_DOCS`,
+//! `concinnity_core::RUNTIME_ASSET_DOCS`); this script joins the two into one
+//! index, so a struct and its impl rejoin by name. Nothing here reads a source
+//! file, which is what lets the reference build from published crates.
 //!
 //! For each asset (and each nested value type) the entry contains:
 //!
@@ -30,7 +33,7 @@
 //! rewritten to the same relative form. A docs viewer rewrites the `.md` suffix
 //! to its own routes at render time.
 
-// Renders a type's doc body from the descriptors the parse produces. Build-side
+// Renders a type's doc body from the descriptors the index produces. Build-side
 // only; page assembly from the finished bodies lives in the library.
 #[path = "build/render.rs"]
 mod render;
@@ -38,24 +41,17 @@ use render::{
     EnumValue, FieldEntry, FieldType, render_parameters, render_values, rewrite_doc_links, slug,
 };
 
+use concinnity_asset::doc_model::{DocField, DocFieldType, DocShape, DocType, DocValue};
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs;
-use std::io;
 use std::path::Path;
 
-const ASSET_SCHEMA_DIR: &str = "../concinnity-asset/src";
-const ASSET_IMPL_DIR: &str = "../concinnity-core/src/assets";
-
 fn main() {
-    println!("cargo:rerun-if-changed={ASSET_SCHEMA_DIR}");
-    println!("cargo:rerun-if-changed={ASSET_IMPL_DIR}");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build/render.rs");
 
-    let reference = extract(Path::new(ASSET_SCHEMA_DIR), Path::new(ASSET_IMPL_DIR))
-        .unwrap_or_else(|e| panic!("concinnity-docs: {e}"));
-    write_assets_doc(&reference);
+    write_assets_doc(&extract());
 }
 
 // Bake the table the library includes. Every field is a `&'static str`, so a
@@ -100,19 +96,65 @@ fn push_doc(out: &mut String, e: &Entry, is_reference_type: bool) {
     out.push_str("    },\n");
 }
 
-// Cross-file indices over the parsed asset sources. Enums, value-type structs,
-// and `impl Default` blocks can each live in a different file from the asset
-// that references them, so every lookup goes through these.
-struct Ctx<'a> {
-    files: &'a [syn::File],
-    // Enum ident -> its serialized variants and docs (string-valued enums only).
-    enums: &'a HashMap<String, EnumInfo>,
-    // Named-field struct ident -> index of the file it is defined in.
-    struct_file_idx: &'a HashMap<String, usize>,
+// Cross-crate indices over the two extracted schemas. An enum, a value-type
+// struct, and the asset that references them can each come from a different
+// crate, so every lookup goes through these.
+struct Ctx {
+    // Named-field struct name -> its extracted shape.
+    structs: HashMap<&'static str, &'static DocType>,
+    // String-valued enum name -> its extracted shape.
+    enums: HashMap<&'static str, &'static DocType>,
     // Documented Component struct ident -> its declarable NAME (for linking to
     // an asset's page). Only authorable components are listed, so links never
     // point at a page that was not generated.
-    comp_by_struct: &'a HashMap<String, String>,
+    comp_by_struct: HashMap<String, String>,
+}
+
+impl Ctx {
+    fn new(comp_by_struct: HashMap<String, String>) -> Self {
+        let mut structs = HashMap::new();
+        let mut enums = HashMap::new();
+        for ty in concinnity_asset::ASSET_DOCS
+            .iter()
+            .chain(concinnity_core::RUNTIME_ASSET_DOCS)
+        {
+            match ty.shape {
+                DocShape::Fields(_) => structs.insert(ty.name, ty),
+                DocShape::Values(_) => enums.insert(ty.name, ty),
+            };
+        }
+        Ctx {
+            structs,
+            enums,
+            comp_by_struct,
+        }
+    }
+
+    // The type's rustdoc, verbatim; empty for a name that is not a struct.
+    fn struct_doc(&self, name: &str) -> &'static str {
+        self.structs.get(name).map_or("", |ty| ty.doc)
+    }
+
+    // The struct's serialized fields; empty for a name that is not a struct.
+    fn fields(&self, name: &str) -> &'static [DocField] {
+        match self.structs.get(name).map(|ty| &ty.shape) {
+            Some(DocShape::Fields(fields)) => fields,
+            _ => &[],
+        }
+    }
+
+    fn enum_values(&self, name: &str) -> Option<(&'static str, &'static [DocValue])> {
+        match self.enums.get(name).map(|ty| (ty.doc, &ty.shape)) {
+            Some((doc, DocShape::Values(values))) => Some((doc, values)),
+            _ => None,
+        }
+    }
+}
+
+// A documented enum gets its own page (its values carry their docs there); an
+// undocumented one is rendered inline as a closed set of string values.
+fn enum_is_documented(doc: &str, values: &[DocValue]) -> bool {
+    !doc.trim().is_empty() || values.iter().any(|v| !v.doc.trim().is_empty())
 }
 
 struct ComponentMeta {
@@ -121,21 +163,6 @@ struct ComponentMeta {
     args_struct: String,
     // "External" | "RuntimeOnly" | "BuildOnly" (RuntimeOnly when unspecified).
     origin: String,
-}
-
-// A string-valued enum (all unit variants): its serialized values, the doc on
-// each value, and the enum-level doc. A documented enum gets its own page; an
-// undocumented one is rendered inline as a closed set of string values.
-struct EnumInfo {
-    variants: Vec<String>,
-    variant_docs: Vec<String>,
-    enum_doc: String,
-}
-
-impl EnumInfo {
-    fn documented(&self) -> bool {
-        !self.enum_doc.trim().is_empty() || self.variant_docs.iter().any(|d| !d.trim().is_empty())
-    }
 }
 
 // Value-type structs and documented enums a render pass discovered as reachable
@@ -161,14 +188,9 @@ struct Reference {
     ref_types: Vec<Entry>,
 }
 
-// Parse the asset sources under `schema_dir` (data schema and enums) and
-// `impl_dir` (the `impl Component` blocks carrying NAME / ORIGIN / Args), and
-// render every documented type. A struct and its impl rejoin by name, so the two
-// trees are parsed into one file set.
-fn extract(schema_dir: &Path, impl_dir: &Path) -> io::Result<Reference> {
-    let files = parse_asset_files(&[schema_dir, impl_dir])?;
-    let enums = collect_enums(&files);
-    let struct_file_idx = collect_structs(&files);
+// Join the two extracted schemas into one index and render every documented
+// type from it.
+fn extract() -> Reference {
     // Manual components keep a literal `impl Component`; the rest come from the
     // concinnity-world registries. A type appears in exactly one of the two.
     let all_components = collect_registry_components();
@@ -179,17 +201,12 @@ fn extract(schema_dir: &Path, impl_dir: &Path) -> io::Result<Reference> {
         .iter()
         .filter(|c| c.origin != "RuntimeOnly")
         .collect();
-    let comp_by_struct: HashMap<String, String> = documented
-        .iter()
-        .map(|c| (c.struct_ident.clone(), c.name.clone()))
-        .collect();
-
-    let ctx = Ctx {
-        files: &files,
-        enums: &enums,
-        struct_file_idx: &struct_file_idx,
-        comp_by_struct: &comp_by_struct,
-    };
+    let ctx = Ctx::new(
+        documented
+            .iter()
+            .map(|c| (c.struct_ident.clone(), c.name.clone()))
+            .collect(),
+    );
 
     // Render every asset, collecting the value types and documented enums its
     // fields reach.
@@ -213,7 +230,7 @@ fn extract(schema_dir: &Path, impl_dir: &Path) -> io::Result<Reference> {
         let pending: Vec<String> = refs
             .value_types
             .iter()
-            .filter(|n| !done_vt.contains(*n) && ctx.struct_file_idx.contains_key(*n))
+            .filter(|n| !done_vt.contains(*n) && ctx.structs.contains_key(n.as_str()))
             .cloned()
             .collect();
         if pending.is_empty() {
@@ -263,108 +280,7 @@ fn extract(schema_dir: &Path, impl_dir: &Path) -> io::Result<Reference> {
     assets.sort_by(|a, b| a.name.cmp(&b.name));
     ref_types.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Ok(Reference { assets, ref_types })
-}
-
-// Source parsing and cross-file indices
-
-fn parse_asset_files(dirs: &[&Path]) -> io::Result<Vec<syn::File>> {
-    let mut out = Vec::new();
-    for dir in dirs {
-        parse_dir(dir, &mut out)?;
-    }
-    Ok(out)
-}
-
-// One level of nesting is enough: the asset sources are a flat directory of
-// modules, some of which are a directory of submodules.
-fn parse_dir(dir: &Path, out: &mut Vec<syn::File>) -> io::Result<()> {
-    for entry in read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            for sub in read_dir(&path)? {
-                push_parsed(&sub?.path(), out)?;
-            }
-        } else {
-            push_parsed(&path, out)?;
-        }
-    }
-    Ok(())
-}
-
-fn read_dir(dir: &Path) -> io::Result<fs::ReadDir> {
-    fs::read_dir(dir).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", dir.display())))
-}
-
-fn push_parsed(path: &Path, out: &mut Vec<syn::File>) -> io::Result<()> {
-    if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-        return Ok(());
-    }
-    let src = fs::read_to_string(path)
-        .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))?;
-    let file = syn::parse_file(&src).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{}: {e}", path.display()),
-        )
-    })?;
-    out.push(file);
-    Ok(())
-}
-
-// Enum ident -> serialized variants and docs, for enums that serialize to a
-// plain string (all variants are unit). Data-carrying enums become JSON
-// objects, so they are left out here and fall through to generic rendering.
-fn collect_enums(files: &[syn::File]) -> HashMap<String, EnumInfo> {
-    let mut out = HashMap::new();
-    for file in files {
-        for item in &file.items {
-            let e = match item {
-                syn::Item::Enum(e) => e,
-                _ => continue,
-            };
-            if e.variants
-                .iter()
-                .any(|v| !matches!(v.fields, syn::Fields::Unit))
-            {
-                continue;
-            }
-            let rule = serde_kv(&e.attrs, "rename_all");
-            let mut variants = Vec::new();
-            let mut variant_docs = Vec::new();
-            for v in &e.variants {
-                variants.push(
-                    serde_kv(&v.attrs, "rename")
-                        .unwrap_or_else(|| apply_case(&v.ident.to_string(), rule.as_deref())),
-                );
-                variant_docs.push(collapse_doc(&extract_doc(&v.attrs)));
-            }
-            out.insert(
-                e.ident.to_string(),
-                EnumInfo {
-                    variants,
-                    variant_docs,
-                    enum_doc: extract_doc(&e.attrs),
-                },
-            );
-        }
-    }
-    out
-}
-
-// Every named-field struct ident -> the index of the file defining it.
-fn collect_structs(files: &[syn::File]) -> HashMap<String, usize> {
-    let mut out = HashMap::new();
-    for (i, file) in files.iter().enumerate() {
-        for item in &file.items {
-            if let syn::Item::Struct(s) = item
-                && matches!(s.fields, syn::Fields::Named(_))
-            {
-                out.insert(s.ident.to_string(), i);
-            }
-        }
-    }
-    out
+    Reference { assets, ref_types }
 }
 
 // Every documented asset type, read through the concinnity-world authoring
@@ -413,7 +329,7 @@ fn render_doc_entry(
     ctx: &Ctx,
     refs: &mut Refs,
 ) -> (String, String) {
-    let doc = strip_rust_blocks(&struct_doc(doc_ident, ctx));
+    let doc = strip_rust_blocks(ctx.struct_doc(doc_ident));
     let cleaned = strip_table_lines(&doc);
     let fields = build_fields(args_ident, ctx, refs);
     let params = render_parameters(&fields);
@@ -424,22 +340,19 @@ fn render_doc_entry(
 // Render a documented enum's page body: its enum-level rustdoc followed by a
 // `## Values` list, one bullet per serialized value with its own doc.
 fn render_enum_doc(name: &str, ctx: &Ctx) -> (String, String) {
-    let info = match ctx.enums.get(name) {
-        Some(i) => i,
-        None => return (String::new(), String::new()),
+    let Some((doc, values)) = ctx.enum_values(name) else {
+        return (String::new(), String::new());
     };
-    let cleaned = strip_table_lines(&strip_rust_blocks(&info.enum_doc));
-    let values: Vec<EnumValue> = info
-        .variants
+    let cleaned = strip_table_lines(&strip_rust_blocks(doc));
+    let values: Vec<EnumValue> = values
         .iter()
-        .zip(info.variant_docs.iter())
-        .map(|(v, d)| EnumValue {
-            value: v.clone(),
-            doc: d.clone(),
+        .map(|v| EnumValue {
+            value: v.value.to_string(),
+            doc: v.doc.to_string(),
         })
         .collect();
     let vals = render_values(&values);
-    (first_paragraph(&info.enum_doc), combine(&cleaned, &vals))
+    (first_paragraph(doc), combine(&cleaned, &vals))
 }
 
 // Join a cleaned description with a generated section, dropping whichever is
@@ -453,432 +366,59 @@ fn combine(description: &str, section: &str) -> String {
 }
 
 fn build_fields(args_ident: &str, ctx: &Ctx, refs: &mut Refs) -> Vec<FieldEntry> {
-    let file = match ctx.struct_file_idx.get(args_ident) {
-        Some(i) => &ctx.files[*i],
-        None => return Vec::new(),
-    };
-    let st = match find_struct(file, args_ident) {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-    let named = match &st.fields {
-        syn::Fields::Named(n) => n,
-        _ => return Vec::new(),
-    };
-    let defaults = extract_defaults(file, args_ident);
-    let mut out = Vec::new();
-    for field in &named.named {
-        if has_serde_skip(&field.attrs) {
-            continue;
-        }
-        let ident = match &field.ident {
-            Some(i) => i.to_string(),
-            None => continue,
-        };
-        let key = get_serde_rename(&field.attrs).unwrap_or_else(|| ident.clone());
-        let (ty, optional) = match option_inner(&field.ty) {
-            Some(inner) => (map_type(inner, ctx, refs), true),
-            None => (map_type(&field.ty, ctx, refs), false),
-        };
-        let doc = collapse_doc(&extract_doc(&field.attrs));
-        // An em-dash means no default was discoverable (derived Default, or a
-        // non-literal initializer), leave it off rather than guess.
-        let default = defaults
-            .get(&ident)
-            .filter(|d| d.as_str() != "\u{2014}")
-            .cloned();
-        out.push(FieldEntry {
-            key,
-            ty,
-            optional,
-            default,
-            doc,
-        });
-    }
-    out
+    ctx.fields(args_ident)
+        .iter()
+        .map(|f| FieldEntry {
+            key: f.key.to_string(),
+            ty: resolve_type(&f.ty, ctx, refs),
+            optional: f.optional,
+            default: f.default.map(str::to_string),
+            doc: f.doc.to_string(),
+        })
+        .collect()
 }
 
-// Translate a Rust field type to a JSON-shaped FieldType. Records any nested
+// Resolve an extracted field type against the joined index. Records any nested
 // non-asset struct, or any documented enum, it links to in `refs` so it gets
 // its own page.
-fn map_type(ty: &syn::Type, ctx: &Ctx, refs: &mut Refs) -> FieldType {
+fn resolve_type(ty: &'static DocFieldType, ctx: &Ctx, refs: &mut Refs) -> FieldType {
     match ty {
-        syn::Type::Path(tp) => {
-            let seg = match tp.path.segments.last() {
-                Some(s) => s,
-                None => return FieldType::Object,
-            };
-            let id = seg.ident.to_string();
-            match id.as_str() {
-                "f32" | "f64" => FieldType::Float,
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize" => {
-                    FieldType::Integer
-                }
-                "bool" => FieldType::Bool,
-                // `AssetId` and the per-kind resource handles are authored as a
-                // by-name reference string (an already-resolved integer is the
-                // compiled form), so they document as a string like any other
-                // cross-reference field.
-                "String" | "AssetId" => FieldType::Str,
-                "TextureHandle"
-                | "MeshHandle"
-                | "MaterialHandle"
-                | "FontHandle"
-                | "AudioClipHandle"
-                | "CubemapTextureHandle"
-                | "EnvironmentMapHandle"
-                | "ColorLutHandle"
-                | "SkinnedMeshHandle" => FieldType::Str,
-                // serde_json::Value and maps are open-ended JSON objects.
-                "Value" | "HashMap" | "BTreeMap" => FieldType::Object,
-                "Option" | "Box" => first_generic(seg)
-                    .map(|inner| map_type(inner, ctx, refs))
-                    .unwrap_or(FieldType::Object),
-                "Vec" => {
-                    let elem = first_generic(seg)
-                        .map(|inner| map_type(inner, ctx, refs))
-                        .unwrap_or(FieldType::Object);
-                    FieldType::Array {
-                        elem: Box::new(elem),
-                        len: None,
-                    }
-                }
-                _ => {
-                    if let Some(info) = ctx.enums.get(&id) {
-                        // A documented enum gets its own page (its values carry
-                        // their docs there); an undocumented one is inlined as a
-                        // closed set of string values.
-                        if info.documented() {
-                            refs.enums.insert(id.clone());
-                            FieldType::NamedEnum(id)
-                        } else {
-                            FieldType::Enum(info.variants.clone())
-                        }
-                    } else if let Some(name) = ctx.comp_by_struct.get(&id) {
-                        // A field embedding another asset's struct links to that
-                        // asset's own page.
-                        FieldType::Named(name.clone())
-                    } else if ctx.struct_file_idx.contains_key(&id) {
-                        refs.value_types.insert(id.clone());
-                        FieldType::Named(id)
-                    } else {
-                        FieldType::Object
-                    }
-                }
-            }
-        }
-        syn::Type::Array(arr) => {
-            let elem = map_type(&arr.elem, ctx, refs);
-            FieldType::Array {
-                elem: Box::new(elem),
-                len: array_len(&arr.len),
-            }
-        }
-        syn::Type::Reference(r) => map_type(&r.elem, ctx, refs),
-        _ => FieldType::Object,
-    }
-}
-
-// syn helpers
-
-fn find_struct<'a>(file: &'a syn::File, ident: &str) -> Option<&'a syn::ItemStruct> {
-    file.items.iter().find_map(|item| match item {
-        syn::Item::Struct(s) if s.ident == ident => Some(s),
-        _ => None,
-    })
-}
-
-fn struct_doc(ident: &str, ctx: &Ctx) -> String {
-    match ctx.struct_file_idx.get(ident) {
-        Some(i) => find_struct(&ctx.files[*i], ident)
-            .map(|s| extract_doc(&s.attrs))
-            .unwrap_or_default(),
-        None => String::new(),
-    }
-}
-
-fn first_generic(seg: &syn::PathSegment) -> Option<&syn::Type> {
-    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-        for a in &args.args {
-            if let syn::GenericArgument::Type(t) = a {
-                return Some(t);
-            }
-        }
-    }
-    None
-}
-
-fn option_inner(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(tp) = ty
-        && let Some(seg) = tp.path.segments.last()
-        && seg.ident == "Option"
-    {
-        return first_generic(seg);
-    }
-    None
-}
-
-fn array_len(expr: &syn::Expr) -> Option<usize> {
-    if let syn::Expr::Lit(l) = expr
-        && let syn::Lit::Int(i) = &l.lit
-    {
-        return i.base10_parse::<usize>().ok();
-    }
-    None
-}
-
-// True for fields that carry #[serde(skip)] (exact token, not skip_serializing).
-fn has_serde_skip(attrs: &[syn::Attribute]) -> bool {
-    for attr in attrs {
-        if !attr.path().is_ident("serde") {
-            continue;
-        }
-        if let syn::Meta::List(list) = &attr.meta {
-            for part in list.tokens.to_string().split(',') {
-                if part.trim() == "skip" {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-// Returns the value of #[serde(rename = "...")] if present on a field.
-fn get_serde_rename(attrs: &[syn::Attribute]) -> Option<String> {
-    serde_kv(attrs, "rename")
-}
-
-// Returns the string value of a `key = "..."` pair inside any #[serde(...)]
-// attribute. The `= ` boundary check keeps `rename` from matching `rename_all`.
-fn serde_kv(attrs: &[syn::Attribute], key: &str) -> Option<String> {
-    for attr in attrs {
-        if !attr.path().is_ident("serde") {
-            continue;
-        }
-        let list = match &attr.meta {
-            syn::Meta::List(list) => list,
-            _ => continue,
-        };
-        let tokens = list.tokens.to_string();
-        for part in tokens.split(',') {
-            let part = part.trim();
-            let rest = match part.strip_prefix(key) {
-                Some(r) => r.trim_start(),
-                None => continue,
-            };
-            let rest = match rest.strip_prefix('=') {
-                Some(r) => r.trim(),
-                None => continue,
-            };
-            if let (Some(a), Some(b)) = (rest.find('"'), rest.rfind('"'))
-                && a != b
-            {
-                return Some(rest[a + 1..b].to_string());
-            }
-        }
-    }
-    None
-}
-
-// Apply a serde `rename_all` rule to a PascalCase variant ident.
-fn apply_case(ident: &str, rule: Option<&str>) -> String {
-    match rule {
-        None | Some("PascalCase") => ident.to_string(),
-        Some("lowercase") => ident.to_lowercase(),
-        Some("UPPERCASE") => ident.to_uppercase(),
-        Some("snake_case") => split_words(ident).join("_"),
-        Some("SCREAMING_SNAKE_CASE") => split_words(ident).join("_").to_uppercase(),
-        Some("kebab-case") => split_words(ident).join("-"),
-        Some("camelCase") => {
-            let words = split_words(ident);
-            let mut s = String::new();
-            for (i, w) in words.iter().enumerate() {
-                if i == 0 {
-                    s.push_str(w);
-                } else {
-                    let mut chars = w.chars();
-                    if let Some(f) = chars.next() {
-                        s.push(f.to_ascii_uppercase());
-                        s.push_str(chars.as_str());
-                    }
-                }
-            }
-            s
-        }
-        Some(_) => ident.to_string(),
-    }
-}
-
-// Split a PascalCase ident into lowercase words: "VertexInstanced" -> [vertex,
-// instanced]. Acronym runs are not special-cased (none occur in asset enums).
-fn split_words(ident: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut cur = String::new();
-    for (i, c) in ident.chars().enumerate() {
-        if c.is_uppercase() && i != 0 && !cur.is_empty() {
-            words.push(std::mem::take(&mut cur));
-        }
-        cur.push(c.to_ascii_lowercase());
-    }
-    if !cur.is_empty() {
-        words.push(cur);
-    }
-    words
-}
-
-// Default extraction (from impl Default)
-
-// Render an expression from a Default::default() body to a display string.
-fn render_expr(expr: &syn::Expr) -> String {
-    match expr {
-        syn::Expr::Lit(l) => match &l.lit {
-            syn::Lit::Float(f) => f.to_string(),
-            syn::Lit::Int(i) => i.base10_digits().to_string(),
-            syn::Lit::Bool(b) => b.value.to_string(),
-            syn::Lit::Str(s) => format!("\"{}\"", s.value()),
-            _ => "\u{2014}".to_string(),
+        DocFieldType::Bool => FieldType::Bool,
+        DocFieldType::Float => FieldType::Float,
+        DocFieldType::Integer => FieldType::Integer,
+        DocFieldType::Str => FieldType::Str,
+        DocFieldType::Object => FieldType::Object,
+        DocFieldType::Array { elem, len } => FieldType::Array {
+            elem: Box::new(resolve_type(elem, ctx, refs)),
+            len: *len,
         },
-        syn::Expr::Array(arr) => {
-            let items: Vec<String> = arr.elems.iter().map(render_expr).collect();
-            format!("[{}]", items.join(", "))
-        }
-        syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => {
-            let inner = render_expr(&u.expr);
-            if inner != "\u{2014}" {
-                format!("-{}", inner)
-            } else {
-                "\u{2014}".to_string()
-            }
-        }
-        // "string".to_string()
-        syn::Expr::MethodCall(mc) if mc.method == "to_string" => render_expr(&mc.receiver),
-        // None, or other path-expressions
-        syn::Expr::Path(p) => {
-            let s = p
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .unwrap_or_default();
-            if s == "None" {
-                "null".to_string()
-            } else {
-                "\u{2014}".to_string()
-            }
-        }
-        _ => "\u{2014}".to_string(),
+        DocFieldType::Name(id) => resolve_name(id, ctx, refs),
     }
 }
 
-// Extract field_name -> default_value_string from impl Default for struct_name.
-fn extract_defaults(file: &syn::File, struct_name: &str) -> HashMap<String, String> {
-    let mut defaults = HashMap::new();
-    for item in &file.items {
-        let imp = match item {
-            syn::Item::Impl(i) => i,
-            _ => continue,
-        };
-        let is_default_trait = imp
-            .trait_
-            .as_ref()
-            .map(|(_, p, _)| {
-                p.segments
-                    .last()
-                    .map(|s| s.ident == "Default")
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        if !is_default_trait {
-            continue;
+// A name the extractor left undecided: an enum, another asset, a value type
+// with its own page, or nothing the reference documents.
+fn resolve_name(id: &'static str, ctx: &Ctx, refs: &mut Refs) -> FieldType {
+    if let Some((doc, values)) = ctx.enum_values(id) {
+        if enum_is_documented(doc, values) {
+            refs.enums.insert(id.to_string());
+            FieldType::NamedEnum(id.to_string())
+        } else {
+            FieldType::Enum(values.iter().map(|v| v.value.to_string()).collect())
         }
-        let self_name = match imp.self_ty.as_ref() {
-            syn::Type::Path(tp) => tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .unwrap_or_default(),
-            _ => continue,
-        };
-        if self_name != struct_name {
-            continue;
-        }
-        for impl_item in &imp.items {
-            let f = match impl_item {
-                syn::ImplItem::Fn(f) if f.sig.ident == "default" => f,
-                _ => continue,
-            };
-            for stmt in &f.block.stmts {
-                collect_fields_from_stmt(stmt, &mut defaults);
-            }
-        }
-    }
-    defaults
-}
-
-fn collect_fields_from_stmt(stmt: &syn::Stmt, out: &mut HashMap<String, String>) {
-    if let syn::Stmt::Expr(e, _) = stmt {
-        collect_fields_from_expr(e, out);
-    }
-}
-
-fn collect_fields_from_expr(expr: &syn::Expr, out: &mut HashMap<String, String>) {
-    match expr {
-        syn::Expr::Struct(es) => {
-            for fv in &es.fields {
-                if let syn::Member::Named(n) = &fv.member {
-                    out.insert(n.to_string(), render_expr(&fv.expr));
-                }
-            }
-        }
-        syn::Expr::Block(eb) => {
-            for stmt in &eb.block.stmts {
-                collect_fields_from_stmt(stmt, out);
-            }
-        }
-        _ => {}
+    } else if let Some(name) = ctx.comp_by_struct.get(id) {
+        // A field embedding another asset's struct links to that asset's own
+        // page.
+        FieldType::Named(name.clone())
+    } else if ctx.structs.contains_key(id) {
+        refs.value_types.insert(id.to_string());
+        FieldType::Named(id.to_string())
+    } else {
+        FieldType::Object
     }
 }
 
 // Doc-comment helpers
-
-fn extract_doc(attrs: &[syn::Attribute]) -> String {
-    let mut doc = String::new();
-    for attr in attrs {
-        if !attr.path().is_ident("doc") {
-            continue;
-        }
-        let nv = match &attr.meta {
-            syn::Meta::NameValue(nv) => nv,
-            _ => continue,
-        };
-        let lit_str = match &nv.value {
-            syn::Expr::Lit(l) => match &l.lit {
-                syn::Lit::Str(s) => s,
-                _ => continue,
-            },
-            _ => continue,
-        };
-        let line = lit_str.value();
-        let line = line.strip_prefix(' ').unwrap_or(&line);
-        doc.push_str(line);
-        doc.push('\n');
-    }
-    while doc.ends_with('\n') {
-        doc.pop();
-    }
-    doc
-}
-
-// Collapse a multi-line field doc to a single line for a bullet.
-fn collapse_doc(doc: &str) -> String {
-    doc.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
 
 fn first_paragraph(doc: &str) -> String {
     let para = doc.split("\n\n").next().unwrap_or("");
