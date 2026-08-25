@@ -19,7 +19,7 @@ pub(crate) struct FogReloadResult {
 // Re-read `world.jsonl` and push the first declared `VolumetricFog` through
 // [`RenderBackend::update_fog_settings`]. Disabled / missing assets push
 // `None`. Each authored asset runs through the same clamp chain as init:
-// [`crate::assets::VolumetricFog::from_args`] (asset-side floors) then
+// [`crate::components::VolumetricFog::from_args`] (asset-side floors) then
 // [`crate::gfx::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
 // so a reload cannot land out-of-range values.
 //
@@ -71,7 +71,7 @@ pub(super) fn reload_volumetric_fog(
             .get("args")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        let parsed: crate::assets::VolumetricFog = match serde_json::from_value(args) {
+        let parsed: crate::components::VolumetricFog = match serde_json::from_value(args) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -174,7 +174,7 @@ pub(super) fn reload_procedural_meshes(
     // the regen compile consumes.
     let mut new_args_by_name: std::collections::HashMap<
         String,
-        (crate::assets::ProceduralMesh, serde_json::Value),
+        (crate::components::ProceduralMesh, serde_json::Value),
     > = std::collections::HashMap::new();
     for entry in &entries {
         let asset_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -188,18 +188,19 @@ pub(super) fn reload_procedural_meshes(
             .get("args")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        let parsed: crate::assets::ProceduralMesh = match serde_json::from_value(raw_args.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    "ProceduralMesh hot-reload: failed to parse '{}' args: {} \
+        let parsed: crate::components::ProceduralMesh =
+            match serde_json::from_value(raw_args.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        "ProceduralMesh hot-reload: failed to parse '{}' args: {} \
                          (kept old geometry)",
-                    name,
-                    e
-                );
-                continue;
-            }
-        };
+                        name,
+                        e
+                    );
+                    continue;
+                }
+            };
         new_args_by_name.insert(name.to_string(), (parsed, raw_args));
     }
 
@@ -211,7 +212,7 @@ pub(super) fn reload_procedural_meshes(
     // Args to write back into the source map after a successful update,
     // staged here so a failed regen / rebuild doesn't clobber the captured
     // value (the diff next reload would then miss the still-pending edit).
-    let mut staged_args: Vec<(usize, crate::assets::ProceduralMesh)> = Vec::new();
+    let mut staged_args: Vec<(usize, crate::components::ProceduralMesh)> = Vec::new();
 
     for (entry_idx, entry) in procedural_meshes.entries.iter().enumerate() {
         let Some((new_args, raw_args)) = new_args_by_name.get(&entry.name) else {
@@ -366,7 +367,7 @@ pub(super) fn reload_procedural_meshes(
 pub(super) fn reload_stories(
     path: &str,
     snapshots: &mut std::collections::HashMap<String, serde_json::Value>,
-) -> Vec<crate::assets::Story> {
+) -> Vec<crate::components::Story> {
     // Each expanded Story deserializes its scaffold name-references, so the
     // name resolver must be installed. In a running editor the initial build
     // already set it up; installing it here too is a cheap no-op and keeps a
@@ -409,7 +410,7 @@ pub(super) fn reload_stories(
         if snapshots.get(name) == Some(&args) {
             continue;
         }
-        match serde_json::from_value::<crate::assets::Story>(args.clone()) {
+        match serde_json::from_value::<crate::components::Story>(args.clone()) {
             Ok(story) => {
                 snapshots.insert(name.to_string(), args);
                 out.push(story);
@@ -473,7 +474,7 @@ pub(super) fn reload_shader_stages(
     shader_stages: &ShaderStageSourceMap,
     backend: &mut dyn crate::gfx::backend::RenderBackend,
 ) -> ShaderStageReloadResult {
-    use crate::assets::ShaderKind;
+    use crate::components::ShaderKind;
 
     let mut result = ShaderStageReloadResult::default();
     if shader_stages.is_empty() {

@@ -6,11 +6,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::assets::{
+use crate::blob::BlobData;
+use crate::components::{
     AudioCommand, ControlsCommand, IndirectLighting, InputKey, SettingCommand, SettingOp,
     ShadowUpdate, Sprite, TextLabel, WindowMode,
 };
-use crate::blob::BlobData;
 use crate::config::Settings;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentStorage, PipelineContext, Resources, System};
@@ -134,14 +134,14 @@ impl Fixture {
                     value_id: VICTIM_LABEL,
                 },
             ],
-            gamepad_map: crate::assets::GamepadMap::default(),
+            gamepad_map: crate::components::GamepadMap::default(),
             pad_rebind_rows: vec![
                 crate::gfx::graphics_system::PadRebindViz {
-                    action: crate::assets::GamepadAction::Jump,
+                    action: crate::components::GamepadAction::Jump,
                     value_id: PAD_REBIND_LABEL,
                 },
                 crate::gfx::graphics_system::PadRebindViz {
-                    action: crate::assets::GamepadAction::Sprint,
+                    action: crate::components::GamepadAction::Sprint,
                     value_id: PAD_VICTIM_LABEL,
                 },
             ],
@@ -607,7 +607,7 @@ fn fov_slider_sends_a_controls_command() {
 // rebound row and the action it took the button from.
 #[test]
 fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
-    use crate::assets::GamepadAction;
+    use crate::components::GamepadAction;
     let mut f = Fixture::new();
     let jump_button = f.state.gamepad_map.get(GamepadAction::Jump);
     let sprint_button = f.state.gamepad_map.get(GamepadAction::Sprint);
@@ -646,12 +646,15 @@ fn pad_rebind_of_a_non_gamepad_action_is_ignored() {
     let mut f = Fixture::new();
     f.apply(vec![SettingCommand {
         setting: Bindable::Forward.setting_key().to_string(),
-        op: SettingOp::RebindButton(crate::assets::GamepadButton::North),
+        op: SettingOp::RebindButton(crate::components::GamepadButton::North),
         value_label: None,
         persist: true,
     }]);
 
-    assert_eq!(f.state.gamepad_map, crate::assets::GamepadMap::default());
+    assert_eq!(
+        f.state.gamepad_map,
+        crate::components::GamepadMap::default()
+    );
     assert!(f.saved.lock().unwrap().is_empty(), "nothing persisted");
 }
 
@@ -708,7 +711,7 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
 // AudioCommand it drains this same tick, addressed to the row's target.
 #[test]
 fn volume_rows_send_targeted_audio_commands() {
-    use concinnity_core::assets::AudioTarget;
+    use concinnity_core::components::AudioTarget;
     let mut f = Fixture::new();
     f.next("master_volume");
     f.next("voice_volume");
@@ -883,16 +886,16 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(
         "aa_mode",
-        SettingOp::SetIndex(settings::aa_mode_index(crate::assets::AaMode::Fxaa)),
+        SettingOp::SetIndex(settings::aa_mode_index(crate::components::AaMode::Fxaa)),
     )]);
 
-    assert_eq!(f.state.post_config.aa_mode, crate::assets::AaMode::Fxaa);
+    assert_eq!(f.state.post_config.aa_mode, crate::components::AaMode::Fxaa);
     assert_eq!(f.state.post_process.fxaa, 1.0);
     assert!(f.saw(&Call::UpdatePostProcess));
 
     f.apply(vec![cycle(
         "aa_mode",
-        SettingOp::SetIndex(settings::aa_mode_index(crate::assets::AaMode::Off)),
+        SettingOp::SetIndex(settings::aa_mode_index(crate::components::AaMode::Off)),
     )]);
     assert_eq!(f.state.post_process.fxaa, 0.0);
 }
@@ -997,7 +1000,7 @@ fn upscale_backend_cycle_reaches_dlss_on_nvidia() {
     let mut seen = false;
     for _ in 0..settings::options("upscale_backend").unwrap().len() {
         f.next("upscale_backend");
-        seen |= f.state.upscale_backend == crate::assets::UpscalerBackend::Dlss;
+        seen |= f.state.upscale_backend == crate::components::UpscalerBackend::Dlss;
     }
     assert!(seen, "DLSS is reachable on an NVIDIA device");
 }

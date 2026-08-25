@@ -260,7 +260,7 @@ pub(crate) fn all_label_ids(base: u32, rows: usize, values: bool) -> Vec<AssetId
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
 
     // A scratch family well clear of every real allocation in `registry.rs`.
     const BASE: u32 = 0x3000_0000 + 0x1F00;

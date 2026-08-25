@@ -7,7 +7,7 @@
 use super::builtin_schema;
 use super::synthesize::{MorphSet, synthesize};
 use super::validate;
-use crate::assets::{CharacterModel, CharacterSchema};
+use crate::components::{CharacterModel, CharacterSchema};
 use crate::glb::{ImportedSkinnedMesh, import_skinned_from_doc};
 use crate::gltf_source::GltfDoc;
 use concinnity_world::world::WorldJsonlAsset;
@@ -90,7 +90,7 @@ impl CharacterModelArg {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{KeyPolarity, SchemaJoint, SchemaKey};
+    use crate::components::{KeyPolarity, SchemaJoint, SchemaKey};
 
     // The customize_character example's body, the only real one in the tree.
     // Absent from a crate checkout outside the workspace, in which case the
@@ -185,11 +185,11 @@ mod tests {
             "whole payload {} B vs dense morph block {dense_bytes} B",
             payload.len()
         );
-        let back: Vec<crate::assets::MorphDelta> = p
+        let back: Vec<crate::components::MorphDelta> = p
             .morphs
             .to_dense()
             .iter()
-            .map(|d| crate::assets::MorphDelta {
+            .map(|d| crate::components::MorphDelta {
                 position: d.position,
                 normal: d.normal,
             })

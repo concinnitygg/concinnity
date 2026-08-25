@@ -62,7 +62,7 @@ impl MtlContext {
     // `shadow.update` at the start of each shadow pass, so a change takes effect
     // on the next draw. Every cascade is already primed, so switching policy never
     // leaves a slice unsampled (priming is one-shot per cascade, not per policy).
-    pub(crate) fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
         self.shadow.update = update;
     }
 

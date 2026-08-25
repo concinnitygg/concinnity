@@ -8,7 +8,7 @@
 // world's camera controller stays frozen.
 
 use super::*;
-use crate::assets::Camera3D;
+use crate::components::Camera3D;
 
 pub(super) struct OrbitDrag {
     pivot: [f32; 3],

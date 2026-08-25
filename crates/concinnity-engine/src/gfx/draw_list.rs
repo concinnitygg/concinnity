@@ -3,7 +3,7 @@
 // Render-prep helpers that consume asset components and produce GPU-ready data.
 // None of these functions hold or borrow a backend handle.
 
-use crate::assets::{
+use crate::components::{
     File, FileKind, InstancedProp, InstancedPropGeometry, ProceduralMesh, Room, SubMeshRef,
     VoxelChunk,
 };
@@ -12,7 +12,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{MaterialHandle, MeshHandle, TextureHandle};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
-    DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
+    DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT,
 };
 
 pub(crate) use crate::gfx::skinning::{IDENTITY as IDENTITY4, mat4_mul};
@@ -166,7 +166,7 @@ pub(crate) fn decomposed_renderable_item(
     entity: crate::ecs::Entity,
     asset_id: AssetId,
 ) -> RenderableItem {
-    use crate::assets::{Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup};
+    use crate::components::{Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup};
 
     let (model, mesh, material, texture, cull_distance) =
         if let Some(m) = ctx.get::<ModelRenderer>(entity) {
@@ -563,9 +563,9 @@ pub(crate) struct DrawListInputs<'a> {
 // Resolve the (albedo_slot, normal_map_slot, material) a draw object binds. A
 // material handle wins and must resolve in `material_map`; an unresolved one
 // comes back as `Err(handle)` so the caller can log its own context. With no
-// material, a texture handle contributes its albedo slot (clamped to slot 0 when
-// past `texture_count`) over the default material; with neither, slot 0 and the
-// default material.
+// material, a texture handle contributes its albedo slot (falling back to the
+// white entry when past `texture_count`) over the default material; with
+// neither, the white entry and the default material.
 pub(crate) fn resolve_material_slots(
     material: Option<MaterialHandle>,
     texture: Option<TextureHandle>,
@@ -577,7 +577,7 @@ pub(crate) fn resolve_material_slots(
     }
     let albedo_slot = match texture {
         Some(tex_id) if tex_id.index() < texture_count => tex_id.index(),
-        _ => 0,
+        _ => NO_ALBEDO_SLOT,
     };
     Ok(MaterialEntry {
         albedo_slot,
@@ -1062,7 +1062,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::Prop;
+    use crate::components::Prop;
     use crate::ecs::TextureHandle;
 
     fn material_map_with(
@@ -1113,13 +1113,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_material_slots_clamps_an_out_of_range_texture_to_slot_zero() {
+    fn resolve_material_slots_sends_an_out_of_range_texture_to_the_white_fallback() {
         let map = std::collections::HashMap::new();
-        // Handle 20 is past the pool of 16, so it clamps to slot 0.
+        // Handle 20 is past the pool of 16. Slot 0 would be a real texture, so
+        // an unusable handle takes the white fallback instead.
         let got = resolve_material_slots(None, Some(TextureHandle(20)), &map, 16).expect("ok");
         assert_eq!(
             (got.albedo_slot, got.normal_map_slot),
-            (0, NO_NORMAL_MAP_SLOT)
+            (NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT)
         );
     }
 
@@ -1129,7 +1130,7 @@ mod tests {
         let got = resolve_material_slots(None, None, &map, 16).expect("ok");
         assert_eq!(
             (got.albedo_slot, got.normal_map_slot),
-            (0, NO_NORMAL_MAP_SLOT)
+            (NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT)
         );
     }
 
@@ -1183,24 +1184,24 @@ mod tests {
     fn build_draw_list_emits_one_cluster_for_instanced_prop() {
         let mesh_geometry = vec![unit_quad_mesh()];
 
-        let inst = crate::assets::InstancedProp {
+        let inst = crate::components::InstancedProp {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
             texture: None,
             cull_distance: 0.0,
             instances: vec![
-                crate::assets::InstanceTransform {
+                crate::components::InstanceTransform {
                     position: [0.0, 0.0, 0.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
                 },
-                crate::assets::InstanceTransform {
+                crate::components::InstanceTransform {
                     position: [5.0, 0.0, 0.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
                 },
-                crate::assets::InstanceTransform {
+                crate::components::InstanceTransform {
                     position: [-3.0, 0.0, 2.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
@@ -1262,7 +1263,7 @@ mod tests {
     fn build_draw_list_skips_empty_instanced_prop() {
         let mesh_geometry = vec![unit_quad_mesh()];
 
-        let inst = crate::assets::InstancedProp {
+        let inst = crate::components::InstancedProp {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
@@ -1344,8 +1345,8 @@ mod tests {
     // tags.
     #[test]
     fn decomposed_renderable_item_matches_a_mesh_prop() {
-        use crate::assets::{Collider, MeshRenderer, Pickup, PropCollider};
         use crate::blob::BlobData;
+        use crate::components::{Collider, MeshRenderer, Pickup, PropCollider};
         use crate::ecs::{ComponentStorage, PipelineContext, Resources};
         use crate::gfx::profile::FrameProfile;
 
@@ -1485,10 +1486,10 @@ mod tests {
         assert_eq!(verts.len(), 8, "each quad's 4 verts appended once");
         assert_eq!(idxs.len(), 12);
         // First sub-mesh took its material's albedo/normal slots; the second
-        // used the default (slot 0, flat normal).
+        // used the default (white, flat normal).
         assert_eq!(draw_objects[0].texture_slot, 3);
         assert_eq!(draw_objects[0].normal_map_slot, 4);
-        assert_eq!(draw_objects[1].texture_slot, 0);
+        assert_eq!(draw_objects[1].texture_slot, NO_ALBEDO_SLOT);
         assert_eq!(draw_objects[1].normal_map_slot, NO_NORMAL_MAP_SLOT);
         // Hot-reload map tracks each sub-mesh id -> its draw slot.
         assert_eq!(mesh_handle_to_draws.get(&0), Some(&vec![0]));
@@ -1759,7 +1760,7 @@ mod tests {
             material: None,
             texture: None,
             cull_distance: 0.0,
-            instances: vec![crate::assets::InstanceTransform::default()],
+            instances: vec![crate::components::InstanceTransform::default()],
         };
         assert!(none(DrawListInputs {
             items: &[],
@@ -1780,7 +1781,7 @@ mod tests {
             material: Some(MaterialHandle(404)),
             texture: None,
             cull_distance: 0.0,
-            instances: vec![crate::assets::InstanceTransform::default()],
+            instances: vec![crate::components::InstanceTransform::default()],
         };
         assert!(none(DrawListInputs {
             items: &[],
@@ -2059,8 +2060,8 @@ mod tests {
     // item is static.
     #[test]
     fn decomposed_renderable_item_matches_a_model_prop() {
-        use crate::assets::ModelRenderer;
         use crate::blob::BlobData;
+        use crate::components::ModelRenderer;
         use crate::ecs::{ComponentStorage, PipelineContext, Resources};
         use crate::gfx::profile::FrameProfile;
 

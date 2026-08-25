@@ -16,7 +16,7 @@ use concinnity_memory::{Arena, MemTag};
 
 use crate::ecs::{
     ComponentAsset, ComponentId, ComponentSlot, ComponentStorage, Entity, EventStore, Events,
-    FrameContext, NoPayloads, PayloadStore, PipelineContext, Resources,
+    FrameContext, NoPayloads, PayloadStore, PipelineContext, Resources, RuntimeComponent,
 };
 use crate::gfx::profile::FrameProfile;
 
@@ -122,7 +122,10 @@ impl World {
     }
 
     /// Add one component to the world.
-    pub fn add_component<C: Into<ComponentAsset>>(&mut self, c: C) {
+    ///
+    /// Only a [`RuntimeComponent`] can be added: a build-only asset is consumed
+    /// by the cook and never reaches a world.
+    pub fn add_component<C: RuntimeComponent>(&mut self, c: C) {
         self.components.push(c.into());
     }
 
@@ -327,7 +330,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::TextLabel;
+    use crate::components::TextLabel;
 
     #[test]
     fn a_new_world_is_empty() {

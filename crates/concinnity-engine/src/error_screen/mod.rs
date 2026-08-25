@@ -9,7 +9,7 @@
 
 mod layout;
 
-use crate::assets::{InputKey, Window};
+use crate::components::{InputKey, Window};
 use crate::ecs::FontHandle;
 use crate::gfx::backend::{FrameParams, RenderBackend};
 use crate::gfx::backend_init::BackendInit;

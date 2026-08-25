@@ -14,8 +14,7 @@ pub use io::{
 };
 
 use crate::ecs::AssetOrigin;
-use crate::registry::ComponentType;
-use crate::resource_type::ResourceAssetType;
+use crate::registry::RegisteredType;
 
 /// Asset name derived from a file path: the file stem with dots replaced by
 /// underscores. Companion injection and `cn add` share this so a generated asset
@@ -118,13 +117,8 @@ pub fn load_world(content: &str) -> Result<Vec<serde_json::Value>, Vec<String>> 
             continue;
         };
 
-        let origin = if let Some(ct) = ComponentType::parse(type_str) {
+        let origin = if let Some(ct) = RegisteredType::parse(type_str) {
             Some(ct.registration().origin)
-        } else if ResourceAssetType::parse(type_str).is_some() {
-            // Resource-only assets (AudioClip, Texture, ...) have left the
-            // component registry; they are External and build into the blob's
-            // resource stream.
-            Some(AssetOrigin::External)
         } else {
             errors.push(format!("{}: unknown type '{}'", label, type_str));
             None

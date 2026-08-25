@@ -9,7 +9,7 @@
 // How a chosen option is applied (which backend call, which persisted field)
 // lives in GraphicsSystem's drain, keyed by the same string.
 
-use crate::assets::{
+use crate::components::{
     AaMode, ReflectionBlurResolution, SettingOp, ShadowUpdate, SsgiResolution, UpscaleQuality,
     UpscalerBackend, WindowMode,
 };

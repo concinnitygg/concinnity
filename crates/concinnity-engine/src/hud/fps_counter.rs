@@ -4,7 +4,7 @@
 // `World::start` constructs one from the world's `FpsCounter` component and it
 // updates that component's `label` with the current rate once per second.
 
-use crate::assets::{FpsCounter, TextLabel};
+use crate::components::{FpsCounter, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use std::time::Instant;
@@ -30,7 +30,7 @@ impl FpsCounterSystem {
 impl System for FpsCounterSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .writes_components(crate::component_mask![crate::assets::TextLabel])
+            .writes_components(crate::component_mask![crate::components::TextLabel])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -56,7 +56,7 @@ impl System for FpsCounterSystem {
 
 #[cfg(test)]
 mod tests {
-    use crate::assets::FpsCounter;
+    use crate::components::FpsCounter;
     use crate::ecs::World;
 
     // An FpsCounter component spawns the internal counter system.
@@ -81,7 +81,7 @@ mod tests {
     // in-file-accessible field), so no real sleep is needed.
     #[test]
     fn rate_written_into_label_after_a_second() {
-        use crate::assets::TextLabel;
+        use crate::components::TextLabel;
         use crate::ecs::asset_id::AssetId;
         use std::time::{Duration, Instant};
 

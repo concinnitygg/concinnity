@@ -12,7 +12,7 @@ pub(crate) mod surface_offset;
 pub(crate) mod taper;
 
 use super::frame::BoneFrame;
-use crate::assets::{KeyPolarity, MorphDelta, SkinnedVertexData, SynthParams};
+use crate::components::{KeyPolarity, MorphDelta, SkinnedVertexData, SynthParams};
 use concinnity_core::math::vec3;
 
 // What every generator reads.
@@ -113,8 +113,8 @@ pub(crate) fn unit(v: [f32; 3]) -> Option<[f32; 3]> {
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
-    use crate::assets::SkeletonJoint;
     use crate::character::frame::bone_frames;
+    use crate::components::SkeletonJoint;
 
     pub(crate) fn joint(name: &str, parent: i32, translation: [f32; 3]) -> SkeletonJoint {
         SkeletonJoint {

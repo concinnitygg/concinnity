@@ -18,7 +18,7 @@
 // below the field (its own row pool here, so it can coexist with the Assets
 // panel's combo).
 
-use crate::assets::TextAlign;
+use crate::components::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -1210,7 +1210,7 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextInput, TextLabel};
+    use crate::components::{Sprite, TextInput, TextLabel};
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)

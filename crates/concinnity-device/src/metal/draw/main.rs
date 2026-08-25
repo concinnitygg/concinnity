@@ -693,7 +693,6 @@ impl MtlContext {
             return 0;
         }
 
-        let last_tex = self.textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
 
         // The planar mirror override is a single command stream executed under
@@ -728,13 +727,12 @@ impl MtlContext {
             // bindless path's GpuDrawArgs selection), and the indexed draw.
             draw_calls += self.draw_static_objects(enc, visible, cam_pos, |enc, obj, _| {
                 let model_uniforms = ModelUniforms { model: obj.model };
-                let slot = obj.texture_slot.min(last_tex);
                 // model matrix at vertex buffer(2)
                 enc.set_vertex_value(&model_uniforms, 2);
                 // material at fragment buffer(3)
                 enc.set_fragment_value(&obj.material, 3);
                 // albedo at texture(0), normal map at texture(1)
-                enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+                enc.set_fragment_texture(self.albedo_pool_texture(obj.texture_slot), 0);
                 enc.set_fragment_texture(self.normal_pool_texture(obj.normal_map_slot), 1);
                 enc.set_fragment_sampler(&self.sampler, 0);
             });
@@ -778,15 +776,12 @@ impl MtlContext {
         }
         enc.set_pipeline(&inst_ps);
 
-        let last_tex = self.textures.len().saturating_sub(1);
-
         // Per cluster: bind material (fragment buffer(3)) + albedo / normal
         // textures, shared across the cluster's LOD buckets. The shared helper
         // owns the cull / LOD-bucket / instance-buffer / draw loop.
         let draw_calls = self.draw_prepared_instances(enc, prepared, false, |enc, cluster| {
             enc.set_fragment_value(&cluster.material, 3);
-            let slot = cluster.texture_slot.min(last_tex);
-            enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+            enc.set_fragment_texture(self.albedo_pool_texture(cluster.texture_slot), 0);
             enc.set_fragment_texture(self.normal_pool_texture(cluster.normal_map_slot), 1);
             enc.set_fragment_sampler(&self.sampler, 0);
         });
@@ -836,14 +831,11 @@ impl MtlContext {
         enc.set_pipeline(&skinned_ps);
         enc.set_vertex_buffer(&svb, 0, 1);
 
-        let last_tex = self.textures.len().saturating_sub(1);
-
         // The shared helper owns the visible filter, the skinned-camera-distance
         // LOD pick, and the u16 indexed draw; the closure binds this mesh's model,
         // joint palette, material, and textures.
         let draw_calls = self.draw_skinned_objects(enc, &sib, cam_pos, |enc, obj, i| {
             let model_uniforms = ModelUniforms { model: obj.model };
-            let slot = obj.texture_slot.min(last_tex);
             // Morph bindings for the VS: the packed morph buffer at 9 and the
             // per-draw params + weights at 10. Objects without morph targets
             // bind the shared VB as a dummy the shader never reads
@@ -867,7 +859,7 @@ impl MtlContext {
             enc.set_vertex_buffer(morph_buf, 0, 9);
             enc.set_vertex_value(&morph_params, 10);
             enc.set_fragment_value(&obj.material, 3);
-            enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+            enc.set_fragment_texture(self.albedo_pool_texture(obj.texture_slot), 0);
             enc.set_fragment_texture(self.normal_pool_texture(obj.normal_map_slot), 1);
             enc.set_fragment_sampler(&self.sampler, 0);
         });

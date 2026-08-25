@@ -7,7 +7,7 @@
 // ONE edit, so undo reverts the whole drag; Escape restores the start state.
 
 use super::*;
-use crate::assets::{CharacterCapsule, CharacterShape};
+use crate::components::{CharacterCapsule, CharacterShape};
 use crate::editor::character_shape::{ShapeValues, SliderRow};
 use crate::editor::widget_slider;
 use crate::gfx::shape_preview;

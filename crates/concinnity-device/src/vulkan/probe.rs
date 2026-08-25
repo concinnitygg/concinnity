@@ -399,7 +399,7 @@ impl VkContext {
         let pool_infos: Vec<vk::DescriptorImageInfo> = self
             .textures
             .iter()
-            .chain(self.normal_map_textures.iter())
+            .chain(self.fallback_textures.iter())
             .map(|img| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -1196,7 +1196,7 @@ impl BakeResources {
 
         // One dedicated descriptor pool for the bake's cull + per-face bindless +
         // global + Hi-Z sets.
-        let tex_pool = (ctx.textures.len() + ctx.normal_map_textures.len()) as u32;
+        let tex_pool = (ctx.textures.len() + ctx.fallback_textures.len()) as u32;
         let has_hiz = ctx.cull.hiz.is_some();
         // Per face: view + light + shadow + ProbeSet + ClusterParams UBOs.
         let uniform_count = PROBE_FACE_COUNT as u32 * 5 + u32::from(has_hiz);

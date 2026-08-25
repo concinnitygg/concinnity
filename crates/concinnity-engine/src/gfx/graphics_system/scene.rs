@@ -1,6 +1,6 @@
 // GraphicsSystem scene-flow wiring and per-frame scene visibility application.
 
-use crate::assets::{RenderHandle, Scene, SceneMember};
+use crate::components::{RenderHandle, Scene, SceneMember};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::scene_flow;
@@ -36,7 +36,7 @@ pub(crate) fn refresh_visibility_snapshot(
             .begin_prop(scratch.scene_of.get(&entity).copied());
         // A Hidden entity contributes no slots: its draws were switched off
         // by a hide request, and a scene switch must not relight them.
-        if ctx.get::<crate::assets::Hidden>(entity).is_none() {
+        if ctx.get::<crate::components::Hidden>(entity).is_none() {
             for &slot in handle.draws.iter() {
                 scratch.visibility.push_draw(slot as usize);
             }
@@ -163,7 +163,7 @@ mod tests {
         ctx.insert(a, RenderHandle { draws: [10].into() });
         let b = ctx.components.spawn();
         ctx.insert(b, RenderHandle { draws: [20].into() });
-        ctx.insert(b, crate::assets::Hidden);
+        ctx.insert(b, crate::components::Hidden);
 
         let (draws, scenes) = snapshot_pairs(&ctx);
         assert_eq!(draws, vec![vec![10usize], vec![]]);

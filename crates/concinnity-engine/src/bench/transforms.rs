@@ -18,7 +18,7 @@
 // still costs.
 
 use super::{BenchWorld, bench};
-use crate::assets::{GlobalTransform, Parent, Prop, Transform};
+use crate::components::{GlobalTransform, Parent, Prop, Transform};
 use crate::ecs::Entity;
 use crate::gfx::transform_propagation::{TransformCache, propagate_transforms_cached};
 

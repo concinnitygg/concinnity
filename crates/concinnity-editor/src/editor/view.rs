@@ -95,7 +95,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 mod tests {
     use super::list_panel::{row_label, title_label};
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         let mut world = World::new();

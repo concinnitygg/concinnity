@@ -15,7 +15,7 @@
 use serde_json::Value;
 
 use crate::check::fault::{Fault, Locate, Step, field};
-use crate::registry::ComponentType;
+use crate::registry::{RegisteredType, ScopeResolution};
 
 // What an expression produces. Entity values are opaque handles: they compare
 // for identity and feed entity-taking expressions, and nothing else.
@@ -162,6 +162,37 @@ pub fn check_variables(name: &str, args: &Value) -> Result<(), String> {
     Ok(())
 }
 
+// Whether a behavior can match entities by this component name, and what to say
+// when it cannot. Returns the tail of the complaint, so `scope` and `queries`
+// share one account of why a name is unmatchable.
+//
+// A world declares far more types than a running world holds: the build expands
+// some away, compiles others into the resource stream, and a load-time pass
+// drains the rest during `World::start`. Only a surviving column can be matched
+// once the world runs, and a name that cannot be is silently empty forever,
+// which is what this rejects at build time.
+fn unmatchable(component: &str) -> Option<String> {
+    let Some(ty) = RegisteredType::parse(component) else {
+        return Some(format!("unknown component '{component}'"));
+    };
+    match ty.scope_resolution() {
+        ScopeResolution::Column(_) => None,
+        ScopeResolution::Consumed => Some(format!(
+            "'{component}', which is consumed when the world starts and matches \
+             nothing from the first tick; name the runtime components it \
+             decomposes into instead"
+        )),
+        ScopeResolution::Expanded => Some(format!(
+            "'{component}', which the build expands into the components it \
+             stands for, so no entity ever carries it"
+        )),
+        ScopeResolution::Resource => Some(format!(
+            "'{component}', which is a resource reached by handle rather than a \
+             component column"
+        )),
+    }
+}
+
 pub(crate) fn check_with_vars(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), String> {
     locate(name, args, vars).map_err(|f| f.message)
 }
@@ -175,11 +206,8 @@ fn locate(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
 fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
     let scope_names = str_array(args, "scope");
     for component in &scope_names {
-        if ComponentType::parse(component).is_none() {
-            return Err(
-                Fault::new(format!("`scope` names unknown component '{component}'"))
-                    .within(field("scope")),
-            );
+        if let Some(why) = unmatchable(component) {
+            return Err(Fault::new(format!("`scope` names {why}")).within(field("scope")));
         }
     }
     let entity_scoped = !scope_names.is_empty();
@@ -227,11 +255,10 @@ fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
             .within(field("has"))));
         }
         for component in &has {
-            if ComponentType::parse(component).is_none() {
-                return Err(at(Fault::new(format!(
-                    "query '{query_name}' names unknown component '{component}'"
-                ))
-                .within(field("has"))));
+            if let Some(why) = unmatchable(component) {
+                return Err(at(
+                    Fault::new(format!("query '{query_name}' names {why}")).within(field("has"))
+                ));
             }
         }
         queries.push(query_name);
@@ -655,6 +682,40 @@ mod tests {
             r#"{"queries":[{"name":"q","has":["Nonesuch"]}]}"#,
             "unknown component 'Nonesuch'",
         );
+    }
+
+    // A name a running world can never carry is worse than an unknown one: it
+    // parses, so nothing complained, and the behavior simply never fired.
+    #[test]
+    fn a_consumed_scope_component_is_rejected() {
+        expect_err(r#"{"scope":["Screen"]}"#, "consumed when the world starts");
+    }
+
+    #[test]
+    fn a_build_only_scope_component_is_rejected() {
+        expect_err(r#"{"scope":["Prefab"]}"#, "expands into the components it");
+    }
+
+    #[test]
+    fn a_resource_scope_component_is_rejected() {
+        expect_err(r#"{"scope":["Material"]}"#, "reached by handle");
+    }
+
+    #[test]
+    fn a_consumed_query_component_is_rejected() {
+        expect_err(
+            r#"{"queries":[{"name":"q","has":["Screen"]}]}"#,
+            "consumed when the world starts",
+        );
+    }
+
+    // Prop is drained at start like the rest, but decomposition leaves a marker
+    // behind, so scoping to it stays valid and is the ordinary way to write a
+    // per-prop behavior.
+    #[test]
+    fn scoping_to_prop_passes() {
+        check_json(r#"{"on":"tick","scope":["Prop"],"do":[]}"#).expect("Prop is scopable");
+        check_json(r#"{"queries":[{"name":"q","has":["Prop"]}]}"#).expect("Prop is queryable");
     }
 
     #[test]

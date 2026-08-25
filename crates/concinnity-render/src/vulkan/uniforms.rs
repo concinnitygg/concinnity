@@ -12,7 +12,7 @@
 //! morph kernels, the raymarch SDF templates, the legacy per-draw main and
 //! velocity passes, and Metal's water / glass_mesh_rt.
 
-use crate::assets::sdf_volume::SDF_PARAMS_LEN;
+use crate::components::sdf_volume::SDF_PARAMS_LEN;
 
 /// Byte size of the auto-exposure push-constant range. Pins the struct size to
 /// what the pipeline layout declares.

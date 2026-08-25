@@ -284,38 +284,26 @@ fn extract() -> Reference {
 }
 
 // Every documented asset type, read through the concinnity-world authoring
-// registries (the single source of the origin / args-schema metadata, since
-// the runtime `Component` trait carries none). `ComponentType::all` covers
-// every component; `args_struct_name` names the authored args schema (the type
-// itself for pass-through assets, the `args:` override for the divergent
-// ones, whose fields the parameter table renders). Resource-only assets
-// (`ResourceAssetType`, e.g. AudioClip) still get a doc page: their schema
-// lives in concinnity-asset like every External asset, they have just left the
-// component registry.
+// registry (the single source of the origin / args-schema metadata, since the
+// runtime `Component` trait carries none). `RegisteredType::all` covers every
+// declarable type, components and resources alike; `args_struct_name` names the
+// authored args schema (the type itself for pass-through assets, the `args:`
+// override for the divergent ones, whose fields the parameter table renders).
 fn collect_registry_components() -> Vec<ComponentMeta> {
-    use concinnity_world::registry::ComponentType;
-    use concinnity_world::resource_type::ResourceAssetType;
+    use concinnity_world::registry::RegisteredType;
 
-    let mut out = Vec::new();
-    for &ty in ComponentType::all() {
-        let name = ty.as_str().to_string();
-        out.push(ComponentMeta {
-            name: name.clone(),
-            struct_ident: name.clone(),
-            args_struct: ty.args_struct_name().to_string(),
-            origin: format!("{:?}", ty.registration().origin),
-        });
-    }
-    for &ty in ResourceAssetType::all() {
-        let name = ty.as_str().to_string();
-        out.push(ComponentMeta {
-            name: name.clone(),
-            struct_ident: name.clone(),
-            args_struct: name,
-            origin: format!("{:?}", ty.registration().origin),
-        });
-    }
-    out
+    RegisteredType::all()
+        .iter()
+        .map(|ty| {
+            let name = ty.as_str().to_string();
+            ComponentMeta {
+                name: name.clone(),
+                struct_ident: name,
+                args_struct: ty.args_struct_name().to_string(),
+                origin: format!("{:?}", ty.registration().origin),
+            }
+        })
+        .collect()
 }
 
 // Doc entry rendering

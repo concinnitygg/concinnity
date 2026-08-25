@@ -12,8 +12,8 @@
 // instead of the behaviors is the regression.
 
 use super::{BehaviorSystem, Snapshot};
-use crate::assets::{Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, Transform};
 use crate::bench::{BenchWorld, bench};
+use crate::components::{Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, Transform};
 use crate::ecs::System;
 
 const BEHAVIORS: usize = 256;

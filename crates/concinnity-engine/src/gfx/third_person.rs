@@ -10,7 +10,7 @@
 // the controller itself in `direct` drive; either way `PhysicsSystem`
 // resolves it against the scene on the next step.
 
-use crate::assets::{
+use crate::components::{
     AnimationGraph, AnimationParams, Camera3D, CameraController, CharacterRig, FollowDrive,
     FrameInput,
 };
@@ -96,14 +96,14 @@ impl ThirdPersonSystem {
 impl System for ThirdPersonSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .reads_components(crate::component_mask![crate::components::FrameInput])
             .writes_components(crate::component_mask![
-                crate::assets::Camera3D,
-                crate::assets::CharacterRig,
-                crate::assets::AnimationParams,
-                crate::assets::CameraProbe,
+                crate::components::Camera3D,
+                crate::components::CharacterRig,
+                crate::components::AnimationParams,
+                crate::components::CameraProbe,
             ])
-            .reads_resources(crate::resource_mask![crate::assets::ControlsCommand])
+            .reads_resources(crate::resource_mask![crate::components::ControlsCommand])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -155,7 +155,7 @@ impl System for ThirdPersonSystem {
         // Occlusion probe: PhysicsSystem raycasts pivot-to-camera each frame
         // and reports the largest unobstructed distance, so walls never cut
         // between the camera and the character.
-        ctx.push(crate::assets::CameraProbe {
+        ctx.push(crate::components::CameraProbe {
             target,
             pivot: self.pivot,
             desired: self.pivot,
@@ -319,7 +319,7 @@ impl System for ThirdPersonSystem {
         ];
         let mut distance = self.distance;
         if let Some(probe) = ctx
-            .query_mut::<crate::assets::CameraProbe>()
+            .query_mut::<crate::components::CameraProbe>()
             .find(|p| Some(p.target) == self.target)
         {
             if let Some(clearance) = probe.clearance {
@@ -353,7 +353,7 @@ impl System for ThirdPersonSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{FollowController, FrameInput};
+    use crate::components::{FollowController, FrameInput};
     use crate::ecs::World;
     use crate::ecs::asset_id::intern;
     use std::time::Duration;
@@ -384,8 +384,8 @@ mod tests {
         target: &str,
         drive: FollowDrive,
         jump_height: f32,
-    ) -> crate::assets::Camera3D {
-        use crate::assets::{Camera3D, CameraController};
+    ) -> crate::components::Camera3D {
+        use crate::components::{Camera3D, CameraController};
         let controller = CameraController {
             move_speed: 2.0,
             follow: Some(FollowController {
@@ -428,20 +428,20 @@ mod tests {
         let target = SkinnedMeshHandle(intern("hero").0);
         let mut world = World::new();
         world.add_component(follow_camera("hero", drive, jump_height));
-        world.add_component(crate::assets::CharacterRig::new(
+        world.add_component(crate::components::CharacterRig::new(
             target,
             0,
             crate::gfx::skinning::IDENTITY,
             0.5,
             0.3,
         ));
-        let graph: crate::assets::AnimationGraph = serde_json::from_value(serde_json::json!({
+        let graph: crate::components::AnimationGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
         }))
         .unwrap();
         world.add_component(graph);
-        world.add_component(crate::assets::AnimationParams::new(target, vec![0.0]));
+        world.add_component(crate::components::AnimationParams::new(target, vec![0.0]));
         (world, target)
     }
 
@@ -480,7 +480,7 @@ mod tests {
         );
 
         let rig = world
-            .query::<crate::assets::CharacterRig>()
+            .query::<crate::components::CharacterRig>()
             .next()
             .expect("rig survives");
         assert!(rig.yaw.abs() < 1e-4, "forward at yaw 0 keeps heading 0");
@@ -490,7 +490,7 @@ mod tests {
             rig.desired_move
         );
         let params = world
-            .query::<crate::assets::AnimationParams>()
+            .query::<crate::components::AnimationParams>()
             .find(|p| p.target == target)
             .expect("params survive");
         assert!(
@@ -498,7 +498,7 @@ mod tests {
             "speed parameter ramped: {:?}",
             params.values
         );
-        let camera = world.query::<crate::assets::Camera3D>().next().unwrap();
+        let camera = world.query::<crate::components::Camera3D>().next().unwrap();
         // Pivot is the rig position raised by `height`; the camera sits
         // `distance` behind it along +Z (looking down -Z).
         assert!((camera.position[1] - (rig.position[1] + 1.5)).abs() < 1e-3);
@@ -524,7 +524,10 @@ mod tests {
             12,
         );
 
-        let rig = world.query::<crate::assets::CharacterRig>().next().unwrap();
+        let rig = world
+            .query::<crate::components::CharacterRig>()
+            .next()
+            .unwrap();
         assert!(
             (rig.yaw + std::f32::consts::FRAC_PI_2).abs() < 1e-3,
             "heading turned to -pi/2 (world +X): {}",
@@ -547,7 +550,10 @@ mod tests {
             },
             1,
         );
-        let rig = world.query::<crate::assets::CharacterRig>().next().unwrap();
+        let rig = world
+            .query::<crate::components::CharacterRig>()
+            .next()
+            .unwrap();
         // v = sqrt(2 g h) with g = 20, h = 1.
         assert!(
             (rig.jump_velocity - (2.0 * concinnity_physics::GRAVITY).sqrt()).abs() < 1e-4,
@@ -562,7 +568,7 @@ mod tests {
     #[test]
     fn direct_drive_moves_the_capsule_through_physics() {
         let (mut world, _) = follow_world(FollowDrive::Direct, 0.0);
-        world.add_component(crate::assets::PhysicsConfig::default());
+        world.add_component(crate::components::PhysicsConfig::default());
         world.start().unwrap();
         step_held(
             &mut world,
@@ -573,7 +579,10 @@ mod tests {
             8,
         );
 
-        let rig = world.query::<crate::assets::CharacterRig>().next().unwrap();
+        let rig = world
+            .query::<crate::components::CharacterRig>()
+            .next()
+            .unwrap();
         assert!(
             rig.position[2] < -1e-4,
             "capsule advanced along -Z: {:?}",
@@ -592,13 +601,13 @@ mod tests {
     #[test]
     fn wall_behind_the_camera_pulls_it_in() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
-        world.add_component(crate::assets::PhysicsConfig::default());
+        world.add_component(crate::components::PhysicsConfig::default());
         // A wall crossing the camera's line at z = +2 (the camera orbits to
         // z = +4 at yaw 0, the pivot sits at z = 0).
-        world.add_component(crate::assets::Prop {
+        world.add_component(crate::components::Prop {
             asset_id: intern("wall"),
             position: [0.0, 1.5, 2.0],
-            collider: Some(crate::assets::PropCollider {
+            collider: Some(crate::components::PropCollider {
                 shape: "cuboid".to_string(),
                 half_extents: [3.0, 1.5, 0.2],
                 radius: 0.0,
@@ -610,7 +619,7 @@ mod tests {
         world.start().unwrap();
         step_held(&mut world, FrameInput::default(), 6);
 
-        let camera = world.query::<crate::assets::Camera3D>().next().unwrap();
+        let camera = world.query::<crate::components::Camera3D>().next().unwrap();
         assert!(
             camera.position[2] < 1.9,
             "camera pulled in front of the wall at z = 2: {:?}",
@@ -630,11 +639,14 @@ mod tests {
     #[test]
     fn idle_rig_rests_on_the_floor() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
-        world.add_component(crate::assets::PhysicsConfig::default());
+        world.add_component(crate::components::PhysicsConfig::default());
         world.start().unwrap();
         step_held(&mut world, FrameInput::default(), 120);
 
-        let rig = world.query::<crate::assets::CharacterRig>().next().unwrap();
+        let rig = world
+            .query::<crate::components::CharacterRig>()
+            .next()
+            .unwrap();
         assert!(
             (-0.02..0.08).contains(&rig.position[1]),
             "capsule settles onto the slab top: {:?}",

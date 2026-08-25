@@ -10,7 +10,7 @@
 // log sink.
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use std::sync::atomic::Ordering;
 
 impl EditorHook {

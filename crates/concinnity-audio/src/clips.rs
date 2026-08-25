@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use concinnity_core::assets::AudioBus;
+use concinnity_core::components::AudioBus;
 
 use crate::EmitterId;
 

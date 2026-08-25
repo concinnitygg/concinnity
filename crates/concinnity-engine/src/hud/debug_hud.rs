@@ -8,7 +8,7 @@
 // the top-right of the window by `GraphicsSystem` (it owns the font metrics and
 // live window size needed to right-align and stack them).
 
-use crate::assets::{Camera3D, DebugHud, FrameInput, TextLabel};
+use crate::components::{Camera3D, DebugHud, FrameInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::profile::PassTiming;
@@ -179,10 +179,10 @@ impl DebugHudSystem {
 impl System for DebugHudSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::assets::Camera3D])
-            .writes_components(crate::component_mask![crate::assets::TextLabel])
+            .reads_components(crate::component_mask![crate::components::Camera3D])
+            .writes_components(crate::component_mask![crate::components::TextLabel])
             .reads_resources(crate::resource_mask![
-                crate::assets::FrameInput,
+                crate::components::FrameInput,
                 crate::app::budget::ThreadBudget,
                 crate::app::budget::MemoryBudget,
             ])

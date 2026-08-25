@@ -21,7 +21,7 @@ use crate::gfx::graphics_system::WorldReloadState;
 // A runtime decal-spawn request. `texture` is the world.jsonl name of the
 // Texture asset to project; `None` (or an unresolvable name) falls back to
 // the renderer's white slot 0 so the tint still stamps. Geometry is the
-// same TRS triple the [`crate::assets::Decal`] component carries.
+// same TRS triple the [`crate::components::Decal`] component carries.
 #[derive(Debug, Clone)]
 pub(crate) struct DecalSpawnArgs {
     pub texture: Option<String>,
@@ -44,7 +44,7 @@ impl Default for DecalSpawnArgs {
 }
 
 // A runtime emitter-spawn request. Same field shape as the
-// [`crate::assets::ParticleEmitter`] asset; the engine clamps + normalises
+// [`crate::components::ParticleEmitter`] asset; the engine clamps + normalises
 // via [`crate::gfx::particles::build_particle_records`].
 #[derive(Debug, Clone)]
 pub(crate) struct EmitterSpawnArgs {
@@ -274,7 +274,7 @@ pub(crate) enum RuntimeCommand {
     // the `systems_mut` borrow ends, via `dispatch_quality_set`.
     QualitySet {
         setting: String,
-        op: crate::assets::SettingOp,
+        op: crate::components::SettingOp,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     // Bind a movement action (`key_forward` / ... ) to a key, live, by pushing
@@ -283,7 +283,7 @@ pub(crate) enum RuntimeCommand {
     // `dispatch_rebind` once the `systems_mut` borrow ends.
     Rebind {
         setting: String,
-        key: crate::assets::InputKey,
+        key: crate::components::InputKey,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     // Despawn an authored placement (and its descendants) by name. ECS-side: it
@@ -324,7 +324,7 @@ pub(crate) enum RuntimeCommand {
     // key press fires, so a headless harness can start, advance, and choose
     // through a story and screenshot each page. ECS-side like `Despawn`.
     Story {
-        command: crate::assets::StoryCommand,
+        command: crate::components::StoryCommand,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
 }
@@ -507,8 +507,8 @@ pub(crate) fn dispatch_quality_set(cmd: RuntimeCommand, world: &mut crate::ecs::
         return;
     };
     world
-        .events_mut::<crate::assets::SettingCommand>()
-        .send(crate::assets::SettingCommand {
+        .events_mut::<crate::components::SettingCommand>()
+        .send(crate::components::SettingCommand {
             setting,
             op,
             value_label: None,
@@ -532,10 +532,10 @@ pub(crate) fn dispatch_rebind(cmd: RuntimeCommand, world: &mut crate::ecs::World
         return;
     };
     world
-        .events_mut::<crate::assets::SettingCommand>()
-        .send(crate::assets::SettingCommand {
+        .events_mut::<crate::components::SettingCommand>()
+        .send(crate::components::SettingCommand {
             setting,
-            op: crate::assets::SettingOp::Rebind(key),
+            op: crate::components::SettingOp::Rebind(key),
             value_label: None,
             persist: true,
         });
@@ -558,8 +558,8 @@ pub(crate) fn dispatch_despawn(cmd: RuntimeCommand, world: &mut crate::ecs::Worl
         return;
     };
     world
-        .events_mut::<crate::assets::DespawnRequest>()
-        .send(crate::assets::DespawnRequest { target: id.into() });
+        .events_mut::<crate::components::DespawnRequest>()
+        .send(crate::components::DespawnRequest { target: id.into() });
     let _ = reply.send(Ok(()));
 }
 
@@ -594,8 +594,8 @@ pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut crate::ecs::Wor
         None => None,
     };
     world
-        .events_mut::<crate::assets::ReparentRequest>()
-        .send(crate::assets::ReparentRequest {
+        .events_mut::<crate::components::ReparentRequest>()
+        .send(crate::components::ReparentRequest {
             child: child_id.into(),
             parent: parent_id.map(Into::into),
         });
@@ -630,11 +630,11 @@ pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut crate::ecs::World)
     let scale = if scale == [0.0; 3] { [1.0; 3] } else { scale };
     let name_id = crate::ecs::asset_id::intern(&name);
     world
-        .events_mut::<crate::assets::SpawnRequest>()
-        .send(crate::assets::SpawnRequest {
+        .events_mut::<crate::components::SpawnRequest>()
+        .send(crate::components::SpawnRequest {
             template: template_id,
             name: Some(name_id),
-            transform: crate::assets::Transform {
+            transform: crate::components::Transform {
                 position,
                 rotation_deg,
                 scale,
@@ -654,7 +654,7 @@ pub(crate) fn dispatch_story(cmd: RuntimeCommand, world: &mut crate::ecs::World)
         return;
     };
     world
-        .events_mut::<crate::assets::StoryCommand>()
+        .events_mut::<crate::components::StoryCommand>()
         .send(command);
     let _ = reply.send(Ok(()));
 }
@@ -670,7 +670,7 @@ pub(crate) fn apply_camera_set(
     args: &CameraSetArgs,
     world: &mut crate::ecs::World,
 ) -> Result<(), String> {
-    use crate::assets::Camera3D;
+    use crate::components::Camera3D;
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return Err("camera-set: no Camera3D in world".to_string());
     };
@@ -696,7 +696,7 @@ pub(crate) fn apply_camera_set(
 // fighting the externally driven pose). Returns `false` when the world has no
 // `Camera3D`, so the caller drops the motion instead of spinning forever.
 pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut crate::ecs::World) -> bool {
-    use crate::assets::Camera3D;
+    use crate::components::Camera3D;
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return false;
     };
@@ -861,7 +861,7 @@ mod tests {
     // succeed (the velocity reset runs over the constructed system).
     #[test]
     fn apply_camera_set_writes_active_camera() {
-        use crate::assets::{Camera3D, CameraController};
+        use crate::components::{Camera3D, CameraController};
         use crate::ecs::World;
 
         let mut world = World::new();
@@ -900,7 +900,7 @@ mod tests {
     // `fov_y_degrees: None` leaves the existing field untouched.
     #[test]
     fn apply_camera_set_keeps_fov_when_none() {
-        use crate::assets::{Camera3D, CameraController};
+        use crate::components::{Camera3D, CameraController};
         use crate::ecs::World;
 
         let mut world = World::new();
@@ -1075,7 +1075,7 @@ mod tests {
     // matrix; a sequence of steps accumulates displacement (sustained motion).
     #[test]
     fn apply_camera_move_step_advances_active_camera() {
-        use crate::assets::{Camera3D, CameraController};
+        use crate::components::{Camera3D, CameraController};
         use crate::ecs::World;
 
         let mut world = World::new();
@@ -1261,7 +1261,7 @@ mod tests {
                 "quality-set",
                 dispatch_spawn_unit(|reply| RuntimeCommand::QualitySet {
                     setting: "ssao".to_string(),
-                    op: crate::assets::SettingOp::Next,
+                    op: crate::components::SettingOp::Next,
                     reply,
                 }),
             ),
@@ -1269,7 +1269,7 @@ mod tests {
                 "rebind",
                 dispatch_spawn_unit(|reply| RuntimeCommand::Rebind {
                     setting: "key_forward".to_string(),
-                    key: crate::assets::InputKey::Space,
+                    key: crate::components::InputKey::Space,
                     reply,
                 }),
             ),
@@ -1303,7 +1303,7 @@ mod tests {
             (
                 "story",
                 dispatch_spawn_unit(|reply| RuntimeCommand::Story {
-                    command: crate::assets::StoryCommand::Advance,
+                    command: crate::components::StoryCommand::Advance,
                     reply,
                 }),
             ),
@@ -1514,8 +1514,8 @@ mod tests {
         assert!(dropped(rx));
     }
 
-    fn controlled_camera() -> crate::assets::Camera3D {
-        use crate::assets::{Camera3D, CameraController};
+    fn controlled_camera() -> crate::components::Camera3D {
+        use crate::components::{Camera3D, CameraController};
         Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
@@ -1534,7 +1534,7 @@ mod tests {
     // The CameraSet wrapper applies the pose against the live ECS and replies Ok.
     #[test]
     fn dispatch_camera_set_applies_pose_and_replies_ok() {
-        use crate::assets::Camera3D;
+        use crate::components::Camera3D;
         use crate::ecs::World;
 
         let mut world = World::new();
@@ -1567,7 +1567,7 @@ mod tests {
         dispatch_quality_set(
             RuntimeCommand::QualitySet {
                 setting: "ssao".to_string(),
-                op: crate::assets::SettingOp::Next,
+                op: crate::components::SettingOp::Next,
                 reply: tx,
             },
             &mut world,
@@ -1575,13 +1575,13 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
 
         let events = world
-            .events::<crate::assets::SettingCommand>()
+            .events::<crate::components::SettingCommand>()
             .expect("setting command queued");
         let mut cursor = crate::ecs::EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].setting, "ssao");
-        assert_eq!(seen[0].op, crate::assets::SettingOp::Next);
+        assert_eq!(seen[0].op, crate::components::SettingOp::Next);
         assert!(seen[0].persist);
         assert!(seen[0].value_label.is_none());
     }
@@ -1593,7 +1593,7 @@ mod tests {
         dispatch_rebind(
             RuntimeCommand::Rebind {
                 setting: "key_forward".to_string(),
-                key: crate::assets::InputKey::Space,
+                key: crate::components::InputKey::Space,
                 reply: tx,
             },
             &mut world,
@@ -1601,7 +1601,7 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
 
         let events = world
-            .events::<crate::assets::SettingCommand>()
+            .events::<crate::components::SettingCommand>()
             .expect("setting command queued");
         let mut cursor = crate::ecs::EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
@@ -1609,7 +1609,7 @@ mod tests {
         assert_eq!(seen[0].setting, "key_forward");
         assert_eq!(
             seen[0].op,
-            crate::assets::SettingOp::Rebind(crate::assets::InputKey::Space)
+            crate::components::SettingOp::Rebind(crate::components::InputKey::Space)
         );
     }
 
@@ -1619,7 +1619,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_story(
             RuntimeCommand::Story {
-                command: crate::assets::StoryCommand::Choose(2),
+                command: crate::components::StoryCommand::Choose(2),
                 reply: tx,
             },
             &mut world,
@@ -1627,12 +1627,12 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
 
         let events = world
-            .events::<crate::assets::StoryCommand>()
+            .events::<crate::components::StoryCommand>()
             .expect("story command queued");
         let mut cursor = crate::ecs::EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
-        assert_eq!(*seen[0], crate::assets::StoryCommand::Choose(2));
+        assert_eq!(*seen[0], crate::components::StoryCommand::Choose(2));
     }
 
     #[test]
@@ -1652,7 +1652,7 @@ mod tests {
         );
         assert!(rx.recv().unwrap().is_ok());
         let events = world
-            .events::<crate::assets::DespawnRequest>()
+            .events::<crate::components::DespawnRequest>()
             .expect("despawn request queued");
         let mut cursor = crate::ecs::EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
@@ -1696,7 +1696,7 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
         {
             let events = world
-                .events::<crate::assets::ReparentRequest>()
+                .events::<crate::components::ReparentRequest>()
                 .expect("reparent request queued");
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
@@ -1722,7 +1722,9 @@ mod tests {
         );
         assert!(rx.recv().unwrap().is_ok());
         {
-            let events = world.events::<crate::assets::ReparentRequest>().unwrap();
+            let events = world
+                .events::<crate::components::ReparentRequest>()
+                .unwrap();
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert!(seen[0].parent.is_none());
@@ -1779,7 +1781,7 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
         {
             let events = world
-                .events::<crate::assets::SpawnRequest>()
+                .events::<crate::components::SpawnRequest>()
                 .expect("spawn request queued");
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
@@ -1808,7 +1810,7 @@ mod tests {
         );
         assert!(rx.recv().unwrap().is_ok());
         {
-            let events = world.events::<crate::assets::SpawnRequest>().unwrap();
+            let events = world.events::<crate::components::SpawnRequest>().unwrap();
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert_eq!(seen[0].transform.scale, [1.0, 1.0, 1.0]);

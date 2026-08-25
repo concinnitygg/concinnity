@@ -1,16 +1,10 @@
 // src/cli/list.rs
-use concinnity_cook::resource_handles::ResourceAssetType;
 use concinnity_cook::world::{find_world_jsonl, parse_world_jsonl, resolve_includes};
-use concinnity_world::registry::ComponentType;
+use concinnity_world::registry::RegisteredType;
 
-// Authoring metadata for a type name, whether it is a registry component or a
-// resource asset (AudioClip, Texture, ...) that lives outside the component
-// registry.
+// Authoring metadata for a type name, whichever group of the registry it is in.
 fn registration_for(type_str: &str) -> Option<concinnity_world::registry::Registration> {
-    if let Some(ct) = ComponentType::parse(type_str) {
-        return Some(ct.registration());
-    }
-    ResourceAssetType::parse(type_str).map(|rt| rt.registration())
+    RegisteredType::parse(type_str).map(RegisteredType::registration)
 }
 
 // Resolve the world path the same way every other subcommand does: an explicit
@@ -368,11 +362,11 @@ mod tests {
     }
 
     #[test]
-    fn registration_for_falls_back_to_resource_assets() {
-        // AudioClip and Texture left the component registry in the resource-table
-        // migration; their metadata now comes from ResourceAssetType.
+    fn registration_for_resolves_resource_assets() {
+        // A resource asset is a registered type like any other; what marks it is
+        // the handle space it reports, not a separate registry.
         for name in ["AudioClip", "Texture"] {
-            assert!(ComponentType::parse(name).is_none());
+            assert!(RegisteredType::parse(name).is_some_and(|t| t.is_resource()));
             let r = registration_for(name).unwrap();
             assert_eq!(r.origin, concinnity_world::registry::AssetOrigin::External);
             assert_eq!(

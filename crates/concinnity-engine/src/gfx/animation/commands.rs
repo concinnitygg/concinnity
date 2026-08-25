@@ -19,9 +19,8 @@ impl AnimationSystem {
     /// Drain pending runtime commands against the system's own clock. Uses the
     /// same `start` / elapsed bookkeeping `step` uses, so the binary-only
     /// `DebugHook::tick` drive can apply commands from outside the per-system
-    /// step. The library never calls this (the drive is in the `cn debug`
-    /// binary), hence the `dead_code` allowance. `step` runs after the hook on
-    /// the same frame, so the `start` anchor set here is shared.
+    /// step. The library never calls this; `step` runs after the hook on the
+    /// same frame, so the `start` anchor set here is shared.
     pub fn apply_runtime_commands(&mut self) {
         let now = std::time::Instant::now();
         let start = *self.start.get_or_insert(now);
@@ -172,7 +171,7 @@ mod tests {
     use super::super::flat::{ClipEntry, FlatState};
     use super::*;
     use crate::app::anim_runtime::{CrossfadeRequest, SetParamRequest};
-    use crate::assets::AnimationGraph;
+    use crate::components::AnimationGraph;
     use crate::ecs::asset_id::AssetId;
     use crate::gfx::anim_graph::GraphCursor;
     use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;

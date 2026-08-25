@@ -16,7 +16,7 @@
 // deadline with no quiet frame fails.
 
 use super::BenchWorld;
-use crate::assets::{
+use crate::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Collider, GlobalTransform, PhysicsConfig,
     Prop, PropCollider, RenderHandle, Transform,
 };

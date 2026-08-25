@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use crate::assets::{GlobalTransform, Parent, Transform};
+use crate::components::{GlobalTransform, Parent, Transform};
 use crate::ecs::{ColumnTicks, Entity, MAX_CHANGE_AGE, PipelineContext, Tick};
 use crate::gfx::draw_list::mat4_mul;
 
@@ -410,7 +410,7 @@ pub(crate) fn propagate_transforms_cached(ctx: &mut PipelineContext, cache: &mut
 // component-column order. Driven by ReparentRequest events the GraphicsSystem
 // drains each step.
 pub(crate) fn reparent(ctx: &mut PipelineContext, child: Entity, new_parent: Option<Entity>) {
-    use crate::assets::Children;
+    use crate::components::Children;
 
     // Drop the old parent edge and unlist the child from that parent.
     if let Some(old) = ctx.remove::<Parent>(child)
@@ -439,8 +439,8 @@ pub(crate) fn reparent(ctx: &mut PipelineContext, child: Entity, new_parent: Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::Children;
     use crate::blob::BlobData;
+    use crate::components::Children;
     use crate::ecs::{Arena, ComponentStorage, FrameContext, Resources};
     use crate::gfx::draw_list::IDENTITY4;
     use crate::gfx::profile::FrameProfile;

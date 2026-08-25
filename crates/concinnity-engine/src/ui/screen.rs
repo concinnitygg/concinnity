@@ -2,7 +2,7 @@
 // one's policies are. Pure bookkeeping -- UiInputSystem owns applying the
 // resulting element-visibility and focus changes to the world.
 
-use crate::assets::{Screen, ScreenCommand, ScreenInput};
+use crate::components::{Screen, ScreenCommand, ScreenInput};
 use crate::ecs::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 

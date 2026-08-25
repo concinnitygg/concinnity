@@ -3,7 +3,7 @@
 // world is decomposed, so every HUD / menu / story update resolves an id to the
 // live component before writing it.
 
-use crate::assets::{Sprite, TextInput, TextLabel};
+use crate::components::{Sprite, TextInput, TextLabel};
 use crate::ecs::{ComponentSlot, PipelineContext, asset_id::AssetId};
 
 // A component that carries the id of the asset it was built from.

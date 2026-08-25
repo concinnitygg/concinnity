@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use concinnity_core::assets::{
+use concinnity_core::components::{
     BodyDynamics, Camera3D, Collider, ContactEvent, Held, PhysicsConfig, PhysicsJoint, Pickup,
     RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent,
 };
@@ -71,7 +71,7 @@ pub struct PhysicsSystem {
     // entities, refilled every step.
     new_props: Vec<(Entity, PropCollSnap)>,
     // Per-step drain scratch, reused so the event handoffs never reallocate.
-    motion_scratch: Vec<concinnity_core::assets::RootMotionEvent>,
+    motion_scratch: Vec<concinnity_core::components::RootMotionEvent>,
     contact_scratch: Vec<ContactHit>,
     sensor_scratch: Vec<SensorCrossing>,
     // Index into `props` of the prop currently being carried.
@@ -304,7 +304,7 @@ impl System for PhysicsSystem {
         let mut floor_built = false;
         if let Some(mesh_id) = self.terrain_mesh {
             let mesh_snap = ctx
-                .query::<concinnity_core::assets::ProceduralMesh>()
+                .query::<concinnity_core::components::ProceduralMesh>()
                 .find(|m| m.asset_id == mesh_id)
                 .cloned();
             match mesh_snap {
@@ -906,7 +906,7 @@ impl System for PhysicsSystem {
 // for exactly this read (see the release sweep in `graphics_system::init`).
 fn build_heightfield_collider(
     world: &mut Simulation,
-    mesh: &concinnity_core::assets::ProceduralMesh,
+    mesh: &concinnity_core::components::ProceduralMesh,
     offset_y: f32,
     mask: LayerMask,
     ctx: &mut PipelineContext,
@@ -1030,7 +1030,9 @@ fn lcg_hash(mut v: u32) -> u32 {
 mod tests {
     use super::*;
     use crate::physics::budget::{record_of, scan_counts};
-    use concinnity_core::assets::{CameraController, CharacterRig, FollowController, PropCollider};
+    use concinnity_core::components::{
+        CameraController, CharacterRig, FollowController, PropCollider,
+    };
     use concinnity_core::ecs::{
         Arena, ComponentStorage, FrameContext, Resources, SkinnedMeshHandle,
     };

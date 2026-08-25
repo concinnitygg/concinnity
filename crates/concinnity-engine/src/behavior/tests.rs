@@ -3,11 +3,11 @@
 // are deterministic.
 
 use super::*;
-use crate::assets::{
-    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
-    EntityTarget, Prop, Transform, VariableDecl,
-};
 use crate::blob::BlobData;
+use crate::components::{
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
+    EntityTarget, Prop, PropInstance, Transform, VariableDecl,
+};
 use crate::ecs::{Arena, ComponentStorage, EventCursor, FrameContext, Resources};
 use crate::gfx::profile::FrameProfile;
 
@@ -69,8 +69,11 @@ fn tick(sys: &mut BehaviorSystem, world: &mut TestWorld, dt: f32) {
     sys.tick(&mut world.ctx(), dt, elapsed);
 }
 
+// A prop's entity as it exists from the first tick: decomposition drains the
+// authored Prop and leaves the PropInstance marker in its place, which is what
+// a behavior scoped to "Prop" resolves against.
 fn spawn_prop(world: &mut TestWorld, position: [f32; 3]) -> Entity {
-    let entity = world.components.push_typed(Prop::default());
+    let entity = world.components.push_typed(PropInstance);
     world.components.insert_typed(
         entity,
         Transform {
@@ -516,7 +519,7 @@ fn a_query_intersects_every_declared_component() {
     }]);
     let placed = spawn_prop(&mut world, [0.0; 3]);
     // A Prop with no Transform must not match.
-    world.components.push_typed(Prop::default());
+    world.components.push_typed(PropInstance);
     let sys = system(&mut world);
 
     let matched = entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
@@ -620,7 +623,7 @@ fn alive_follows_the_world_not_this_ticks_queries() {
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var(&sys, "still_here"), 1, "a matched entity is alive");
 
-    world.components.remove_typed::<Prop>(entity);
+    world.components.remove_typed::<PropInstance>(entity);
     world.components.remove_typed::<Transform>(entity);
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(
@@ -792,7 +795,7 @@ fn enter_fires_on_matching_crossings_only() {
         ..Default::default()
     }]);
     let mut index = std::collections::BTreeMap::new();
-    let entity = world.components.push_typed(Prop::default());
+    let entity = world.components.push_typed(PropInstance);
     index.insert(AssetId(7), entity);
     world
         .resources
@@ -831,7 +834,7 @@ fn crossings_survive_a_menu_pause() {
         ..Default::default()
     }]);
     let mut index = std::collections::BTreeMap::new();
-    let entity = world.components.push_typed(Prop::default());
+    let entity = world.components.push_typed(PropInstance);
     index.insert(AssetId(7), entity);
     world
         .resources
@@ -862,7 +865,7 @@ fn interact_fires_on_matching_press_only() {
         ..Default::default()
     }]);
     let mut index = std::collections::BTreeMap::new();
-    let entity = world.components.push_typed(Prop::default());
+    let entity = world.components.push_typed(PropInstance);
     index.insert(AssetId(7), entity);
     world
         .resources
@@ -900,7 +903,7 @@ fn show_and_hide_send_visibility_requests() {
         ..Default::default()
     }]);
     let mut index = std::collections::BTreeMap::new();
-    let entity = world.components.push_typed(Prop::default());
+    let entity = world.components.push_typed(PropInstance);
     index.insert(AssetId(3), entity);
     world
         .resources
@@ -1216,6 +1219,62 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
         .read(&mut cursor)
         .count();
     assert_eq!(fired, 1);
+}
+
+// The scoped-behavior tests above drive a bare TestWorld, whose components go
+// straight into storage: decomposition never runs, so they cannot show that a
+// scope survives it. This one goes through `World::start`, where the authored
+// Prop column is drained, and covers both halves of the
+// ModelRenderer-xor-MeshRenderer split a Prop decomposes into.
+#[test]
+fn a_prop_scoped_behavior_fires_once_started() {
+    let mut world = crate::ecs::World::new();
+    world.add_component(Prop {
+        asset_id: AssetId(1),
+        mesh: Some(crate::ecs::MeshHandle(10)),
+        scale: [1.0; 3],
+        ..Default::default()
+    });
+    world.add_component(Prop {
+        asset_id: AssetId(2),
+        model: Some(AssetId(20)),
+        position: [10.0, 0.0, 0.0],
+        scale: [1.0; 3],
+        ..Default::default()
+    });
+    world.add_component(Behavior {
+        on: BehaviorSource::Tick,
+        scope: vec!["Prop".into()],
+        body: vec![BehaviorNode::SetTransform {
+            entity: BehaviorExpr::SelfEntity,
+            position: Some(BehaviorExpr::Add(
+                Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
+                Box::new(BehaviorExpr::Vec3([0.0, 1.0, 0.0])),
+            )),
+            rotation_deg: None,
+            scale: None,
+        }],
+        ..Default::default()
+    });
+
+    world.start().unwrap();
+    assert_eq!(
+        world.query::<Prop>().count(),
+        0,
+        "decomposition drained the authored column",
+    );
+    world.step();
+
+    let mut lifted: Vec<f32> = world
+        .join2::<PropInstance, Transform>()
+        .map(|(_, _, t)| t.position[1])
+        .collect();
+    lifted.sort_by(f32::total_cmp);
+    assert_eq!(
+        lifted,
+        vec![1.0, 1.0],
+        "both the mesh- and the model-backed prop ran the behavior",
+    );
 }
 
 // Typed world variables, declared by the world's Variables asset.

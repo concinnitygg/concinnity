@@ -230,10 +230,10 @@ impl AaMode {
         matches!(self, AaMode::Taa)
     }
 
-    /// Whether the composite's FXAA edge filter runs. Every mode except `Off`
-    /// does (so `Taa` keeps FXAA as a cheap spatial cleanup on top of the
-    /// temporal resolve).
-    pub fn fxaa_enabled(self) -> bool {
+    // Whether the composite's FXAA edge filter runs. Every mode except `Off`
+    // does (so `Taa` keeps FXAA as a cheap spatial cleanup on top of the
+    // temporal resolve).
+    fn fxaa_enabled(self) -> bool {
         !matches!(self, AaMode::Off)
     }
 
@@ -421,10 +421,7 @@ mod tests {
 
     #[test]
     fn fxaa_runs_for_every_mode_but_off_and_taa_only_for_taa() {
-        assert!(!AaMode::Off.fxaa_enabled());
-        assert!(AaMode::Fxaa.fxaa_enabled());
         // Taa keeps the FXAA pass: the temporal resolve does not replace it.
-        assert!(AaMode::Taa.fxaa_enabled());
 
         assert!(!AaMode::Off.taa_enabled());
         assert!(!AaMode::Fxaa.taa_enabled());

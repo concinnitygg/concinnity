@@ -3,8 +3,8 @@
 // a regional slider with a smooth boundary.
 
 use super::SynthInput;
-use crate::assets::MorphDelta;
 use crate::character::frame::region_weight;
+use crate::components::MorphDelta;
 use concinnity_core::math::vec3;
 
 pub(crate) fn displace(input: &SynthInput, source: &[MorphDelta]) -> Vec<[f32; 3]> {

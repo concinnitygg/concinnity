@@ -12,7 +12,7 @@
 // frontmost open panel.
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 
 impl EditorHook {
     // The `entries` index of the first StoryImport (the panel's subject).

@@ -1,7 +1,7 @@
 // GraphicsSystem one-time setup: backend creation, draw-list build, and the
 // shader / texture / streaming wiring performed on the first tick.
 
-use crate::assets::{
+use crate::components::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
     Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, RectAreaLight,
     SdfVolume, Shader, ShaderKind, SkinnedMeshGeometry, SpotLight, StageSource, StageSourceExt,
@@ -39,10 +39,10 @@ struct ResolvedRenderConfig {
 struct SkinnedGeometry {
     handle: crate::ecs::SkinnedMeshHandle,
     name_id: AssetId,
-    mesh: crate::assets::SkinnedMesh,
+    mesh: crate::components::SkinnedMesh,
     vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
     indices: Vec<u16>,
-    joint_defs: Vec<crate::assets::SkeletonJoint>,
+    joint_defs: Vec<crate::components::SkeletonJoint>,
     morphs: crate::gfx::mesh_payload::PayloadMorphs,
     lod_alternates: Vec<(f32, Vec<u16>)>,
 }
@@ -58,9 +58,9 @@ struct SkinnedSkeletonEntry {
     skeleton: skinning::Skeleton,
     morph_names: Vec<String>,
     model: [[f32; 4]; 4],
-    capsule: Option<crate::assets::CharacterCapsule>,
+    capsule: Option<crate::components::CharacterCapsule>,
     // The authored placement and local bounds, for the editor's pick index.
-    transform: crate::assets::Transform,
+    transform: crate::components::Transform,
     local_bounds: ([f32; 3], [f32; 3]),
 }
 
@@ -155,10 +155,10 @@ struct TextAtlases {
 // Whether any text in the world names no Font, and so has no face to draw with
 // unless one is registered as the fallback.
 fn font_less_text(ctx: &PipelineContext) -> bool {
-    ctx.query::<crate::assets::TextLabel>()
+    ctx.query::<crate::components::TextLabel>()
         .any(|l| l.font.is_none())
         || ctx
-            .query::<crate::assets::TextInput>()
+            .query::<crate::components::TextInput>()
             .any(|t| t.font.is_none())
 }
 
@@ -314,7 +314,7 @@ impl GraphicsSystem {
         // unshifted. The DebugHud component is queried (not drained) by its
         // system, so it is still present here; absent fields are skipped.
         self.debug_hud_chips = ctx
-            .query::<crate::assets::DebugHud>()
+            .query::<crate::components::DebugHud>()
             .next()
             .map(|d| {
                 [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
@@ -327,7 +327,7 @@ impl GraphicsSystem {
         // the frame step can pack them tight from the top-left. Like DebugHud
         // the component is queried (not drained), so it is still present here.
         self.stat_hud_chips = ctx
-            .query::<crate::assets::StatHud>()
+            .query::<crate::components::StatHud>()
             .next()
             .map(|s| {
                 [
@@ -587,7 +587,7 @@ impl GraphicsSystem {
         // after the user-override overlay and before the per-feature derivation
         // below, so the backend builds against the clamped config.
         if post_config.is_some() {
-            let clamp = |cfg: &mut crate::assets::PostProcessConfig,
+            let clamp = |cfg: &mut crate::components::PostProcessConfig,
                          key: &str,
                          overridden: bool,
                          allowed: bool| {
@@ -942,7 +942,7 @@ impl GraphicsSystem {
         > = std::collections::HashMap::new();
         for (handle, entry) in skinned_table.0.iter().enumerate() {
             let handle = crate::ecs::SkinnedMeshHandle(handle as u32);
-            let (name_id, sm): (u32, crate::assets::SkinnedMesh) =
+            let (name_id, sm): (u32, crate::components::SkinnedMesh) =
                 match postcard::from_bytes(&entry.data_bytes) {
                     Ok(t) => t,
                     Err(e) => {
@@ -1100,7 +1100,7 @@ impl GraphicsSystem {
             let lod_slices =
                 crate::gfx::draw_list::append_lod_slices(&mut skinned_indices, lod_alts, base);
 
-            let skeleton = crate::assets::build_skeleton_from_joint_defs(joint_defs);
+            let skeleton = crate::components::build_skeleton_from_joint_defs(joint_defs);
             let joint_count = skeleton.len().min(crate::gfx::render_types::MAX_JOINTS);
 
             // Bind-pose (object-space) AABB over this mesh's vertices. The
@@ -1196,7 +1196,7 @@ impl GraphicsSystem {
                 morph_names: morphs.names.clone(),
                 model: sm.model_matrix(),
                 capsule: sm.capsule.clone(),
-                transform: crate::assets::Transform {
+                transform: crate::components::Transform {
                     position: sm.position,
                     rotation_deg: sm.rotation_deg,
                     scale: sm.scale,
@@ -1337,13 +1337,19 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            // Unset fallbacks differ per field: slot 0 is the sentinel the
-            // shader gates on to keep its scalar value; the normal maps instead
-            // select the flat-normal fallback, `NO_NORMAL_MAP_SLOT` for the
-            // primary and `texture_count` (one past the last real texture) for
-            // the terrain slope-blend layer.
+            // Unset fallbacks differ per field. Albedo and the primary normal
+            // map select a reserved fallback entry through a sentinel no real
+            // handle can collide with; `normal_secondary` names the flat-normal
+            // entry (`texture_count`) directly. Slot 0 stays the sentinel the
+            // shader gates on for the emissive and ORM maps, which keeps their
+            // scalar value, and for `albedo_secondary`, whose terrain-blend
+            // consumer no shader implements yet.
             let slots = [
-                ("albedo", mat.albedo, 0),
+                (
+                    "albedo",
+                    mat.albedo,
+                    crate::gfx::render_types::NO_ALBEDO_SLOT,
+                ),
                 (
                     "normal_map",
                     mat.normal_map,
@@ -1488,7 +1494,7 @@ impl GraphicsSystem {
             // share one blob with the mesh/texture payloads read elsewhere in
             // init.
             let payload = match ctx.read_payload(&locator) {
-                Ok(b) => match crate::assets::ShaderPayload::decode(b) {
+                Ok(b) => match crate::components::ShaderPayload::decode(b) {
                     Ok(p) => p,
                     Err(e) => {
                         tracing::error!("GraphicsSystem: shader payload decode: {:?}", e);
@@ -1610,7 +1616,10 @@ impl GraphicsSystem {
         // KeyBinding) is "menu mode": capture is driven per-frame in `run_step`.
         // A UI-only world (no camera) stays free-cursor.
         let has_ui = ctx.query::<HitRegion>().next().is_some()
-            || ctx.query::<crate::assets::KeyBinding>().next().is_some();
+            || ctx
+                .query::<crate::components::KeyBinding>()
+                .next()
+                .is_some();
         let has_camera = ctx.query::<Camera3D>().next().is_some();
         self.menu_mode = has_camera && has_ui;
         // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
@@ -1923,10 +1932,10 @@ impl GraphicsSystem {
         // than fatal.
         let sprite_texture_ids: Vec<crate::ecs::TextureHandle> = {
             let mut ids: Vec<crate::ecs::TextureHandle> = ctx
-                .query::<crate::assets::Sprite>()
+                .query::<crate::components::Sprite>()
                 .filter_map(|s| s.texture)
                 .collect();
-            for story in ctx.query::<crate::assets::Story>() {
+            for story in ctx.query::<crate::components::Story>() {
                 let stages = story.nodes.iter().flat_map(|n| {
                     n.pages
                         .iter()
@@ -2033,9 +2042,9 @@ impl GraphicsSystem {
         // 'box_mesh'" instead of an opaque id.
         let proc_mesh_args_snapshot: std::collections::HashMap<
             AssetId,
-            (String, crate::assets::ProceduralMesh),
+            (String, crate::components::ProceduralMesh),
         > = if crate::app::dev_flags::enabled() {
-            ctx.query::<crate::assets::ProceduralMesh>()
+            ctx.query::<crate::components::ProceduralMesh>()
                 .filter_map(|pm| {
                     let name = crate::ecs::asset_id::name_of(pm.asset_id)?;
                     Some((pm.asset_id, (name, pm.clone())))
@@ -2071,7 +2080,7 @@ impl GraphicsSystem {
 
         // drain Model components into a name-keyed map for Prop lookup
         let models = ctx.drain::<Model>();
-        let model_map: std::collections::HashMap<AssetId, Vec<crate::assets::SubMeshRef>> =
+        let model_map: std::collections::HashMap<AssetId, Vec<crate::components::SubMeshRef>> =
             models.into_iter().map(|m| (m.asset_id, m.meshes)).collect();
 
         // decode Room payloads before shaders/textures are read; all payloads
@@ -2253,11 +2262,11 @@ impl GraphicsSystem {
         // whose SDF shader bytes happen to land alone in a blob shows
         // "failed to read fragment shader payload: FileIo; skipping" at
         // runtime and the SDF surface never draws.
-        let sdf_blobs = crate::assets::sdf_volume::sdf_volume_blob_indices(ctx);
+        let sdf_blobs = crate::components::sdf_volume::sdf_volume_blob_indices(ctx);
         // PhysicsSystem inits after GraphicsSystem and reads the baked
         // heightfield collider grid from a heightfield ProceduralMesh's
         // payload, so those blobs must also survive this sweep.
-        let terrain_blobs = crate::assets::procedural_mesh::heightfield_blob_indices(ctx);
+        let terrain_blobs = crate::components::procedural_mesh::heightfield_blob_indices(ctx);
         let mut released = std::collections::HashSet::new();
         for idx in shader_locators
             .iter()
@@ -2279,14 +2288,14 @@ impl GraphicsSystem {
         // InstancedProp components are drained because every instance becomes a
         // baked DrawObject; there is no per-frame update path yet. Drain before
         // taking Prop references because drain shifts the underlying Vec.
-        let instanced_props = ctx.drain::<crate::assets::InstancedProp>();
+        let instanced_props = ctx.drain::<crate::components::InstancedProp>();
 
         // Entities to render, in Prop-column order, so each gets a RenderHandle +
         // GlobalTransform attached below. Enumerated through the Transform column
         // (the decomposition gives every prop a Transform in Prop order); the Prop
         // column itself was drained by the decomposition pass at load.
         let prop_entities: Vec<crate::ecs::Entity> = ctx
-            .query_with_entity::<crate::assets::Transform>()
+            .query_with_entity::<crate::components::Transform>()
             .map(|(entity, _)| entity)
             .collect();
 
@@ -2353,8 +2362,8 @@ impl GraphicsSystem {
                 .iter()
                 .map(|&slot| slot as u32)
                 .collect();
-            ctx.insert(entity, crate::assets::RenderHandle { draws });
-            ctx.insert(entity, crate::assets::GlobalTransform(world_mats[i]));
+            ctx.insert(entity, crate::components::RenderHandle { draws });
+            ctx.insert(entity, crate::components::GlobalTransform(world_mats[i]));
             if want_pick {
                 let (local_min, local_max) = prop_local_bounds[i];
                 self.pick_candidates.push(super::PickCandidate {
@@ -2682,7 +2691,7 @@ impl GraphicsSystem {
         // (object AABBs alone would read it as a solid block). Budget-gated, so a heavy
         // import keeps coarse AABB occupancy. `None` -> the backend's own AABB auto-seed.
         let auto_seed_geometry_probes = if ctx
-            .query::<crate::assets::ReflectionProbe>()
+            .query::<crate::components::ReflectionProbe>()
             .next()
             .is_some()
         {
@@ -2859,7 +2868,7 @@ impl GraphicsSystem {
         // launches) has to be applied here; otherwise the app would always start
         // windowed regardless of the saved mode. No-op for Windowed and in
         // embedded mode (the backend owns no window there).
-        if self.window_args.mode != crate::assets::WindowMode::Windowed
+        if self.window_args.mode != crate::components::WindowMode::Windowed
             && let Some(backend) = self.backend.as_deref_mut()
         {
             backend.set_window_mode(self.window_args.mode);
@@ -2877,7 +2886,7 @@ impl GraphicsSystem {
         // entities so editor tooling can address the authored probes by name.
         if let Some(backend) = self.backend.as_deref_mut() {
             let declared: Vec<crate::gfx::reflection_probe::ProbePlacement> = ctx
-                .query::<crate::assets::ReflectionProbe>()
+                .query::<crate::components::ReflectionProbe>()
                 .map(|p| {
                     crate::gfx::reflection_probe::ProbePlacement::from_center_extents(
                         p.position,
@@ -3017,7 +3026,7 @@ impl GraphicsSystem {
                 // and its bounds join the pick index.
                 if want_pick {
                     ctx.insert(entity, transform);
-                    ctx.insert(entity, crate::assets::GlobalTransform(model));
+                    ctx.insert(entity, crate::components::GlobalTransform(model));
                     self.pick_candidates.push(super::PickCandidate {
                         asset_id: name_id,
                         entity,
@@ -3036,7 +3045,7 @@ impl GraphicsSystem {
                 // (init runs later this tick) creates the kinematic capsule
                 // from it, and the render transform follows it each frame.
                 if let Some((half_height, radius)) = capsule {
-                    ctx.push(crate::assets::CharacterRig::new(
+                    ctx.push(crate::components::CharacterRig::new(
                         handle,
                         template_index,
                         model,

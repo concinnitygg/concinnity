@@ -140,11 +140,13 @@ impl Impacts {
         out.append(&mut self.hits);
     }
 
+    #[cfg(test)]
     /// Hits the reservation had no room for.
     pub(crate) fn overflows(&self) -> u32 {
         self.overflows
     }
 
+    #[cfg(test)]
     pub(crate) fn clear_overflows(&mut self) {
         self.overflows = 0;
     }

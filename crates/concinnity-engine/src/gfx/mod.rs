@@ -103,8 +103,3 @@ pub(crate) mod skinned_mesh_map;
 // Third-person character controller. Internal system, constructed instead of
 // Camera3DSystem when the controlling camera's controller has a `follow` block.
 pub(crate) mod third_person;
-
-// First-person camera controller. Currently unreferenced scaffolding
-// (Camera3DSystem drives the camera); kept for a future stateful controller.
-#[cfg(not(target_os = "macos"))]
-pub(crate) mod fps_controller;

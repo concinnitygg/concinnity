@@ -98,7 +98,7 @@ fn marquee_hits(
     let Some(index) = world.resource::<crate::ecs::PickIndex>() else {
         return Vec::new();
     };
-    let Some(cam) = world.query::<crate::assets::Camera3D>().next() else {
+    let Some(cam) = world.query::<crate::components::Camera3D>().next() else {
         return Vec::new();
     };
     let fov = cam.fov_y_degrees.to_radians();

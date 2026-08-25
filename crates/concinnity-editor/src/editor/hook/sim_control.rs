@@ -7,7 +7,7 @@
 // before the world step, so a publish here gates that same frame's systems.
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 
 impl EditorHook {
     // Transport shortcuts: Ctrl+P plays / pauses, Ctrl+Shift+P stops,

@@ -206,7 +206,7 @@ impl VkContext {
                     title,
                     width,
                     height,
-                    &crate::assets::WindowMode::Windowed,
+                    &crate::components::WindowMode::Windowed,
                     true,
                     title_bar,
                 )?;
@@ -810,17 +810,22 @@ impl VkContext {
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        // Flat-normal fallback: the single normal-region image, sampled by a
-        // draw with no normal map. Real normal maps are textures in
-        // `gpu_textures` (the shared pool) at their own handle; only this
-        // fallback lives in `normal_map_textures`, one slot past the last texture.
-        let flat_normal = texture::create_fallback_flat_normal(&GpuUploadContext {
+        // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
+        // the flat-normal image a draw with no normal map samples, then the
+        // white image a draw with no albedo samples. Real normal maps and
+        // albedos are textures in `gpu_textures` (the shared pool) at their own
+        // handle; only these two live in `fallback_textures`, past the last
+        // real texture.
+        let upload_ctx = GpuUploadContext {
             alloc: &alloc,
             device: &device,
             command_pool,
             queue: graphics_queue,
-        })?;
-        let gpu_normal_maps = vec![flat_normal];
+        };
+        let gpu_fallbacks = vec![
+            texture::create_fallback_flat_normal(&upload_ctx)?,
+            texture::create_fallback_white(&upload_ctx)?,
+        ];
 
         let gpu_text_atlases: Vec<GpuImage> = text_atlases
             .iter()
@@ -2143,20 +2148,27 @@ impl VkContext {
             let last_tex = gpu_textures.len().saturating_sub(1);
             // Resolve the image view a `normal_map_slot` samples: a real normal
             // map is a texture in the shared pool at its own slot;
-            // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the sole
-            // entry of `gpu_normal_maps`).
+            // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the first
+            // entry of `gpu_fallbacks`). `NO_ALBEDO_SLOT` likewise selects the
+            // white fallback, so an untextured material shows its tint.
             let normal_view = |nms: usize| {
                 if nms == NO_NORMAL_MAP_SLOT {
-                    gpu_normal_maps[0].view
+                    gpu_fallbacks[0].view
                 } else {
                     gpu_textures[nms.min(last_tex)].view
                 }
             };
+            let albedo_view = |ts: usize| {
+                if ts == NO_ALBEDO_SLOT {
+                    gpu_fallbacks[1].view
+                } else {
+                    gpu_textures[ts.min(last_tex)].view
+                }
+            };
             for (&set, obj) in sets.iter().zip(draw_objects.iter()) {
-                let tex_slot = obj.texture_slot.min(last_tex);
                 let albedo_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(gpu_textures[tex_slot].view)
+                    .image_view(albedo_view(obj.texture_slot))
                     .sampler(linear_sampler.handle());
                 let nm_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -2267,7 +2279,7 @@ impl VkContext {
             let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &set_layouts)?;
             let pool_infos: Vec<vk::DescriptorImageInfo> = gpu_textures
                 .iter()
-                .chain(gpu_normal_maps.iter())
+                .chain(gpu_fallbacks.iter())
                 .map(|img| {
                     vk::DescriptorImageInfo::default()
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -3083,16 +3095,22 @@ impl VkContext {
             let last_tex = gpu_textures.len().saturating_sub(1);
             let normal_view = |nms: usize| {
                 if nms == NO_NORMAL_MAP_SLOT {
-                    gpu_normal_maps[0].view
+                    gpu_fallbacks[0].view
                 } else {
                     gpu_textures[nms.min(last_tex)].view
                 }
             };
+            let albedo_view = |ts: usize| {
+                if ts == NO_ALBEDO_SLOT {
+                    gpu_fallbacks[1].view
+                } else {
+                    gpu_textures[ts.min(last_tex)].view
+                }
+            };
             for (cluster, &set) in instanced_clusters.iter().zip(sets.iter()) {
-                let tex_slot = cluster.texture_slot.min(last_tex);
                 let albedo_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(gpu_textures[tex_slot].view)
+                    .image_view(albedo_view(cluster.texture_slot))
                     .sampler(linear_sampler.handle());
                 let nm_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -3850,7 +3868,7 @@ impl VkContext {
                 sampler: ltc_sampler,
             },
             textures: gpu_textures,
-            normal_map_textures: gpu_normal_maps,
+            fallback_textures: gpu_fallbacks,
             linear_sampler,
             main_pipeline,
             main_pipeline_layout,

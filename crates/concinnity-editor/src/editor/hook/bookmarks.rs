@@ -5,12 +5,12 @@
 // project's editor session store (`editor/session_store.rs`).
 
 use super::*;
-use crate::assets::Camera3D;
+use crate::components::Camera3D;
 use framing::CameraPose;
 
 // The bookmark slot a digit key addresses, if any.
-pub(super) fn slot_for(key: crate::assets::InputKey) -> Option<usize> {
-    use crate::assets::InputKey;
+pub(super) fn slot_for(key: crate::components::InputKey) -> Option<usize> {
+    use crate::components::InputKey;
     Some(match key {
         InputKey::Num1 => 0,
         InputKey::Num2 => 1,

@@ -3,7 +3,7 @@
 // wnd_proc (window.rs); this struct is the snapshot consumed by
 // GraphicsSystem each tick.
 
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use crate::gfx::keymap::KeyMap;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 

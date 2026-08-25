@@ -176,13 +176,7 @@ impl DxContext {
 // The capture path sizes its readback from `GetCopyableFootprints` (which also
 // folds in the 256-byte row alignment), so this helper only documents +
 // asserts the format-to-texel-size mapping under test.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capture path sizes its readback from GetCopyableFootprints; this only asserts the mapping under test"
-    )
-)]
+#[cfg(test)]
 fn swapchain_bytes_per_pixel(format: DXGI_FORMAT) -> u32 {
     match format {
         DXGI_FORMAT_R16G16B16A16_FLOAT => 8,

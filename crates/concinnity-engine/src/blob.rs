@@ -37,8 +37,16 @@ pub(crate) struct LoadedBlob {
 }
 
 pub(crate) fn load() -> Result<LoadedBlob, CnResult> {
-    let (meta, blob_data) = concinnity_store::blob::load_raw()?;
+    resolve(concinnity_store::blob::load_raw()?)
+}
 
+// `load` against a primary blob file named directly, rather than the
+// `.concinnity/data/` layout. Overflow blobs are its siblings by index.
+pub(crate) fn load_at(primary: &std::path::Path) -> Result<LoadedBlob, CnResult> {
+    resolve(concinnity_store::blob::load_raw_at(primary)?)
+}
+
+fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, CnResult> {
     let components = meta
         .defs
         .iter()

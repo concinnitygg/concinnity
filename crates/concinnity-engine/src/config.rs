@@ -62,7 +62,7 @@ pub(crate) struct GraphicsSettings {
     // Window mode (windowed / borderless / fullscreen). `None` uses the world's
     // `Window.mode`. Applied live.
     #[serde(default)]
-    pub(crate) window_mode: Option<crate::assets::WindowMode>,
+    pub(crate) window_mode: Option<crate::components::WindowMode>,
     // Chosen fullscreen display mode [width, height, refresh_hz] in pixels
     // (refresh_hz 0 = unknown / keep the display's rate). `None` means never
     // chosen: the display keeps its own mode and the Resolution row shows it.
@@ -74,13 +74,13 @@ pub(crate) struct GraphicsSettings {
     // `PostProcessConfig.upscale_quality`. Applied at next launch (the upscaler
     // and render targets are sized once at init).
     #[serde(default)]
-    pub(crate) render_scale: Option<crate::assets::UpscaleQuality>,
+    pub(crate) render_scale: Option<crate::components::UpscaleQuality>,
     // Upscaler backend (`PostProcessConfig.upscale_backend`: Auto / FSR3 / DLSS /
     // XeSS). `None` uses the world's value. Applied at next launch (the upscaler
     // is selected + built once at init); DirectX / Vulkan only (Metal uses
     // MetalFX). A user/hardware preference, independent of the quality preset.
     #[serde(default)]
-    pub(crate) upscale_backend: Option<crate::assets::UpscalerBackend>,
+    pub(crate) upscale_backend: Option<crate::components::UpscalerBackend>,
     // Exposure offset in photographic stops. `None` uses the world's
     // `PostProcessConfig.exposure_ev`. Applied live (a pure post-process
     // uniform), and re-applied at init for a persisted choice.
@@ -122,7 +122,7 @@ pub(crate) struct GraphicsSettings {
     // the composite FXAA flag updates in place) and governed by the quality
     // preset ceiling like the toggles below.
     #[serde(default)]
-    pub aa_mode: Option<crate::assets::AaMode>,
+    pub aa_mode: Option<crate::components::AaMode>,
     // Quality-feature toggles. Each `None` uses the world's
     // `PostProcessConfig` value. They gate render passes whose GPU resources
     // (pipelines, targets, acceleration structures) are built at init, so a
@@ -149,7 +149,7 @@ pub(crate) struct GraphicsSettings {
     // launch on backends without a live path. Governed by the quality preset
     // ceiling like the toggles above.
     #[serde(default)]
-    pub(crate) ssgi_resolution: Option<crate::assets::SsgiResolution>,
+    pub(crate) ssgi_resolution: Option<crate::components::SsgiResolution>,
     #[serde(default)]
     pub(crate) ssgi_rays: Option<u32>,
     #[serde(default)]
@@ -159,7 +159,7 @@ pub(crate) struct GraphicsSettings {
     // value. Applied live on Metal; governed by the quality preset ceiling like
     // the SSGI sub-quality above (only bites when a reflection feature is on).
     #[serde(default)]
-    pub(crate) reflection_blur_resolution: Option<crate::assets::ReflectionBlurResolution>,
+    pub(crate) reflection_blur_resolution: Option<crate::components::ReflectionBlurResolution>,
     // Per-feature sub-quality tunables (SSAO radius / intensity, SSR intensity /
     // distance, SSGI intensity / distance, auto-exposure EV bounds + speed). Each
     // `None` uses the world's `PostProcessConfig` value. Applied live on Metal via
@@ -191,7 +191,7 @@ pub(crate) struct GraphicsSettings {
     #[serde(default)]
     pub shadow_map_size: Option<u32>,
     #[serde(default)]
-    pub(crate) shadow_update: Option<crate::assets::ShadowUpdate>,
+    pub(crate) shadow_update: Option<crate::components::ShadowUpdate>,
     // Shadow distance in world units (`GraphicsConfig.shadow_distance`). `None`
     // uses the world's value. Applied live on Metal (the cascade-split math reads
     // it each frame) and governed by the quality preset ceiling like the shadow
@@ -279,7 +279,7 @@ pub(crate) struct ControlsSettings {
     // Gamepad action button bindings (sprint/jump/interact). `None` uses the
     // engine defaults (L3/South/West). Applied by the input sampling.
     #[serde(default)]
-    pub(crate) gamepad_map: Option<crate::assets::GamepadMap>,
+    pub(crate) gamepad_map: Option<crate::components::GamepadMap>,
 }
 
 impl Settings {
@@ -326,7 +326,7 @@ mod tests {
                 vsync: Some(true),
                 fps_cap: Some(144),
                 resolution: Some([1920, 1080, 120]),
-                upscale_backend: Some(crate::assets::UpscalerBackend::Xess),
+                upscale_backend: Some(crate::components::UpscalerBackend::Xess),
                 exposure_ev: Some(-1.5),
                 bloom_intensity: Some(0.8),
                 bloom_threshold: Some(1.2),
@@ -334,16 +334,16 @@ mod tests {
                 lut_strength: Some(0.75),
                 ambient_intensity: Some(1.5),
                 fov: Some(90.0),
-                aa_mode: Some(crate::assets::AaMode::Taa),
+                aa_mode: Some(crate::components::AaMode::Taa),
                 ssao: Some(false),
                 ssr: Some(true),
                 ray_traced_reflections: Some(false),
                 ssgi: Some(true),
                 auto_exposure: Some(false),
-                ssgi_resolution: Some(crate::assets::SsgiResolution::Quarter),
+                ssgi_resolution: Some(crate::components::SsgiResolution::Quarter),
                 ssgi_rays: Some(16),
                 ssgi_steps: Some(24),
-                reflection_blur_resolution: Some(crate::assets::ReflectionBlurResolution::Full),
+                reflection_blur_resolution: Some(crate::components::ReflectionBlurResolution::Full),
                 bloom_knee: Some(0.4),
                 ssao_radius: Some(0.6),
                 ssao_intensity: Some(1.2),
@@ -355,7 +355,7 @@ mod tests {
                 auto_exposure_max_ev: Some(6.0),
                 auto_exposure_speed: Some(2.0),
                 shadow_map_size: Some(4096),
-                shadow_update: Some(crate::assets::ShadowUpdate::EveryFrame),
+                shadow_update: Some(crate::components::ShadowUpdate::EveryFrame),
                 shadow_distance: Some(160),
                 shadow_cascades: Some(3),
                 anisotropy: Some(16),
@@ -377,14 +377,14 @@ mod tests {
             controls: ControlsSettings {
                 mouse_sensitivity: Some(0.0025),
                 keymap: Some(crate::gfx::keymap::KeyMap {
-                    forward: crate::assets::InputKey::Up,
+                    forward: crate::components::InputKey::Up,
                     ..crate::gfx::keymap::KeyMap::default()
                 }),
                 gamepad_look_sensitivity: Some(3.0),
                 gamepad_deadzone: Some(0.2),
-                gamepad_map: Some(crate::assets::GamepadMap {
-                    jump: crate::assets::GamepadButton::East,
-                    ..crate::assets::GamepadMap::default()
+                gamepad_map: Some(crate::components::GamepadMap {
+                    jump: crate::components::GamepadButton::East,
+                    ..crate::components::GamepadMap::default()
                 }),
             },
         };
@@ -443,7 +443,7 @@ mod tests {
     fn settings_save_load_roundtrip_is_sandboxed() {
         let s = Settings {
             graphics: GraphicsSettings {
-                render_scale: Some(crate::assets::UpscaleQuality::Performance),
+                render_scale: Some(crate::components::UpscaleQuality::Performance),
                 vsync: Some(true),
                 exposure_ev: Some(-1.5),
                 ..Default::default()

@@ -108,7 +108,7 @@ pub(crate) enum Call {
     SetCameraCapture(bool),
     SetReflectionProbes(usize),
     SetVsync(bool),
-    SetWindowMode(crate::assets::WindowMode),
+    SetWindowMode(crate::components::WindowMode),
     SetWindowSize(u32, u32),
     SetDisplayMode(crate::gfx::display_mode::DisplayMode),
     SetAmbientIntensity(f32),
@@ -523,7 +523,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetVsync(on));
     }
 
-    fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
+    fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
         self.record(Call::SetWindowMode(mode));
     }
 
@@ -543,7 +543,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetKeymap);
     }
 
-    fn set_shadow_update(&mut self, _update: crate::assets::ShadowUpdate) {
+    fn set_shadow_update(&mut self, _update: crate::components::ShadowUpdate) {
         self.record(Call::SetShadowUpdate);
     }
 

@@ -71,15 +71,8 @@ pub(super) struct HiZResources {
     // the GPU-cull kernel (4 corner Loads at a picked mip).
     pub(super) srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(super) srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    // CPU descriptor handle of the depth-source SRV the init kernel binds at
-    // t0 (the main-depth SRV the decal/fog passes also share). The CPU
-    // handle is captured at init so a future resize can rewrite it in
-    // place without rebinding the cull root signature.
-    #[expect(
-        dead_code,
-        reason = "captured at init so a resize can rewrite the depth SRV without rebinding the cull root signature"
-    )]
-    pub(super) depth_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    // GPU descriptor handle of the depth-source SRV the init kernel binds at
+    // t0 (the main-depth SRV the decal/fog passes also share).
     pub(super) depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     // Per-mip UAV CPU/GPU descriptor pairs. Length = `mip_count`.
     pub(super) mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
@@ -293,14 +286,13 @@ pub(super) struct HiZDeviceCtx<'a> {
 }
 
 // The Hi-Z render target: its dimensions plus every descriptor handle the
-// downsample + cull kernels bind. The all-mips SRV and main-depth SRV each
-// have a (CPU, GPU) pair; the per-mip UAVs have one pair per mip.
+// downsample + cull kernels bind. The all-mips SRV has a (CPU, GPU) pair;
+// the per-mip UAVs have one pair per mip.
 pub(super) struct HiZTarget {
     pub width: u32,
     pub height: u32,
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub depth_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub mip_uav_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
@@ -322,7 +314,6 @@ impl HiZResources {
             height,
             srv_cpu,
             srv_gpu,
-            depth_srv_cpu,
             depth_srv_gpu,
             mip_uav_cpus,
             mip_uav_gpus,
@@ -363,7 +354,6 @@ impl HiZResources {
             rest_state: D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             srv_cpu,
             srv_gpu,
-            depth_srv_cpu,
             depth_srv_gpu,
             mip_uav_cpus,
             mip_uav_gpus,

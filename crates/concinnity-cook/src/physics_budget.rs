@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use concinnity_blob::PhysicsBudgetRecord;
+use concinnity_core::blob::PhysicsBudgetRecord;
 use concinnity_physics::{PhysicsBudget, PhysicsCounts};
 use concinnity_world::world::WorldJsonlAsset;
 

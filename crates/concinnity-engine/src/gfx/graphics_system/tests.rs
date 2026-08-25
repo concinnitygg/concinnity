@@ -8,12 +8,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::assets::{
+use crate::blob::BlobData;
+use crate::components::{
     Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
     ReparentRequest, Scene, SceneCommand, Shader, ShaderKind, SpawnRequest, Sprite,
     StreamingConfig, TextLabel, Transform, Window,
 };
-use crate::blob::BlobData;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
     ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources, StepResult,
@@ -109,7 +109,7 @@ impl WorldBuilder {
     // One Shader whose payload container carries the given compiled stages.
     // The stage bytes are opaque to the mock, so any bytes serve.
     fn push_shader(&mut self, stages: &[(ShaderKind, &[u8])]) {
-        let container = crate::assets::ShaderPayload {
+        let container = crate::components::ShaderPayload {
             stages: stages.iter().map(|(k, b)| (*k, b.to_vec())).collect(),
         };
         let locator = self.payload(&container.encode().expect("encode shader payload"));
@@ -316,8 +316,12 @@ fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
         // InputSystem's init seeds the one FrameInput row; the fresh
         // per-step instance here needs the same seed without the init's
         // settings-file read.
-        if ctx.query::<crate::assets::FrameInput>().next().is_none() {
-            ctx.push(crate::assets::FrameInput::default());
+        if ctx
+            .query::<crate::components::FrameInput>()
+            .next()
+            .is_none()
+        {
+            ctx.push(crate::components::FrameInput::default());
         }
         crate::gfx::input_system::InputSystem::new().step(&mut ctx);
     }
@@ -372,7 +376,7 @@ fn init_builds_draw_list_and_render_handles() {
         .collect();
     assert_eq!(handles, vec![vec![0]]);
     let globals: Vec<[[f32; 4]; 4]> = ctx
-        .query::<crate::assets::GlobalTransform>()
+        .query::<crate::components::GlobalTransform>()
         .map(|g| g.0)
         .collect();
     assert_eq!(globals.len(), 1);
@@ -386,7 +390,7 @@ fn init_builds_draw_list_and_render_handles() {
 // nothing. The chips surviving to the parked resource guards that.
 #[test]
 fn init_parks_overlay_assets_with_the_hud_chips() {
-    use crate::assets::{DebugHud, StatHud};
+    use crate::components::{DebugHud, StatHud};
     use crate::gfx::overlay::OverlayAssets;
 
     let (_state, hooks) = recording_hooks();
@@ -1287,7 +1291,7 @@ fn spawn_request_clones_template_draw_slot() {
 
 #[test]
 fn visibility_request_switches_slots_and_hidden_tag() {
-    use crate::assets::{Hidden, VisibilityRequest};
+    use crate::components::{Hidden, VisibilityRequest};
 
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
@@ -1469,7 +1473,7 @@ fn mesh_streaming_reuploads_evicted_geometry() {
 // the rebase is a function of the camera position alone.
 #[test]
 fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
-    use crate::assets::VoxelWorld;
+    use crate::components::VoxelWorld;
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
     // Default chunk is 16x16 world units; a small view radius keeps the chunk
@@ -1622,14 +1626,14 @@ fn reparent_request_repoints_the_child_under_the_named_parent() {
 
     let ctx = world.ctx();
     assert_eq!(
-        ctx.get::<crate::assets::Parent>(child).map(|p| p.0),
+        ctx.get::<crate::components::Parent>(child).map(|p| p.0),
         Some(parent),
         "the child hangs off the named parent"
     );
     // Both quads are placed at (1, 2, 3), so the child's world position is now
     // the parent's translation applied twice.
     let global = ctx
-        .get::<crate::assets::GlobalTransform>(child)
+        .get::<crate::components::GlobalTransform>(child)
         .expect("child keeps a world matrix");
     assert_eq!(
         [global.0[3][0], global.0[3][1], global.0[3][2]],
@@ -1667,7 +1671,10 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
     spawn_step(&mut spawn, &mut world);
 
     assert_eq!(
-        world.ctx().get::<crate::assets::Parent>(child).map(|p| p.0),
+        world
+            .ctx()
+            .get::<crate::components::Parent>(child)
+            .map(|p| p.0),
         Some(parent),
         "an unresolved parent name never detaches the child to a root"
     );
@@ -1699,10 +1706,12 @@ fn reparent_request_without_a_parent_detaches_the_child() {
 
     let ctx = world.ctx();
     assert!(
-        ctx.get::<crate::assets::Parent>(child).is_none(),
+        ctx.get::<crate::components::Parent>(child).is_none(),
         "an unnamed parent detaches the child"
     );
-    let global = ctx.get::<crate::assets::GlobalTransform>(child).unwrap();
+    let global = ctx
+        .get::<crate::components::GlobalTransform>(child)
+        .unwrap();
     assert_eq!(
         [global.0[3][0], global.0[3][1], global.0[3][2]],
         [1.0, 2.0, 3.0],
@@ -1721,7 +1730,7 @@ fn expired_lifetime_despawns_the_entity_and_retires_its_slot() {
     let entity = entity_named(&mut world, PROP);
     world
         .ctx()
-        .insert(entity, crate::assets::Lifetime { remaining: 0.0 });
+        .insert(entity, crate::components::Lifetime { remaining: 0.0 });
 
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
@@ -1747,7 +1756,7 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::assets::Spawner {
+            crate::components::Spawner {
                 template: PROP,
                 interval: 1.0,
                 lifetime: 5.0,
@@ -1772,14 +1781,14 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
     assert!(lock(&state).saw(&Call::CloneStaticDrawObject { src: 0, new_idx: 1 }));
     let ctx = world.ctx();
     assert_eq!(
-        ctx.query::<crate::assets::Lifetime>()
+        ctx.query::<crate::components::Lifetime>()
             .map(|l| l.remaining)
             .collect::<Vec<_>>(),
         vec![5.0],
         "the cadence copy carries the spawner's lifetime"
     );
     let spawner_count = ctx
-        .query::<crate::assets::Spawner>()
+        .query::<crate::components::Spawner>()
         .map(|s| s.count)
         .next();
     assert_eq!(spawner_count, Some(1), "the spawner counted the copy");
@@ -1796,11 +1805,11 @@ fn menu_active_freezes_lifetimes_and_spawners() {
     let entity = entity_named(&mut world, PROP);
     {
         let mut ctx = world.ctx();
-        ctx.insert(entity, crate::assets::Lifetime { remaining: 0.0 });
+        ctx.insert(entity, crate::components::Lifetime { remaining: 0.0 });
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::assets::Spawner {
+            crate::components::Spawner {
                 template: PROP,
                 interval: 1.0,
                 lifetime: 0.0,
@@ -1830,7 +1839,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
     assert_eq!(
         world
             .ctx()
-            .query::<crate::assets::Spawner>()
+            .query::<crate::components::Spawner>()
             .map(|s| s.count)
             .next(),
         Some(0),
@@ -1885,10 +1894,10 @@ fn system_trait_delegates_to_init_and_step() {
 // desync the settings menu from the backend.
 #[test]
 fn quality_toggle_and_cycle_helpers_round_trip() {
-    use crate::assets::{AaMode, ReflectionBlurResolution, SsgiResolution};
+    use crate::components::{AaMode, ReflectionBlurResolution, SsgiResolution};
     use crate::gfx::settings::QUALITY_CYCLE_KEYS;
 
-    let mut cfg = crate::assets::PostProcessConfig::default();
+    let mut cfg = crate::components::PostProcessConfig::default();
     for key in [
         "ssao",
         "ssr",
@@ -1944,7 +1953,7 @@ fn quality_toggle_and_cycle_helpers_round_trip() {
     assert_eq!(cfg.ssgi_resolution, ceiling.ssgi_resolution);
 
     // An explicitly overridden knob is left alone by the same clamp.
-    let mut kept = crate::assets::PostProcessConfig {
+    let mut kept = crate::components::PostProcessConfig {
         ssgi_rays: 32,
         ..Default::default()
     };
@@ -1960,7 +1969,7 @@ fn quality_toggle_and_cycle_helpers_round_trip() {
 // overlay and the upscaler are deliberately gated on the world declaring one
 // (overriding a feature is meaningless without its tunables), so any test of
 // those paths must author a config rather than lean on the defaults.
-fn post_config_scene(cfg: crate::assets::PostProcessConfig) -> WorldBuilder {
+fn post_config_scene(cfg: crate::components::PostProcessConfig) -> WorldBuilder {
     let mut b = scene_builder();
     b.push(cfg);
     b
@@ -1995,7 +2004,7 @@ fn profile_at(tier: GpuTier) -> GpuProfile {
 // is no ceiling, so each override stands exactly as stored.
 #[test]
 fn persisted_post_process_overrides_win_over_authored_config() {
-    use crate::assets::{AaMode, IndirectLighting, ReflectionBlurResolution, SsgiResolution};
+    use crate::components::{AaMode, IndirectLighting, ReflectionBlurResolution, SsgiResolution};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
@@ -2032,7 +2041,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     settings.graphics.auto_exposure_speed = Some(3.0);
 
     let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
-    let mut world = post_config_scene(crate::assets::PostProcessConfig {
+    let mut world = post_config_scene(crate::components::PostProcessConfig {
         // Deliberately the opposite of every override above, so a value that
         // survives to the backend can only have come from the store.
         aa_mode: AaMode::Off,
@@ -2106,12 +2115,12 @@ fn persisted_post_process_overrides_win_over_authored_config() {
 // later preset up-shift can restore exactly what the world asked for.
 #[test]
 fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
-    use crate::assets::{AaMode, IndirectLighting};
+    use crate::components::{AaMode, IndirectLighting};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     let (state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
-    let mut world = post_config_scene(crate::assets::PostProcessConfig {
+    let mut world = post_config_scene(crate::components::PostProcessConfig {
         ssao: true,
         ssr: true,
         ray_traced_reflections: true,
@@ -2154,14 +2163,14 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
 // Rows the user never touched still clamp.
 #[test]
 fn an_explicit_override_survives_the_preset_ceiling() {
-    use crate::assets::AaMode;
+    use crate::components::AaMode;
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     settings.graphics.ssao = Some(true);
     settings.graphics.aa_mode = Some(AaMode::Taa);
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
-    let mut world = post_config_scene(crate::assets::PostProcessConfig {
+    let mut world = post_config_scene(crate::components::PostProcessConfig {
         ssao: true,
         ssr: true,
         aa_mode: AaMode::Taa,
@@ -2241,7 +2250,7 @@ fn auto_preset_shadow_ceiling_tracks_the_detected_tier() {
 // window is always created windowed.
 #[test]
 fn persisted_display_and_system_overrides_reach_the_backend() {
-    use crate::assets::{UpscaleQuality, UpscalerBackend, WindowMode};
+    use crate::components::{UpscaleQuality, UpscalerBackend, WindowMode};
     use crate::gfx::display_mode::DisplayMode;
 
     let mut settings = crate::config::Settings::default();
@@ -2366,7 +2375,7 @@ fn label_color(world: &mut TestWorld, id: AssetId) -> [f32; 3] {
 // which the static option table cannot express.
 #[test]
 fn settings_rows_show_their_live_values_at_init() {
-    use crate::assets::ShadowUpdate;
+    use crate::components::ShadowUpdate;
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.vsync = Some(true);
@@ -2617,7 +2626,7 @@ fn every_owned_slider_key_recovers_a_live_value() {
 // the live rebind drain.
 #[test]
 fn rebind_rows_show_their_bound_keys_at_init() {
-    use crate::assets::InputKey;
+    use crate::components::InputKey;
     use crate::gfx::keymap::{Bindable, KeyMap};
 
     let mut settings = crate::config::Settings::default();
@@ -2687,7 +2696,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
 // not bleed over the chrome. The bands are handed to OverlaySystem at init.
 #[test]
 fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
-    use crate::assets::{ScrollPanel, ScrollRow};
+    use crate::components::{ScrollPanel, ScrollRow};
 
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -2738,7 +2747,7 @@ fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
 // upscaler-selector row.
 #[test]
 fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
-    use crate::assets::{ScrollPanel, ScrollRow};
+    use crate::components::{ScrollPanel, ScrollRow};
 
     let (state, hooks) = recording_hooks();
     state.lock().unwrap().caps = crate::gfx::backend::DeviceCapabilities {
@@ -2806,7 +2815,7 @@ const DISABLED: [f32; 3] = crate::gfx::settings_system::rows::DISABLED_ROW_COLOR
 // from the window itself, so the row does not apply).
 #[test]
 fn master_toggles_gray_the_rows_they_govern() {
-    use crate::assets::{ScrollPanel, ScrollRow};
+    use crate::components::{ScrollPanel, ScrollRow};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.perf_stats = Some(false);
@@ -3161,7 +3170,7 @@ fn an_unreadable_environment_map_payload_fails_init() {
 // declared instance wins (one homogeneous medium is all the pass models).
 #[test]
 fn volumetric_fog_resolves_into_the_backend_init() {
-    use crate::assets::VolumetricFog;
+    use crate::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3188,7 +3197,7 @@ fn volumetric_fog_resolves_into_the_backend_init() {
 // density.
 #[test]
 fn disabled_volumetric_fog_skips_the_fog_pass() {
-    use crate::assets::VolumetricFog;
+    use crate::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3208,7 +3217,7 @@ fn disabled_volumetric_fog_skips_the_fog_pass() {
 // replacing the auto-seed a probe-less world falls back to.
 #[test]
 fn declared_reflection_probes_replace_the_auto_seed() {
-    use crate::assets::ReflectionProbe;
+    use crate::components::ReflectionProbe;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3239,7 +3248,7 @@ fn declared_reflection_probes_replace_the_auto_seed() {
 // object each, and the component is drained (there is no per-frame update path).
 #[test]
 fn instanced_prop_bakes_its_instances_into_one_cluster() {
-    use crate::assets::{InstanceTransform, InstancedProp};
+    use crate::components::{InstanceTransform, InstancedProp};
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3278,7 +3287,7 @@ fn instanced_prop_bakes_its_instances_into_one_cluster() {
 // behind would only invite a second, stale build.
 #[test]
 fn one_shot_world_fx_are_resolved_and_drained_at_init() {
-    use crate::assets::{Decal, GlassPanel, ParticleEmitter, SdfVolume, WaterSurface};
+    use crate::components::{Decal, GlassPanel, ParticleEmitter, SdfVolume, WaterSurface};
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3382,7 +3391,12 @@ fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
 // Register a SkinnedMesh resource: the placement / material / spawn reserve ride
 // the baked `data_bytes`, the geometry + skeleton ride the compiled payload, and
 // the table index IS the mesh's `SkinnedMeshHandle`.
-fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: crate::assets::SkinnedMesh, n: u16) {
+fn push_skinned_mesh(
+    b: &mut WorldBuilder,
+    name: AssetId,
+    sm: crate::components::SkinnedMesh,
+    n: u16,
+) {
     let locator = b.payload(&skinned_payload(n, &[]));
     let handle = b.skinned_records.len() as u32;
     let data = postcard::to_allocvec(&(name.0, sm)).unwrap();
@@ -3401,7 +3415,7 @@ fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: crate::assets::Ski
 // with a capsule additionally gets a CharacterRig for PhysicsSystem.
 #[test]
 fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
-    use crate::assets::{CharacterCapsule, SkinnedMesh};
+    use crate::components::{CharacterCapsule, SkinnedMesh};
 
     const RIGGED: AssetId = AssetId(840);
     const PLAIN: AssetId = AssetId(841);
@@ -3457,14 +3471,14 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
     let ctx = world.ctx();
     // One SkeletonPose per mesh, each keyed to its handle and template draw.
     let mut poses: Vec<(u32, usize)> = ctx
-        .query::<crate::assets::SkeletonPose>()
+        .query::<crate::components::SkeletonPose>()
         .map(|p| (p.mesh_id.0, p.skinned_index))
         .collect();
     poses.sort();
     assert_eq!(poses, vec![(0, 0), (1, 1)]);
     // Only the capsule-carrying mesh gets a rig.
     let rigs: Vec<u32> = ctx
-        .query::<crate::assets::CharacterRig>()
+        .query::<crate::components::CharacterRig>()
         .map(|r| r.target.0)
         .collect();
     assert_eq!(rigs, vec![0], "only the capsule mesh gets a character rig");
@@ -3490,7 +3504,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
 // without growing any GPU buffer.
 #[test]
 fn skinned_instance_reserves_get_their_own_vertex_regions() {
-    use crate::assets::SkinnedMesh;
+    use crate::components::SkinnedMesh;
 
     const HERO: AssetId = AssetId(842);
     let (state, hooks) = recording_hooks();
@@ -3537,7 +3551,7 @@ fn skinned_instance_reserves_get_their_own_vertex_regions() {
 // build: a silent fallback would render the character with the wrong surface.
 #[test]
 fn a_skinned_mesh_with_an_unknown_material_fails_init() {
-    use crate::assets::SkinnedMesh;
+    use crate::components::SkinnedMesh;
 
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3562,7 +3576,7 @@ fn a_skinned_mesh_with_an_unknown_material_fails_init() {
 // payload at all, each fail the world build rather than dropping the character.
 #[test]
 fn a_skinned_mesh_without_usable_geometry_fails_init() {
-    use crate::assets::SkinnedMesh;
+    use crate::components::SkinnedMesh;
     use concinnity_core::ecs::{ResourceKind, ResourceRecord};
 
     let record = |b: &mut WorldBuilder, payload: Option<PayloadLocator>| {
@@ -3616,7 +3630,7 @@ fn a_skinned_mesh_without_usable_geometry_fails_init() {
 // again, unless a menu is open (animation is frozen behind it).
 #[test]
 fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
-    use crate::assets::SkinnedMesh;
+    use crate::components::SkinnedMesh;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3636,7 +3650,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     let flag_pose = |world: &mut TestWorld| {
         let mut ctx = world.ctx();
         let pose = ctx
-            .query_mut::<crate::assets::SkeletonPose>()
+            .query_mut::<crate::components::SkeletonPose>()
             .next()
             .unwrap();
         pose.updated = true;
@@ -3843,7 +3857,7 @@ fn an_undecodable_material_record_fails_init() {
 // the shader's container carries the stage.
 #[test]
 fn an_instanced_vertex_shader_payload_reaches_the_backend() {
-    use crate::assets::{InstanceTransform, InstancedProp};
+    use crate::components::{InstanceTransform, InstancedProp};
 
     let (state, hooks) = recording_hooks();
     // scene_builder()'s shader carries no instanced stage, so build the same
@@ -3915,7 +3929,7 @@ fn a_shader_without_a_payload_fails_init() {
 // rebased set against its own region.
 #[test]
 fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
-    use crate::assets::SkinnedMesh;
+    use crate::components::SkinnedMesh;
     use concinnity_core::ecs::{ResourceKind, ResourceRecord};
 
     let (state, hooks) = recording_hooks();
@@ -4016,7 +4030,7 @@ fn reparent_request_with_an_unresolved_child_is_skipped() {
     assert!(
         world
             .ctx()
-            .get::<crate::assets::Children>(child)
+            .get::<crate::components::Children>(child)
             .is_none_or(|c| c.0.is_empty()),
         "nothing was parented under the named parent"
     );
@@ -4040,7 +4054,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::assets::Spawner {
+            crate::components::Spawner {
                 template: AssetId(904),
                 interval: 1.0,
                 lifetime: 0.0,
@@ -4072,7 +4086,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
 // none reserved) the spawn yields nothing rather than growing a GPU buffer.
 #[test]
 fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
-    use crate::assets::SkinnedMesh;
+    use crate::components::SkinnedMesh;
 
     const HERO: AssetId = AssetId(853);
     let (state, hooks) = recording_hooks();
@@ -4090,7 +4104,10 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
     );
     let mut world = b.build();
     let _gs = init_graphics(&mut world, hooks);
-    let poses_before = world.ctx().query::<crate::assets::SkeletonPose>().count();
+    let poses_before = world
+        .ctx()
+        .query::<crate::components::SkeletonPose>()
+        .count();
 
     {
         let mut ctx = world.ctx();
@@ -4104,7 +4121,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::assets::Spawner {
+            crate::components::Spawner {
                 template: HERO,
                 interval: 1.0,
                 lifetime: 2.0,
@@ -4124,7 +4141,10 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
         "a skinned template never clones a static draw slot"
     );
     assert_eq!(
-        world.ctx().query::<crate::assets::SkeletonPose>().count(),
+        world
+            .ctx()
+            .query::<crate::components::SkeletonPose>()
+            .count(),
         poses_before,
         "an exhausted instance pool spawns nothing rather than growing a buffer"
     );
@@ -4136,7 +4156,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
 // apply parts hand out a disjoint mutable screen of the backend + bookkeeping.
 #[test]
 fn hot_reload_seams_hand_out_the_backend_and_the_captured_sources() {
-    use crate::assets::VolumetricFog;
+    use crate::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -4217,7 +4237,7 @@ fn a_residency_cap_below_the_streamed_set_reserves_a_smaller_seed() {
 // gathered into the text-atlas pool alongside the sprite textures.
 #[test]
 fn story_stage_images_are_resident_before_any_sprite_references_them() {
-    use crate::assets::{Story, StoryImage, StoryNode, StoryPage, StoryStage};
+    use crate::components::{Story, StoryImage, StoryNode, StoryPage, StoryStage};
     use concinnity_core::ecs::ResourceKind;
 
     let (state, hooks) = recording_hooks();
@@ -4351,7 +4371,7 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
 // skinned model update the next step.
 #[test]
 fn skinned_mesh_joins_the_pick_index_when_opted_in() {
-    use crate::assets::SkinnedMesh;
+    use crate::components::SkinnedMesh;
 
     const BODY: AssetId = AssetId(842);
     let (state, hooks) = recording_hooks();
@@ -4387,13 +4407,13 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     // Move the template: the live Transform drives the skinned model push.
     let entity = world
         .ctx()
-        .join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
+        .join2::<crate::components::SkeletonPose, crate::components::Transform>()
         .map(|(e, _, _)| e)
         .next()
         .expect("the template pose carries a Transform");
     world
         .ctx()
-        .get_mut::<crate::assets::Transform>(entity)
+        .get_mut::<crate::components::Transform>(entity)
         .unwrap()
         .position = [7.0, 0.0, 0.0];
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
@@ -4427,7 +4447,7 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     assert_eq!(
         world
             .ctx()
-            .join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
+            .join2::<crate::components::SkeletonPose, crate::components::Transform>()
             .count(),
         0
     );

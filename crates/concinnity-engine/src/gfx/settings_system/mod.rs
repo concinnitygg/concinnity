@@ -20,7 +20,7 @@
 // resource; each step takes it and puts it back, so the state and the
 // `PipelineContext` are never borrowed together.
 
-use crate::assets::SceneCommand;
+use crate::components::SceneCommand;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::ops::RenderOps;
@@ -43,7 +43,7 @@ pub(crate) struct SettingsState {
     pub(crate) rebind_rows: Vec<crate::gfx::graphics_system::RebindViz>,
     // Live gamepad action -> button map (the source of truth for the gamepad
     // rebind rows), carried to InputSystem via ControlsCommand on each rebind.
-    pub(crate) gamepad_map: crate::assets::GamepadMap,
+    pub(crate) gamepad_map: crate::components::GamepadMap,
     pub(crate) pad_rebind_rows: Vec<crate::gfx::graphics_system::PadRebindViz>,
     pub(crate) sliders: Vec<crate::gfx::graphics_system::SliderViz>,
     // Cycle rows' setting key -> value-label id, captured at init, so a change
@@ -55,9 +55,9 @@ pub(crate) struct SettingsState {
     // The world's resolved PostProcessConfig with the user's persisted
     // quality-toggle overrides applied: the source of truth for the
     // Quality-group toggles and cycle knobs.
-    pub(crate) post_config: crate::assets::PostProcessConfig,
+    pub(crate) post_config: crate::components::PostProcessConfig,
     // The authored baseline a live preset change re-clamps from.
-    pub(crate) authored_post_config: crate::assets::PostProcessConfig,
+    pub(crate) authored_post_config: crate::components::PostProcessConfig,
     // Live ambient (IBL) light scale (lives in the backend's LightUniforms,
     // so it takes a dedicated setter).
     pub(crate) ambient_intensity: f32,
@@ -66,19 +66,19 @@ pub(crate) struct SettingsState {
     pub(crate) quality_preset: crate::gfx::quality_preset::QualityPreset,
     pub(crate) gpu_profile: crate::gfx::backend::GpuProfile,
     // Restart-required display state (persist + relabel only).
-    pub(crate) render_scale: crate::assets::UpscaleQuality,
-    pub(crate) upscale_backend: crate::assets::UpscalerBackend,
+    pub(crate) render_scale: crate::components::UpscaleQuality,
+    pub(crate) upscale_backend: crate::components::UpscalerBackend,
     pub(crate) temporal_upscaling: bool,
     pub(crate) hdr_display: bool,
     pub(crate) hdr_pq: bool,
     // Shadow knobs (live) and their authored baselines.
     pub(crate) shadow_map_size: u32,
-    pub(crate) shadow_update: crate::assets::ShadowUpdate,
+    pub(crate) shadow_update: crate::components::ShadowUpdate,
     pub(crate) shadow_distance: u32,
     pub(crate) shadow_cascades: u32,
     pub(crate) anisotropy: u32,
     pub(crate) authored_shadow_map_size: u32,
-    pub(crate) authored_shadow_update: crate::assets::ShadowUpdate,
+    pub(crate) authored_shadow_update: crate::components::ShadowUpdate,
     pub(crate) authored_shadow_distance: u32,
     pub(crate) authored_shadow_cascades: u32,
     pub(crate) authored_anisotropy: u32,
@@ -93,7 +93,7 @@ pub(crate) struct SettingsState {
     pub(crate) show_vram: bool,
     pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
     // Window mode + authored size (the windowed size restored on mode return).
-    pub(crate) window_args: crate::assets::Window,
+    pub(crate) window_args: crate::components::Window,
     // The Resolution row's mode list, the user's chosen fullscreen mode, the
     // display's own mode at init, and the row labels grayed outside
     // fullscreen.
@@ -252,7 +252,7 @@ impl SettingsState {
         // The Resolution row only applies in fullscreen (windowed sizes come from
         // the window, borderless covers the display), so it is inert in the other
         // modes. The disabled-rows set is fully determined by these two inputs.
-        let is_fullscreen = self.window_args.mode == crate::assets::WindowMode::Fullscreen;
+        let is_fullscreen = self.window_args.mode == crate::components::WindowMode::Fullscreen;
         let inputs = (self.perf_stats, is_fullscreen);
         if self.published_disabled_inputs != Some(inputs) {
             let mut disabled_rows: std::collections::HashSet<String> = if self.perf_stats {

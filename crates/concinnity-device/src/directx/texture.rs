@@ -1353,29 +1353,6 @@ pub(super) fn create_fallback_cubemap(
     })
 }
 
-// Upload a six-face HDR cubemap from a CubemapTexture payload. `bytes` is the
-// raw RGBA32F face-major data emitted by build/cubemap.rs::compile_cubemap_payload:
-// 6 * face_size² * 16 bytes in face order +X, -X, +Y, -Y, +Z, -Z. Single-mip.
-#[expect(
-    dead_code,
-    reason = "cubemap upload path lands with the DirectX probe capture; no caller yet"
-)]
-pub(super) fn upload_cubemap(
-    alloc: &DeviceAllocator,
-    face_size: u32,
-    bytes: &[u8],
-    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource, String> {
-    let resource = upload_cube_resource(alloc, face_size, 1, bytes)?;
-    write_cube_srv_single_mip(alloc.device(), &resource, srv_cpu);
-    Ok(GpuResource {
-        resource,
-        srv_cpu,
-        srv_gpu,
-    })
-}
-
 // Upload an EnvironmentMap payload into two cube textures: a single-mip
 // irradiance cube and a multi-mip prefiltered radiance cube. Both are
 // RGBA32F TextureCube SRVs.

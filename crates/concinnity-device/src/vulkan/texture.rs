@@ -1505,21 +1505,6 @@ fn create_cube_image(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
-// Upload a six-face HDR cubemap from a `CubemapTexture` payload. RGBA32F,
-// 6 * face_size * face_size * 16 bytes in face-major order
-// (+X, -X, +Y, -Y, +Z, -Z). Single-mip.
-#[expect(
-    dead_code,
-    reason = "cubemap upload path lands with the Vulkan probe capture; no caller yet"
-)]
-pub(super) fn upload_cubemap(
-    ctx: &GpuUploadContext,
-    face_size: u32,
-    bytes: &[u8],
-) -> Result<GpuImage, String> {
-    create_cube_image(ctx, face_size, &[bytes])
-}
-
 // Create a 1×1 RGBA32F cube of `value` for every face. Used as the IBL
 // fallback when no `EnvironmentMap` is bound: the fragment shader keys off
 // `prefilter_mip_count == 0` and skips IBL math, but the cube binding must

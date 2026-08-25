@@ -6,7 +6,7 @@
 // visibility snapshot skips tagged entities, so a scene jump never relights
 // a hidden entity.
 
-use crate::assets::{Hidden, RenderHandle};
+use crate::components::{Hidden, RenderHandle};
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::ops::RenderOps;
 

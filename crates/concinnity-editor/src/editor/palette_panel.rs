@@ -246,7 +246,7 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextInput, TextLabel};
+    use crate::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         let mut world = World::new();

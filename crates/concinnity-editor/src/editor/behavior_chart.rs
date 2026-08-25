@@ -481,7 +481,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
     use crate::editor::behavior::graph;
     use serde_json::json;
 

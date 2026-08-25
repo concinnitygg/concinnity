@@ -4,7 +4,7 @@
 // author one side of an asymmetric key.
 
 use super::SynthInput;
-use crate::assets::MorphDelta;
+use crate::components::MorphDelta;
 use std::collections::HashMap;
 
 // Uniform grid over the positions, `cell` wide.

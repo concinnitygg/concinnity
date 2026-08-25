@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use concinnity_core::assets::{
+use concinnity_core::components::{
     BodyDynamics, Camera3D, CharacterRig, Collider, PhysicsJoint, Transform, TriggerVolume,
 };
 use concinnity_core::ecs::asset_id::AssetId;
@@ -203,12 +203,14 @@ pub(crate) fn reserved_bytes(budget: &PhysicsBudget) -> u64 {
         + vec_bytes::<(Entity, [f32; 3], [f32; 3])>(caps.sampled)
         + vec_bytes::<(Entity, PropCollSnap)>(caps.new_props)
         + vec_bytes::<RigPhysics>(caps.rigs)
-        + vec_bytes::<concinnity_core::assets::RootMotionEvent>(caps.root_motions)
+        + vec_bytes::<concinnity_core::components::RootMotionEvent>(caps.root_motions)
         + vec_bytes::<ContactHit>(caps.contacts)
         + vec_bytes::<SensorCrossing>(caps.sensor_crossings)
         + table_bytes::<(BodyHandle, BodyHandle), ContactHit>(caps.contact_pairs)
         + table_bytes::<(BodyHandle, BodyHandle), u64>(caps.contact_pairs)
-        + table_bytes::<u64, (AssetId, concinnity_core::assets::TriggerFilter)>(caps.sensor_filters)
+        + table_bytes::<u64, (AssetId, concinnity_core::components::TriggerFilter)>(
+            caps.sensor_filters,
+        )
 }
 
 /// Report the reservation under the physics tag: the driver's containers plus

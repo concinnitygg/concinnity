@@ -9,7 +9,7 @@
 // with several shaders spreads its warmup across the loading screen instead of
 // building every pipeline in one frame.
 
-use crate::assets::{ShaderKind, ShaderPayload};
+use crate::components::{ShaderKind, ShaderPayload};
 
 // Where a deferred bucket's compiled stage container is read from.
 pub(crate) enum ShaderPayloadSource {

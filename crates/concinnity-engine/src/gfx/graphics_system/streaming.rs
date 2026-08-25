@@ -1,7 +1,7 @@
 // GraphicsSystem asset-streaming setup: wires the texture, normal-map, mesh,
 // and voxel-world streaming pools onto the backend, plus the stats accessor.
 
-use crate::assets::{BlockType, StreamingConfig, VoxelWorld};
+use crate::components::{BlockType, StreamingConfig, VoxelWorld};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::draw_list::MaterialEntry;
 use crate::gfx::mesh_payload::Vertex;
@@ -68,7 +68,7 @@ pub(super) fn deferred_texture_slots(
     // Scenes are still undrained at this point; the first declared is the
     // start scene (the one setup_scene_flow pins).
     let Some(start) = ctx
-        .query::<crate::assets::Scene>()
+        .query::<crate::components::Scene>()
         .next()
         .map(|s| s.asset_id)
     else {
@@ -103,7 +103,7 @@ pub(super) fn deferred_mesh_sources(
         return out;
     }
     let Some(start) = ctx
-        .query::<crate::assets::Scene>()
+        .query::<crate::components::Scene>()
         .next()
         .map(|s| s.asset_id)
     else {
@@ -153,7 +153,7 @@ pub(super) fn deferred_shader_buckets(
         return deferred;
     }
     let Some(start) = ctx
-        .query::<crate::assets::Scene>()
+        .query::<crate::components::Scene>()
         .next()
         .map(|s| s.asset_id)
     else {
@@ -241,7 +241,7 @@ impl GraphicsSystem {
         if self.mesh_streamer.is_some() {
             let mut scene_of_draw = std::collections::HashMap::new();
             for (_, member, handle) in
-                ctx.join2::<crate::assets::SceneMember, crate::assets::RenderHandle>()
+                ctx.join2::<crate::components::SceneMember, crate::components::RenderHandle>()
             {
                 for &slot in &handle.draws {
                     scene_of_draw.insert(slot as usize, member.0);
@@ -681,7 +681,7 @@ mod tests {
         fn new(scenes: &[AssetId]) -> Self {
             let mut components = crate::ecs::ComponentStorage::default();
             for &asset_id in scenes {
-                components.push_typed(crate::assets::Scene {
+                components.push_typed(crate::components::Scene {
                     asset_id,
                     camera_shot: None,
                 });

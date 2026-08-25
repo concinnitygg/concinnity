@@ -16,14 +16,11 @@ concinnity-toolchain = { workspace = true }
 
 [dependencies]
 concinnity-asset = { workspace = true }
-concinnity-blob = { workspace = true }
 concinnity-cook = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-cpu = { workspace = true }
-concinnity-eas = { workspace = true }
 concinnity-engine = { workspace = true }
 concinnity-memory = { workspace = true }
-concinnity-physics = { workspace = true }
 concinnity-render = { workspace = true }
 
 [[bench]]
@@ -37,23 +34,8 @@ path = "cook.rs"
 harness = false
 
 [[bench]]
-name = "ecs"
-path = "ecs.rs"
-harness = false
-
-[[bench]]
 name = "engine"
 path = "engine.rs"
-harness = false
-
-[[bench]]
-name = "memory"
-path = "memory.rs"
-harness = false
-
-[[bench]]
-name = "physics"
-path = "physics.rs"
 harness = false
 
 [[bench]]

@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use super::expand::{asset_name, type_norm};
-use crate::assets::Font;
+use crate::components::Font;
 use concinnity_world::spec::{asset, spec_to_value};
 
 // A settings/menu TextLabel value with `centered` pinned false: the default-font

@@ -33,10 +33,9 @@ pub use compile::{CompiledGraph, CompiledPass, CompiledResource};
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
 pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
 pub use transient::{
-    PoolGates, TransientSlot, TransientTexture, assert_slot_aliasing_sound, plan_pool_slots,
-    planning_inputs, pooled,
+    PoolGates, TransientSlot, TransientTexture, assert_slot_aliasing_sound, plan_pool_slots, pooled,
 };
-pub(crate) use transient::{SlotConflict, plan_transient_slots, slot_conflicts};
+pub(crate) use transient::{SlotConflict, plan_transient_slots, planning_inputs, slot_conflicts};
 pub use types::{
     BarrierOp, BufferUsage, ClearValue, GraphResourceClass, PassKind, PixelFormat, ReadStages,
     ResourceId, ResourceState, TextureDesc, TextureHandle, TextureUsage,

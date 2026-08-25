@@ -614,7 +614,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// The change flows through the backend's normal resize path (no GPU rebuild
     /// beyond the resize it triggers). Default no-op for backends without a
     /// window (embedded / preview) or that don't yet implement it.
-    fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
+    fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
         let _ = mode;
     }
 
@@ -695,7 +695,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// resolution, which is sized once at init). Default no-op: a backend that only
     /// reads the cadence at init keeps the init-time value (DirectX / Vulkan
     /// today), so the choice persists and takes effect at the next launch there.
-    fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+    fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
         let _ = update;
     }
 
@@ -1420,7 +1420,7 @@ mod tests {
 
         // Presentation + window no-ops.
         backend.set_vsync(true);
-        backend.set_window_mode(crate::assets::WindowMode::Fullscreen);
+        backend.set_window_mode(crate::components::WindowMode::Fullscreen);
         backend.set_window_size(1280, 720);
         backend.set_display_mode(crate::display_mode::DisplayMode {
             width: 1920,
@@ -1434,7 +1434,7 @@ mod tests {
         backend.set_keymap(&KeyMap::default());
         backend.apply_quality_settings(stub_quality());
         backend.update_quality_params(stub_quality());
-        backend.set_shadow_update(crate::assets::ShadowUpdate::EveryFrame);
+        backend.set_shadow_update(crate::components::ShadowUpdate::EveryFrame);
         backend.set_shadow_distance(200);
         backend.set_shadow_cascades(3);
         backend.update_fog_settings(None);
@@ -1471,7 +1471,7 @@ mod tests {
     // A minimal empty-world BackendInit borrowing `window`, for exercising the
     // default `reload_world`. Empty slices are `'static`; the only real borrow
     // is the window args.
-    fn empty_backend_init(window: &crate::assets::Window) -> BackendInit<'_> {
+    fn empty_backend_init(window: &crate::components::Window) -> BackendInit<'_> {
         use crate::backend_init::{
             MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
         };
@@ -1510,7 +1510,7 @@ mod tests {
             area_lights: Vec::new(),
             shadows: ShadowParams {
                 map_size: 0,
-                update: crate::assets::ShadowUpdate::default(),
+                update: crate::components::ShadowUpdate::default(),
                 distance: 0,
                 cascades: 1,
             },
@@ -1530,7 +1530,7 @@ mod tests {
                 hdr_pq: false,
                 temporal_upscaling: false,
                 upscale_scale: 1.0,
-                upscale_backend: crate::assets::UpscalerBackend::Auto,
+                upscale_backend: crate::components::UpscalerBackend::Auto,
                 occlusion_two_pass: false,
             },
             fx: WorldFx {
@@ -1550,7 +1550,7 @@ mod tests {
         // A backend without a real reload path reports the swap unsupported, so
         // the caller falls back to a full rebuild.
         let mut backend = StubBackend;
-        let window = crate::assets::Window::default();
+        let window = crate::components::Window::default();
         assert!(backend.reload_world(empty_backend_init(&window)).is_err());
     }
 

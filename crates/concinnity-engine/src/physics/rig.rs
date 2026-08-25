@@ -7,7 +7,7 @@
 // scene like the player capsule; each frame the blended capsule position is
 // written back to the rig component for GraphicsSystem's render follow.
 
-use concinnity_core::assets::{CharacterRig, RootMotionEvent};
+use concinnity_core::components::{CharacterRig, RootMotionEvent};
 use concinnity_core::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
 use concinnity_core::gfx::root_motion::add3;
 use concinnity_physics::{BodyHandle, CharacterCapsule, CharacterMoveInput, LayerMask, Simulation};

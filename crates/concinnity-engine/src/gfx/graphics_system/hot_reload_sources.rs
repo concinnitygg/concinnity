@@ -131,7 +131,7 @@ pub struct ProceduralMeshSourceEntry {
     /// Last-applied generator args as the parsed component, so default-filled
     /// fields match what a reload-time parse of `world.jsonl` produces.
     /// Typed equality classifies whether to regenerate.
-    pub args: crate::assets::ProceduralMesh,
+    pub args: crate::components::ProceduralMesh,
     /// Every draw slot that received this mesh's geometry at init.
     pub draw_indices: Vec<usize>,
 }
@@ -193,7 +193,7 @@ pub(crate) fn resolve_runtime_source_path(raw: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct ShaderStageSourceEntry {
     /// Which shader stage this entry compiles.
-    pub kind: crate::assets::shader::ShaderKind,
+    pub kind: crate::components::shader::ShaderKind,
     /// Resolved on-disk path the build pipeline read at compile time. Stored
     /// resolved (not raw) so the watcher can subscribe to a real parent
     /// directory even when the asset declaration used a bare filename.
@@ -204,7 +204,7 @@ pub struct ShaderStageSourceEntry {
 /// can hot-reload. Owned by `GraphicsSystem` under `cn debug` only; consumed
 /// by `reload_shader_stages` when the asset hot-reload watcher fires on a
 /// captured shader-source file. The map holds at most one entry per
-/// [`crate::assets::shader::ShaderKind`] (vertex, fragment, shadow,
+/// [`crate::components::shader::ShaderKind`] (vertex, fragment, shadow,
 /// vertex_instanced): the runtime drains one stage per kind at init.
 #[derive(Debug, Clone, Default)]
 pub struct ShaderStageSourceMap {
@@ -524,7 +524,7 @@ mod tests {
     // Shader stages watch their resolved paths, one entry per kind.
     #[test]
     fn shader_stage_map_watches_resolved_parents() {
-        use crate::assets::shader::ShaderKind;
+        use crate::components::shader::ShaderKind;
 
         let mut map = ShaderStageSourceMap::new();
         assert!(map.is_empty());
@@ -553,7 +553,7 @@ mod tests {
     fn shader_stage_map_skips_an_empty_resolved_path() {
         let mut map = ShaderStageSourceMap::new();
         map.entries.push(ShaderStageSourceEntry {
-            kind: crate::assets::shader::ShaderKind::Fragment,
+            kind: crate::components::shader::ShaderKind::Fragment,
             resolved_path: String::new(),
         });
         assert!(map.watch_dirs().is_empty());

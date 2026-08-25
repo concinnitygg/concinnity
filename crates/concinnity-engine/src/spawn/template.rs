@@ -7,9 +7,9 @@
 // mod.rs), and paired with a Lifetime tick that auto-despawns expired
 // instances so their freed draw slots can be recycled by the next spawn.
 
-use crate::assets::{
+use crate::components::{
     BodyDynamics, Collider, GlobalTransform, Lifetime, MeshRenderer, ModelRenderer, Pickup,
-    RenderHandle, SkeletonPose, Spawner, Transform,
+    PropInstance, RenderHandle, SkeletonPose, Spawner, Transform,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::decompose::EntityByName;
@@ -54,6 +54,7 @@ pub(super) fn spawn_from_template(
     let collider = ctx.get::<Collider>(template).cloned();
     let body_dynamics = ctx.get::<BodyDynamics>(template).copied();
     let pickup = ctx.get::<Pickup>(template).is_some();
+    let prop_instance = ctx.get::<PropInstance>(template).is_some();
 
     let entity = ctx.components.spawn();
     ctx.insert(entity, transform);
@@ -72,6 +73,9 @@ pub(super) fn spawn_from_template(
     }
     if pickup {
         ctx.insert(entity, Pickup);
+    }
+    if prop_instance {
+        ctx.insert(entity, PropInstance);
     }
     if let Some(secs) = lifetime {
         ctx.insert(entity, Lifetime { remaining: secs });
@@ -109,9 +113,14 @@ pub(super) fn spawn_skinned_from_template(
     let skinned_index = acquire_slot(template_pose.skinned_index, model)?;
     let pose = template_pose.clone_for_slot(skinned_index);
 
+    let prop_instance = ctx.get::<PropInstance>(template).is_some();
+
     let entity = ctx.components.spawn();
     ctx.insert(entity, transform);
     ctx.insert(entity, pose);
+    if prop_instance {
+        ctx.insert(entity, PropInstance);
+    }
     if let Some(secs) = lifetime {
         ctx.insert(entity, Lifetime { remaining: secs });
     }
@@ -260,7 +269,7 @@ mod tests {
             ctx.insert(template, RenderHandle { draws: [0].into() });
             ctx.insert(
                 template,
-                Collider(crate::assets::PropCollider {
+                Collider(crate::components::PropCollider {
                     radius: 0.4,
                     ..Default::default()
                 }),

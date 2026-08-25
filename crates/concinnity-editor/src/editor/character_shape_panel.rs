@@ -13,7 +13,7 @@ use super::registry::{self, PanelKey};
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
 use super::widget_slider::{self, SliderIds};
-use crate::assets::TextAlign;
+use crate::components::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -382,7 +382,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 mod tests {
     use super::super::character_shape::{self, Rows};
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
     use concinnity_cook::character::builtin_schema;
 
     fn injected_world() -> World {

@@ -6,7 +6,9 @@
 //! the rect area-light extents.
 
 use crate::area_light;
-use crate::assets::{DirectionalLight, PointLight, RectAreaLight, SpotLight, SpotLightGeometry};
+use crate::components::{
+    DirectionalLight, PointLight, RectAreaLight, SpotLight, SpotLightGeometry,
+};
 use crate::render_types::{
     AreaLightData, DirectionalLightData, GpuLight, LIGHT_KIND_AREA, LIGHT_KIND_POINT,
     LIGHT_KIND_SPOT, LightUniforms, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,

@@ -1,3 +1,34 @@
+[workspace.package]
+version = "0.18.56"
+authors = ["Grant Wilkes <grant@concinnity.gg>"]
+edition = "2024"
+license = "MIT"
+rust-version = "1.96"
+repository = "https://github.com/concinnitygg/concinnity"
+homepage = "https://concinnity.gg"
+
+[workspace.dependencies]
+concinnity-asset = { path = "crates/concinnity-asset", version = "0.18" }
+concinnity-audio = { path = "crates/concinnity-audio", version = "0.18" }
+concinnity-cli = { path = "crates/concinnity-cli", version = "0.18" }
+concinnity-cook = { path = "crates/concinnity-cook", version = "0.18" }
+concinnity-core = { path = "crates/concinnity-core", version = "0.18" }
+concinnity-cpu = { path = "crates/concinnity-cpu", version = "0.18" }
+concinnity-device = { path = "crates/concinnity-device", version = "0.18" }
+concinnity-docs = { path = "crates/concinnity-docs", version = "0.18" }
+concinnity-editor = { path = "crates/concinnity-editor", version = "0.18" }
+concinnity-engine = { path = "crates/concinnity-engine", version = "0.18" }
+concinnity-font = { path = "crates/concinnity-font", version = "0.18" }
+concinnity-memory = { path = "crates/concinnity-memory", version = "0.18" }
+concinnity-physics = { path = "crates/concinnity-physics", version = "0.18" }
+concinnity-render = { path = "crates/concinnity-render", version = "0.18" }
+concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.18" }
+concinnity-shader = { path = "crates/concinnity-shader", version = "0.18" }
+concinnity-slang = { path = "crates/concinnity-slang", version = "0.18" }
+concinnity-store = { path = "crates/concinnity-store", version = "0.18" }
+concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.18" }
+concinnity-world = { path = "crates/concinnity-world", version = "0.18" }
+
 [package]
 name = "concinnity"
 version.workspace = true
@@ -7,41 +38,38 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Asset-driven 3D rendering engine and application framework"
+description = "Asset-driven application world framework"
 readme = "README.md"
 keywords = ["gamedev", "graphics", "engine", "rendering", "3d"]
 categories = ["game-engines", "graphics", "rendering::engine"]
 autobenches = false
 autotests = false
 autobins = false
-# Allowlist, not a denylist: this working copy is not always a git checkout, so
-# cargo has no .gitignore to filter by and anything unlisted would ship.
 include = [
     "/src",
     "/build.rs",
     "/examples/**/*.rs",
-    "/examples/**/*.md",
     "/README.md",
     "/LICENSE",
 ]
-
-[workspace.package]
-version = "0.18.55"
-authors = ["Grant Wilkes <grant@concinnity.gg>"]
-edition = "2024"
-license = "MIT"
-rust-version = "1.96"
-repository = "https://github.com/concinnitygg/concinnity"
-homepage = "https://concinnity.gg"
 
 [lib]
 name = "concinnity"
 path = "src/lib.rs"
 
+[workspace]
+resolver = "2"
+members = [
+    "crates/*",
+    "benches",
+]
+
+default-members = [
+    ".",
+    "crates/*",
+]
+
 [package.metadata.docs.rs]
-# Not `all-features`: that turns on `vulkan` (ash + shaderc built from source)
-# and `cli` (the editor tree) on top of the default graph, neither of which the
-# published documentation shows anything extra for.
 features = ["cook"]
 default-target = "x86_64-unknown-linux-gnu"
 targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
@@ -49,8 +77,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["std"]
-# The engine runtime. Off leaves the asset vocabulary and a `World` to build
-# with it, neither of which needs an operating system.
 std = ["dep:concinnity-engine", "dep:concinnity-memory"]
 cook = ["std", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
 vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan"]
@@ -70,13 +96,8 @@ concinnity-toolchain = { workspace = true, features = ["fetch"] }
 concinnity-toolchain = { workspace = true }
 
 [[example]]
-name = "simple"
-path = "examples/simple.rs"
-required-features = ["std"]
-
-[[example]]
-name = "bistro"
-path = "examples/bistro/main.rs"
+name = "cube"
+path = "examples/cube.rs"
 required-features = ["cook"]
 
 [[example]]
@@ -87,41 +108,11 @@ required-features = ["cook"]
 [lints]
 workspace = true
 
-[workspace]
-resolver = "2"
-members = [
-    "crates/*",
-    "benches",
-]
-
-default-members = [
-    ".",
-    "crates/*",
-]
-
-[workspace.dependencies]
-concinnity-asset = { path = "crates/concinnity-asset", version = "0.18" }
-concinnity-audio = { path = "crates/concinnity-audio", version = "0.18" }
-concinnity-blob = { path = "crates/concinnity-blob", version = "0.18" }
-concinnity-cli = { path = "crates/concinnity-cli", version = "0.18" }
-concinnity-cook = { path = "crates/concinnity-cook", version = "0.18" }
-concinnity-core = { path = "crates/concinnity-core", version = "0.18" }
-concinnity-cpu = { path = "crates/concinnity-cpu", version = "0.18" }
-concinnity-device = { path = "crates/concinnity-device", version = "0.18" }
-concinnity-docs = { path = "crates/concinnity-docs", version = "0.18" }
-concinnity-eas = { path = "crates/concinnity-eas", version = "0.18" }
-concinnity-editor = { path = "crates/concinnity-editor", version = "0.18" }
-concinnity-engine = { path = "crates/concinnity-engine", version = "0.18" }
-concinnity-font = { path = "crates/concinnity-font", version = "0.18" }
-concinnity-memory = { path = "crates/concinnity-memory", version = "0.18" }
-concinnity-physics = { path = "crates/concinnity-physics", version = "0.18" }
-concinnity-render = { path = "crates/concinnity-render", version = "0.18" }
-concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.18" }
-concinnity-shader = { path = "crates/concinnity-shader", version = "0.18" }
-concinnity-slang = { path = "crates/concinnity-slang", version = "0.18" }
-concinnity-store = { path = "crates/concinnity-store", version = "0.18" }
-concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.18" }
-concinnity-world = { path = "crates/concinnity-world", version = "0.18" }
+[workspace.lints.rust]
+unreachable_pub = "warn"
+missing_docs = "warn"
+trivial_numeric_casts = "warn"
+future_incompatible = "warn"
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "warn"
@@ -141,12 +132,6 @@ infinite_loop = "warn"
 empty_enum_variants_with_brackets = "warn"
 mixed_attributes_style = "warn"
 unnecessary_self_imports = "warn"
-
-[workspace.lints.rust]
-unreachable_pub = "warn"
-missing_docs = "warn"
-trivial_numeric_casts = "warn"
-future_incompatible = "warn"
 
 [profile.dev]
 opt-level = 2

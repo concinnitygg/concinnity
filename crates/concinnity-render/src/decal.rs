@@ -5,7 +5,7 @@
 //! world-space point of each rasterised pixel from depth and tests whether it
 //! lies inside the box.
 
-use crate::assets::Decal;
+use crate::components::Decal;
 
 /// Per-decal data the renderer consumes each frame. Built once at
 /// `GraphicsSystem` init from the world's `Decal` components.

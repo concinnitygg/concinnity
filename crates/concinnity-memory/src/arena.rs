@@ -148,8 +148,9 @@ impl Arena {
         }
     }
 
+    #[cfg(test)]
     /// A slice of `len` copies of `value`.
-    pub fn alloc_slice<T: Copy>(&self, len: usize, value: T) -> Option<&mut [T]> {
+    pub(crate) fn alloc_slice<T: Copy>(&self, len: usize, value: T) -> Option<&mut [T]> {
         let slice = self.uninit_slice::<T>(len)?;
         for slot in slice.iter_mut() {
             slot.write(value);

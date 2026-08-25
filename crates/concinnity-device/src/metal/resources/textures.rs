@@ -13,17 +13,32 @@ use crate::metal::texture::{upload_texture, upload_texture_image};
 impl MtlContext {
     // The texture a `normal_map_slot` samples for the legacy per-draw normal
     // binding: a real normal map is a texture in the shared pool at its own slot;
-    // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the sole entry of
-    // `normal_map_textures`).
+    // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the first entry of
+    // `fallback_textures`).
     pub(in crate::metal) fn normal_pool_texture(
         &self,
         normal_map_slot: usize,
     ) -> &ProtocolObject<dyn objc2_metal::MTLTexture> {
         if normal_map_slot == crate::gfx::render_types::NO_NORMAL_MAP_SLOT {
-            self.normal_map_textures[0].as_ref()
+            self.fallback_textures[0].as_ref()
         } else {
             let last = self.textures.len().saturating_sub(1);
             self.textures[normal_map_slot.min(last)].as_ref()
+        }
+    }
+
+    // The same for an albedo `texture_slot`: `NO_ALBEDO_SLOT` selects the white
+    // fallback (the second entry), so an untextured material shows its tint
+    // rather than whichever texture holds slot 0.
+    pub(in crate::metal) fn albedo_pool_texture(
+        &self,
+        texture_slot: usize,
+    ) -> &ProtocolObject<dyn objc2_metal::MTLTexture> {
+        if texture_slot == crate::gfx::render_types::NO_ALBEDO_SLOT {
+            self.fallback_textures[1].as_ref()
+        } else {
+            let last = self.textures.len().saturating_sub(1);
+            self.textures[texture_slot.min(last)].as_ref()
         }
     }
 

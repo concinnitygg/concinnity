@@ -1,7 +1,7 @@
 // asset_impls/file.rs
 
-use concinnity_core::assets::File;
-use concinnity_core::assets::FileKind;
+use concinnity_core::components::File;
+use concinnity_core::components::FileKind;
 
 impl crate::asset::BuildAsset for File {
     fn compile_payload(

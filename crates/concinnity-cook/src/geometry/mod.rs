@@ -41,7 +41,7 @@ type LodAlternates = Vec<(f32, Vec<u16>)>;
 
 // Convert an args-form `SkeletonJoint` into the payload joint form.
 fn joint_def_to_payload(
-    j: &crate::assets::SkeletonJoint,
+    j: &crate::components::SkeletonJoint,
 ) -> crate::gfx::mesh_payload::PayloadJoint {
     crate::gfx::mesh_payload::PayloadJoint {
         name: j.name.clone(),
@@ -259,7 +259,7 @@ fn bounding_sphere_radius(positions: &[[f32; 3]]) -> f32 {
 // Normals are computed from triangle geometry; tangents from UV gradients.
 // Shared by the inline Mesh path and file-backed mesh formats (e.g. OBJ).
 pub(crate) fn compile_mesh_from_vertex_data(
-    vertex_data: &[crate::assets::VertexData],
+    vertex_data: &[crate::components::VertexData],
     indices: &[u16],
 ) -> Vec<u8> {
     let mut normals: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_data.len()];
@@ -307,11 +307,11 @@ pub(crate) struct SkinnedLods<'a> {
 // QEM half-edge collapse against the LOD0 vertex set, mirroring the static
 // [`build_lod_alternates`] path.
 pub(crate) fn compile_skinned_mesh_payload_with_lods(
-    vertex_data: &[crate::assets::SkinnedVertexData],
+    vertex_data: &[crate::components::SkinnedVertexData],
     indices: &[u16],
-    skeleton: &[crate::assets::SkeletonJoint],
+    skeleton: &[crate::components::SkeletonJoint],
     morph_target_names: &[String],
-    morph_deltas: &[crate::assets::MorphDelta],
+    morph_deltas: &[crate::components::MorphDelta],
     lods: &SkinnedLods,
 ) -> Result<Vec<u8>, String> {
     let lod_levels = lods.levels.clamp(1, 8);
@@ -716,7 +716,7 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+    use crate::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
     use crate::gfx::mesh_payload::{
         Vertex, deserialise_heightfield, deserialise_skinned_with_lods, deserialise_with_lods,
     };

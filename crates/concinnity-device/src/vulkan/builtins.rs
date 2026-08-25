@@ -19,11 +19,12 @@ use super::pipeline::{
 
 // Size of the bindless texture pool for a world with `texture_count` entries
 // in its texture table: one image per table slot (a single fallback when the
-// table is empty) plus the flat-normal fallback. Baked into the pool-sized
-// shaders via `{POOL_SIZE}`; init and the export-time precompile both derive
-// the value here so a bundle's precompiled artifacts match its first launch.
+// table is empty) plus the reserved fallbacks, flat-normal and white. Baked
+// into the pool-sized shaders via `{POOL_SIZE}`; init and the export-time
+// precompile both derive the value here so a bundle's precompiled artifacts
+// match its first launch.
 pub(crate) fn bindless_pool_size(texture_count: usize) -> usize {
-    texture_count.max(1) + 1
+    texture_count.max(1) + crate::gfx::render_types::FALLBACK_TEXTURE_COUNT
 }
 
 // How a program's compile source is assembled from its shader file. Defines

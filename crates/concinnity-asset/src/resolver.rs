@@ -21,7 +21,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// A name -> dense id resolver.
-pub type ResolveFn = fn(&str) -> u32;
+pub(crate) type ResolveFn = fn(&str) -> u32;
 
 /// A name -> per-kind resource-handle resolver. Returns the resource's dense
 /// handle, or `None` when the name is not a known resource of that kind in the
@@ -29,7 +29,7 @@ pub type ResolveFn = fn(&str) -> u32;
 /// handle is not assignable on demand: it is a position in the build's
 /// declaration-ordered resource table, so a name with no matching resource has
 /// no handle.
-pub type HandleResolveFn = fn(&str) -> Option<u32>;
+pub(crate) type HandleResolveFn = fn(&str) -> Option<u32>;
 
 // An atomically-installable `ResolveFn` slot. Holds the function pointer as a
 // `usize` (0 = unset): written once at install, only read afterward.

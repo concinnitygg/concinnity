@@ -5,7 +5,7 @@
 //! while keeping each slice primed before it is sampled. Shared by all three
 //! backends so the policy lives once next to the CSM math in `csm.rs`.
 
-use crate::assets::ShadowUpdate;
+use crate::components::ShadowUpdate;
 use crate::render_types::NUM_SHADOW_CASCADES;
 
 /// Round-robin clock + primed-set state for the cascade re-render schedule. One
@@ -78,7 +78,7 @@ fn select_cascade_mask(
 #[cfg(test)]
 mod tests {
     use super::{ShadowCascadeScheduler, select_cascade_mask};
-    use crate::assets::ShadowUpdate;
+    use crate::components::ShadowUpdate;
     use crate::render_types::NUM_SHADOW_CASCADES;
 
     const ALL: u32 = (1u32 << NUM_SHADOW_CASCADES) - 1;

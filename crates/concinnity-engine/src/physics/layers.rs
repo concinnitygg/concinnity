@@ -6,7 +6,7 @@
 // The table resolves names to bits once at init; everything downstream works
 // in plain `LayerMask` bit pairs.
 
-use concinnity_core::assets::PhysicsConfig;
+use concinnity_core::components::PhysicsConfig;
 use concinnity_physics::LayerMask;
 
 pub(crate) const LAYER_WORLD: &str = "world";

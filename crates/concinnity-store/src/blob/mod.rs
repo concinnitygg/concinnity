@@ -3,36 +3,62 @@
 //! format contract (schema, header, version, bytes <-> metadata) and is
 //! deliberately I/O-free, so every read below is `fs` here plus a pure parse
 //! there. Blob data is read-only at runtime; concinnity-cook writes what
-//! `concinnity_blob::encode_cnb` returns.
+//! `concinnity_core::blob::encode_cnb` returns.
 use std::fs;
 use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
-use concinnity_blob::BlobError;
+pub use concinnity_core::blob::{BLOB_MAGIC, HEADER_SIZE, WorldManifest};
+use concinnity_core::blob::{BlobError, parse_cnb, parse_payload_section_start, payload_section};
 use concinnity_core::result::CnResult;
 
 mod data;
 
-pub use concinnity_blob::{BLOB_MAGIC, HEADER_SIZE, WorldManifest};
 pub use concinnity_core::SCHEMA_HASH;
 pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
-/// Format a blob file path for a given index under `.concinnity/data/`. Blob 0
-/// is the primary blob (the metadata block plus the first payload section);
-/// higher indices are overflow payload blobs. The format crate is path-agnostic;
-/// this layout knowledge stays here.
+// Where the blob files live when a host named a primary blob directly, rather
+// than taking the `.concinnity/data/` layout. Holds that file's path; every
+// overflow blob is its sibling named by index.
+fn primary_override() -> &'static Mutex<Option<PathBuf>> {
+    static PRIMARY: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    PRIMARY.get_or_init(|| Mutex::new(None))
+}
+
+/// Format a blob file path for a given index. Blob 0 is the primary blob (the
+/// metadata block plus the first payload section); higher indices are overflow
+/// payload blobs, which are always siblings of blob 0. The format crate is
+/// path-agnostic; this layout knowledge stays here.
+///
+/// Blob 0 is `.concinnity/data/0` unless [`load_raw_at`] anchored the layout on
+/// a blob file named directly, in which case that file is blob 0 and its
+/// directory holds the rest.
 pub fn blob_path(index: u32) -> String {
-    crate::paths::data_dir()
-        .join(index.to_string())
-        .to_string_lossy()
-        .into_owned()
+    let primary = primary_override().lock().unwrap().clone();
+    resolve_blob_path(primary.as_deref(), index)
+}
+
+// Pure resolution split out so the two layouts are unit-testable without the
+// process-global anchor.
+fn resolve_blob_path(primary: Option<&Path>, index: u32) -> String {
+    let path = match primary {
+        Some(p) if index == 0 => p.to_path_buf(),
+        Some(p) => p
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            .join(index.to_string()),
+        None => crate::paths::data_dir().join(index.to_string()),
+    };
+    path.to_string_lossy().into_owned()
 }
 
 /// Read and deserialize a blob's metadata section (component defs + resource
 /// records). Returns (meta, payload_start_offset).
 pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnResult> {
     let data = read_file(path)?;
-    concinnity_blob::parse_cnb(SCHEMA_HASH, &data).map_err(|e| report(path, e))
+    parse_cnb(SCHEMA_HASH, &data).map_err(|e| report(path, e))
 }
 
 /// Byte offset within a blob file at which its payload section begins. Reads
@@ -50,13 +76,13 @@ pub fn payload_section_start(path: &str) -> Result<u64, CnResult> {
         tracing::error!("Failed to read header of {}: {}", path, e);
         CnResult::FileIo
     })?;
-    concinnity_blob::parse_payload_section_start(&header).map_err(|e| report(path, e))
+    parse_payload_section_start(&header).map_err(|e| report(path, e))
 }
 
 // Read just the payload section of a blob file into memory.
 fn read_payload_section(path: &str) -> Result<Vec<u8>, CnResult> {
     let data = read_file(path)?;
-    Ok(concinnity_blob::payload_section(&data).to_vec())
+    Ok(payload_section(&data).to_vec())
 }
 
 fn read_file(path: &str) -> Result<Vec<u8>, CnResult> {
@@ -81,6 +107,16 @@ fn report(path: &str, e: BlobError) -> CnResult {
         BlobError::Encode => tracing::error!("{}: failed to serialize metadata", path),
     }
     CnResult::FileIo
+}
+
+/// Load the blob file at `primary` and the payload store around it, anchoring
+/// the process's blob layout on it: that file is blob 0 and its siblings named
+/// by index are the overflow payload blobs, so a world written to `data/0`
+/// reads `data/1`, `data/2`, ... beside it. The anchor outlives the call
+/// because payloads stream off disk long after startup.
+pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnResult> {
+    *primary_override().lock().unwrap() = Some(primary.to_path_buf());
+    load_raw()
 }
 
 /// Load the primary blob's metadata and the `BlobData` payload store from the
@@ -138,6 +174,7 @@ pub fn load_defs() -> Result<Vec<BlobAssetDef>, CnResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::blob::encode_cnb;
 
     #[test]
     fn blob_path_appends_the_index() {
@@ -145,6 +182,31 @@ mod tests {
         // only the trailing index and distinctness are asserted.
         assert!(blob_path(5).ends_with('5'));
         assert_ne!(blob_path(0), blob_path(1));
+    }
+
+    #[test]
+    fn an_anchored_primary_owns_blob_zero_and_its_siblings() {
+        // Blob 0 is the file named verbatim (whatever it is called); every
+        // overflow blob is its sibling named by index. Built through `join` so
+        // the separator is the platform's.
+        let primary = Path::new("out").join("blobs").join("0");
+        assert_eq!(
+            resolve_blob_path(Some(&primary), 0),
+            primary.to_string_lossy()
+        );
+        assert_eq!(
+            resolve_blob_path(Some(&primary), 2),
+            Path::new("out").join("blobs").join("2").to_string_lossy()
+        );
+
+        // A bare file name hangs its siblings off the working directory.
+        assert_eq!(resolve_blob_path(Some(Path::new("0")), 1), "1");
+    }
+
+    #[test]
+    fn without_an_anchor_blobs_sit_under_the_data_dir() {
+        let expected = crate::paths::data_dir().join("3");
+        assert_eq!(resolve_blob_path(None, 3), expected.to_string_lossy());
     }
 
     #[test]
@@ -176,8 +238,7 @@ mod tests {
     fn payload_section_start_skips_header_and_meta() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("0").to_string_lossy().into_owned();
-        let image = concinnity_blob::encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"payloadbytes")
-            .unwrap();
+        let image = encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"payloadbytes").unwrap();
         std::fs::write(&path, &image).unwrap();
 
         let start = payload_section_start(&path).expect("section start");
@@ -228,12 +289,12 @@ mod tests {
         };
         std::fs::write(
             path_for(0),
-            concinnity_blob::encode_cnb(SCHEMA_HASH, &meta, b"primary").unwrap(),
+            encode_cnb(SCHEMA_HASH, &meta, b"primary").unwrap(),
         )
         .unwrap();
         std::fs::write(
             path_for(1),
-            concinnity_blob::encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"overflow").unwrap(),
+            encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"overflow").unwrap(),
         )
         .unwrap();
 

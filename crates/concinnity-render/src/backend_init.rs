@@ -5,8 +5,10 @@
 //! selected at compile time (Metal / DirectX / Vulkan). Every backend receives
 //! the same struct; each reads the fields its feature set consumes.
 
-use crate::assets::{GlassPanel, SdfVolume, ShadowUpdate, UpscalerBackend, WaterSurface, Window};
 use crate::auto_exposure::AutoExposureSettings;
+use crate::components::{
+    GlassPanel, SdfVolume, ShadowUpdate, UpscalerBackend, WaterSurface, Window,
+};
 use crate::decal::DecalRecord;
 use crate::mesh_payload::Vertex;
 use crate::particles::ParticleEmitterRecord;

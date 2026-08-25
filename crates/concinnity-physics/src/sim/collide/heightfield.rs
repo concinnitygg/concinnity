@@ -322,10 +322,12 @@ impl Heightfields {
         self.fields.get(index as usize)
     }
 
+    #[cfg(test)]
     pub(crate) fn overflows(&self) -> u32 {
         self.overflows.load(Ordering::Relaxed)
     }
 
+    #[cfg(test)]
     pub(crate) fn clear_overflows(&self) {
         self.overflows.store(0, Ordering::Relaxed);
     }

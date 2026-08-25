@@ -14,7 +14,6 @@
 mod detect;
 mod equirect;
 
-pub use detect::PanoramaSphere;
 pub use detect::detect;
 pub(crate) use equirect::load_equirect;
 // Panorama / ordinary-scene `.glb` bytes for tests in sibling modules that

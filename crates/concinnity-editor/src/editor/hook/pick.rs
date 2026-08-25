@@ -153,7 +153,7 @@ impl EditorHook {
         let id = crate::ecs::asset_id::lookup(name)?;
         let index = world.resource::<crate::ecs::PickIndex>()?;
         let entry = index.entries.iter().find(|e| e.asset_id == id)?;
-        let cam = world.query::<crate::assets::Camera3D>().next()?;
+        let cam = world.query::<crate::components::Camera3D>().next()?;
         highlight::screen_rect(
             &cam.view_matrix,
             cam.fov_y_degrees.to_radians(),
@@ -167,7 +167,7 @@ impl EditorHook {
 // The mouse ray from the world's live camera, or `None` in a camera-less
 // world (nothing 3D to pick). Shared with the gizmo drag drive.
 pub(super) fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> Option<PickRay> {
-    let cam = world.query::<crate::assets::Camera3D>().next()?;
+    let cam = world.query::<crate::components::Camera3D>().next()?;
     screen_ray(
         &cam.view_matrix,
         cam.position,

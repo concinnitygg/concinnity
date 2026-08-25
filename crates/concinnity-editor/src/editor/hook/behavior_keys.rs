@@ -48,7 +48,7 @@
 // only Left and Right, which are the caret's (`text_input_system`).
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use crate::editor::behavior::graph::Card;
 use crate::editor::behavior::navigate::{self, Dir};
 use crate::editor::behavior_chart::CARD_POOL;

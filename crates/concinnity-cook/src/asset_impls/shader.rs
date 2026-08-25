@@ -1,8 +1,8 @@
 // asset_impls/shader.rs
 
 use crate::asset::BuildCtx;
-use concinnity_core::assets::shader::platform_key;
-use concinnity_core::assets::{Shader, ShaderKind, ShaderPayload};
+use concinnity_core::components::shader::platform_key;
+use concinnity_core::components::{Shader, ShaderKind, ShaderPayload};
 use concinnity_world::source_args::resolve_source_from_args;
 
 // Resolve a raw per-platform source string to the on-disk path the build will

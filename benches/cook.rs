@@ -13,8 +13,8 @@
 //!
 //! Run with `cargo bench -p concinnity-bench --bench cook`.
 
-use concinnity_blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
 use concinnity_cook::{build_pipeline_from_str, prepare_world};
+use concinnity_core::blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
 
 use concinnity_bench::Bench;
 

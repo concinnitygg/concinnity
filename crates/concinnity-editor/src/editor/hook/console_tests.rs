@@ -7,7 +7,7 @@
 // /snap, /dup, /floor dispatches beside the rest of the drive in `tests.rs`.
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use crate::test_support::isolate_state_dir;
 use std::sync::atomic::Ordering;
 
@@ -19,7 +19,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 fn console_world() -> World {
     let mut world = World::new();
     for id in console_panel::all_field_ids() {
-        world.add_component(crate::assets::TextInput {
+        world.add_component(crate::components::TextInput {
             asset_id: id,
             ..Default::default()
         });

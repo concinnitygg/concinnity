@@ -25,6 +25,9 @@ include = [
 [[bin]]
 name = "concinnity"
 path = "src/main.rs"
+# Shares its name with the framework facade's lib target, which collides in
+# `cargo doc --workspace`; a CLI binary has no rustdoc to publish anyway.
+doc = false
 
 [features]
 # Target the Vulkan backend. Activates this crate's optional ash/shaderc so the

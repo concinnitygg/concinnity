@@ -125,7 +125,7 @@ impl PayloadMorphs {
     }
 
     /// Every entry paired with the vertex it belongs to.
-    pub fn vertex_entries(&self) -> impl Iterator<Item = (usize, &MorphEntry)> {
+    pub(crate) fn vertex_entries(&self) -> impl Iterator<Item = (usize, &MorphEntry)> {
         self.offsets.windows(2).enumerate().flat_map(move |(v, w)| {
             self.entries[w[0] as usize..w[1] as usize]
                 .iter()
@@ -166,8 +166,8 @@ impl PayloadMorphs {
     }
 
     /// The single GPU buffer the deform kernels read: the offsets table, then
-    /// the entries starting at word [`entry_word_base`] (16-byte aligned), each
-    /// entry seven 4-byte words laid out as [`MorphEntry`].
+    /// the entries, which start at the first 16-byte-aligned word past it.
+    /// Each entry is seven 4-byte words laid out as [`MorphEntry`].
     pub fn packed_words(&self) -> Vec<u32> {
         if self.is_empty() {
             return Vec::new();
@@ -182,12 +182,12 @@ impl PayloadMorphs {
 }
 
 /// Words per [`MorphEntry`] in the packed buffer.
-pub const MORPH_ENTRY_WORDS: usize = 7;
+pub(crate) const MORPH_ENTRY_WORDS: usize = 7;
 
 /// Word index where the entries begin in [`PayloadMorphs::packed_words`]: the
 /// `vertex_count + 1` offsets rounded up to a 16-byte boundary. The shaders
 /// compute the same value from their `vertex_count` parameter.
-pub fn entry_word_base(vertex_count: usize) -> usize {
+pub(crate) fn entry_word_base(vertex_count: usize) -> usize {
     (vertex_count + 1 + 3) & !3
 }
 

@@ -2,8 +2,9 @@
 //! the cook pipeline, the subsystem crates, and the editor all have to agree on
 //! and none of them owns: the backend-agnostic GPU data layouts the CPU and the
 //! shaders both name, the transform and skeleton math those layouts are
-//! expressed in, the ECS component definitions and the registry built from them,
-//! and the post-process / quality setting structs.
+//! expressed in, the ECS storage mechanism plus the component definitions and
+//! the registry built from them, the post-process / quality setting structs,
+//! and the `.cnb` blob container format the cooked world travels in.
 //!
 //! Data and the small total functions over it. CPU compute over that vocabulary
 //! -- skinning, IK, LOD decimation, rasterisation, IBL convolution -- lives in
@@ -28,15 +29,14 @@ include!(concat!(env!("OUT_DIR"), "/runtime_asset_docs.rs"));
 /// into every blob header. A blob whose stored hash differs was written by a
 /// different engine schema and fails the load check instead of mis-decoding.
 ///
-/// Mixed from the three crates that own a piece of that schema: the authored
-/// asset types, this crate's divergent runtime structs and component registry
-/// (whose list order is the tag), and the blob container's record shapes. No
-/// manually maintained version number, and no crate reaching into another's
-/// directory to compute it.
+/// Mixed from the three pieces of that schema: the authored asset types, this
+/// crate's divergent runtime structs and component registry (whose list order
+/// is the tag), and the blob container's record shapes. No manually maintained
+/// version number, and no crate reaching into another's directory to compute it.
 pub const SCHEMA_HASH: u32 = mix(&[
     concinnity_asset::SOURCE_HASH,
     COMPONENT_SCHEMA_HASH,
-    concinnity_blob::RECORD_SCHEMA_HASH,
+    blob::RECORD_SCHEMA_HASH,
 ]);
 
 // FNV-1a over the parts, order-significant.
@@ -56,7 +56,12 @@ const fn mix(parts: &[u32]) -> u32 {
     hash
 }
 
-pub mod assets;
+// The container parses bytes the process did not produce, so a panic there is a
+// crash on a corrupt file rather than a bug. Invariants that genuinely cannot
+// fail use `expect` with the invariant named; tests unwrap freely.
+#[cfg_attr(not(test), warn(clippy::unwrap_used))]
+pub mod blob;
+pub mod components;
 pub mod ecs;
 pub mod gfx;
 pub mod math;

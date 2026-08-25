@@ -115,7 +115,7 @@ impl TransientSlot {
 /// sweep over the reachable space in this module's tests plus each executor's
 /// per-frame assertion; if this graph ever becomes too permissive the sweep is
 /// what fails.
-pub fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
+pub(crate) fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
     FrameGraphInputs {
         // `world_hidden` masks passes off rather than on, so leaving it false
         // keeps the richer graph.

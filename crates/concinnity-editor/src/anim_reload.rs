@@ -232,8 +232,8 @@ mod tests {
     }
 
     // A file-backed Animation targeting a SkinnedMesh named "reload_hero".
-    fn file_backed_animation(source: &str, animation_name: &str) -> crate::assets::Animation {
-        crate::assets::Animation {
+    fn file_backed_animation(source: &str, animation_name: &str) -> crate::components::Animation {
+        crate::components::Animation {
             asset_id: intern("reload_clip"),
             target: Some(crate::ecs::SkinnedMeshHandle(intern("reload_hero").0)),
             source: source.to_string(),

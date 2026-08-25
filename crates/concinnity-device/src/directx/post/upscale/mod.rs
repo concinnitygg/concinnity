@@ -17,7 +17,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use crate::assets::UpscalerBackend;
+use crate::components::UpscalerBackend;
 
 #[cfg(ngx_sdk_bundled)]
 mod dlss;
@@ -333,7 +333,7 @@ pub(in crate::directx) fn build_upscaler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::UpscalerBackend as B;
+    use crate::components::UpscalerBackend as B;
 
     // The backend a request resolves to: the first candidate in the order.
     fn resolved(req: B, dlss: bool, xess: bool, fsr3: bool) -> ResolvedBackend {

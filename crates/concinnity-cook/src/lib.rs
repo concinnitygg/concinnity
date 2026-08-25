@@ -5,7 +5,7 @@
 //! and core has no edge back into it.
 //!
 //! Bridge: the vocabulary and compute modules below are re-exported crate-wide
-//! so code moved here keeps resolving its `crate::{assets,ecs,gfx,result}`
+//! so code moved here keeps resolving its `crate::{components,ecs,gfx,result}`
 //! paths. The payload *decoders* and shared payload types live in
 //! `concinnity_cpu::build`; this crate's modules call back into them.
 //! The source importers parse artist-supplied files, so a panic here is a crash
@@ -20,7 +20,7 @@
     )
 )]
 
-pub(crate) use concinnity_core::{assets, result};
+pub(crate) use concinnity_core::{components, result};
 pub(crate) use concinnity_cpu::gfx;
 
 // The vocabulary's ECS surface, with the build-time name interner shadowing its
@@ -43,7 +43,7 @@ pub use concinnity_core::platform;
 pub use concinnity_store::paths;
 
 // The world front half -- the authored model, the type vocabulary
-// (`ComponentType` / `ResourceAssetType`), the typed spec vocabulary, and the
+// (`RegisteredType` / `RegisteredType`), the typed spec vocabulary, and the
 // pure semantic checks -- lives in concinnity-world; the registry is bound here
 // so cook code keeps resolving `crate::registry`. cook composes its
 // compile-backed checks on top (crate::check) and owns expansion (crate::world).
@@ -111,7 +111,6 @@ pub mod world;
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode + world parse API stays in
 // concinnity-cpu.
-pub use pipeline::TextureSourceInfo;
 pub use pipeline::{
     BuildProgress, PipelineResult, build_compiled, build_compiled_with_progress, build_from_path,
     build_pipeline_from_str, validate_asset, validate_world_jsonl, write_build_outputs,

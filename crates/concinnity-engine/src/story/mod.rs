@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::assets::{
+use crate::components::{
     CueKind, FrameInput, InputKey, PlayCue, ScreenCommand, ScreenShown, Sprite, Story,
     StoryCommand, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryReload, StoryScaffold,
     StoryStage, TextLabel,
@@ -315,19 +315,19 @@ impl StorySystem {
 impl System for StorySystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .reads_components(crate::component_mask![crate::components::FrameInput])
             .writes_components(crate::component_mask![
-                crate::assets::TextLabel,
-                crate::assets::Sprite,
+                crate::components::TextLabel,
+                crate::components::Sprite,
             ])
             .reads_resources(crate::resource_mask![
-                crate::assets::StoryReload,
-                crate::assets::ScreenShown,
-                crate::assets::StoryCommand,
+                crate::components::StoryReload,
+                crate::components::ScreenShown,
+                crate::components::StoryCommand,
             ])
             .writes_resources(crate::resource_mask![
-                crate::assets::PlayCue,
-                crate::assets::ScreenCommand,
+                crate::components::PlayCue,
+                crate::components::ScreenCommand,
             ])
     }
 

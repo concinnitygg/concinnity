@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use crate::assets::{SkeletonJoint, SkinnedVertexData, VertexData};
+use crate::components::{SkeletonJoint, SkinnedVertexData, VertexData};
 use crate::gfx::skinning::{JointPose, euler_yxz_from_quat};
 use crate::gltf_source::GltfDoc;
 
@@ -27,7 +27,7 @@ pub(crate) struct ImportedSkinnedMesh {
     // Morph-target names, one per target; empty when the mesh has none.
     pub(crate) morph_target_names: Vec<String>,
     // Dense target-major deltas: entry `t * vertices.len() + v`.
-    pub(crate) morph_deltas: Vec<crate::assets::MorphDelta>,
+    pub(crate) morph_deltas: Vec<crate::components::MorphDelta>,
 }
 
 // Same as [`import_skinned_glb`] but takes a pre-parsed glTF document. The
@@ -421,7 +421,7 @@ fn topological_order(parents: &[Option<usize>]) -> (Vec<usize>, Vec<usize>) {
 type SkinnedGeometry = (
     Vec<SkinnedVertexData>,
     Vec<u16>,
-    Vec<crate::assets::MorphDelta>,
+    Vec<crate::components::MorphDelta>,
 );
 
 // One primitive's morph targets: per-vertex position and normal deltas.
@@ -432,7 +432,7 @@ fn import_geometry(
     doc: &GltfDoc,
     remap: &[usize],
 ) -> Result<SkinnedGeometry, String> {
-    use crate::assets::MorphDelta;
+    use crate::components::MorphDelta;
 
     let mut vertices: Vec<SkinnedVertexData> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
@@ -553,7 +553,7 @@ fn import_geometry(
     let total = vertices.len();
     let mut morph_deltas = Vec::with_capacity(targets.len() * total);
     for mut t in targets {
-        t.resize(total, crate::assets::MorphDelta::default());
+        t.resize(total, crate::components::MorphDelta::default());
         morph_deltas.extend(t);
     }
     Ok((vertices, indices, morph_deltas))

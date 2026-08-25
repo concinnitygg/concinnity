@@ -24,7 +24,7 @@ pub(crate) fn cross_refs_for(
     name: &str,
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
-    use crate::assets::{
+    use crate::components::{
         AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, Prop, VoxelChunk,
         VoxelWorld,
     };
@@ -56,19 +56,13 @@ type DeclaredRefs = (
 // Name-sets are built once per distinct target; every target names a real
 // declarable type (guarded by `ref_fields_name_real_target_types`).
 fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    use crate::registry::ComponentType;
-    use crate::resource_type::ResourceAssetType;
+    use crate::registry::RegisteredType;
 
     let norm = |t: &str| t.to_lowercase().replace('_', "");
 
-    let ref_lists: Vec<DeclaredRefs> = ComponentType::all()
+    let ref_lists: Vec<DeclaredRefs> = RegisteredType::all()
         .iter()
         .map(|t| (t.as_str(), t.ref_fields()))
-        .chain(
-            ResourceAssetType::all()
-                .iter()
-                .map(|t| (t.as_str(), t.ref_fields())),
-        )
         .filter(|(_, refs)| !refs.is_empty())
         .map(|(name, refs)| (norm(name), name, refs))
         .collect();
@@ -1119,17 +1113,11 @@ mod tests {
     // ref (the old asset_refs/registry drift) can never reappear.
     #[test]
     fn every_registry_ref_field_is_validated() {
-        use crate::registry::ComponentType;
-        use crate::resource_type::ResourceAssetType;
+        use crate::registry::RegisteredType;
 
-        let all: Vec<(&str, &[(&str, &str)])> = ComponentType::all()
+        let all: Vec<(&str, &[(&str, &str)])> = RegisteredType::all()
             .iter()
             .map(|t| (t.as_str(), t.ref_fields()))
-            .chain(
-                ResourceAssetType::all()
-                    .iter()
-                    .map(|t| (t.as_str(), t.ref_fields())),
-            )
             .filter(|(_, refs)| !refs.is_empty())
             .collect();
         assert!(!all.is_empty());

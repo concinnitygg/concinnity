@@ -1,6 +1,6 @@
 // asset_impls/procedural_mesh.rs
 
-use concinnity_core::assets::ProceduralMesh;
+use concinnity_core::components::ProceduralMesh;
 
 impl crate::asset::BuildAsset for ProceduralMesh {
     fn compile_payload(

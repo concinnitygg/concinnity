@@ -2,7 +2,7 @@
 // StatHud chip anchoring. All of it needs the loaded font metrics, which is
 // why it runs in the overlay build rather than the HUD systems themselves.
 
-use crate::assets::{LabelBox, LayoutContainer, TextLabel};
+use crate::components::{LabelBox, LayoutContainer, TextLabel};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::text;
@@ -14,7 +14,7 @@ pub(super) struct LabelLayoutScratch {
     // Every measurable label's box this frame, keyed by id.
     boxes: std::collections::HashMap<AssetId, LabelBox>,
     // One container's resolved placements, reused per container.
-    placements: Vec<crate::assets::LabelPlacement>,
+    placements: Vec<crate::components::LabelPlacement>,
     // Every placed label's resolved text origin.
     placed: std::collections::HashMap<AssetId, (f32, f32)>,
 }
@@ -151,8 +151,8 @@ fn position_chip_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Justify, LayoutRow, SpriteFit, TextAlign};
     use crate::blob::BlobData;
+    use crate::components::{Justify, LayoutRow, SpriteFit, TextAlign};
     use crate::ecs::{ComponentSlot, ComponentStorage, FontHandle, Resources};
     use crate::gfx::profile::FrameProfile;
 

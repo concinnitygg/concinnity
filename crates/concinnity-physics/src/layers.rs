@@ -25,7 +25,7 @@ impl LayerMask {
 
     /// Whether two masks admit each other. The same rule governs a query
     /// against a collider, with the query carrying one of the two masks.
-    pub const fn interacts_with(self, other: LayerMask) -> bool {
+    pub(crate) const fn interacts_with(self, other: LayerMask) -> bool {
         (self.memberships & other.filter) != 0 && (other.memberships & self.filter) != 0
     }
 }

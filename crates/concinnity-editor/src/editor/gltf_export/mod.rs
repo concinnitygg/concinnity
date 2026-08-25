@@ -14,9 +14,9 @@ mod source;
 
 pub(crate) use source::export_world_mesh;
 
-use crate::assets::SkeletonJoint;
+use crate::components::SkeletonJoint;
 use crate::gfx::mesh_payload::MorphDelta;
-use concinnity_core::assets::build_skeleton_from_joint_defs;
+use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::gfx::transform::{Mat4, mat4_affine_inverse};
 
 // Everything one exported mesh carries. Attribute lists are parallel to

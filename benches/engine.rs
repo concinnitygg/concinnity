@@ -12,7 +12,7 @@
 //! Run with `cargo bench -p concinnity-bench --bench engine`.
 
 use concinnity_bench::{Bench, Rng};
-use concinnity_engine::assets::Prop;
+use concinnity_engine::components::Prop;
 use concinnity_engine::ecs::{ComponentSlot, Entity, World};
 
 const SIZES: [(usize, &str); 2] = [(10_000, "10k"), (100_000, "100k")];

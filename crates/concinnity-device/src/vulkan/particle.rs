@@ -77,14 +77,6 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // as a storage buffer by both the compute pass and the vertex pass.
     // Held for the emitter's lifetime; the descriptor sets alias it.
     pub _pool_buffer: PooledBuffer,
-    // Pool size in bytes. Kept around so a future hot-reload that
-    // resizes a live emitter's pool can reuse the descriptor write
-    // helper (`write_compute_set`) with the new range.
-    #[expect(
-        dead_code,
-        reason = "kept so a pool-resizing hot reload can reuse write_compute_set with the new range"
-    )]
-    pub pool_bytes: u64,
     // One u32 atomic counter (4 bytes). Reset to the integer spawn budget
     // each frame via `vkCmdUpdateBuffer`; decremented by the compute
     // kernel as threads claim spawn slots.
@@ -372,7 +364,6 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 
     Ok(ParticleEmitterGpuState {
         _pool_buffer: pool_buffer,
-        pool_bytes,
         counter_buffer,
         spawn_state: Cell::new(ParticleSpawnState::default()),
         compute_set,

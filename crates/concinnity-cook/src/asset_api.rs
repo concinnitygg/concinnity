@@ -3,7 +3,7 @@
 //! This module is the single place where "type name + JSON args → BlobAssetDef"
 //! is implemented.
 use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef};
-use crate::registry::ComponentType;
+use crate::registry::RegisteredType;
 use crate::registry::Registration;
 use crate::result::CnResult;
 
@@ -41,11 +41,14 @@ pub(crate) struct AssetTypeEntry {
 /// step calls this first, then runs its compilation pass over the resulting
 /// defs. The HTTP API follows the same two-step pattern
 pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
-    if let Some(ct) = ComponentType::parse(&req.asset_type) {
+    if let Some(ct) = RegisteredType::parse(&req.asset_type) {
         let reg = ct.registration();
         if reg.origin != AssetOrigin::External {
             return Err(CnResult::InvalidArgument);
         }
+        // A resource asset is External too, but compiles into the resource
+        // stream rather than a component record, so it has no tag to carry.
+        let discriminant = ct.discriminant().ok_or(CnResult::InvalidArgument)?;
         let args = resolve_args(&reg, &req.args);
         // Every record is baked. For a pass-through type the baked component is
         // its reserialized args (the component IS its args); a divergent type
@@ -57,7 +60,7 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
         return Ok(BlobAssetDef {
             name: None,
             kind: AssetKind::Component,
-            discriminant: ct.discriminant(),
+            discriminant,
             args_bytes,
             payload: None,
         });
@@ -70,7 +73,7 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
 // List every externally-addable component type with its registration metadata.
 #[cfg(test)]
 pub(crate) fn list_addable_types() -> Vec<AssetTypeEntry> {
-    let mut entries: Vec<AssetTypeEntry> = ComponentType::addable_types()
+    let mut entries: Vec<AssetTypeEntry> = RegisteredType::addable_types()
         .map(|(ct, reg)| AssetTypeEntry {
             asset_type: ct.as_str().to_string(),
             summary: concinnity_docs::summary(ct.as_str())
@@ -214,23 +217,24 @@ mod tests {
         let def = create_asset_def(&req).unwrap();
         assert_eq!(def.kind, AssetKind::Component);
         assert_eq!(
-            def.discriminant,
-            ComponentType::parse("ProceduralMesh")
+            Some(def.discriminant),
+            RegisteredType::parse("ProceduralMesh")
                 .unwrap()
                 .discriminant()
         );
         assert!(def.name.is_none());
         assert!(def.payload.is_none());
         // The baked bytes decode as the component (postcard).
-        postcard::from_bytes::<crate::assets::ProceduralMesh>(&def.args_bytes).unwrap();
+        postcard::from_bytes::<crate::components::ProceduralMesh>(&def.args_bytes).unwrap();
     }
 
-    // Every addable type builds a baked def from its default args: the def's
-    // bytes reconstruct through `from_baked` at load. A new type whose baked
-    // form cannot round-trip its defaults fails here.
+    // Every addable component type builds a baked def from its default args: the
+    // def's bytes reconstruct through `from_baked` at load. A new type whose
+    // baked form cannot round-trip its defaults fails here. A resource asset has
+    // no component def; it compiles into the resource stream instead.
     #[test]
-    fn every_addable_type_builds_a_baked_def() {
-        for (ct, _) in ComponentType::addable_types() {
+    fn every_addable_component_type_builds_a_baked_def() {
+        for (ct, _) in RegisteredType::addable_types().filter(|(t, _)| !t.is_resource()) {
             let def = create_asset_def(&AssetRequest {
                 asset_type: ct.as_str().to_string(),
                 args: None,
@@ -248,10 +252,11 @@ mod tests {
             args: Some(serde_json::json!({ "generator": "box" })),
         };
         let def = create_asset_def(&req).unwrap();
-        let baked: crate::assets::ProceduralMesh = postcard::from_bytes(&def.args_bytes).unwrap();
+        let baked: crate::components::ProceduralMesh =
+            postcard::from_bytes(&def.args_bytes).unwrap();
         assert_eq!(baked.generator, "box");
         // Defaults fill the fields the caller omitted.
-        let defaults = crate::assets::ProceduralMesh::default();
+        let defaults = crate::components::ProceduralMesh::default();
         assert_eq!(baked.half_width, defaults.half_width);
         assert_eq!(baked.ceiling_height, defaults.ceiling_height);
     }

@@ -10,7 +10,7 @@
 //! recomputing hashes.
 
 use crate::pipeline::PipelineResult;
-use concinnity_blob::ResourceKind;
+use concinnity_core::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
 use concinnity_cpu::build::texture as texture_payload;
 use concinnity_cpu::build::texture::{TextureFormat, downscale_rgba};
 use concinnity_cpu::gfx::raster;
@@ -74,7 +74,8 @@ pub(crate) fn bake_thumbnails_in(
     // Surface colors by material handle, feeding model sub-mesh shading.
     let mut material_colors: HashMap<u32, [f32; 3]> = HashMap::new();
     for (record, name) in records_of(result, ResourceKind::Material) {
-        let Ok(mat) = postcard::from_bytes::<crate::assets::Material>(&record.data_bytes) else {
+        let Ok(mat) = postcard::from_bytes::<crate::components::Material>(&record.data_bytes)
+        else {
             report.skipped += 1;
             continue;
         };
@@ -166,7 +167,8 @@ fn bake_models(
             mesh_payloads.insert(*handle, bytes);
         }
     }
-    let Some(model_disc) = crate::registry::ComponentType::parse("Model").map(|t| t.discriminant())
+    let Some(model_disc) =
+        crate::registry::RegisteredType::parse("Model").and_then(|t| t.discriminant())
     else {
         return Ok(());
     };
@@ -174,7 +176,7 @@ fn bake_models(
         if def.discriminant != model_disc {
             continue;
         }
-        let Ok(model) = postcard::from_bytes::<crate::assets::Model>(&def.args_bytes) else {
+        let Ok(model) = postcard::from_bytes::<crate::components::Model>(&def.args_bytes) else {
             report.skipped += 1;
             continue;
         };
@@ -219,10 +221,7 @@ fn bake_models(
 }
 
 // The payload bytes a component def's locator points at.
-fn def_payload_of<'a>(
-    result: &'a PipelineResult,
-    def: &concinnity_blob::BlobAssetDef,
-) -> Option<&'a [u8]> {
+fn def_payload_of<'a>(result: &'a PipelineResult, def: &BlobAssetDef) -> Option<&'a [u8]> {
     slice_payload(&result.payloads, def.payload.as_ref()?)
 }
 
@@ -231,7 +230,7 @@ fn def_payload_of<'a>(
 fn records_of(
     result: &PipelineResult,
     kind: ResourceKind,
-) -> impl Iterator<Item = (&concinnity_blob::ResourceRecord, &str)> {
+) -> impl Iterator<Item = (&ResourceRecord, &str)> {
     result
         .resources
         .iter()
@@ -242,17 +241,11 @@ fn records_of(
 
 // The payload bytes a record's locator points at, sliced out of the in-memory
 // blob payload sections.
-fn payload_of<'a>(
-    result: &'a PipelineResult,
-    record: &concinnity_blob::ResourceRecord,
-) -> Option<&'a [u8]> {
+fn payload_of<'a>(result: &'a PipelineResult, record: &ResourceRecord) -> Option<&'a [u8]> {
     slice_payload(&result.payloads, record.payload.as_ref()?)
 }
 
-fn slice_payload<'a>(
-    payloads: &'a [Vec<u8>],
-    loc: &concinnity_blob::PayloadLocator,
-) -> Option<&'a [u8]> {
+fn slice_payload<'a>(payloads: &'a [Vec<u8>], loc: &PayloadLocator) -> Option<&'a [u8]> {
     let blob = payloads.get(loc.blob_index as usize)?;
     let start = usize::try_from(loc.offset).ok()?;
     let end = start.checked_add(usize::try_from(loc.len).ok()?)?;
@@ -390,7 +383,7 @@ fn write_index(dir: &Path, index: &[(String, String)]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_blob::{PayloadLocator, ResourceRecord};
+    use concinnity_core::blob::AssetKind;
 
     fn record(kind: ResourceKind, handle: u32, blob: u32, offset: u64, len: u64) -> ResourceRecord {
         ResourceRecord {
@@ -490,7 +483,7 @@ mod tests {
     fn material_swatch_keys_on_record_and_albedo_average() {
         let dir = tempfile::tempdir().unwrap();
         let mut result = textured_meshed_result();
-        let mat = crate::assets::Material {
+        let mat = crate::components::Material {
             roughness: 0.4,
             metallic: 0.1,
             ..Default::default()
@@ -522,7 +515,7 @@ mod tests {
         let ball_off = result.payloads[0].len() as u64;
         let ball_len = ball.len() as u64;
         result.payloads[0].extend_from_slice(&ball);
-        let mat = crate::assets::Material {
+        let mat = crate::components::Material {
             tint: [0.2, 0.9, 0.2],
             ..Default::default()
         };
@@ -534,25 +527,26 @@ mod tests {
         });
         result.resource_locks.push(lock("green", "Material"));
 
-        let model_disc = crate::registry::ComponentType::parse("Model")
+        let model_disc = crate::registry::RegisteredType::parse("Model")
             .unwrap()
-            .discriminant();
-        let model = crate::assets::Model {
+            .discriminant()
+            .unwrap();
+        let model = crate::components::Model {
             meshes: vec![
-                crate::assets::SubMeshRef {
+                crate::components::SubMeshRef {
                     mesh: Some(crate::ecs::MeshHandle(0)),
                     material: Some(crate::ecs::MaterialHandle(0)),
                 },
-                crate::assets::SubMeshRef {
+                crate::components::SubMeshRef {
                     mesh: Some(crate::ecs::MeshHandle(1)),
                     material: None,
                 },
             ],
             ..Default::default()
         };
-        let def = |disc: u8, args_bytes: Vec<u8>, payload| concinnity_blob::BlobAssetDef {
+        let def = |disc: u8, args_bytes: Vec<u8>, payload| BlobAssetDef {
             name: None,
-            kind: concinnity_blob::AssetKind::Component,
+            kind: AssetKind::Component,
             discriminant: disc,
             args_bytes,
             payload,
@@ -584,8 +578,8 @@ mod tests {
 
         // A model whose sub-meshes all fail to resolve is skipped, not fatal.
         let mut broken = result;
-        let orphan = crate::assets::Model {
-            meshes: vec![crate::assets::SubMeshRef {
+        let orphan = crate::components::Model {
+            meshes: vec![crate::components::SubMeshRef {
                 mesh: Some(crate::ecs::MeshHandle(99)),
                 material: None,
             }],

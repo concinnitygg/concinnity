@@ -16,7 +16,7 @@
 //   scene.rs     scene-flow wiring + scene visibility
 //   helpers.rs   shared free functions
 
-use crate::assets::{PostProcessResolve, Window};
+use crate::components::{PostProcessResolve, Window};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;
@@ -108,7 +108,7 @@ pub struct GraphicsSystem {
     perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
     max_frames: Option<u64>,
     shadow_map_size: u32,
-    shadow_update: crate::assets::ShadowUpdate,
+    shadow_update: crate::components::ShadowUpdate,
     // Shadow distance in world units (GraphicsConfig.shadow_distance). Applied
     // live via set_shadow_distance (the per-frame cascade-split math reads it);
     // preset-governed (a manual change flips the master preset to Custom).
@@ -135,12 +135,12 @@ pub struct GraphicsSystem {
     // PostProcessConfig overridden by any persisted choice. The settings row
     // cycles + persists it; it is restart-required, so this is display/persist
     // state only (the upscaler is sized once at init).
-    render_scale: crate::assets::UpscaleQuality,
+    render_scale: crate::components::UpscaleQuality,
     // Current upscaler backend (Auto / FSR3 / DLSS / XeSS), seeded at init from
     // the world's PostProcessConfig overridden by any persisted choice. Like
     // render_scale this is restart-required display/persist state (the upscaler
     // is selected + built once at init); DirectX / Vulkan only.
-    upscale_backend: crate::assets::UpscalerBackend,
+    upscale_backend: crate::components::UpscalerBackend,
     // The render backend while init constructs and wires it. Boxed
     // `dyn RenderBackend` so the setup logic in init.rs / streaming.rs /
     // scene.rs runs as one cfg-free path across Metal, DirectX, and Vulkan.
@@ -225,7 +225,7 @@ pub struct GraphicsSystem {
     // to the backend's live rebuild. The non-toggle fields (exposure, bloom,
     // ambient) keep their authored values here; the sliders own those via
     // `post_process` / `ambient_intensity` instead.
-    post_config: crate::assets::PostProcessConfig,
+    post_config: crate::components::PostProcessConfig,
     // Slider rows in the world, captured at init from their drag HitRegions +
     // handle Sprites. Drives the handle position + value-label update when a
     // slider changes, and the one-time sync of both to the live value at init.
@@ -254,7 +254,7 @@ pub struct GraphicsSystem {
     // Live gamepad action -> button map. Seeded at init from the persisted
     // `ControlsSettings.gamepad_map` or the engine default; InputSystem applies
     // it (the gamepad is polled engine-side, so no backend push).
-    gamepad_map: crate::assets::GamepadMap,
+    gamepad_map: crate::components::GamepadMap,
     // Gamepad rebind rows in the world, captured at init from their
     // `setting:pad_*:rebind` HitRegions, like `rebind_rows`.
     pad_rebind_rows: Vec<PadRebindViz>,
@@ -276,7 +276,7 @@ pub struct GraphicsSystem {
     // ceiling are applied (defaulted when the world declares none). The pristine
     // baseline a live preset change re-clamps from, so up-shifting a preset
     // restores the world's features and down-shifting clamps them off.
-    authored_post_config: crate::assets::PostProcessConfig,
+    authored_post_config: crate::components::PostProcessConfig,
     // Display-output / upscaling preferences (the Display settings rows). Resolved
     // at init from the world's `PostProcessConfig` overridden by any persisted
     // choice, passed to the backend ctor, and held here so the rows display +
@@ -291,7 +291,7 @@ pub struct GraphicsSystem {
     // a live preset change re-clamps from, like `authored_post_config`. The live
     // values are `shadow_map_size` / `shadow_update` above.
     authored_shadow_map_size: u32,
-    authored_shadow_update: crate::assets::ShadowUpdate,
+    authored_shadow_update: crate::components::ShadowUpdate,
     // The world's authored shadow distance, the baseline a live preset change
     // re-clamps from. The live value is `shadow_distance` above.
     authored_shadow_distance: u32,
@@ -347,7 +347,7 @@ pub(crate) struct RebindViz {
 // init (`init_pad_rebind_rows`) from the row's `setting:pad_*:rebind` HitRegion
 // and handed to SettingsState for the button-rebind drain.
 pub(crate) struct PadRebindViz {
-    pub(crate) action: crate::assets::GamepadAction,
+    pub(crate) action: crate::components::GamepadAction,
     pub(crate) value_id: AssetId,
 }
 
@@ -388,9 +388,8 @@ pub struct WorldReloadState {
 /// catalogue and in-flight state live on the debug side
 /// (`crate::debug::hot_reload`), built from
 /// [`HotReloadSources`](crate::gfx::graphics_system::hot_reload_sources::HotReloadSources).
-/// The library never constructs this; hence the
-/// `dead_code` allowance: the fields are read only from the `cn debug` binary's
-/// drive, never under `cargo check --lib`.
+/// The library never constructs this; the fields are read from the debug
+/// drive alone.
 pub struct HotReloadApplyParts<'a> {
     /// The live render backend.
     pub backend: &'a mut dyn RenderBackend,
@@ -430,7 +429,7 @@ impl GraphicsSystem {
             perf_sub_row_labels: Vec::new(),
             max_frames: None,
             shadow_map_size: 2048,
-            shadow_update: crate::assets::ShadowUpdate::default(),
+            shadow_update: crate::components::ShadowUpdate::default(),
             shadow_distance: 80,
             shadow_cascades: 4,
             anisotropy: 8,
@@ -439,8 +438,8 @@ impl GraphicsSystem {
             frame_count: 0,
             frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,
-            render_scale: crate::assets::UpscaleQuality::default(),
-            upscale_backend: crate::assets::UpscalerBackend::default(),
+            render_scale: crate::components::UpscaleQuality::default(),
+            upscale_backend: crate::components::UpscalerBackend::default(),
             backend: None,
             scene_flow: None,
             scene_visibility: Default::default(),
@@ -463,13 +462,13 @@ impl GraphicsSystem {
             // at init from the world / persisted store.
             ambient_intensity: 1.0,
             // Default until init resolves the world's config + persisted toggles.
-            post_config: crate::assets::PostProcessConfig::default(),
+            post_config: crate::components::PostProcessConfig::default(),
             sliders: Vec::new(),
             cycle_value_labels: std::collections::HashMap::new(),
             clip_rects: std::collections::HashMap::new(),
             keymap: crate::gfx::keymap::KeyMap::default(),
             rebind_rows: Vec::new(),
-            gamepad_map: crate::assets::GamepadMap::default(),
+            gamepad_map: crate::components::GamepadMap::default(),
             pad_rebind_rows: Vec::new(),
             // All-capable until the backend reports otherwise at init.
             caps: crate::gfx::backend::DeviceCapabilities::ALL,
@@ -478,13 +477,13 @@ impl GraphicsSystem {
             // Seeded at init from the persisted preset (Auto on first launch).
             quality_preset: crate::gfx::quality_preset::QualityPreset::Auto,
             // Defaulted until init captures the world's authored config.
-            authored_post_config: crate::assets::PostProcessConfig::default(),
+            authored_post_config: crate::components::PostProcessConfig::default(),
             // Resolved at init from the world's config + persisted overrides.
             temporal_upscaling: false,
             hdr_display: false,
             hdr_pq: false,
             authored_shadow_map_size: 2048,
-            authored_shadow_update: crate::assets::ShadowUpdate::default(),
+            authored_shadow_update: crate::components::ShadowUpdate::default(),
             authored_shadow_distance: 80,
             authored_shadow_cascades: 4,
             authored_anisotropy: 8,
@@ -610,28 +609,35 @@ impl GraphicsSystem {
 
 // The current on/off state of quality toggle `key` in `cfg`, or `None` for a
 // key that is not a quality toggle.
-pub(crate) fn quality_toggle_on(cfg: &crate::assets::PostProcessConfig, key: &str) -> Option<bool> {
+pub(crate) fn quality_toggle_on(
+    cfg: &crate::components::PostProcessConfig,
+    key: &str,
+) -> Option<bool> {
     match key {
         "ssao" => Some(cfg.ssao),
         "ssr" => Some(cfg.ssr),
         "ray_traced_reflections" => Some(cfg.ray_traced_reflections),
-        "ssgi" => Some(cfg.indirect_lighting == crate::assets::IndirectLighting::Ssgi),
+        "ssgi" => Some(cfg.indirect_lighting == crate::components::IndirectLighting::Ssgi),
         "auto_exposure" => Some(cfg.auto_exposure),
         _ => None,
     }
 }
 
 // Flip quality toggle `key` to `on` in `cfg`. Unknown keys are ignored.
-pub(crate) fn set_quality_toggle(cfg: &mut crate::assets::PostProcessConfig, key: &str, on: bool) {
+pub(crate) fn set_quality_toggle(
+    cfg: &mut crate::components::PostProcessConfig,
+    key: &str,
+    on: bool,
+) {
     match key {
         "ssao" => cfg.ssao = on,
         "ssr" => cfg.ssr = on,
         "ray_traced_reflections" => cfg.ray_traced_reflections = on,
         "ssgi" => {
             cfg.indirect_lighting = if on {
-                crate::assets::IndirectLighting::Ssgi
+                crate::components::IndirectLighting::Ssgi
             } else {
-                crate::assets::IndirectLighting::Ibl
+                crate::components::IndirectLighting::Ibl
             }
         }
         "auto_exposure" => cfg.auto_exposure = on,
@@ -649,7 +655,7 @@ pub(crate) fn is_quality_cycle(key: &str) -> bool {
 // The current menu option index of cycle quality knob `key` in `cfg`, or `None`
 // for a key that is not a cycle quality knob.
 pub(crate) fn quality_cycle_index(
-    cfg: &crate::assets::PostProcessConfig,
+    cfg: &crate::components::PostProcessConfig,
     key: &str,
 ) -> Option<usize> {
     use crate::gfx::settings;
@@ -668,7 +674,7 @@ pub(crate) fn quality_cycle_index(
 // Set cycle quality knob `key` in `cfg` from a menu option index. Unknown keys
 // are ignored.
 pub(crate) fn set_quality_cycle(
-    cfg: &mut crate::assets::PostProcessConfig,
+    cfg: &mut crate::components::PostProcessConfig,
     key: &str,
     index: usize,
 ) {
@@ -690,7 +696,7 @@ pub(crate) fn set_quality_cycle(
 // overrode it. Shared by the init clamp and the live preset re-derive so both
 // produce the same result.
 pub(crate) fn clamp_quality_cycle(
-    cfg: &mut crate::assets::PostProcessConfig,
+    cfg: &mut crate::components::PostProcessConfig,
     key: &str,
     ceiling: &crate::gfx::quality_preset::QualityCeiling,
     overridden: bool,
@@ -723,7 +729,7 @@ pub(crate) fn clamp_quality_cycle(
 // Mirrors the init-time derivation (the same `*_settings()` methods), so a
 // live rebuild reproduces exactly what a launch with this config would build.
 pub(crate) fn derive_quality_settings(
-    cfg: &crate::assets::PostProcessConfig,
+    cfg: &crate::components::PostProcessConfig,
 ) -> crate::gfx::backend::QualitySettings {
     crate::gfx::backend::QualitySettings {
         taa: cfg.aa_mode.taa_enabled(),

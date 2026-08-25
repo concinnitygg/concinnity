@@ -1,4 +1,4 @@
-use crate::assets::FileKind;
+use crate::components::FileKind;
 
 // Compile a File asset's source into a binary payload.
 //

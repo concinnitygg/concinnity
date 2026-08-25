@@ -56,9 +56,6 @@ pub struct GraphicsConfig {
     pub fps_cap: u32,
     /// Background clear colour [r, g, b, a] in linear 0..1 space.
     pub clear_color: [f32; 4],
-    /// Rotation speed of the demo object in radians per second. Only used when
-    /// no camera is present.
-    pub rotation_speed: f32,
     /// Shadow map resolution in texels (e.g. 2048). Set to 0 to disable shadows.
     pub shadow_map_size: u32,
     /// How often shadow cascades are re-rendered. `hybrid` (default) amortizes
@@ -92,7 +89,6 @@ impl Default for GraphicsConfig {
             vsync: false,
             fps_cap: 0,
             clear_color: [0.01, 0.01, 0.02, 1.0],
-            rotation_speed: 1.0,
             shadow_map_size: 2048,
             shadow_update: ShadowUpdate::default(),
             shadow_distance: 80,
@@ -158,7 +154,7 @@ mod tests {
         assert_eq!(back.shadow_map_size, 4096);
         assert_eq!(back.shadow_cascades, 2);
         assert_eq!(back.anisotropy, 16);
-        // Rotation speed was not authored, so it keeps the schema default.
-        assert_eq!(back.rotation_speed, 1.0);
+        // Frames in flight was not authored, so it keeps the schema default.
+        assert_eq!(back.frames_in_flight, 2);
     }
 }

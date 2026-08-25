@@ -15,7 +15,7 @@
 // the HUD systems wrote last tick (they run after the build), so what is
 // measured is exactly what is drawn.
 
-use crate::assets::{Sprite, TextInput, TextLabel};
+use crate::components::{Sprite, TextInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::{sprite as gfx_sprite, text};
@@ -96,13 +96,13 @@ impl System for OverlaySystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
             .reads_components(crate::component_mask![
-                crate::assets::Sprite,
-                crate::assets::TextInput,
-                crate::assets::LayoutContainer,
+                crate::components::Sprite,
+                crate::components::TextInput,
+                crate::components::LayoutContainer,
             ])
-            .writes_components(crate::component_mask![crate::assets::TextLabel])
+            .writes_components(crate::component_mask![crate::components::TextLabel])
             .reads_resources(crate::resource_mask![
-                crate::assets::FrameInput,
+                crate::components::FrameInput,
                 crate::ecs::CursorState,
                 crate::ecs::ScreenStack,
                 crate::ecs::HudLayers,
@@ -173,7 +173,7 @@ impl OverlaySystem {
         // the init-time size before the first poll. A live resize is picked up
         // one frame later, which is invisible mid-drag.
         let (win_w, win_h) = ctx
-            .resource::<crate::assets::FrameInput>()
+            .resource::<crate::components::FrameInput>()
             .map(|i| (i.viewport[0], i.viewport[1]))
             .unwrap_or(assets.initial_viewport);
         // The cursor state InputSystem sampled at the end of the previous tick
@@ -398,8 +398,8 @@ impl OverlaySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{SpriteFit, TextAlign};
     use crate::blob::BlobData;
+    use crate::components::{SpriteFit, TextAlign};
     use crate::ecs::{
         ComponentSlot, ComponentStorage, CursorState, DropdownView, FontHandle, HudLayers,
         MenuOverride, OpenDropdown, Resources, ScreenStack,
@@ -677,7 +677,7 @@ mod tests {
         let frame = w.build(0.0);
         assert_eq!(x_span(&frame.calls[0]), (0.0, REF_W));
 
-        w.resources.insert(crate::assets::FrameInput {
+        w.resources.insert(crate::components::FrameInput {
             viewport: [800.0, 600.0],
             ..Default::default()
         });

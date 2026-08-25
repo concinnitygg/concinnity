@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use crate::assets::{Behavior, BehaviorLiteral};
+use crate::components::{Behavior, BehaviorLiteral};
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct BehaviorSave {
@@ -51,7 +51,7 @@ mod tests {
 
     #[test]
     fn def_hash_tracks_content_not_identity() {
-        use crate::assets::BehaviorSource;
+        use crate::components::BehaviorSource;
         use crate::ecs::asset_id::AssetId;
 
         let a = Behavior {

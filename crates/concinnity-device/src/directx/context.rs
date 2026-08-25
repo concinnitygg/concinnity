@@ -474,7 +474,7 @@ pub(super) struct CloneState {
 // previous frame's elapsed time feeding FSR's `frameTimeDelta`.
 pub(super) struct UpscaleState {
     pub backend: Option<Box<dyn super::post::upscale::UpscaleBackend>>,
-    pub requested: crate::assets::UpscalerBackend,
+    pub requested: crate::components::UpscalerBackend,
     pub jitter: std::cell::Cell<[f32; 2]>,
     pub prev_elapsed: std::cell::Cell<f32>,
 }
@@ -507,7 +507,7 @@ pub(super) struct ShadowState {
     pub light_dir: [f32; 3],
     // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
     // refreshes the near cascade every frame and the far cascades round-robin.
-    pub update: crate::assets::ShadowUpdate,
+    pub update: crate::components::ShadowUpdate,
     // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
     // per-frame cascade-split computation and capped at the camera far plane.
     pub distance: u32,
@@ -738,7 +738,7 @@ pub(super) struct DxInstanced {
 // Shader-visible descriptor heaps + samplers + the scene texture pools, grouped
 // off the flat `DxContext`. DirectX's binding model couples these: the SRV heap
 // holds the per-object/per-cluster texture SRVs whose layout the `textures` /
-// `normal_map_textures` pools feed, and the sampler heap holds the static
+// `fallback_textures` pools feed, and the sampler heap holds the static
 // samplers. No direct Vulkan single-struct equivalent (VK keeps its textures +
 // samplers flat), so this is DX progress toward Metal's struct-of-structs. The
 // `draw.n_objects` / `draw.n_clusters` heap-layout counts stay flat on `DxContext` (read
@@ -773,11 +773,12 @@ pub(super) struct DxDescriptors {
     // Shared texture pool (kept alive). Every texture -- albedo, normal map,
     // emissive/ORM, terrain secondary -- lives here once at its handle, matching
     // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
-    // index directly into it. `normal_map_textures` holds only the single
-    // flat-normal fallback a normal-less draw samples (its pool slot is one past
-    // the last real texture); real normal maps are entries in `textures`.
+    // index directly into it. `fallback_textures` holds only the reserved
+    // pair past the last real texture -- flat-normal for a normal-less draw,
+    // then white for an albedo-less one; real normal maps and albedos are
+    // entries in `textures`.
     pub textures: Vec<PooledTexture>,
-    pub normal_map_textures: Vec<PooledTexture>,
+    pub fallback_textures: Vec<PooledTexture>,
     // Held only to keep the text-atlas textures resident; the SRV handles
     // below are what the text pass actually binds.
     #[expect(
@@ -1765,7 +1766,7 @@ impl DxContext {
         // init. A no-op (mask stays 0) when the world has no shadowed spot.
         self.spot_shadow.advance(matches!(
             self.shadow.update,
-            crate::assets::ShadowUpdate::EveryFrame
+            crate::components::ShadowUpdate::EveryFrame
         ));
 
         // 3. record_frame fans non-composite passes onto rayon workers
@@ -2159,14 +2160,6 @@ impl DxContext {
         self.win_mut().recapture_on_click = true;
     }
 
-    #[expect(
-        dead_code,
-        reason = "symmetric with capture_cursor; no DirectX caller yet, kept so the cursor API stays complete"
-    )]
-    pub(crate) fn release_cursor(&mut self) {
-        do_release_cursor(self.win_mut());
-    }
-
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the helper, so calling
     // it every frame with the same value is cheap.
@@ -2219,7 +2212,7 @@ impl DxContext {
     // Switch window mode / resize at runtime (windowed / borderless / fullscreen
     // and content-size presets). The Win32 work lives in `window.rs`; the resize
     // path picks up the resulting WM_SIZE.
-    pub(crate) fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
         do_set_window_mode(self.win_mut(), mode);
     }
 
@@ -2282,7 +2275,7 @@ impl DxContext {
     // Set the live shadow cascade re-render cadence. The per-frame cascade split
     // reads `shadow.update` at the start of each draw (see draw_frame), so a
     // change takes effect on the next frame with no rebuild or allocation.
-    pub(crate) fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
         self.shadow.update = update;
     }
 

@@ -29,14 +29,13 @@ vulkan = []
 
 [dependencies]
 concinnity-asset = { workspace = true }
-concinnity-blob = { workspace = true }
-concinnity-eas = { workspace = true }
 concinnity-memory = { workspace = true }
 
 bytemuck = { version = "1", default-features = false, features = ["derive"] }
 libm = "0.2"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
 thiserror = { version = "2.0.18", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
 

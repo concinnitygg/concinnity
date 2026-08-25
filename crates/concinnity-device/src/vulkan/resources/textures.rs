@@ -8,7 +8,7 @@
 
 use ash::vk;
 
-use crate::gfx::render_types::NO_NORMAL_MAP_SLOT;
+use crate::gfx::render_types::{NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT};
 
 use super::super::context::*;
 use super::super::texture::{
@@ -41,14 +41,26 @@ impl VkContext {
 
     // The image view a `normal_map_slot` samples for a baked per-object binding:
     // a real normal map is a texture in the shared pool at its own slot;
-    // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the sole entry of
-    // `normal_map_textures`).
+    // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the first entry of
+    // `fallback_textures`).
     pub(in crate::vulkan) fn normal_pool_view(&self, normal_map_slot: usize) -> vk::ImageView {
         if normal_map_slot == NO_NORMAL_MAP_SLOT {
-            self.normal_map_textures[0].view
+            self.fallback_textures[0].view
         } else {
             let last = self.textures.len().saturating_sub(1);
             self.textures[normal_map_slot.min(last)].view
+        }
+    }
+
+    // The same for an albedo `texture_slot`: `NO_ALBEDO_SLOT` selects the white
+    // fallback (the second entry), so an untextured material shows its tint
+    // rather than whichever texture holds slot 0.
+    pub(in crate::vulkan) fn albedo_pool_view(&self, texture_slot: usize) -> vk::ImageView {
+        if texture_slot == NO_ALBEDO_SLOT {
+            self.fallback_textures[1].view
+        } else {
+            let last = self.textures.len().saturating_sub(1);
+            self.textures[texture_slot.min(last)].view
         }
     }
 
@@ -553,8 +565,7 @@ impl VkContext {
             shader_bucket: src.shader_bucket,
         };
 
-        let last_tex = self.textures.len().saturating_sub(1);
-        let albedo_view = self.textures[texture_slot.min(last_tex)].view;
+        let albedo_view = self.albedo_pool_view(texture_slot);
         let normal_view = self.normal_pool_view(normal_map_slot);
 
         // Reuse a vacated clone descriptor set, else allocate a fresh one up to

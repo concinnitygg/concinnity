@@ -31,9 +31,13 @@ use super::contact::{ContactCache, Manifold, carry_impulses};
 use super::impact::Impacts;
 use super::island::Islands;
 use super::joint::{Joint, JointFrame, JointSet};
-use super::math::{Mat3, Quat, Vec3};
+#[cfg(test)]
+use super::math::Mat3;
+use super::math::{Quat, Vec3};
 use super::narrow::{self, Narrow};
-use super::query::{self, RayQuery, ShapeCast, ShapeCastHit};
+use super::query::{self, RayQuery};
+#[cfg(test)]
+use super::query::{ShapeCast, ShapeCastHit};
 use super::scene::Scene;
 use super::sensor::Sensors;
 use super::solver::{self, Solver, SolverBody};
@@ -94,7 +98,7 @@ const MIN_FANOUT_COST: usize = 4000;
 ///     sim.step(1.0 / 60.0);
 /// }
 ///
-/// let (position, _rotation) = sim.body_pose(ball).expect("a live body");
+/// let (position, _rotation) = sim.body_pose_quat(ball).expect("a live body");
 /// assert!(
 ///     (position[1] - 0.5).abs() < 0.02,
 ///     "the ball rests on the floor, at y = {}",
@@ -179,8 +183,7 @@ impl Simulation {
     ///
     /// Splitting never changes what a step produces, so the reserved count is
     /// a ceiling rather than a promise: a step handed a wider fan-out uses
-    /// this many pieces of it and reports the difference through
-    /// [`Simulation::worker_overflows`].
+    /// this many pieces of it and leaves the rest of it idle.
     pub fn reserve_workers(&mut self, workers: usize) -> usize {
         let capacity = self.bodies.capacity();
         self.workers = workers.clamp(1, solver::MAX_WORKERS);
@@ -195,21 +198,18 @@ impl Simulation {
         self.workers
     }
 
+    #[cfg(test)]
     /// Steps that were handed a wider fan-out than the reservation covers,
     /// since the count was last cleared. Each one ran on the reserved number
     /// of workers instead, which changes nothing about the result.
-    pub fn worker_overflows(&self) -> u32 {
+    pub(crate) fn worker_overflows(&self) -> u32 {
         self.worker_overflows
     }
 
+    #[cfg(test)]
     /// Forget the count above.
-    pub fn clear_worker_overflows(&mut self) {
+    pub(crate) fn clear_worker_overflows(&mut self) {
         self.worker_overflows = 0;
-    }
-
-    /// The tuning character moves are resolved with.
-    pub fn character_config(&self) -> &CharacterConfig {
-        &self.character
     }
 
     /// Tune the character controller. `grounded` is true for a gravity-bound
@@ -234,8 +234,9 @@ impl Simulation {
         &self.config
     }
 
+    #[cfg(test)]
     /// Re-tune the simulation. Takes effect on the next step.
-    pub fn set_config(&mut self, config: SimConfig) {
+    pub(crate) fn set_config(&mut self, config: SimConfig) {
         self.config = config;
     }
 
@@ -260,14 +261,16 @@ impl Simulation {
         self.joints.len()
     }
 
+    #[cfg(test)]
     /// Sensor pairs currently overlapping: what the regions are holding,
     /// rather than what crossed a boundary to get there.
-    pub fn sensor_overlap_count(&self) -> usize {
+    pub(crate) fn sensor_overlap_count(&self) -> usize {
         self.sensors.overlap_count()
     }
 
     /// Contact points the last step solved.
-    pub fn contact_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn contact_count(&self) -> usize {
         self.contacts
             .manifolds()
             .iter()
@@ -434,6 +437,7 @@ impl Simulation {
         self.sensors.drain_into(out);
     }
 
+    #[cfg(test)]
     /// Crossings and overlaps the reservation had no room for, since the
     /// count was last cleared.
     ///
@@ -441,12 +445,13 @@ impl Simulation {
     /// draining every step and a world whose regions hold fewer bodies than
     /// it has. A non-zero count means something crossed a region and no
     /// caller was told about it.
-    pub fn sensor_overflows(&self) -> u32 {
+    pub(crate) fn sensor_overflows(&self) -> u32 {
         self.sensors.overflows()
     }
 
+    #[cfg(test)]
     /// Reset the count of declined crossings.
-    pub fn clear_sensor_overflows(&mut self) {
+    pub(crate) fn clear_sensor_overflows(&mut self) {
         self.sensors.clear_overflows();
     }
 
@@ -470,19 +475,15 @@ impl Simulation {
         self.impacts.drain_into(out);
     }
 
+    #[cfg(test)]
     /// Contact hits the reservation had no room for, since the count was last
     /// cleared.
     ///
     /// The queue is reserved for one hit per contact pair, which covers a
     /// caller draining every step. A non-zero count means a collision
     /// happened that no caller was told about.
-    pub fn contact_hit_overflows(&self) -> u32 {
+    pub(crate) fn contact_hit_overflows(&self) -> u32 {
         self.impacts.overflows()
-    }
-
-    /// Reset the count of declined contact hits.
-    pub fn clear_contact_hit_overflows(&mut self) {
-        self.impacts.clear_overflows();
     }
 
     /// Add a static height grid: terrain, addressed like any other body.
@@ -536,7 +537,7 @@ impl Simulation {
     ///     sim.step(1.0 / 60.0);
     /// }
     ///
-    /// let (position, _) = sim.body_pose(ball).expect("a live body");
+    /// let (position, _) = sim.body_pose_quat(ball).expect("a live body");
     /// assert!(
     ///     (position[1] - 0.5).abs() < 0.02,
     ///     "the ball rests on the terrain, at y = {}",
@@ -564,43 +565,42 @@ impl Simulation {
         self.add(Body::terrain(index, bounds, origin, 1.0, mask))
     }
 
+    #[cfg(test)]
     /// Queries that gave up with terrain still to look at, since the count was
     /// last cleared.
     ///
     /// A query walks a bounded number of the grid's triangles and stops rather
     /// than growing a buffer. A non-zero count means some question was asked
     /// of more surface than that, and the answer covered only part of it.
-    pub fn heightfield_overflows(&self) -> u32 {
+    pub(crate) fn heightfield_overflows(&self) -> u32 {
         self.fields.overflows()
     }
 
+    #[cfg(test)]
     /// Reset the count of terrain queries that gave up.
-    pub fn clear_heightfield_overflows(&mut self) {
+    pub(crate) fn clear_heightfield_overflows(&mut self) {
         self.fields.clear_overflows();
     }
 
+    #[cfg(test)]
     /// Fast bodies and swept region crossings the continuous-collision
     /// reservation had no room for, since the count was last cleared.
     ///
     /// The reservation holds one entry per body, which covers every body in
     /// the world moving fast at once. A non-zero count means a body took a
     /// step long enough to pass through something and was not swept.
-    pub fn ccd_overflows(&self) -> u32 {
+    pub(crate) fn ccd_overflows(&self) -> u32 {
         self.ccd.overflows()
     }
 
-    /// Reset the count of declined sweeps.
-    pub fn clear_ccd_overflows(&mut self) {
-        self.ccd.clear_overflows();
-    }
-
+    #[cfg(test)]
     /// Bodies the last step swept along their own path because they moved
     /// too far for its contact test to have seen what they crossed.
     ///
     /// Zero for a world at ordinary speeds, which is what the gate is for:
     /// a non-zero count is the number of bodies that paid for the expensive
     /// path on the last step.
-    pub fn swept_body_count(&self) -> usize {
+    pub(crate) fn swept_body_count(&self) -> usize {
         self.ccd.mover_count()
     }
 
@@ -673,7 +673,7 @@ impl Simulation {
     /// }
     ///
     /// // The bob swings, but it stays one unit from the post it hangs off.
-    /// let (position, _) = sim.body_pose(bob).expect("a live body");
+    /// let (position, _) = sim.body_pose_quat(bob).expect("a live body");
     /// let reach = ((position[0] - 0.0).powi(2)
     ///     + (position[1] - 4.0).powi(2)
     ///     + (position[2] - 0.0).powi(2))
@@ -753,7 +753,8 @@ impl Simulation {
     }
 
     /// Whether a body is driven by position rather than by forces.
-    pub fn is_kinematic(&self, handle: BodyHandle) -> Option<bool> {
+    #[cfg(test)]
+    pub(crate) fn is_kinematic(&self, handle: BodyHandle) -> Option<bool> {
         Some(self.bodies.get(pool_handle(handle))?.is_kinematic())
     }
 
@@ -794,33 +795,8 @@ impl Simulation {
 
     /// Sweep a shape through the world, returning the nearest body it runs
     /// into and how far along the cast's motion that happens.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use concinnity_physics::{ColliderShape, LayerMask, ShapeCast, Simulation};
-    ///
-    /// let mut sim = Simulation::with_capacity(1);
-    /// sim.add_fixed(
-    ///     &ColliderShape::Cuboid { half_extents: [10.0, 0.5, 10.0] },
-    ///     [0.0, -0.5, 0.0],
-    ///     [0.0; 3],
-    ///     0.8,
-    ///     LayerMask::ALL,
-    /// );
-    ///
-    /// let capsule = ColliderShape::Capsule { half_height: 0.6, radius: 0.3 };
-    /// let hit = sim
-    ///     .shape_cast(&ShapeCast::new(capsule, [0.0, 4.0, 0.0], [0.0, -8.0, 0.0]))
-    ///     .expect("the floor is down there");
-    ///
-    /// // The capsule reaches 0.9 below its centre, so it stops with its
-    /// // centre 0.9 above the floor.
-    /// let landed = 4.0 - hit.toi * 8.0;
-    /// assert!((landed - 0.9).abs() < 0.01, "landed at {landed}");
-    /// assert!(hit.normal[1] > 0.99, "standing on it: {:?}", hit.normal);
-    /// ```
-    pub fn shape_cast(&self, cast: &ShapeCast) -> Option<ShapeCastHit> {
+    #[cfg(test)]
+    pub(crate) fn shape_cast(&self, cast: &ShapeCast) -> Option<ShapeCastHit> {
         query::shape_cast(self.scene(), cast)
     }
 
@@ -919,8 +895,9 @@ impl Simulation {
         true
     }
 
+    #[cfg(test)]
     /// A body's world-space position and Euler-degree rotation.
-    pub fn body_pose(&self, handle: BodyHandle) -> Option<([f32; 3], [f32; 3])> {
+    pub(crate) fn body_pose(&self, handle: BodyHandle) -> Option<([f32; 3], [f32; 3])> {
         let body = self.bodies.get(pool_handle(handle))?;
         Some((body.position.to_array(), body.orientation.to_euler_deg()))
     }
@@ -931,8 +908,9 @@ impl Simulation {
         Some((body.position.to_array(), body.orientation.to_xyzw()))
     }
 
+    #[cfg(test)]
     /// A body's linear velocity in world units per second.
-    pub fn linear_velocity(&self, handle: BodyHandle) -> Option<[f32; 3]> {
+    pub(crate) fn linear_velocity(&self, handle: BodyHandle) -> Option<[f32; 3]> {
         Some(
             self.bodies
                 .get(pool_handle(handle))?
@@ -941,8 +919,9 @@ impl Simulation {
         )
     }
 
+    #[cfg(test)]
     /// A body's angular velocity in radians per second.
-    pub fn angular_velocity(&self, handle: BodyHandle) -> Option<[f32; 3]> {
+    pub(crate) fn angular_velocity(&self, handle: BodyHandle) -> Option<[f32; 3]> {
         Some(
             self.bodies
                 .get(pool_handle(handle))?
@@ -956,41 +935,46 @@ impl Simulation {
         Some(self.bodies.get(pool_handle(handle))?.mass)
     }
 
+    #[cfg(test)]
     /// Whether a settled body has stopped being simulated.
-    pub fn is_sleeping(&self, handle: BodyHandle) -> Option<bool> {
+    pub(crate) fn is_sleeping(&self, handle: BodyHandle) -> Option<bool> {
         Some(self.bodies.get(pool_handle(handle))?.sleeping)
     }
 
+    #[cfg(test)]
     /// Set a body's linear velocity, waking it.
-    pub fn set_linear_velocity(&mut self, handle: BodyHandle, velocity: [f32; 3]) {
+    pub(crate) fn set_linear_velocity(&mut self, handle: BodyHandle, velocity: [f32; 3]) {
         if let Some(body) = self.bodies.get_mut(pool_handle(handle)) {
             body.linear_velocity = Vec3::from_array(velocity);
             body.wake();
         }
     }
 
+    #[cfg(test)]
     /// Set a body's angular velocity in radians per second, waking it.
-    pub fn set_angular_velocity(&mut self, handle: BodyHandle, velocity: [f32; 3]) {
+    pub(crate) fn set_angular_velocity(&mut self, handle: BodyHandle, velocity: [f32; 3]) {
         if let Some(body) = self.bodies.get_mut(pool_handle(handle)) {
             body.angular_velocity = Vec3::from_array(velocity);
             body.wake();
         }
     }
 
+    #[cfg(test)]
     /// Apply an impulse through a body's centre of mass, waking it.
-    pub fn apply_impulse(&mut self, handle: BodyHandle, impulse: [f32; 3]) {
+    pub(crate) fn apply_impulse(&mut self, handle: BodyHandle, impulse: [f32; 3]) {
         if let Some(body) = self.bodies.get_mut(pool_handle(handle)) {
             body.linear_velocity += Vec3::from_array(impulse) * body.inv_mass;
             body.wake();
         }
     }
 
+    #[cfg(test)]
     /// Kinetic plus gravitational potential energy over every dynamic body,
     /// with potential measured from `y = 0`.
     ///
     /// A settled world's total must not climb: a solver that injects energy
     /// says so here before it says so as a stack that will not stand.
-    pub fn total_energy(&self) -> f32 {
+    pub(crate) fn total_energy(&self) -> f32 {
         let mut total = 0.0;
         for (_, body) in self.bodies.iter() {
             if !body.is_dynamic() {
@@ -1022,11 +1006,26 @@ impl Simulation {
     /// # Examples
     ///
     /// ```
-    /// use concinnity_physics::{Inline, Simulation};
+    /// use concinnity_physics::{ColliderShape, DynamicParams, Inline, LayerMask, Simulation};
     ///
     /// let mut sim = Simulation::with_capacity(1);
+    /// let ball = sim
+    ///     .add_dynamic(
+    ///         &ColliderShape::Ball { radius: 0.5 },
+    ///         [0.0, 10.0, 0.0],
+    ///         [0.0; 3],
+    ///         DynamicParams {
+    ///             mass: 1.0,
+    ///             friction: 0.4,
+    ///             restitution: 0.2,
+    ///             gravity_scale: 1.0,
+    ///             linear_damping: 0.0,
+    ///         },
+    ///         LayerMask::ALL,
+    ///     )
+    ///     .expect("room for one body");
     /// sim.step_with(1.0 / 60.0, &Inline);
-    /// assert_eq!(sim.worker_overflows(), 0);
+    /// assert!(sim.body_pose_quat(ball).expect("a live body").0[1] < 10.0, "it fell");
     /// ```
     pub fn step_with(&mut self, dt: f32, fanout: &impl Fanout) {
         if !dt.is_finite() || dt <= 0.0 {
@@ -1427,6 +1426,36 @@ fn update_sleep(
 
 #[cfg(test)]
 mod tests {
+
+    // A capsule swept at a floor stops where its lower cap meets it, and the
+    // hit reports the surface it landed on.
+    #[test]
+    fn a_shape_cast_stops_at_the_first_body_in_its_path() {
+        let mut sim = Simulation::with_capacity(1);
+        sim.add_fixed(
+            &ColliderShape::Cuboid {
+                half_extents: [10.0, 0.5, 10.0],
+            },
+            [0.0, -0.5, 0.0],
+            [0.0; 3],
+            0.8,
+            LayerMask::ALL,
+        );
+
+        let capsule = ColliderShape::Capsule {
+            half_height: 0.6,
+            radius: 0.3,
+        };
+        let hit = sim
+            .shape_cast(&ShapeCast::new(capsule, [0.0, 4.0, 0.0], [0.0, -8.0, 0.0]))
+            .expect("the floor is down there");
+
+        // The capsule reaches 0.9 below its centre, so it stops with its
+        // centre 0.9 above the floor.
+        let landed = 4.0 - hit.toi * 8.0;
+        assert!((landed - 0.9).abs() < 0.01, "landed at {landed}");
+        assert!(hit.normal[1] > 0.99, "standing on it: {:?}", hit.normal);
+    }
     use super::*;
 
     const TICK: f32 = 1.0 / 60.0;

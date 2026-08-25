@@ -2,7 +2,7 @@
 // GraphicsSystem's init-time row captures: label / sprite writers, the
 // action-string parsers, and the gray-out helpers for disabled rows.
 
-use crate::assets::{HitRegion, Sprite, TextLabel};
+use crate::components::{HitRegion, Sprite, TextLabel};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::setting_action;
@@ -77,7 +77,7 @@ pub(crate) fn capture_row_labels(
         return Vec::new();
     }
     let rows: Vec<Vec<AssetId>> = ctx
-        .query::<crate::assets::ScrollPanel>()
+        .query::<crate::components::ScrollPanel>()
         .flat_map(|p| p.rows.iter().map(|r| r.elements.clone()))
         .collect();
     let dim = expand_dim_set(&anchors, &rows);
@@ -294,13 +294,13 @@ mod tests {
         world.push(region("setting:other:next", Some(20)));
         world.push(region("quit", Some(1)));
         world.push(region("setting:shadows:prev", None));
-        world.push(crate::assets::ScrollPanel {
+        world.push(crate::components::ScrollPanel {
             rows: vec![
-                crate::assets::ScrollRow {
+                crate::components::ScrollRow {
                     elements: vec![AssetId(1), AssetId(2), AssetId(3), AssetId(4), AssetId(5)],
                     ..Default::default()
                 },
-                crate::assets::ScrollRow {
+                crate::components::ScrollRow {
                     elements: vec![AssetId(20)],
                     ..Default::default()
                 },

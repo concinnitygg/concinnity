@@ -24,7 +24,7 @@ mod tests;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
-use crate::assets::{Animation, SkeletonPose};
+use crate::components::{Animation, SkeletonPose};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle, StepResult, System};
 use crate::gfx::skinning::{self, AnimationClip};
@@ -154,9 +154,6 @@ impl AnimationSystem {
     /// The file-backed clips captured at init under `cn debug`. The editor
     /// crate's hot-reload drive reads these to re-import each clip from source.
     /// Empty when hot-reload is off or every clip is inline.
-    /// `dead_code` allowed while the runtime crate still carries the legacy
-    /// binary; the only caller is the editor crate (external). Removed when the
-    /// binary moves out of the runtime crate.
     pub fn reload_entries(&self) -> &[AnimationReloadEntry] {
         &self.reload_entries
     }
@@ -205,14 +202,14 @@ fn resumed_origin(start: Instant, anchor: Instant, now: Instant) -> Instant {
 impl System for AnimationSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::assets::CharacterRig])
+            .reads_components(crate::component_mask![crate::components::CharacterRig])
             .writes_components(crate::component_mask![
-                crate::assets::SkeletonPose,
-                crate::assets::AnimationParams,
-                crate::assets::GroundProbes,
+                crate::components::SkeletonPose,
+                crate::components::AnimationParams,
+                crate::components::GroundProbes,
             ])
             .reads_resources(crate::resource_mask![crate::ecs::MenuActive])
-            .writes_resources(crate::resource_mask![crate::assets::RootMotionEvent])
+            .writes_resources(crate::resource_mask![crate::components::RootMotionEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -394,8 +391,8 @@ impl System for AnimationSystem {
                 }
             };
             if delta != [0.0; 3] {
-                ctx.events_mut::<crate::assets::RootMotionEvent>().send(
-                    crate::assets::RootMotionEvent {
+                ctx.events_mut::<crate::components::RootMotionEvent>().send(
+                    crate::components::RootMotionEvent {
                         target: *target,
                         delta,
                     },
@@ -419,7 +416,7 @@ impl System for AnimationSystem {
             };
             // Split borrows: the scratch buffers and outputs are written
             // while the skeleton is read.
-            let crate::assets::SkeletonPose {
+            let crate::components::SkeletonPose {
                 skeleton,
                 scratch,
                 joint_matrices,

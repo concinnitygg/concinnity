@@ -8,7 +8,7 @@
 // Face vertices may be v, v/vt, v/vt/vn, or v//vn.
 // Polygons with more than 3 vertices are triangulated with a fan.
 
-use crate::assets::VertexData;
+use crate::components::VertexData;
 use std::collections::HashMap;
 
 use crate::import::NEUTRAL_COLOR;

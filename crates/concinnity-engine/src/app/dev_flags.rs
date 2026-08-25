@@ -67,12 +67,8 @@ static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
 #[cfg(test)]
 static FLAG_ACCESS: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
-/// Mark this process as running under a dev-loop entry point (`cn debug` /
-/// `cn editor`). Call once before world build.
-///
-/// `dead_code` allow: only the binary's `Commands::Debug` / `Commands::Editor`
-/// arms call this; the library never sets the flag (it only reads it), so
-/// `cargo check --lib` reports it unused.
+/// Mark this process as running under a dev-loop entry point. Call once
+/// before world build; the library only reads the flag.
 pub fn set_enabled(v: bool) {
     ENABLED.store(v, Ordering::SeqCst);
 }
@@ -95,11 +91,8 @@ pub(crate) fn capture() -> bool {
     CAPTURE.load(Ordering::SeqCst)
 }
 
-/// Raise the "Animation source changed" flag. Called by the cn debug asset
-/// hot-reload watcher and the WS `reload-assets` handler.
-///
-/// `dead_code` allow: only the binary-only debug subsystem sets this; the
-/// library never does, so `cargo check --lib` reports it unused.
+/// Raise the "Animation source changed" flag. Called by the asset hot-reload
+/// watcher and the WS `reload-assets` handler; the library only reads it.
 pub fn set_pending_animations() {
     PENDING_ANIMATIONS.store(true, Ordering::SeqCst);
 }
@@ -112,10 +105,8 @@ pub fn take_pending_animations() -> bool {
 }
 
 /// Record the CLI `--validation` request. `None` leaves the build-profile
-/// default in effect; `Some` forces validation on or off.
-///
-/// `dead_code` allow: only the binary's `Commands::Run` / `Commands::Debug` arms
-/// call this; the library only reads it, so `cargo check --lib` reports it unused.
+/// default in effect; `Some` forces validation on or off. The library only
+/// reads it.
 pub fn set_validation(v: Option<bool>) {
     let encoded = match v {
         None => 0,
@@ -143,10 +134,7 @@ pub(crate) fn resolve_validation() -> bool {
 
 /// Record the world.jsonl path the dev host resolved, so the hot-reload watcher
 /// can subscribe to it. Called by the editor's `cn debug` / `cn editor` entry
-/// before world build.
-///
-/// `dead_code` allow: only the editor crate sets this; the library just reads
-/// it, so `cargo check --lib` reports it unused.
+/// before world build; the library only reads it.
 pub fn set_world_jsonl_path(path: Option<String>) {
     *WORLD_JSONL_PATH.lock().unwrap() = path;
 }

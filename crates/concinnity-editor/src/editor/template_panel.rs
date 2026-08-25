@@ -14,7 +14,7 @@
 // `Sprite` / `TextLabel` components at reserved ids driven each frame by the hook;
 // it is read-only (no per-row interaction), so it needs no typed fields.
 
-use crate::assets::TextAlign;
+use crate::components::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -299,7 +299,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)

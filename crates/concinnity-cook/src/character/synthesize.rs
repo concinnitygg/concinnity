@@ -4,7 +4,9 @@
 
 use super::frame::{bone_frames, region_joints};
 use super::synth::{self, SynthInput};
-use crate::assets::{CharacterSchema, KeyPolarity, MorphDelta, SkeletonJoint, SkinnedVertexData};
+use crate::components::{
+    CharacterSchema, KeyPolarity, MorphDelta, SkeletonJoint, SkinnedVertexData,
+};
 
 // A source's morph set: names and dense target-major deltas.
 pub(crate) struct MorphSet {
@@ -153,7 +155,7 @@ pub(crate) fn synthesize(
 mod tests {
     use super::super::synth::test_support::cylinder;
     use super::*;
-    use crate::assets::{SchemaRegion, SynthParams, SynthesizedTarget};
+    use crate::components::{SchemaRegion, SynthParams, SynthesizedTarget};
 
     fn target(
         name: &str,

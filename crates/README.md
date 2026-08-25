@@ -15,10 +15,8 @@
 | `concinnity-audio`     | lib       |                    | Audio system (wraps [kira]).                                           |
 | `concinnity-store`     | lib       |                    | State tree on disk: paths, source lookup, blob reads.                  |
 | `concinnity-cpu`       | lib       |                    | CPU compute over the vocabulary: payload codecs, geometry, kernels.    |
-| `concinnity-core`      | lib       | :white_check_mark: | Runtime vocabulary: GPU layouts, ECS components, world data, settings. |
-| `concinnity-blob`      | lib       | :white_check_mark: | Packed asset blob format; `write` feature gated to cook.               |
+| `concinnity-core`      | lib       | :white_check_mark: | Runtime vocabulary: GPU layouts, ECS storage and components, world data, settings, blob format. |
 | `concinnity-asset`     | lib       | :white_check_mark: | User-facing asset schema (the single home for asset types).            |
-| `concinnity-eas`       | lib       | :white_check_mark: | Entity/archetype storage backing the ECS.                              |
 | `concinnity-physics`   | lib       | :white_check_mark: | Rigid-body simulation: bodies, contacts, solver, queries.              |
 | `concinnity-memory`    | lib       | :white_check_mark: | Allocation layer: tracking allocator, tagged budgets, arenas, pools.   |
 | `concinnity-docs`      | lib       | :white_check_mark: | Asset reference, extracted at build time and embedded.                 |

@@ -18,7 +18,7 @@ use super::health::{self, HealthSnapshot, Meter, TagRow};
 use super::registry::{self, PanelKey};
 use super::theme;
 use super::widget::{self, point_in};
-use crate::assets::TextAlign;
+use crate::components::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -372,7 +372,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
     use concinnity_memory::{Ledger, MemStats, MemTag, Realm};
 
     const GB: u64 = 1024 * 1024 * 1024;

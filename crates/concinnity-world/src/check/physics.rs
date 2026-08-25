@@ -155,13 +155,6 @@ pub struct ColliderSpawnSources<'a> {
     pub behaviors: Vec<&'a str>,
 }
 
-impl ColliderSpawnSources<'_> {
-    /// Whether the world holds only the props it declares.
-    pub fn is_empty(&self) -> bool {
-        self.spawners.is_empty() && self.behaviors.is_empty()
-    }
-}
-
 /// Collect the world's runtime sources of collider-bearing props.
 ///
 /// Every copy such a source emits needs a physics body the authored content
@@ -183,7 +176,7 @@ pub fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpawnSource
     let is_collider_prop =
         |name: &serde_json::Value| name.as_str().is_some_and(|n| collider_props.contains(&n));
 
-    let defaults = crate::assets::SpawnerArgs::default();
+    let defaults = crate::components::SpawnerArgs::default();
     for asset in assets {
         match norm(&asset.asset_type).as_str() {
             "spawner" if asset.args.get("template").is_some_and(is_collider_prop) => {
@@ -374,7 +367,10 @@ mod tests {
             asset("banner", "Prop", serde_json::json!({"mesh": "m"})),
             asset("drop", "Spawner", serde_json::json!({"template": "banner"})),
         ];
-        assert!(collider_spawn_sources(&bare).is_empty());
+        assert_eq!(
+            collider_spawn_sources(&bare),
+            ColliderSpawnSources::default()
+        );
     }
 
     // An unauthored cadence is the SpawnerArgs default: one a second, and
@@ -389,7 +385,7 @@ mod tests {
             ),
             asset("drop", "Spawner", serde_json::json!({"template": "crate"})),
         ];
-        let defaults = crate::assets::SpawnerArgs::default();
+        let defaults = crate::components::SpawnerArgs::default();
         let spawner = &collider_spawn_sources(&assets).spawners[0];
         assert_eq!(spawner.interval, defaults.interval);
         assert_eq!(spawner.lifetime, defaults.lifetime);
@@ -407,7 +403,10 @@ mod tests {
             ),
             asset("drop", "Spawner", serde_json::json!({"template": "banner"})),
         ];
-        assert!(collider_spawn_sources(&assets).is_empty());
+        assert_eq!(
+            collider_spawn_sources(&assets),
+            ColliderSpawnSources::default()
+        );
     }
 
     #[test]
@@ -436,7 +435,10 @@ mod tests {
             "Prop",
             serde_json::json!({"mesh": "m", "collider": {"shape": "ball"}}),
         )];
-        assert!(collider_spawn_sources(&quiet).is_empty());
+        assert_eq!(
+            collider_spawn_sources(&quiet),
+            ColliderSpawnSources::default()
+        );
     }
 
     #[test]

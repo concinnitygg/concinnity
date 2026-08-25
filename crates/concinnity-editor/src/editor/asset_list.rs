@@ -202,7 +202,7 @@ pub(crate) fn layout_scrollbar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
 
     fn entry(name: &str, ty: &str) -> serde_json::Value {
         serde_json::json!({"name": name, "type": ty, "args": {}})

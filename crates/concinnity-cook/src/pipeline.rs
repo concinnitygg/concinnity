@@ -6,17 +6,25 @@
 //! - Packs all payloads into blobs using PayloadPacker (fills locators)
 //! - Sorts: components first, then systems in declared order
 
+use concinnity_core::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
 use serde::Deserialize;
 
-use crate::assets::FileKind;
+use crate::components::FileKind;
 use crate::world::WorldJsonlAsset;
 
 use crate::asset_api::{self, AssetRequest};
 use crate::blob::PayloadPacker;
 use crate::ecs::asset_id;
 use crate::ecs::{AssetKind, BlobAssetDef, ResourceRecord};
-use crate::registry::ComponentType;
+use crate::registry::RegisteredType;
 use crate::resource_handles::ResourceAssetCompile;
+
+// The resource kind of a job selected by `collect_resource_jobs`. Every entry
+// there was chosen by having one, so the lookup cannot fail.
+fn job_resource_kind(rt: crate::registry::RegisteredType) -> crate::resource_handles::ResourceKind {
+    rt.resource_kind()
+        .expect("a resource job carries a resource type")
+}
 
 // The mesh kinds' declarable type names. Both are resource assets (no
 // `Component` impl, so no `::NAME` const); the desugar passes and the cache
@@ -56,15 +64,15 @@ pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write the blobs and world-lock.json for a compiled world: the shared build
-/// tail used by the CLI and the FFI host. The lock records each asset under its
-/// real name plus every injected default with its full args.
-pub fn write_build_outputs(
+/// Write a compiled world's blob files, naming the primary blob `primary`.
+/// Every overflow payload blob is written as its sibling named by index, which
+/// is the layout the runtime reads back. No lock file and no thumbnails: this
+/// is the blob output alone.
+pub fn write_blobs_to(
     result: &PipelineResult,
-    injected: &[crate::world::InjectedAsset],
-    shadowed: &[crate::world::ShadowedAsset],
+    primary: &std::path::Path,
 ) -> std::io::Result<crate::blob::PackResult> {
-    let pack_result = crate::blob::write_blobs(
+    crate::blob::write_blobs(
         crate::blob::BlobStreams {
             defs: &result.defs,
             resources: &result.resources,
@@ -73,7 +81,19 @@ pub fn write_build_outputs(
             physics_budget: result.physics_budget,
         },
         &result.payloads,
-    )?;
+        primary,
+    )
+}
+
+/// Write the blobs and world-lock.json for a compiled world: the shared build
+/// tail used by the CLI and the FFI host. The lock records each asset under its
+/// real name plus every injected default with its full args.
+pub fn write_build_outputs(
+    result: &PipelineResult,
+    injected: &[crate::world::InjectedAsset],
+    shadowed: &[crate::world::ShadowedAsset],
+) -> std::io::Result<crate::blob::PackResult> {
+    let pack_result = write_blobs_to(result, std::path::Path::new(&crate::blob::blob_path(0)))?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
@@ -153,11 +173,11 @@ pub struct PipelineResult {
     /// resource kind migrates off the component registry (AudioClip first).
     pub resources: Vec<ResourceRecord>,
     /// Per-scene exclusively-owned blob content, in scene declaration order.
-    pub scene_groups: Vec<concinnity_blob::SceneGroup>,
+    pub scene_groups: Vec<SceneGroup>,
     /// Baked AABB + counts per static mesh payload, by mesh-source handle.
-    pub mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
+    pub mesh_bounds: Vec<MeshBoundsRecord>,
     /// The world's physics reservation, or `None` when it runs no physics.
-    pub physics_budget: Option<concinnity_blob::PhysicsBudgetRecord>,
+    pub physics_budget: Option<PhysicsBudgetRecord>,
     // Unified mesh-source handle -> asset name for mesh payloads compiled as
     // component defs (ProceduralMesh and friends). Resource-stream Mesh
     // handles lead the space and resolve through `resources`; these resolve
@@ -188,11 +208,7 @@ impl PipelineResult {
     /// `name`, sliced out of the in-memory blob sections. `None` when no such
     /// resource was compiled or it carries no payload. The editor's glTF
     /// export reads a SkinnedMesh's composed geometry through this.
-    pub fn resource_payload(
-        &self,
-        kind: concinnity_blob::ResourceKind,
-        name: &str,
-    ) -> Option<&[u8]> {
+    pub fn resource_payload(&self, kind: ResourceKind, name: &str) -> Option<&[u8]> {
         let record = self
             .resources
             .iter()
@@ -247,10 +263,9 @@ pub fn validate_asset(
         return Ok(());
     }
 
-    // Resource-only asset types (AudioClip) have left the component registry, so
-    // they never build a component def; validate them as known types with a
-    // structural check instead of routing through `create_asset_def`.
-    if crate::resource_handles::ResourceAssetType::parse(asset_type).is_some() {
+    // A resource asset never builds a component def; validate it as a known type
+    // with a structural check instead of routing through `create_asset_def`.
+    if crate::registry::RegisteredType::parse(asset_type).is_some_and(|t| t.is_resource()) {
         crate::check::check_asset(&type_norm, name, args)?;
         return Ok(());
     }
@@ -384,15 +399,17 @@ pub fn build_compiled_with_progress(
     // `create_asset_def`; it is compiled + packed as a resource below. `named` is
     // therefore no longer 1:1 with `assets`, so `named_src[i]` records the source
     // asset index of each component def.
-    use crate::resource_handles::ResourceAssetType;
+    use crate::registry::RegisteredType;
     let mut named: Vec<(String, BlobAssetDef)> = Vec::new();
     let mut named_src: Vec<usize> = Vec::new();
-    let mut resource_jobs: Vec<(usize, ResourceAssetType, u32)> = Vec::new();
+    let mut resource_jobs: Vec<(usize, RegisteredType, u32)> = Vec::new();
     for (i, asset) in assets.iter().enumerate() {
-        if let Some(rt) = ResourceAssetType::parse(&asset.asset_type) {
+        if let Some((rt, kind)) =
+            RegisteredType::parse(&asset.asset_type).and_then(|t| t.resource_kind().map(|k| (t, k)))
+        {
             let id = asset_id::intern(&asset.name);
             let handle = resource_handles
-                .get(rt.resource_kind(), id)
+                .get(kind, id)
                 .expect("resource asset was assigned a handle above");
             resource_jobs.push((i, rt, handle));
             continue;
@@ -418,13 +435,13 @@ pub fn build_compiled_with_progress(
     // set) leaves an empty source (nothing to watch).
     let texture_count = resource_jobs
         .iter()
-        .filter(|(_, rt, _)| *rt == ResourceAssetType::Texture)
+        .filter(|(_, rt, _)| *rt == RegisteredType::Texture)
         .map(|(_, _, h)| *h as usize + 1)
         .max()
         .unwrap_or(0);
     let mut texture_sources = vec![TextureSourceInfo::default(); texture_count];
     for (asset_idx, rt, handle) in &resource_jobs {
-        if *rt != ResourceAssetType::Texture {
+        if *rt != RegisteredType::Texture {
             continue;
         }
         let asset = &assets[*asset_idx];
@@ -463,13 +480,13 @@ pub fn build_compiled_with_progress(
     // mesh-source space); an inline-authored mesh leaves an empty source.
     let mesh_count = resource_jobs
         .iter()
-        .filter(|(_, rt, _)| *rt == ResourceAssetType::Mesh)
+        .filter(|(_, rt, _)| *rt == RegisteredType::Mesh)
         .map(|(_, _, h)| *h as usize + 1)
         .max()
         .unwrap_or(0);
     let mut mesh_sources = vec![MeshSourceInfo::default(); mesh_count];
     for (asset_idx, rt, handle) in &resource_jobs {
-        if *rt != ResourceAssetType::Mesh {
+        if *rt != RegisteredType::Mesh {
             continue;
         }
         let args = &assets[*asset_idx].args;
@@ -543,14 +560,14 @@ pub fn build_compiled_with_progress(
                 handle: *handle,
                 args_hash: crate::blob::checksum(asset.args.to_string().as_bytes()),
                 payload_blob: record.payload.as_ref().map(|p| p.blob_index),
-                texture_source: (*rt == ResourceAssetType::Texture).then(|| {
+                texture_source: (*rt == RegisteredType::Texture).then(|| {
                     let t = &texture_sources[*handle as usize];
                     crate::blob::LockedTextureSource {
                         source: t.source.clone(),
                         image_index: t.image_index,
                     }
                 }),
-                mesh_source: (*rt == ResourceAssetType::Mesh).then(|| {
+                mesh_source: (*rt == RegisteredType::Mesh).then(|| {
                     let m = &mesh_sources[*handle as usize];
                     crate::blob::LockedMeshSource {
                         source: m.source.clone(),
@@ -607,7 +624,7 @@ fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
     artifacts_dir: Option<&str>,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
-    use crate::resource_handles::{ResourceAssetCompile, ResourceAssetType};
+    use crate::resource_handles::{RegisteredType, ResourceAssetCompile};
 
     let mut out = std::collections::HashMap::new();
     let empty: [WorldJsonlAsset; 0] = [];
@@ -625,9 +642,9 @@ fn probe_mesh_payload_cache(
         // Both mesh kinds are resource assets: their caches key on the
         // resource discriminant and resource source list.
         let rt = if asset.asset_type == MESH_TYPE {
-            ResourceAssetType::Mesh
+            RegisteredType::Mesh
         } else if asset.asset_type == SKINNED_MESH_TYPE {
-            ResourceAssetType::SkinnedMesh
+            RegisteredType::SkinnedMesh
         } else {
             continue;
         };
@@ -636,7 +653,7 @@ fn probe_mesh_payload_cache(
             artifacts_dir,
             all_assets: &empty,
         };
-        let discriminant = RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8;
+        let discriminant = RESOURCE_CACHE_DISC_BASE + job_resource_kind(rt) as u8;
         let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
         // A shape baked into the mesh changes its payload as much as the
         // source does, so its args join the key.
@@ -874,7 +891,7 @@ fn desugar_gltf_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
-    use crate::assets::VertexData;
+    use crate::components::VertexData;
     use std::collections::HashMap;
 
     // One split chunk: its vertices and index buffer.
@@ -1037,7 +1054,7 @@ fn desugar_fbx_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
-    use crate::assets::VertexData;
+    use crate::components::VertexData;
     use crate::fbx::FbxScene;
     use std::collections::HashMap;
 
@@ -1170,7 +1187,7 @@ fn desugar_fbx_meshes(
 // byte-for-byte unchanged. Channels targeting non-joint nodes are dropped
 // silently by the importers.
 fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
-    use crate::assets::Animation;
+    use crate::components::Animation;
     use crate::ecs::Component;
 
     let skin_by_target = skin_index_by_target(assets);
@@ -1324,7 +1341,7 @@ fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<
 // untouched. A root-motion clip whose root joint has no track produces an
 // empty curve, which would silently never move a character, so it warns.
 fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
-    use crate::assets::Animation;
+    use crate::components::Animation;
     use crate::ecs::Component;
 
     // This deserializes each flagged clip (whose `target` is a name reference),
@@ -1391,9 +1408,11 @@ pub fn validate_world_jsonl(content: &str) -> std::io::Result<()> {
 
     let mut errors: Vec<String> = Vec::new();
     for asset in &loaded.assets {
-        // Resource-only assets (AudioClip) do not build a component def; they are
-        // a known type on their own registry, so skip the component resolution.
-        if crate::resource_handles::ResourceAssetType::parse(&asset.asset_type).is_some() {
+        // A resource asset does not build a component def, so skip the component
+        // resolution for it.
+        if crate::registry::RegisteredType::parse(&asset.asset_type)
+            .is_some_and(|t| t.is_resource())
+        {
             continue;
         }
         let req = AssetRequest {
@@ -1433,8 +1452,8 @@ struct PendingResource {
 // The output of the compile + pack pass: the packed blob payload sections, the
 // resource-stream records (each with its payload locator), and cache accounting.
 struct CompiledOutput {
-    scene_groups: Vec<concinnity_blob::SceneGroup>,
-    mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
+    scene_groups: Vec<SceneGroup>,
+    mesh_bounds: Vec<MeshBoundsRecord>,
     mesh_component_names: Vec<(u32, String)>,
     blobs: Vec<Vec<u8>>,
     resources: Vec<ResourceRecord>,
@@ -1446,7 +1465,7 @@ struct CompiledOutput {
 // unified mesh-source handle. None when the payload does not parse as a
 // static mesh (VoxelChunk voxel data, a malformed payload); absence means the
 // runtime decodes that payload eagerly.
-fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<concinnity_blob::MeshBoundsRecord> {
+fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
     let (verts, idxs, _) = concinnity_cpu::gfx::mesh_payload::deserialise_with_lods(bytes).ok()?;
     let first = verts.first()?;
     let mut min = first.pos;
@@ -1457,7 +1476,7 @@ fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<concinnity_blob::Mesh
             max[axis] = max[axis].max(v.pos[axis]);
         }
     }
-    Some(concinnity_blob::MeshBoundsRecord {
+    Some(MeshBoundsRecord {
         handle,
         min,
         max,
@@ -1471,7 +1490,7 @@ fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<concinnity_blob::Mesh
 #[derive(Clone, Copy)]
 struct PackContext<'a> {
     assets: &'a [WorldJsonlAsset],
-    resource_jobs: &'a [(usize, crate::resource_handles::ResourceAssetType, u32)],
+    resource_jobs: &'a [(usize, crate::registry::RegisteredType, u32)],
     partition: &'a crate::scene_partition::ScenePartition,
     mesh_source_handles: &'a crate::resource_handles::ResourceHandles,
     max_blob_bytes: u64,
@@ -1506,7 +1525,7 @@ fn compile_and_pack_payloads(
             if def.kind != AssetKind::Component {
                 return false;
             }
-            let Some(ct) = ComponentType::from_discriminant(def.discriminant) else {
+            let Some(ct) = RegisteredType::from_discriminant(def.discriminant) else {
                 return false;
             };
             if ct.as_str() == "File" {
@@ -1556,10 +1575,10 @@ fn compile_and_pack_payloads(
         .par_iter()
         .map(
             |(idx, name, discriminant)| -> std::io::Result<(usize, Vec<u8>)> {
-                let ct = ComponentType::from_discriminant(*discriminant).ok_or_else(|| {
+                let ct = RegisteredType::from_discriminant(*discriminant).ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("Invalid ComponentType discriminant for asset '{}'", name),
+                        format!("Invalid RegisteredType discriminant for asset '{}'", name),
                     )
                 })?;
 
@@ -1608,7 +1627,7 @@ fn compile_and_pack_payloads(
 
     // Compile the resource-stream payloads (AudioClip today). Few and cheap, so
     // this stays serial; the content-addressed payload cache still short-circuits
-    // an unchanged source. Bypasses the `BuildAsset`/`ComponentType` path a
+    // an unchanged source. Bypasses the `BuildAsset`/`RegisteredType` path a
     // component takes -- a resource is no longer a component.
     let mut resource_hits = 0usize;
     let mut resource_pending: Vec<PendingResource> = Vec::new();
@@ -1642,7 +1661,7 @@ fn compile_and_pack_payloads(
             // entry is shared across a DirectX and a Vulkan cook.
             let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
             let key = crate::cache::payload_key(
-                RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8,
+                RESOURCE_CACHE_DISC_BASE + job_resource_kind(*rt) as u8,
                 &asset.args,
                 &ctx,
                 &inputs,
@@ -1660,7 +1679,7 @@ fn compile_and_pack_payloads(
             }
         };
         resource_pending.push(PendingResource {
-            kind: rt.resource_kind() as u8,
+            kind: job_resource_kind(*rt) as u8,
             handle: *handle,
             bytes,
             is_data: rt.is_data(),
@@ -1687,9 +1706,9 @@ fn compile_and_pack_payloads(
     // Baked AABB + counts for every static mesh payload, resource-stream Mesh
     // entries first (their resource handle IS the mesh-source handle) then the
     // compiled mesh-source components, sorted by handle for determinism.
-    let mut mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord> = Vec::new();
+    let mut mesh_bounds: Vec<MeshBoundsRecord> = Vec::new();
     for ((_, rt, handle), res) in resource_jobs.iter().zip(&resource_pending) {
-        if *rt == crate::resource_handles::ResourceAssetType::Mesh
+        if *rt == crate::registry::RegisteredType::Mesh
             && let Some(record) = mesh_bounds_record(*handle, &res.bytes)
         {
             mesh_bounds.push(record);
@@ -1719,14 +1738,14 @@ fn compile_and_pack_payloads(
 
     // One group per scene (declaration order, possibly empty), carrying the
     // resource-stream entries and payload defs that scene exclusively owns.
-    let scene_groups: Vec<concinnity_blob::SceneGroup> = (0..partition.scenes.len())
-        .map(|s| concinnity_blob::SceneGroup {
+    let scene_groups: Vec<SceneGroup> = (0..partition.scenes.len())
+        .map(|s| SceneGroup {
             scene: asset_id::intern(&partition.scenes[s]),
             resources: resource_jobs
                 .iter()
                 .zip(&res_owners)
                 .filter(|(_, o)| **o == Owner::Scene(s))
-                .map(|((_, rt, handle), _)| (rt.resource_kind() as u8, *handle))
+                .map(|((_, rt, handle), _)| (job_resource_kind(*rt) as u8, *handle))
                 .collect(),
             defs: pending
                 .iter()
@@ -1809,7 +1828,7 @@ fn compile_and_pack_payloads(
     })
 }
 
-// Dispatch payload compilation by ComponentType. Every variant listed below
+// Dispatch payload compilation by RegisteredType. Every variant listed below
 // has a `BuildAsset` impl in its asset file; the body of each call here is a
 // one-liner that delegates to the trait. Adding a new compiled component
 // means:
@@ -1817,30 +1836,32 @@ fn compile_and_pack_payloads(
 //   2. impl `BuildAsset` for the type in its asset file
 //   3. Add one match arm here
 fn compile_by_type(
-    ct: ComponentType,
+    ct: RegisteredType,
     args: &serde_json::Value,
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> std::io::Result<Vec<u8>> {
     use crate::asset::BuildAsset;
-    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
+    use crate::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
     match ct {
-        ComponentType::ProceduralMesh => <ProceduralMesh as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::VoxelChunk => <VoxelChunk as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::File => <File as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::Room => <Room as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::Shader => <Shader as BuildAsset>::compile_payload(args, ctx),
-        ComponentType::SdfVolume => <SdfVolume as BuildAsset>::compile_payload(args, ctx),
+        RegisteredType::ProceduralMesh => {
+            <ProceduralMesh as BuildAsset>::compile_payload(args, ctx)
+        }
+        RegisteredType::VoxelChunk => <VoxelChunk as BuildAsset>::compile_payload(args, ctx),
+        RegisteredType::File => <File as BuildAsset>::compile_payload(args, ctx),
+        RegisteredType::Room => <Room as BuildAsset>::compile_payload(args, ctx),
+        RegisteredType::Shader => <Shader as BuildAsset>::compile_payload(args, ctx),
+        RegisteredType::SdfVolume => <SdfVolume as BuildAsset>::compile_payload(args, ctx),
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "Asset '{}' is marked Compiled but has no BuildAsset impl (ComponentType {:?})",
+                "Asset '{}' is marked Compiled but has no BuildAsset impl (RegisteredType {:?})",
                 ctx.name, other
             ),
         )),
     }
 }
 
-// Dispatch each asset's payload-cache contribution by ComponentType. Mirrors
+// Dispatch each asset's payload-cache contribution by RegisteredType. Mirrors
 // `compile_by_type` so the cache layer can fold a hash of every input the
 // compile reads into its payload key. Types with no `BuildAsset` impl, or with
 // the trait default, contribute nothing.
@@ -1849,12 +1870,12 @@ fn compile_by_type(
 // asset whose payload differs per backend cannot pick up one without the
 // other.
 fn cache_inputs_by_type(
-    ct: ComponentType,
+    ct: RegisteredType,
     args: &serde_json::Value,
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> crate::asset::CacheInputs {
     use crate::asset::{BuildAsset, CacheInputs};
-    use crate::assets::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
+    use crate::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
     macro_rules! inputs {
         ($t:ty) => {
             CacheInputs {
@@ -1864,12 +1885,12 @@ fn cache_inputs_by_type(
         };
     }
     match ct {
-        ComponentType::ProceduralMesh => inputs!(ProceduralMesh),
-        ComponentType::VoxelChunk => inputs!(VoxelChunk),
-        ComponentType::File => inputs!(File),
-        ComponentType::Room => inputs!(Room),
-        ComponentType::Shader => inputs!(Shader),
-        ComponentType::SdfVolume => inputs!(SdfVolume),
+        RegisteredType::ProceduralMesh => inputs!(ProceduralMesh),
+        RegisteredType::VoxelChunk => inputs!(VoxelChunk),
+        RegisteredType::File => inputs!(File),
+        RegisteredType::Room => inputs!(Room),
+        RegisteredType::Shader => inputs!(Shader),
+        RegisteredType::SdfVolume => inputs!(SdfVolume),
         _ => CacheInputs::extra(Vec::new()),
     }
 }
@@ -1993,7 +2014,7 @@ mod tests {
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(2)))
             .expect("day_crate def present with interned id 2");
 
-        let baked: crate::assets::Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
+        let baked: crate::components::Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
         // The `mesh` reference resolved to box's handle (0).
         assert_eq!(baked.mesh, Some(crate::ecs::MeshHandle(0)));
         // The `day_` name prefix resolved to Scene `day`'s id (1).
@@ -2022,9 +2043,9 @@ mod tests {
             .iter()
             .position(|n| n == "physics_config")
             .expect("the injected config compiled into the blob");
-        let baked: crate::assets::PhysicsConfig =
+        let baked: crate::components::PhysicsConfig =
             postcard::from_bytes(&result.defs[index].args_bytes).unwrap();
-        let default = crate::assets::PhysicsConfig::default();
+        let default = crate::components::PhysicsConfig::default();
         assert_eq!(baked.floor_y, default.floor_y);
         assert_eq!(baked.terrain_subdivisions, default.terrain_subdivisions);
         assert_eq!(baked.terrain_mesh, default.terrain_mesh);
@@ -2053,7 +2074,7 @@ mod tests {
         );
         let result = build_pipeline_from_str(world, None).expect("build");
         let bytes = result
-            .resource_payload(concinnity_blob::ResourceKind::SkinnedMesh, "prism")
+            .resource_payload(ResourceKind::SkinnedMesh, "prism")
             .expect("named payload");
         let payload =
             concinnity_cpu::gfx::mesh_payload::deserialise_skinned_with_lods(bytes).unwrap();
@@ -2062,12 +2083,12 @@ mod tests {
         // The wrong name or the wrong kind finds nothing.
         assert!(
             result
-                .resource_payload(concinnity_blob::ResourceKind::SkinnedMesh, "ghost")
+                .resource_payload(ResourceKind::SkinnedMesh, "ghost")
                 .is_none()
         );
         assert!(
             result
-                .resource_payload(concinnity_blob::ResourceKind::Texture, "prism")
+                .resource_payload(ResourceKind::Texture, "prism")
                 .is_none()
         );
     }
@@ -2147,7 +2168,7 @@ mod tests {
             .iter()
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(1)))
             .expect("HitRegion def");
-        let baked: crate::assets::HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
+        let baked: crate::components::HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
         assert_eq!(baked.action, "screen:toggle:0");
 
         let esc = result
@@ -2155,7 +2176,7 @@ mod tests {
             .iter()
             .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(2)))
             .expect("KeyBinding def");
-        let baked: crate::assets::KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
+        let baked: crate::components::KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
         assert_eq!(baked.action, "screen:toggle:0");
     }
 
@@ -2185,21 +2206,21 @@ mod tests {
                 .iter()
                 .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(id)))
                 .unwrap_or_else(|| panic!("expected a def for {expect}"));
-            let ct = crate::registry::ComponentType::from_discriminant(def.discriminant)
+            let ct = crate::registry::RegisteredType::from_discriminant(def.discriminant)
                 .unwrap_or_else(|| panic!("{expect}: unknown discriminant"));
             match ct {
-                crate::registry::ComponentType::Sprite => {
-                    postcard::from_bytes::<crate::assets::Sprite>(&def.args_bytes)
+                crate::registry::RegisteredType::Sprite => {
+                    postcard::from_bytes::<crate::components::Sprite>(&def.args_bytes)
                         .unwrap()
                         .screen
                 }
-                crate::registry::ComponentType::TextLabel => {
-                    postcard::from_bytes::<crate::assets::TextLabel>(&def.args_bytes)
+                crate::registry::RegisteredType::TextLabel => {
+                    postcard::from_bytes::<crate::components::TextLabel>(&def.args_bytes)
                         .unwrap()
                         .screen
                 }
-                crate::registry::ComponentType::HitRegion => {
-                    postcard::from_bytes::<crate::assets::HitRegion>(&def.args_bytes)
+                crate::registry::RegisteredType::HitRegion => {
+                    postcard::from_bytes::<crate::components::HitRegion>(&def.args_bytes)
                         .unwrap()
                         .screen
                 }
@@ -3896,7 +3917,7 @@ mod tests {
         let material = &result.resources[0];
         assert!(material.payload.is_none(), "a Material rides inline");
         assert!(!material.data_bytes.is_empty());
-        postcard::from_bytes::<crate::assets::Material>(&material.data_bytes)
+        postcard::from_bytes::<crate::components::Material>(&material.data_bytes)
             .expect("the inline bytes decode as a Material");
         assert_eq!(result.resource_locks[0].name, "wood");
         assert_eq!(result.resource_locks[0].payload_blob, None);
@@ -3951,7 +3972,7 @@ mod tests {
         assert!(probed.contains_key("m"));
     }
 
-    use crate::resource_handles::{ResourceAssetType, ResourceKind};
+    use crate::resource_handles::{RegisteredType, ResourceKind};
 
     fn procedural_mesh_def() -> BlobAssetDef {
         asset_api::create_asset_def(&AssetRequest {
@@ -3980,7 +4001,7 @@ mod tests {
             ),
         ];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
-        let resource_jobs = vec![(1usize, ResourceAssetType::Mesh, 0u32)];
+        let resource_jobs = vec![(1usize, RegisteredType::Mesh, 0u32)];
         let mut cache = std::collections::HashMap::new();
         cache.insert(
             "shape".to_string(),
@@ -4056,8 +4077,8 @@ mod tests {
         ];
         let mut named: Vec<(String, BlobAssetDef)> = Vec::new();
         let resource_jobs = vec![
-            (3usize, ResourceAssetType::Mesh, 0u32),
-            (4usize, ResourceAssetType::Mesh, 1u32),
+            (3usize, RegisteredType::Mesh, 0u32),
+            (4usize, RegisteredType::Mesh, 1u32),
         ];
         let cache = std::collections::HashMap::from([
             (
@@ -4160,7 +4181,7 @@ mod tests {
             ),
         ];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
-        let resource_jobs = vec![(1usize, ResourceAssetType::Mesh, 0u32)];
+        let resource_jobs = vec![(1usize, RegisteredType::Mesh, 0u32)];
         let miss = |key: &str| MeshCacheEntry {
             key: key.to_string(),
             bytes: None,
@@ -4251,7 +4272,7 @@ mod tests {
             },
         )];
         assert!(
-            ComponentType::from_discriminant(200).is_none(),
+            RegisteredType::from_discriminant(200).is_none(),
             "200 must stay outside the registered discriminant range"
         );
 
@@ -4328,7 +4349,7 @@ mod tests {
 
     #[test]
     fn compile_by_type_without_build_impl_errors() {
-        let ct = ComponentType::parse("Prop").expect("Prop is a registered component");
+        let ct = RegisteredType::parse("Prop").expect("Prop is a registered component");
         let err = compile_by_type(ct, &serde_json::json!({}), &ctx())
             .expect_err("Prop has no BuildAsset impl");
         assert!(err.to_string().contains("no BuildAsset impl"), "got: {err}");
@@ -4337,7 +4358,7 @@ mod tests {
     #[test]
     fn cache_inputs_by_type_defaults_to_empty_extras() {
         use crate::asset::SourceFiles;
-        let ct = ComponentType::parse("Prop").expect("Prop is a registered component");
+        let ct = RegisteredType::parse("Prop").expect("Prop is a registered component");
         let inputs = cache_inputs_by_type(ct, &serde_json::json!({}), &ctx());
         assert_eq!(inputs.sources, SourceFiles::Extra(Vec::new()));
         assert!(!inputs.target_dependent);
@@ -4363,13 +4384,13 @@ mod tests {
         }
     }
 
-    // AudioClip compiles through `ResourceAssetType` now, not `compile_by_type`
+    // AudioClip compiles through `RegisteredType` now, not `compile_by_type`
     // (it left the component registry). Its source-less error still surfaces, and
     // its source file is folded into the payload cache key.
     #[test]
     fn resource_asset_types_compile_audio_clip_texture_cubemap_env_lut_and_font() {
-        use crate::resource_handles::ResourceAssetType;
-        let rt = ResourceAssetType::parse("AudioClip").expect("AudioClip is a resource asset");
+        use crate::registry::RegisteredType;
+        let rt = RegisteredType::parse("AudioClip").expect("AudioClip is a resource asset");
         let err = rt
             .compile_payload(&serde_json::json!({}))
             .expect_err("a source-less AudioClip must fail to compile");
@@ -4383,7 +4404,7 @@ mod tests {
         // Texture is also a resource asset (it left the component registry). A
         // procedural texture compiles a non-empty payload, and a file-backed one
         // folds its source into the payload cache key.
-        let tex = ResourceAssetType::parse("Texture").expect("Texture is a resource asset");
+        let tex = RegisteredType::parse("Texture").expect("Texture is a resource asset");
         let bytes = tex
             .compile_payload(&serde_json::json!({"generator": "checker", "resolution": 32}))
             .expect("a procedural texture compiles");
@@ -4396,7 +4417,7 @@ mod tests {
         // CubemapTexture is a resource asset too. Source-less args fail, and its
         // `.hdr` source folds into the payload cache key.
         let cube =
-            ResourceAssetType::parse("CubemapTexture").expect("CubemapTexture is a resource asset");
+            RegisteredType::parse("CubemapTexture").expect("CubemapTexture is a resource asset");
         let err = cube
             .compile_payload(&serde_json::json!({}))
             .expect_err("a source-less CubemapTexture must fail to compile");
@@ -4410,10 +4431,10 @@ mod tests {
         );
 
         // EnvironmentMap and ColorLut are resource assets too. Both surface their
-        // source-less error through `ResourceAssetType::compile_payload`, and fold
+        // source-less error through `RegisteredType::compile_payload`, and fold
         // their `source` into the payload cache key.
         let env =
-            ResourceAssetType::parse("EnvironmentMap").expect("EnvironmentMap is a resource asset");
+            RegisteredType::parse("EnvironmentMap").expect("EnvironmentMap is a resource asset");
         let err = env
             .compile_payload(&serde_json::json!({}))
             .expect_err("a source-less EnvironmentMap must fail to compile");
@@ -4427,7 +4448,7 @@ mod tests {
             vec!["e.hdr".to_string()]
         );
 
-        let lut = ResourceAssetType::parse("ColorLut").expect("ColorLut is a resource asset");
+        let lut = RegisteredType::parse("ColorLut").expect("ColorLut is a resource asset");
         let err = lut
             .compile_payload(&serde_json::json!({}))
             .expect_err("a source-less ColorLut must fail to compile");
@@ -4443,7 +4464,7 @@ mod tests {
         // Font is a resource asset. The built-in font (empty `path`) compiles a
         // non-empty atlas, and a file-backed font folds its `path` (not `source`)
         // into the payload cache key.
-        let font = ResourceAssetType::parse("Font").expect("Font is a resource asset");
+        let font = RegisteredType::parse("Font").expect("Font is a resource asset");
         let bytes = font
             .compile_payload(&serde_json::json!({"size_px": 20}))
             .expect("the built-in font compiles");
@@ -4463,7 +4484,7 @@ mod tests {
     // image busts the payload cache.
     #[test]
     fn gltf_sources_fold_referenced_sibling_files_into_source_files() {
-        use crate::resource_handles::ResourceAssetType;
+        use crate::registry::RegisteredType;
 
         let dir = tempfile::tempdir().unwrap();
         let json = serde_json::json!({
@@ -4475,7 +4496,7 @@ mod tests {
         std::fs::write(&gltf_path, serde_json::to_vec(&json).unwrap()).unwrap();
         let src = gltf_path.to_str().unwrap().to_string();
 
-        for rt in [ResourceAssetType::Mesh, ResourceAssetType::SkinnedMesh] {
+        for rt in [RegisteredType::Mesh, RegisteredType::SkinnedMesh] {
             let files = rt.source_files(&serde_json::json!({"source": src}));
             assert_eq!(files.len(), 3, "{rt:?}: {files:?}");
             assert_eq!(files[0], src);
@@ -4484,15 +4505,15 @@ mod tests {
         }
 
         // A `.glb` source reports only itself.
-        let glb = ResourceAssetType::Mesh.source_files(&serde_json::json!({"source": "scene.glb"}));
+        let glb = RegisteredType::Mesh.source_files(&serde_json::json!({"source": "scene.glb"}));
         assert_eq!(glb, vec!["scene.glb".to_string()]);
     }
 
     // Dispatch coverage: compile_by_type / source_files_by_type route each
-    // compiled ComponentType to its asset_impls wrapper.
+    // compiled RegisteredType to its asset_impls wrapper.
 
-    fn ct(name: &str) -> ComponentType {
-        ComponentType::parse(name).unwrap_or_else(|| panic!("{name} is a registered component"))
+    fn ct(name: &str) -> RegisteredType {
+        RegisteredType::parse(name).unwrap_or_else(|| panic!("{name} is a registered component"))
     }
 
     // Arms whose outcome is deterministic from inline args alone: a valid
@@ -4501,8 +4522,8 @@ mod tests {
     #[test]
     fn compile_by_type_dispatches_deterministic_arms() {
         // Mesh is a resource asset now: it compiles through
-        // `ResourceAssetType::compile_payload`, not the ComponentType dispatch.
-        let mesh_bytes = crate::resource_handles::ResourceAssetType::Mesh
+        // `RegisteredType::compile_payload`, not the RegisteredType dispatch.
+        let mesh_bytes = crate::registry::RegisteredType::Mesh
             .compile_payload(&serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}))
             .expect("Mesh compiles through the resource path");
         assert!(!mesh_bytes.is_empty());
@@ -4554,8 +4575,8 @@ mod tests {
     // data form carries the interned name id and drops the geometry.
     #[test]
     fn skinned_mesh_resource_compile_paths() {
-        use crate::resource_handles::ResourceAssetType;
-        let rt = ResourceAssetType::SkinnedMesh;
+        use crate::registry::RegisteredType;
+        let rt = RegisteredType::SkinnedMesh;
 
         let ok = serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "indices": []});
         let bytes = rt.compile_payload(&ok).expect("skinned compiles");
@@ -4595,7 +4616,7 @@ mod tests {
             )
             .expect("data bakes")
             .expect("skinned mesh carries baked data");
-        let (baked_name, sm): (u32, crate::assets::SkinnedMesh) =
+        let (baked_name, sm): (u32, crate::components::SkinnedMesh) =
             postcard::from_bytes(&data).unwrap();
         assert_eq!(baked_name, name_id.0);
         assert_eq!(sm.scale, [1.0, 1.0, 1.0], "zero scale clamps to unit");
@@ -4670,7 +4691,7 @@ mod tests {
         );
         match out {
             Ok(bytes) => {
-                let payload = concinnity_core::assets::ShaderPayload::decode(&bytes)
+                let payload = concinnity_core::components::ShaderPayload::decode(&bytes)
                     .expect("empty container decodes");
                 assert!(payload.stages.is_empty(), "glsl stub compiles no stages");
             }

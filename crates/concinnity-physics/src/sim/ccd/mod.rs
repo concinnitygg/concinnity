@@ -116,11 +116,13 @@ impl Ccd {
             + self.crossings.capacity() * size_of::<(u32, u32)>()) as u64
     }
 
+    #[cfg(test)]
     /// Movers and crossings the reservation had no room for.
     pub(crate) fn overflows(&self) -> u32 {
         self.overflows
     }
 
+    #[cfg(test)]
     pub(crate) fn clear_overflows(&mut self) {
         self.overflows = 0;
     }
@@ -248,6 +250,7 @@ impl Ccd {
         }
     }
 
+    #[cfg(test)]
     /// Bodies the last step was fast enough to sweep.
     pub(crate) fn mover_count(&self) -> usize {
         self.movers.len()

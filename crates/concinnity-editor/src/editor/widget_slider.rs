@@ -8,7 +8,7 @@
 
 use super::theme;
 use super::widget::{self, place_rounded};
-use crate::assets::TextAlign;
+use crate::components::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 

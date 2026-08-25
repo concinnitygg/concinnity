@@ -11,7 +11,7 @@
 // interleaving-dependent under the atomic counter and must never be treated
 // as world state.
 
-use crate::assets::{
+use crate::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, BodyDynamics, Collider, PhysicsConfig,
     Prop, PropCollider, Transform,
 };
@@ -38,7 +38,7 @@ fn hash_world(world: &World) -> u64 {
         hash_f32s(&mut h, &t.scale);
     }
     fnv(&mut h, &(world.component_count() as u64).to_le_bytes());
-    if let Some(events) = world.events::<crate::assets::ContactEvent>() {
+    if let Some(events) = world.events::<crate::components::ContactEvent>() {
         fnv(&mut h, &(events.len() as u64).to_le_bytes());
     }
     h
@@ -94,7 +94,7 @@ fn build_world() -> World {
                 scale: None,
             },
         ],
-        queries: vec![crate::assets::BehaviorQuery {
+        queries: vec![crate::components::BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],

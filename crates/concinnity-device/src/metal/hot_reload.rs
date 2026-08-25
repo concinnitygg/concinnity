@@ -65,13 +65,6 @@ pub(crate) struct WatcherHandle {
         reason = "notify keeps its listener thread alive while the handle lives; never read after construction"
     )]
     watcher: notify::RecommendedWatcher,
-    // The shader source directory the watcher is observing. Kept for
-    // diagnostics: log lines reference it on init.
-    #[expect(
-        dead_code,
-        reason = "kept for diagnostics; log lines reference it on init"
-    )]
-    watched_dir: PathBuf,
 }
 
 // Spawn a `notify` watcher over the Metal shader source directory and wire
@@ -161,10 +154,7 @@ pub(crate) fn spawn(flag: Arc<AtomicBool>) -> Option<WatcherHandle> {
         "hot-reload: watching {} for .metal and .slang changes",
         dir.display()
     );
-    Some(WatcherHandle {
-        watcher,
-        watched_dir: dir,
-    })
+    Some(WatcherHandle { watcher })
 }
 
 // True when this notify event is a modify of a shader source file we care

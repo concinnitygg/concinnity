@@ -1,31 +1,87 @@
-//! Renderer-free ecs metadata + identity layer shared by the build / validate
-//! pipeline and the client runtime: the asset identity types (`asset_id`), the
-//! `Component` metadata trait, and the plain data types the registry and blob
-//! format are built from (`AssetOrigin`, `AssetPayload`, `PayloadLocator`,
-//! `BlobAssetDef`, `AssetKind`). The interner that assigns those identities
-//! keeps a per-thread table and lives in concinnity-cpu. The authoring
-//! `Registration` record lives in concinnity-world, constructed from the trait's
-//! metadata consts.
+//! The renderer-free half of the engine's ECS: the storage mechanism, the
+//! per-tick context systems see, and the asset identity + registry layer the
+//! build / validate pipeline and the client runtime share.
 //!
-//! The `System` behavior trait + its `StepResult` are here too (renderer-free:
-//! they name only `PipelineContext`), as is the `World`'s data half (`world`):
-//! the components, resources, events, payloads, profile, and frame scratch a
-//! tick reads and writes, with nothing that runs. What runs over that data --
-//! the constructed systems, their schedule, and `start` / `step` -- lives in the
-//! client crate's `ecs` module alongside the value enums (`ComponentAsset` /
-//! `SystemAsset`) and the registry macros, which re-exports everything here
-//! under the historical `crate::ecs::*` paths.
+//! The storage mechanism is closed-world and carries no engine domain type. It
+//! provides the generic primitives only: entities ([`Entity`], [`Entities`]),
+//! typed storage columns ([`Column`]), change ticks ([`Tick`]), component masks
+//! ([`ComponentMask`]) and a join index ([`JoinIndex`]), resources
+//! ([`Resources`]), events ([`Events`]), and the per-system access sets
+//! ([`Access`]) the scheduler uses to run two systems concurrently. Nothing in
+//! that half knows about meshes, blobs, or rendering, and none of it stores a
+//! type the project did not register at compile time: there is no TypeId-keyed
+//! type erasure and no open-world insert of arbitrary external types.
+//!
+//! The concrete component set is registered in `registry` and expanded by
+//! [`define_components!`](crate::define_components), which pairs the asset-enum
+//! dispatch with the storage half from
+//! [`define_component_storage!`](crate::define_component_storage).
+//!
+//! On top of that sit the pieces the engine reaches for: the [`Component`]
+//! metadata trait, the plain data types the registry and blob format are built
+//! from ([`AssetOrigin`], [`AssetPayload`], [`PayloadLocator`],
+//! [`BlobAssetDef`], [`AssetKind`]), the [`System`] behavior trait, and the
+//! [`World`]'s data half: the components, resources, events, payloads, profile,
+//! and frame scratch a tick reads and writes, with nothing that runs. What runs
+//! over that data -- the constructed systems, their schedule, and `start` /
+//! `step` -- lives in the client crate's `ecs` module alongside the value enums
+//! (`ComponentAsset` / `SystemAsset`), which re-exports everything here under
+//! the historical `crate::ecs::*` paths.
+//!
+//! The interner that assigns asset identities keeps a per-thread table and
+//! lives in concinnity-cpu. The authoring `Registration` record lives in
+//! concinnity-world, constructed from the trait's metadata consts.
 
-use alloc::vec::Vec;
-
+pub mod access_check;
 pub mod asset_id;
-mod entity_index;
+
+mod access;
+mod column;
+mod component;
+mod context;
+mod define_components;
+mod entity;
+mod entity_by_name;
+mod event;
+mod event_store;
 mod frame;
+mod join;
+mod mask;
 mod payload_store;
 mod protocol;
 mod registry;
+mod resource;
+mod storage;
 mod system;
+mod tick;
 mod world;
+
+#[cfg(test)]
+mod join_bench;
+#[cfg(test)]
+mod storage_bench;
+
+// The storage primitives. `Column`, `Entities`, `JoinIndex` and `AtomicTick`
+// are named by the expansion of `define_component_storage!`, so they are public
+// here for every crate that expands it.
+pub use access::Access;
+pub use column::{Column, ColumnTicks};
+pub use entity::{Entities, Entity};
+pub use event::{EventCursor, Events};
+pub use event_store::EventStore;
+pub use join::JoinIndex;
+pub use mask::{ComponentId, ComponentMask};
+pub use resource::Resources;
+pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};
+
+// The runtime-facing component contract and the metadata enums the registry and
+// the blob format are built from.
+pub use component::{
+    AssetOrigin, AssetPayload, BuildOnlyAsset, Component, ResourceAsset, RuntimeComponent,
+};
+
+// Systems' view of the world during a tick.
+pub use context::PipelineContext;
 
 // Per-frame facilities carried on `PipelineContext`. Re-exported by the client
 // `ecs` module under the historical `crate::ecs::*` paths, like the rest.
@@ -35,17 +91,18 @@ mod world;
 pub use concinnity_memory::Arena;
 pub use frame::{FrameContext, FrameVec};
 
-// Renderer-free per-frame protocol resources the runtime systems publish and
-// read to coordinate a tick (menu state, frame-rate cap, HUD prefs, cursor +
-// dropdown views). They name no renderer type, so they live here where the
-// physics / audio subsystem crates can reach them; the client `ecs` module
-// re-exports them under the historical `crate::ecs::*` paths.
+// Renderer-free resources the runtime systems publish and read to coordinate a
+// tick (menu state, frame-rate cap, HUD prefs, cursor + dropdown views), plus
+// the world's cook-counted physics reservation. They name no renderer type, so
+// they live here where the physics / audio subsystem crates can reach them; the
+// client `ecs` module re-exports them under the historical `crate::ecs::*`
+// paths.
 pub use protocol::{
     CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
     GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown,
     OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode, ScreenStack, SimTiming,
     TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal, TransientSaves,
-    ViewOverrides, WorldLines,
+    ViewOverrides, WorldLines, WorldPhysicsBudget,
 };
 
 // The runtime behavior trait every engine system implements + its per-step
@@ -59,44 +116,11 @@ pub use system::{StepResult, System};
 // Renderer-free, so the physics / audio subsystem crates can resolve a name
 // reference to an Entity through it; the client `ecs::decompose` module
 // re-exports it under the historical `crate::ecs::decompose::EntityByName` path.
-pub use entity_index::EntityByName;
+pub use entity_by_name::EntityByName;
 
-pub mod access_check;
-
-// Debug-only touch reporters for the context accessors below, so each
-// accessor carries one line. Compiled out of release builds.
-#[cfg(debug_assertions)]
-fn note_read<C: ComponentSlot>() {
-    access_check::touch(access_check::Touch::ComponentRead {
-        id: C::DISCRIMINANT,
-        type_name: core::any::type_name::<C>(),
-    });
-}
-
-#[cfg(debug_assertions)]
-fn note_write<C: ComponentSlot>() {
-    access_check::touch(access_check::Touch::ComponentWrite {
-        id: C::DISCRIMINANT,
-        type_name: core::any::type_name::<C>(),
-    });
-}
-
-#[cfg(debug_assertions)]
-fn note_structural(op: &'static str) {
-    access_check::touch(access_check::Touch::Structural { op });
-}
-
-#[cfg(debug_assertions)]
-fn note_resource<T: 'static>(write: bool) {
-    access_check::touch(access_check::Touch::Resource {
-        type_id: core::any::TypeId::of::<T>(),
-        type_name: core::any::type_name::<T>(),
-        write,
-    });
-}
-
-// The payload-access seam systems reach through: keeps the ECS mechanism free
-// of blob file I/O (concinnity-store's `BlobData` is the runtime implementor).
+// The payload-access seam systems reach through: keeps the storage mechanism
+// free of blob file I/O (concinnity-store's `BlobData` is the runtime
+// implementor).
 pub use payload_store::{NoPayloads, PayloadStore};
 
 // The world's data half: the five things a `PipelineContext` borrows, owned in
@@ -104,69 +128,13 @@ pub use payload_store::{NoPayloads, PayloadStore};
 // run over it.
 pub use world::{ScratchStats, World};
 
-use crate::ecs::asset_id::AssetId;
-use crate::gfx::profile::FrameProfile;
-use crate::result::CnResult;
-pub use concinnity_eas::{
-    Access, ColumnTicks, ComponentId, ComponentMask, Entity, EventCursor, EventStore, Events,
-    MAX_CHANGE_AGE, Resources, Tick,
-};
-
-// Runtime asset-registry types, generated by the macros further down (invoked
-// in `registry`). Re-exported here so the rest of the crate (and the client,
-// which re-exports this module under `crate::ecs::*`) can keep using the
-// historical `crate::ecs::*` paths. The authoring `ComponentType` registry is
-// built from the same component list in the build crate. The runtime
+// Runtime asset-registry types, generated by the macros in `define_components`
+// (invoked in `registry`). Re-exported here so the rest of the crate (and the
+// client, which re-exports this module under `crate::ecs::*`) can keep using
+// the historical `crate::ecs::*` paths. The authoring `RegisteredType` registry
+// is built from the same component list in the build crate. The runtime
 // `SystemAsset` enum is generated client-side from the `System` behavior trait.
 pub use registry::{ComponentAsset, ComponentSlot, ComponentStorage, ComponentTag};
-
-/// Where an asset comes from and whether it persists to a blob.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum AssetOrigin {
-    /// Authored in a world and persisted to the blob.
-    External,
-    /// Created by the runtime; never persisted.
-    RuntimeOnly,
-    /// Consumed by the build; never reaches the runtime.
-    BuildOnly,
-}
-
-/// Whether the asset has a compiled binary payload packed into a .cnb blob.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum AssetPayload {
-    /// No compiled payload; the component is its own data.
-    None,
-    /// A compiled binary payload packed into the blob.
-    Compiled,
-}
-
-/// Component -- pure serializable data, no behavior. The runtime-facing surface
-/// only: a component loads from its baked blob bytes and receives its injected
-/// identity/payload hooks. All authoring metadata (origin, payload kind,
-/// reference fields, args schema, validators) lives in the build-side registry
-/// (concinnity-world), derived from the `for_each_component!` metadata blocks.
-pub trait Component: Sized + Send + core::fmt::Debug + 'static {
-    /// The registry name a world authors this component under.
-    const NAME: &'static str;
-
-    /// Reconstruct this component from a blob record, whose bytes are the
-    /// serialized runtime component (cook already ran the asset -> component
-    /// translation). The default rejects: runtime-only components are never
-    /// stored in a blob, so only loadable types provide an implementation.
-    fn from_baked(_bytes: &[u8]) -> Result<Self, CnResult> {
-        Err(CnResult::AssetInvalidType)
-    }
-
-    /// Called after construction to inject the payload locator from the blob def.
-    /// Only meaningful for components with a compiled payload.
-    /// The default implementation does nothing (correct for most components).
-    fn inject_locator(&mut self, _locator: PayloadLocator) {}
-
-    /// Called after construction to inject the asset's identity from the blob
-    /// def. Only meaningful for components that look themselves up by id at
-    /// runtime. The default implementation does nothing.
-    fn inject_name(&mut self, _id: AssetId) {}
-}
 
 // Points to an asset's compiled binary payload within the data blob files.
 // Defined in the schema crate because blob-backed asset structs carry it as a
@@ -187,663 +155,10 @@ pub use concinnity_asset::{
 };
 
 // The blob record schema (the component defs stream + the resource stream) is
-// owned by the concinnity-blob format crate; re-exported here under its
-// historical path so the runtime, cook, and the registry macros keep naming
-// `ecs::{BlobAssetDef, ResourceKind, ...}` unchanged.
-pub use concinnity_blob::{
+// owned by the `blob` format module; re-exported here so the runtime, cook, and
+// the registry macros keep naming `ecs::{BlobAssetDef, ResourceKind, ...}`
+// unchanged.
+pub use crate::blob::{
     AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind,
     ResourceRecord, SceneGroup,
 };
-
-/// The world's physics reservation as cook counted it, published at blob load.
-/// Absent when the world declares no physics content, or when the world was
-/// built in memory rather than loaded from a blob; the simulation then counts
-/// the loaded components itself.
-///
-/// Lives here rather than with the engine's other blob resources because the
-/// simulation driver reads it, and the engine depends on the driver.
-pub struct WorldPhysicsBudget(pub PhysicsBudgetRecord);
-
-/// PipelineContext -- systems' view of the world during a tick. Renderer-free:
-/// it exposes typed component storage, the in-memory blob payload store, and the
-/// per-frame profiler. The client `World` constructs one each tick and passes it
-/// to every `System::step`.
-pub struct PipelineContext<'a> {
-    /// Per-type component storage. Systems should not access this directly;
-    /// use `query`, `query_mut`, `drain`, or `push` instead.
-    pub components: &'a mut ComponentStorage,
-    /// Compiled-payload store. Systems use `read_payload` to fetch binary data,
-    /// then call `release_blob` when done with it. A trait object so the ECS
-    /// mechanism names no concrete blob store; the runtime passes `BlobData`.
-    pub blob: &'a mut dyn PayloadStore,
-    /// Per-frame profiling data. `World::step` records each system's CPU step
-    /// time here; `GraphicsSystem` writes the backend `RenderStats` after its
-    /// draw call, and `StatHud` reads it back to drive the on-screen HUD.
-    pub profile: &'a mut FrameProfile,
-    /// Type-keyed engine singletons (e.g. the per-frame FrameInput snapshot),
-    /// accessed via `resource` / `resource_mut` / `insert_resource`. Events live
-    /// here too, inside a single `EventStore` resource that owns one `Events<E>`
-    /// queue per event type, reached via `events` / `events_mut`.
-    pub resources: &'a mut Resources,
-    /// Frame-scoped facilities: scratch that the frame loop reclaims wholesale.
-    /// One field rather than several so what a frame offers can grow without
-    /// touching every system and every construction site again.
-    pub frame: FrameContext<'a>,
-}
-
-impl<'a> PipelineContext<'a> {
-    /// Immutable iteration over all components of type C.
-    pub fn query<C: ComponentSlot>(&self) -> core::slice::Iter<'_, C> {
-        #[cfg(debug_assertions)]
-        note_read::<C>();
-        C::slot(self.components).iter()
-    }
-
-    /// Iterate all components of type C paired with their owning Entity.
-    pub fn query_with_entity<C: ComponentSlot>(&self) -> impl Iterator<Item = (Entity, &C)> {
-        #[cfg(debug_assertions)]
-        note_read::<C>();
-        C::slot(self.components).iter_with_entities()
-    }
-
-    /// Mutable iteration over all components of type C.
-    pub fn query_mut<C: ComponentSlot>(&mut self) -> core::slice::IterMut<'_, C> {
-        #[cfg(debug_assertions)]
-        note_write::<C>();
-        self.components.values_mut::<C>().iter_mut()
-    }
-
-    /// Mutable iteration over all components of type C paired with their owning
-    /// Entity (the mutable counterpart of `query_with_entity`), so a system can
-    /// update each component and still know which entity owns it without first
-    /// materializing the entity set into a Vec.
-    pub fn query_mut_with_entity<C: ComponentSlot>(
-        &mut self,
-    ) -> impl Iterator<Item = (Entity, &mut C)> {
-        #[cfg(debug_assertions)]
-        note_write::<C>();
-        self.components.values_mut_with_entities::<C>()
-    }
-
-    /// The change tick of component type C's column (bumped on any insert /
-    /// remove / mutable access of a C). Comparing two reads across frames detects
-    /// whether any C changed without scanning the column, so a per-frame pass can
-    /// skip its work when nothing touched C since it last ran.
-    pub fn changed_tick<C: ComponentSlot>(&self) -> Tick {
-        #[cfg(debug_assertions)]
-        note_read::<C>();
-        self.components.changed_tick::<C>()
-    }
-
-    /// Every tick stamp of C's column. `changed` answers "did any C move"; a
-    /// pass that wants to re-examine only the components that moved also needs
-    /// `bulk` (a whole-column write, after which every row must be assumed
-    /// written) and `structural` (a row added or removed, after which row
-    /// positions and membership have moved).
-    pub fn column_ticks<C: ComponentSlot>(&self) -> ColumnTicks {
-        #[cfg(debug_assertions)]
-        note_read::<C>();
-        self.components.column_ticks::<C>()
-    }
-
-    /// Components of type C written since `since`, paired with their owning
-    /// entity: the dirty set a per-frame pass walks instead of the whole column.
-    /// Reports only rows a targeted `get_mut` touched, so it is meaningful only
-    /// while C's `bulk` and `structural` ticks have not moved since `since`.
-    pub fn changed_rows<C: ComponentSlot>(
-        &self,
-        since: Tick,
-    ) -> impl Iterator<Item = (Entity, &C)> {
-        #[cfg(debug_assertions)]
-        note_read::<C>();
-        self.components.changed_rows::<C>(since)
-    }
-
-    /// Mutable slice of all components of type C. Unlike `query_mut` this
-    /// exposes the backing storage as a slice, which a system can hand to the
-    /// job pool for parallel per-component work.
-    pub fn query_slice_mut<C: ComponentSlot>(&mut self) -> &mut [C] {
-        #[cfg(debug_assertions)]
-        note_write::<C>();
-        self.components.values_mut::<C>()
-    }
-
-    /// Remove and return all components of type C, despawning each removed
-    /// row's Entity so the indices recycle.
-    pub fn drain<C: ComponentSlot>(&mut self) -> Vec<C> {
-        #[cfg(debug_assertions)]
-        note_structural("drain");
-        self.components.drain::<C>()
-    }
-
-    /// Push a runtime-produced component into the matching typed column,
-    /// minting a fresh Entity for it. Preferred over reaching into
-    /// `self.components` directly.
-    pub fn push<C: ComponentSlot>(&mut self, c: C) {
-        #[cfg(debug_assertions)]
-        note_structural("push");
-        self.components.push_typed(c);
-    }
-
-    /// Add a component to an existing entity, so an entity can own more than one
-    /// component. The entity must be alive and must not already have C. Allowed
-    /// dead because the caller is in the client crate (the load-time Prop
-    /// decomposition); core itself has no systems.
-    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) {
-        #[cfg(debug_assertions)]
-        note_structural("insert");
-        self.components.insert_typed(entity, c);
-    }
-
-    /// Remove a component from an entity, returning it if present. The entity
-    /// keeps its other components. Allowed dead for the same cross-crate reason
-    /// as `insert` (the client toggles the Held tag on pickup/drop).
-    pub fn remove<C: ComponentSlot>(&mut self, entity: Entity) -> Option<C> {
-        #[cfg(debug_assertions)]
-        note_structural("remove");
-        self.components.remove_typed::<C>(entity)
-    }
-
-    /// Remove an entity entirely: swap-remove its row from every component
-    /// column and recycle its id (a stale handle to it then reads as dead). A
-    /// no-op on an already-dead or unknown entity. Allowed dead for the same
-    /// cross-crate reason as `insert` (the client despawns entities at runtime
-    /// from the GraphicsSystem).
-    pub fn despawn(&mut self, entity: Entity) {
-        #[cfg(debug_assertions)]
-        note_structural("despawn");
-        self.components.despawn(entity);
-    }
-
-    /// Whether an entity is still live (not despawned, matching generation).
-    /// Allowed dead for the same cross-crate reason as `insert` (the client
-    /// reaps a despawned entity's physics body in PhysicsSystem).
-    pub fn is_alive(&self, entity: Entity) -> bool {
-        self.components.is_alive(entity)
-    }
-
-    /// Borrow one entity's component C read-only. Allowed dead for the same
-    /// cross-crate reason as `insert` (the client reads Transform / Held by
-    /// entity in the physics, camera, and audio systems).
-    pub fn get<C: ComponentSlot>(&self, entity: Entity) -> Option<&C> {
-        #[cfg(debug_assertions)]
-        note_read::<C>();
-        self.components.get::<C>(entity)
-    }
-
-    /// Every entity carrying the component with this tag. Serves the queries a
-    /// Behavior declares by component name, which no type parameter can express.
-    pub fn entities_with_tag(&self, tag: u8) -> &[Entity] {
-        #[cfg(debug_assertions)]
-        access_check::touch(access_check::Touch::ComponentRead {
-            id: tag,
-            type_name: "<by tag>",
-        });
-        self.components.entities_with_tag(tag)
-    }
-
-    /// Read-only join over two component types: iterate the first type's rows
-    /// and yield both refs for every entity that also has the second. Allowed
-    /// dead for the same cross-crate reason as `insert`.
-    pub fn join2<A: ComponentSlot, B: ComponentSlot>(
-        &self,
-    ) -> impl Iterator<Item = (Entity, &A, &B)> {
-        #[cfg(debug_assertions)]
-        {
-            note_read::<A>();
-            note_read::<B>();
-        }
-        self.components.join2::<A, B>()
-    }
-
-    /// Mutably borrow one entity's component C (a propagation pass writing a
-    /// single entity's value). Allowed dead for the same cross-crate reason as
-    /// `insert`.
-    pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
-        #[cfg(debug_assertions)]
-        note_write::<C>();
-        self.components.get_mut::<C>(entity)
-    }
-
-    /// Borrow the singleton resource of type T, if present.
-    pub fn resource<T: core::any::Any>(&self) -> Option<&T> {
-        #[cfg(debug_assertions)]
-        note_resource::<T>(false);
-        self.resources.get::<T>()
-    }
-
-    /// Mutably borrow the singleton resource of type T, if present.
-    pub fn resource_mut<T: core::any::Any>(&mut self) -> Option<&mut T> {
-        #[cfg(debug_assertions)]
-        note_resource::<T>(true);
-        self.resources.get_mut::<T>()
-    }
-
-    /// Install (or replace) the singleton resource of type T, returning the
-    /// previous instance if one was present.
-    pub fn insert_resource<T: core::any::Any + Send>(&mut self, value: T) -> Option<T> {
-        #[cfg(debug_assertions)]
-        note_resource::<T>(true);
-        self.resources.insert(value)
-    }
-
-    /// Withdraw the singleton resource of type T, if present.
-    pub fn remove_resource<T: core::any::Any>(&mut self) -> Option<T> {
-        #[cfg(debug_assertions)]
-        note_resource::<T>(true);
-        self.resources.remove::<T>()
-    }
-
-    /// Take the singleton resource value of type T, leaving `T::default()`
-    /// parked in its slot so a take/republish cycle reuses the allocation.
-    /// `None` when the type was never inserted.
-    pub fn take_resource<T: core::any::Any + Send + Default>(&mut self) -> Option<T> {
-        #[cfg(debug_assertions)]
-        note_resource::<T>(true);
-        self.resources.take::<T>()
-    }
-
-    /// Borrow the event queue for event type E, if any events of that type have
-    /// been registered.
-    pub fn events<E: 'static>(&self) -> Option<&Events<E>> {
-        #[cfg(debug_assertions)]
-        note_resource::<E>(false);
-        self.resources.get::<EventStore>()?.get::<E>()
-    }
-
-    /// Mutably borrow the event queue for event type E, creating an empty one on
-    /// first access so writers and readers never miss it. All queues live in the
-    /// `EventStore` resource, which the frame driver rotates wholesale.
-    pub fn events_mut<E: Send + 'static>(&mut self) -> &mut Events<E> {
-        #[cfg(debug_assertions)]
-        note_resource::<E>(true);
-        if !self.resources.contains::<EventStore>() {
-            self.resources.insert(EventStore::new());
-        }
-        self.resources
-            .get_mut::<EventStore>()
-            .expect("EventStore was just inserted")
-            .get_mut_or_create::<E>()
-    }
-
-    /// Read the compiled payload bytes for a locator.
-    ///
-    /// Takes `&mut self` because an overflow blob is read from disk lazily on
-    /// first access. Returns an error if the blob was released, the locator is
-    /// out of range, or the on-demand load fails.
-    pub fn read_payload(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
-        #[cfg(debug_assertions)]
-        access_check::touch(access_check::Touch::Blob { op: "read_payload" });
-        self.blob.read(locator)
-    }
-
-    /// Release the in-memory payload for an entire blob once all systems
-    /// that need it have finished (e.g. after GPU upload).
-    ///
-    /// See `PayloadStore::release` for semantics.
-    pub fn release_blob(&mut self, blob_index: u32) {
-        #[cfg(debug_assertions)]
-        access_check::touch(access_check::Touch::Blob { op: "release_blob" });
-        self.blob.release(blob_index);
-    }
-}
-
-// Asset registration macros
-//
-// `define_components!` builds the runtime half of the registry (invoked in
-// `crate::ecs::registry` over the shared `for_each_component!` list): the
-// `ComponentAsset` value enum via `__define_asset_kind!`, plus the blob loader
-// and ECS storage. The authoring `ComponentType` registry is built from the same
-// list in the build crate. The runtime `SystemAsset` enum is generated
-// separately, client-side, by the `define_systems!` table.
-
-// Internal helper. Emits the runtime `<Kind>Asset` value enum the ECS stores
-// and the `From<$ty>` conversions. The authoring metadata registry (`<Kind>Type`)
-// is emitted separately so the two can live in different crates.
-#[macro_export]
-#[doc(hidden)]
-macro_rules! __define_asset_kind {
-    (
-        asset_enum: $asset_enum:ident,
-        asset_kind: $kind_variant:ident,
-        $( $variant:ident => $ty:path, $disc:expr_2021 ),+ $(,)?
-    ) => {
-        // One variant per component type; each is named for the component it
-        // wraps, so the list itself is the documentation.
-        /// A loaded component of any registered type.
-        #[derive(Debug)]
-        #[expect(missing_docs, reason = "one variant per component type, each named for the component it wraps")]
-        pub enum $asset_enum {
-            $( $variant($ty) ),+
-        }
-
-        $( impl From<$ty> for $asset_enum { fn from(c: $ty) -> Self { $asset_enum::$variant(c) } } )+
-    };
-}
-
-/// Generate the runtime component registry from the engine's component list:
-/// the `ComponentTag` discriminants, the `ComponentAsset` value enum, and the
-/// `ComponentStorage` / `ComponentSlot` pair the ECS stores rows in.
-///
-/// Each list entry carries a `{ ... }` metadata block the authoring registry
-/// consumes; this macro captures and ignores it.
-#[macro_export]
-macro_rules! define_components {
-    // Each list entry carries a `{ ... }` metadata block consumed by
-    // `cn_impl_components!` (which generates the trivial `Component` impls). The
-    // runtime registry only needs the `Variant => Type` pair, so it captures the
-    // block and ignores it.
-    ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
-        /// The component type tag: one fieldless variant per component, in list
-        /// order, so each variant's `#[repr(u8)]` discriminant is its list
-        /// position (0, 1, 2, ...). `ComponentTag::$variant as u8` is that tag,
-        /// used both as the on-disk blob discriminant and as the in-memory ECS
-        /// `ComponentId`. The tag is assigned by position, not hand-written, and
-        /// is not a stable on-disk contract: a build regenerates the blob, so the
-        /// blob and the engine that loads it always agree. The authoring
-        /// `ComponentType` registry derives the same tag from this enum.
-        // One variant per component type, named for that component.
-        #[repr(u8)]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        #[expect(missing_docs, reason = "one variant per component type, named for that component")]
-        pub enum ComponentTag {
-            $( $variant ),+
-        }
-
-        impl ComponentTag {
-            /// The registry name of this tag, as a world authors it.
-            pub fn as_str(self) -> &'static str {
-                match self {
-                    $( ComponentTag::$variant => stringify!($variant) ),+
-                }
-            }
-
-            /// The tag a component name denotes. Resolves the component names a
-            /// Behavior declares in its `scope` and `queries`.
-            pub fn parse(name: &str) -> Option<ComponentTag> {
-                $(
-                    if name == stringify!($variant) {
-                        return Some(ComponentTag::$variant);
-                    }
-                )+
-                None
-            }
-        }
-
-        $crate::__define_asset_kind! {
-            asset_enum: ComponentAsset,
-            asset_kind: Component,
-            $( $variant => $ty, ComponentTag::$variant as u8 ),+
-        }
-
-        impl ComponentAsset {
-            /// Reconstruct a component from a blob def: dispatch on the tag and
-            /// deserialize the runtime component via `Component::from_baked`
-            /// (every record is baked -- cook already ran the asset -> component
-            /// translation).
-            pub fn from_baked(def: &BlobAssetDef) -> Result<Self, CnResult> {
-                $(
-                    if def.discriminant == ComponentTag::$variant as u8 {
-                        let mut c = <$ty as Component>::from_baked(&def.args_bytes)?;
-                        if let Some(id) = def.name {
-                            <$ty as Component>::inject_name(&mut c, id);
-                        }
-                        return Ok(ComponentAsset::$variant(c));
-                    }
-                )+
-                Err(CnResult::AssetInvalidType)
-            }
-
-            /// Inject a payload locator into the component after construction.
-            /// Delegates to `Component::inject_locator`; a no-op for types
-            /// that don't override that method.
-            pub fn inject_locator(&mut self, locator: PayloadLocator) {
-                match self {
-                    $( ComponentAsset::$variant(c) => c.inject_locator(locator) ),+
-                }
-            }
-        }
-
-        // Per-type runtime storage. The `Column`-backed storage struct, the
-        // `ComponentSlot` access trait, and the generic storage operations
-        // (typed push, drain, mutable access, counts) are generated by the eas
-        // storage macro -- shared and engine-agnostic. The asset-enum dispatch
-        // (`push`, `all_defs`) is engine-specific and added in the impl below.
-        concinnity_eas::define_component_storage! {
-            storage: ComponentStorage,
-            slot: ComponentSlot,
-            $( $variant => $ty, ComponentTag::$variant as u8 ),+
-        }
-
-        impl ComponentStorage {
-            /// Dispatch a `ComponentAsset` variant into its typed column via the
-            /// generic typed push (which mints the Entity and stamps the tick).
-            /// Returns the minted Entity so loaders can index it by name.
-            pub fn push(&mut self, asset: ComponentAsset) -> $crate::ecs::Entity {
-                match asset {
-                    $( ComponentAsset::$variant(c) => self.push_typed(c), )+
-                }
-            }
-
-            /// Every entity carrying the component with this tag, in column
-            /// order. Serves the declared-query resolution in BehaviorSystem,
-            /// which selects components by authored name rather than by type.
-            pub fn entities_with_tag(&self, tag: u8) -> &[$crate::ecs::Entity] {
-                $(
-                    if tag == ComponentTag::$variant as u8 {
-                        return self.$variant.entities();
-                    }
-                )+
-                &[]
-            }
-
-            /// How many components of each type are stored: one `(tag, count)`
-            /// entry per populated type, in tag order. The debug WS snapshot
-            /// reports these; nothing re-serializes stored components back to
-            /// defs. Counted rather than listed per instance, so the snapshot
-            /// is sized by the number of component types rather than by the
-            /// world.
-            pub fn component_census(&self) -> ::alloc::vec::Vec<(u8, u32)> {
-                let mut out = ::alloc::vec::Vec::new();
-                $(
-                    let count = self.$variant.len();
-                    if count > 0 {
-                        out.push((ComponentTag::$variant as u8, count as u32));
-                    }
-                )+
-                out
-            }
-        }
-    };
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::vec;
-
-    // A payload store holding nothing: every read errors, releases are no-ops.
-    // Lets the ECS tests exercise the context's payload forwarding without
-    // depending on the concrete `BlobData` (which lives host-side).
-    struct EmptyStore;
-
-    impl PayloadStore for EmptyStore {
-        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnResult> {
-            Err(CnResult::FileIo)
-        }
-        fn release(&mut self, _blob_index: u32) {}
-        fn disk_backed(&self) -> bool {
-            false
-        }
-    }
-
-    // A standalone PipelineContext over empty storage, for exercising the
-    // resource and event surfaces without a running world.
-    fn parts() -> (
-        ComponentStorage,
-        EmptyStore,
-        FrameProfile,
-        Resources,
-        concinnity_memory::Arena,
-    ) {
-        (
-            ComponentStorage::default(),
-            EmptyStore,
-            FrameProfile::default(),
-            Resources::new(),
-            concinnity_memory::Arena::with_capacity(64 * 1024),
-        )
-    }
-
-    #[test]
-    fn resources_round_trip_through_context() {
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
-        assert!(ctx.resource::<u32>().is_none());
-        assert_eq!(ctx.insert_resource(7u32), None);
-        assert_eq!(ctx.resource::<u32>(), Some(&7));
-        *ctx.resource_mut::<u32>().unwrap() = 9;
-        assert_eq!(ctx.resource::<u32>(), Some(&9));
-        // Re-inserting returns the previous value.
-        assert_eq!(ctx.insert_resource(1u32), Some(9));
-    }
-
-    #[test]
-    fn events_round_trip_through_context() {
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
-        assert!(ctx.events::<u32>().is_none());
-        ctx.events_mut::<u32>().send(1);
-        ctx.events_mut::<u32>().send(2);
-
-        let mut cursor = EventCursor::default();
-        let seen: Vec<u32> = ctx
-            .events::<u32>()
-            .unwrap()
-            .read(&mut cursor)
-            .copied()
-            .collect();
-        assert_eq!(seen, vec![1, 2]);
-        // The same cursor sees nothing new on a second read.
-        assert_eq!(ctx.events::<u32>().unwrap().read(&mut cursor).count(), 0);
-    }
-
-    // A blob record loads through `from_baked`: the bytes are the serialized
-    // runtime component, name injection follows, and an unknown tag is
-    // rejected.
-    #[test]
-    fn baked_records_load_through_from_baked() {
-        use crate::assets::PointLight;
-        let light = PointLight {
-            intensity: 3.5,
-            range: 12.0,
-            ..Default::default()
-        };
-        let baked = BlobAssetDef {
-            name: None,
-            kind: AssetKind::Component,
-            discriminant: ComponentTag::PointLight as u8,
-            args_bytes: postcard::to_allocvec(&light).unwrap(),
-            payload: None,
-        };
-        let from_baked = ComponentAsset::from_baked(&baked).unwrap();
-        let ComponentAsset::PointLight(b) = &from_baked else {
-            panic!("expected PointLight");
-        };
-        assert_eq!(b.intensity, 3.5);
-        assert_eq!(b.range, 12.0);
-        // An unknown tag is rejected.
-        let mut bad = baked;
-        bad.discriminant = 255;
-        assert_eq!(
-            ComponentAsset::from_baked(&bad).unwrap_err(),
-            CnResult::AssetInvalidType
-        );
-    }
-
-    #[test]
-    fn storage_push_dispatches_into_the_typed_column() {
-        let mut storage = ComponentStorage::default();
-        storage.push(crate::assets::Transform::default().into());
-        let census = storage.component_census();
-        // Transform's tag is its position in the component list.
-        assert_eq!(census, vec![(ComponentTag::Transform as u8, 1)]);
-    }
-
-    #[test]
-    fn context_component_ops_cover_the_entity_lifecycle() {
-        use crate::assets::{GlobalTransform, Transform};
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
-
-        ctx.push(Transform::default());
-        let e = ctx.components.push_typed(Transform::default());
-        assert!(ctx.is_alive(e));
-        assert_eq!(ctx.query::<Transform>().count(), 2);
-        assert_eq!(ctx.query_with_entity::<Transform>().count(), 2);
-
-        // Mutate through each of the mutable access paths.
-        for t in ctx.query_mut::<Transform>() {
-            t.position[0] = 1.0;
-        }
-        ctx.query_slice_mut::<Transform>()[0].position[1] = 2.0;
-        ctx.get_mut::<Transform>(e).unwrap().position[2] = 3.0;
-        assert_eq!(ctx.get::<Transform>(e).unwrap().position, [1.0, 0.0, 3.0]);
-
-        // A second component on the same entity, then remove it again.
-        ctx.insert(e, GlobalTransform::default());
-        assert_eq!(ctx.join2::<Transform, GlobalTransform>().count(), 1);
-        assert!(ctx.remove::<GlobalTransform>(e).is_some());
-        assert!(ctx.remove::<GlobalTransform>(e).is_none());
-
-        // Despawn kills the entity and its remaining components.
-        ctx.despawn(e);
-        assert!(!ctx.is_alive(e));
-        assert_eq!(ctx.query::<Transform>().count(), 1);
-        assert!(ctx.get::<Transform>(e).is_none());
-
-        // Drain empties the column and returns the survivors.
-        let drained = ctx.drain::<Transform>();
-        assert_eq!(drained.len(), 1);
-        assert_eq!(ctx.query::<Transform>().count(), 0);
-    }
-
-    #[test]
-    fn read_payload_and_release_forward_to_the_store() {
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
-        let loc = PayloadLocator {
-            blob_index: 0,
-            offset: 0,
-            len: 4,
-        };
-        // read_payload forwards the store's error verbatim.
-        assert_eq!(ctx.read_payload(&loc).unwrap_err(), CnResult::FileIo);
-        // release_blob forwards without panicking.
-        ctx.release_blob(0);
-    }
-}

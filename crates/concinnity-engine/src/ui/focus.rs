@@ -5,7 +5,7 @@
 // pulse. Pure geometry + action-string grouping; UiInputSystem owns the focus
 // state and applies the resulting styling / actions to the world.
 
-use crate::assets::NavDirection;
+use crate::components::NavDirection;
 use crate::gfx::setting_action;
 
 // Weight of the perpendicular offset in the directional score, so a target

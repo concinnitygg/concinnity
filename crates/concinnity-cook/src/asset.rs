@@ -49,7 +49,7 @@ pub(crate) struct BuildCtx<'a> {
 //
 // Only types whose `Component::PAYLOAD` is `AssetPayload::Compiled` should
 // implement this. The build pipeline dispatches via a match on
-// `ComponentType` in [`crate::pipeline`].
+// `RegisteredType` in [`crate::pipeline`].
 pub(crate) trait BuildAsset: Component {
     fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
 

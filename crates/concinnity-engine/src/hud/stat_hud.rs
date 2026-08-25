@@ -9,7 +9,7 @@
 // resource); the exposure and HDR chips show whenever their feature is active.
 // Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
-use crate::assets::{StatHud, TextLabel};
+use crate::components::{StatHud, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{HudPrefs, PipelineContext, StepResult, System};
 use std::time::Instant;
@@ -157,7 +157,7 @@ impl StatHudSystem {
 impl System for StatHudSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .writes_components(crate::component_mask![crate::assets::TextLabel])
+            .writes_components(crate::component_mask![crate::components::TextLabel])
             .reads_resources(crate::resource_mask![
                 crate::ecs::HudPrefs,
                 crate::app::budget::MemoryBudget,
@@ -322,7 +322,7 @@ mod tests {
     // A StatHud component spawns the internal HUD system.
     #[test]
     fn stat_hud_component_spawns_internal_system() {
-        use crate::assets::StatHud;
+        use crate::components::StatHud;
         use crate::ecs::World;
 
         let mut world = World::new();

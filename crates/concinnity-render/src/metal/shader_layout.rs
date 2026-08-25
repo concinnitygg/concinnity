@@ -27,7 +27,7 @@ use crate::uniforms::ViewUniforms;
 /// One field the engine guarantees at a fixed byte offset inside an
 /// engine-provided buffer struct.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ExpectedField {
+pub(crate) struct ExpectedField {
     /// The field's name in the shader struct.
     pub name: &'static str,
     /// The field's byte offset in the shader struct.
@@ -39,7 +39,7 @@ pub struct ExpectedField {
 /// pointer (e.g. `GpuObjectData`) it is the per-element stride, which is what a
 /// wrong-stride bug corrupts.
 #[derive(Clone, Debug)]
-pub struct ExpectedStruct {
+pub(crate) struct ExpectedStruct {
     /// The struct's name in the shader.
     pub name: &'static str,
     /// The struct's size in bytes.
@@ -103,7 +103,7 @@ macro_rules! field {
 /// The indices mirror the binds in `metal/draw/main.rs` and the shadow shader;
 /// the layouts are derived from the real `#[repr(C)]` structs (the single source
 /// of truth, the same ones the `*_layout_matches_msl` tests pin to MSL).
-pub fn engine_buffers(stage: EngineStage) -> Vec<(u32, ExpectedStruct)> {
+pub(crate) fn engine_buffers(stage: EngineStage) -> Vec<(u32, ExpectedStruct)> {
     match stage {
         EngineStage::Vertex => vec![
             (0, view_uniforms_layout()),
@@ -283,7 +283,7 @@ fn shadow_pass_push_layout() -> ExpectedStruct {
 ///     the engine's offset. Fields the shader renames or omits are skipped: it
 ///     only has to read the fields it uses from where the engine put them. The
 ///     size check remains the backstop for the renamed-field case.
-pub fn compare_binding(
+pub(crate) fn compare_binding(
     index: u32,
     expected: &ExpectedStruct,
     reflected: &ReflectedStruct,

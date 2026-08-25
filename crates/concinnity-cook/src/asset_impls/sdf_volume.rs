@@ -1,7 +1,7 @@
 // asset_impls/sdf_volume.rs
 
 use crate::asset::BuildCtx;
-use concinnity_core::assets::SdfVolume;
+use concinnity_core::components::SdfVolume;
 use concinnity_world::source_args::current_platform_source_arg;
 
 // Resolve a raw `fragment_shader` arg to an on-disk path, picking the first

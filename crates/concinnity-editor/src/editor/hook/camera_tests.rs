@@ -9,7 +9,7 @@
 // and what hands control back.
 
 use super::*;
-use crate::assets::{Camera3D, InputKey};
+use crate::components::{Camera3D, InputKey};
 use crate::test_support::isolate_state_dir;
 
 const VP: [f32; 2] = [1280.0, 720.0];
@@ -342,7 +342,7 @@ fn selection_bounds_fall_back_to_a_billboards_transform() {
     crate::ecs::asset_id::reset_interner();
     let id = crate::ecs::asset_id::intern("lamp");
     let mut world = World::new();
-    let entity = world.push(crate::assets::Transform {
+    let entity = world.push(crate::components::Transform {
         position: [4.0, 5.0, 6.0],
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],

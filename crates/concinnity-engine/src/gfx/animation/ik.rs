@@ -9,7 +9,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::assets::{AnimationIkChain, AnimationParams, CharacterRig, GroundProbe, GroundProbes};
+use crate::components::{
+    AnimationIkChain, AnimationParams, CharacterRig, GroundProbe, GroundProbes,
+};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::ik::TwoBoneChain;
@@ -38,7 +40,7 @@ pub(super) struct IkChainRuntime {
 pub(super) fn resolve_chains(
     graph_id: AssetId,
     authored: &[AnimationIkChain],
-    parameters: &[crate::assets::AnimationParam],
+    parameters: &[crate::components::AnimationParam],
     skeleton: &Skeleton,
 ) -> Vec<IkChainRuntime> {
     let mut chains = Vec::new();
@@ -242,7 +244,7 @@ pub(super) fn refresh_rays(
         };
         {
             let Some(pose) = ctx
-                .query::<crate::assets::SkeletonPose>()
+                .query::<crate::components::SkeletonPose>()
                 .find(|p| p.mesh_id == target)
             else {
                 continue;
@@ -283,7 +285,7 @@ fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::AnimationParam;
+    use crate::components::AnimationParam;
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
 
     // A valid hip -> knee -> foot chain (each the direct child of the last),

@@ -7,7 +7,7 @@
 // before UiInputSystem (its screen commands apply the same tick); the elements
 // it writes are drawn by the next overlay build, like every HUD system.
 
-use crate::assets::{LoadingOverlay, ScreenCommand, Sprite, TextLabel};
+use crate::components::{LoadingOverlay, ScreenCommand, Sprite, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::scene_flow::FadePhase;
@@ -132,15 +132,15 @@ impl System for LoadingOverlaySystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
             .writes_components(crate::component_mask![
-                crate::assets::Sprite,
-                crate::assets::TextLabel,
+                crate::components::Sprite,
+                crate::components::TextLabel,
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::ActiveSceneFlow,
                 crate::ecs::SceneResidencyStatus,
                 crate::ecs::ScreenStack,
             ])
-            .writes_resources(crate::resource_mask![crate::assets::ScreenCommand])
+            .writes_resources(crate::resource_mask![crate::components::ScreenCommand])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -230,7 +230,7 @@ impl System for LoadingOverlaySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::Screen;
+    use crate::components::Screen;
     use crate::ecs::World;
     use crate::gfx::scene_flow::SceneFlow;
 

@@ -9,7 +9,7 @@
 // pose, so entering play mode afterwards continues from there.
 
 use super::*;
-use crate::assets::Camera3D;
+use crate::components::Camera3D;
 
 const MOUSE_SENS: f32 = 0.003;
 const FLY_SPEED: f32 = 6.0;

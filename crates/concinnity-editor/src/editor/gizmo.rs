@@ -8,7 +8,7 @@
 // the write-back.
 
 use super::registry::ID_BASE;
-use crate::assets::Sprite;
+use crate::components::Sprite;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 use concinnity_cpu::gfx::pick::PickRay;

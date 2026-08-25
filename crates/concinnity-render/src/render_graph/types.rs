@@ -177,7 +177,7 @@ impl GraphResourceClass {
     /// executors cannot disagree about (say) whether the shadow map is a depth
     /// target. Depth-stencil wins over storage wins over render target, since a
     /// target declaring several is used in the most constrained of them.
-    pub const fn for_texture_usage(usage: TextureUsage) -> Self {
+    pub(crate) const fn for_texture_usage(usage: TextureUsage) -> Self {
         if usage.contains(TextureUsage::DEPTH_STENCIL) {
             GraphResourceClass::DepthTarget
         } else if usage.contains(TextureUsage::STORAGE) {
@@ -190,7 +190,7 @@ impl GraphResourceClass {
     /// The class a buffer of `usage` belongs to, on the same declared-usage rule
     /// as [`Self::for_texture_usage`]. Indirect arguments win over the read-write
     /// binding, since a buffer declaring both is consumed as draw arguments.
-    pub const fn for_buffer_usage(usage: BufferUsage) -> Self {
+    pub(crate) const fn for_buffer_usage(usage: BufferUsage) -> Self {
         if usage.contains(BufferUsage::INDIRECT) {
             GraphResourceClass::IndirectBuffer
         } else if usage.contains(BufferUsage::UNORDERED) {
@@ -260,7 +260,7 @@ impl ReadStages {
     /// a render pass that sampled in the vertex / geometry stage would be
     /// labelled FRAGMENT. No graph-driven resource is read that way today; if
     /// one ever is, carry an explicit per-read stage instead of deriving it.
-    pub const fn for_pass_kind(kind: PassKind) -> Self {
+    pub(crate) const fn for_pass_kind(kind: PassKind) -> Self {
         match kind {
             PassKind::Render => Self::FRAGMENT,
             PassKind::Compute => Self::COMPUTE,
@@ -430,7 +430,7 @@ impl PixelFormat {
     /// Bytes per texel (per sample). Used by the aliasing planner to size a
     /// resource's memory footprint. The engine uses only single-plane,
     /// power-of-two formats, so this is one byte count per variant.
-    pub const fn bytes_per_texel(self) -> u32 {
+    pub(crate) const fn bytes_per_texel(self) -> u32 {
         match self {
             PixelFormat::Rgba16Float => 8,
             PixelFormat::Rgba8Unorm
@@ -478,7 +478,7 @@ impl TextureDesc {
     /// A single-sample, single-mip, single-layer 2D texture: the shape almost
     /// every graph target has. The axes that differ are added by the `with_*`
     /// methods below, so a desc that names one is saying something.
-    pub const fn texture_2d(
+    pub(crate) const fn texture_2d(
         width: TextureSize,
         height: TextureSize,
         format: PixelFormat,
@@ -505,7 +505,7 @@ impl TextureDesc {
 
     /// A single-mip 3D texture of `depth` slices (the volumetric-fog froxel
     /// volume). Distinct from an array: the slices are a sampled third axis.
-    pub const fn volume_3d(
+    pub(crate) const fn volume_3d(
         width: TextureSize,
         height: TextureSize,
         depth: u32,
@@ -519,7 +519,7 @@ impl TextureDesc {
     }
 
     /// This desc with the MSAA sample count replaced.
-    pub const fn with_sample_count(self, sample_count: u32) -> Self {
+    pub(crate) const fn with_sample_count(self, sample_count: u32) -> Self {
         Self {
             sample_count,
             ..self
@@ -527,7 +527,7 @@ impl TextureDesc {
     }
 
     /// This desc with the array-layer count replaced.
-    pub const fn with_array_layers(self, array_layers: u32) -> Self {
+    pub(crate) const fn with_array_layers(self, array_layers: u32) -> Self {
         Self {
             array_layers,
             ..self
@@ -535,13 +535,13 @@ impl TextureDesc {
     }
 
     /// This desc with the mip-level count replaced.
-    pub const fn with_mip_levels(self, mip_levels: u32) -> Self {
+    pub(crate) const fn with_mip_levels(self, mip_levels: u32) -> Self {
         Self { mip_levels, ..self }
     }
 
     /// Override the colour a target clears to. Only for a target whose cleared
     /// background carries meaning; see `clear`.
-    pub const fn with_clear_color(self, color: [f32; 4]) -> Self {
+    pub(crate) const fn with_clear_color(self, color: [f32; 4]) -> Self {
         Self {
             clear: ClearValue::Color(color),
             ..self
@@ -626,27 +626,17 @@ impl std::ops::BitOr for TextureUsage {
 pub struct BufferUsage(pub u32);
 
 impl BufferUsage {
-    /// Bound as a uniform buffer.
-    pub const UNIFORM: Self = Self(1 << 0);
     /// Bound for read-write shader storage.
     pub const STORAGE: Self = Self(1 << 1);
-    /// Bound as an index buffer.
-    pub const INDEX: Self = Self(1 << 2);
-    /// Bound as a vertex buffer.
-    pub const VERTEX: Self = Self(1 << 3);
     /// Read as indirect draw / dispatch arguments.
-    pub const INDIRECT: Self = Self(1 << 4);
-    /// Source of a copy.
-    pub const TRANSFER_SRC: Self = Self(1 << 5);
-    /// Destination of a copy.
-    pub const TRANSFER_DST: Self = Self(1 << 6);
+    pub(crate) const INDIRECT: Self = Self(1 << 4);
     /// Consumers access this buffer through the same read-write binding the
     /// producer wrote through, rather than a read-only view of it. It therefore
     /// never transitions to a read state, and ordering between the producer and
     /// the consumer comes from an execution barrier instead of a state change.
     /// The two-pass cull's `cull_status` is the case: both phases bind it the
     /// same way.
-    pub const UNORDERED: Self = Self(1 << 7);
+    pub(crate) const UNORDERED: Self = Self(1 << 7);
 
     /// The empty usage set.
     pub const fn empty() -> Self {
@@ -913,14 +903,14 @@ mod tests {
 
     #[test]
     fn buffer_usage_bitset_ops() {
-        let u = BufferUsage::UNIFORM | BufferUsage::INDEX;
-        assert!(u.contains(BufferUsage::UNIFORM));
-        assert!(u.contains(BufferUsage::INDEX));
-        assert!(!u.contains(BufferUsage::VERTEX));
+        let u = BufferUsage::STORAGE | BufferUsage::INDIRECT;
+        assert!(u.contains(BufferUsage::STORAGE));
+        assert!(u.contains(BufferUsage::INDIRECT));
+        assert!(!u.contains(BufferUsage::UNORDERED));
         assert_eq!(BufferUsage::empty().0, 0);
         assert_eq!(
-            u.union(BufferUsage::VERTEX).0,
-            BufferUsage::UNIFORM.0 | BufferUsage::INDEX.0 | BufferUsage::VERTEX.0
+            u.union(BufferUsage::UNORDERED).0,
+            BufferUsage::STORAGE.0 | BufferUsage::INDIRECT.0 | BufferUsage::UNORDERED.0
         );
     }
 

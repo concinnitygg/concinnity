@@ -7,7 +7,7 @@
 // world-free; the hook owns the entries and `character_shape_panel.rs` the
 // layout.
 
-use crate::assets::{CharacterSchema, JointProportion, ShapePreset, ShapeSlider};
+use crate::components::{CharacterSchema, JointProportion, ShapePreset, ShapeSlider};
 use rand::{Rng, SeedableRng};
 
 // The trailing section for keys and groups the schema does not place.

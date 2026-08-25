@@ -114,7 +114,7 @@ pub(crate) fn apply_effects(world: &mut World, effects: FrameHotReloadEffects) {
                 .map(|u| (u.skinned_index, u.new_skeleton))
                 .collect();
         let mut applied = 0usize;
-        for pose in world.query_mut::<crate::assets::SkeletonPose>() {
+        for pose in world.query_mut::<crate::components::SkeletonPose>() {
             if let Some(new_skel) = index_to_new.get(&pose.skinned_index) {
                 pose.skeleton = new_skel.clone();
                 pose.joint_matrices = pose.skeleton.bind_skinning_matrices();
@@ -133,7 +133,7 @@ pub(crate) fn apply_effects(world: &mut World, effects: FrameHotReloadEffects) {
     // world step, so the swap lands the same frame.
     for story in effects.story_updates {
         world
-            .events_mut::<crate::assets::StoryReload>()
-            .send(crate::assets::StoryReload { story });
+            .events_mut::<crate::components::StoryReload>()
+            .send(crate::components::StoryReload { story });
     }
 }

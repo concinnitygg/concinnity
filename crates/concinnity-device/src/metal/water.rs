@@ -33,7 +33,7 @@ use objc2_metal::{
     MTLVertexStepFunction,
 };
 
-use crate::assets::{MAX_WATER_WAVES, WaterSurface, WaterWave};
+use crate::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use crate::geometry::water_grid::build_water_grid;
 use crate::gfx::mesh_payload::Vertex;
 

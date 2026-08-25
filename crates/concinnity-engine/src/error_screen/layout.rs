@@ -6,7 +6,7 @@
 // not screen-owned: a `Screen` maps through the reference-canvas overlay
 // transform, and this path has no world to own one.
 
-use crate::assets::{TextAlign, TextLabel};
+use crate::components::{TextAlign, TextLabel};
 use crate::ecs::FontHandle;
 use crate::gfx::text::{FontSet, measure_label_box};
 

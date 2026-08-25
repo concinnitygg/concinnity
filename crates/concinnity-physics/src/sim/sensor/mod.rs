@@ -145,15 +145,18 @@ impl Sensors {
         out.append(&mut self.crossings);
     }
 
+    #[cfg(test)]
     /// Crossings and overlaps the reservation had no room for.
     pub(crate) fn overflows(&self) -> u32 {
         self.overflows
     }
 
+    #[cfg(test)]
     pub(crate) fn clear_overflows(&mut self) {
         self.overflows = 0;
     }
 
+    #[cfg(test)]
     /// Pairs currently overlapping.
     pub(crate) fn overlap_count(&self) -> usize {
         self.overlaps.len()

@@ -4,7 +4,7 @@
 // Runs after the mesh import passes so imported targets and skeletons are
 // inline in the args.
 
-use crate::assets::CharacterShape;
+use crate::components::CharacterShape;
 use crate::ecs::Component;
 use concinnity_world::world::WorldJsonlAsset;
 
@@ -92,7 +92,7 @@ pub(crate) fn warn_unresolved(assets: &[WorldJsonlAsset]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{JointProportion, ShapeSlider};
+    use crate::components::{JointProportion, ShapeSlider};
 
     #[test]
     fn names_resolve_against_the_inline_mesh_args() {

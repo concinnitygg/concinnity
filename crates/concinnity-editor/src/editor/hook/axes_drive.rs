@@ -7,7 +7,7 @@
 // off state, and the renderer drops the pass with it.
 
 use super::*;
-use crate::assets::Camera3D;
+use crate::components::Camera3D;
 use concinnity_cpu::gfx::lines::Line;
 
 impl EditorHook {

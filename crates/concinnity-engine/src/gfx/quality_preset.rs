@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::assets::{
+use crate::components::{
     AaMode, ReflectionBlurResolution, ShadowUpdate, SsgiResolution, UpscaleQuality,
 };
 use crate::gfx::backend::{GpuProfile, GpuTier};
@@ -548,7 +548,7 @@ mod tests {
     // actually promises is the cap value itself.
     #[test]
     fn tier_caps_bound_the_shadow_and_texture_knobs() {
-        use crate::assets::ShadowUpdate;
+        use crate::components::ShadowUpdate;
         // No ceiling (Custom / Ultra) leaves a world's authored values alone.
         let none = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
         assert_eq!(none.shadow_map_size, SHADOW_SIZE_MAX);

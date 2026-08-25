@@ -4,7 +4,7 @@
 // vocabulary: the asset data types (PhysicsJoint, Prop, PropBody) turned into
 // the shapes, joint specs and body parameters the simulation is built from.
 
-use concinnity_core::assets::{BodyDynamics, PhysicsJoint, PhysicsJointKind, PropCollider};
+use concinnity_core::components::{BodyDynamics, PhysicsJoint, PhysicsJointKind, PropCollider};
 use concinnity_physics::{ColliderShape, DynamicParams, JointMotor, JointSpec};
 
 // The `JointSpec` a `PhysicsJoint` asset describes, converting authored degrees

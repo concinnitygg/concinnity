@@ -89,7 +89,7 @@ impl RenderBackend for MtlContext {
         fn cursor_outside_window(&self) -> bool;
         fn set_menu_mode(&mut self, on: bool);
         fn set_camera_capture(&mut self, capture: bool);
-        fn set_window_mode(&mut self, mode: crate::assets::WindowMode);
+        fn set_window_mode(&mut self, mode: crate::components::WindowMode);
         fn set_window_size(&mut self, width: u32, height: u32);
         fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode>;
@@ -105,7 +105,7 @@ impl RenderBackend for MtlContext {
         fn update_post_process(&mut self, params: PostProcessParams);
         fn set_ambient_intensity(&mut self, value: f32);
         fn apply_quality_settings(&mut self, settings: QualitySettings);
-        fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate);
+        fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);
         fn set_shadow_cascades(&mut self, count: u32);
         fn update_quality_params(&mut self, settings: QualitySettings);

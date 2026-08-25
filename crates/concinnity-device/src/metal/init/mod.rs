@@ -419,21 +419,25 @@ impl MtlContext {
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        // Flat-normal fallback: the single normal-region texture (1x1 tangent-space
-        // (0,0,1)), sampled by a draw with no normal map. Real normal maps are
-        // textures in `gpu_textures` (the shared pool) at their own handle; only
-        // this fallback lives in `gpu_normal_maps`, one slot past the last texture.
+        // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
+        // the 1x1 tangent-space (0,0,1) texture a draw with no normal map
+        // samples, then the 1x1 white texture a draw with no albedo samples.
+        // Real normal maps and albedos are textures in `gpu_textures` (the
+        // shared pool) at their own handle; only these two live in
+        // `gpu_fallbacks`, past the last real texture.
         let flat_normal = upload_texture(&allocator, 1, 1, &[128u8, 128, 255, 255])
             .map_err(|e| format!("flat normal fallback: {}", e))?;
-        let gpu_normal_maps = vec![flat_normal];
+        let white = upload_texture(&allocator, 1, 1, &[255u8, 255, 255, 255])
+            .map_err(|e| format!("white fallback: {}", e))?;
+        let gpu_fallbacks = vec![flat_normal, white];
 
         // The bindless static pass binds every texture plus the flat-normal
         // fallback into one capped pool. A world that exceeds the cap still
         // renders, but objects whose pool index would overflow get clamped to
         // the last slot.
-        if bindless && gpu_textures.len() + gpu_normal_maps.len() > BINDLESS_TEXTURE_COUNT {
+        if bindless && gpu_textures.len() + gpu_fallbacks.len() > BINDLESS_TEXTURE_COUNT {
             tracing::warn!(
-                "Metal: texture pool ({} textures + flat-normal fallback) exceeds bindless \
+                "Metal: texture pool ({} textures + 2 fallbacks) exceeds bindless \
                  capacity {}; some objects will sample a clamped texture",
                 gpu_textures.len(),
                 BINDLESS_TEXTURE_COUNT,
@@ -1136,7 +1140,7 @@ impl MtlContext {
         // static objects, drawn through the shared cull + indirect path
         // (`build_object_buffer` / `build_draw_args_buffer` re-append these every
         // frame; see `cull_count`). Built once here against the final bindless
-        // pool counts (`gpu_textures` / `gpu_normal_maps`, the same counts the
+        // pool counts (`gpu_textures` / `gpu_fallbacks`, the same counts the
         // static fill uses) via the Metal-local `metal_instance_records`, which
         // addresses the flat pool with Metal's CPU-bias convention (NOT the
         // shared core `instance_object_records`, which is the DX/VK raw-index
@@ -1238,7 +1242,7 @@ impl MtlContext {
             geometry_less,
             allocator,
             textures: gpu_textures,
-            normal_map_textures: gpu_normal_maps,
+            fallback_textures: gpu_fallbacks,
             light_uniforms,
             local_light_buffer,
             sampler,

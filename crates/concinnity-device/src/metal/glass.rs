@@ -17,7 +17,7 @@ use objc2_metal::{
     MTLVertexStepFunction,
 };
 
-use crate::assets::GlassPanel;
+use crate::components::GlassPanel;
 use crate::geometry::glass_quad::build_glass_quad;
 use crate::gfx::mesh_payload::Vertex;
 

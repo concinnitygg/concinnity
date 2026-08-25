@@ -16,7 +16,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDate, NSPoint, NSSize};
 
-use crate::assets::{InputKey, WindowMode};
+use crate::components::{InputKey, WindowMode};
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::keymap::KeyMap;
 

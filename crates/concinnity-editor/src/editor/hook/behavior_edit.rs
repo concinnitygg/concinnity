@@ -18,7 +18,7 @@
 
 use std::sync::OnceLock;
 
-use concinnity_world::registry::ComponentType;
+use concinnity_world::registry::RegisteredType;
 use serde_json::Value;
 
 use super::*;
@@ -73,7 +73,7 @@ fn component_names() -> &'static [&'static str] {
     static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
     NAMES.get_or_init(|| {
         let mut names: Vec<&'static str> =
-            ComponentType::all().iter().map(|t| t.as_str()).collect();
+            RegisteredType::all().iter().map(|t| t.as_str()).collect();
         names.sort_unstable();
         names
     })

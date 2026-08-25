@@ -9,9 +9,9 @@
 //! Two further inputs a payload depends on are derived by the crates that own
 //! them and folded in by `cache.rs`: the payload format helpers shared with the
 //! runtime (`concinnity_cpu::BUILD_SOURCE_HASH`) and the postcard-visible asset
-//! schema (`concinnity_blob::SCHEMA_HASH`). Each crate hashes its own sources so
-//! that a build from a registry checkout, which has no sibling directories to
-//! read, derives the same value.
+//! schema (`concinnity_core::SCHEMA_HASH`). Each crate hashes its own sources
+//! so that a build from a registry checkout, which has no sibling directories
+//! to read, derives the same value.
 
 use std::path::PathBuf;
 

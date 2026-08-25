@@ -153,7 +153,10 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Resul
     let renders = app.world().renders();
 
     if let Some(max) = options.max_frames {
-        for config in app.world_mut().query_mut::<crate::assets::GraphicsConfig>() {
+        for config in app
+            .world_mut()
+            .query_mut::<crate::components::GraphicsConfig>()
+        {
             config.max_frames = Some(max);
         }
     }

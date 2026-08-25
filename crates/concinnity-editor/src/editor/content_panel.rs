@@ -247,7 +247,7 @@ fn place_cell(world: &mut World, slot: usize, cell: &CellView, o: [f32; 2], mous
                 l.color = [tint[0], tint[1], tint[2]];
                 l.x = area[0] + area[2] * 0.5;
                 l.y = area[1] + (area[3] - widget::LINE_H) * 0.5;
-                l.align = crate::assets::TextAlign::Center;
+                l.align = crate::components::TextAlign::Center;
                 l.visible = true;
             }
         }

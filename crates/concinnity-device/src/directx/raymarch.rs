@@ -50,7 +50,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
-use crate::assets::sdf_volume::SdfVolume;
+use crate::components::sdf_volume::SdfVolume;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{
@@ -92,9 +92,8 @@ fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
 }
 
 // Per-`SdfVolume` GPU state: the compiled render pipeline, the static
-// per-volume cbuffer (uploaded once at init), the optional shadow-cast
-// PSO, and a couple of asset-side scalars kept around for a future
-// CPU frustum cull.
+// per-volume cbuffer (uploaded once at init) and the optional
+// shadow-cast PSO.
 pub(in crate::directx) struct RaymarchVolumeRecord {
     pub(in crate::directx) pso: ID3D12PipelineState,
     // Depth-only shadow PSO. `Some` when the asset's `cast_shadows`
@@ -103,27 +102,18 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     // runtime flag, currently can't toggle, but the field is
     // preserved for future runtime mutation).
     pub(in crate::directx) shadow_pso: Option<ID3D12PipelineState>,
-    // Per-volume cbuffer (CPU-visible upload heap, mapped once at
-    // build time, never modified: the asset's centre / extent / params
-    // are static).
+    // Per-volume cbuffer (CPU-visible upload heap, written once at build
+    // time and never modified: the asset's centre / extent / params are
+    // static). Held because `volume_cbuffer_gva` below is only valid while
+    // this buffer is alive.
     #[expect(
         dead_code,
-        reason = "mapped once at build time and never re-read; the encoder binds volume_cbuffer_gva"
+        reason = "held to keep the GPU memory alive; the encoder binds through volume_cbuffer_gva"
     )]
     volume_cbuffer: PooledBuffer,
     pub(in crate::directx) volume_cbuffer_gva: u64,
     pub(in crate::directx) visible: bool,
     pub(in crate::directx) cast_shadows: bool,
-    #[expect(
-        dead_code,
-        reason = "preserved for a future runtime re-place; the encoder reads the cbuffer copy"
-    )]
-    pub(in crate::directx) world_centre: [f32; 3],
-    #[expect(
-        dead_code,
-        reason = "preserved for a future runtime re-place; the encoder reads the cbuffer copy"
-    )]
-    pub(in crate::directx) world_extent: [f32; 3],
 }
 
 // Engine-side raymarch resources: shared cube buffers, per-frame view
@@ -159,9 +149,7 @@ pub(in crate::directx) struct RaymarchResources {
     // 1×1 white fallback for the `scene_color` SRV slot, kept around
     // only to hold a resource open while init runs; the live SRV at
     // `scene_color_srv_cpu` is rewritten to point at `hdr_resolve_copy`
-    // (below) before the first frame. Lives in case a future per-volume
-    // "no refraction needed" opt-out wants to re-point the slot at a
-    // constant tap.
+    // (below) before the first frame.
     #[expect(
         dead_code,
         reason = "holds the scene_color slot open during init; the live SRV is re-pointed before the first frame"
@@ -1159,8 +1147,6 @@ impl RaymarchResources {
                 volume_cbuffer_gva: gva,
                 visible: vol.visible,
                 cast_shadows: vol.cast_shadows,
-                world_centre: vol.centre,
-                world_extent: vol.extent,
             });
         }
 

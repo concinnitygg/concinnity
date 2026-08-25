@@ -11,7 +11,7 @@
 //! morph kernels, the raymarch SDF templates, the legacy per-draw main and
 //! velocity passes, and Metal's water / glass_mesh_rt.
 
-use crate::assets::sdf_volume::SDF_PARAMS_LEN;
+use crate::components::sdf_volume::SDF_PARAMS_LEN;
 
 /// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalised
 /// frustum planes, the camera position sharing its row with the object count, the

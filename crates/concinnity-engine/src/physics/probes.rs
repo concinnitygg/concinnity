@@ -6,7 +6,7 @@
 // writer (the probing systems run after physics), which is invisible at
 // frame rates.
 
-use concinnity_core::assets::{AudioOcclusionProbe, CameraProbe, GroundProbes};
+use concinnity_core::components::{AudioOcclusionProbe, CameraProbe, GroundProbes};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_physics::{LayerMask, Simulation};
 

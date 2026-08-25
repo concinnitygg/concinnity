@@ -8,7 +8,7 @@ mod focus;
 mod screen;
 mod scroll_layout;
 
-use crate::assets::{
+use crate::components::{
     FrameInput, HitRegion, InputKey, KeyBinding, NavDirection, SceneCommand, Screen, ScreenCommand,
     ScreenShown, ScrollPanel, SettingCommand, SettingOp, Sprite, SpriteFit, StoryCommand,
     TextLabel,
@@ -313,11 +313,11 @@ impl UiInputSystem {
 impl System for UiInputSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .reads_components(crate::component_mask![crate::components::FrameInput])
             .writes_components(crate::component_mask![
-                crate::assets::TextLabel,
-                crate::assets::Sprite,
-                crate::assets::TextInput,
+                crate::components::TextLabel,
+                crate::components::Sprite,
+                crate::components::TextInput,
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::DisabledSettingRows,
@@ -326,11 +326,11 @@ impl System for UiInputSystem {
             .writes_resources(crate::resource_mask![
                 crate::ecs::OpenDropdown,
                 crate::ecs::ScreenStack,
-                crate::assets::ScreenCommand,
-                crate::assets::ScreenShown,
-                crate::assets::SettingCommand,
-                crate::assets::SceneCommand,
-                crate::assets::StoryCommand,
+                crate::components::ScreenCommand,
+                crate::components::ScreenShown,
+                crate::components::SettingCommand,
+                crate::components::SceneCommand,
+                crate::components::StoryCommand,
             ])
     }
 
@@ -427,7 +427,7 @@ impl System for UiInputSystem {
                     .push(l.asset_id);
             }
         }
-        for t in ctx.query::<crate::assets::TextInput>() {
+        for t in ctx.query::<crate::components::TextInput>() {
             if let Some(screen_id) = t.screen {
                 self.text_inputs_by_screen
                     .entry(screen_id)
@@ -464,7 +464,7 @@ impl System for UiInputSystem {
         }
         for ids in self.text_inputs_by_screen.values() {
             for &id in ids {
-                for ti in ctx.query_mut::<crate::assets::TextInput>() {
+                for ti in ctx.query_mut::<crate::components::TextInput>() {
                     if ti.asset_id == id {
                         ti.visible = false;
                         break;
@@ -515,7 +515,7 @@ impl System for UiInputSystem {
         // the field: ordinary KeyBindings and the focus pulses are suspended
         // so typing cannot fire actions (screen toggles below stay live).
         let typing = ctx
-            .query::<crate::assets::TextInput>()
+            .query::<crate::components::TextInput>()
             .any(|t| t.visible && t.focused);
 
         // The pad's menu pulses engage only while a capturing screen is
@@ -1379,7 +1379,7 @@ impl UiInputSystem {
                 .new_top
                 .and_then(|id| self.screens.meta(id))
                 .and_then(|m| m.focus);
-            for ti in ctx.query_mut::<crate::assets::TextInput>() {
+            for ti in ctx.query_mut::<crate::components::TextInput>() {
                 ti.focused = Some(ti.asset_id) == focus;
             }
         }
@@ -1433,7 +1433,7 @@ impl UiInputSystem {
         }
         if let Some(ids) = self.text_inputs_by_screen.get(&screen_id) {
             for &id in ids {
-                for ti in ctx.query_mut::<crate::assets::TextInput>() {
+                for ti in ctx.query_mut::<crate::components::TextInput>() {
                     if ti.asset_id == id {
                         ti.visible = visible;
                         break;
@@ -1908,7 +1908,7 @@ mod tests {
     // (HitRegion / Screen / KeyBinding) before `world.start()`, which constructs
     // the system from them via the build schedule.
     use super::*;
-    use crate::assets::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
+    use crate::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
     use crate::ecs::World;
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
@@ -1952,8 +1952,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1984,8 +1984,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2006,7 +2006,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2065,8 +2065,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2087,7 +2087,7 @@ mod tests {
             screen: Some(menu),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2139,8 +2139,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2162,7 +2162,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         (world, screen)
@@ -2230,8 +2230,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2252,7 +2252,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.insert_resource(crate::ecs::DisplayModes(modes));
@@ -2475,8 +2475,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 0.66,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2498,7 +2498,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2531,7 +2531,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2561,7 +2561,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2593,7 +2593,7 @@ mod tests {
             follow_cursor: false,
             visible: true, // intentionally true to confirm init hides it
             screen: Some(screen_id),
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
             corner_radius: 0.0,
             border_width: 0.0,
             border_color: [0.0, 0.0, 0.0, 1.0],
@@ -2675,7 +2675,7 @@ mod tests {
             screen: Some(screen_id),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         world
@@ -2732,7 +2732,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2769,7 +2769,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2794,7 +2794,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2817,7 +2817,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2845,7 +2845,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2893,7 +2893,7 @@ mod tests {
             screen: None,
             disabled: true,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2925,7 +2925,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -2959,7 +2959,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -3032,7 +3032,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         // Body click region (a settings action; a content region, so it is
         // bucketed into its row and gated by the collapse).
@@ -3049,7 +3049,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.add_component(ScrollPanel {
             screen: Some(screen),
@@ -3207,7 +3207,7 @@ mod tests {
                 screen: Some(screen),
                 disabled: false,
                 follow_label: false,
-                fit: crate::assets::SpriteFit::Fit,
+                fit: crate::components::SpriteFit::Fit,
             });
         }
         world.add_component(ScrollPanel {
@@ -3338,8 +3338,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -3360,7 +3360,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
         (world, value)
@@ -3370,7 +3370,7 @@ mod tests {
     // command fires); the next pressed key binds it via a Rebind SettingCommand.
     #[test]
     fn rebind_click_captures_then_binds_next_key() {
-        use crate::assets::InputKey;
+        use crate::components::InputKey;
         let (mut world, value) = rebind_world();
 
         // Click the rebind row: enters capture, value shows the prompt, and no
@@ -3426,7 +3426,7 @@ mod tests {
     // A captured key with no active capture binds nothing.
     #[test]
     fn captured_key_without_capture_is_ignored() {
-        use crate::assets::InputKey;
+        use crate::components::InputKey;
         let (mut world, _value) = rebind_world();
         world.add_component(FrameInput {
             captured_key: Some(InputKey::Q),
@@ -3599,7 +3599,7 @@ mod tests {
                 follow_cursor: false,
                 visible: false,
                 screen: Some(screen),
-                fit: crate::assets::SpriteFit::Fit,
+                fit: crate::components::SpriteFit::Fit,
                 corner_radius: 0.0,
                 border_width: 0.0,
                 border_color: [0.0, 0.0, 0.0, 1.0],
@@ -3712,7 +3712,7 @@ mod tests {
             focus: Some(AssetId(91)),
             ..Default::default()
         });
-        world.add_component(crate::assets::TextInput {
+        world.add_component(crate::components::TextInput {
             asset_id: AssetId(91),
             visible: true,
             screen: Some(AssetId(90)),
@@ -3720,7 +3720,7 @@ mod tests {
         });
         world.start().unwrap();
         let focused = |w: &World| {
-            w.query::<crate::assets::TextInput>()
+            w.query::<crate::components::TextInput>()
                 .find(|t| t.asset_id == AssetId(91))
                 .map(|t| (t.visible, t.focused))
                 .unwrap()
@@ -3756,7 +3756,7 @@ mod tests {
             action: "screen:toggle:100".to_string(),
             ..Default::default()
         });
-        let mut field = crate::assets::TextInput {
+        let mut field = crate::components::TextInput {
             asset_id: AssetId(101),
             visible: true,
             ..Default::default()
@@ -3776,7 +3776,7 @@ mod tests {
         );
 
         // Blur the field: the same key now fires the binding.
-        for ti in world.query_mut::<crate::assets::TextInput>() {
+        for ti in world.query_mut::<crate::components::TextInput>() {
             ti.focused = false;
         }
         world.add_component(FrameInput {
@@ -4009,7 +4009,7 @@ mod tests {
                 screen: Some(menu),
                 disabled: false,
                 follow_label: false,
-                fit: crate::assets::SpriteFit::Fit,
+                fit: crate::components::SpriteFit::Fit,
             });
         }
         world.start().unwrap();
@@ -4132,7 +4132,7 @@ mod tests {
                 screen: Some(screen),
                 disabled: false,
                 follow_label: false,
-                fit: crate::assets::SpriteFit::Fit,
+                fit: crate::components::SpriteFit::Fit,
             });
         }
         world.add_component(HitRegion {
@@ -4148,7 +4148,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -4287,7 +4287,7 @@ mod tests {
             screen: Some(stage),
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -4326,7 +4326,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
         });
         world.start().unwrap();
 
@@ -4336,7 +4336,7 @@ mod tests {
 
         // Press East (which also raises the back pulse): it binds.
         world.add_component(FrameInput {
-            captured_button: Some(crate::assets::GamepadButton::East),
+            captured_button: Some(crate::components::GamepadButton::East),
             back: true,
             ..Default::default()
         });
@@ -4346,7 +4346,7 @@ mod tests {
         assert_eq!(cmds[0].setting, "pad_jump");
         assert!(matches!(
             cmds[0].op,
-            SettingOp::RebindButton(crate::assets::GamepadButton::East)
+            SettingOp::RebindButton(crate::components::GamepadButton::East)
         ));
     }
 }

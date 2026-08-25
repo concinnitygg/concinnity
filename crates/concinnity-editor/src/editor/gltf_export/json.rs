@@ -8,7 +8,7 @@
 use serde_json::{Value, json};
 
 use super::buffer::BinBuffer;
-use crate::assets::SkeletonJoint;
+use crate::components::SkeletonJoint;
 use concinnity_core::gfx::transform::{decompose, trs_matrix};
 
 // Accessor indices for one mesh, as returned by the `BinBuffer` pushes.

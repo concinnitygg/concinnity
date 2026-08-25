@@ -172,7 +172,7 @@ impl EditorHook {
 
     // Enter in the focused path field adds, like clicking the Add button.
     pub(super) fn import_keys(&mut self, world: &mut World, input: &FrameInput) {
-        if self.import_focus && input.captured_key == Some(crate::assets::InputKey::Enter) {
+        if self.import_focus && input.captured_key == Some(crate::components::InputKey::Enter) {
             self.add_import(world);
         }
     }

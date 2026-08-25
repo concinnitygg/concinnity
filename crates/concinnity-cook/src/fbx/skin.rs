@@ -18,7 +18,7 @@ use super::{
     arr_f64, arr_i32, attr_i64, attr_str, local_matrices, node_scene_local, object_id, object_name,
     transform_point,
 };
-use crate::assets::{SkeletonJoint, SkinnedVertexData, VertexData};
+use crate::components::{SkeletonJoint, SkinnedVertexData, VertexData};
 use crate::gfx::skinning::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
 };

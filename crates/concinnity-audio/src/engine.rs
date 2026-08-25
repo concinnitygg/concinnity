@@ -20,7 +20,7 @@ use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::track::{SpatialTrackBuilder, SpatialTrackHandle, TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, Tween};
 
-use concinnity_core::assets::{AudioBus, AudioTarget, Rolloff};
+use concinnity_core::components::{AudioBus, AudioTarget, Rolloff};
 
 use crate::clips::{ClipState, ClipStore, PendingPlay};
 use crate::decode::DecodeWorker;

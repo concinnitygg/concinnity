@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_ESCAPE, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::assets::WindowMode;
+use crate::components::WindowMode;
 
 use super::chrome::windowed_style;
 use super::input::*;

@@ -365,7 +365,7 @@ mod tests {
     }
 
     fn identity() -> [[f32; 4]; 4] {
-        crate::assets::Transform::default().model_matrix()
+        crate::components::Transform::default().model_matrix()
     }
 
     // Every endpoint of every emitted segment, for on-surface assertions.
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn box_edges_span_the_transformed_extents() {
         let mut out = Vec::new();
-        let model = crate::assets::Transform {
+        let model = crate::components::Transform {
             position: [10.0, 0.0, 0.0],
             rotation_deg: [0.0, 90.0, 0.0],
             scale: [1.0; 3],

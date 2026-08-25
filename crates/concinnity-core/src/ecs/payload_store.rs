@@ -2,8 +2,8 @@
 //
 // Systems reach compiled binary payloads through this trait, not a concrete
 // store, so the ECS mechanism carries no dependency on blob file I/O or the
-// `.concinnity/` layout. The runtime implementor is `concinnity_blob`-backed
-// `BlobData` in `crate::blob`; tests supply their own.
+// `.concinnity/` layout. The runtime implementor is the `BlobData` that
+// concinnity-store builds over `crate::blob`; tests supply their own.
 
 use crate::ecs::PayloadLocator;
 use crate::result::CnResult;

@@ -6,7 +6,7 @@
 // and the providers are tested beside them in `editor/palette/`.
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use crate::editor::palette::{Category, PaletteAction};
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
@@ -17,7 +17,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 fn palette_world() -> World {
     let mut world = World::new();
     for id in palette_panel::all_field_ids() {
-        world.add_component(crate::assets::TextInput {
+        world.add_component(crate::components::TextInput {
             asset_id: id,
             ..Default::default()
         });

@@ -26,6 +26,8 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+#[cfg(test)]
+mod bench;
 mod budget;
 mod character;
 mod events;
@@ -34,6 +36,8 @@ mod handle;
 mod joints;
 mod layers;
 mod sim;
+#[cfg(test)]
+mod tests;
 mod types;
 
 pub use budget::{PhysicsBudget, PhysicsCounts};
@@ -44,8 +48,8 @@ pub use handle::BodyHandle;
 pub use joints::{JointMotor, JointSpec};
 pub use layers::LayerMask;
 pub use sim::{
-    CharacterCapsule, CharacterConfig, ShapeCast, ShapeCastHit, SimConfig, Simulation,
-    euler_deg_from_quat, quat_from_euler_deg,
+    CharacterCapsule, ShapeCast, ShapeCastHit, SimConfig, Simulation, euler_deg_from_quat,
+    quat_from_euler_deg,
 };
 pub use types::{ColliderShape, DynamicParams};
 

@@ -479,8 +479,8 @@ pub(super) fn handle_quality_set(text: &str) -> String {
         return error_reply("quality-set: missing 'setting'");
     }
     let op = match req.op.as_str() {
-        "next" | "" => crate::assets::SettingOp::Next,
-        "prev" => crate::assets::SettingOp::Prev,
+        "next" | "" => crate::components::SettingOp::Next,
+        "prev" => crate::components::SettingOp::Prev,
         other => {
             return error_reply(&format!(
                 "quality-set: unknown op '{other}' (use next | prev)"
@@ -528,7 +528,7 @@ pub(super) fn handle_rebind(text: &str) -> String {
     }
     // The canonical `InputKey` serializes to its variant name, so a JSON string
     // deserializes straight to it (W, Space, Shift, Num1, Up, ...).
-    let key: crate::assets::InputKey =
+    let key: crate::components::InputKey =
         match serde_json::from_value(serde_json::Value::String(req.key.clone())) {
             Ok(k) => k,
             Err(_) => {
@@ -610,19 +610,19 @@ pub(super) fn handle_story(text: &str) -> String {
         Err(reply) => return reply,
     };
     let command = match req.action.as_str() {
-        "start" => crate::assets::StoryCommand::Start,
-        "continue" => crate::assets::StoryCommand::Continue,
-        "advance" => crate::assets::StoryCommand::Advance,
-        "choose" => crate::assets::StoryCommand::Choose(req.option),
-        "auto" => crate::assets::StoryCommand::ToggleAuto,
-        "skip" => crate::assets::StoryCommand::ToggleSkip,
-        "log" => crate::assets::StoryCommand::ToggleLog,
-        "save" => crate::assets::StoryCommand::OpenSave,
-        "load" => crate::assets::StoryCommand::OpenLoad,
-        "slot" => crate::assets::StoryCommand::Slot(req.option),
-        "pause" => crate::assets::StoryCommand::TogglePause,
-        "settings" => crate::assets::StoryCommand::OpenSettings,
-        "settings_back" => crate::assets::StoryCommand::CloseSettings,
+        "start" => crate::components::StoryCommand::Start,
+        "continue" => crate::components::StoryCommand::Continue,
+        "advance" => crate::components::StoryCommand::Advance,
+        "choose" => crate::components::StoryCommand::Choose(req.option),
+        "auto" => crate::components::StoryCommand::ToggleAuto,
+        "skip" => crate::components::StoryCommand::ToggleSkip,
+        "log" => crate::components::StoryCommand::ToggleLog,
+        "save" => crate::components::StoryCommand::OpenSave,
+        "load" => crate::components::StoryCommand::OpenLoad,
+        "slot" => crate::components::StoryCommand::Slot(req.option),
+        "pause" => crate::components::StoryCommand::TogglePause,
+        "settings" => crate::components::StoryCommand::OpenSettings,
+        "settings_back" => crate::components::StoryCommand::CloseSettings,
         other => return error_reply(&format!("story: unknown action '{other}'")),
     };
     run_with_reply(
@@ -1531,7 +1531,7 @@ mod tests {
             |cmd| match cmd {
                 RuntimeCommand::QualitySet { setting, op, reply } => {
                     assert_eq!(setting, "taa");
-                    assert_eq!(op, crate::assets::SettingOp::Prev);
+                    assert_eq!(op, crate::components::SettingOp::Prev);
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1545,7 +1545,7 @@ mod tests {
             || handle_quality_set(r#"{"setting":"ssao"}"#),
             |cmd| match cmd {
                 RuntimeCommand::QualitySet { op, reply, .. } => {
-                    assert_eq!(op, crate::assets::SettingOp::Next);
+                    assert_eq!(op, crate::components::SettingOp::Next);
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1567,7 +1567,7 @@ mod tests {
                     reply,
                 } => {
                     assert_eq!(setting, "key_forward");
-                    assert_eq!(key, crate::assets::InputKey::Space);
+                    assert_eq!(key, crate::components::InputKey::Space);
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1596,7 +1596,7 @@ mod tests {
 
     #[test]
     fn story_maps_every_action_to_its_command() {
-        use crate::assets::StoryCommand;
+        use crate::components::StoryCommand;
         let _guard = test_support::lock();
         let cases = [
             ("start", StoryCommand::Start),
@@ -1630,7 +1630,7 @@ mod tests {
 
     #[test]
     fn story_choose_and_slot_carry_the_option_index() {
-        use crate::assets::StoryCommand;
+        use crate::components::StoryCommand;
         let _guard = test_support::lock();
         for (action, expected) in [
             ("choose", StoryCommand::Choose(2)),
@@ -1730,9 +1730,9 @@ mod tests {
     // can drain. Drive a real system built from a small world while the
     // handler blocks, exactly as the per-frame debug drive would.
 
-    fn anim_clip(name: &str, duration: f32) -> crate::assets::Animation {
+    fn anim_clip(name: &str, duration: f32) -> crate::components::Animation {
         crate::ecs::asset_id::ensure_name_resolver();
-        let mut a: crate::assets::Animation = serde_json::from_value(serde_json::json!({
+        let mut a: crate::components::Animation = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": duration,
             "looping": true,
@@ -1742,9 +1742,9 @@ mod tests {
         a
     }
 
-    fn hero_graph() -> crate::assets::AnimationGraph {
+    fn hero_graph() -> crate::components::AnimationGraph {
         crate::ecs::asset_id::ensure_name_resolver();
-        let mut g: crate::assets::AnimationGraph = serde_json::from_value(serde_json::json!({
+        let mut g: crate::components::AnimationGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",

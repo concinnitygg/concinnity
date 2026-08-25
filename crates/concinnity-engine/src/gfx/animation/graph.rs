@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::assets::{AnimationGraph, AnimationParams};
+use crate::components::{AnimationGraph, AnimationParams};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::anim_graph::{CompiledGraph, GraphCursor};
@@ -82,7 +82,7 @@ pub(super) fn install_graphs(
                 let chains = if g.ik_chains.is_empty() {
                     Vec::new()
                 } else if let Some(skeleton) = ctx
-                    .query::<crate::assets::SkeletonPose>()
+                    .query::<crate::components::SkeletonPose>()
                     .find(|p| p.mesh_id == target)
                     .map(|p| p.skeleton.clone())
                 {
@@ -97,7 +97,7 @@ pub(super) fn install_graphs(
                     Vec::new()
                 };
                 if !chains.is_empty() {
-                    ctx.push(crate::assets::GroundProbes {
+                    ctx.push(crate::components::GroundProbes {
                         target,
                         probes: Vec::new(),
                     });
@@ -339,7 +339,7 @@ mod tests {
             "seeded from the declared default"
         );
         assert_eq!(
-            w.count::<crate::assets::GroundProbes>(),
+            w.count::<crate::components::GroundProbes>(),
             0,
             "no chains, no probe exchange"
         );
@@ -365,7 +365,7 @@ mod tests {
             panic!("graph installed");
         };
         assert!(g.chains.is_empty(), "IK disabled without a skeleton");
-        assert_eq!(w.count::<crate::assets::GroundProbes>(), 0);
+        assert_eq!(w.count::<crate::components::GroundProbes>(), 0);
     }
 
     // A graph bucket parked at its initial state, for driving `step_target`.

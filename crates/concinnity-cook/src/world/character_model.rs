@@ -7,8 +7,8 @@
 // CharacterShape or Animation target either.
 
 use super::expand::{asset_name, type_norm};
-use crate::assets::CharacterModel;
 use crate::character::import::CharacterModelArg;
+use crate::components::CharacterModel;
 use concinnity_world::world::WorldJsonlAsset;
 
 // The fields a CharacterModel shares with the SkinnedMesh it becomes.

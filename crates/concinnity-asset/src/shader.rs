@@ -58,25 +58,7 @@ pub struct StageSource {
     pub sources: Option<BTreeMap<String, String>>,
 }
 
-impl StageSource {
-    /// A stage source declaring per-platform paths.
-    pub fn per_platform<I, K, V>(entries: I) -> Self
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<String>,
-    {
-        Self {
-            source: String::new(),
-            sources: Some(
-                entries
-                    .into_iter()
-                    .map(|(k, v)| (k.into(), v.into()))
-                    .collect(),
-            ),
-        }
-    }
-}
+impl StageSource {}
 
 /// Declares a custom shader program: the vertex and fragment stages, plus the
 /// optional GPU-instanced vertex stage.
@@ -273,20 +255,6 @@ mod tests {
             serde_json::to_string(&ShaderKind::VertexInstanced).unwrap(),
             r#""vertex_instanced""#
         );
-    }
-
-    #[test]
-    fn per_platform_collects_the_declared_source_paths() {
-        let stage = StageSource::per_platform([
-            ("metal", "my.metal"),
-            ("hlsl", "my_vert.hlsl"),
-            ("glsl", "my.vert"),
-        ]);
-        assert!(stage.source.is_empty());
-        let sources = stage.sources.expect("per-platform sources");
-        assert_eq!(sources.len(), 3);
-        assert_eq!(sources["metal"], "my.metal");
-        assert_eq!(sources["glsl"], "my.vert");
     }
 
     #[test]

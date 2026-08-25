@@ -209,8 +209,8 @@ impl concinnity_core::ecs::PayloadStore for BlobData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_blob::{BlobMeta, encode_cnb};
     use concinnity_core::SCHEMA_HASH;
+    use concinnity_core::blob::{BlobMeta, encode_cnb};
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
         PayloadLocator {

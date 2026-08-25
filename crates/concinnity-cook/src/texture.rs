@@ -24,7 +24,7 @@
 // gltf crates.
 use serde::Deserialize;
 
-use concinnity_core::assets::Texture;
+use concinnity_core::components::Texture;
 use concinnity_cpu::build::texture::{
     TextureFormat, TextureImage, TextureMip, downscale_rgba, serialise,
 };

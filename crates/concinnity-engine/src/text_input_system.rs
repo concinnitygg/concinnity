@@ -7,7 +7,7 @@
 // (runtime-only fields), so the renderer and any reader see the edited text in
 // place.
 
-use crate::assets::{FrameInput, InputKey, SpriteFit, TextInput};
+use crate::components::{FrameInput, InputKey, SpriteFit, TextInput};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use concinnity_core::gfx::overlay::OverlayTransform;
@@ -109,8 +109,8 @@ impl TextInputSystem {
 impl System for TextInputSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::assets::FrameInput])
-            .writes_components(crate::component_mask![crate::assets::TextInput])
+            .reads_components(crate::component_mask![crate::components::FrameInput])
+            .writes_components(crate::component_mask![crate::components::TextInput])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {

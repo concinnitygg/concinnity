@@ -5,7 +5,7 @@
 // contributed lingers in any pass. Driven by DespawnRequest events SpawnSystem
 // drains each step (see mod.rs), and by the Lifetime expiries it ticks.
 
-use crate::assets::{Children, RenderHandle, SkeletonPose};
+use crate::components::{Children, RenderHandle, SkeletonPose};
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::ops::RenderOps;
 use crate::gfx::render_slots::RenderSlots;
@@ -94,8 +94,8 @@ pub(super) fn despawn_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Parent, Transform};
     use crate::blob::BlobData;
+    use crate::components::{Parent, Transform};
     use crate::ecs::{ComponentStorage, Resources};
     use crate::gfx::profile::FrameProfile;
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn despawn_retires_a_skinned_instance_slot() {
-        use crate::assets::SkeletonPose;
+        use crate::components::SkeletonPose;
         use crate::gfx::skinning::Skeleton;
         run(|ctx| {
             // A skinned entity carries a SkeletonPose (no RenderHandle); its

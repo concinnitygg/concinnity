@@ -17,7 +17,7 @@
 use serde_json::Value;
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use crate::editor::behavior::edit;
 use crate::editor::behavior::palette;
 use crate::editor::behavior::relations;

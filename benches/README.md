@@ -16,21 +16,14 @@ numbers agree with what the engine's own readouts would say.
 ## Running
 
 ```
-cargo bench -p concinnity-bench                     # every target
-cargo bench -p concinnity-bench --bench ecs         # one target
-cargo bench -p concinnity-bench --bench ecs -- join # substring filter
-cargo bench -p concinnity-bench -- --json out.json  # machine-readable report
+cargo bench -p concinnity-bench                      # every target
+cargo bench -p concinnity-bench --bench cook         # one target
+cargo bench -p concinnity-bench --bench cook -- 10k  # substring filter
+cargo bench -p concinnity-bench -- --json out.json   # machine-readable report
 ```
 
 ## Targets
 
-- `ecs`: the EAS storage primitives. Spawn and despawn churn, dense column
-  scans, two- and three-way joins (partner columns shuffled so probes pay a
-  real scattered read), targeted lookups, deferred command record and apply,
-  sparse-column churn, and the event queue.
-- `memory`: the allocation layer. Frame arena against the heap path it
-  replaces, pool churn, the inline-vec single-element case, and ledger report
-  cost.
 - `cook`: the world cook and blob load path. Front-half parse + expand +
   validate, the full in-memory compile, and the blob encode / parse pair, on
   a procedural prop world at 1k and 10k entities. The payload cache is
@@ -41,24 +34,54 @@ cargo bench -p concinnity-bench -- --json out.json  # machine-readable report
   blending, skinning-matrix resolution, the composed two-clip per-character
   cost, and the two-bone IK solve.
 - `engine`: the engine's public `World` surface, against the real registered
-  component set rather than the `ecs` target's synthetic three. World
-  populate (with and without the manifest pre-size), column iteration,
-  targeted lookups, and column drain. `World::despawn` is `#[cfg(test)]`
-  and so is not reachable here.
+  component set rather than the synthetic three the in-crate storage
+  benchmarks use. World populate (with and without the manifest pre-size),
+  column iteration, targeted lookups, and column drain. `World::despawn` is
+  `#[cfg(test)]` and so is not reachable here.
 - `render`: the GPU-free render-prep layer. BVH build and frustum query
   over a 10k-object scene, light packing for the clustered forward pass,
   the streaming planner's per-frame re-rank under sustained pool pressure
   (churn asserted), and draw-slot recycling. No backend is involved.
-- `physics`: the engine's rigid-body simulation. Stepping benches rebuild an
-  identical stacked world and step it a fixed count per iteration, so the
+
+## In-crate benchmarks
+
+Some benchmarks live in the crate they measure rather than here, because the
+macro or the private type they drive is expanded by its consumers rather than
+called across a crate boundary. They run as ignored tests, and report through
+the same `Bench::run` instrument:
+
+- the ECS storage primitives (`concinnity-core`). Spawn and despawn churn,
+  dense column scans, two- and three-way joins (partner columns shuffled so
+  probes pay a real scattered read), targeted lookups, and the event queue;
+  plus the three-way join comparison that sized the draw-list build path.
+
+  ```
+  cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 bench_storage
+  cargo test -p concinnity-core --release -- --ignored --nocapture join_probe
+  ```
+
+- the allocation layer (`concinnity-memory`). Frame arena against the heap
+  path it replaces, pool churn, the inline-vec single-element case, and ledger
+  report cost.
+
+  ```
+  cargo test -p concinnity-memory --release -- --ignored --nocapture --test-threads=1 bench_allocation_layer
+  ```
+
+- the rigid-body simulation (`concinnity-physics`). Stepping benches rebuild
+  an identical stacked world and step it a fixed count per iteration, so the
   measured work is bit-identical run to run (asserted, so a change that breaks
-  determinism fails loudly): sustained-contact settling, contact-free fall,
-  the sleeping-island idle step, world build, body churn, joints, sensor
-  regions, contact reporting, terrain, raycasts, shape casts, and the
-  character-move solve. Stepping is measured on the engine's job pool, the way
-  the driver runs it; the `_serial` twins step the same world on the calling
-  thread, so a pair reads as the scaling the split bought. Both must land in
-  the same place, which the determinism assertion checks.
+  determinism fails loudly): sustained-contact settling, contact-free fall, the
+  sleeping-island idle step, world build, body churn, joints, sensor regions,
+  contact reporting, terrain, raycasts, shape casts, and the character-move
+  solve. Stepping is measured on the engine's job pool, the way the driver runs
+  it; the `_serial` twins step the same world on the calling thread, so a pair
+  reads as the scaling the split bought. Both must land in the same place,
+  which the determinism assertion checks.
+
+  ```
+  cargo test -p concinnity-physics --release -- --ignored --nocapture --test-threads=1 bench
+  ```
 
 ## Reading the report
 

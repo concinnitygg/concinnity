@@ -35,7 +35,7 @@
 use serde::Deserialize;
 
 use crate::hdr::{HdrImage, equirect_to_cube};
-use concinnity_core::assets::EnvironmentMap;
+use concinnity_core::components::EnvironmentMap;
 use concinnity_cpu::build::environment_map::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, compute_irradiance,
     compute_prefilter, max_mip_count, serialise_payload,

@@ -1005,6 +1005,20 @@ pub struct LodSlice {
 /// branch. Backends map this to the fallback's reserved pool index.
 pub const NO_NORMAL_MAP_SLOT: usize = usize::MAX;
 
+/// Sentinel albedo `texture_slot` meaning "this object has no albedo texture."
+/// Slot 0 cannot say that: it is a real handle, held by whichever texture the
+/// world declares first, so an unset albedo encoded as 0 sampled that texture
+/// and tinted it. `usize::MAX` collides with no handle and lets a backend
+/// substitute the synthesized white fallback, which leaves `tint` as the
+/// object's colour without a shader branch.
+pub const NO_ALBEDO_SLOT: usize = usize::MAX;
+
+/// Pool entries reserved past the real textures: the flat-normal fallback at
+/// `texture_count`, then the white albedo fallback at `texture_count + 1`.
+/// Every backend appends them in this order, so the two `*_pool_index`
+/// resolvers below agree with each backend's pool construction.
+pub const FALLBACK_TEXTURE_COUNT: usize = 2;
+
 /// One renderable object: vertex/index slice within the shared GPU buffers,
 /// a model matrix, albedo and normal-map texture slots, and material parameters.
 pub struct DrawObject {
@@ -1124,9 +1138,10 @@ impl DrawObject {
 /// `albedo_index` / `normal_index` (and the secondary / emissive / ORM indices)
 /// are indices into each backend's single handle-indexed texture pool: albedo,
 /// normal, and every optional map share one dense table, so a texture used in
-/// more than one role resolves to one descriptor. The pool's flat-normal
-/// fallback occupies a reserved slot past the real textures; an object with no
-/// normal map addresses it, so `normal_index` never needs a shader branch.
+/// more than one role resolves to one descriptor. The pool's two fallbacks
+/// occupy reserved slots past the real textures: an object with no normal map
+/// addresses the flat-normal entry and one with no albedo addresses the white
+/// entry, so neither index needs a shader branch.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuObjectData {
@@ -1183,18 +1198,24 @@ pub struct GpuObjectData {
 }
 
 /// Resolve an albedo `texture_slot` to its index in the handle-indexed texture
-/// pool, clamped into the real-texture range so a stale slot reads the last
-/// valid entry rather than out of bounds. `texture_count` is the pool's
-/// real-texture count (the flat-normal fallback sits one past it).
+/// pool. A real albedo addresses its own texture slot (clamped into the
+/// real-texture range so a stale slot reads the last valid entry rather than
+/// out of bounds); `NO_ALBEDO_SLOT` addresses the white fallback at
+/// `texture_count + 1`, so an untextured material samples white and shows its
+/// `tint` rather than whichever texture happens to hold slot 0.
 pub fn albedo_pool_index(texture_slot: usize, texture_count: u32) -> u32 {
-    (texture_slot as u32).min(texture_count.saturating_sub(1))
+    if texture_slot == NO_ALBEDO_SLOT {
+        texture_count + 1
+    } else {
+        (texture_slot as u32).min(texture_count.saturating_sub(1))
+    }
 }
 
 /// Resolve a `normal_map_slot` to its index in the handle-indexed texture pool.
 /// A real normal map addresses its own texture slot (clamped into the
 /// real-texture range); `NO_NORMAL_MAP_SLOT` addresses the flat-normal fallback
-/// at `texture_count` (one past the last real texture), so the shader never
-/// needs a "has a normal map?" branch.
+/// at `texture_count` (the first reserved entry past the last real texture), so
+/// the shader never needs a "has a normal map?" branch.
 pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
     if normal_map_slot == NO_NORMAL_MAP_SLOT {
         texture_count
@@ -1676,6 +1697,40 @@ mod tests {
     use super::*;
     use crate::test_support::draw_object;
     use core::mem::{offset_of, size_of};
+
+    // The two reserved entries sit past the real textures in a fixed order, so
+    // the resolvers and every backend's pool construction agree.
+    #[test]
+    fn the_fallbacks_follow_the_real_textures_in_order() {
+        let texture_count = 4;
+        assert_eq!(normal_pool_index(NO_NORMAL_MAP_SLOT, texture_count), 4);
+        assert_eq!(albedo_pool_index(NO_ALBEDO_SLOT, texture_count), 5);
+        assert_eq!(
+            FALLBACK_TEXTURE_COUNT, 2,
+            "the pool reserves exactly the flat-normal and white entries"
+        );
+    }
+
+    // The regression this fixes: slot 0 is a real handle, so an unset albedo
+    // encoded as 0 sampled whichever texture the world declared first. Only the
+    // sentinel may reach the white entry.
+    #[test]
+    fn an_unset_albedo_resolves_to_white_and_slot_zero_stays_a_real_texture() {
+        let texture_count = 4;
+        assert_eq!(albedo_pool_index(0, texture_count), 0);
+        assert_ne!(
+            albedo_pool_index(NO_ALBEDO_SLOT, texture_count),
+            albedo_pool_index(0, texture_count)
+        );
+    }
+
+    // A stale slot past the pool still has to land on a real texture rather
+    // than run off the end or be mistaken for the sentinel.
+    #[test]
+    fn an_out_of_range_albedo_clamps_into_the_real_textures() {
+        assert_eq!(albedo_pool_index(9, 4), 3);
+        assert_eq!(albedo_pool_index(0, 0), 0);
+    }
 
     #[test]
     fn material_uniforms_layout_matches_msl() {

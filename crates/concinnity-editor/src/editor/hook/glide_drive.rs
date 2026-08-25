@@ -6,7 +6,7 @@
 // the selection's world bounds and steps the interpolation.
 
 use super::*;
-use crate::assets::{Camera3D, Transform};
+use crate::components::{Camera3D, Transform};
 use framing::CameraPose;
 
 const GLIDE_SECS: f32 = 0.25;

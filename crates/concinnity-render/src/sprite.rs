@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::assets::{Sprite, SpriteFit};
+use crate::components::{Sprite, SpriteFit};
 use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::render_types::{TextDrawCall, TextVertex};

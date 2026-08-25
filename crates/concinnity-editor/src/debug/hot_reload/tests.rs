@@ -444,12 +444,12 @@ fn procedural_mesh_args_normalise_via_round_trip() {
 
     // Init-side: parse + re-serialize (mirroring what `serde_json::to_value`
     // on the deserialised component yields).
-    let init_component: crate::assets::ProceduralMesh =
+    let init_component: crate::components::ProceduralMesh =
         serde_json::from_value(user_args.clone()).unwrap();
     let init_norm = serde_json::to_value(&init_component).unwrap();
 
     // Reload-side: parse user args → component → re-serialize.
-    let reload_component: crate::assets::ProceduralMesh =
+    let reload_component: crate::components::ProceduralMesh =
         serde_json::from_value(user_args.clone()).unwrap();
     let reload_norm = serde_json::to_value(&reload_component).unwrap();
 
@@ -460,12 +460,12 @@ fn procedural_mesh_args_normalise_via_round_trip() {
 fn procedural_mesh_args_diff_detects_real_changes() {
     // A meaningful arg change must produce a distinct normalised value so
     // the diff fires.
-    let v1: crate::assets::ProceduralMesh = serde_json::from_value(serde_json::json!({
+    let v1: crate::components::ProceduralMesh = serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [0.5, 0.5, 0.5],
     }))
     .unwrap();
-    let v2: crate::assets::ProceduralMesh = serde_json::from_value(serde_json::json!({
+    let v2: crate::components::ProceduralMesh = serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [1.0, 1.0, 1.0],
     }))
@@ -519,7 +519,7 @@ fn shader_stage_source_map_round_trips_empty() {
 
 #[test]
 fn shader_stage_source_map_collects_unique_parent_dirs() {
-    use crate::assets::ShaderKind;
+    use crate::components::ShaderKind;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -544,7 +544,7 @@ fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
     // A bare filename has no parent directory; the watcher would try to
     // subscribe to "" which notify rejects. The debug-WS `reload-assets`
     // command still works for these.
-    use crate::assets::ShaderKind;
+    use crate::components::ShaderKind;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -663,7 +663,7 @@ fn state_with_only_shader_stages_still_spawns_a_watcher() {
     // World loaded only via shader-stage edits (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still want the watcher
     // alive so `.metal` saves trigger the recompile pass.
-    use crate::assets::ShaderKind;
+    use crate::components::ShaderKind;
     let mut stages = ShaderStageSourceMap::new();
     stages.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -1107,8 +1107,8 @@ fn zero_skinned_vertex() -> crate::gfx::mesh_payload::SkinnedVertex {
     }
 }
 
-fn joint_def(name: &str) -> crate::assets::SkeletonJoint {
-    crate::assets::SkeletonJoint {
+fn joint_def(name: &str) -> crate::components::SkeletonJoint {
+    crate::components::SkeletonJoint {
         name: name.to_string(),
         parent: -1,
         translation: [0.0; 3],
@@ -1900,7 +1900,7 @@ fn reload_volumetric_fog_bad_args_keep_the_previous_state() {
 
 // reload_procedural_meshes
 
-fn normalised_box_args(half: f32) -> crate::assets::ProceduralMesh {
+fn normalised_box_args(half: f32) -> crate::components::ProceduralMesh {
     serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [half, half, half],
@@ -1908,7 +1908,10 @@ fn normalised_box_args(half: f32) -> crate::assets::ProceduralMesh {
     .unwrap()
 }
 
-fn one_proc_mesh_map(name: &str, args: crate::assets::ProceduralMesh) -> ProceduralMeshSourceMap {
+fn one_proc_mesh_map(
+    name: &str,
+    args: crate::components::ProceduralMesh,
+) -> ProceduralMeshSourceMap {
     let mut map = ProceduralMeshSourceMap::new();
     map.entries.push(ProceduralMeshSourceEntry {
         name: name.to_string(),
@@ -2076,7 +2079,7 @@ fn reload_stories_ignores_worlds_without_stories() {
 
 #[test]
 fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
-    use crate::assets::ShaderKind;
+    use crate::components::ShaderKind;
     let dir = tempfile::tempdir().unwrap();
     let mut map = ShaderStageSourceMap::new();
     map.entries.push(ShaderStageSourceEntry {
@@ -2498,7 +2501,7 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
 
 #[test]
 fn apply_effects_splices_the_matching_skeleton_pose_only() {
-    use crate::assets::SkeletonPose;
+    use crate::components::SkeletonPose;
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
 
     let mut world = crate::ecs::World::new();
@@ -2546,7 +2549,7 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
 #[test]
 fn apply_effects_sends_a_story_reload_event() {
     let mut world = crate::ecs::World::new();
-    let story = crate::assets::Story {
+    let story = crate::components::Story {
         asset_id: Default::default(),
         title: "Tale".to_string(),
         nodes: Vec::new(),
@@ -2564,7 +2567,7 @@ fn apply_effects_sends_a_story_reload_event() {
 
     let mut cursor = crate::ecs::EventCursor::default();
     let events = world
-        .events::<crate::assets::StoryReload>()
+        .events::<crate::components::StoryReload>()
         .expect("a StoryReload event queue exists after apply");
     let received: Vec<_> = events.read(&mut cursor).collect();
     assert_eq!(received.len(), 1);

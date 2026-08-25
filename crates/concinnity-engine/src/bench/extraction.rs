@@ -9,7 +9,7 @@
 // into the snapshot's span buffer).
 
 use super::{BenchWorld, bench};
-use crate::assets::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
+use crate::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
 use crate::ecs::{Entity, SkinnedMeshHandle};
 use crate::gfx::graphics_system::GraphicsSystem;
 use crate::gfx::snapshot::RenderSnapshot;

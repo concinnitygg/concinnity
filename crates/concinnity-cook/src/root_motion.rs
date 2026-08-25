@@ -5,7 +5,7 @@
 // runtime samples the finished curve (`gfx::root_motion::RootTrack`), it
 // never re-derives it.
 
-use crate::assets::Animation;
+use crate::components::Animation;
 use concinnity_core::gfx::root_motion::RootKey;
 
 // Strip the root joint's travel out of `tracks` and bake it into

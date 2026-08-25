@@ -387,7 +387,7 @@ impl VkContext {
         // init. A no-op (mask stays 0) when the world has no shadowed spot.
         self.spot_shadow.advance(matches!(
             self.shadow.update,
-            crate::assets::ShadowUpdate::EveryFrame
+            crate::components::ShadowUpdate::EveryFrame
         ));
 
         // Push this frame's skinning matrices into the per-frame joint buffers

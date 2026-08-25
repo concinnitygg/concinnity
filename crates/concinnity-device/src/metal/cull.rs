@@ -955,17 +955,18 @@ impl MtlContext {
             enc.setArgumentBuffer_offset(Some(&buf), 0);
         }
         let count = super::context::BINDLESS_TEXTURE_COUNT;
-        // The shared pool: every real texture, then the flat-normal fallback at
-        // `texture_count`, then the white fallback for the unused tail (so an
-        // over-cap or clamped index still samples a valid texture).
+        // The shared pool: every real texture, then the reserved fallbacks --
+        // flat-normal at `texture_count`, white at `texture_count + 1` -- and
+        // white again across the unused tail, so an over-cap or clamped index
+        // still samples a valid texture.
         let texture_count = self.textures.len();
         for i in 0..count {
             let tex = if i < texture_count {
                 self.textures[i].as_ref()
             } else if i == texture_count {
-                self.normal_map_textures[0].as_ref()
+                self.fallback_textures[0].as_ref()
             } else {
-                self.textures[0].as_ref()
+                self.fallback_textures[1].as_ref()
             };
             // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
             // buffer/texture indices the shaders declare.
@@ -1015,7 +1016,7 @@ impl MtlContext {
         encoder: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
     ) {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
-        for tex in self.textures.iter().chain(self.normal_map_textures.iter()) {
+        for tex in self.textures.iter().chain(self.fallback_textures.iter()) {
             encoder.useResource_usage_stages(
                 ProtocolObject::from_ref(&**tex),
                 MTLResourceUsage::Read,

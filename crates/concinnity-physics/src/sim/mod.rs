@@ -59,7 +59,7 @@ mod sensor;
 mod solver;
 mod world;
 
-pub use character::{CharacterCapsule, CharacterConfig};
+pub use character::CharacterCapsule;
 pub use config::SimConfig;
 pub use pose::{euler_deg_from_quat, quat_from_euler_deg};
 pub use query::{ShapeCast, ShapeCastHit};

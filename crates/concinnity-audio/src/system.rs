@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::occlusion::OcclusionSmoother;
 use crate::{AudioEngine, AudioVolumes, EmitterId, EmitterParams};
-use concinnity_core::assets::{
+use concinnity_core::components::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
     BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
 };
@@ -487,7 +487,7 @@ mod tests {
     use super::{AudioSystem, EmitterBinding};
     use crate::occlusion::OcclusionSmoother;
     use crate::{AudioVolumes, EmitterId};
-    use concinnity_core::assets::{
+    use concinnity_core::components::{
         AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget,
         BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
     };

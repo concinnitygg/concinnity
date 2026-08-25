@@ -8,7 +8,7 @@
 // then folds the same shape into the vertices on request.
 
 use super::ExportMesh;
-use crate::assets::CharacterShape;
+use crate::components::CharacterShape;
 use crate::gfx::mesh_payload::{SkinnedPayload, deserialise_skinned_with_lods};
 use crate::world::WorldJsonlAsset;
 use concinnity_core::ecs::ResourceKind;

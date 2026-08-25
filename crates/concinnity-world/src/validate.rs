@@ -1,10 +1,10 @@
 //! Named bake-time validators for the data-only assets. Each function clamps or
 //! normalizes an asset's authored value into a self-consistent runtime value.
 //! The registry entry names the function via `validate: <fn>`; the build-side
-//! `ComponentType::reserialize_args` applies it while baking the blob record.
+//! `RegisteredType::reserialize_args` applies it while baking the blob record.
 //! The runtime never runs these -- a baked record is already validated.
 
-use crate::assets::{
+use crate::components::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Material,
     ParticleEmitter, PhysicsJoint, PhysicsJointKind, PointLight, Prop, RectAreaLight,
     ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SpotLight, SpotLightGeometry,
@@ -13,7 +13,7 @@ use crate::assets::{
 
 // The wave ceiling lives with the schema in concinnity-asset and is shared with
 // the render backends; re-imported here for the clamp.
-use crate::assets::MAX_WATER_WAVES;
+use crate::components::MAX_WATER_WAVES;
 
 // Resolve the fragment shader source path for the current build backend from a
 // volume's `fragment_shaders` map (preferred) or its `fragment_shader`
@@ -46,7 +46,7 @@ fn sdf_current_platform_source(v: &SdfVolume) -> Option<String> {
 /// that path's extension). The step-count bounds stay in core: they double as
 /// the runtime kernel's loop bound.
 pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
-    use crate::assets::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+    use crate::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
     // Extents must be positive: a zero or negative extent would produce an
     // inside-out bounding box no fragment ever enters.
     for axis in v.extent.iter_mut() {
@@ -252,7 +252,7 @@ pub fn voxel_chunk(mut args: VoxelChunk) -> VoxelChunk {
 
 #[cfg(test)]
 mod tests {
-    use crate::assets::*;
+    use crate::components::*;
 
     mod material {
         use super::*;
@@ -586,7 +586,7 @@ mod tests {
 
     mod instanced_prop {
         use super::*;
-        use crate::assets::{InstanceTransform, InstancedPropGeometry};
+        use crate::components::{InstanceTransform, InstancedPropGeometry};
         use crate::ecs::asset_id::AssetId;
 
         fn empty() -> InstancedProp {
@@ -655,7 +655,7 @@ mod tests {
 
     mod sdf_volume {
         use super::*;
-        use crate::assets::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+        use crate::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
 
         // File extension matching the backend these tests compile against, so a
         // single `fragment_shader` path resolves as current-platform-compatible

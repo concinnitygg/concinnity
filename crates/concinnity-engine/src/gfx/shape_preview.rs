@@ -5,7 +5,7 @@
 // exposes to a shape (its morph-target and joint names) and a re-seed of its
 // pose through an edited shape.
 
-use crate::assets::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
+use crate::components::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{SkinnedMeshHandle, World};
 use crate::gfx::graphics_system::character_shape;
@@ -13,7 +13,7 @@ use crate::gfx::graphics_system::character_shape;
 /// Each skinned mesh's morph-target names, indexed by handle. Published by
 /// GraphicsSystem while it loads the SkinnedMesh resource table.
 #[derive(Debug, Default, Clone)]
-pub struct SkinnedMeshMorphNames(pub Vec<Vec<String>>);
+pub(crate) struct SkinnedMeshMorphNames(pub Vec<Vec<String>>);
 
 /// The names a shape targeting one mesh can reference.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -105,7 +105,7 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{JointProportion, ShapeSlider};
+    use crate::components::{JointProportion, ShapeSlider};
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
 
     fn chain() -> Skeleton {

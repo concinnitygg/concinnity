@@ -19,10 +19,10 @@ use super::outlines::shapes::{BOX_EDGES, EDGES};
 use super::registry::ID_BASE;
 use super::theme;
 use super::widget;
-use crate::assets::Sprite;
+use crate::components::Sprite;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-use concinnity_world::registry::ComponentType;
+use concinnity_world::registry::RegisteredType;
 
 // Reserved id family: the next free block after the panel families below 0x1000.
 // Icons at +0x00, their glyph labels at +0x40, and the drag ghost's dotted box
@@ -95,7 +95,7 @@ pub(crate) fn eligible(ty: &str) -> bool {
         if let Some(&known) = c.borrow().get(ty) {
             return known;
         }
-        let fresh = ComponentType::parse(ty).is_some_and(|ct| {
+        let fresh = RegisteredType::parse(ty).is_some_and(|ct| {
             !ct.renders() && position_of(&super::form::working_args(ty, None)).is_some()
         });
         c.borrow_mut().insert(ty.to_string(), fresh);
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn box_outline_covers_every_edge_and_rejects_behind() {
         let view = view_matrix([0.0; 3], 0.0, 0.0);
-        let model = crate::assets::Transform {
+        let model = crate::components::Transform {
             position: [0.0, 0.0, -10.0],
             ..Default::default()
         }
@@ -504,7 +504,7 @@ mod tests {
             assert!((c[0] - 640.0).abs() < 100.0, "{c:?}");
             assert!((c[1] - 360.0).abs() < 100.0, "{c:?}");
         }
-        let behind = crate::assets::Transform {
+        let behind = crate::components::Transform {
             position: [0.0, 0.0, 10.0],
             ..Default::default()
         }

@@ -33,7 +33,7 @@ use crate::vulkan::owned::{
 };
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::assets::SdfVolume;
+use crate::components::SdfVolume;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{LightUniforms, ShadowUniforms};
 

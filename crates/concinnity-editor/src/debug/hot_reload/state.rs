@@ -69,7 +69,7 @@ pub(crate) struct DecodedSkinnedMesh {
     pub entry_idx: usize,
     pub vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
     pub indices: Vec<u16>,
-    pub skeleton: Vec<crate::assets::SkeletonJoint>,
+    pub skeleton: Vec<crate::components::SkeletonJoint>,
 }
 
 // Output of one off-thread decode pass: every captured source the worker
@@ -297,7 +297,7 @@ pub(crate) struct FrameHotReloadEffects {
     pub skeleton_updates: Vec<PendingSkeletonUpdate>,
     // Freshly re-compiled story graphs from a `.md` save, to be sent as
     // `StoryReload` events so the running story system swaps them in.
-    pub story_updates: Vec<crate::assets::Story>,
+    pub story_updates: Vec<crate::components::Story>,
 }
 
 // Run every asset / shader / world.jsonl reload pass for one frame and return

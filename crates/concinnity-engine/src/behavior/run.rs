@@ -6,7 +6,7 @@
 // (an empty query's `first`, an unresolved name, a despawned entity) yields
 // None, and the node holding it is skipped rather than guessing.
 
-use crate::assets::Transform;
+use crate::components::Transform;
 use crate::ecs::{Entity, asset_id::AssetId};
 
 use super::program::{Arith, CExpr, CNode, COp, Cmp, Val};
@@ -54,13 +54,13 @@ pub(super) enum Effect {
         parent: Option<Entity>,
     },
     Visible(Entity, bool),
-    Sound(crate::assets::PlayCue),
+    Sound(crate::components::PlayCue),
     Scene {
         scene: AssetId,
         transition: String,
     },
     Screen(AssetId),
-    Story(crate::assets::StoryPlayback),
+    Story(crate::components::StoryPlayback),
     Save,
 }
 
@@ -323,7 +323,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
                 out.push(Effect::Visible(entity, *visible));
             }
         }
-        COp::Sound { clip, kind, volume } => out.push(Effect::Sound(crate::assets::PlayCue {
+        COp::Sound { clip, kind, volume } => out.push(Effect::Sound(crate::components::PlayCue {
             clip: *clip,
             kind: *kind,
             volume: *volume,

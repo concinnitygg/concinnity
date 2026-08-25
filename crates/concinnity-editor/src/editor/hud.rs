@@ -21,7 +21,7 @@ use super::registry::ID_BASE;
 use super::sim::SimState;
 use super::theme;
 use super::widget::{self, place_rounded, place_sprite, point_in};
-use crate::assets::{FrameInput, TextAlign};
+use crate::components::{FrameInput, TextAlign};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 pub(crate) const SAVE_BUTTON: AssetId = AssetId(ID_BASE);
@@ -459,7 +459,7 @@ fn place_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextLabel};
+    use crate::components::{Sprite, TextLabel};
 
     fn state(dirty: bool, view: bool, visible: bool) -> HudState {
         HudState {

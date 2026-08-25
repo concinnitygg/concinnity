@@ -73,11 +73,6 @@ pub(in crate::directx) struct ProbeCube {
         reason = "held to keep the prefilter cube resident; the array SRV is what the shaders bind"
     )]
     pub(in crate::directx) prefilter: PooledTexture,
-    #[expect(
-        dead_code,
-        reason = "carried alongside the cube for the array SRV write; not read per frame"
-    )]
-    pub(in crate::directx) mip_count: u32,
 }
 
 // The GPU resources + state of one in-flight capture. The six faces share one
@@ -854,10 +849,7 @@ impl DxContext {
         );
 
         debug_assert_eq!(index, self.probe.maps.len());
-        self.probe.maps.push(ProbeCube {
-            prefilter,
-            mip_count,
-        });
+        self.probe.maps.push(ProbeCube { prefilter });
         self.probe.set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
             box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
             box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],

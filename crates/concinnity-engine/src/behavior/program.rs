@@ -6,7 +6,7 @@
 // total: anything it cannot resolve becomes `CExpr::Never`, which evaluates to
 // nothing and skips its node rather than panicking.
 
-use crate::assets::{
+use crate::components::{
     Behavior, BehaviorExpr, BehaviorLiteral, BehaviorNode, BehaviorSource, CueKind, StoryPlayback,
 };
 use crate::ecs::{AudioClipHandle, Entity, TracePath, TraceStep, asset_id::AssetId};
@@ -316,13 +316,19 @@ impl Names<'_> {
     }
 }
 
-pub(super) fn compile(def: Behavior, vars: &mut VarTable) -> Program {
-    let scope: Vec<u8> = def
-        .scope
-        .iter()
-        .filter_map(|c| ComponentTag::parse(c))
+// Resolve an authored component name to the tag that still holds its entities
+// at tick time. A load-time pass drains some columns during `World::start`;
+// `surviving_tag` maps those to the runtime component that replaces them
+// (`Prop` -> `PropInstance`) and drops the ones nothing replaces, which the
+// world checker rejects before a build gets here.
+fn surviving_tag(name: &str) -> Option<u8> {
+    ComponentTag::parse(name)
+        .and_then(ComponentTag::surviving_tag)
         .map(|t| t as u8)
-        .collect();
+}
+
+pub(super) fn compile(def: Behavior, vars: &mut VarTable) -> Program {
+    let scope: Vec<u8> = def.scope.iter().filter_map(|c| surviving_tag(c)).collect();
     let local_names: Vec<String> = def.locals.iter().map(|l| l.name.clone()).collect();
     let local_inits: Vec<Val> = def
         .locals
@@ -333,13 +339,7 @@ pub(super) fn compile(def: Behavior, vars: &mut VarTable) -> Program {
     let queries: Vec<Vec<u8>> = def
         .queries
         .iter()
-        .map(|q| {
-            q.has
-                .iter()
-                .filter_map(|c| ComponentTag::parse(c))
-                .map(|t| t as u8)
-                .collect()
-        })
+        .map(|q| q.has.iter().filter_map(|c| surviving_tag(c)).collect())
         .collect();
 
     // A variable source names a variable that must have a slot even if no node

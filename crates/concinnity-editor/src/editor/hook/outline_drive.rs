@@ -9,7 +9,7 @@
 // the renderer's line pass, which handles depth: occluded runs draw faint.
 
 use super::*;
-use crate::assets::{
+use crate::components::{
     Collider, PointLight, RectAreaLight, RectAreaLightGeometry, ReflectionProbe,
     SPOT_MAX_ANGLE_DEG, SpotLight, SpotLightGeometry, Transform, TriggerVolume,
 };
@@ -400,7 +400,7 @@ mod tests {
             "zone",
             TriggerVolume {
                 position: [0.0; 3],
-                collider: crate::assets::PropCollider {
+                collider: crate::components::PropCollider {
                     shape: "ball".to_string(),
                     radius: 2.0,
                     ..Default::default()
@@ -441,7 +441,7 @@ mod tests {
     fn colliders_show_only_through_their_toggle() {
         let mut world = world_with(
             "crate",
-            Collider(crate::assets::PropCollider {
+            Collider(crate::components::PropCollider {
                 shape: "cuboid".to_string(),
                 half_extents: [1.0, 1.0, 1.0],
                 ..Default::default()
@@ -500,7 +500,7 @@ mod tests {
         for (ty, c, _) in EXTENTS {
             assert!(seen.insert(ty), "{ty} repeats");
             assert!(
-                concinnity_world::registry::ComponentType::parse(ty).is_some(),
+                concinnity_world::registry::RegisteredType::parse(ty).is_some(),
                 "{ty} is not a registered component type"
             );
             assert_ne!(
@@ -540,7 +540,7 @@ mod tests {
         // `working_args` keeps merging the defaults the frustum relies on).
         let world = world_with(
             "shot",
-            crate::assets::Camera3D {
+            crate::components::Camera3D {
                 position: [0.0; 3],
                 view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
                 fov_y_degrees: 75.0,

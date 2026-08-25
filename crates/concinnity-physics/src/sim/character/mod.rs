@@ -23,6 +23,6 @@ mod resolve;
 mod slide;
 
 pub use capsule::CharacterCapsule;
-pub use config::CharacterConfig;
+pub(crate) use config::CharacterConfig;
 
 pub(crate) use resolve::resolve;

@@ -3,12 +3,19 @@
 // list fails to compile here.
 
 // Bind one anonymous const per registry entry, naming the type through the
-// facade. The entries' metadata blocks are captured and ignored.
+// facade. The list arrives in three groups; every one of them is a type the
+// registries know, so all three must be reachable. The entries' metadata blocks
+// are captured and ignored.
 macro_rules! assert_exported {
-    ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
+    (
+        stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
+        build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? },
+        resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
+    ) => {
         $( const _: Option<crate::assets::$variant> = None; )+
+        $( const _: Option<crate::assets::$bvariant> = None; )+
+        $( const _: Option<crate::assets::$rvariant> = None; )+
     };
 }
 
 concinnity_core::for_each_component!(assert_exported);
-concinnity_core::for_each_resource_asset!(assert_exported);

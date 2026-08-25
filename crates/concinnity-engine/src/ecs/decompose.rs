@@ -9,15 +9,17 @@
 // It then drains the Prop column: every renderer and gameplay system reads the
 // per-instance components, so the source Props are no longer needed. drain<Prop>
 // clears only the Prop component, so each entity survives on its Transform /
-// renderer / tag components. Cross-references between placements (a Prop's
+// renderer / tag components. A `PropInstance` marker among them keeps the
+// entity identifiable as a prop, which is what a behavior scoped to "Prop"
+// resolves against. Cross-references between placements (a Prop's
 // parent) resolve through a name -> Entity index this pass also publishes as a
 // resource.
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::assets::{
+use crate::components::{
     BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
-    Pickup, Prop, PropBody, SceneMember, Transform,
+    Pickup, Prop, PropBody, PropInstance, SceneMember, Transform,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
@@ -52,6 +54,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
     // Per-entity components. A Prop's `model` takes precedence over `mesh`,
     // encoded structurally as ModelRenderer-xor-MeshRenderer on the entity.
     for (entity, prop) in &props {
+        ctx.insert(*entity, PropInstance);
         ctx.insert(
             *entity,
             Transform {
@@ -144,14 +147,16 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 
     // Drop the Prop column now that every consumer reads the decomposed
     // components. drain<Prop> clears only the Prop component, so each entity
-    // survives on its Transform / renderer / tag components.
+    // survives on its Transform / renderer / tag components, PropInstance
+    // among them. Registered as `consumed: PropInstance`, which is what makes
+    // a behavior scoped to "Prop" resolve to the marker.
     ctx.drain::<Prop>();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Prop, PropCollider};
+    use crate::components::{Prop, PropCollider};
     use crate::ecs::{MaterialHandle, MeshHandle, World};
 
     fn prop(id: u32) -> Prop {
@@ -298,7 +303,7 @@ mod tests {
         wall.mesh = Some(MeshHandle(11));
         wall.collider = Some(PropCollider::default());
         world.add_component(wall);
-        world.add_component(crate::assets::PropBody {
+        world.add_component(crate::components::PropBody {
             prop_name: Some(AssetId(1)),
             mass: 4.0,
             ..Default::default()
@@ -306,7 +311,7 @@ mod tests {
 
         world.start().expect("start");
 
-        assert_eq!(world.query::<crate::assets::PropBody>().count(), 0);
+        assert_eq!(world.query::<crate::components::PropBody>().count(), 0);
         let dynamics: Vec<_> = world
             .join2::<BodyDynamics, MeshRenderer>()
             .map(|(_, b, m)| (m.mesh, b.mass))

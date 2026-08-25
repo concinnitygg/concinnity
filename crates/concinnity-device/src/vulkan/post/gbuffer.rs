@@ -1038,18 +1038,6 @@ impl GbufferResources {
         self.velocity_images[frame].view
     }
 
-    // The per-frame depth view FSR consumes alongside the motion vectors. FSR
-    // binds the `GpuImage` (image + view) directly from `depth_images`, so this
-    // view-only accessor is part of the symmetric reader API but currently
-    // unused; kept for parity with the other channel accessors.
-    #[expect(
-        dead_code,
-        reason = "part of the symmetric channel-accessor API; FSR binds the GpuImage directly"
-    )]
-    pub(in crate::vulkan) fn depth_view(&self, frame: usize) -> vk::ImageView {
-        self.depth_images[frame].view
-    }
-
     // Per-frame normal+depth views, one per frame in flight. The readers that
     // bind a per-frame descriptor set (SSR resolve, SSAO kernel/blur, SSGI, RT)
     // slice this so each set samples its own frame's unified G-buffer.

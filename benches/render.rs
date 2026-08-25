@@ -1,54 +1,22 @@
-//! Benchmarks over the GPU-free render-prep layer: BVH build and frustum
-//! query (the visibility path), light packing for the clustered forward
-//! pass, the streaming planner's per-frame re-rank under pool pressure, and
-//! draw-slot recycling. Everything here runs on the CPU side of the
-//! render / device split; no backend is involved.
+//! Benchmarks over the GPU-free render-prep layer: light packing for the
+//! clustered forward pass, the streaming planner's per-frame re-rank under
+//! pool pressure, and draw-slot recycling. Everything here runs on the CPU
+//! side of the render / device split; no backend is involved.
+//!
+//! The BVH build and frustum query are benchmarked inside concinnity-render,
+//! where the item type they need lives.
 //!
 //! Run with `cargo bench -p concinnity-bench --bench render`.
 
 use concinnity_asset::{PointLight, RectAreaLight, SpotLight};
 use concinnity_bench::Bench;
-use concinnity_render::bvh::{Bvh, BvhItem};
 use concinnity_render::draw_slot::{DrawSlotAllocator, SlotAlloc};
-use concinnity_render::frustum::Frustum;
 use concinnity_render::lights::build_light_data;
 use concinnity_render::streaming::StreamPlanner;
 
 const OBJECTS: usize = 10_000;
 const STREAM_ITEMS: usize = 4_096;
 const SLOT_CHURN: usize = 1_024;
-
-// Unit boxes on a 100x100 ground grid straddling the camera plane, so the
-// frustum query sees a real mix of accepted, rejected, and straddling nodes.
-fn scene_items() -> Vec<BvhItem> {
-    (0..OBJECTS)
-        .map(|i| {
-            let x = (i % 100) as f32 * 3.0 - 150.0;
-            let z = (i / 100) as f32 * 6.0 - 300.0;
-            BvhItem {
-                bb_min: [x - 0.5, 0.0, z - 0.5],
-                bb_max: [x + 0.5, 1.0, z + 0.5],
-                cull_distance: 0.0,
-                index: i as u32,
-            }
-        })
-        .collect()
-}
-
-// Perspective view-projection (70 degree fov, 16:9, camera at the origin
-// looking down -Z), column-major as the renderer's ViewUniforms lay it out.
-fn camera_frustum() -> Frustum {
-    let f = 1.0 / 35.0f32.to_radians().tan();
-    let aspect = 16.0 / 9.0;
-    let (near, far) = (0.1, 400.0);
-    let mut vp = [[0.0f32; 4]; 4];
-    vp[0][0] = f / aspect;
-    vp[1][1] = f;
-    vp[2][2] = (far + near) / (near - far);
-    vp[2][3] = -1.0;
-    vp[3][2] = 2.0 * far * near / (near - far);
-    Frustum::from_view_projection(vp)
-}
 
 // One streaming frame: re-score every item against the hotspot, plan, and
 // complete the scheduled loads. Returns the number of load/evict decisions.
@@ -66,26 +34,6 @@ fn stream_frame(planner: &mut StreamPlanner, center: usize, frame: u64) -> usize
 
 fn main() {
     let mut bench = Bench::from_env();
-
-    let items = scene_items();
-    let frustum = camera_frustum();
-
-    bench.run("render/bvh_build/10k", OBJECTS as u64, || {
-        Bvh::build(&items)
-    });
-
-    let bvh = Bvh::build(&items);
-    let mut visible = 0u32;
-    bvh.query(&frustum, [0.0; 3], |_| visible += 1);
-    assert!(
-        visible > 0 && (visible as usize) < OBJECTS,
-        "the query fixture must accept some objects and reject others, saw {visible}"
-    );
-    bench.run("render/bvh_query/10k", OBJECTS as u64, || {
-        let mut seen = 0u32;
-        bvh.query(&frustum, [0.0; 3], |_| seen += 1);
-        seen
-    });
 
     {
         let grid = |i: usize| {

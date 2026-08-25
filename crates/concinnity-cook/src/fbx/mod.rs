@@ -29,13 +29,13 @@ use fbxcel::low::v7400::AttributeValue;
 use fbxcel::tree::any::AnyTree;
 use fbxcel::tree::v7400::NodeHandle;
 
-use crate::assets::VertexData;
+use crate::components::VertexData;
 use crate::gfx::skinning::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 
 use crate::import::NEUTRAL_COLOR;
 
 /// A material with its scalar factors and resolved on-disk texture paths.
-pub struct FbxMaterial {
+pub(crate) struct FbxMaterial {
     /// The material's name in the FBX document.
     pub name: String,
     /// Albedo texture path, when the material names one.
@@ -56,7 +56,7 @@ pub struct FbxMaterial {
 }
 
 /// One material group of a mesh: geometry-local vertices and triangle indices.
-pub struct FbxPrimitive {
+pub(crate) struct FbxPrimitive {
     /// The primitive's vertices.
     pub vertices: Vec<VertexData>,
     /// Triangle indices into `vertices`.
@@ -67,7 +67,7 @@ pub struct FbxPrimitive {
 
 /// A scene node carrying geometry: a world transform plus the primitives drawn
 /// at that transform.
-pub struct FbxProp {
+pub(crate) struct FbxProp {
     /// The prop's name in the FBX document.
     pub name: String,
     /// World-space position.
@@ -85,7 +85,7 @@ pub struct FbxProp {
 }
 
 /// The fully extracted scene.
-pub struct FbxScene {
+pub(crate) struct FbxScene {
     /// Materials declared by the document.
     pub materials: Vec<FbxMaterial>,
     /// Primitives declared by the document.
@@ -374,7 +374,7 @@ fn load_tree(path: &str) -> Result<fbxcel::tree::v7400::Tree, String> {
 }
 
 /// Parse a binary FBX file into an [`FbxScene`].
-pub fn parse_fbx(path: &str) -> Result<FbxScene, String> {
+pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
     let tree = load_tree(path)?;
     let root = tree.root();
     let objects = root
@@ -1109,7 +1109,7 @@ mod tests {
 
         // World matrix per joint name via the same JointPose math the runtime
         // uses to rebuild bind poses.
-        fn worlds(skeleton: &[crate::assets::SkeletonJoint]) -> HashMap<String, Mat4> {
+        fn worlds(skeleton: &[crate::components::SkeletonJoint]) -> HashMap<String, Mat4> {
             let mut w: Vec<Mat4> = Vec::with_capacity(skeleton.len());
             let mut by_name = HashMap::new();
             for j in skeleton {
@@ -1164,7 +1164,7 @@ mod tests {
             assert!((sum - 1.0).abs() < 1e-3, "weights must normalize: {v:?}");
             assert!(v.joints.iter().all(|&j| (j as usize) < fbx.skeleton.len()));
         }
-        fn bounds(verts: &[crate::assets::SkinnedVertexData]) -> ([f32; 3], [f32; 3]) {
+        fn bounds(verts: &[crate::components::SkinnedVertexData]) -> ([f32; 3], [f32; 3]) {
             let mut lo = [f32::MAX; 3];
             let mut hi = [f32::MIN; 3];
             for v in verts {
@@ -1195,7 +1195,7 @@ mod tests {
             tracks: &[crate::glb::ImportedAnimationTrack],
             joint: usize,
             t: f32,
-            bind: &crate::assets::SkeletonJoint,
+            bind: &crate::components::SkeletonJoint,
         ) -> Mat4 {
             let bind_pose = JointPose {
                 translation: bind.translation,
@@ -1220,7 +1220,7 @@ mod tests {
         }
 
         fn joint_world_at(
-            skeleton: &[crate::assets::SkeletonJoint],
+            skeleton: &[crate::components::SkeletonJoint],
             tracks: &[crate::glb::ImportedAnimationTrack],
             name: &str,
             t: f32,

@@ -15,7 +15,7 @@
 // interact, Start onto escape); the sticks publish as the analog
 // `move_axis` / `look_axis` fields.
 
-use crate::assets::{FrameInput, GamepadButton, GamepadMap, NavDirection};
+use crate::components::{FrameInput, GamepadButton, GamepadMap, NavDirection};
 use crate::ecs::{InputMailbox, PipelineContext, StepResult, System};
 use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
 use crate::input::nav::NavRepeat;
@@ -118,17 +118,17 @@ fn compose_frame_input(
 impl System for InputSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .writes_components(crate::component_mask![crate::assets::FrameInput])
+            .writes_components(crate::component_mask![crate::components::FrameInput])
             .reads_resources(crate::resource_mask![
                 crate::ecs::MenuActive,
                 crate::ecs::ScreenStack,
                 crate::ecs::FlyCam,
-                crate::assets::ControlsCommand,
+                crate::components::ControlsCommand,
             ])
             .writes_resources(crate::resource_mask![
                 crate::ecs::InputMailbox,
                 crate::ecs::CursorState,
-                crate::assets::FrameInput,
+                crate::components::FrameInput,
             ])
     }
 
@@ -174,7 +174,7 @@ impl System for InputSystem {
 
         // Live controls changes (a gamepad rebind or deadzone slider) sent by
         // SettingsSystem earlier this tick.
-        if let Some(events) = ctx.events::<crate::assets::ControlsCommand>() {
+        if let Some(events) = ctx.events::<crate::components::ControlsCommand>() {
             for cmd in events.read(&mut self.controls_cursor) {
                 if let Some(map) = cmd.gamepad_map {
                     self.map = map;
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn rebound_map_routes_buttons_to_their_actions() {
         let mut map = GamepadMap::DEFAULT;
-        map.rebind(crate::assets::GamepadAction::Jump, GamepadButton::North);
+        map.rebind(crate::components::GamepadAction::Jump, GamepadButton::North);
         let pad = pad_snapshot(&[press(GamepadButton::North)]);
         let input = compose_frame_input(&RenderInput::default(), &pad, map, None, true);
         assert!(input.jump, "jump follows the rebound button");
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn nav_confirm_and_back_pass_the_menu_gate() {
         let pad = pad_snapshot(&[press(GamepadButton::South), press(GamepadButton::East)]);
-        let nav = Some(crate::assets::NavDirection::Down);
+        let nav = Some(crate::components::NavDirection::Down);
         let input = compose_frame_input(
             &RenderInput::default(),
             &pad,

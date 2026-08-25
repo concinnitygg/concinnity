@@ -9,7 +9,7 @@
 // ONE undo step.
 
 use super::*;
-use crate::assets::Transform;
+use crate::components::Transform;
 use crate::ecs::PickIndex;
 use concinnity_cpu::gfx::pick::{PickRay, ray_aabb};
 use gizmo::GizmoMode;

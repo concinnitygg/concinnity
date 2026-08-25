@@ -10,7 +10,7 @@
 // none of the shared machinery is touched.
 
 use super::hook::{EditorHook, panels};
-use crate::assets::FrameInput;
+use crate::components::FrameInput;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 

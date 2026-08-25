@@ -21,7 +21,7 @@
 // `crate::gfx::streaming::{texture, mesh, chunk}`; this module only
 // scores, dispatches, and applies their results each frame.
 
-use crate::assets::Camera3D;
+use crate::components::Camera3D;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, RenderOpFailures, StepResult, System};
 use crate::gfx::backend::ChunkMesh;

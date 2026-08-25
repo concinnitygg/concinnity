@@ -8,8 +8,8 @@
 //! renderer through the public API widened here; the modules the editor reaches
 //! into are `pub` so it can name their paths, but individual internals stay
 //! `pub(crate)` unless the editor specifically needs them.
-pub mod assets;
 pub mod blob;
+pub mod components;
 pub mod ecs;
 mod heap;
 
@@ -87,4 +87,4 @@ pub(crate) mod text_input_system;
 pub(crate) mod ui;
 
 // Asset API
-pub use assets::*;
+pub use components::*;

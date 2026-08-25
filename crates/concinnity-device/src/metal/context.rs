@@ -221,7 +221,7 @@ pub(super) struct ShadowState {
     pub map_size: u32,
     // Cascade re-render policy from `GraphicsConfig.shadow_update`. Hybrid
     // refreshes the near cascade every frame and the far cascades round-robin.
-    pub update: crate::assets::ShadowUpdate,
+    pub update: crate::components::ShadowUpdate,
     // Shadow distance in world units (`GraphicsConfig.shadow_distance`), read by
     // the per-frame cascade-split computation and capped at the camera far
     // plane. Mutable so `set_shadow_distance` can change it live.
@@ -600,7 +600,7 @@ pub(crate) struct MtlContext {
     // Holds only the 1x1 flat-normal fallback (RGBA 128,128,255,255) a
     // normal-less draw samples; its pool slot is one past the last real texture.
     // Real normal maps are entries in `textures`.
-    pub(super) normal_map_textures: Vec<PooledTexture>,
+    pub(super) fallback_textures: Vec<PooledTexture>,
     // All scene lights packed and pushed to the fragment shader at buffer(4).
     pub(super) light_uniforms: LightUniforms,
     // Per-scene local lights (point + spot + area) for the clustered forward

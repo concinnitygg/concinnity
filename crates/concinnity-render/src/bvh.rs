@@ -81,7 +81,7 @@ pub struct Bvh {
 
 /// One leaf input as supplied to [`Bvh::build`].
 #[derive(Copy, Clone, Debug)]
-pub struct BvhItem {
+pub(crate) struct BvhItem {
     /// Lower corner of the leaf's world AABB.
     pub bb_min: [f32; 3],
     /// Upper corner of the leaf's world AABB.
@@ -94,7 +94,7 @@ pub struct BvhItem {
 
 impl Bvh {
     /// Build a hierarchy over `items`. An empty input yields an empty tree.
-    pub fn build(items: &[BvhItem]) -> Self {
+    pub(crate) fn build(items: &[BvhItem]) -> Self {
         let mut bvh = Bvh::default();
         if items.is_empty() {
             return bvh;
@@ -477,5 +477,101 @@ mod tests {
         assert_eq!(bvh.nodes.len(), 7);
         let f = Frustum::from_view_projection(ident_vp());
         assert_eq!(collect(&bvh, &f), vec![0, 1, 2, 3]);
+    }
+}
+
+// Build and query cost over a scene the size a stress world reaches. In-crate
+// rather than under a bench target because `Bvh::build` and `BvhItem` have no
+// consumer outside this crate -- a backend receives a built `Bvh` from
+// `partition_draw_objects` and only queries it.
+//
+//     cargo test -p concinnity-render --release -- --ignored --nocapture \
+//         --test-threads=1 bench_bvh
+#[cfg(test)]
+mod bench {
+    use super::{Bvh, BvhItem};
+    use crate::frustum::Frustum;
+    use std::time::Instant;
+
+    const OBJECTS: usize = 10_000;
+    const TARGET_NS: u128 = 200_000_000;
+    const MAX_ITERS: u64 = 1 << 20;
+
+    fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
+        let mut iters: u64 = 1;
+        loop {
+            let start = Instant::now();
+            for _ in 0..iters {
+                std::hint::black_box(body());
+            }
+            if start.elapsed().as_nanos() >= TARGET_NS || iters >= MAX_ITERS {
+                break;
+            }
+            iters = iters.saturating_mul(4).min(MAX_ITERS);
+        }
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            std::hint::black_box(body());
+        }
+        let per_item_ns = start.elapsed().as_secs_f64() * 1e9 / (iters * items.max(1)) as f64;
+        println!("  {name:<40} {per_item_ns:>10.2} ns/item");
+    }
+
+    // Unit boxes on a 100x100 ground grid straddling the camera plane, so the
+    // frustum query sees a real mix of accepted, rejected, and straddling
+    // nodes.
+    fn scene_items() -> Vec<BvhItem> {
+        (0..OBJECTS)
+            .map(|i| {
+                let x = (i % 100) as f32 * 3.0 - 150.0;
+                let z = (i / 100) as f32 * 6.0 - 300.0;
+                BvhItem {
+                    bb_min: [x - 0.5, 0.0, z - 0.5],
+                    bb_max: [x + 0.5, 1.0, z + 0.5],
+                    cull_distance: 0.0,
+                    index: i as u32,
+                }
+            })
+            .collect()
+    }
+
+    // Perspective view-projection (70 degree fov, 16:9, camera at the origin
+    // looking down -Z), column-major as the renderer's ViewUniforms lay it out.
+    fn camera_frustum() -> Frustum {
+        let f = 1.0 / 35.0f32.to_radians().tan();
+        let aspect = 16.0 / 9.0;
+        let (near, far) = (0.1, 400.0);
+        let mut vp = [[0.0f32; 4]; 4];
+        vp[0][0] = f / aspect;
+        vp[1][1] = f;
+        vp[2][2] = (far + near) / (near - far);
+        vp[2][3] = -1.0;
+        vp[3][2] = 2.0 * far * near / (near - far);
+        Frustum::from_view_projection(vp)
+    }
+
+    #[test]
+    #[ignore = "benchmark; run with --ignored --test-threads=1"]
+    fn bench_bvh() {
+        let items = scene_items();
+        let frustum = camera_frustum();
+
+        bench("render/bvh_build/10k", OBJECTS as u64, || {
+            Bvh::build(&items)
+        });
+
+        let bvh = Bvh::build(&items);
+        let mut visible = 0u32;
+        bvh.query(&frustum, [0.0; 3], |_| visible += 1);
+        assert!(
+            visible > 0 && (visible as usize) < OBJECTS,
+            "the query fixture must accept some objects and reject others, saw {visible}"
+        );
+        bench("render/bvh_query/10k", OBJECTS as u64, || {
+            let mut seen = 0u32;
+            bvh.query(&frustum, [0.0; 3], |_| seen += 1);
+            seen
+        });
     }
 }

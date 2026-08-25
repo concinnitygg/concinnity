@@ -4,7 +4,7 @@
 //! uniform builder the GPU compute + render passes share. Pure CPU; the
 //! per-emitter GPU buffers themselves are allocated by the backend at init.
 
-use crate::assets::ParticleEmitter;
+use crate::components::ParticleEmitter;
 use crate::render_types::ParticleParams;
 
 /// Upper bound on the per-emitter pool the backend will allocate. Each slot
@@ -239,7 +239,7 @@ impl ParticleSpawnState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::ParticleEmitter;
+    use crate::components::ParticleEmitter;
 
     #[test]
     fn invisible_emitter_is_skipped() {

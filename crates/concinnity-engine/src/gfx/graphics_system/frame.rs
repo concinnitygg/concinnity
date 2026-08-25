@@ -4,7 +4,7 @@
 // rebase run in StreamingSystem, scheduled just before this system.
 
 use super::*;
-use crate::assets::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
+use crate::components::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
 use crate::gfx::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -310,7 +310,7 @@ impl GraphicsSystem {
         // slots whose matrix is unchanged, so a static scene sends nothing.
         transform_propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
         for (_entity, global, handle) in
-            ctx.join2::<crate::assets::GlobalTransform, crate::assets::RenderHandle>()
+            ctx.join2::<crate::components::GlobalTransform, crate::components::RenderHandle>()
         {
             for &slot in &handle.draws {
                 self.model_push
@@ -341,7 +341,7 @@ impl GraphicsSystem {
                     .iter()
                     .filter(|c| hidden.contains(&c.asset_id))
                 {
-                    if let Some(handle) = ctx.get::<crate::assets::RenderHandle>(c.entity) {
+                    if let Some(handle) = ctx.get::<crate::components::RenderHandle>(c.entity) {
                         for &slot in &handle.draws {
                             self.model_push.push_changed(
                                 &mut snap.models,
@@ -355,7 +355,7 @@ impl GraphicsSystem {
                     .iter()
                     .filter(|c| !hidden.contains(&c.asset_id))
                     .filter_map(|c| {
-                        let global = ctx.get::<crate::assets::GlobalTransform>(c.entity)?;
+                        let global = ctx.get::<crate::components::GlobalTransform>(c.entity)?;
                         let (bb_min, bb_max) =
                             crate::gfx::frustum::transform_aabb(c.local_min, c.local_max, global.0);
                         Some(crate::ecs::PickEntry {
@@ -379,7 +379,7 @@ impl GraphicsSystem {
         // the world drawn, and its edits reseed poses and move templates, so
         // the push runs there.
         if !menu_active || menu_override.is_some() {
-            for pose in ctx.query_mut::<crate::assets::SkeletonPose>() {
+            for pose in ctx.query_mut::<crate::components::SkeletonPose>() {
                 if !pose.updated {
                     continue;
                 }
@@ -394,7 +394,7 @@ impl GraphicsSystem {
             // follows it. The authored templates have no Transform and keep
             // the model baked into their draw object at load.
             for (_entity, pose, transform) in
-                ctx.join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
+                ctx.join2::<crate::components::SkeletonPose, crate::components::Transform>()
             {
                 self.skinned_model_push.push_changed(
                     &mut snap.skinned_models,
@@ -406,7 +406,7 @@ impl GraphicsSystem {
             // (PhysicsSystem wrote it on the previous tick; `moved` persists
             // across a menu pause, so no motion is lost while uploads are
             // skipped).
-            for rig in ctx.query_mut::<crate::assets::CharacterRig>() {
+            for rig in ctx.query_mut::<crate::components::CharacterRig>() {
                 if rig.moved {
                     self.skinned_model_push.push(
                         &mut snap.skinned_models,
@@ -452,7 +452,7 @@ impl GraphicsSystem {
         // refreshed from the FrameInput InputSystem published after the last
         // draw (the same source all overlay layout uses), seeded from the
         // backend at init. `[0, 0]` (backend not ready yet) keeps the seed.
-        if let Some(input) = ctx.query::<crate::assets::FrameInput>().next()
+        if let Some(input) = ctx.query::<crate::components::FrameInput>().next()
             && input.viewport != [0.0, 0.0]
         {
             self.viewport = (input.viewport[0], input.viewport[1]);
@@ -571,7 +571,7 @@ impl GraphicsSystem {
             // a gamepad rebind row.
             if let Some(action) = crate::gfx::keymap::Bindable::from_setting_key(key) {
                 rows.push(RebindViz { action, value_id });
-            } else if let Some(action) = crate::assets::GamepadAction::from_setting_key(key) {
+            } else if let Some(action) = crate::components::GamepadAction::from_setting_key(key) {
                 pad_rows.push(super::PadRebindViz { action, value_id });
             }
         }
@@ -612,7 +612,7 @@ impl GraphicsSystem {
     pub(super) fn init_clip_rects(&mut self, ctx: &mut PipelineContext) {
         let mut clips: std::collections::HashMap<AssetId, [f32; 4]> =
             std::collections::HashMap::new();
-        for panel in ctx.query::<crate::assets::ScrollPanel>() {
+        for panel in ctx.query::<crate::components::ScrollPanel>() {
             let band = [panel.x, panel.y, panel.width, panel.height];
             for row in &panel.rows {
                 for &id in &row.elements {
@@ -659,7 +659,7 @@ impl GraphicsSystem {
         // borrow ends before the TextLabel write below), then expand the gated
         // value labels to every element of the rows that contain them.
         let rows: Vec<Vec<AssetId>> = ctx
-            .query::<crate::assets::ScrollPanel>()
+            .query::<crate::components::ScrollPanel>()
             .flat_map(|p| p.rows.iter().map(|r| r.elements.clone()))
             .collect();
         let dim = expand_dim_set(&gated_value_labels, &rows);
@@ -746,8 +746,8 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    use crate::assets::{GlobalTransform, RenderHandle, SkeletonPose};
     use crate::blob::BlobData;
+    use crate::components::{GlobalTransform, RenderHandle, SkeletonPose};
     use crate::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
     use crate::gfx::overlay::OverlayFrame;
     use crate::gfx::profile::FrameProfile;
@@ -916,7 +916,7 @@ mod tests {
             let e = ctx.components.spawn();
             ctx.insert(
                 e,
-                crate::assets::Camera3D {
+                crate::components::Camera3D {
                     fov_y_degrees: 90.0,
                     near: 0.1,
                     far: 500.0,

@@ -1,9 +1,12 @@
-//! The resource-asset vocabulary: `ResourceAssetType`, the enum of asset types
-//! that live in the blob's resource stream (not the component registry), plus
-//! the classifiers that decide which resource kind an authored asset is. The
-//! per-type compile dispatch lives in concinnity-cook (each type compiles
-//! differently and the compilers live there); this module owns only naming,
-//! parsing, kind mapping, and authoring metadata.
+//! Which resource kind an authored asset compiles into.
+//!
+//! The resource asset types are one group of the shared registry list, so their
+//! naming, parsing and authoring metadata come from `RegisteredType` like every
+//! other type's. What lives here is the part a registry entry cannot state: the
+//! mesh-source handle space, which four different type groups draw from in a
+//! fixed order, and the `File` classifier, which needs an asset's args rather
+//! than just its type name. The per-type compile dispatch lives in
+//! concinnity-cook, where the compilers are.
 
 // The resource kinds (and their `resource_kind` blob tag) are defined with the
 // blob format; re-exported here for the classifiers and the cook-side handle
@@ -29,7 +32,7 @@ fn norm_type(t: &str) -> String {
 fn file_is_mesh(args: &serde_json::Value) -> bool {
     args.get("kind")
         .and_then(|k| k.as_str())
-        .and_then(crate::assets::FileKind::from_ext)
+        .and_then(crate::components::FileKind::from_ext)
         .map(|fk| fk.is_mesh())
         .unwrap_or(false)
 }
@@ -55,263 +58,91 @@ pub fn is_mesh_source(asset_type: &str, args: &serde_json::Value) -> bool {
 }
 
 /// The resource kind a declarable asset type name maps to, or `None` for a
-/// non-resource type. Every resource lives in the resource-asset registry (the
-/// two registries share no names), so this is the single classifier the build
-/// uses to assign handles over the world's assets.
+/// non-resource type. The single classifier the build uses to assign handles
+/// over the world's assets.
 pub fn asset_resource_kind(asset_type: &str) -> Option<ResourceKind> {
-    let rt = ResourceAssetType::parse(asset_type)?;
+    let ty = crate::registry::RegisteredType::parse(asset_type)?;
     // Mesh draws from the shared mesh-source handle space (assigned by cook's
     // `assign_mesh_source_handles` in block order across all four geometry
     // producers), so the per-kind declaration-order classifier must not also
     // assign it.
-    if rt == ResourceAssetType::Mesh {
+    if ty == crate::registry::RegisteredType::Mesh {
         return None;
     }
-    Some(rt.resource_kind())
-}
-
-// Generate `ResourceAssetType` from the shared resource-asset list: the enum of
-// asset types that live in the blob's resource stream (not the component
-// registry), plus the uniform authoring operations over it. The per-type compile
-// dispatch is hand-written in concinnity-cook (each type compiles differently).
-macro_rules! define_resource_asset_type {
-    ( $( $variant:ident => $ty:path { resource: $kind:ident $($meta:tt)* } ),+ $(,)? ) => {
-        // One variant per resource asset type, named for that type.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        #[expect(missing_docs, reason = "one variant per resource asset type, named for that type")]
-        pub enum ResourceAssetType {
-            $( $variant ),+
-        }
-
-        impl ResourceAssetType {
-            /// The resource type's registry name.
-            pub fn as_str(self) -> &'static str {
-                match self { $( Self::$variant => stringify!($variant) ),+ }
-            }
-            /// The type a registry name selects, or `None` if unknown.
-            pub fn parse(s: &str) -> Option<Self> {
-                $( if s == stringify!($variant) { return Some(Self::$variant); } )+
-                None
-            }
-            /// The dense per-kind handle space this asset is assigned into.
-            pub fn resource_kind(self) -> ResourceKind {
-                match self { $( Self::$variant => ResourceKind::$kind ),+ }
-            }
-            /// Authoring metadata: a resource asset is External with a compiled
-            /// payload; its default args come from the schema struct's `Default`.
-            pub fn registration(self) -> crate::registry::Registration {
-                match self {
-                    $( Self::$variant => crate::registry::Registration {
-                        type_name: stringify!($variant),
-                        origin: crate::ecs::AssetOrigin::External,
-                        payload: crate::ecs::AssetPayload::Compiled,
-                        default_args: serde_json::to_value(<$ty as Default>::default()).ok(),
-                    } ),+
-                }
-            }
-            /// Every resource asset type, in list order.
-            pub fn all() -> &'static [ResourceAssetType] {
-                &[ $( Self::$variant ),+ ]
-            }
-            /// Round-trip authored args through the schema struct, the resource
-            /// analogue of `ComponentType::reserialize_args`. It rejects what the
-            /// typed schema cannot hold (a negative count, a string where a
-            /// number belongs) without compiling the payload, so authoring tools
-            /// can check a resource's args as cheaply as a component's.
-            pub fn reserialize_args(
-                self,
-                args: &serde_json::Value,
-            ) -> Result<serde_json::Value, String> {
-                crate::ecs::asset_id::ensure_name_resolver();
-                match self {
-                    $(
-                        Self::$variant => {
-                            let typed = serde_json::from_value::<$ty>(args.clone())
-                                .map_err(|e| e.to_string())?;
-                            serde_json::to_value(&typed).map_err(|e| e.to_string())
-                        }
-                    ),+
-                }
-            }
-            /// The structural flags shared with the component registry: see
-            /// `ComponentType::{useful_blank, renders}`. Resource assets are
-            /// never singletons.
-            pub fn useful_blank(self) -> bool {
-                match self {
-                    $( Self::$variant => crate::registry::__meta_useful_blank!($($meta)*) ),+
-                }
-            }
-            /// Whether declaring the type implies the world renders.
-            pub fn renders(self) -> bool {
-                match self {
-                    $( Self::$variant => crate::registry::__meta_renders!($($meta)*) ),+
-                }
-            }
-        }
-    };
-}
-
-concinnity_core::for_each_resource_asset!(define_resource_asset_type);
-
-impl ResourceAssetType {
-    /// Whether this resource is a DATA resource: its compiled bytes are the
-    /// record's inline `data_bytes`, not a blob payload the record points at.
-    /// Material (small, per-object surface params) is the only one today; every
-    /// other kind is a `compiled` payload resource.
-    pub fn is_data(self) -> bool {
-        matches!(self, Self::Material)
-    }
-
-    /// The asset-reference fields this resource declares, as `(field, target type)`.
-    /// Mirrors `ComponentType::ref_fields`: the editor add-form turns each into a
-    /// name picker over the world's assets of that type. Material carries its
-    /// texture references here now that it has left the component registry (which
-    /// used to supply this via the `refs:` metadata).
-    pub fn ref_fields(self) -> &'static [(&'static str, &'static str)] {
-        match self {
-            Self::Material => &[
-                ("albedo", "Texture"),
-                ("normal_map", "Texture"),
-                ("emissive_map", "Texture"),
-                ("orm_map", "Texture"),
-                ("albedo_secondary", "Texture"),
-                ("normal_secondary", "Texture"),
-                ("shader", "Shader"),
-            ],
-            _ => &[],
-        }
-    }
+    ty.resource_kind()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::ComponentType;
+    use crate::registry::RegisteredType;
+
+    // Every resource asset is a registered type like any other; what marks it as
+    // a resource is the handle space it reports, not which registry it is in.
+    #[test]
+    fn resource_types_report_a_kind_and_others_do_not() {
+        for (name, kind) in [
+            ("Texture", ResourceKind::Texture),
+            ("CubemapTexture", ResourceKind::CubemapTexture),
+            ("EnvironmentMap", ResourceKind::EnvironmentMap),
+            ("ColorLut", ResourceKind::ColorLut),
+            ("Font", ResourceKind::Font),
+            ("Material", ResourceKind::Material),
+            ("SkinnedMesh", ResourceKind::SkinnedMesh),
+            ("AudioClip", ResourceKind::AudioClip),
+        ] {
+            let ty = RegisteredType::parse(name).expect("a declarable type");
+            assert_eq!(ty.resource_kind(), Some(kind), "{name}");
+            assert_eq!(asset_resource_kind(name), Some(kind), "{name}");
+            assert_eq!(ty.discriminant(), None, "{name} is not stored in a column");
+        }
+
+        // A stored component reports no resource kind.
+        let prop = RegisteredType::parse("Prop").expect("Prop is registered");
+        assert_eq!(prop.resource_kind(), None);
+        assert_eq!(asset_resource_kind("Prop"), None);
+        assert!(prop.discriminant().is_some());
+    }
+
+    // Mesh is a resource, but its handle is not assigned by the type-name
+    // classifier: it shares the mesh-source handle space with ProceduralMesh /
+    // VoxelChunk / File, assigned in block order by cook's
+    // `assign_mesh_source_handles`.
+    #[test]
+    fn mesh_is_a_resource_but_not_classified_by_name() {
+        let mesh = RegisteredType::parse("Mesh").expect("Mesh is registered");
+        assert_eq!(mesh.resource_kind(), Some(ResourceKind::Mesh));
+        assert_eq!(asset_resource_kind("Mesh"), None);
+        assert!(is_mesh_source("Mesh", &serde_json::json!({})));
+    }
+
+    // Material's compiled bytes ride inline in its record; every other resource
+    // points at a payload section.
+    #[test]
+    fn only_material_is_a_data_resource() {
+        for &ty in RegisteredType::all() {
+            let expected = ty.as_str() == "Material";
+            assert_eq!(ty.is_data(), expected, "{}", ty.as_str());
+        }
+    }
 
     // The typed round-trip fills the schema defaults and rejects what the
     // schema cannot hold, so authoring tools can check a resource's args
     // without paying for its payload compile.
     #[test]
-    fn reserialize_args_fills_defaults_and_rejects_bad_types() {
-        let env = ResourceAssetType::EnvironmentMap;
+    fn normalized_args_fills_defaults_and_rejects_bad_types() {
+        let env = RegisteredType::parse("EnvironmentMap").expect("registered");
         let out = env
-            .reserialize_args(&serde_json::json!({"source": "studio.hdr"}))
+            .normalized_args(&serde_json::json!({"source": "studio.hdr"}))
             .expect("a source-only EnvironmentMap round-trips");
         assert_eq!(out["source"], "studio.hdr");
         assert_eq!(out["prefilter_face_size"], 512, "defaults are materialized");
 
         // A negative value cannot land in a u32 field.
-        let err = ResourceAssetType::Font
-            .reserialize_args(&serde_json::json!({"size_px": -5}))
+        RegisteredType::parse("Font")
+            .expect("registered")
+            .normalized_args(&serde_json::json!({"size_px": -5}))
             .expect_err("a negative u32 must be rejected");
-        assert!(err.contains("-5"), "got: {err}");
-    }
-
-    #[test]
-    fn resource_types_classify_others_do_not() {
-        // Texture has left the component registry: it classifies through
-        // `ResourceAssetType`, folded in by `asset_resource_kind`.
-        assert_eq!(ComponentType::parse("Texture"), None);
-        assert_eq!(asset_resource_kind("Texture"), Some(ResourceKind::Texture));
-        // CubemapTexture has also left: a resource-only asset, no longer a
-        // `ComponentType`, classified through `ResourceAssetType`.
-        assert_eq!(ComponentType::parse("CubemapTexture"), None);
-        assert_eq!(
-            ResourceAssetType::parse("CubemapTexture"),
-            Some(ResourceAssetType::CubemapTexture)
-        );
-        assert_eq!(
-            asset_resource_kind("CubemapTexture"),
-            Some(ResourceKind::CubemapTexture)
-        );
-        // EnvironmentMap, ColorLut, and Font have left too.
-        assert_eq!(ComponentType::parse("EnvironmentMap"), None);
-        assert_eq!(
-            asset_resource_kind("EnvironmentMap"),
-            Some(ResourceKind::EnvironmentMap)
-        );
-        assert_eq!(ComponentType::parse("ColorLut"), None);
-        assert_eq!(
-            asset_resource_kind("ColorLut"),
-            Some(ResourceKind::ColorLut)
-        );
-        assert_eq!(ComponentType::parse("Font"), None);
-        assert_eq!(asset_resource_kind("Font"), Some(ResourceKind::Font));
-        // Mesh has left the component registry, but its handle is still not
-        // assigned through the type-name classifier: it shares the mesh-source
-        // handle space with ProceduralMesh / VoxelChunk / File, assigned by
-        // cook's `assign_mesh_source_handles`. So the generic classifier does
-        // not treat it as a resource, while `ResourceAssetType` still parses it
-        // (compile + record emission go through the resource path).
-        assert_eq!(ComponentType::parse("Mesh"), None);
-        assert_eq!(
-            ResourceAssetType::parse("Mesh"),
-            Some(ResourceAssetType::Mesh)
-        );
-        assert_eq!(asset_resource_kind("Mesh"), None);
-        assert!(is_mesh_source("Mesh", &serde_json::json!({})));
-        // Material has left the component registry: a DATA resource, no longer a
-        // `ComponentType`, classified through `ResourceAssetType`.
-        assert_eq!(ComponentType::parse("Material"), None);
-        assert_eq!(
-            asset_resource_kind("Material"),
-            Some(ResourceKind::Material)
-        );
-        assert!(ResourceAssetType::Material.is_data());
-        assert!(!ResourceAssetType::Texture.is_data());
-        // SkinnedMesh has left the component registry too: it classifies
-        // through `ResourceAssetType` (a compiled payload + inline baked data).
-        assert_eq!(ComponentType::parse("SkinnedMesh"), None);
-        assert_eq!(
-            ResourceAssetType::parse("SkinnedMesh"),
-            Some(ResourceAssetType::SkinnedMesh)
-        );
-        assert_eq!(
-            asset_resource_kind("SkinnedMesh"),
-            Some(ResourceKind::SkinnedMesh)
-        );
-        // Pure-data components and containers are not resources.
-        assert_eq!(asset_resource_kind("PointLight"), None);
-        assert_eq!(asset_resource_kind("Prop"), None);
-        assert_eq!(asset_resource_kind("Transform"), None);
-
-        // AudioClip has left the component registry: it is a resource-only asset,
-        // classified through `ResourceAssetType`, and no longer a `ComponentType`.
-        assert_eq!(ComponentType::parse("AudioClip"), None);
-        assert_eq!(
-            ResourceAssetType::parse("AudioClip"),
-            Some(ResourceAssetType::AudioClip)
-        );
-        // The combined classifier covers both registries by type name.
-        assert_eq!(
-            asset_resource_kind("AudioClip"),
-            Some(ResourceKind::AudioClip)
-        );
-        assert_eq!(asset_resource_kind("PointLight"), None);
-    }
-
-    // The structural flags on the resource registry: Material and Font are the
-    // blank-useful addables; EnvironmentMap and SkinnedMesh are the
-    // render-implying kinds (a placed skinned mesh is scene content in its own
-    // right, so its presence renders like any static Prop).
-    #[test]
-    fn resource_structural_flags_mark_the_curated_sets() {
-        let flagged = |f: fn(ResourceAssetType) -> bool| -> Vec<&'static str> {
-            ResourceAssetType::all()
-                .iter()
-                .copied()
-                .filter(|&t| f(t))
-                .map(ResourceAssetType::as_str)
-                .collect()
-        };
-        assert_eq!(
-            flagged(ResourceAssetType::useful_blank),
-            ["Font", "Material"]
-        );
-        assert_eq!(
-            flagged(ResourceAssetType::renders),
-            ["EnvironmentMap", "SkinnedMesh"]
-        );
     }
 
     #[test]

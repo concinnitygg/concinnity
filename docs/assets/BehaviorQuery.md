@@ -8,4 +8,4 @@ into the entities carrying every named component.
 ## Parameters
 
 - `name`: A string. The name expressions read the result by.
-- `has`: An array of strings. Component names an entity must all carry to match.
+- `has`: An array of strings. Component names an entity must all carry to match. Resolved the same way as a behavior's [`scope`](Behavior::scope).

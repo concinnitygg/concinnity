@@ -425,11 +425,11 @@ impl DxContext {
         let n_atlases = text_atlases.len();
         // Flat bindless pool sizes, derived from the resource pools built below.
         // Albedo and normal maps share ONE handle-indexed pool: the real
-        // textures (a 1x1 white fallback stands in when there are none) followed
-        // by a single flat-normal fallback for normal-less draws. So the pool is
-        // `flat_albedo_count + 1` SRVs; `flat_normal_count` is that trailing 1.
+        // textures (a 1x1 white fallback stands in when there are none)
+        // followed by the reserved fallback pair, flat-normal then white, for
+        // draws with no normal map and no albedo.
         let flat_albedo_count = textures.len().max(1);
-        let flat_normal_count = 1;
+        let flat_fallback_count = FALLBACK_TEXTURE_COUNT;
         let _ = decal_srv_extra; // folded into the heap_layout decal block.
 
         // Planar reflections: group each glass pane's plane into a bounded set of
@@ -497,7 +497,7 @@ impl DxContext {
             refl_composite_srv_extra,
             planar_resolve_srv_extra,
             albedo_count: flat_albedo_count,
-            normal_count: flat_normal_count,
+            normal_count: flat_fallback_count,
         });
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
@@ -924,34 +924,35 @@ impl DxContext {
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        // Flat-normal fallback: the single normal-region resource, sampled by a
-        // draw with no normal map. Real normal maps are textures in
-        // `gpu_textures` (the shared pool), addressed by their own handle; only
-        // this fallback lives in `normal_map_textures`.
-        let gpu_normal_maps: Vec<PooledTexture> =
-            vec![create_fallback_flat_normal_resource(&alloc)?];
+        // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
+        // the flat-normal resource a draw with no normal map samples, then the
+        // white resource a draw with no albedo samples. Real normal maps and
+        // albedos are textures in `gpu_textures` (the shared pool), addressed by
+        // their own handle; only these two live in `fallback_textures`.
+        let gpu_fallbacks: Vec<PooledTexture> = vec![
+            create_fallback_flat_normal_resource(&alloc)?,
+            create_fallback_white_resource(&alloc)?,
+        ];
 
         // Flat deduplicated bindless pool: one SRV per distinct texture, then the
-        // flat-normal fallback at `flat_albedo_count`. The bindless main pass and
+        // fallback pair at `flat_albedo_count`. The bindless main pass and
         // the RT hit shader bind this region's base and index it by a flat slot
-        // (`albedo = texture_slot`, `normal = normal's own handle`, or the
-        // fallback slot when the draw has no normal map), mirroring Vulkan/Metal.
-        // A shared texture resolves to ONE descriptor here, unlike the per-object
-        // pairs below which bake a copy per draw.
+        // (`albedo = texture_slot` or the white slot when the draw has none,
+        // `normal = normal's own handle` or the flat-normal slot), mirroring
+        // Vulkan/Metal. A shared texture resolves to ONE descriptor here, unlike
+        // the per-object pairs below which bake a copy per draw.
         debug_assert_eq!(gpu_textures.len(), flat_albedo_count);
-        debug_assert_eq!(gpu_normal_maps.len(), flat_normal_count);
+        debug_assert_eq!(gpu_fallbacks.len(), flat_fallback_count);
         let last_tex = gpu_textures.len() - 1;
-        let flat_pool_len = flat_albedo_count + flat_normal_count;
+        let flat_pool_len = flat_albedo_count + flat_fallback_count;
         for f in 0..FRAMES {
             let copy_base = flat_pool_base_slot + f * flat_pool_len;
             for (k, tex) in gpu_textures.iter().enumerate() {
                 write_texture_srv(&device, tex, slot_cpu(copy_base + k));
             }
-            write_texture_srv(
-                &device,
-                &gpu_normal_maps[0],
-                slot_cpu(copy_base + flat_albedo_count),
-            );
+            for (k, tex) in gpu_fallbacks.iter().enumerate() {
+                write_texture_srv(&device, tex, slot_cpu(copy_base + flat_albedo_count + k));
+            }
         }
 
         // Resolve the pool resource a `normal_map_slot` samples for the legacy
@@ -960,7 +961,18 @@ impl DxContext {
         // flat-normal fallback.
         let normal_resource = |slot: usize| -> &ID3D12Resource {
             if slot == NO_NORMAL_MAP_SLOT {
-                &gpu_normal_maps[0]
+                &gpu_fallbacks[0]
+            } else {
+                &gpu_textures[slot.min(last_tex)]
+            }
+        };
+
+        // The same for an albedo `texture_slot`: a real albedo is a texture at
+        // its own slot; `NO_ALBEDO_SLOT` selects the white fallback, so an
+        // untextured material shows its tint rather than texture 0.
+        let albedo_resource = |slot: usize| -> &ID3D12Resource {
+            if slot == NO_ALBEDO_SLOT {
+                &gpu_fallbacks[1]
             } else {
                 &gpu_textures[slot.min(last_tex)]
             }
@@ -973,12 +985,11 @@ impl DxContext {
         // pool length so out-of-range slots fall back to the last valid entry.
         if n_objects > 0 {
             for (obj_idx, obj) in draw_objects.iter().enumerate() {
-                let albedo_idx = obj.texture_slot.min(last_tex);
                 let albedo_slot_idx = object_base_slot + obj_idx * 2;
                 let normal_slot_idx = albedo_slot_idx + 1;
                 write_texture_srv(
                     &device,
-                    &gpu_textures[albedo_idx],
+                    albedo_resource(obj.texture_slot),
                     slot_cpu(albedo_slot_idx),
                 );
                 write_texture_srv(
@@ -994,12 +1005,11 @@ impl DxContext {
         if n_clusters > 0 {
             let cluster_base_slot = object_base_slot + n_objects * 2;
             for (cluster_idx, cluster) in instanced_clusters.iter().enumerate() {
-                let albedo_idx = cluster.texture_slot.min(last_tex);
                 let albedo_slot_idx = cluster_base_slot + cluster_idx * 2;
                 let normal_slot_idx = albedo_slot_idx + 1;
                 write_texture_srv(
                     &device,
-                    &gpu_textures[albedo_idx],
+                    albedo_resource(cluster.texture_slot),
                     slot_cpu(albedo_slot_idx),
                 );
                 write_texture_srv(
@@ -2076,7 +2086,6 @@ impl DxContext {
                     height: render_h,
                     srv_cpu: slot_cpu(hiz_srv_slot),
                     srv_gpu: slot_gpu(hiz_srv_slot),
-                    depth_srv_cpu: slot_cpu(decal_depth_srv_slot),
                     depth_srv_gpu: decal_depth_srv_gpu,
                     mip_uav_cpus,
                     mip_uav_gpus,
@@ -2288,7 +2297,7 @@ impl DxContext {
                 linear_sampler_gpu,
                 text_sampler_gpu,
                 textures: gpu_textures,
-                normal_map_textures: gpu_normal_maps,
+                fallback_textures: gpu_fallbacks,
                 text_atlas_textures: gpu_text_atlases,
                 text_atlas_srv_gpus,
             },

@@ -220,7 +220,7 @@ pub struct RaymarchVolumeUniforms {
     pub receive_shadows: i32,
     /// Generic parameter block; the user shader casts it to whatever struct it
     /// interprets.
-    pub params: [f32; crate::assets::sdf_volume::SDF_PARAMS_LEN],
+    pub params: [f32; crate::components::sdf_volume::SDF_PARAMS_LEN],
 }
 
 /// Cascade selector pushed at buffer(4) for the raymarch shadow-caster pipeline.

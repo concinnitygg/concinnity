@@ -16,7 +16,7 @@
 // (`validate_registry_refs`); the rules here judge relationships between
 // assets that already resolve.
 
-use crate::registry::ComponentType;
+use crate::registry::RegisteredType;
 use crate::world::WorldJsonlAsset;
 use std::collections::HashSet;
 
@@ -75,7 +75,7 @@ pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
 // injection only adds a missing singleton (it skips when the type is already
 // present), so a violation always means two declared or generated instances.
 fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    for ty in ComponentType::all().iter().filter(|t| t.singleton()) {
+    for ty in RegisteredType::all().iter().filter(|t| t.singleton()) {
         let type_norm = norm(ty.as_str());
         let names: Vec<&str> = assets
             .iter()

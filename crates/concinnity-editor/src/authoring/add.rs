@@ -18,7 +18,7 @@
 use crate::world::{WORLD_JSONL, patch_world_jsonl_to};
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::build_from_path;
-use concinnity_world::registry::ComponentType;
+use concinnity_world::registry::RegisteredType;
 
 /// Add an asset to `world_path` and rebuild. See module docs.
 ///
@@ -383,7 +383,7 @@ pub(crate) fn is_path_like(s: &str) -> bool {
     }
     // has a dot but the full string isn't a known type name
     if s.contains('.') {
-        return ComponentType::parse(s).is_none();
+        return RegisteredType::parse(s).is_none();
     }
     false
 }
@@ -393,10 +393,9 @@ fn validated_entry(
     asset_type: &str,
     args: serde_json::Value,
 ) -> std::io::Result<serde_json::Value> {
-    // Resource-only assets (AudioClip) have left the component registry, so they
-    // don't build a component def. Resolve their args against the resource
-    // registration (supplied over defaults) instead of `create_asset_def`.
-    if let Some(rt) = concinnity_cook::resource_handles::ResourceAssetType::parse(asset_type) {
+    // A resource asset does not build a component def. Resolve its args against
+    // its registration (supplied over defaults) instead of `create_asset_def`.
+    if let Some(rt) = RegisteredType::parse(asset_type).filter(|t| t.is_resource()) {
         let mut resolved = rt
             .registration()
             .default_args
@@ -436,7 +435,7 @@ fn validated_entry(
 // and cannot round-trip to JSON.
 fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_json::Value {
     let empty = || serde_json::Value::Object(Default::default());
-    let Some(ct) = ComponentType::parse(asset_type) else {
+    let Some(ct) = RegisteredType::parse(asset_type) else {
         return empty();
     };
     let mut merged = ct.registration().default_args.unwrap_or_else(empty);
@@ -456,7 +455,7 @@ fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_js
 // components); materialize its default args from the registration and set the
 // source path.
 fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<serde_json::Value> {
-    let reg = ComponentType::parse(asset_type)
+    let reg = RegisteredType::parse(asset_type)
         .ok_or_else(|| std::io::Error::other(format!("{} asset type is unavailable", asset_type)))?
         .registration();
     let mut args = reg
@@ -1003,7 +1002,7 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
         return entry_from_path(target);
     }
 
-    if ComponentType::parse(target).is_some() {
+    if RegisteredType::parse(target).is_some() {
         return entry_from_type_name(target).map(|e| vec![e]);
     }
 

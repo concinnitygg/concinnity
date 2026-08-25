@@ -12,7 +12,7 @@
 //! the glass-panel quad builder, so a panel and an area light with the same
 //! normal agree on which way is "across".
 
-use crate::assets::RectAreaLight;
+use crate::components::RectAreaLight;
 use crate::geometry::glass_quad::plane_basis;
 use crate::render_types::{AreaLightData, MAX_AREA_LIGHTS};
 

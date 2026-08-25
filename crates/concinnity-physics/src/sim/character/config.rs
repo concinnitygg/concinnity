@@ -19,7 +19,7 @@ const UPWARD: f32 = 1.0e-3;
 /// [`CharacterConfig::default`] is a gravity-bound character on ordinary
 /// terrain: a 45 degree climb limit and a knee-high step.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CharacterConfig {
+pub(crate) struct CharacterConfig {
     /// Steepest surface, in degrees from horizontal, the mover treats as
     /// ground. Anything steeper is a wall it slides down rather than climbs.
     /// `0` disables the limit, leaving every upward-facing surface walkable.
@@ -46,7 +46,7 @@ impl Default for CharacterConfig {
 impl CharacterConfig {
     /// Tune a character by climb limit, step height, and whether gravity
     /// governs it.
-    pub fn new(max_slope_deg: f32, step_height: f32, grounded: bool) -> Self {
+    pub(crate) fn new(max_slope_deg: f32, step_height: f32, grounded: bool) -> Self {
         CharacterConfig {
             max_slope_deg,
             step_height,

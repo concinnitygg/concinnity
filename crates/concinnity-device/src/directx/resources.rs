@@ -278,13 +278,25 @@ impl DxContext {
     // Resolve the pool resource a legacy per-draw normal SRV should bake for a
     // `normal_map_slot`: a real normal map is a texture at its own slot (clamped
     // to the pool); `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the
-    // sole entry of `normal_map_textures`).
+    // first entry of `fallback_textures`).
     fn normal_pool_resource(&self, normal_map_slot: usize) -> &ID3D12Resource {
         if normal_map_slot == NO_NORMAL_MAP_SLOT {
-            &self.descriptors.normal_map_textures[0]
+            &self.descriptors.fallback_textures[0]
         } else {
             let last = self.descriptors.textures.len().saturating_sub(1);
             &self.descriptors.textures[normal_map_slot.min(last)]
+        }
+    }
+
+    // The same for a legacy per-draw albedo SRV: a real albedo is a texture at
+    // its own slot; `NO_ALBEDO_SLOT` selects the white fallback (the second
+    // entry of `fallback_textures`).
+    fn albedo_pool_resource(&self, texture_slot: usize) -> &ID3D12Resource {
+        if texture_slot == NO_ALBEDO_SLOT {
+            &self.descriptors.fallback_textures[1]
+        } else {
+            let last = self.descriptors.textures.len().saturating_sub(1);
+            &self.descriptors.textures[texture_slot.min(last)]
         }
     }
 
@@ -295,6 +307,13 @@ impl DxContext {
     fn normal_is_slot(&self, nms: usize, slot: usize) -> bool {
         let last = self.descriptors.textures.len().saturating_sub(1);
         nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot
+    }
+
+    // The same for an albedo slot: `NO_ALBEDO_SLOT` samples the never-streamed
+    // white fallback and so matches no streamed slot.
+    fn albedo_is_slot(&self, ts: usize, slot: usize) -> bool {
+        let last = self.descriptors.textures.len().saturating_sub(1);
+        ts != NO_ALBEDO_SLOT && ts.min(last) == slot
     }
 
     // Re-point the build-time per-object / per-cluster / per-skinned SRV pairs
@@ -310,7 +329,6 @@ impl DxContext {
     // `chunk_srv_base_slot` and are fixed at `setup_chunk_streaming` time
     // (skipped here).
     fn rewrite_legacy_object_pairs(&self, slot: usize) {
-        let last = self.descriptors.textures.len() - 1;
         let resource = &self.descriptors.textures[slot];
         for (obj_idx, obj) in self.draw.objects.iter().enumerate() {
             if self.clone.slot_by_draw_idx.contains_key(&obj_idx) || obj_idx >= self.draw.n_objects
@@ -318,7 +336,7 @@ impl DxContext {
                 continue;
             }
             let pair_base = 3 + obj_idx * 2;
-            if obj.texture_slot.min(last) == slot {
+            if self.albedo_is_slot(obj.texture_slot, slot) {
                 write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(obj.normal_map_slot, slot) {
@@ -328,7 +346,7 @@ impl DxContext {
         let cluster_base = 3 + self.draw.n_objects * 2;
         for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
             let pair_base = cluster_base + cluster_idx * 2;
-            if cluster.texture_slot.min(last) == slot {
+            if self.albedo_is_slot(cluster.texture_slot, slot) {
                 write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(cluster.normal_map_slot, slot) {
@@ -337,7 +355,7 @@ impl DxContext {
         }
         for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
             let pair_base = self.skinned.srv_base_slot + i * 2;
-            if obj.texture_slot.min(last) == slot {
+            if self.albedo_is_slot(obj.texture_slot, slot) {
                 write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(obj.normal_map_slot, slot) {
@@ -351,14 +369,13 @@ impl DxContext {
     // every per-frame flat-pool copy. Only legal under a device drain (the
     // fallback streaming path and the `cn debug` hot-reload paths).
     fn rewrite_bound_texture_srvs(&self, slot: usize) {
-        let last = self.descriptors.textures.len() - 1;
         let resource = &self.descriptors.textures[slot];
         for (&obj_idx, &clone_offset) in self.clone.slot_by_draw_idx.iter() {
             let Some(obj) = self.draw.objects.get(obj_idx) else {
                 continue;
             };
             let pair_base = self.clone.srv_base_slot + clone_offset * 2;
-            if obj.texture_slot.min(last) == slot {
+            if self.albedo_is_slot(obj.texture_slot, slot) {
                 write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
             }
             if self.normal_is_slot(obj.normal_map_slot, slot) {
@@ -402,10 +419,10 @@ impl DxContext {
         if !bindless_active {
             return true;
         }
-        let last = self.descriptors.textures.len().saturating_sub(1);
         self.clone.slot_by_draw_idx.keys().any(|&draw_idx| {
             self.draw.objects.get(draw_idx).is_some_and(|obj| {
-                obj.texture_slot.min(last) == slot || self.normal_is_slot(obj.normal_map_slot, slot)
+                self.albedo_is_slot(obj.texture_slot, slot)
+                    || self.normal_is_slot(obj.normal_map_slot, slot)
             })
         })
     }
@@ -657,10 +674,9 @@ impl DxContext {
         }
         let albedo_slot = self.clone.srv_base_slot + clone_offset * 2;
         let normal_slot = albedo_slot + 1;
-        let last_tex = self.descriptors.textures.len().saturating_sub(1);
         write_texture_srv(
             &self.device,
-            &self.descriptors.textures[texture_slot.min(last_tex)],
+            self.albedo_pool_resource(texture_slot),
             self.srv_slot_cpu(albedo_slot),
         );
         write_texture_srv(

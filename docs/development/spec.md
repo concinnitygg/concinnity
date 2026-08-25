@@ -102,24 +102,25 @@ player.
 | `concinnity-shader`    | lib       |          | Cook-time shader compilers for the target backend.        |
 | `concinnity-font`      | lib       |          | Cook-time glyph atlas rasteriser.                         |
 | `concinnity-render`    | lib       |          | GPU-free render preparation and the backend trait.        |
-| `concinnity-physics`   | lib       |          | Rigid-body simulation facade.                             |
+| `concinnity-physics`   | lib       |          | Simulation driver: world content to bodies and back.      |
 | `concinnity-audio`     | lib       |          | Audio mixing and spatialisation facade.                   |
 | `concinnity-store`     | lib       |          | On-disk state tree: paths, source lookup, blob reads.     |
 | `concinnity-cpu`       | lib       |          | CPU compute: payload codecs, geometry, kernels, job pool. |
-| `concinnity-core`      | lib       |   yes    | Runtime vocabulary: GPU layouts, components, registry.    |
-| `concinnity-blob`      | lib       |   yes    | Blob container format.                                    |
+| `concinnity-core`      | lib       |   yes    | Runtime vocabulary: GPU layouts, ECS storage and components, world data, blob format. |
 | `concinnity-asset`     | lib       |   yes    | User-facing asset schema (data only).                     |
-| `concinnity-eas`       | lib       |   yes    | Entity/archetype storage backing the ECS.                 |
 | `concinnity-memory`    | lib       |   yes    | Tracking allocator, tagged budgets, arenas, pools.        |
+| `concinnity-dynamics`  | lib       |   yes    | Rigid-body simulation: bodies, contacts, solver, queries. |
 | `concinnity-docs`      | lib       |   yes    | Asset reference, extracted at compile time.               |
-| `concinnity-toolchain` | build-dep |          | Compile-time codegen for binary and graphics crates.      |
-
-The full linkage graph is in [crates/README.md](../../crates/README.md). The
-layering rules that must hold:
+| `concinnity-toolchain` | build-dep |          | Build-script support: cfgs, SDKs, source hashing, docs.   |
 
 - `concinnity-asset` holds **data only**. No behaviour, one dependency (serde).
 - `concinnity-core` may not name a path, a file, or an I/O type.
-- `concinnity-blob` performs no I/O and holds no residency policy.
+- The `World` is split across that line: `concinnity-core` owns its data half
+  (components, resources, events, payload store, profile, frame scratch) and
+  `concinnity-engine` wraps that in the half that runs (the constructed systems,
+  their schedule, `start` and `step`). Building world content therefore needs no
+  operating system, which is what the facade's `--no-default-features` tier is.
+- `concinnity_core::blob` performs no I/O and holds no residency policy.
 - `concinnity-cook` never appears in the runtime's dependency closure.
 - The cook itself carries no backend cfgs, so it runs on hosts with no GPU.
 - `concinnity-device` depends on `concinnity-render`, never the reverse.
@@ -195,12 +196,14 @@ expands away during the cook and never reaches the blob: `LightRig`, `Prefab`,
 Names exist for authoring and for diagnostics. By the time a frame is drawn,
 every reference is a dense integer.
 
-### 3.3 Entity storage (EAS)
+### 3.3 Entity storage
 
-`concinnity-eas` (Entity-Asset-System) is the storage mechanism. It provides
-generic primitives only: it knows nothing about meshes, blobs, or rendering. The
-concrete component set is injected by `concinnity-core` through the registry
-macro.
+`concinnity_core::ecs` holds the storage mechanism alongside the registry that
+feeds it. The mechanism half provides generic primitives only: it knows nothing
+about meshes, blobs, or rendering. The concrete component set arrives from the
+registry (`ecs::registry`), which expands `define_components!` over the
+component list; that macro in turn expands `define_component_storage!` for the
+storage half. Nothing in the mechanism names a component type.
 
 Storage is one `Column<T>` per registered component type. A column bundles:
 
@@ -216,10 +219,6 @@ Column<Transform>
   ticks     [ 41 ][ 41 ][ 58 ][ 12 ]
   stamps    { changed, added, bulk, structural }
 ```
-
-Two storage kinds exist. `Table` is the dense default. `SparseSet` is opt-in
-per component type for high-churn types where dense compaction would cost more
-than it saves.
 
 **Change detection.** Four column-level stamps carry different meanings:
 
@@ -462,11 +461,12 @@ interned it.
 
 ## 6. Blob container format
 
-The container is `concinnity-blob`. The crate owns the format contract and
-nothing else: the record schema, the header constants, and the pure
+The container is `concinnity_core::blob`. The module owns the format contract
+and nothing else: the record schema, the header constants, and the pure
 bytes-to-metadata transforms. It performs no I/O and holds no residency policy,
-which is what makes it `no_std`. Callers own both sides: `concinnity-store`
-reads the on-disk layout, `concinnity-cook` writes what the encoder returns.
+which is what keeps it inside a `no_std` crate. Callers own both sides:
+`concinnity-store` reads the on-disk layout, `concinnity-cook` writes what the
+encoder returns.
 
 ### 6.1 Image layout
 
@@ -753,12 +753,12 @@ sequenceDiagram
 ### 8.2 Process initialization
 
 `#[global_allocator]` is a per-program item, so it belongs to the binary rather
-than to a library in its dependency graph. Each Concinnity binary installs the
-tracking allocator itself at its crate root. Nothing forces that declaration at
-compile time, and a binary without it runs correctly on Rust's default allocator
-while reporting no memory at all — crash reports lose their heap figures and
-long-session drift detection goes dark. Logging initialization therefore verifies
-the allocator is installed and warns if it is not.
+than to a library in its dependency graph. A Concinnity binary that wants heap
+figures installs the tracking allocator itself at its crate root. It is optional:
+a binary without it runs correctly on Rust's default allocator, and every reader
+of the heap statistics takes an `Option` — crash reports ship without heap
+figures and long-session drift detection reports nothing. The binaries that do
+report heap figures pin their own declaration with a unit test.
 
 Crash hooks install next: a panic hook that writes a report and chains to the
 previously installed hook, plus a native fault handler on macOS and Windows. The
@@ -1097,7 +1097,7 @@ registry.
 | 12  | `Camera3DSystem`       | The first controlled `Camera3D` has no follow block.                                                                            |
 | 13  | `ThirdPersonSystem`    | The first controlled `Camera3D` has a follow block.                                                                             |
 | 14  | `FpsCounter`           | The world declares an `FpsCounter`.                                                                                             |
-| 15  | `AnimationSystem`      | The world declares any `Animation` or `AnimGraph`.                                                                              |
+| 15  | `AnimationSystem`      | The world declares any `Animation` or `AnimationGraph`.                                                                         |
 | 16  | `StorySystem`          | The world declares a `Story`.                                                                                                   |
 | 17  | `AudioSystem`          | The world declares any `AudioEmitter`, `AudioCue`, a story page or choice with audio, or a `Behavior` with a sound node.        |
 | 18  | `UiInputSystem`        | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                                  |
@@ -1247,9 +1247,13 @@ one tick later as a failure entry and is rolled back at the top of the next step
 
 ### 10.4 The render graph
 
-On the Metal backend every pass dispatches through a single build-then-execute
-pair. The graph tracks order, barriers, and lifetimes; it does not allocate
-transient GPU resources, which stay backend-owned.
+Every backend dispatches its passes through a single build-then-execute pair.
+The graph tracks order, barriers, and lifetimes, and it describes the transient
+targets: a resource's extent, format, sample count, mip count and usage are
+declared once in the graph, and each backend's transient pool translates that
+one description into a native descriptor rather than keeping a table of its own.
+Which of those the pool owns is still per backend; the rest are allocated by the
+backend, from the graph's description.
 
 **Construction.** A per-frame `FrameGraphInputs` struct carries one flag per
 gated pass, derived from live backend state and world content. The builder
@@ -1268,7 +1272,14 @@ unambiguous DAG rather than an ambiguous alias.
   order.
 - **Per-pass barriers** — one per resource state transition. Metal mostly
   ignores these (Apple GPUs handle most hazards implicitly); the Vulkan and
-  DirectX executors emit pipeline / resource barriers from them.
+  DirectX executors emit pipeline / resource barriers from them. What a state
+  means natively follows the usage the resource declares, so no executor restates
+  whether a target is colour or depth. What it sits in _between_ frames does not
+  follow from usage and is declared per resource and per backend: the staggered
+  shadow cascades rest sampled because a skipped slice keeps the depth it was
+  last rendered with, while main depth is fully rewritten and rests discarded. A
+  frame that ends a resource somewhere other than its resting state is closed by
+  one restoring transition after the last pass.
 - **Transient lifetimes** — a first-use/last-use pass range per resource, the
   input to the aliasing planner.
 
@@ -1276,7 +1287,35 @@ unambiguous DAG rather than an ambiguous alias.
 outlives the frame (the cross-frame shadow map, the froxel volume, the Hi-Z
 pyramid). `create_texture` marks a single-frame transient the aliasing planner
 may pack into shared physical memory, since disjoint lifetimes can share
-storage.
+storage. A resource qualifies as a transient only if its first graph touch fully
+writes it, no later frame reads what this frame wrote, its whole lifetime is
+inside the graph, and no configuration makes it the same GPU object as another
+graph resource — two resources on one object would give that object two
+independent barrier timelines.
+
+**Aliasing.** The planner packs each transient's `[first, last]` lifetime with an
+interval-graph greedy: one slot per group of resources that are never live
+together, sized to the largest member. Resources sharing a slot must agree on
+depth-vs-colour and on sample count, which are what change the kind of
+allocation a backend must make.
+
+The soundness problem is that pools are built at init and resize while graphs
+compile per frame, so a grouping decided on one graph is applied to every later
+one — and two resources disjoint in the planning graph can be simultaneously live
+in another. Turning a pass off only shortens lifetimes, but some passes
+_substitute_ for one another rather than disappearing, so there is no single
+maximal graph to plan against. Three layers cover it: the pool plans against its
+build configuration with every gated pass forced on; a headless sweep asserts
+that no planned slot has two overlapping members across the reachable input
+space, view modes and show flags included; and each executor asserts the same
+predicate per frame in debug builds, over the graph actually in hand. The
+per-frame assertion is the one that reaches the combinations the sweep's
+reachability model does not.
+
+The interval test is on pass _indices_, which is a disjointness test only while
+the pass list is totally ordered. Async compute makes the schedule partially
+ordered, at which point the planner needs the toposort's reachability relation
+instead; aliasing and async compute have to be designed together.
 
 **Conditional passes** use an invalid-handle sentinel so call sites stay
 branchless: reads and writes of an invalid handle are compile-time no-ops.
@@ -1326,6 +1365,7 @@ flowchart TD
         UP["Upscale"]
         LINES["Lines"]
         BLOOM["Bloom"]
+        HIZF["HizFinal"]
         COMP["Composite"]
     end
 
@@ -1344,6 +1384,7 @@ flowchart TD
     TRANS --> TAA --> BLOOM --> COMP
     TRANS --> UP --> BLOOM
     TAA --> LINES --> COMP
+    LINES --> HIZF --> COMP
 ```
 
 The full catalogue with per-pass semantics is [Appendix A](#appendix-a-render-pass-catalogue).
@@ -1362,10 +1403,27 @@ disoccluded survivors, depth-compositing with phase 1. Phase 2's HDR write
 becomes the head of the decoration chain. Instanced and skinned geometry is not
 Hi-Z-culled, so it draws fully in phase 1 and is not repeated.
 
+**Terminal Hi-Z build.** The frame's last pass reduces the final main depth into
+the Hi-Z pyramid the _next_ frame's phase-1 cull tests against. It is a graph
+node rather than an action appended after the graph, so main depth stays live to
+the end of the frame: were its last graph use the last decoration pass, an
+aliasing planner could hand the memory to another resource while the reduction
+was still reading it. Phase-1 cull's read of the pyramid the previous frame left
+is declared for the same reason, giving the rebuild a write-after-read edge.
+
 **Unified G-buffer pre-pass.** One jittered traversal writes view-space normal
 and linear depth, perceptual roughness, and screen-space motion into a single
-MRT, replacing separate SSR, SSAO, and velocity pre-passes. Every consumer (SSR,
-SSAO, SSGI, ray tracing, TAA, the upscaler) reads that one output.
+MRT, plus its own depth attachment, replacing separate SSR, SSAO, and velocity
+pre-passes.
+
+The four attachments are four graph resources, not one handle, because their
+consumers differ: SSAO, SSGI and both reflection resolves read normal+depth; only
+the reflection resolves read roughness; only the temporal passes read motion; and
+only the upscaler reads the depth. One handle would give each of them the union
+of four lifetimes, which is harmless while nothing owns their memory and wrong
+the moment something does. The depth attachment also settles the question on its
+own — it is a different resource class from its three colour siblings, so no
+single handle could have described it.
 
 **Reflections are exclusive.** Ray-traced reflections and screen-space
 reflections occupy the same slot; when ray tracing is live, the builder inserts
@@ -1392,9 +1450,20 @@ What genuinely differs between backends:
 | Built-in shader production | Precompiled into the binary at compile time | Compiled at renderer init, cached to disk           | Compiled at renderer init, cached to disk           |
 | Driver pipeline cache      | Not needed (OS maintains a per-app cache)   | D3D12 pipeline library, persisted per adapter       | `VkPipelineCache`, persisted per adapter            |
 | Graph barriers             | Mostly implicit; hazards handled by the GPU | Explicit resource barriers emitted from graph state | Explicit pipeline barriers emitted from graph state |
+| Transient pool backing     | One tracked placement heap per alias slot   | One heap per slot, single-buffered                  | One allocation per slot per frame in flight         |
 | Ray-traced reflections     | Metal ray tracing                           | DXR                                                 | `VK_KHR_ray_query` + acceleration structures        |
 | Temporal upscaling         | MetalFX                                     | FSR 3, DLSS, XeSS                                   | FSR 3                                               |
 | Windowing                  | AppKit                                      | Win32                                               | Win32 on Windows, GLFW on Linux, AppKit on macOS    |
+
+The transient-pool row has a consequence for how aliasing is verified. Metal
+places each alias slot on its own hazard-_tracked_ heap, which delays reads and
+writes of every resource on that heap until in-flight modifications of any of
+them complete — exactly the ordering aliased members need, and the reason the
+heap is per slot rather than shared. But it means a planner that ever put two
+concurrently-live resources in one slot would make Metal _serialise_ where the
+explicit backends race. Metal will look correct while Vulkan and DirectX corrupt,
+so Vulkan synchronization validation is the oracle for aliasing, not a Metal
+pixel comparison.
 
 Vendor upscaling SDKs are optional at compile time. When an SDK is absent the
 build script skips it and the renderer falls back to native-resolution
@@ -1890,6 +1959,7 @@ so the list is append-only.
 | 28  | `light_cull`           | compute | Clustered light binning into per-cluster index lists over a screen-tiled, exponential-depth froxel grid.                                                 |
 | 29  | `spot_shadow`          | render  | Depth-only render of each shadowed spot cone into its slice of the spot shadow array.                                                                    |
 | 30  | `lines`                | render  | World-space line ribbons, depth-tested against the resolved scene so occluded segments are hidden.                                                       |
+| 31  | `hiz_final`            | compute | Terminal Hi-Z pyramid rebuild from the frame's final depth, for the next frame's phase-1 occlusion test.                                                 |
 
 ---
 
@@ -1905,7 +1975,7 @@ not the authored args. Every record in a blob is baked.
 primary blob and carries the metadata.
 
 **Companion** — an asset the cook injects because another asset implies it (a
-text label implies a font).
+text label implies a render marker).
 
 **Component** — the runtime form of an asset, stored in a column and owned by an
 entity.
@@ -1918,8 +1988,6 @@ components on its entity and drains the `Prop` column.
 
 **Discriminant** — a component type's `u8` tag, assigned by its position in the
 registry list. The blob tag and the in-memory component id.
-
-**EAS** — Entity-Asset-System. The storage crate backing the ECS.
 
 **Gate** — the function that decides whether a system is present in a world, and
 constructs it.

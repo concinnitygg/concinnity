@@ -20,7 +20,7 @@
 //   - An `EngineDefaults` asset turns individual defaults off entirely.
 
 use super::expand::{ExpandReport, asset_name, type_norm};
-use crate::assets::EngineDefaults;
+use crate::components::EngineDefaults;
 
 pub(crate) const HUD_FONT_NAME: &str = "hud_font";
 const HUD_FONT_SIZE_PX: u32 = 20;
@@ -723,7 +723,7 @@ fn inject_physics_config(
     }
     // Serialized from the type, so the injected settings cannot drift from the
     // values the runtime falls back to.
-    let args = serde_json::to_value(crate::assets::PhysicsConfig::default())
+    let args = serde_json::to_value(crate::components::PhysicsConfig::default())
         .map_err(|e| format!("PhysicsConfig: default args are not representable: {}", e))?;
     if name_claimed(
         assets,
@@ -1446,8 +1446,8 @@ mod tests {
         let mut report = ExpandReport::default();
         inject_engine_defaults(&mut assets, &mut report).unwrap();
         let args = injected_physics(&assets).unwrap()["args"].clone();
-        let parsed: crate::assets::PhysicsConfig = serde_json::from_value(args).unwrap();
-        let default = crate::assets::PhysicsConfig::default();
+        let parsed: crate::components::PhysicsConfig = serde_json::from_value(args).unwrap();
+        let default = crate::components::PhysicsConfig::default();
         assert_eq!(parsed.floor_y, default.floor_y);
         assert_eq!(parsed.terrain_half_width, default.terrain_half_width);
         assert_eq!(parsed.terrain_half_depth, default.terrain_half_depth);

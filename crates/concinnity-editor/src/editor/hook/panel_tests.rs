@@ -58,7 +58,7 @@ fn show_every_element(p: &dyn Panel, world: &mut World) {
 fn visible_sprites(p: &dyn Panel, world: &World) -> Vec<AssetId> {
     let ids = p.sprite_ids();
     world
-        .query::<crate::assets::Sprite>()
+        .query::<crate::components::Sprite>()
         .filter(|s| s.visible && ids.contains(&s.asset_id))
         .map(|s| s.asset_id)
         .collect()
@@ -77,21 +77,21 @@ fn hide_blanks_every_declared_element() {
 
         for id in p.sprite_ids() {
             let s = world
-                .query::<crate::assets::Sprite>()
+                .query::<crate::components::Sprite>()
                 .find(|s| s.asset_id == id)
                 .unwrap_or_else(|| panic!("{key:?} declares sprite {id:?} but injection has none"));
             assert!(!s.visible, "{key:?} left sprite {id:?} visible after hide");
         }
         for id in p.label_ids() {
             let l = world
-                .query::<crate::assets::TextLabel>()
+                .query::<crate::components::TextLabel>()
                 .find(|l| l.asset_id == id)
                 .unwrap_or_else(|| panic!("{key:?} declares label {id:?} but injection has none"));
             assert!(!l.visible, "{key:?} left label {id:?} visible after hide");
         }
         for (id, _) in p.field_ids() {
             let t = world
-                .query::<crate::assets::TextInput>()
+                .query::<crate::components::TextInput>()
                 .find(|t| t.asset_id == id)
                 .unwrap_or_else(|| panic!("{key:?} declares field {id:?} but injection has none"));
             assert!(!t.visible, "{key:?} left field {id:?} visible after hide");

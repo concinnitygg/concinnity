@@ -160,11 +160,10 @@ impl VkContext {
             .map(|_| self.descriptors.object_set_layout.handle())
             .collect();
         let object_sets = alloc_descriptor_sets(&self.device, pool.handle(), &object_layouts)?;
-        let last_tex = self.textures.len().saturating_sub(1);
         for (&set, obj) in object_sets.iter().zip(draw_objects.iter()) {
             let albedo_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(self.textures[obj.texture_slot.min(last_tex)].view)
+                .image_view(self.albedo_pool_view(obj.texture_slot))
                 .sampler(self.linear_sampler.handle());
             let nm_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)

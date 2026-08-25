@@ -31,10 +31,9 @@
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-use concinnity_cook::resource_handles::ResourceAssetType;
-use concinnity_world::registry::ComponentType;
+use concinnity_world::registry::RegisteredType;
 
-use crate::assets::TextAlign;
+use crate::components::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -66,15 +65,11 @@ pub(crate) fn add_types() -> impl Iterator<Item = &'static str> {
     static TYPES: OnceLock<Vec<&'static str>> = OnceLock::new();
     TYPES
         .get_or_init(|| {
-            let components = ComponentType::all()
+            let components = RegisteredType::all()
                 .iter()
                 .filter(|t| t.useful_blank())
                 .map(|t| t.as_str());
-            let resources = ResourceAssetType::all()
-                .iter()
-                .filter(|t| t.useful_blank())
-                .map(|t| t.as_str());
-            components.chain(resources).collect()
+            components.collect()
         })
         .iter()
         .copied()
@@ -92,7 +87,7 @@ pub(crate) fn config_types() -> impl Iterator<Item = &'static str> {
     static TYPES: OnceLock<Vec<&'static str>> = OnceLock::new();
     TYPES
         .get_or_init(|| {
-            ComponentType::all()
+            RegisteredType::all()
                 .iter()
                 .filter(|t| t.singleton() && t.addable())
                 .map(|t| t.as_str())
@@ -104,7 +99,7 @@ pub(crate) fn config_types() -> impl Iterator<Item = &'static str> {
 
 // Whether `ty` is a world-config singleton (edit-or-add rather than blind append).
 pub(crate) fn is_singleton(ty: &str) -> bool {
-    ComponentType::parse(ty).is_some_and(|t| t.singleton())
+    RegisteredType::parse(ty).is_some_and(|t| t.singleton())
 }
 
 // Every type the "+" picker offers: the multi-instance addables plus the config
@@ -1188,7 +1183,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextInput, TextLabel};
+    use crate::components::{Sprite, TextInput, TextLabel};
 
     // Point the cook's `.concinnity/` (its content-addressed cache) at a private
     // temp dir for the whole test process, so the cook-based tests below never read
@@ -1967,16 +1962,9 @@ mod tests {
     fn add_types_cook_with_default_args() {
         isolate_state_dir();
         for ty in picker_types() {
-            // Most add types are components; Font (and future resources) are
-            // addable-blank resource assets, External by construction.
-            if let Some(ct) = concinnity_world::registry::ComponentType::parse(ty) {
-                assert!(ct.addable(), "{ty} must be External / addable");
-            } else {
-                assert!(
-                    concinnity_cook::resource_handles::ResourceAssetType::parse(ty).is_some(),
-                    "{ty} must be a known component or resource asset type"
-                );
-            }
+            let ct = concinnity_world::registry::RegisteredType::parse(ty)
+                .unwrap_or_else(|| panic!("{ty} must be a known asset type"));
+            assert!(ct.addable(), "{ty} must be External / addable");
             cook_blank(ty).unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));
         }
     }
@@ -1990,7 +1978,7 @@ mod tests {
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
         isolate_state_dir();
-        use concinnity_world::registry::ComponentType;
+        use concinnity_world::registry::RegisteredType;
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[
@@ -2015,7 +2003,7 @@ mod tests {
         // both lists.
         let offered: std::collections::HashSet<&str> = picker_types().collect();
         let excluded: std::collections::HashSet<&str> = EXCLUDED.iter().copied().collect();
-        for (_t, reg) in ComponentType::addable_types() {
+        for (_t, reg) in RegisteredType::addable_types() {
             let ty = reg.type_name;
             let cooks = cook_blank(ty).is_ok();
             if !cooks {

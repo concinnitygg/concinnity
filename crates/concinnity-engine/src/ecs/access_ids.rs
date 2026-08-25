@@ -62,7 +62,7 @@ macro_rules! define_access_ids {
 
 define_access_ids! {
     resources: [
-        crate::assets::FrameInput,
+        crate::components::FrameInput,
         crate::ecs::MenuActive,
         crate::ecs::SimTiming,
         crate::ecs::MenuOverride,
@@ -87,17 +87,17 @@ define_access_ids! {
         crate::gfx::overlay::OverlayRecycle,
     ],
     events: [
-        crate::assets::ControlsCommand,
-        crate::assets::InteractEvent,
-        crate::assets::RootMotionEvent,
-        crate::assets::ScreenCommand,
-        crate::assets::ScreenShown,
-        crate::assets::SettingCommand,
-        crate::assets::SceneCommand,
-        crate::assets::StoryCommand,
-        crate::assets::StoryReload,
-        crate::assets::PlayCue,
-        crate::assets::AudioCommand,
+        crate::components::ControlsCommand,
+        crate::components::InteractEvent,
+        crate::components::RootMotionEvent,
+        crate::components::ScreenCommand,
+        crate::components::ScreenShown,
+        crate::components::SettingCommand,
+        crate::components::SceneCommand,
+        crate::components::StoryCommand,
+        crate::components::StoryReload,
+        crate::components::PlayCue,
+        crate::components::AudioCommand,
     ],
 }
 
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn registered_types_resolve_to_distinct_ids() {
         let a = id_of::<crate::ecs::MenuActive>().unwrap();
-        let b = id_of::<crate::assets::ScreenCommand>().unwrap();
+        let b = id_of::<crate::components::ScreenCommand>().unwrap();
         assert_ne!(a, b);
     }
 
@@ -236,15 +236,16 @@ mod tests {
     #[test]
     fn ensure_event_queues_creates_declared_queues_only() {
         let mut store = EventStore::new();
-        let access = Access::new().writes_resources(resource_mask![crate::assets::ScreenCommand]);
+        let access =
+            Access::new().writes_resources(resource_mask![crate::components::ScreenCommand]);
         ensure_event_queues(&mut store, access);
-        assert!(store.get::<crate::assets::ScreenCommand>().is_some());
-        assert!(store.get::<crate::assets::PlayCue>().is_none());
+        assert!(store.get::<crate::components::ScreenCommand>().is_some());
+        assert!(store.get::<crate::components::PlayCue>().is_none());
 
         // Exclusive systems keep lazy creation.
         let mut lazy = EventStore::new();
         ensure_event_queues(&mut lazy, Access::new().exclusive());
-        assert!(lazy.get::<crate::assets::ScreenCommand>().is_none());
+        assert!(lazy.get::<crate::components::ScreenCommand>().is_none());
     }
 
     #[cfg(debug_assertions)]
@@ -288,11 +289,11 @@ mod tests {
         fn undeclared_component_read_panics() {
             install_hook();
             set_active(Some((
-                Access::new().writes_components(component_mask![crate::assets::TextLabel]),
+                Access::new().writes_components(component_mask![crate::components::TextLabel]),
                 "TestSystem",
             )));
             let mut p = parts();
-            let _ = ctx(&mut p).query::<crate::assets::Sprite>().count();
+            let _ = ctx(&mut p).query::<crate::components::Sprite>().count();
         }
 
         #[test]
@@ -301,7 +302,7 @@ mod tests {
             install_hook();
             set_active(Some((Access::new(), "TestSystem")));
             let mut p = parts();
-            ctx(&mut p).push(crate::assets::TextLabel::default());
+            ctx(&mut p).push(crate::components::TextLabel::default());
         }
 
         #[test]
@@ -320,21 +321,21 @@ mod tests {
             let mut p = parts();
             set_active(Some((
                 Access::new()
-                    .writes_components(component_mask![crate::assets::TextLabel])
+                    .writes_components(component_mask![crate::components::TextLabel])
                     .reads_resources(resource_mask![crate::ecs::MenuActive]),
                 "TestSystem",
             )));
             {
                 let mut c = ctx(&mut p);
-                let _ = c.query::<crate::assets::TextLabel>().count();
-                let _ = c.query_mut::<crate::assets::TextLabel>().count();
+                let _ = c.query::<crate::components::TextLabel>().count();
+                let _ = c.query_mut::<crate::components::TextLabel>().count();
                 let _ = c.resource::<crate::ecs::MenuActive>();
             }
             set_active(Some((Access::new().exclusive(), "TestSystem")));
             {
                 let mut c = ctx(&mut p);
-                c.push(crate::assets::TextLabel::default());
-                let _ = c.query::<crate::assets::Sprite>().count();
+                c.push(crate::components::TextLabel::default());
+                let _ = c.query::<crate::components::Sprite>().count();
             }
             set_active(None);
         }
@@ -346,7 +347,7 @@ mod tests {
         assert!(m.contains(id_of::<crate::ecs::MenuActive>().unwrap()));
         assert!(!m.contains(id_of::<crate::ecs::FlyCam>().unwrap()));
 
-        let c = component_mask![crate::assets::TextLabel];
+        let c = component_mask![crate::components::TextLabel];
         assert!(!c.is_empty());
     }
 }

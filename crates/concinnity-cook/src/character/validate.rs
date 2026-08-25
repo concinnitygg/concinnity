@@ -2,7 +2,7 @@
 // present under the right parent and every bipolar key has both targets,
 // plus the model's own args. Every problem is reported, in one pass.
 
-use crate::assets::{CharacterModel, CharacterSchema, SkeletonJoint};
+use crate::components::{CharacterModel, CharacterSchema, SkeletonJoint};
 
 // Problems with `skeleton` and `target_names` against `schema`; empty when
 // the source conforms.
@@ -43,12 +43,12 @@ pub(crate) fn source_errors(
     let has = |name: &str| target_names.iter().any(|t| t == name);
     for key in &schema.keys {
         match key.polarity {
-            crate::assets::KeyPolarity::Unipolar => {
+            crate::components::KeyPolarity::Unipolar => {
                 if !has(&key.name) {
                     errors.push(format!("missing shape key '{}'", key.name));
                 }
             }
-            crate::assets::KeyPolarity::Bipolar => {
+            crate::components::KeyPolarity::Bipolar => {
                 let (plus, minus) = (format!("{}+", key.name), format!("{}-", key.name));
                 match (has(&plus), has(&minus)) {
                     (true, true) => {}
@@ -89,7 +89,7 @@ pub(crate) fn model_errors(model: &CharacterModel) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{KeyPolarity, SchemaJoint, SchemaKey};
+    use crate::components::{KeyPolarity, SchemaJoint, SchemaKey};
 
     fn joint(name: &str, parent: i32) -> SkeletonJoint {
         SkeletonJoint {

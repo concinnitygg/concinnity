@@ -50,8 +50,9 @@ fn merge(a: Option<Owner>, b: Owner) -> Owner {
 // scene prop (an AnimationGraph target, a Behavior show/hide) does not drag that
 // prop's resources into the global set.
 fn is_reference_target(type_norm: &str) -> bool {
-    concinnity_world::resource_type::ResourceAssetType::all()
+    concinnity_world::registry::RegisteredType::all()
         .iter()
+        .filter(|t| t.is_resource())
         .any(|t| t.as_str().to_lowercase() == type_norm)
         || matches!(
             type_norm,

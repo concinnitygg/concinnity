@@ -2,7 +2,7 @@
 //! renderer uploads the atlas textures; this module only builds the quad
 //! geometry from TextLabel components each frame.
 
-use crate::assets::{LabelBox, SpriteFit, TextAlign, TextLabel};
+use crate::components::{LabelBox, SpriteFit, TextAlign, TextLabel};
 use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::render_types::{TextDrawCall, TextVertex};
@@ -647,8 +647,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             wrap_width: 0.0,

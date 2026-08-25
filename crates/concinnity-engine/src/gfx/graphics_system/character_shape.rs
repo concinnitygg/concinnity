@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::assets::{CharacterCapsule, CharacterShape, SkeletonPose};
+use crate::components::{CharacterCapsule, CharacterShape, SkeletonPose};
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::proportions::ProportionLayer;
 use crate::gfx::skinning::Skeleton;
@@ -112,7 +112,7 @@ pub(crate) fn proportioned_capsule(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{JointProportion, ShapeSlider};
+    use crate::components::{JointProportion, ShapeSlider};
     use crate::gfx::skinning::{Joint, JointPose};
 
     fn chain() -> Skeleton {

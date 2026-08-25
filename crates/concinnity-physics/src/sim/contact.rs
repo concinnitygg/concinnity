@@ -148,6 +148,7 @@ impl ContactCache {
         (&mut self.current, &self.previous)
     }
 
+    #[cfg(test)]
     pub(crate) fn manifolds(&self) -> &[Manifold] {
         &self.current
     }

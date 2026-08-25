@@ -4,7 +4,7 @@
 // the same paths but lives on `Camera3D`, so it travels back to the caller,
 // which holds the mutable camera borrow.
 
-use crate::assets::{Camera3D, ControlsCommand};
+use crate::components::{Camera3D, ControlsCommand};
 use crate::ecs::{EventCursor, PipelineContext};
 
 // The look values a controller carries, borrowed for the duration of an update.

@@ -23,7 +23,7 @@ use super::behavior_chart;
 use super::registry::{self, PanelKey};
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
-use crate::assets::TextAlign;
+use crate::components::TextAlign;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -1426,7 +1426,7 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{Sprite, TextInput, TextLabel};
+    use crate::components::{Sprite, TextInput, TextLabel};
     use crate::editor::behavior::outline;
 
     fn injected_world() -> World {

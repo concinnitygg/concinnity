@@ -157,7 +157,11 @@ impl DebugServer {
                     // Accept the motion only when a camera exists, so the client
                     // gets a clean error in a camera-less world. The reply fires
                     // on acceptance, not completion.
-                    if world.query::<crate::assets::Camera3D>().next().is_some() {
+                    if world
+                        .query::<crate::components::Camera3D>()
+                        .next()
+                        .is_some()
+                    {
                         self.camera_motion = Some(runtime_spawn::CameraMotion::from_args(&args));
                         let _ = reply.send(Ok(()));
                     } else {
@@ -269,7 +273,7 @@ impl DebugHook for DebugServer {
         // Active-camera pose for `camera-get`. One component read, so refresh
         // every tick like the streaming / profiler snapshots above.
         state.camera = world
-            .query::<crate::assets::Camera3D>()
+            .query::<crate::components::Camera3D>()
             .next()
             .map(|c| CameraSnapshot {
                 position: c.position,

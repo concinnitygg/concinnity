@@ -30,7 +30,10 @@ impl MtlContext {
     // round-robin clock. Called once per frame from draw_frame; the result is
     // stashed in `spot_shadow.render_mask` for encode_spot_shadow_pass.
     pub(in crate::metal) fn next_spot_shadow_mask(&mut self) -> u32 {
-        let every_frame = matches!(self.shadow.update, crate::assets::ShadowUpdate::EveryFrame);
+        let every_frame = matches!(
+            self.shadow.update,
+            crate::components::ShadowUpdate::EveryFrame
+        );
         self.spot_shadow
             .scheduler
             .next_mask(every_frame, self.spot_shadow.count as usize)

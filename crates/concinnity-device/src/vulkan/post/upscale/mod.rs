@@ -29,7 +29,7 @@ use ash::vk;
 
 use crate::vulkan::owned::VkDevice;
 
-use crate::assets::UpscalerBackend;
+use crate::components::UpscalerBackend;
 use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::context::{HDR_FORMAT, VkContext};
 use crate::vulkan::graph_exec::GraphFrameParams;
@@ -824,7 +824,7 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::UpscalerBackend as B;
+    use crate::components::UpscalerBackend as B;
 
     fn resolved(req: B, dlss: bool, xess: bool, fsr: bool) -> ResolvedBackend {
         backend_order(req, dlss, xess, fsr)[0]

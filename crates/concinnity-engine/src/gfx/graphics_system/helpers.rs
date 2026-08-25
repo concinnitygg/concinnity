@@ -2,7 +2,7 @@
 // code: chunk conversion, camera-relative chunk placement, draw-object
 // position extraction, streaming payload sources, and backend construction.
 
-use crate::assets::BlockType;
+use crate::components::BlockType;
 use crate::gfx::mesh_payload::Vertex;
 
 // Resolve a `BlockType` asset into the chunk mesher's palette entry. Per-face

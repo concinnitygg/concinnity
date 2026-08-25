@@ -14,7 +14,7 @@
 use super::hud;
 use super::registry::{self, PanelKey};
 use super::theme;
-use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window, WindowMode};
+use crate::components::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window, WindowMode};
 use crate::ecs::FontHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -535,7 +535,7 @@ mod tests {
     // not shift any field. Pins the spec builders against drift.
     #[test]
     fn constructors_materialize_expected_components() {
-        use crate::assets::TextAlign;
+        use crate::components::TextAlign;
 
         let s = button_sprite(
             AssetId(1),

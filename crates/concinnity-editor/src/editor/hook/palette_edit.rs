@@ -10,7 +10,7 @@
 // click outside it.
 
 use super::*;
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use crate::editor::behavior::navigate;
 use crate::editor::palette::{PaletteAction, providers};
 

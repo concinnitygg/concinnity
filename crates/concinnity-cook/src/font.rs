@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 
-use concinnity_core::assets::Font;
+use concinnity_core::components::Font;
 
 // Compile a Font asset's arguments into the binary blob payload format.
 //

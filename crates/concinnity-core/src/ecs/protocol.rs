@@ -1,16 +1,27 @@
 // src/ecs/protocol.rs
 //
-// Renderer-free per-frame protocol types: the resource singletons the runtime
-// systems publish and read to coordinate one tick. They name no graphics
-// backend, windowing, physics, or audio type, so they live in core where every
-// subsystem crate can reach them without depending on the renderer. The client
-// `ecs` module re-exports them under the historical `crate::ecs::*` paths.
+// Renderer-free protocol types: the resource singletons the runtime systems
+// publish and read to coordinate a tick, plus the world's cook-counted physics
+// reservation, published once at blob load. They name no graphics backend,
+// windowing, physics, or audio type, so they live in core where every subsystem
+// crate can reach them without depending on the renderer. The client `ecs`
+// module re-exports them under the historical `crate::ecs::*` paths.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::blob::PhysicsBudgetRecord;
 use crate::ecs::asset_id::AssetId;
 use concinnity_asset::FontHandle;
+
+/// The world's physics reservation as cook counted it, published at blob load.
+/// Absent when the world declares no physics content, or when the world was
+/// built in memory rather than loaded from a blob; the simulation then counts
+/// the loaded components itself.
+///
+/// Lives here rather than with the engine's other blob resources because the
+/// simulation driver reads it, and the engine depends on the driver.
+pub struct WorldPhysicsBudget(pub PhysicsBudgetRecord);
 
 /// Per-frame menu state, published as a resource by the overlay build (which runs
 /// first in the schedule) and read by the simulation systems the same tick.
@@ -300,7 +311,7 @@ pub struct PickIndex {
 }
 
 /// One extra RGBA8 image for the sprite/text atlas pool, bound to a reserved
-/// [TextureHandle](crate::assets) the inserting tool chose. The handle space
+/// [TextureHandle](crate::components) the inserting tool chose. The handle space
 /// must stay clear of the compiled world's dense texture handles (tools use a
 /// high base).
 #[derive(Debug, Clone)]
@@ -406,7 +417,7 @@ pub enum ScheduleMode {
 impl ScheduleMode {
     /// The mode a world runs under: the published resource, or `Serial` when
     /// nothing published one.
-    pub fn current(resources: &concinnity_eas::Resources) -> ScheduleMode {
+    pub fn current(resources: &crate::ecs::Resources) -> ScheduleMode {
         resources
             .get::<ScheduleMode>()
             .copied()

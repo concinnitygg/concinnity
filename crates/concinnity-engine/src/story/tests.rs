@@ -1,5 +1,5 @@
 use super::*;
-use crate::assets::{
+use crate::components::{
     Screen, Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker,
 };
 use crate::ecs::World;
@@ -546,7 +546,7 @@ fn typewriter_reveals_and_advance_completes() {
 // it while the flag is set.
 #[test]
 fn ops_raise_flags_and_gates_redirect() {
-    use crate::assets::{StoryGate, StoryOp};
+    use crate::components::{StoryGate, StoryOp};
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -599,7 +599,7 @@ fn ops_raise_flags_and_gates_redirect() {
 // visible options, and picking maps back to the right target.
 #[test]
 fn gated_choices_filter_and_remap() {
-    use crate::assets::StoryCondition;
+    use crate::components::StoryCondition;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -657,7 +657,7 @@ fn gated_choices_filter_and_remap() {
 // A menu whose gate passes redirects play instead of opening.
 #[test]
 fn menu_gates_redirect_past_the_menu() {
-    use crate::assets::{StoryGate, StoryOp};
+    use crate::components::{StoryGate, StoryOp};
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -900,7 +900,7 @@ fn reload_refreshes_an_open_menu() {
 // the threshold is met.
 #[test]
 fn numeric_ops_accumulate_and_comparisons_gate() {
-    use crate::assets::{StoryGate, StoryOp};
+    use crate::components::{StoryGate, StoryOp};
     let add_trip = StoryOp {
         name: "trips".to_string(),
         value: 1,
@@ -1652,7 +1652,7 @@ fn pageless_node_enters_its_choice_menu_directly() {
 // entry.
 #[test]
 fn pageless_choice_gate_redirects_on_entry() {
-    use crate::assets::StoryGate;
+    use crate::components::StoryGate;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1691,7 +1691,7 @@ fn pageless_choice_gate_redirects_on_entry() {
 // is shown.
 #[test]
 fn first_page_gate_redirects_on_node_entry() {
-    use crate::assets::StoryGate;
+    use crate::components::StoryGate;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1727,7 +1727,7 @@ fn first_page_gate_redirects_on_node_entry() {
 // node, like a menu-less node.
 #[test]
 fn all_gated_choices_fall_through() {
-    use crate::assets::StoryCondition;
+    use crate::components::StoryCondition;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1764,7 +1764,7 @@ fn all_gated_choices_fall_through() {
 // the loop instead of spinning forever, landing on no page.
 #[test]
 fn gate_loop_is_stopped_by_the_hop_limit() {
-    use crate::assets::StoryGate;
+    use crate::components::StoryGate;
     let dummy = || StoryChoice {
         label: "x".to_string(),
         target: 0,

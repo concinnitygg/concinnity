@@ -58,7 +58,7 @@ impl RenderBackend for VkContext {
         fn set_menu_mode(&mut self, on: bool);
         fn set_camera_capture(&mut self, capture: bool);
         fn set_vsync(&mut self, on: bool);
-        fn set_window_mode(&mut self, mode: crate::assets::WindowMode);
+        fn set_window_mode(&mut self, mode: crate::components::WindowMode);
         fn set_window_size(&mut self, width: u32, height: u32);
         fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode>;
@@ -68,7 +68,7 @@ impl RenderBackend for VkContext {
         fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap);
         fn set_reflection_probes(&mut self, probes: &[crate::gfx::reflection_probe::ProbePlacement]);
         fn apply_quality_settings(&mut self, settings: crate::gfx::backend::QualitySettings);
-        fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate);
+        fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);
         fn set_shadow_cascades(&mut self, count: u32);
         fn update_quality_params(&mut self, settings: crate::gfx::backend::QualitySettings);

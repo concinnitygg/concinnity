@@ -261,14 +261,6 @@ pub(in crate::directx) struct SsaoResources {
     // pooled resource at build / resize time.
     pub(in crate::directx) ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(in crate::directx) ao_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    // CPU handle of the AO SRV; the same slot main-pass paths copy to the
-    // per-draw "object" SRV table when rebinding the AO descriptor (not
-    // used yet but handy for future descriptor-table reshuffles).
-    #[expect(
-        dead_code,
-        reason = "kept for a future descriptor-table reshuffle; the live binding is ao_srv_gpu"
-    )]
-    pub(in crate::directx) ao_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
 
     // GTAO horizon-search kernel + depth-aware blur (fullscreen triangle).
     pub(in crate::directx) kernel_root_sig: ID3D12RootSignature,
@@ -358,7 +350,6 @@ impl SsaoResources {
             ao_raw_srv_gpu: ao_raw_srv.1,
             ao_rtv,
             ao_srv_gpu: ao_srv.1,
-            ao_srv_cpu: ao_srv.0,
             kernel_root_sig,
             kernel_pso,
             blur_root_sig,

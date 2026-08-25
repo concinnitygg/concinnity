@@ -16,7 +16,7 @@
 // list. The world clock (Lifetime + Spawner) freezes while a menu is open
 // (`MenuActive`, published by OverlaySystem earlier this tick).
 
-use crate::assets::{
+use crate::components::{
     DespawnRequest, EntityTarget, ReparentRequest, SpawnRequest, VisibilityRequest,
 };
 use crate::ecs::asset_id::AssetId;
@@ -234,7 +234,10 @@ impl SpawnSystem {
             // A skinned template (a SkeletonPose entity) claims a
             // pre-reserved instance slot; a static one clones a draw
             // slot. Dispatch on which the template carries.
-            if ctx.get::<crate::assets::SkeletonPose>(template).is_some() {
+            if ctx
+                .get::<crate::components::SkeletonPose>(template)
+                .is_some()
+            {
                 template::spawn_skinned_from_template(
                     ctx,
                     template,
@@ -271,7 +274,10 @@ impl SpawnSystem {
             let Some(template) = resolve_name(ctx, due.template) else {
                 continue;
             };
-            if ctx.get::<crate::assets::SkeletonPose>(template).is_some() {
+            if ctx
+                .get::<crate::components::SkeletonPose>(template)
+                .is_some()
+            {
                 template::spawn_skinned_from_template(
                     ctx,
                     template,

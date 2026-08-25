@@ -12,7 +12,7 @@
 // component is present. GLFW's CursorDisabled mode delivers raw relative
 // deltas directly via CursorPos events, so no manual warping is needed.
 
-use crate::assets::{InputKey, WindowMode};
+use crate::components::{InputKey, WindowMode};
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::keymap::KeyMap;
 

@@ -10,7 +10,7 @@
 // uses, so the form, tree, and gizmo all follow for free.
 
 use super::*;
-use crate::assets::{Camera3D, Transform};
+use crate::components::{Camera3D, Transform};
 use concinnity_cpu::gfx::pick::ray_aabb;
 
 // One drawable / pickable billboard this frame: the authored entry it stands

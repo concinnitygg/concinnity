@@ -1,9 +1,10 @@
 //! Debug-build access validation hook. `PipelineContext` accessors report each
 //! touch here; the client installs a hook that asserts the touch against the
-//! stepping system's declared `Access` (tracked client-side, since this crate
-//! is no_std and holds no per-thread state). Compiled out of release builds
-//! entirely: release parallel-safety never rests on these checks, only on the
-//! executor handing conflicting systems to different waves.
+//! stepping system's declared [`Access`](crate::ecs::Access) (tracked
+//! client-side, since this crate is no_std and holds no per-thread state).
+//! Compiled out of release builds entirely: release parallel-safety never rests
+//! on these checks, only on the executor handing conflicting systems to
+//! different waves.
 #![cfg(debug_assertions)]
 
 use core::any::TypeId;

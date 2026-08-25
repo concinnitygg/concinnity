@@ -6,7 +6,7 @@
 // turns mouse/keyboard input into a `Camera3D` orientation and a movement
 // intent for the player's `RigidBody`.
 
-use crate::assets::{Camera3D, CameraController, FrameInput, Interactable, Transform};
+use crate::components::{Camera3D, CameraController, FrameInput, Interactable, Transform};
 use crate::ecs::{Entity, PipelineContext, StepResult, System};
 use std::time::Instant;
 
@@ -72,16 +72,16 @@ impl Camera3DSystem {
 impl System for Camera3DSystem {
     fn access(&self) -> crate::ecs::Access {
         crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .reads_components(crate::component_mask![crate::components::FrameInput])
             .writes_components(crate::component_mask![
-                crate::assets::Camera3D,
-                crate::assets::Transform,
+                crate::components::Camera3D,
+                crate::components::Transform,
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::decompose::EntityByName,
-                crate::assets::ControlsCommand,
+                crate::components::ControlsCommand,
             ])
-            .writes_resources(crate::resource_mask![crate::assets::InteractEvent])
+            .writes_resources(crate::resource_mask![crate::components::InteractEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -300,8 +300,8 @@ impl System for Camera3DSystem {
                             .map(|(&name, _)| name)
                     });
                 if let Some(target) = target {
-                    ctx.events_mut::<crate::assets::InteractEvent>()
-                        .send(crate::assets::InteractEvent { target });
+                    ctx.events_mut::<crate::components::InteractEvent>()
+                        .send(crate::components::InteractEvent { target });
                 }
             }
         }
@@ -312,7 +312,7 @@ impl System for Camera3DSystem {
 
 #[cfg(test)]
 mod tests {
-    use crate::assets::{Camera3D, CameraController};
+    use crate::components::{Camera3D, CameraController};
     use crate::ecs::World;
 
     fn camera(controller: Option<CameraController>) -> Camera3D {
@@ -356,7 +356,7 @@ mod tests {
     // This is the settings-menu sensitivity slider applying without a restart.
     #[test]
     fn controls_command_updates_sensitivity_live() {
-        use crate::assets::{ControlsCommand, FrameInput};
+        use crate::components::{ControlsCommand, FrameInput};
 
         let mut world = World::new();
         // Free-fly avoids the PhysicsSystem path; start from a known sensitivity.
@@ -394,7 +394,7 @@ mod tests {
     // slider applying without a restart.
     #[test]
     fn controls_command_updates_fov_live() {
-        use crate::assets::{ControlsCommand, FrameInput};
+        use crate::components::{ControlsCommand, FrameInput};
 
         let mut world = World::new();
         let ctrl = CameraController {
@@ -453,7 +453,7 @@ mod tests {
     // starving the menu, so Escape did nothing over a captured camera.)
     #[test]
     fn camera_and_ui_share_frame_input() {
-        use crate::assets::{FrameInput, KeyBinding, Screen, ScreenCommand};
+        use crate::components::{FrameInput, KeyBinding, Screen, ScreenCommand};
         use crate::ecs::asset_id::AssetId;
 
         let mut world = World::new();
@@ -495,7 +495,7 @@ mod tests {
     // two units ahead (within reach and inside the facing cone), and a latched
     // interact input. Shared by the interact decomposition tests.
     fn interact_world() -> World {
-        use crate::assets::Prop;
+        use crate::components::Prop;
         use crate::ecs::asset_id::AssetId;
 
         let mut world = World::new();
@@ -518,7 +518,7 @@ mod tests {
     // Transform.
     #[test]
     fn interact_rotates_transform() {
-        use crate::assets::{FrameInput, Interactable, Prop, Transform};
+        use crate::components::{FrameInput, Interactable, Prop, Transform};
 
         let mut world = interact_world();
         world.start().unwrap();
@@ -546,7 +546,7 @@ mod tests {
     // of moving itself, driving the FPS-walker basis and commit branch.
     #[test]
     fn fps_walker_clamps_bounds_and_hands_off_movement() {
-        use crate::assets::FrameInput;
+        use crate::components::FrameInput;
         use crate::gfx::camera::view_matrix;
 
         let mut world = World::new();

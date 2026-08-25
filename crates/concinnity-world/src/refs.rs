@@ -7,8 +7,7 @@
 
 use crate::check::asset_refs::CrossRef;
 use crate::check::cross_reference::cross_refs_for;
-use crate::registry::ComponentType;
-use crate::resource_type::ResourceAssetType;
+use crate::registry::RegisteredType;
 use crate::world::WorldJsonlAsset;
 
 /// The names of every asset `asset` references, in field/declaration order.
@@ -20,14 +19,9 @@ pub fn referenced_names(asset: &WorldJsonlAsset) -> Vec<String> {
 
     let mut names = Vec::new();
 
-    let flat_refs = ComponentType::all()
+    let flat_refs = RegisteredType::all()
         .iter()
         .map(|t| (t.as_str(), t.ref_fields()))
-        .chain(
-            ResourceAssetType::all()
-                .iter()
-                .map(|t| (t.as_str(), t.ref_fields())),
-        )
         .filter(|(ty, _)| norm(ty) == type_norm)
         .flat_map(|(_, refs)| refs.iter());
     for &(field, _target) in flat_refs {

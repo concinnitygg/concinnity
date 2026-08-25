@@ -15,6 +15,8 @@
 
 pub(crate) mod access_ids;
 pub(crate) mod by_asset_id;
+#[cfg(test)]
+mod consumed_columns_tests;
 pub(crate) mod decompose;
 #[cfg(test)]
 mod determinism_tests;
@@ -26,11 +28,11 @@ pub(crate) mod waves;
 // `PipelineContext`, re-exported from concinnity-core so the rest of the client
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
-    Access, Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset,
-    ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity, EventCursor, EventStore,
-    Events, FontHandle, FrameContext, FrameVec, MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord,
-    MeshHandle, PayloadLocator, PipelineContext, Resources, SceneGroup, ScratchStats,
-    SkinnedMeshHandle, TextureHandle, Tick,
+    Access, Arena, AudioClipHandle, BlobAssetDef, BuildOnlyAsset, ColumnTicks, Component,
+    ComponentAsset, ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity,
+    EventCursor, EventStore, Events, FontHandle, FrameContext, FrameVec, MAX_CHANGE_AGE,
+    MaterialHandle, MeshBoundsRecord, MeshHandle, PayloadLocator, PipelineContext, Resources,
+    RuntimeComponent, SceneGroup, ScratchStats, SkinnedMeshHandle, TextureHandle, Tick,
 };
 
 // The name interner keeps a per-thread table, so it lives in concinnity-cpu;
@@ -259,10 +261,10 @@ macro_rules! define_systems {
         /// Variant sizes follow the behavior types; boxing them would only move
         /// the per-system state behind a pointer for no real gain here.
         // Gated on where the lint actually fires: the gap between the two
-        // largest variants clears the threshold on macOS but not on Windows or
+        // largest variants clears the threshold on macOS and Windows but not on
         // Linux.
         #[cfg_attr(
-            target_os = "macos",
+            any(target_os = "macos", target_os = "windows"),
             expect(
                 clippy::large_enum_variant,
                 reason = "boxing would only move the per-system state behind a pointer"
@@ -403,7 +405,10 @@ impl World {
     }
 
     /// Add one component to the world.
-    pub fn add_component<C: Into<ComponentAsset>>(&mut self, c: C) {
+    ///
+    /// Only a [`RuntimeComponent`] can be added: a build-only asset is consumed
+    /// by the cook and never reaches a world.
+    pub fn add_component<C: RuntimeComponent>(&mut self, c: C) {
         self.data.add_component(c);
     }
 
@@ -425,7 +430,7 @@ impl World {
     // can decide on the render loop regardless of timing.
     /// Whether the world needs a renderer.
     pub fn renders(&self) -> bool {
-        self.query::<crate::assets::GraphicsConfig>()
+        self.query::<crate::components::GraphicsConfig>()
             .next()
             .is_some()
             || self
@@ -833,7 +838,7 @@ mod tests {
     fn graphics_config_makes_world_render() {
         let mut world = World::new();
         assert!(!world.renders());
-        world.add_component(crate::assets::GraphicsConfig::default());
+        world.add_component(crate::components::GraphicsConfig::default());
         assert!(world.renders());
     }
 
@@ -842,7 +847,7 @@ mod tests {
     // DebugHud is developer-only but `cfg!(debug_assertions)` holds under test.
     #[test]
     fn hud_components_spawn_in_schedule_order() {
-        use crate::assets::{DebugHud, FpsCounter, StatHud};
+        use crate::components::{DebugHud, FpsCounter, StatHud};
 
         let mut world = World::new();
         world.add_component(FpsCounter::default());
@@ -859,7 +864,7 @@ mod tests {
     // so `start()` opens no device here.
     #[test]
     fn system_manifest_matches_started_systems() {
-        use crate::assets::{DebugHud, FpsCounter, StatHud, Story, TextInput};
+        use crate::components::{DebugHud, FpsCounter, StatHud, Story, TextInput};
 
         let mut world = World::new();
         world.add_component(StatHud::default());
@@ -878,7 +883,7 @@ mod tests {
     // entry (the manifest is a filtered view of `SYSTEMS`, nothing else).
     #[test]
     fn system_manifest_is_a_table_order_subset() {
-        use crate::assets::{FpsCounter, StatHud};
+        use crate::components::{FpsCounter, StatHud};
 
         let mut world = World::new();
         world.add_component(FpsCounter::default());
@@ -902,7 +907,7 @@ mod tests {
     #[test]
     fn streaming_runs_immediately_before_graphics() {
         let mut world = World::new();
-        world.add_component(crate::assets::GraphicsConfig::default());
+        world.add_component(crate::components::GraphicsConfig::default());
         let manifest = world.system_manifest();
         let s = manifest
             .iter()
@@ -923,7 +928,7 @@ mod tests {
     // controlled camera's `follow` block picks exactly one of them.
     #[test]
     fn camera_controller_gates_are_exclusive() {
-        use crate::assets::{Camera3D, CameraController, FollowController};
+        use crate::components::{Camera3D, CameraController, FollowController};
 
         let mut fly_cam = Camera3D::bake(Default::default());
         fly_cam.controller = Some(CameraController::default());
@@ -947,7 +952,7 @@ mod tests {
     #[test]
     fn audio_gate_probes_without_a_device() {
         let mut world = World::new();
-        world.add_component(crate::assets::AudioEmitter::default());
+        world.add_component(crate::components::AudioEmitter::default());
         assert_eq!(world.system_manifest(), ["AudioSystem"]);
     }
 
@@ -968,7 +973,7 @@ mod tests {
     #[test]
     fn story_component_spawns_story_system() {
         let mut world = World::new();
-        world.add_component(crate::assets::Story::default());
+        world.add_component(crate::components::Story::default());
         world.start().unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -1002,7 +1007,7 @@ mod tests {
     // dumping their contents.
     #[test]
     fn world_debug_impl_reports_counts() {
-        use crate::assets::TextLabel;
+        use crate::components::TextLabel;
 
         let mut world = World::new();
         world.add_component(TextLabel::default());
@@ -1017,7 +1022,7 @@ mod tests {
     // path or the typed one) fills it, and `start()` is what gives it systems.
     #[test]
     fn empty_world_fills_from_components_then_systems() {
-        use crate::assets::{FpsCounter, TextLabel};
+        use crate::components::{FpsCounter, TextLabel};
 
         let mut world = World::new();
         assert!(world.is_empty());
@@ -1037,7 +1042,7 @@ mod tests {
     // matching query finds it.
     #[test]
     fn push_lands_in_the_typed_slot() {
-        use crate::assets::TextLabel;
+        use crate::components::TextLabel;
 
         let mut world = World::new();
         world.push(TextLabel {
@@ -1056,7 +1061,7 @@ mod tests {
     // which is how the editor suppresses a world's baked-in HUD before start.
     #[test]
     fn remove_all_drops_only_the_named_type() {
-        use crate::assets::{DebugHud, TextLabel};
+        use crate::components::{DebugHud, TextLabel};
 
         let mut world = World::new();
         world.add_component(TextLabel::default());
@@ -1073,14 +1078,14 @@ mod tests {
     // and without a per-instance entry.
     #[test]
     fn component_census_counts_one_entry_per_populated_type() {
-        use crate::assets::TextLabel;
+        use crate::components::TextLabel;
 
         let mut world = World::new();
         assert!(world.component_census().is_empty());
 
         world.add_component(TextLabel::default());
         world.add_component(TextLabel::default());
-        world.add_component(crate::assets::FpsCounter::default());
+        world.add_component(crate::components::FpsCounter::default());
 
         let census = world.component_census();
         assert_eq!(census.len(), 2, "one entry per type, not per component");
@@ -1098,7 +1103,7 @@ mod tests {
     // authored Prop into per-entity components, and the despawn takes them all.
     #[test]
     fn despawn_removes_an_entitys_components() {
-        use crate::assets::{MeshRenderer, Prop, Transform};
+        use crate::components::{MeshRenderer, Prop, Transform};
 
         let mut world = World::new();
         world.add_component(Prop::default());

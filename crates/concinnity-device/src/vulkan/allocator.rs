@@ -318,27 +318,12 @@ impl PooledBuffer {
 #[derive(Clone)]
 pub(super) struct PooledImage {
     image: vk::Image,
-    mapped: *mut u8,
     _lease: Option<Rc<Lease>>,
 }
 
 impl PooledImage {
     pub(super) fn image(&self) -> vk::Image {
         self.image
-    }
-
-    // A pointer to this image's own bytes, or null when its memory type is not
-    // host-visible. Only meaningful for LINEAR-tiled images; nothing pools one
-    // yet, so this is exercised by the unit tests alone.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "nothing pools a LINEAR-tiled image yet; tests alone read it"
-        )
-    )]
-    pub(super) fn mapped_ptr(&self) -> *mut u8 {
-        self.mapped
     }
 
     // Tie `view` to this image's lifetime: it is destroyed just before the
@@ -355,20 +340,13 @@ impl PooledImage {
     pub(super) fn null() -> Self {
         Self {
             image: vk::Image::null(),
-            mapped: std::ptr::null_mut(),
             _lease: None,
         }
     }
 
     // Exercised by the unit tests; no live caller branches on an image's null
     // state yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no live caller branches on an image's null state yet"
-        )
-    )]
+    #[cfg(test)]
     pub(super) fn is_null(&self) -> bool {
         self.image == vk::Image::null()
     }
@@ -548,10 +526,8 @@ impl DeviceAllocator {
             self.release(reservation);
             return Err(super::error::map_vk_result(e, "bind_image_memory"));
         }
-        let mapped = resource_ptr(&reservation);
         Ok(PooledImage {
             image,
-            mapped,
             _lease: Some(Rc::new(self.lease(reservation, PooledHandle::Image(image)))),
         })
     }
@@ -862,7 +838,6 @@ mod tests {
         assert!(buffer.mapped_ptr().is_null());
         let image = PooledImage::null();
         assert!(image.is_null());
-        assert!(image.mapped_ptr().is_null());
         drop(buffer);
         drop(image);
     }

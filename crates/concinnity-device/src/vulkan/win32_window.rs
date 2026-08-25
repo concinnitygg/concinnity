@@ -10,7 +10,7 @@
 
 use ash::vk;
 
-use crate::assets::WindowMode;
+use crate::components::WindowMode;
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::input::RenderInput;
 use crate::gfx::keymap::KeyMap;
@@ -70,16 +70,6 @@ impl Win32Window {
     // as DirectX and as GLFW's focus-gated engage on Linux).
     pub(crate) fn capture_cursor(&mut self) {
         self.win_state.recapture_on_click = true;
-    }
-
-    // Symmetric with `capture_cursor`; reached only through
-    // `set_camera_capture` today, kept so the cursor API stays complete.
-    #[expect(
-        dead_code,
-        reason = "symmetric with capture_cursor; reached only through set_camera_capture today"
-    )]
-    pub(crate) fn release_cursor(&mut self) {
-        do_release_cursor(&mut self.win_state);
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),

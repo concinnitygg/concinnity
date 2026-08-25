@@ -18,9 +18,6 @@ use crate::ecs::asset_id::AssetId;
 /// command applies to; `weights` must match the clip count registered for
 /// that target. `duration_secs == 0` snaps to the new weights on the next
 /// frame. Rejected when the target is graph-driven (use `SetParam`).
-///
-/// `dead_code` allow: the only constructor is the binary-only debug module,
-/// so `cargo check --lib` sees the struct as unconstructed.
 #[derive(Debug)]
 pub struct CrossfadeRequest {
     /// The `SkinnedMesh` the crossfade applies to.
@@ -34,8 +31,6 @@ pub struct CrossfadeRequest {
 /// One queued graph parameter write. `target` is the `SkinnedMesh` whose
 /// graph declares the parameter; the value lands in the target's `AnimationParams`
 /// component on the next animation step.
-///
-/// `dead_code` allow: same rationale as `CrossfadeRequest` above.
 #[derive(Debug)]
 pub struct SetParamRequest {
     /// The `SkinnedMesh` whose graph declares the parameter.
@@ -68,10 +63,6 @@ pub struct GraphStateReport {
 
 /// One runtime command pushed onto [`enqueue`] by the debug WS server and
 /// drained by `AnimationSystem::apply_runtime_commands`.
-///
-/// `dead_code` allow: the only producer is the binary-only `crate::debug`
-/// module (declared by main.rs, not lib.rs), so `cargo check --lib` sees the
-/// variants as unconstructed.
 pub enum AnimCommand {
     /// Crossfade a target's clip weights.
     Crossfade {
@@ -107,8 +98,6 @@ pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
 /// Push a command onto the animation runtime queue. The caller blocks on its
 /// own reply receiver to get the result. A poisoned mutex is recovered and
 /// used regardless (an unrelated panic must not silently drop commands).
-///
-/// `dead_code` allow: the only producer is the binary-only debug module.
 pub fn enqueue(cmd: AnimCommand) {
     let mut q = match QUEUE.lock() {
         Ok(g) => g,

@@ -21,7 +21,7 @@ fn world_with_fields() -> World {
         .into_iter()
         .chain(form_panel::all_field_ids())
     {
-        world.add_component(crate::assets::TextInput {
+        world.add_component(crate::components::TextInput {
             asset_id: id,
             ..Default::default()
         });

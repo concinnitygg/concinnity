@@ -41,13 +41,13 @@ pub use id::{AssetId, de_opt_asset_ref};
 pub use locator::PayloadLocator;
 pub use reference::{AssetRef, de_opt_asset_ref_typed};
 pub use resolver::{
-    HandleResolveFn, ResolveFn, set_audio_clip_handle_resolver, set_font_handle_resolver,
-    set_material_handle_resolver, set_mesh_handle_resolver, set_name_resolver,
-    set_shader_handle_resolver, set_skinned_mesh_handle_resolver, set_texture_handle_resolver,
+    set_audio_clip_handle_resolver, set_font_handle_resolver, set_material_handle_resolver,
+    set_mesh_handle_resolver, set_name_resolver, set_shader_handle_resolver,
+    set_skinned_mesh_handle_resolver, set_texture_handle_resolver,
 };
 
 // Asset data schema: one module per asset type, mirroring the impl-side layout
-// under concinnity-core/src/assets. Each holds the plain struct(s), enum(s),
+// under concinnity-core/src/components. Each holds the plain struct(s), enum(s),
 // `Default`, and serde derives; the matching ECS behavior lives in core.
 mod application;
 mod audio_bus;

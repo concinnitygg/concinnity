@@ -4,7 +4,7 @@
 // parameters, sanitizing degenerate values (the cook rejects them, but a
 // hand-edited blob or hot-reloaded world must not produce NaN volume).
 
-use concinnity_core::assets::Rolloff;
+use concinnity_core::components::Rolloff;
 use kira::Easing;
 
 // Fallbacks matching the AudioEmitter schema defaults.

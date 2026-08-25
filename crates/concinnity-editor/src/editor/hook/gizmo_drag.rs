@@ -13,7 +13,7 @@
 // entry list once); Escape cancels and restores the start state.
 
 use super::*;
-use crate::assets::{Camera3D, GlobalTransform, Transform};
+use crate::components::{Camera3D, GlobalTransform, Transform};
 use gizmo::GizmoMode;
 
 // Committed values are rounded so world.jsonl stays readable: positions and
@@ -96,7 +96,7 @@ impl EditorHook {
         let entity = world
             .resource::<concinnity_core::ecs::EntityByName>()?
             .get(id)?;
-        if world.get::<crate::assets::Parent>(entity).is_some() {
+        if world.get::<crate::components::Parent>(entity).is_some() {
             return None;
         }
         world.get::<Transform>(entity)?;

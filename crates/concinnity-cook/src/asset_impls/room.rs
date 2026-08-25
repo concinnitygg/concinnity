@@ -1,6 +1,6 @@
 // asset_impls/room.rs
 
-use concinnity_core::assets::Room;
+use concinnity_core::components::Room;
 
 impl crate::asset::BuildAsset for Room {
     fn compile_payload(

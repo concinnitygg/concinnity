@@ -20,7 +20,6 @@ path = "src/lib.rs"
 
 [dependencies]
 concinnity-core = { workspace = true }
-concinnity-blob = { workspace = true }
 
 tracing = "0.1.44"
 

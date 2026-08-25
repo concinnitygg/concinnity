@@ -21,7 +21,7 @@ use objc2_foundation::NSSize;
 use objc2_quartz_core::CAMetalLayer;
 
 use crate::appkit::{AppKitWindow, AppKitWindowParts, chrome, window_delegate};
-use crate::assets::WindowMode;
+use crate::components::WindowMode;
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::input::RenderInput;
 use crate::gfx::keymap::KeyMap;
@@ -119,10 +119,6 @@ impl AppKitVkWindow {
 
     pub(crate) fn capture_cursor(&mut self) {
         self.win.capture_cursor();
-    }
-
-    pub(crate) fn release_cursor(&mut self) {
-        self.win.release_cursor();
     }
 
     pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {

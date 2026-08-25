@@ -11,8 +11,8 @@
 // per-type descriptor to maintain. Editable kinds: string / integer / float /
 // bool; a fixed-length numeric array of 2..=4 elements (a vector or a colour),
 // edited as comma-separated numbers; a string-enum, cycled through its variants
-// (discovered per field via `ComponentType::field_enum_variants`); and an
-// asset-reference field (`ComponentType::ref_fields`), cycled through `(none)` +
+// (discovered per field via `RegisteredType::field_enum_variants`); and an
+// asset-reference field (`RegisteredType::ref_fields`), cycled through `(none)` +
 // the world's assets of the target type (the hook fills the options via
 // `set_ref_options`). A plain nested OBJECT is flattened into its leaves, keyed by
 // a dotted path (`controller.move_speed`), up to `MAX_NEST_DEPTH` levels; the leaf
@@ -22,9 +22,9 @@
 // (`waves.0.amplitude`); `set_at_path` / `get_at_path` navigate the numeric index
 // segments. Every other kind (deeper objects / arrays past the depth cap, undeclared
 // nulls) is left at its default and round-trips untouched. The assembled object is
-// validated by the caller via `ComponentType::reserialize_args`.
+// validated by the caller via `RegisteredType::reserialize_args`.
 
-use concinnity_world::registry::ComponentType;
+use concinnity_world::registry::RegisteredType;
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the
@@ -129,22 +129,17 @@ fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
 // one context argument rather than two.
 #[derive(Clone, Copy)]
 struct TypeMeta {
-    ct: Option<ComponentType>,
+    ct: Option<RegisteredType>,
     // `(field, target type)` each; the add form turns each into a name picker.
     refs: &'static [(&'static str, &'static str)],
 }
 
 impl TypeMeta {
-    // Build from an authoring type name. Reference fields come from the component
-    // registry (`ComponentType::ref_fields`) or, for a resource type that has left
-    // it (Material's texture refs), from `ResourceAssetType`.
+    // Build from an authoring type name. Reference fields come from the entry's
+    // `refs:` metadata, whichever group of the registry it is in.
     fn of(ty: &str) -> Self {
-        let ct = ComponentType::parse(ty);
-        let refs = ct.map(|c| c.ref_fields()).unwrap_or_else(|| {
-            concinnity_cook::resource_handles::ResourceAssetType::parse(ty)
-                .map(|rt| rt.ref_fields())
-                .unwrap_or(&[])
-        });
+        let ct = RegisteredType::parse(ty);
+        let refs = ct.map(|c| c.ref_fields()).unwrap_or(&[]);
         TypeMeta { ct, refs }
     }
 
@@ -223,14 +218,8 @@ fn number_text(n: &serde_json::Number) -> String {
 // The type's registered default args as an object (empty if the type is unknown
 // or has no args schema).
 pub(crate) fn base_args(ty: &str) -> Map<String, Value> {
-    // A resource asset (Font, ...) is not a `ComponentType`; its registration
-    // (and default args) come from `ResourceAssetType` instead.
-    ComponentType::parse(ty)
+    RegisteredType::parse(ty)
         .and_then(|ct| ct.registration().default_args)
-        .or_else(|| {
-            concinnity_cook::resource_handles::ResourceAssetType::parse(ty)
-                .and_then(|rt| rt.registration().default_args)
-        })
         .and_then(|v| match v {
             Value::Object(m) => Some(m),
             _ => None,
@@ -698,24 +687,23 @@ fn get_at_path_mut<'a>(obj: &'a mut Map<String, Value>, path: &str) -> Option<&'
 // Validate an assembled args object by round-tripping it through the type's typed
 // `Args` (the same check `cn add` applies). `Ok(())` means it will cook.
 pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Result<(), String> {
-    if let Some(ct) = ComponentType::parse(ty) {
-        return ct
-            .reserialize_args(&Value::Object(args.clone()))
-            .map(|_| ())
-            .map_err(|e| e.to_string());
-    }
+    let Some(ct) = RegisteredType::parse(ty) else {
+        return Err(format!("unknown asset type '{ty}'"));
+    };
     // A resource asset gets the same two checks a component does -- the typed
     // schema round-trip, then the structural check `cn add` / `cn check` run --
     // but never a payload compile: an EnvironmentMap's convolution costs seconds
     // and would stall the editor on every Apply. A source file that parses but
     // decodes badly is caught by the preview rebuild and by SAVE, which cook for
     // real.
-    if let Some(rt) = concinnity_cook::resource_handles::ResourceAssetType::parse(ty) {
+    if ct.is_resource() {
         let args = Value::Object(args.clone());
-        rt.reserialize_args(&args)?;
+        ct.normalized_args(&args).map_err(|e| e.to_string())?;
         return concinnity_cook::validate_asset(ty, name, &args);
     }
-    Err(format!("unknown asset type '{ty}'"))
+    ct.reserialize_args(&Value::Object(args.clone()))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -976,9 +964,9 @@ mod tests {
         assert_eq!(coerce(&f, "", &Value::Null), Value::String("stone".into()));
     }
 
-    // A resource type declares its references through `ResourceAssetType`, not the
-    // component registry: Material left the registry but its albedo/normal/etc.
-    // fields must still render as Texture pickers in the add form.
+    // A resource type declares its references through the same `refs:` metadata
+    // every other type uses: Material's albedo/normal/etc. fields must render as
+    // Texture pickers in the add form.
     #[test]
     fn resource_type_material_texture_fields_are_ref_pickers() {
         let fields = fields_for("Material", None);

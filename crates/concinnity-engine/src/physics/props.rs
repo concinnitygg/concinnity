@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use concinnity_core::assets::BodyDynamics;
+use concinnity_core::components::BodyDynamics;
 use concinnity_core::ecs::Entity;
 
 use concinnity_physics::{
@@ -252,7 +252,7 @@ impl PropBodies {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::assets::{PhysicsConfig, Transform};
+    use concinnity_core::components::{PhysicsConfig, Transform};
     use concinnity_core::ecs::ComponentStorage;
 
     // Distinct live entities, minted the way the load-time decomposition does.

@@ -5,7 +5,7 @@
 //! backend resolves it to its own native key codes when it is pushed via
 //! `RenderBackend::set_keymap`.
 
-use crate::assets::InputKey;
+use crate::components::InputKey;
 use serde::{Deserialize, Serialize};
 
 /// A rebindable gameplay action. The four movement directions, sprint, jump, and

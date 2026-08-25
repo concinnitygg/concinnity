@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use crate::assets::GlassPanel;
+use crate::components::GlassPanel;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::slang_builtins;

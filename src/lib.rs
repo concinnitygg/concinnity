@@ -1,17 +1,17 @@
-//! Concinnity is a graphics application framework: construct an [`App`],
+//! Concinnity is a graphics application framework: construct an `App`,
 //! populate its [`World`] with components, and run it on the engine's
 //! runtime loop.
 //!
 //! # Creating an application
 //!
-//! A [`World`] is constructed first, then handed to an [`App`], which runs
+//! A [`World`] is constructed first, then handed to an `App`, which runs
 //! it.
 //!
 //! ```no_run
 //! use concinnity::assets::{GraphicsConfig, TextLabel};
 //! use concinnity::{App, World};
 //!
-//! fn main() -> std::io::Result<()> {
+//! fn main() {
 //!     let mut world = World::new();
 //!     world.add_component(GraphicsConfig::default());
 //!     world.add_component(TextLabel {
@@ -19,12 +19,26 @@
 //!         ..Default::default()
 //!     });
 //!
-//!     App::from_world(world).run()
+//!     App::from_world(world).run().expect("the app runs");
 //! }
 //! ```
 //!
 //! A [`GraphicsConfig`](assets::GraphicsConfig) is what gives the app a
 //! window.
+//!
+//! A world compiled ahead of time is played straight from its blob file, with
+//! no authoring step in the shipped binary:
+//!
+//! ```no_run
+//! use concinnity::App;
+//!
+//! fn main() {
+//!     App::from_blob("data/0")
+//!         .expect("data/0 holds a compiled world")
+//!         .run()
+//!         .expect("the app runs");
+//! }
+//! ```
 //!
 //! # Features
 //!
@@ -34,15 +48,14 @@
 //! `std` is that runtime, and it is on by default. Turning it off leaves the
 //! asset vocabulary and a [`World`] to build with it, so a `no_std` crate can
 //! assemble world content where no runtime exists. What it drops is everything
-//! that runs: there is no `App`, no `cook`, and no `install_global_allocator`,
-//! and a [`World`] carries components and resources but no systems, `start`, or
-//! `step`. `concinnity_engine::ecs::World` is [`From`] the one built here, so
-//! handing the content to a runtime elsewhere is one conversion.
+//! that runs: there is no `App` and no `cook`, and a [`World`] carries
+//! components but nothing to step them.
 //!
 //! `cook` adds the `cook` module, which compiles authored assets into a
-//! runnable [`World`] in process. It pulls in the asset importers (glTF, FBX,
-//! textures, fonts), so a shipped application that plays an already-compiled
-//! world should leave it off.
+//! runnable [`World`] in process, or writes them to a blob file for a shipped
+//! application to play. It pulls in the asset importers (glTF, FBX, textures,
+//! fonts), so an application that only plays an already-compiled world should
+//! leave it off.
 //!
 //! `vulkan` selects the Vulkan backend where the platform default is Metal or
 //! DirectX.
@@ -55,21 +68,12 @@
 extern crate std;
 
 #[cfg(feature = "std")]
-pub use concinnity_engine::App;
-#[cfg(feature = "std")]
-pub use concinnity_engine::ecs::World;
-/// Where the engine reads and writes its state tree (`data/`, `saves/`,
-/// `settings`, the build caches). A host anchors it before it compiles or
-/// runs anything; unanchored, it hangs off the current directory.
-#[cfg(feature = "std")]
-pub use concinnity_engine::paths;
-#[cfg(feature = "std")]
-pub use concinnity_memory::install_global_allocator;
+mod app;
+mod world;
 
-// Without the runtime there is nothing to run a world, so the world is its data
-// half alone -- the same components and resources, minus the systems.
-#[cfg(not(feature = "std"))]
-pub use concinnity_core::ecs::World;
+#[cfg(feature = "std")]
+pub use app::App;
+pub use world::World;
 
 /// The runtime asset vocabulary (`Application`, `Camera3D`, `Room`,
 /// `DirectionalLight`, ...), each addable to a [`World`] as a component.
@@ -80,7 +84,7 @@ pub mod assets {
     // (`SpotLightGeometry`, `PostProcessResolve`, ...), none of which an
     // application authoring assets has any use for. `asset_exports` checks the
     // list stays complete.
-    pub use concinnity_core::assets::{
+    pub use concinnity_core::components::{
         AaMode, Animation, AnimationBlend, AnimationBlendPoint, AnimationCondition, AnimationGraph,
         AnimationIkChain, AnimationParam, AnimationParams, AnimationState, AnimationTrack,
         AnimationTransition, AppLimits, Application, ApplicationArgs, AudioBus, AudioClip,
@@ -99,21 +103,21 @@ pub mod assets {
         Mesh, MeshRenderer, Model, ModelRenderer, MorphDelta, MorphKey, NavDirection, OptionSelect,
         PaletteEntry, Panel, PanelSection, Parent, ParticleEmitter, PhysicsConfig, PhysicsJoint,
         PhysicsJointKind, Pickup, PlayCue, PointLight, PostProcessConfig, Prefab, PrefabEntry,
-        PrefabKind, ProceduralMesh, Prop, PropBody, PropCollider, ProportionGroup, RectAreaLight,
-        ReflectionBlurResolution, ReflectionProbe, RenderHandle, ReparentRequest, ResolvedSliders,
-        RigidBody, Rolloff, Room, RoomArgs, RootMotionEvent, Scene, SceneCommand, SceneImport,
-        SceneMember, SchemaJoint, SchemaKey, SchemaRegion, Screen, ScreenCommand, ScreenInput,
-        ScreenShown, ScrollGroup, ScrollPanel, ScrollRow, SdfVolume, SettingCommand, SettingOp,
-        SettingsProfile, Shader, ShaderKind, ShaderPayload, ShadowUpdate, ShapePreset, ShapeSlider,
-        SkeletonJoint, SkeletonPose, SkinnedMesh, SkinnedVertexData, Slider, SpawnRequest, Spawner,
-        SpawnerArgs, SpotLight, Sprite, SpriteFit, SsgiResolution, StageSource, StatHud, Story,
-        StoryChoice, StoryCommand, StoryCompareOp, StoryCondition, StoryGate, StoryImage,
-        StoryImport, StoryNode, StoryOp, StoryPage, StoryPlayback, StoryReload, StoryScaffold,
-        StorySpeaker, StoryStage, StreamingConfig, SubMeshRef, SynthParams, SynthesizedTarget,
-        TextAlign, TextInput, TextLabel, Texture, Transform, TriggerFilter, TriggerVolume,
-        UpscaleQuality, UpscalerBackend, VariableDecl, Variables, VertexData, VisibilityRequest,
-        VolumeEvent, VolumetricFog, VoxelChunk, VoxelWorld, WaterSurface, WaterWave, Window,
-        WindowMode,
+        PrefabKind, ProceduralMesh, Prop, PropBody, PropCollider, PropInstance, ProportionGroup,
+        RectAreaLight, ReflectionBlurResolution, ReflectionProbe, RenderHandle, ReparentRequest,
+        ResolvedSliders, RigidBody, Rolloff, Room, RoomArgs, RootMotionEvent, Scene, SceneCommand,
+        SceneImport, SceneMember, SchemaJoint, SchemaKey, SchemaRegion, Screen, ScreenCommand,
+        ScreenInput, ScreenShown, ScrollGroup, ScrollPanel, ScrollRow, SdfVolume, SettingCommand,
+        SettingOp, SettingsProfile, Shader, ShaderKind, ShaderPayload, ShadowUpdate, ShapePreset,
+        ShapeSlider, SkeletonJoint, SkeletonPose, SkinnedMesh, SkinnedVertexData, Slider,
+        SpawnRequest, Spawner, SpawnerArgs, SpotLight, Sprite, SpriteFit, SsgiResolution,
+        StageSource, StatHud, Story, StoryChoice, StoryCommand, StoryCompareOp, StoryCondition,
+        StoryGate, StoryImage, StoryImport, StoryNode, StoryOp, StoryPage, StoryPlayback,
+        StoryReload, StoryScaffold, StorySpeaker, StoryStage, StreamingConfig, SubMeshRef,
+        SynthParams, SynthesizedTarget, TextAlign, TextInput, TextLabel, Texture, Transform,
+        TriggerFilter, TriggerVolume, UpscaleQuality, UpscalerBackend, VariableDecl, Variables,
+        VertexData, VisibilityRequest, VolumeEvent, VolumetricFog, VoxelChunk, VoxelWorld,
+        WaterSurface, WaterWave, Window, WindowMode,
     };
 }
 
@@ -139,9 +143,10 @@ mod tests {
             ..Default::default()
         });
 
-        assert_eq!(world.component_count(), 1);
+        let inner = world.inner();
+        assert_eq!(inner.component_count(), 1);
         assert_eq!(
-            world.query::<TextLabel>().next().unwrap().content,
+            inner.query::<TextLabel>().next().unwrap().content,
             "Hello, world!"
         );
     }
@@ -159,25 +164,6 @@ mod tests {
         });
 
         let mut app = super::App::from_world(world);
-        assert_eq!(app.start(), Ok(()));
-    }
-
-    // The tier handoff: a world built where no runtime exists becomes the
-    // engine's world by conversion, with its content intact.
-    #[cfg(feature = "std")]
-    #[test]
-    fn a_data_only_world_converts_into_the_engines_world() {
-        let mut data = concinnity_core::ecs::World::new();
-        data.add_component(TextLabel {
-            content: "carried over".into(),
-            ..Default::default()
-        });
-
-        let world: World = data.into();
-        assert_eq!(world.component_count(), 1);
-        assert_eq!(
-            world.query::<TextLabel>().next().unwrap().content,
-            "carried over"
-        );
+        assert_eq!(app.inner_mut().start(), Ok(()));
     }
 }

@@ -4,9 +4,9 @@
 // capsule follows, and the shape asset is consumed. The mesh that comes out
 // is a plain SkinnedMesh with no shape work left for the runtime.
 
-use crate::assets::{CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh};
+use crate::components::{CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh};
 use crate::ecs::Component;
-use concinnity_core::assets::build_skeleton_from_joint_defs;
+use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::gfx::proportions::ProportionLayer;
 use concinnity_core::gfx::transform::{self, Mat4};
 use concinnity_core::math::vec3;
@@ -258,7 +258,7 @@ pub(crate) fn bake_shapes<'c>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{CharacterCapsule, JointProportion, ShapeSlider, SkinnedVertexData};
+    use crate::components::{CharacterCapsule, JointProportion, ShapeSlider, SkinnedVertexData};
 
     fn joint(name: &str, parent: i32, y: f32) -> SkeletonJoint {
         SkeletonJoint {

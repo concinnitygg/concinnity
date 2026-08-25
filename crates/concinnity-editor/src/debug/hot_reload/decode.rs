@@ -587,7 +587,7 @@ pub(crate) fn poll_pending_assets(
             joint_count_changes.push((ds.entry_idx, new_joint_count));
             state.pending_skeleton_updates.push(PendingSkeletonUpdate {
                 skinned_index: entry.skinned_index,
-                new_skeleton: crate::assets::build_skeleton_from_joint_defs(&ds.skeleton),
+                new_skeleton: crate::components::build_skeleton_from_joint_defs(&ds.skeleton),
             });
             tracing::info!(
                 "asset hot-reload: SkinnedMesh '{}' joint count changed ({} → {}), \

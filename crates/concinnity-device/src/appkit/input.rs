@@ -8,7 +8,7 @@
 
 use objc2_app_kit::NSEvent;
 
-use crate::assets::InputKey;
+use crate::components::InputKey;
 
 // The previously-duplicated InputState collapsed into the shared
 // crate::gfx::input::RenderInput; this alias keeps the historical name.

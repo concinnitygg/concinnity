@@ -36,7 +36,7 @@ use objc2_metal::{
     MTLResourceOptions, MTLStoreAction, MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use crate::assets::sdf_volume::SdfVolume;
+use crate::components::sdf_volume::SdfVolume;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::LightUniforms;
 

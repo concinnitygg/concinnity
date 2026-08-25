@@ -8,7 +8,7 @@
 // code names under crate::* so their `crate::<module>` import paths resolve.
 // world.jsonl I/O lives in the compiler (concinnity-cook), not core.
 pub(crate) use concinnity_cook::world;
-pub(crate) use concinnity_engine::{app, assets, blob, ecs, gfx, jobs, resource};
+pub(crate) use concinnity_engine::{app, blob, components, ecs, gfx, jobs, resource};
 
 // Authoring / in-memory build. Its exports below are the surface the
 // out-of-tree Swift app's FFI crate embeds; the `cn` binary uses only part of

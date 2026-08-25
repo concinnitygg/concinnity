@@ -2,7 +2,7 @@
 // text-input field box/caret. Both are built as plain Sprites + TextLabels and
 // fed through the same shapers as the authored overlay elements.
 
-use crate::assets::{Sprite, TextInput, TextLabel};
+use crate::components::{Sprite, TextInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::text;
 
@@ -82,7 +82,7 @@ pub(super) fn build_dropdown_overlay(
         follow_cursor: false,
         visible: true,
         screen: screen.screen,
-        fit: crate::assets::SpriteFit::Fit,
+        fit: crate::components::SpriteFit::Fit,
         corner_radius: 0.0,
         border_width: 0.0,
         border_color: [0.0, 0.0, 0.0, 1.0],
@@ -138,8 +138,8 @@ pub(super) fn build_dropdown_overlay(
             color: screen.color,
             scale: screen.scale,
             centered: false,
-            align: crate::assets::TextAlign::Left,
-            fit: crate::assets::SpriteFit::Fit,
+            align: crate::components::TextAlign::Left,
+            fit: crate::components::SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             // An option longer than the list is cut with an ellipsis rather
@@ -300,7 +300,7 @@ pub(super) fn build_text_input_overlay(
         color,
         scale: ti.scale,
         centered: false,
-        align: crate::assets::TextAlign::Left,
+        align: crate::components::TextAlign::Left,
         fit: ti.fit,
         background: [0.0, 0.0, 0.0, 0.0],
         padding: 0.0,
@@ -343,7 +343,7 @@ pub(super) fn build_text_input_overlay(
                     color: ti.placeholder_color,
                     scale: ti.scale,
                     centered: false,
-                    align: crate::assets::TextAlign::Left,
+                    align: crate::components::TextAlign::Left,
                     fit: ti.fit,
                     background: [0.0, 0.0, 0.0, 0.0],
                     padding: 0.0,

@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use crate::assets::{
+use crate::components::{
     Behavior, BehaviorSource, DespawnRequest, InteractEvent, PlayCue, ReparentRequest,
     SceneCommand, ScreenCommand, SpawnRequest, StoryCommand, StoryPlayback, Transform, Variables,
     VisibilityRequest, VolumeEvent,

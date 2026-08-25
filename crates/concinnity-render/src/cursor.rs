@@ -5,7 +5,7 @@
 //! it needs no new pipeline and renders on every backend. The arrow's diagonal
 //! edges are real geometry, not a stair-stepped stack of quads.
 
-use crate::assets::Sprite;
+use crate::components::Sprite;
 use crate::ecs::CursorShape;
 use crate::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::OverlayTransform;
@@ -243,7 +243,7 @@ mod tests {
             follow_cursor: true,
             visible: true,
             screen: None,
-            fit: crate::assets::SpriteFit::Fit,
+            fit: crate::components::SpriteFit::Fit,
             corner_radius: 0.0,
             border_width: 0.0,
             border_color: [0.0, 0.0, 0.0, 1.0],

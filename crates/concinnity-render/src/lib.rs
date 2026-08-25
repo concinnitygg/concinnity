@@ -19,7 +19,7 @@ pub use concinnity_cpu::gfx::mesh_payload;
 // `AssetId` newtype from the vocabulary, and from the compute crate the
 // environment-map bake the reflection-probe payload builder calls plus the
 // glass-quad generator.
-pub(crate) use concinnity_core::{assets, ecs};
+pub(crate) use concinnity_core::{components, ecs};
 pub(crate) use concinnity_cpu::{build, geometry};
 
 pub mod area_light;

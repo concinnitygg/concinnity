@@ -34,7 +34,7 @@ pub(crate) mod gfx {
 // Asset data types, the runtime build helpers, and the mesh/chunk geometry the
 // backends reach by their historical `crate::` paths; plus the shared rayon job
 // pool (now in concinnity-render).
-pub(crate) use concinnity_core::assets;
+pub(crate) use concinnity_core::components;
 pub(crate) use concinnity_cpu::{build, geometry};
 pub(crate) use concinnity_render::jobs;
 

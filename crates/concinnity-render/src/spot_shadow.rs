@@ -11,7 +11,7 @@
 //! square footprint. Right-handed with [0, 1] depth, matching `csm.rs`, so the
 //! same matrices are valid on all three backends.
 
-use crate::assets::{SpotLight, SpotLightGeometry};
+use crate::components::{SpotLight, SpotLightGeometry};
 use crate::mat::{add3, look_at, mat4_mul, perspective_rh, scale3, up_for};
 use crate::render_types::{MAX_SHADOWED_SPOTS, SpotShadowData};
 

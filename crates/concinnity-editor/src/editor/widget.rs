@@ -8,7 +8,7 @@
 // place-a-sprite / point-in-rect logic -- in one place instead of two copies.
 
 use super::theme;
-use crate::assets::{Sprite, TextAlign, TextInput, TextLabel};
+use crate::components::{Sprite, TextAlign, TextInput, TextLabel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 

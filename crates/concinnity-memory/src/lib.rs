@@ -37,6 +37,8 @@ extern crate alloc;
 extern crate std;
 
 mod arena;
+#[cfg(test)]
+mod bench;
 mod counters;
 mod detail;
 mod inline_vec;

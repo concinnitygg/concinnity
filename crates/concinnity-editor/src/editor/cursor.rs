@@ -8,7 +8,7 @@
 
 use super::registry::ID_BASE;
 use super::widget;
-use crate::assets::Sprite;
+use crate::components::Sprite;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 

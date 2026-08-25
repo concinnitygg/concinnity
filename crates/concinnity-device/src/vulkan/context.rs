@@ -69,7 +69,7 @@ pub(super) struct VkShadow {
     pub(super) light_dir: [f32; 3],
     // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
     // refreshes the near cascade every frame and the far cascades round-robin.
-    pub(super) update: crate::assets::ShadowUpdate,
+    pub(super) update: crate::components::ShadowUpdate,
     // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
     // per-frame cascade-split computation and capped at the camera far plane.
     pub(super) distance: u32,
@@ -1040,7 +1040,7 @@ pub(crate) struct VkContext {
     pub(super) textures: Vec<GpuImage>,
     // Holds only the flat-normal fallback a normal-less draw samples (its pool
     // slot is one past the last real texture); real normal maps are in `textures`.
-    pub(super) normal_map_textures: Vec<GpuImage>,
+    pub(super) fallback_textures: Vec<GpuImage>,
 
     // Samplers
     pub(super) linear_sampler: OwnedSampler,
@@ -1091,7 +1091,7 @@ pub(crate) struct VkContext {
     // Kept so a swapchain resize rebuilds the same backend via `build_upscaler`
     // (the DLSS / XeSS device extensions are fixed at device creation, so the
     // resize must re-resolve to the same first choice; it does, deterministically).
-    pub(super) upscale_requested: crate::assets::UpscalerBackend,
+    pub(super) upscale_requested: crate::components::UpscalerBackend,
 
     // Screen-space ambient occlusion (GTAO) resources. `Some` only when the
     // world's `PostProcessConfig` set `ssao: true`; `None` binds the
@@ -1936,16 +1936,6 @@ impl VkContext {
         self.window_mut().capture_cursor();
     }
 
-    // Symmetric with `capture_cursor`; reached only through `set_camera_capture`
-    // today, kept public so the cursor API stays complete.
-    #[expect(
-        dead_code,
-        reason = "symmetric with capture_cursor; reached only through set_camera_capture today"
-    )]
-    pub(crate) fn release_cursor(&mut self) {
-        self.window_mut().release_cursor();
-    }
-
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the window helper.
     pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
@@ -1990,7 +1980,7 @@ impl VkContext {
     // Switch window mode / resize at runtime. The GLFW work lives in window.rs;
     // the framebuffer-size change drives a swapchain rebuild via the present
     // path's OUT_OF_DATE handling.
-    pub(crate) fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
         self.window_mut().set_window_mode(mode);
     }
 
@@ -2042,7 +2032,7 @@ impl VkContext {
     // Set the live shadow cascade re-render cadence. The per-frame cascade split
     // reads `shadow.update` at the start of each draw (see draw.rs), so a change
     // takes effect on the next frame with no rebuild or allocation.
-    pub(crate) fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
         self.shadow.update = update;
     }
 
@@ -2412,7 +2402,7 @@ impl VkContext {
         // Scene textures + baked reflection-probe cubes: dropping them retires
         // them through the allocator.
         self.textures.clear();
-        self.normal_map_textures.clear();
+        self.fallback_textures.clear();
         self.text.atlas_textures.clear();
         self.probe.maps.clear();
     }

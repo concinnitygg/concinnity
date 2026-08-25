@@ -50,10 +50,25 @@ impl App {
         app
     }
 
+    /// An app holding the world compiled into the blob file at `path`.
+    /// Overflow payload blobs are its siblings named by index, so a world
+    /// written to `data/0` reads `data/1`, `data/2`, ... beside it.
+    pub fn from_blob(path: &std::path::Path) -> Result<Self, CnResult> {
+        let mut app = Self::new();
+        app.install(blob::load_at(path)?);
+        Ok(app)
+    }
+
     /// load assets and blob payload data from the primary blob and
     /// populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
-        let loaded = blob::load()?;
+        self.install(blob::load()?);
+        Ok(())
+    }
+
+    // Populate the world from an already-decoded blob, replacing whatever the
+    // app held.
+    fn install(&mut self, loaded: blob::LoadedBlob) {
         let (assets, mut resources, scene_groups, mesh_bounds, physics_budget, manifest, blob_data) = (
             loaded.components,
             loaded.resources,
@@ -91,7 +106,6 @@ impl App {
         // renderer reads the TextureTable to build its shared texture pool.
         crate::resource::install_resource_tables(&mut world, &mut resources);
         self.world = world;
-        Ok(())
     }
 
     /// Borrow the app's world.
@@ -134,7 +148,7 @@ impl App {
 
         let limits = self
             .world
-            .query::<crate::assets::Application>()
+            .query::<crate::components::Application>()
             .next()
             .map(|a| a.limits)
             .unwrap_or_default();
@@ -212,7 +226,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{AppLimits, Application};
+    use crate::components::{AppLimits, Application};
 
     // Starting the app publishes the thread + memory budgets as world resources,
     // honoring an `Application`'s limits. A world with no GraphicsConfig starts

@@ -10,7 +10,7 @@
 // that already selected the cell.
 
 use super::*;
-use crate::assets::{Camera3D, Transform};
+use crate::components::{Camera3D, Transform};
 
 // Movement below this is a click, not a drag (the marquee's convention).
 const DRAG_START_PX: f32 = 4.0;

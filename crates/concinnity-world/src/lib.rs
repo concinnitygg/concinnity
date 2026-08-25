@@ -1,9 +1,9 @@
 //! concinnity-world: the build-side world front half.
 //!
 //! Owns the authored world model (world.jsonl parsing and I/O, structural
-//! validation), the authoring type vocabulary (`ComponentType` and
-//! `ResourceAssetType`, both instantiated from the shared registry lists in
-//! concinnity-core), the asset cross-reference metadata, semantic validation
+//! validation), the authoring type vocabulary (`RegisteredType`, instantiated
+//! from the shared registry list in concinnity-core), the asset
+//! cross-reference metadata, semantic validation
 //! (`check`), the typed authoring vocabulary (`spec`), and the world templates
 //! built from it (`template`). Everything here operates on the authored input;
 //! the shipped runtime plays compiled blobs and never links this crate.
@@ -20,7 +20,7 @@
 
 // Bridge: re-export the modules the moved code names under crate::* so its
 // `crate::<module>` import paths resolve unchanged.
-pub(crate) use concinnity_core::{assets, platform, result};
+pub(crate) use concinnity_core::{components, platform, result};
 
 // The vocabulary's ECS surface, with the build-time name interner shadowing its
 // `asset_id`: the interner keeps a per-thread table, so it lives in

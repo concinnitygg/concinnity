@@ -269,14 +269,6 @@ pub struct CharacterSchema {
 }
 
 impl CharacterSchema {
-    /// The region a joint belongs to, if any region lists it.
-    pub fn region_of_joint(&self, joint: &str) -> Option<&str> {
-        self.regions
-            .iter()
-            .find(|r| r.joints.iter().any(|j| j == joint))
-            .map(|r| r.name.as_str())
-    }
-
     /// The region named `name`.
     pub fn region(&self, name: &str) -> Option<&SchemaRegion> {
         self.regions.iter().find(|r| r.name == name)
@@ -306,11 +298,6 @@ impl CharacterSchema {
             }
         }
         out
-    }
-
-    /// The names of the joints a source must have.
-    pub fn required_joints(&self) -> impl Iterator<Item = &SchemaJoint> {
-        self.joints.iter().filter(|j| !j.optional)
     }
 
     /// Problems in the schema itself: regions naming unknown joints, keys
@@ -433,19 +420,11 @@ mod tests {
         assert_eq!(KeyPolarity::Bipolar.range(), [-1.0, 1.0]);
         let s = schema();
         assert_eq!(s.required_target_names(), ["weight+", "weight-", "brow"]);
-        let required: Vec<&str> = s.required_joints().map(|j| j.name.as_str()).collect();
-        assert_eq!(
-            required,
-            ["root", "spine", "head"],
-            "optional joints are not required"
-        );
     }
 
     #[test]
-    fn regions_resolve_by_joint_and_captions_fall_back_to_names() {
+    fn regions_resolve_by_name_and_captions_fall_back_to_names() {
         let s = schema();
-        assert_eq!(s.region_of_joint("head"), Some("face"));
-        assert_eq!(s.region_of_joint("root"), None);
         assert_eq!(s.region("torso").unwrap().joints, ["spine"]);
         let keys = s.all_keys();
         assert_eq!(keys.len(), 3, "authored keys then synthesized");
