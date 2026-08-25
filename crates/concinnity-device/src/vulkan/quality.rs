@@ -402,6 +402,7 @@ impl VkContext {
                 clusters: &self.instanced.clusters,
                 albedo_count: self.textures.len(),
                 total_vertices: self.rt_static_vertex_count,
+                exclude_seethrough: self.seethrough_meshes_enabled(),
             },
             self.frames_in_flight,
             self.hot_reload.enabled,

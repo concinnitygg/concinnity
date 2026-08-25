@@ -9,13 +9,18 @@
 // of Gerstner waves; the fragment shader composites:
 //   * Refraction: sample the pre-transparent scene snapshot at a
 //     normal-perturbed screen UV.
-//   * Tint: shallow→deep colour mix by water-column thickness derived from
+//   * Tint: shallow to deep colour mix by water-column thickness derived from
 //     the difference between the main depth and the water surface depth.
 //   * Foam: a soft mask where the seabed is just below the surface.
-//   * Reflection: IBL prefilter cubemap at the reflected view direction
-//     (with a hand-tuned sky fallback when no EnvironmentMap is bound).
+//   * Reflection: the sharp planar reflection where the surface has one, else
+//     the box-projected reflection-probe set, else the IBL prefilter cubemap,
+//     else a hand-tuned sky gradient.
 //   * Fresnel: Schlick-power mix of refraction-tinted vs. reflected colour.
 // Output blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA into `scene_pre_taa`.
+//
+// The shaders are the shared `shaders/water.slang`, the single source all three
+// backends compile; the pipeline state matches the glass panes exactly, because
+// the same transparent encoder feeds both.
 //
 // Refraction samples `hdr_targets.transparent_scene_copy` (the snapshot the
 // transparent encoder blits from the current scene-pre-taa before drawing) so
@@ -27,24 +32,18 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLBlendFactor, MTLBuffer, MTLDevice, MTLLibrary as _, MTLPixelFormat,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLVertexFormat,
-    MTLVertexStepFunction,
-};
+use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
 
 use crate::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use crate::geometry::water_grid::build_water_grid;
 use crate::gfx::mesh_payload::Vertex;
 
 use super::context::MtlContext;
-use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use super::pipeline::{ns_str, shader_library};
+use super::glass::build_transparent_pipeline_stages;
+use super::slang_shaders;
 use super::transparent::{TransparentDraw, bytes_of};
-use super::uniforms::WATER_MAX_WAVES;
-use super::uniforms::WaterParams;
-use super::uniforms::WaterWaveGpu;
 use concinnity_render::uniforms::TransparentView;
+use concinnity_render::uniforms::{WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
 
 // Per-surface GPU state: a static tessellated grid VB + IB.
 pub(in crate::metal) struct WaterSurfaceRecord {
@@ -52,6 +51,9 @@ pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_count: u32,
     pub(in crate::metal) params: WaterParams,
+    pub(in crate::metal) visible: bool,
+    // World-space centre, for the back-to-front camera-distance sort.
+    pub(in crate::metal) centre: [f32; 3],
     // Planar reflection slot this surface samples (index into the
     // `PlanarReflectionSet`). `None` when the world has no planar set or this
     // surface's plane overflowed the budget; the shader then keeps the probe/sky
@@ -72,16 +74,16 @@ pub(in crate::metal) fn build_water_surface_record(
     // Flatten into the standard Vertex layout. Tangent + colour are filled
     // with placeholders since the water shader rebuilds the normal frame
     // analytically and the fragment ignores per-vertex colour.
-    let mut packed: Vec<Vertex> = Vec::with_capacity(verts.len());
-    for (pos, normal, color, uv) in verts {
-        packed.push(Vertex {
+    let packed: Vec<Vertex> = verts
+        .into_iter()
+        .map(|(pos, normal, color, uv)| Vertex {
             pos,
             normal,
             tangent: [1.0, 0.0, 0.0],
             color,
             uv,
-        });
-    }
+        })
+        .collect();
     let vb_bytes = packed.len() * std::mem::size_of::<Vertex>();
     let ib_bytes = idxs.len() * std::mem::size_of::<u16>();
 
@@ -104,24 +106,26 @@ pub(in crate::metal) fn build_water_surface_record(
             .ok_or("failed to allocate water index buffer")?
     };
 
-    let params = water_params_from(surface, 0.0);
-
     Ok(WaterSurfaceRecord {
         vertex_buffer: vb,
         index_buffer: ib,
         index_count: idxs.len() as u32,
-        params,
+        params: water_params_from(surface),
+        visible: surface.visible,
+        centre: surface.centre,
         // Patched after `assign_planar_slots` runs over all reflectors in init.
         planar_slot: None,
     })
 }
 
-fn water_params_from(surface: &WaterSurface, prefilter_mip_count: f32) -> WaterParams {
+// Build the per-surface `WaterParams` from an authored surface. `planar` starts
+// zeroed and `collect_water_transparent_draws` patches it on the frames the
+// planar pass ran. Pure; unit tested. Mirrors `directx::water::water_params_from`.
+fn water_params_from(surface: &WaterSurface) -> WaterParams {
     let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
     for (slot, src) in waves.iter_mut().zip(surface.waves.iter()) {
         *slot = wave_to_gpu(src);
     }
-    let wave_count = surface.waves.len().min(MAX_WATER_WAVES) as u32;
     WaterParams {
         centre: [surface.centre[0], surface.centre[1], surface.centre[2], 0.0],
         deep_colour: [
@@ -142,13 +146,10 @@ fn water_params_from(surface: &WaterSurface, prefilter_mip_count: f32) -> WaterP
         fresnel_power: surface.fresnel_power,
         roughness: surface.roughness,
         refraction_strength: surface.refraction_strength,
-        wave_count,
-        prefilter_mip_count,
+        wave_count: surface.waves.len().min(MAX_WATER_WAVES) as u32,
+        _pad: 0.0,
         waves,
-        // Planar reflection off by default; `collect_water_transparent_draws`
-        // patches `planar.x` to 1 (and the distortion scale) when the planar
-        // pass ran this frame.
-        planar: [0.0, 0.0, 0.0, 0.0],
+        planar: [0.0; 4],
     }
 }
 
@@ -157,6 +158,7 @@ fn water_params_from(surface: &WaterSurface, prefilter_mip_count: f32) -> WaterP
 // perturbs the lookup a little to fake ripple displacement.
 const PLANAR_DISTORTION: f32 = 0.03;
 
+// The shader-side wave lane for one authored wave. Pure; unit tested.
 fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
     WaterWaveGpu {
         dir_amp_wave: [w.direction[0], w.direction[1], w.amplitude, w.wavelength],
@@ -165,13 +167,24 @@ fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
 }
 
 impl MtlContext {
-    // Contribute one [`TransparentDraw`] per water surface to the transparent
-    // pass. The shared `encode_transparent` encoder owns the render pass, the
-    // scene snapshot, back-to-front sorting, and the shared reflection bindings
-    // (prefilter cube + probe cubes + probe set + cube sampler). Each draw binds
-    // the snapshot (refraction source) at texture(0) and the resolved main depth
-    // at texture(1). Sampling the snapshot rather than `hdr_resolve` is what lets
-    // water render with SSR off.
+    // True when a visible water surface holds a planar slot, so the mirror
+    // re-render has a consumer this frame even while the trace is live. Water
+    // takes the mirror over its own trace (see `water.slang`), so this is what
+    // the planar gate reads; glass is deliberately not counted.
+    pub(in crate::metal) fn water_planar_slot_live(&self) -> bool {
+        self.water
+            .surfaces
+            .iter()
+            .any(|s| s.visible && s.planar_slot.is_some())
+    }
+
+    // Contribute one [`TransparentDraw`] per visible water surface to the
+    // transparent pass. The shared `encode_transparent` encoder owns the render
+    // pass, the scene snapshot, back-to-front sorting, and the shared reflection
+    // bindings (prefilter cube + probe cubes + probe set + cube sampler). Each
+    // draw binds the snapshot (refraction source) at texture(0) and the resolved
+    // main depth at texture(1). Sampling the snapshot rather than `hdr_resolve` is
+    // what lets water render with SSR off.
     pub(in crate::metal) fn collect_water_transparent_draws(
         &self,
         view: &TransparentView,
@@ -184,7 +197,9 @@ impl MtlContext {
         //   RT on                   -> flat RT trace (per-object tint)
         //   RT off                  -> box-projected probe cube / sky prefilter
         // `rt.accel` live means RT is on; `bindless` means the texture pool
-        // exists. Falls back through to the probe pipeline.
+        // exists. Falls back through to the probe pipeline. Either RT pipeline
+        // still takes the planar mirror over its own trace where the surface has
+        // a slot, so this picks the fragment, not the reflection source.
         let rt_on = self.rt.accel.is_some();
         let pipeline = match (
             rt_on && bindless,
@@ -199,14 +214,14 @@ impl MtlContext {
                 None => return,
             },
         };
-        let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();
         for surface in &self.water.surfaces {
-            // Rebuild params with the current prefilter mip count; everything
-            // else is asset-side-static.
+            if !surface.visible {
+                continue;
+            }
+            // Everything but the planar flag below is asset-side-static.
             let mut params = surface.params;
-            params.prefilter_mip_count = prefilter_mip_count;
             let mut fragment_textures = vec![
                 // The refraction snapshot (texture 0) + resolved main depth
                 // (texture 1). The IBL prefilter cube (texture 2), probe cubes
@@ -217,7 +232,8 @@ impl MtlContext {
             ];
             // Select the sharp planar reflection when the planar pass ran this
             // frame and this surface was assigned a slot; bind that slot's resolve
-            // at texture(11). Otherwise the shader keeps the probe / sky path.
+            // at texture(11). Both fragments honour the flag, so this outranks the
+            // trace as well. Otherwise the shader keeps the trace / probe / sky path.
             if planar_live
                 && let Some(targets) = surface
                     .planar_slot
@@ -226,7 +242,7 @@ impl MtlContext {
                 params.planar = [1.0, PLANAR_DISTORTION, 0.0, 0.0];
                 fragment_textures.push((11, targets.resolve.clone()));
             }
-            let c = params.centre;
+            let c = surface.centre;
             let sort_distance =
                 ((c[0] - cam[0]).powi(2) + (c[1] - cam[1]).powi(2) + (c[2] - cam[2]).powi(2))
                     .sqrt();
@@ -248,7 +264,7 @@ impl MtlContext {
 }
 
 // Build the water render pipeline. Standard 5-attribute vertex layout at
-// buffer(1); the same descriptor the main pass uses, so any
+// buffer(1); the same descriptor the glass panes and the main pass use, so any
 // `ProceduralMesh::water_grid` mesh can bind directly. Output target is
 // `scene_pre_taa` (RGBA16Float single-sample); SRC_ALPHA blend writes the
 // transparent water on top of whatever the SsrResolve pass produced.
@@ -256,116 +272,110 @@ pub(super) fn build_water_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_water_pipeline_from(device, hot_reload, "water.metal", "water_fragment")
+    build_water_pipeline_slang(device, hot_reload, &slang_shaders::WATER_FRAG)
 }
 
 // Build the ray-traced water pipeline: the same vertex layout + blend, but the
-// `water_fragment_rt` fragment (water_rt.metal) traces a sharp reflection ray
-// against the scene acceleration structure instead of sampling a probe cube.
-// Compiled only on RT-capable devices (the shader uses `metal_raytracing`);
-// selected per-frame only while `self.rt.accel` is live, the probe pipeline
-// otherwise. This is the FLAT variant (per-object material tint as albedo).
+// `water_rt_fragment` variant traces a sharp reflection ray against the scene
+// acceleration structure for surfaces with no mirror plane, instead of sampling
+// a probe cube (one with a plane samples it either way). Built only on
+// RT-capable devices (its metallib carries a real ray query); selected per-frame
+// only while `self.rt.accel` is live, the probe pipeline otherwise. This is the
+// FLAT variant (per-object material tint as albedo).
 pub(super) fn build_water_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_water_pipeline_from(device, hot_reload, "water_rt.metal", "water_fragment_rt")
+    build_water_pipeline_slang(device, hot_reload, &slang_shaders::WATER_FRAG_RT)
 }
 
-// Build the textured ray-traced water pipeline: the same trace as
-// `water_fragment_rt`, but the reflected hit's albedo / normal / emissive are
-// sampled from the bindless texture pool (buffer 10) instead of a flat
-// per-object tint. Selected over the flat variant only in a bindless world.
+// Build the textured ray-traced water pipeline: the same trace as the flat RT
+// variant, but the reflected hit's albedo / normal / emissive are sampled from
+// the bindless texture pool (buffer 10) instead of a flat per-object tint.
+// Selected over the flat variant only in a bindless world.
 pub(super) fn build_water_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_water_pipeline_from(
-        device,
-        hot_reload,
-        "water_rt.metal",
-        "water_fragment_rt_textured",
-    )
+    build_water_pipeline_slang(device, hot_reload, &slang_shaders::WATER_FRAG_RT_TEXTURED)
 }
 
-// Shared water pipeline builder: every variant uses the identical `water_vertex`
-// + vertex descriptor + blend state and differs only in its shader source file
-// and fragment entry point.
-fn build_water_pipeline_from(
+// The water pipelines, whose stages come from the single-source `water.slang`.
+// Each fragment variant declares only the resources it binds, so each is its own
+// metallib while the vertex is compiled once for all of them.
+fn build_water_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    shader_name: &str,
-    fragment_entry: &str,
+    fragment: &slang_shaders::SlangLib,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, shader_name)?;
+    let vert_fn = slang_shaders::entry_function(device, &slang_shaders::WATER_VERT, hot_reload)?;
+    let frag_fn = slang_shaders::entry_function(device, fragment, hot_reload)?;
+    build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
+}
 
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("water_vertex"))
-        .ok_or("water_vertex not found")?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str(fragment_entry))
-        .ok_or_else(|| format!("{} not found", fragment_entry))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Standard mesh vertex layout (pos / normal / tangent / colour / uv at
-    // buffer(1)). Stride = sizeof(Vertex) = 56 bytes.
-    let vert_desc = vertex_descriptor(
-        &[
-            VertexAttr {
-                index: 0,
-                format: MTLVertexFormat::Float3,
-                offset: 0,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 1,
-                format: MTLVertexFormat::Float3,
-                offset: 12,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 2,
-                format: MTLVertexFormat::Float3,
-                offset: 24,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 3,
-                format: MTLVertexFormat::Float3,
-                offset: 36,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 4,
-                format: MTLVertexFormat::Float2,
-                offset: 48,
-                buffer_index: 1,
-            },
-        ],
-        &[VertexLayout {
-            buffer_index: 1,
-            stride: std::mem::size_of::<Vertex>(),
-            step: MTLVertexStepFunction::PerVertex,
-        }],
-    );
+    // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
+    // `concinnity_render::uniforms`, and are checked against the compiled shader
+    // by `shader_layout`.
 
-    let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexDescriptor(Some(&vert_desc));
-    desc.setVertexFunction(Some(&vert_fn));
-    desc.setFragmentFunction(Some(&frag_fn));
-    desc.setRasterSampleCount(1);
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
-        ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        ca.setBlendingEnabled(true);
-        ca.setSourceRGBBlendFactor(MTLBlendFactor::SourceAlpha);
-        ca.setDestinationRGBBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
-        ca.setSourceAlphaBlendFactor(MTLBlendFactor::SourceAlpha);
-        ca.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
+    #[test]
+    fn wave_to_gpu_packs_the_lanes() {
+        let w = WaterWave {
+            amplitude: 0.25,
+            wavelength: 3.0,
+            speed: 1.5,
+            direction: [0.6, -0.8],
+            steepness: 0.4,
+        };
+        let g = wave_to_gpu(&w);
+        assert_eq!(g.dir_amp_wave, [0.6, -0.8, 0.25, 3.0]);
+        assert_eq!(g.speed_steep_pad, [1.5, 0.4, 0.0, 0.0]);
     }
 
-    device
-        .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create water pipeline state: {:?}", e))
+    #[test]
+    fn water_params_from_maps_fields() {
+        let surface = WaterSurface {
+            centre: [1.0, 2.0, 3.0],
+            deep_colour: [0.02, 0.05, 0.12],
+            shallow_colour: [0.1, 0.3, 0.4],
+            depth_falloff_metres: 3.0,
+            foam_width_metres: 0.2,
+            foam_intensity: 0.5,
+            fresnel_power: 4.0,
+            roughness: 0.08,
+            refraction_strength: 0.05,
+            waves: vec![WaterWave::default(), WaterWave::default()],
+            ..Default::default()
+        };
+        let p = water_params_from(&surface);
+        assert_eq!(p.centre, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(p.deep_colour, [0.02, 0.05, 0.12, 0.0]);
+        assert_eq!(p.shallow_colour, [0.1, 0.3, 0.4, 0.0]);
+        assert_eq!(p.depth_falloff, 3.0);
+        assert_eq!(p.foam_width, 0.2);
+        assert_eq!(p.foam_intensity, 0.5);
+        assert_eq!(p.fresnel_power, 4.0);
+        assert_eq!(p.roughness, 0.08);
+        assert_eq!(p.refraction_strength, 0.05);
+        assert_eq!(p.wave_count, 2);
+        // Planar is off until the encoder sees a live planar pass.
+        assert_eq!(p.planar, [0.0; 4]);
+    }
+
+    // More authored waves than the shader's array can hold must clamp rather
+    // than overflow the fixed lane count.
+    #[test]
+    fn water_params_clamps_the_wave_count() {
+        let surface = WaterSurface {
+            waves: vec![WaterWave::default(); MAX_WATER_WAVES + 3],
+            ..Default::default()
+        };
+        assert_eq!(
+            water_params_from(&surface).wave_count,
+            MAX_WATER_WAVES as u32
+        );
+    }
 }

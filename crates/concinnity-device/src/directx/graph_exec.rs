@@ -861,16 +861,16 @@ impl DxContext {
         }
     }
 
-    // Build the per-frame `TransparentView` cbuffer payload for the glass pass.
+    // Build the per-frame `TransparentView` cbuffer payload for the transparent pass.
     // Uses the jittered VP (`vp_mat`) the Main pass rasterised with, so the
     // glass quad's clip-space depth matches the stored main-depth the fragment
     // shader tests against. Mirrors `encode_decals`' use of `vp_mat`.
     fn build_transparent_view(
         &self,
         params: &GraphFrameParams<'_>,
-    ) -> super::glass::TransparentView {
+    ) -> super::transparent::TransparentView {
         let inv_vp = super::math::mat4_inverse(params.vp_mat);
-        super::glass::TransparentView {
+        super::transparent::TransparentView {
             vp: params.vp_mat,
             inv_vp,
             camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
@@ -1074,25 +1074,23 @@ impl DxContext {
                 self.encode_upscale(cmd, params)?;
             }
             PassId::Transparent => {
-                // Generic translucent pass: draws the world's glass panels
-                // back-to-front over the post-SSR scene. Gated by
+                // Generic translucent pass: draws the world's glass panes and
+                // water surfaces back-to-front over the post-SSR scene. Gated by
                 // `FrameGraphInputs::transparent_enabled`
-                // (`DxContext::transparent_enabled`), so it only appears when
-                // the world declared visible `GlassPanel`s. Water is a separate
-                // (Metal-only) producer not ported here.
+                // (`DxContext::transparent_enabled`), so it only appears when the
+                // world declared a visible `GlassPanel` or `WaterSurface`.
                 //
                 // Planar reflections run inline at the head of the pass (same cmd
-                // list -> the per-plane mirror resolves are ready before the glass
-                // draws sample them). A no-op when the world has no planar set.
-                // Skipped only when the per-pixel RT glass trace will actually run
-                // (`rt_glass_active`: RT live AND the glass RT pipelines built),
-                // since the trace supersedes planar (sharp + off-screen-correct) and
-                // the mirror re-render would be wasted. Gating on `rt_glass_active`
-                // (not `rt_reflections_active`) keeps planar alive when RT is live
-                // but the glass RT pipelines failed to build, so the glass pass's
-                // probe/planar fallback samples a freshly rendered resolve. Mirrors
-                // Metal's `planar_live = rt.accel.is_none()` gate.
-                if !self.rt_glass_active() {
+                // list -> the per-plane mirror resolves are ready before the
+                // transparent draws sample them). A no-op when the world has no
+                // planar set. `planar_pass_needed` decides: a visible water
+                // surface holding a slot always needs it (water takes the mirror
+                // over the trace), and so does any reflector when the per-pixel
+                // trace will not run. Gating on `rt_transparent_active` (not
+                // `rt_reflections_active`) keeps planar alive when RT is live but
+                // a producer's RT pipelines failed to build, so its probe/planar
+                // fallback samples a freshly rendered resolve.
+                if self.planar_pass_needed() {
                     self.encode_planar_reflections(cmd, params)?;
                 }
                 let view = self.build_transparent_view(params);

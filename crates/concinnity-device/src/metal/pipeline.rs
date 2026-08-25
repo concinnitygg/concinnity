@@ -75,11 +75,8 @@ fn object_common(hot_reload: bool) -> std::borrow::Cow<'static, str> {
 pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'static, str> {
     let embedded: &'static str = match name {
         "cull.metal" => include_str!("shaders/cull.metal"),
-        "glass_mesh_rt.metal" => include_str!("shaders/glass_mesh_rt.metal"),
         "main.metal" => include_str!("shaders/main.metal"),
         "rt_skin.metal" => include_str!("shaders/rt_skin.metal"),
-        "water.metal" => include_str!("shaders/water.metal"),
-        "water_rt.metal" => include_str!("shaders/water_rt.metal"),
         _ => panic!(
             "shader_source: '{name}' is not a registered Metal shader. Add an \
              `include_str!(\"shaders/{name}\")` arm to shader_source in \
@@ -267,9 +264,9 @@ mod shader_source_tests {
     fn embedded_path_when_hot_reload_off() {
         // A shader with no `{OBJECT_DATA}` marker, so the embedded path is
         // borrowed rather than spliced.
-        let s = shader_source(false, "water.metal");
+        let s = shader_source(false, "rt_skin.metal");
         assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
-        assert!(s.contains("water_fragment("));
+        assert!(s.contains("kernel void rt_skin("));
     }
 
     #[test]
@@ -294,8 +291,8 @@ mod shader_source_tests {
     fn hot_reload_prefers_disk_when_present() {
         // The shader files live in this checkout, so the disk-load path
         // succeeds and produces the same content (or a newer edit).
-        let s = shader_source(true, "water.metal");
-        assert!(s.contains("water_fragment("));
+        let s = shader_source(true, "rt_skin.metal");
+        assert!(s.contains("kernel void rt_skin("));
     }
 
     #[test]

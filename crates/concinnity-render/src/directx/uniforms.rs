@@ -9,7 +9,7 @@
 //! reflection per target. The hand-written asserts below are for the families
 //! whose shaders are still per backend -- the cull kernel, the skinning and
 //! morph kernels, the raymarch SDF templates, the legacy per-draw main and
-//! velocity passes, and Metal's water / glass_mesh_rt.
+//! velocity passes, and Metal's water.
 
 use crate::components::sdf_volume::SDF_PARAMS_LEN;
 

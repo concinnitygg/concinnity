@@ -83,7 +83,7 @@
 //
 // `profile` reports the engine profiler: each system's last-frame CPU step
 // time (micros), the render backend's draw-call / object counts plus GPU
-// frame time, and (Metal only today) per-pass GPU timings under the
+// frame time, and per-pass GPU timings under the
 // `render.passes` array: `[{"name":"main","micros":1234}, ...]`. Empty-
 // name slots are dropped, so a backend with no per-pass support reports
 // an empty array.

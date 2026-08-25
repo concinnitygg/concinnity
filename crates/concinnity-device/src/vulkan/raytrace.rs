@@ -1025,6 +1025,17 @@ pub(in crate::vulkan) struct RtDeviceCtx<'a> {
 }
 
 // The scene geometry + bindless-pool sizing `build_rt_accel` bakes into the
+// Whether a draw object contributes geometry to the BVH. When the Layer 2
+// see-through path is enabled, see-through glass meshes are left out: they trace
+// their own per-pixel reflection in the transparent pass, and excluding them
+// means glass neither reflects glass nor self-hits. Off keeps every transparent
+// mesh IN the BVH so Layer 1 opaque glass reflects and is reflected like any
+// other surface. Driven by `seethrough_meshes_enabled` (opt-in per
+// `Material::see_through`), not a global flag.
+fn participates_in_bvh(o: &DrawObject, exclude_seethrough: bool) -> bool {
+    o.resident && o.index_count >= 3 && !(exclude_seethrough && o.material.see_through != 0)
+}
+
 // initial BVH: the shared static vertex / index buffers, the participating draw
 // objects + instanced clusters, and the pool counts the geometry-table indices
 // offset against. Borrowed for the duration of the build.
@@ -1043,6 +1054,8 @@ pub(in crate::vulkan) struct RtSceneGeometry<'a> {
     // The shared vertex buffer's vertex count (used to bound each geometry's
     // `max_vertex`).
     pub(in crate::vulkan) total_vertices: usize,
+    // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
+    pub(in crate::vulkan) exclude_seethrough: bool,
 }
 
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
@@ -1071,14 +1084,16 @@ pub(super) fn build_rt_accel(
         clusters,
         albedo_count,
         total_vertices,
+        exclude_seethrough,
     } = geometry;
     let as_loader = ash::khr::acceleration_structure::Device::new(instance, device);
 
-    // Participating static objects + clusters (real triangles, resident).
+    // Participating static objects + clusters (real triangles, resident, and not
+    // rerouted to the see-through transparent path).
     let object_indices: Vec<usize> = draw_objects
         .iter()
         .enumerate()
-        .filter(|(_, o)| o.resident && o.index_count >= 3)
+        .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
         .map(|(i, _)| i)
         .collect();
     let cluster_list: Vec<(usize, &InstancedCluster)> = clusters
@@ -1383,6 +1398,10 @@ pub(super) fn build_rt_accel(
 pub(in crate::vulkan) struct RtRebuildPolicy {
     pub mode: RtDynamicMode,
     pub topology_dirty: bool,
+    // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
+    // Must match what the init build used, or a refresh would silently re-add
+    // geometry the transparent pass is already drawing.
+    pub exclude_seethrough: bool,
 }
 
 // Everything one `dynamic_update` needs beyond the device context, the command
@@ -1438,6 +1457,7 @@ impl RtAccelData {
                 RtRebuildPolicy {
                     mode,
                     topology_dirty,
+                    exclude_seethrough,
                 },
             frame_idx,
             skinned,
@@ -1478,7 +1498,9 @@ impl RtAccelData {
         // the static TLAS FIRST (before the transform path re-reads `object_indices`).
         // The refresh always rebuilds a static TLAS; on the skinned path
         // `rebuild_skinned` below then overlays the skinned tail on top.
-        if topology_dirty && let Err(e) = self.refresh_topology(ctx, cmd, draw_objects, now) {
+        if topology_dirty
+            && let Err(e) = self.refresh_topology(ctx, cmd, draw_objects, exclude_seethrough, now)
+        {
             tracing::warn!("RT topology refresh failed (keeping live BVH): {e}");
         }
 
@@ -1570,6 +1592,7 @@ impl RtAccelData {
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
+        exclude_seethrough: bool,
         now: u64,
     ) -> Result<(), String> {
         // Advance to the next ring slot and take it out, which sidesteps the
@@ -1579,7 +1602,8 @@ impl RtAccelData {
         self.static_cursor = next_slot(self.static_cursor, self.static_ring.len());
         let cursor = self.static_cursor;
         let mut slot = std::mem::take(&mut self.static_ring[cursor]);
-        let result = self.refresh_topology_into(ctx, cmd, draw_objects, now, &mut slot);
+        let result =
+            self.refresh_topology_into(ctx, cmd, draw_objects, exclude_seethrough, now, &mut slot);
         self.static_ring[cursor] = slot;
         result
     }
@@ -1589,6 +1613,7 @@ impl RtAccelData {
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
+        exclude_seethrough: bool,
         now: u64,
         slot: &mut StaticFrameRing,
     ) -> Result<(), String> {
@@ -1602,7 +1627,7 @@ impl RtAccelData {
         let new_indices: Vec<usize> = draw_objects
             .iter()
             .enumerate()
-            .filter(|(_, o)| o.resident && o.index_count >= 3)
+            .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
             .map(|(i, _)| i)
             .collect();
         let new_sigs: Vec<GeomSig> = new_indices
@@ -2775,6 +2800,7 @@ impl super::context::VkContext {
                 clusters: &self.instanced.clusters,
                 albedo_count: self.textures.len(),
                 total_vertices: self.rt_static_vertex_count,
+                exclude_seethrough: self.seethrough_meshes_enabled(),
             },
             self.frames_in_flight,
             self.hot_reload.enabled,
@@ -2801,8 +2827,8 @@ impl super::context::VkContext {
         if let Some(rt) = self.rt_reflections.as_ref() {
             rt.rewire_geometry(&device, vertex_buffer, index_buffer);
         }
-        if let Some(glass) = self.glass.as_ref() {
-            glass.wire_rt_geometry(&device, vertex_buffer, index_buffer);
+        if let Some(transparent) = self.transparent.as_ref() {
+            transparent.wire_rt_geometry(&device, vertex_buffer, index_buffer);
         }
     }
 

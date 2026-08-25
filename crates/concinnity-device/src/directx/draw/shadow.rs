@@ -341,12 +341,16 @@ impl DxContext {
                 // Append to the GPU-driven cascade depth (no re-clear).
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
             }
+            let skip_seethrough = self.mesh_glass_active();
             for (i, obj) in self.draw.objects.iter().enumerate() {
                 if i < self.draw.n_objects || !obj.visible || !obj.resident {
                     continue;
                 }
                 if !self.clone.slot_by_draw_idx.contains_key(&i) {
                     continue; // streamed chunk -> folded into the cull records
+                }
+                if skip_seethrough && obj.material.see_through != 0 {
+                    continue; // see-through glass casts no shadow (Layer 2)
                 }
                 let push = ShadowPush {
                     model: obj.model,
@@ -397,10 +401,18 @@ impl DxContext {
             cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
             cmd.SetGraphicsRootConstantBufferView(1, bind.ubo_gva);
 
+            // See-through glass (Layer 2) casts no shadow: it is rerouted out of
+            // every opaque rasterisation while RT is live, and the GPU-driven
+            // cascade takes the same decision through the cull kernel's ENABLED
+            // bit. Hoisted out of the loop -- the gate is frame state.
+            let skip_seethrough = self.mesh_glass_active();
             for obj in &self.draw.objects {
                 // A non-resident streamed mesh has no geometry in the shared
                 // buffers yet -- skip it everywhere.
                 if !obj.visible || !obj.resident {
+                    continue;
+                }
+                if skip_seethrough && obj.material.see_through != 0 {
                     continue;
                 }
                 let push = ShadowPush {

@@ -1324,6 +1324,7 @@ impl VkContext {
         // Static geometry: same visible set + LOD pick as the main pass so the
         // G-buffer covers exactly what main rasterised.
         let last_obj = self.draw.objects.len().saturating_sub(1);
+        let skip_seethrough = self.mesh_glass_active();
         for &draw_idx in visible {
             let i = (draw_idx as usize).min(last_obj);
             let obj = match self.draw.objects.get(i) {
@@ -1331,6 +1332,12 @@ impl VkContext {
                 None => continue,
             };
             if !obj.visible || !obj.resident {
+                continue;
+            }
+            // See-through glass meshes (Layer 2) are rerouted to the transparent
+            // pass while RT is live, so they must not stamp depth here either --
+            // the refraction tap reads the scene they would otherwise occlude.
+            if skip_seethrough && obj.material.see_through != 0 {
                 continue;
             }
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);
@@ -1757,6 +1764,7 @@ impl VkContext {
                 vk::IndexType::UINT32,
             );
         }
+        let skip_seethrough = self.mesh_glass_active();
         for &draw_idx in visible {
             let i = draw_idx as usize;
             if i < self.draw.n_objects {
@@ -1769,6 +1777,12 @@ impl VkContext {
                 continue;
             };
             if !obj.visible || !obj.resident {
+                continue;
+            }
+            // See-through glass meshes (Layer 2) are rerouted to the transparent
+            // pass while RT is live, so they must not stamp depth here either --
+            // the refraction tap reads the scene they would otherwise occlude.
+            if skip_seethrough && obj.material.see_through != 0 {
                 continue;
             }
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);

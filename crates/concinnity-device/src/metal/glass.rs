@@ -12,9 +12,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBlendFactor, MTLBuffer, MTLDevice, MTLLibrary as _, MTLPixelFormat,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLVertexFormat,
-    MTLVertexStepFunction,
+    MTLBlendFactor, MTLBuffer, MTLDevice, MTLPixelFormat, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLResourceOptions, MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use crate::components::GlassPanel;
@@ -23,12 +22,9 @@ use crate::gfx::mesh_payload::Vertex;
 
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use super::pipeline::{ns_str, shader_library};
 use super::slang_shaders;
 use super::transparent::{TransparentDraw, bytes_of};
-use super::uniforms::GlassMeshParams;
-use concinnity_render::uniforms::GlassParams;
-use concinnity_render::uniforms::TransparentView;
+use concinnity_render::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 
 // Refraction offset + Fresnel falloff for a transparent glass MESH. A `Material`
 // carries no glass-specific tunables (unlike a `GlassPanel`), so these match the
@@ -147,36 +143,28 @@ pub(super) fn build_glass_pipeline_rt(
     build_glass_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_FRAG_RT)
 }
 
-// Build the ray-traced transparent glass MESH pipeline (`glass_mesh_rt.metal`):
-// the same 5-attribute vertex layout + blend as the pane pipelines, but the
-// `glass_mesh_vertex` stage applies a per-draw model matrix and the fragment uses
-// the interpolated mesh normal. Compiled only on RT-capable devices. Drives the
-// FLAT trace (reflected-hit material tint as albedo).
+// Build the ray-traced see-through glass MESH pipeline: the same 5-attribute
+// vertex layout + blend as the pane pipelines, but the `glass_mesh_vertex` stage
+// applies a per-draw model matrix and the fragment shades off the interpolated
+// mesh normal. Compiled only on RT-capable devices. Drives the FLAT trace
+// (reflected-hit material tint as albedo).
 pub(super) fn build_glass_mesh_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_from(
-        device,
-        hot_reload,
-        "glass_mesh_rt.metal",
-        "glass_mesh_vertex",
-        "glass_mesh_fragment_rt",
-    )
+    build_glass_mesh_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_MESH_FRAG_RT)
 }
 
-// The textured transparent glass MESH variant: reflected hits sample the bindless
+// The textured see-through glass MESH variant: reflected hits sample the bindless
 // pool (buffer 10). Selected over the flat variant only in a bindless world.
 pub(super) fn build_glass_mesh_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_from(
+    build_glass_mesh_pipeline_slang(
         device,
         hot_reload,
-        "glass_mesh_rt.metal",
-        "glass_mesh_vertex",
-        "glass_mesh_fragment_rt_textured",
+        &slang_shaders::GLASS_MESH_FRAG_RT_TEXTURED,
     )
 }
 
@@ -201,34 +189,28 @@ fn build_glass_pipeline_slang(
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     let vert_fn = slang_shaders::entry_function(device, &slang_shaders::GLASS_VERT, hot_reload)?;
     let frag_fn = slang_shaders::entry_function(device, fragment, hot_reload)?;
-    build_glass_pipeline_stages(device, &vert_fn, &frag_fn)
+    build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 
-// The glass MESH pipelines, still hand-written MSL: they have no Vulkan or
-// DirectX counterpart, so there is no second copy for a single source to
-// converge.
-fn build_glass_pipeline_from(
+// The glass MESH pipelines, from `glass_mesh.slang`. A separate vertex stage
+// from the pane one: it applies the per-draw model matrix and forwards the
+// interpolated world normal the fragment shades off.
+fn build_glass_mesh_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    shader_name: &str,
-    vertex_entry: &str,
-    fragment_entry: &str,
+    fragment: &slang_shaders::SlangLib,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, shader_name)?;
-
-    let vert_fn = library
-        .newFunctionWithName(&ns_str(vertex_entry))
-        .ok_or_else(|| format!("{} not found", vertex_entry))?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str(fragment_entry))
-        .ok_or_else(|| format!("{} not found", fragment_entry))?;
-    build_glass_pipeline_stages(device, &vert_fn, &frag_fn)
+    let vert_fn =
+        slang_shaders::entry_function(device, &slang_shaders::GLASS_MESH_VERT, hot_reload)?;
+    let frag_fn = slang_shaders::entry_function(device, fragment, hot_reload)?;
+    build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 
-// Shared descriptor for every transparent-pane pipeline: the standard
-// 5-attribute vertex layout at buffer(1) and straight-alpha blending into the
-// RGBA16Float scene target, with no depth attachment.
-fn build_glass_pipeline_stages(
+// Shared descriptor for every transparent-pass pipeline (glass panes, glass
+// meshes, water surfaces): the standard 5-attribute vertex layout at buffer(1)
+// and straight-alpha blending into the RGBA16Float scene target, with no depth
+// attachment.
+pub(in crate::metal) fn build_transparent_pipeline_stages(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
     frag_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
@@ -292,7 +274,7 @@ fn build_glass_pipeline_stages(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create glass pipeline state: {:?}", e))
+        .map_err(|e| format!("failed to create transparent pipeline state: {:?}", e))
 }
 
 impl MtlContext {
@@ -396,10 +378,26 @@ impl MtlContext {
         self.seethrough_meshes_enabled() && self.rt.accel.is_some()
     }
 
+    // Whether a see-through mesh actually draws this frame. Panes and water
+    // answer this from their static records; a mesh's visibility lives in
+    // `draw.objects`, so the graph gate has to ask separately or a world whose
+    // only translucent producer is a mesh gets no transparent pass and the mesh
+    // disappears (it is already skipped in the opaque pass and the BLAS).
+    // Mirrors `DxContext::mesh_glass_visible`.
+    pub(in crate::metal) fn mesh_glass_visible(&self) -> bool {
+        self.mesh_glass_active()
+            && self.glass.seethrough_mesh_indices.iter().any(|&i| {
+                self.draw
+                    .objects
+                    .get(i)
+                    .is_some_and(|o| o.visible && o.resident)
+            })
+    }
+
     // Contribute one [`TransparentDraw`] per visible see-through glass MESH (Layer
     // 2): a `Material` flagged `see_through` (which implies `transparent`) on an
     // RT-capable device. Each mesh draws from the SHARED scene vertex/index buffers
-    // via its `DrawObject` offsets + model matrix; the `glass_mesh_rt` shader traces
+    // via its `DrawObject` offsets + model matrix; `glass_mesh.slang` traces
     // a per-pixel reflection off the interpolated mesh normal. A no-op unless RT is
     // live (`mesh_glass_active`); when inactive the meshes render opaque (Layer 1)
     // in the main pass. The same gate skips them in the opaque pass + the RT BLAS,

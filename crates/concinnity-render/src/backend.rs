@@ -14,8 +14,8 @@
 //!     ignores the (texture_slot, normal_map_slot) args; DX/VK bake them
 //!     into a shared descriptor at setup time.
 //!
-//! `render_stats` is Metal-only today and has a default no-op impl so DX/VK
-//! don't need to override it.
+//! `render_stats` has a default no-op impl so a backend with no draw-call /
+//! object counters need not override it; all three shipping backends do.
 
 use crate::auto_exposure::AutoExposureSettings;
 use crate::backend_init::{BackendInit, ShaderBytes, SwapchainConfig};
@@ -553,7 +553,9 @@ pub trait RenderBackend: SceneControl + Send {
     fn logical_size(&self) -> (f32, f32) {
         (0.0, 0.0)
     }
-    /// Metal-only diagnostics; default no-op for parity.
+    /// Per-frame draw-call / object counters. Default no-op so a backend that
+    /// tracks none still satisfies the trait; all three shipping backends
+    /// override it.
     fn render_stats(&self) -> RenderStats {
         RenderStats::default()
     }
@@ -1386,7 +1388,7 @@ mod tests {
         assert_eq!(backend.gpu_profile().tier, GpuTier::Unknown);
         assert_eq!(backend.gpu_profile().vendor, GpuVendor::Other);
         assert_eq!(backend.gpu_profile().memory_budget_bytes, 0);
-        // Metal-only diagnostics: zeroed no-op defaults elsewhere.
+        // Diagnostics a backend may leave to the default: zeroed here.
         assert_eq!(backend.logical_size(), (0.0, 0.0));
         assert_eq!(backend.render_stats(), RenderStats::default());
         // No window-bounds tracking: the in-engine cursor always draws.

@@ -309,24 +309,24 @@ mod tests {
 
     #[test]
     fn pool_size_counts_fallbacks() {
-        // Empty table: the fallback white texture + the flat-normal fallback.
-        assert_eq!(bindless_pool_size(0), 2);
-        assert_eq!(bindless_pool_size(1), 2);
-        assert_eq!(bindless_pool_size(7), 8);
+        // One slot per table entry (an empty table still pads to one) plus the
+        // two reserved fallbacks, flat-normal then white.
+        assert_eq!(bindless_pool_size(0), 3);
+        assert_eq!(bindless_pool_size(1), 3);
+        assert_eq!(bindless_pool_size(7), 9);
     }
 
     // The uploaded image vectors reproduce the pool length exactly: init pads an
-    // empty texture table to one fallback white image and always uploads the
-    // single flat-normal fallback alongside it. A raw texture count is never a
-    // valid pool length, so a compile handed one silently drops the last slot.
+    // empty texture table to one image and always uploads the reserved fallbacks
+    // alongside it. A raw texture count is never a valid pool length, so a
+    // compile handed one silently drops the last slots.
     #[test]
     fn pool_size_matches_the_uploaded_image_counts() {
         for texture_count in [0usize, 1, 7, 64] {
             let gpu_textures = texture_count.max(1);
-            let gpu_normal_maps = 1;
             assert_eq!(
                 bindless_pool_size(texture_count),
-                gpu_textures + gpu_normal_maps
+                gpu_textures + crate::gfx::render_types::FALLBACK_TEXTURE_COUNT
             );
             assert!(bindless_pool_size(texture_count) > texture_count);
         }

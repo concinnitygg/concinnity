@@ -2587,9 +2587,10 @@ impl GraphicsSystem {
         };
         let particle_count = particle_records.len();
 
-        // Drain transparent water surfaces. The Metal backend builds a
-        // tessellated grid + per-surface uniforms per record at init;
-        // DirectX / Vulkan ignore the slice for now.
+        // Drain transparent water surfaces. Every backend builds a tessellated
+        // grid + per-surface uniforms per record at init and draws them in the
+        // shared transparent pass, alongside the glass panes below
+        // (`metal/water.rs`, `directx/water.rs`, `vulkan/water.rs`).
         let water_surfaces: Vec<WaterSurface> = ctx.drain::<WaterSurface>();
 
         // Drain translucent glass panels. Every backend builds a world-space
@@ -2685,11 +2686,19 @@ impl GraphicsSystem {
             crate::gfx::graphics_system::streaming::chunk_reserve_count,
         );
 
-        // Reflection-probe auto-seed geometry. Computed here, before `draw_objects`
-        // moves into the backend: when the world declares no `ReflectionProbe`, surface-
-        // voxelise the static geometry so a watertight single-mesh interior is detected
-        // (object AABBs alone would read it as a solid block). Budget-gated, so a heavy
-        // import keeps coarse AABB occupancy. `None` -> the backend's own AABB auto-seed.
+        // Reflection-probe auto-seed. Computed here, before `draw_objects` moves into
+        // the backend: when the world declares no `ReflectionProbe`, surface-voxelise
+        // the static geometry so a watertight single-mesh interior is detected (object
+        // AABBs alone would read it as a solid block). The triangle gather is
+        // budget-gated, and an over-budget import falls back to coarse AABB occupancy
+        // rather than to no seed at all. `None` -> the backend's own AABB auto-seed.
+        //
+        // The bounds the grid tiles union the reflectors with the geometry, because a
+        // water surface / glass pane is not a draw object: a pool wider than every mesh
+        // would otherwise sit outside the grid entirely and inherit whatever
+        // `probe_set_specular`'s no-coverage fallback picked. Occupancy stays
+        // geometry-only -- it answers "is this capture point inside a wall", which a
+        // plane does not make true.
         let auto_seed_geometry_probes = if ctx
             .query::<crate::components::ReflectionProbe>()
             .next()
@@ -2697,22 +2706,35 @@ impl GraphicsSystem {
         {
             None
         } else {
-            gather_auto_seed_triangles(&draw_objects, &all_vertices, &all_indices).and_then(
-                |tris| {
-                    let occupancy: Vec<([f32; 3], [f32; 3])> = draw_objects
-                        .iter()
-                        .map(|o| (o.bb_min, o.bb_max))
-                        .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
-                        .collect();
-                    let (mn, mx) =
-                        crate::gfx::reflection_probe::fold_world_bounds(occupancy.iter().copied())?;
-                    Some(
-                        crate::gfx::reflection_probe::auto_seed_probes_with_geometry(
-                            mn, mx, &occupancy, &tris,
-                        ),
+            let occupancy: Vec<([f32; 3], [f32; 3])> = draw_objects
+                .iter()
+                .map(|o| (o.bb_min, o.bb_max))
+                .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
+                .collect();
+            let reflectors = water_surfaces
+                .iter()
+                .map(|w| {
+                    crate::gfx::reflection_probe::reflector_bounds(
+                        w.centre,
+                        [w.extent[0], 0.0, w.extent[1]],
                     )
-                },
+                })
+                .chain(glass_panels.iter().map(|g| {
+                    // A pane is an oriented quad; its longest half-side bounds it on
+                    // every axis whatever its normal.
+                    let r = g.half_size[0].max(g.half_size[1]);
+                    crate::gfx::reflection_probe::reflector_bounds(g.centre, [r, r, r])
+                }));
+            let tris = gather_auto_seed_triangles(&draw_objects, &all_vertices, &all_indices)
+                .unwrap_or_default();
+            crate::gfx::reflection_probe::fold_world_bounds(
+                occupancy.iter().copied().chain(reflectors),
             )
+            .map(|(mn, mx)| {
+                crate::gfx::reflection_probe::auto_seed_probes_with_geometry(
+                    mn, mx, &occupancy, &tris,
+                )
+            })
         };
 
         // Planar reflection plane budget: there is no world-authored value, so the

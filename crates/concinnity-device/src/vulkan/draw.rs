@@ -165,6 +165,13 @@ impl VkContext {
     ) {
         use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
         let stride = std::mem::size_of::<GpuDrawArgs>();
+        // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
+        // the RT path is live: it draws in the transparent pass instead. Clearing
+        // ENABLED makes the cull kernel reset its command to a no-op (the same
+        // path invisible / non-resident objects take), so it neither draws opaque
+        // nor occludes the refraction snapshot. The object keeps its slot, so
+        // every parallel cull / object-buffer / prev-model index stays intact.
+        let mesh_glass_active = self.mesh_glass_active();
         for (i, obj) in self
             .draw
             .objects
@@ -176,13 +183,15 @@ impl VkContext {
             // straight through to LOD0.
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
+            let opaque_visible =
+                obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
             let rec = GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 // The record's shader bucket rides the upper flag bits so the
                 // cull kernel can route its command into that bucket's region.
-                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable())
+                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
                     | draw_args_bucket_bits(obj.shader_bucket),
             };
             buf.write_val(i * stride, &rec);
@@ -462,11 +471,12 @@ impl VkContext {
             // post-SSR scene + velocity and writing the swapchain-res scene the
             // bloom + composite stack samples.
             upscale_enabled: self.upscale.is_some(),
-            // Transparent / translucent pass: on when the world declared
-            // visible `GlassPanel`s (the only producer on this backend; water
-            // is Metal-only). The shared builder then seeds the Transparent
-            // node and the executor draws the glass over the post-SSR scene.
-            transparent_enabled: self.glass.as_ref().is_some_and(|g| g.any_visible()),
+            // Transparent / translucent pass: on when the world declared a
+            // visible `GlassPanel` or `WaterSurface`. The shared builder then
+            // seeds the Transparent node and the executor draws every record
+            // back-to-front over the post-SSR scene.
+            transparent_enabled: self.transparent.as_ref().is_some_and(|t| t.any_visible())
+                || self.mesh_glass_visible(),
             // Two-pass Hi-Z occlusion: inserts HizBuild -> Cull2 -> Main2 after
             // Main when the world requested `occlusion_two_pass` and the bindless
             // GPU-cull path + phase-2 resources are live. `two_pass_occlusion_active`

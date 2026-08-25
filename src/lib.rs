@@ -2,43 +2,23 @@
 //! populate its [`World`] with components, and run it on the engine's
 //! runtime loop.
 //!
-//! # Creating an application
+//! # Running an application
 //!
-//! A [`World`] is constructed first, then handed to an `App`, which runs
-//! it.
-//!
-//! ```no_run
-//! use concinnity::assets::{GraphicsConfig, TextLabel};
-//! use concinnity::{App, World};
-//!
-//! fn main() {
-//!     let mut world = World::new();
-//!     world.add_component(GraphicsConfig::default());
-//!     world.add_component(TextLabel {
-//!         content: "Hello, world!".to_string(),
-//!         ..Default::default()
-//!     });
-//!
-//!     App::from_world(world).run().expect("the app runs");
-//! }
-//! ```
-//!
-//! A [`GraphicsConfig`](assets::GraphicsConfig) is what gives the app a
-//! window.
-//!
-//! A world compiled ahead of time is played straight from its blob file, with
-//! no authoring step in the shipped binary:
+//! The most common use-case for a client will be running an `App` from
+//! locally saved binary data.
 //!
 //! ```no_run
 //! use concinnity::App;
 //!
 //! fn main() {
-//!     App::from_blob("data/0")
-//!         .expect("data/0 holds a compiled world")
+//!     App::from_blob("my_game.cnb")
+//!         .expect("my_game.cnb holds a compiled world")
 //!         .run()
 //!         .expect("the app runs");
 //! }
 //! ```
+//!
+//! The `cook` module manages this world binary data.
 //!
 //! # Features
 //!

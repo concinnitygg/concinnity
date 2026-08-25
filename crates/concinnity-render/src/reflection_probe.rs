@@ -269,6 +269,15 @@ const INTERIOR_MIN_ENCLOSED: u8 = 5;
 // Smallest interior region (in voxels) that earns a probe, so a one-voxel pocket
 // wedged between props is not mistaken for a room.
 const INTERIOR_MIN_CLUSTER: usize = 4;
+// Smallest interior region (in metres, on every axis) that earns a probe. The
+// voxel floor above scales with the scene, so in a small scene a solid prop's
+// own hollow clears it: a surface voxeliser cannot tell a sealed box from a
+// room, and a `ProceduralMesh` box is exactly a sealed box. This is the scale
+// test that can -- a room is a space a camera can stand in. Without it, a world
+// whose only mesh is a crate spends a probe (and a full cube bake) capturing the
+// inside of that crate, and every reflector with no probe of its own inherits
+// it.
+const INTERIOR_MIN_ROOM_SPAN: f32 = 2.0;
 
 // Pick grid dimensions `nx * nz <= budget` that stay close to the requested counts
 // (so the grid keeps the scene's horizontal aspect). Scales both down by a common
@@ -618,11 +627,6 @@ fn interior_probes_from_solid(
         clusters.push(members);
     }
 
-    // Largest rooms first; skip noise; one probe per room up to budget.
-    clusters.retain(|c| c.len() >= INTERIOR_MIN_CLUSTER);
-    clusters.sort_by_key(|c| std::cmp::Reverse(c.len()));
-    clusters.truncate(budget);
-
     let voxel_center = |i: usize| {
         let z = i / (nx * ny);
         let y = (i / nx) % ny;
@@ -633,6 +637,28 @@ fn interior_probes_from_solid(
             aabb_min[2] + (z as f32 + 0.5) * vs,
         ]
     };
+    // World-space span of a region, corner to corner across its voxels.
+    let cluster_span = |members: &[usize]| {
+        let mut lo = [f32::MAX; 3];
+        let mut hi = [f32::MIN; 3];
+        for &i in members {
+            let c = voxel_center(i);
+            for a in 0..3 {
+                lo[a] = lo[a].min(c[a] - vs * 0.5);
+                hi[a] = hi[a].max(c[a] + vs * 0.5);
+            }
+        }
+        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
+    };
+
+    // Largest rooms first; skip voxel noise and anything too small to stand in;
+    // one probe per room up to budget.
+    clusters.retain(|c| {
+        c.len() >= INTERIOR_MIN_CLUSTER
+            && cluster_span(c).iter().all(|d| *d >= INTERIOR_MIN_ROOM_SPAN)
+    });
+    clusters.sort_by_key(|c| std::cmp::Reverse(c.len()));
+    clusters.truncate(budget);
     clusters
         .iter()
         .map(|members| {
@@ -714,6 +740,41 @@ fn seed_interior_probes_tris(
     };
     let solid = solid_from_triangles(aabb_min, vs, nx, ny, nz, triangles);
     interior_probes_from_solid(aabb_min, vs, nx, ny, nz, &solid, budget)
+}
+
+// Half-height a flat reflector contributes to the scene bounds. A water surface
+// or a glass pane is a plane, so it has no thickness of its own; without this a
+// world whose only reflector is a pool would fold to a zero-height AABB and every
+// grid probe would get a zero-height influence box, which nothing is ever inside.
+// Standing height, matching `INTERIOR_MIN_ROOM_SPAN`.
+const REFLECTOR_BOUNDS_HALF_HEIGHT: f32 = 2.0;
+
+/// The world-space AABB an auto-seed pass should count for a flat reflector: a
+/// water surface or a glass pane.
+///
+/// A reflector is not a draw object, so it never reaches `fold_world_bounds`
+/// through the scene geometry. A pool or a pane wider than every mesh would
+/// otherwise sit outside the probe grid entirely, leaving `probe_set_specular` to
+/// hand it whatever its no-coverage fallback picked -- which is how a 28 m pool
+/// ended up reflecting the inside of the 1.4 m crate floating over it.
+///
+/// `half_extents` is per-axis and is expected to be zero on the reflector's flat
+/// axis; every axis is widened to at least `REFLECTOR_BOUNDS_HALF_HEIGHT` so the
+/// result is a real volume rather than a plane.
+pub fn reflector_bounds(centre: [f32; 3], half_extents: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let half = |a: usize| half_extents[a].abs().max(REFLECTOR_BOUNDS_HALF_HEIGHT);
+    (
+        [
+            centre[0] - half(0),
+            centre[1] - half(1),
+            centre[2] - half(2),
+        ],
+        [
+            centre[0] + half(0),
+            centre[1] + half(1),
+            centre[2] + half(2),
+        ],
+    )
 }
 
 /// Auto-seed probes from the scene bounds, used when a world declares no
@@ -1120,6 +1181,58 @@ mod tests {
         );
         // The influence box covers (most of) the room interior.
         assert!(probes[0].box_min[0] < 2.0 && probes[0].box_max[0] > 8.0);
+    }
+
+    #[test]
+    fn reflector_bounds_covers_the_surface_and_has_volume() {
+        // A 28 m square pool centred at the origin: the box spans its full extent
+        // horizontally and is a real volume vertically, so grid probes seeded over
+        // it get influence boxes a point can be inside.
+        let (mn, mx) = reflector_bounds([0.0, 0.0, 0.0], [14.0, 0.0, 14.0]);
+        assert_eq!(mn[0], -14.0);
+        assert_eq!(mx[2], 14.0);
+        assert!(
+            mx[1] - mn[1] > 0.0,
+            "flat axis is inflated, not left at zero"
+        );
+
+        // Off-origin, and an axis already larger than the floor is left alone.
+        let (mn, mx) = reflector_bounds([5.0, 3.0, -2.0], [0.5, 6.0, 0.5]);
+        assert_eq!(mn[1], -3.0);
+        assert_eq!(mx[1], 9.0);
+        assert!(mn[0] < 5.0 && mx[0] > 5.0);
+
+        // Folding it in is what widens a scene whose only mesh is a small crate.
+        let crate_aabb = ([-0.7, 0.6, -0.7], [0.7, 2.0, 0.7]);
+        let pool = reflector_bounds([0.0, 0.0, 0.0], [14.0, 0.0, 14.0]);
+        let (mn, mx) = fold_world_bounds([crate_aabb, pool]).expect("finite bounds");
+        assert_eq!((mn[0], mx[0]), (-14.0, 14.0));
+        assert_eq!((mn[2], mx[2]), (-14.0, 14.0));
+    }
+
+    #[test]
+    fn seed_interior_probes_ignores_a_prop_sized_hollow() {
+        // The `examples/cube.rs` case: the world's only mesh is a 1.4 m
+        // `ProceduralMesh` box. A surface voxeliser cannot tell it from a room, so
+        // the enclosure sweep finds its inside; the span guard is what rejects it,
+        // and without it the box's lit interior became the reflection every
+        // uncovered surface in the world inherited.
+        let crate_tris = box_mesh_tris([-0.7, 0.6, -0.7], [0.7, 2.0, 0.7]);
+        let probes = seed_interior_probes_tris([-0.8, 0.5, -0.8], [0.8, 2.1, 0.8], &crate_tris, 8);
+        assert!(
+            probes.is_empty(),
+            "a prop-sized hollow is not a room: {probes:?}"
+        );
+
+        // Scaled up past the standing-room span, the same shape does earn one, so
+        // the guard is a size test and not a blanket rejection of small scenes.
+        let room_tris = box_mesh_tris([-2.5, 0.0, -2.5], [2.5, 3.0, 2.5]);
+        let probes = seed_interior_probes_tris([-3.0, -0.5, -3.0], [3.0, 3.5, 3.0], &room_tris, 8);
+        assert_eq!(
+            probes.len(),
+            1,
+            "a standing-height room still earns a probe"
+        );
     }
 
     #[test]

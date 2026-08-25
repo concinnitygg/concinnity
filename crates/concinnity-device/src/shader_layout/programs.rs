@@ -109,6 +109,8 @@ const LIGHT_CULL: &str = include_str!("../shaders/light_cull.slang");
 const GBUFFER_PREPASS: &str = include_str!("../shaders/gbuffer_prepass.slang");
 const SHADOW: &str = include_str!("../shaders/shadow.slang");
 const GLASS: &str = include_str!("../shaders/glass.slang");
+const WATER: &str = include_str!("../shaders/water.slang");
+const GLASS_MESH: &str = include_str!("../shaders/glass_mesh.slang");
 const RT_REFLECTIONS: &str = include_str!("../shaders/rt_reflections.slang");
 const DECAL: &str = include_str!("../shaders/decal.slang");
 const LINE: &str = include_str!("../shaders/line.slang");
@@ -190,6 +192,35 @@ pub(super) static GLASS_VERT: Program = Program {
     file: "glass.slang",
     embedded: GLASS,
     entry: "glass_vertex",
+    profile: "vs_6_0",
+    common: &[PROBES],
+    metal: &[("METAL_ABI", "1")],
+    vulkan: &[("USE_MSAA", "1")],
+    directx: &[("DXIL_ABI", "1")],
+};
+
+// The glass mesh vertex stage declares both of its blocks: it reads the model
+// matrix out of the per-mesh params. The file is ray-traced only, but the ray
+// query is unreachable from the vertex entry, so slangc compiles it on the Metal
+// target too and all three reflect.
+pub(super) static GLASS_MESH_VERT: Program = Program {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH,
+    entry: "glass_mesh_vertex",
+    profile: "vs_6_0",
+    common: &[PROBES],
+    metal: &[("METAL_ABI", "1")],
+    vulkan: &[("USE_MSAA", "1")],
+    directx: &[("DXIL_ABI", "1")],
+};
+
+// The water vertex stage is the smallest entry that declares the whole water
+// block set: the Gerstner sum reads the wave table, so `WaterParams` (and the
+// `WaterWave` element it arrays) survive into the vertex reflection.
+pub(super) static WATER_VERT: Program = Program {
+    file: "water.slang",
+    embedded: WATER,
+    entry: "water_vertex",
     profile: "vs_6_0",
     common: &[PROBES],
     metal: &[("METAL_ABI", "1")],

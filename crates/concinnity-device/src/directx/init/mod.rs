@@ -148,8 +148,7 @@ impl DxContext {
                     decals,
                     particles,
                     fog: fog_settings,
-                    // The DirectX water port is still open.
-                    water_surfaces: _,
+                    water_surfaces,
                     glass_panels,
                     sdf_volumes,
                 },
@@ -432,16 +431,25 @@ impl DxContext {
         let flat_fallback_count = FALLBACK_TEXTURE_COUNT;
         let _ = decal_srv_extra; // folded into the heap_layout decal block.
 
-        // Planar reflections: group each glass pane's plane into a bounded set of
-        // distinct reflector planes (near-coplanar panes share one mirror render;
-        // panes past the budget fall back to the probe cube). The distinct count
-        // sizes the reserved planar-resolve SRV block; `slots[i]` is pane `i`'s
-        // resolve slot (or `None`). Computed here (pre-heap) so the block is sized
-        // before the heap is created; the set itself is built after the render dims
-        // are known.
-        let planar_panes: Vec<[f32; 4]> = glass_panels
+        // Planar reflections: group each transparent reflector's plane into a
+        // bounded set of distinct planes (near-coplanar reflectors share one mirror
+        // render; reflectors past the budget fall back to the probe cube). The
+        // distinct count sizes the reserved planar-resolve SRV block; `slots[i]` is
+        // reflector `i`'s resolve slot (or `None`). Computed here (pre-heap) so the
+        // block is sized before the heap is created; the set itself is built after
+        // the render dims are known.
+        //
+        // Water first, then glass, matching the Metal backend, so the two slot
+        // ranges are `[..water_surfaces.len()]` and the rest.
+        let planar_panes: Vec<[f32; 4]> = water_surfaces
             .iter()
-            .map(|p| crate::directx::planar::pane_plane(p.normal, p.centre))
+            // A water surface's rest plane: horizontal at the surface base height.
+            .map(|s| [0.0, 1.0, 0.0, -s.centre[1]])
+            .chain(
+                glass_panels
+                    .iter()
+                    .map(|p| crate::directx::planar::pane_plane(p.normal, p.centre)),
+            )
             .collect();
         // Cap at the capacity ceiling the reserved planar resolve SRVs are sized to,
         // so a stale/over-large preset value can never over-allocate.
@@ -2097,8 +2105,9 @@ impl DxContext {
 
         // Planar reflections: one mirror-render resolve per distinct reflector
         // plane (the `assign_planar_slots` representatives), each SRV in a reserved
-        // heap slot the glass pass binds per pane. `None` when no pane was assigned
-        // a planar slot (no glass, or every plane degenerate / over budget).
+        // heap slot the transparent pass binds per record. `None` when no reflector
+        // was assigned a planar slot (no transparent content, or every plane
+        // degenerate / over budget).
         let planar_reflection = if planar_assignment.representatives.is_empty() {
             None
         } else {
@@ -2128,32 +2137,61 @@ impl DxContext {
             )?)
         };
 
-        // Translucent glass panels: the generic producer for the shared
-        // transparent pass. `Some` only when the world declared any
-        // `GlassPanel`. Shares the main-depth SRV with the decal pass; the
-        // scene-copy snapshot uses its own reserved heap slot. `planar_assignment.slots`
-        // gives each pane its planar resolve slot (or `None` -> probe-cube fallback).
-        let glass = if glass_panels.is_empty() {
-            None
-        } else {
-            Some(crate::directx::glass::GlassResources::new(
-                crate::directx::glass::GlassDeviceCtx { alloc: &alloc },
-                crate::directx::glass::GlassBuildConfig {
-                    msaa_samples,
-                    width: render_w,
-                    height: render_h,
-                    hot_reload,
-                },
-                crate::directx::glass::GlassSceneTargets {
-                    scene_copy_srv_cpu: slot_cpu(transparent_scene_copy_srv_slot),
-                    scene_copy_srv_gpu: slot_gpu(transparent_scene_copy_srv_slot),
-                    depth_srv_gpu: decal_depth_srv_gpu,
-                },
-                &glass_panels,
-                &planar_assignment.slots,
-                info_queue.as_ref(),
-            )?)
-        };
+        // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
+        // arg, which implies `transparent`): see-through only looks right when the
+        // space behind the glass is modelled. A material that is `transparent` but
+        // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
+        // reflections) = tinted reflective glass that hides the interior. This list
+        // drives the transparent-pass producer, the opaque-pass skip and the
+        // RT-BLAS exclude together.
+        let seethrough_mesh_indices: Vec<usize> = draw_objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.material.transparent != 0 && o.material.see_through != 0)
+            .map(|(i, _)| i)
+            .collect();
+
+        // The shared transparent pass and its producers: water surfaces,
+        // translucent glass panes, and see-through glass meshes. `Some` only when
+        // the world declared at least one of the three; the mesh case additionally
+        // needs a DXR-capable GPU, since its producer is ray-traced only and a
+        // pane-less, water-less world would otherwise build the whole pass for a
+        // producer that cannot exist. Shares the main-depth SRV with the decal
+        // pass; the scene-copy snapshot uses its own reserved heap slot.
+        // `planar_assignment.slots` gives each reflector its planar resolve slot
+        // (or `None` -> probe-cube fallback), numbered water first to match the
+        // plane list above.
+        let has_seethrough_meshes =
+            !seethrough_mesh_indices.is_empty() && super::raytrace::raytracing_supported(&device);
+        let transparent =
+            if glass_panels.is_empty() && water_surfaces.is_empty() && !has_seethrough_meshes {
+                None
+            } else {
+                let (water_planar_slots, glass_planar_slots) =
+                    planar_assignment.slots.split_at(water_surfaces.len());
+                Some(crate::directx::transparent::TransparentResources::new(
+                    crate::directx::transparent::TransparentDeviceCtx { alloc: &alloc },
+                    crate::directx::transparent::TransparentBuildConfig {
+                        msaa_samples,
+                        width: render_w,
+                        height: render_h,
+                        hot_reload,
+                    },
+                    crate::directx::transparent::TransparentSceneTargets {
+                        scene_copy_srv_cpu: slot_cpu(transparent_scene_copy_srv_slot),
+                        scene_copy_srv_gpu: slot_gpu(transparent_scene_copy_srv_slot),
+                        depth_srv_gpu: decal_depth_srv_gpu,
+                    },
+                    crate::directx::transparent::TransparentContent {
+                        glass_panels: &glass_panels,
+                        glass_planar_slots,
+                        water_surfaces: &water_surfaces,
+                        water_planar_slots,
+                        seethrough_mesh_indices: &seethrough_mesh_indices,
+                    },
+                    info_queue.as_ref(),
+                )?)
+            };
 
         // Hardware-RT acceleration structure. Built once over the shared static
         // vertex/index buffers + the draw-object / cluster lists, only when the
@@ -2174,6 +2212,13 @@ impl DxContext {
                 clusters: &instanced_clusters,
                 total_vertices: vertices.len(),
                 albedo_count: flat_albedo_count as u32,
+                // Exclude the meshes the transparent pass will reroute. Decided
+                // here rather than through `seethrough_meshes_enabled` because
+                // the context does not exist yet; the two agree because both read
+                // "a material opted in AND the mesh pipelines built".
+                exclude_seethrough: transparent
+                    .as_ref()
+                    .is_some_and(|t| t.mesh_pipelines_ready()),
             }) {
                 Ok(Some(mut accel)) => {
                     match super::raytrace::build_rt_skin_pipeline(&device, hot_reload) {
@@ -2430,7 +2475,7 @@ impl DxContext {
             lines: super::line::LineState::empty(),
             main_depth_srv_gpu: decal_depth_srv_gpu,
             raymarch,
-            glass,
+            transparent,
             planar_reflection,
             fog: super::context::FogState {
                 resources: fog_resources,

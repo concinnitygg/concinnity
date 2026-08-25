@@ -182,8 +182,7 @@ pub struct FrameGraphInputs {
     /// objects phase-1 cull marked occluded, and `Main2` redraws the
     /// disoccluded survivors. `Main2`'s hdr_resolve write becomes the head
     /// of the post chain so AutoExposure / Decals / Fog / SSR see the
-    /// combined two-pass result. Metal only today; the other backends keep
-    /// this false.
+    /// combined two-pass result.
     pub two_pass_occlusion_enabled: bool,
     /// `true` when screen-space global illumination is on
     /// (`PostProcessConfig.indirect_lighting == "ssgi"`); matches
@@ -193,7 +192,7 @@ pub struct FrameGraphInputs {
     /// source) and writes the next version with the gathered indirect term
     /// additively composited in. SSGI reuses the SSR pre-pass G-buffer for
     /// normals + depth, so `ssr_prepass_enabled` is forced on whenever this is
-    /// set. Metal only today; the other backends keep this false.
+    /// set.
     pub ssgi_enabled: bool,
     /// `true` when hardware ray-traced reflections are live (RT requested + GPU
     /// supports it + the scene acceleration structure built); matches
@@ -203,16 +202,14 @@ pub struct FrameGraphInputs {
     /// world may enable both, and where this is set the builder inserts
     /// `RtReflections` and omits `SsrResolve`, so at most one of them is in the
     /// graph. Like SSGI it reuses the SSR depth + normal + roughness pre-pass,
-    /// so `ssr_prepass_enabled` is forced on whenever this is set. Metal only
-    /// today; the other backends keep this false.
+    /// so `ssr_prepass_enabled` is forced on whenever this is set.
     pub rt_reflections_enabled: bool,
     /// `true` to collapse the SSR / SSAO / velocity geometry pre-passes into a
     /// single `GBufferPrepass` node that writes view-space normal+depth,
     /// roughness, and motion in one traversal: every consumer reads that one
     /// output. When set, the builder emits `GBufferPrepass` (gated on any of
     /// `ssr_prepass_enabled || ssao_enabled || velocity_enabled`) instead of the
-    /// separate `SsrPrepass` + `Velocity` nodes. Metal only today; the other
-    /// backends keep this false and emit their separate prepasses.
+    /// separate `SsrPrepass` + `Velocity` nodes.
     pub unified_gbuffer_prepass: bool,
     /// `true` when an opaque full-screen menu backdrop covers the scene, so
     /// nothing the world passes produce is visible. The builder masks every
@@ -223,8 +220,8 @@ pub struct FrameGraphInputs {
     pub world_hidden: bool,
     /// `true` when the scene has local lights to cluster. The graph adds a
     /// `LightCull` compute pass before Main that bins the lights into per-cluster
-    /// lists Main reads (RAW edge). Metal only today; the other backends keep this
-    /// false and iterate the local lights directly.
+    /// lists Main reads (RAW edge). A backend with no light-cull pipeline keeps
+    /// this false and iterates the local lights directly.
     pub clustered_lighting_enabled: bool,
     /// `true` when the composite samples the SSAO output directly (the
     /// occlusion view mode). Declares a Composite read of `ao_output`, so the

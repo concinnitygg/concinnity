@@ -76,8 +76,8 @@ enum Reason {
 // audit: Vulkan has `cmd_pipeline_barrier` and the attachment layout
 // declarations a render pass performs at its own boundaries. The table is keyed
 // by (file, call) rather than by file, because one file legitimately holds
-// several kinds for different reasons -- `glass.rs` has two inline transfer
-// barriers and one attachment round trip.
+// several kinds for different reasons -- `transparent.rs` has two inline
+// transfer barriers and one attachment round trip.
 struct BackendAudit {
     backend: &'static str,
     root: &'static str,
@@ -125,8 +125,8 @@ const AUDITS: &[BackendAudit] = &[
             // One orders each plane's mirror render behind the previous
             // render's attachment writes, which the shared main render pass
             // declares `UNDEFINED` and so transitions without a dependency;
-            // the other makes the finished targets visible to the glass
-            // sample. Neither the targets nor the shared mirror depth is a
+            // the other makes the finished targets visible to the transparent
+            // pass's sample. Neither the targets nor the shared mirror depth is a
             // graph resource.
             ("planar.rs", "cmd_pipeline_barrier", 2, Reason::Ungraphed),
             // The refraction snapshot: both passes copy the scene image into a
@@ -136,7 +136,12 @@ const AUDITS: &[BackendAudit] = &[
             // pass's colour LOAD declares -- so no net state crosses the node
             // boundary and there is no graph edge to derive it from. The
             // snapshot itself is not a graph resource.
-            ("glass.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
+            (
+                "transparent.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::IntraPass,
+            ),
             ("raymarch.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
             ("main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
             (
@@ -153,7 +158,12 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("decal.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
-            ("glass.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            (
+                "transparent.rs",
+                ".final_layout(",
+                1,
+                Reason::AttachmentLayout,
+            ),
             ("line.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             ("particle.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             ("raymarch.rs", ".final_layout(", 2, Reason::AttachmentLayout),
@@ -207,7 +217,7 @@ const AUDITS: &[BackendAudit] = &[
             // The refraction snapshot: a fragment cannot sample the attachment
             // it is blending into, so the pass copies the scene into a private
             // target and restores the scene to the state it was handed.
-            ("glass.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            ("transparent.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // The SSGI gather samples the scene the composite then blends into,
             // so this node reads and writes one resource; the graph models that
             // as a single write and the gather borrows the read state.

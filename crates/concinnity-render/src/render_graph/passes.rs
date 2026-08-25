@@ -142,16 +142,16 @@ pub enum PassId {
     /// compute pass reduces it into the Hi-Z pyramid so `Cull2` can re-test
     /// the objects phase 1 occluded against up-to-date depth. Distinct from
     /// the end-of-frame Hi-Z build (which feeds the *next* frame's phase-1
-    /// cull and stays an inline action, not a graph node). Metal only; the
-    /// other backends keep `two_pass_occlusion_enabled` false so this node
-    /// never appears in their graphs.
+    /// cull and stays an inline action, not a graph node). Every backend
+    /// implements the node; whether it appears is `two_pass_occlusion_enabled`,
+    /// which each seeds from its own two-pass state.
     HizBuild = 21,
     /// Phase-2 GPU cull for two-pass occlusion. Re-tests the objects `Cull`
     /// (phase 1) marked Hi-Z-occluded against the freshly rebuilt pyramid
     /// (`HizBuild`) and encodes a draw for any that turn out visible into a
     /// second indirect command buffer `Main2` consumes. Reads the per-object
     /// status buffer phase-1 cull wrote + the `draw_args2` buffer it writes.
-    /// Gated on `FrameGraphInputs::two_pass_occlusion_enabled`; Metal only.
+    /// Gated on `FrameGraphInputs::two_pass_occlusion_enabled`.
     Cull2 = 22,
     /// Phase-2 main pass for two-pass occlusion. Loads (does not clear) the
     /// HDR colour + depth `Main` wrote and re-runs only the bindless-static
@@ -160,7 +160,7 @@ pub enum PassId {
     /// Hi-Z-culled, so it is fully drawn in phase 1 and not repeated here.
     /// Becomes the new head of the hdr_resolve post-decoration chain (so
     /// AutoExposure / Decals / Fog / SSR see the combined result). Gated on
-    /// `FrameGraphInputs::two_pass_occlusion_enabled`; Metal only.
+    /// `FrameGraphInputs::two_pass_occlusion_enabled`.
     Main2 = 23,
     /// Screen-space global illumination. A refinement of SSR: it reuses the
     /// SSR depth + normal pre-pass G-buffer and screen-space ray-march, but
@@ -170,9 +170,7 @@ pub enum PassId {
     /// radiance source and additively composites the gathered + denoised
     /// indirect term back into it, so the near-field colour bleed layers on top
     /// of the IBL ambient. Gated on `FrameGraphInputs::ssgi_enabled`; when
-    /// `indirect_lighting` is IBL-only the slot is omitted entirely. Metal only
-    /// today; the other backends keep the flag false so this node never appears
-    /// in their graphs.
+    /// `indirect_lighting` is IBL-only the slot is omitted entirely.
     Ssgi = 24,
     /// Hardware ray-traced reflections. Occupies the same scene-pre-taa slot as
     /// `SsrResolve` (reads the post-decoration `hdr_resolve`, writes
@@ -183,29 +181,31 @@ pub enum PassId {
     /// pre-pass (so `SsrPrepass` is forced on), but instead of a screen-space
     /// march it traces a world-space reflection ray against an acceleration
     /// structure built over the static scene geometry, so off-screen reflected
-    /// geometry appears. Gated on `FrameGraphInputs::rt_reflections_enabled`;
-    /// Metal only, and only on GPUs that report ray-tracing support.
+    /// geometry appears. Gated on `FrameGraphInputs::rt_reflections_enabled`,
+    /// and so only on GPUs that report ray-tracing support.
     RtReflections = 25,
     /// Unified geometry G-buffer pre-pass. One jittered traversal of the visible
     /// set writes view-space normal + linear depth, perceptual roughness, and
     /// screen-space motion into a single MRT (plus a sampleable depth), replacing
     /// the separate `SsrPrepass` + `Velocity` (and the SSAO-owned prepass): every
     /// consumer (SSR, SSAO, SSGI, RT, TAA, upscaler) reads this one output. Gated
-    /// on `FrameGraphInputs::unified_gbuffer_prepass`; Metal only, so the other
-    /// backends keep the flag false and emit their separate prepasses instead.
+    /// on `FrameGraphInputs::unified_gbuffer_prepass`.
     GBufferPrepass = 26,
     /// Roughness-aware reflection composite. Not a standalone graph node: it is
     /// encoded inline at the tail of the `SsrResolve` / `RtReflections` pass
     /// (both write a reflection target, then blur it by roughness and composite
     /// it over the scene). It carries its own timing slot so its cost is visible
-    /// separately from the trace/march that precedes it. Metal only.
+    /// separately from the trace/march that precedes it. Inline on every
+    /// backend, so no backend's graph executor ever dispatches this id: each
+    /// treats it as a programming error the way it treats the bundled SSAO
+    /// sub-passes.
     ReflectionComposite = 27,
     /// Clustered light-binning compute pass. Once per frame, before Main: bins the
     /// scene's local lights (the GpuLight buffer) into a per-cluster index list
     /// over a screen-tiled, exponential-depth froxel grid, which the forward pass
     /// reads to shade each fragment from only its cluster's lights instead of
-    /// iterating every light. Runs when the world has local lights; Metal first,
-    /// the other backends follow. Writes a storage buffer Main reads (RAW edge).
+    /// iterating every light. Runs when the world has local lights. Writes a
+    /// storage buffer Main reads (RAW edge).
     LightCull = 28,
     /// Depth-only render of each shadowed spot light's cone into one slice of the
     /// spot shadow map array. Local lights are static, so the projections are

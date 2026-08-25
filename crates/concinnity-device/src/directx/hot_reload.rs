@@ -191,7 +191,7 @@ impl DxContext {
     //
     // Covers every runtime-bundled PSO: composite, text, bloom (prefilter
     // / downsample / upsample), GPU-cull compute, auto-exposure (build +
-    // average), projected-decal, glass (transparent), volumetric-fog, the
+    // average), projected-decal, transparent (glass + water), volumetric-fog, the
     // unified G-buffer pre-pass (static / instanced / skinned), SSAO (kernel,
     // blur), SSR (resolve), TAA (resolve), and the bindless main pipeline when
     // it is live. The world-loaded
@@ -436,16 +436,29 @@ impl DxContext {
             )
         );
 
-        // Glass (only when the world declared any GlassPanel).
+        // The transparent pass's two producers (each only when the world declared
+        // its asset). Both rebuild against the pass's shared root signature.
         let glass_pso = rebuild_if_live!(
-            self.glass.is_some(),
+            self.transparent.as_ref().is_some_and(|t| t.has_glass()),
             super::glass::rebuild_glass_pso(
                 device,
-                &self
-                    .glass
+                self.transparent
                     .as_ref()
-                    .expect("glass resources are live")
-                    .root_sig,
+                    .expect("transparent resources are live")
+                    .root_sig(),
+                self.hdr.msaa_samples,
+                hr,
+                info_queue,
+            )
+        );
+        let water_pso = rebuild_if_live!(
+            self.transparent.as_ref().is_some_and(|t| t.has_water()),
+            super::water::rebuild_water_pso(
+                device,
+                self.transparent
+                    .as_ref()
+                    .expect("transparent resources are live")
+                    .root_sig(),
                 self.hdr.msaa_samples,
                 hr,
                 info_queue,
@@ -609,8 +622,8 @@ impl DxContext {
         if let (Some(pso), Some(lines)) = (line_pso, self.lines.resources.as_mut()) {
             lines.pso = pso;
         }
-        if let (Some(pso), Some(glass)) = (glass_pso, self.glass.as_mut()) {
-            glass.pso = pso;
+        if let Some(transparent) = self.transparent.as_mut() {
+            transparent.swap_pipelines(glass_pso, water_pso);
         }
         if let (Some(pso), Some(fog)) = (fog_pso, self.fog.resources.as_mut()) {
             fog.pso = pso;

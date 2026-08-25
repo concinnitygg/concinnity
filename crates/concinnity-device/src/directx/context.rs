@@ -1208,19 +1208,20 @@ pub(crate) struct DxContext {
     // the slot entirely.
     pub(super) raymarch: Option<super::raymarch::RaymarchResources>,
 
-    // Translucent glass panels. `Some` only when the world declared any
-    // `GlassPanel`; with none the field stays `None` and the transparent pass
-    // is skipped. The generic producer for the shared `PassId::Transparent`
-    // slot; render-graph inclusion is gated on `Self::transparent_enabled()`.
-    // Water is a separate (Metal-only) producer not ported here. Mirrors
-    // src/metal glass handling.
-    pub(super) glass: Option<super::glass::GlassResources>,
+    // The shared `PassId::Transparent` slot and its two producers, translucent
+    // glass panes and water surfaces. `Some` only when the world declared a
+    // `GlassPanel` or a `WaterSurface`; with neither the field stays `None` and
+    // the pass is skipped. Render-graph inclusion is gated on
+    // `Self::transparent_enabled()`. Mirrors src/metal's transparent encoder.
+    pub(super) transparent: Option<super::transparent::TransparentResources>,
 
-    // Planar reflections for flat glass panes: a per-frame mirror render of the
-    // scene reflected across each distinct pane plane, sampled projectively by the
-    // glass shader (sharper + scene-correct vs the box-projected probe cube).
-    // `Some` only when the world has glass panes assigned to a planar slot. Driven
-    // inline at the head of the transparent pass (`encode_planar_reflections`).
+    // Planar reflections for the transparent pass's flat reflectors: a per-frame
+    // mirror render of the scene reflected across each distinct reflector plane
+    // (a water surface's rest plane, a glass pane's plane), sampled by the
+    // shaders at screen UV (sharper + scene-correct vs the box-projected probe
+    // cube). `Some` only when the world has reflectors assigned to a planar slot.
+    // Driven inline at the head of the transparent pass
+    // (`encode_planar_reflections`).
     pub(super) planar_reflection: Option<super::planar::PlanarReflectionSet>,
 
     // Volumetric fog. See [`FogState`].
@@ -2056,27 +2057,84 @@ impl DxContext {
         }
     }
 
-    // True when glass panes trace a per-pixel RT reflection this frame: RT is live
-    // AND the glass RT pipelines built (DXR + DXC). Single-sources the glass-RT
-    // decision so the two consumers agree: `encode_transparent` selects the RT
-    // trace, and `graph_exec` skips the planar mirror re-render (RT supersedes
-    // planar). They MUST gate on the same predicate -- if RT is live but the glass
-    // RT pipelines failed to build, the glass pass falls back to the probe/planar
-    // path, so the planar resolve must still be rendered for it to sample (gating
-    // the skip on `rt_reflections_active()` alone would leave it sampling a stale
-    // resolve).
-    pub(super) fn rt_glass_active(&self) -> bool {
-        self.rt_reflections_active() && self.glass.as_ref().is_some_and(|g| g.rt_pipelines_ready())
+    // True when the transparent pass traces a per-pixel RT reflection this frame:
+    // RT is live AND every live producer's RT pipelines built (DXR + DXC).
+    // Single-sources the decision so the two consumers agree: `encode_transparent`
+    // selects the RT trace, and `graph_exec` skips the planar mirror re-render (RT
+    // supersedes planar). They MUST gate on the same predicate -- if RT is live but
+    // a producer's RT pipelines failed to build, that producer falls back to the
+    // probe/planar path, so the planar resolve must still be rendered for it to
+    // sample (gating the skip on `rt_reflections_active()` alone would leave it
+    // sampling a stale resolve).
+    pub(super) fn rt_transparent_active(&self) -> bool {
+        self.rt_reflections_active()
+            && self
+                .transparent
+                .as_ref()
+                .is_some_and(|t| t.rt_pipelines_ready())
+    }
+
+    // True when the transparent pass has to render its planar mirrors this frame.
+    // Water takes the mirror over its own trace wherever it holds a slot (see
+    // `water.slang`), so a visible water surface keeps the re-render alive even
+    // while the trace is live; a glass-only world under a live trace skips it as
+    // before. Shared with the other backends through
+    // `planar_reflection::planar_pass_needed`.
+    pub(super) fn planar_pass_needed(&self) -> bool {
+        crate::gfx::planar_reflection::planar_pass_needed(
+            self.planar_reflection.is_some(),
+            self.transparent
+                .as_ref()
+                .is_some_and(|t| t.water_planar_slot_live()),
+            self.rt_transparent_active(),
+        )
     }
 
     // True when the render graph should include `PassId::Transparent`. Wraps
-    // the `glass.any_visible()` check; drives
-    // `FrameGraphInputs::transparent_enabled` in `record_frame::seed_inputs`.
+    // the `transparent.any_visible()` check plus this frame's see-through mesh
+    // visibility, which lives in `draw.objects` rather than in a static record;
+    // drives `FrameGraphInputs::transparent_enabled` in
+    // `record_frame::seed_inputs`.
     pub(super) fn transparent_enabled(&self) -> bool {
-        self.glass
+        self.transparent.as_ref().is_some_and(|t| t.any_visible()) || self.mesh_glass_visible()
+    }
+
+    // Whether a material opted into Layer 2 see-through glass AND the device can
+    // drive it (the mesh pipelines built). Independent of `rt_accel`, so it
+    // answers "would the see-through path run if RT is on" -- used at the RT-BLAS
+    // build, which must exclude the meshes it will reroute before the
+    // acceleration structure it gates on exists. Data-driven: see-through is
+    // opt-in per `Material::see_through`, so a scene with no see-through material
+    // never engages Layer 2 and its transparent glass stays Layer 1 (opaque, low
+    // roughness, reflective).
+    pub(super) fn seethrough_meshes_enabled(&self) -> bool {
+        self.transparent
             .as_ref()
-            .map(|g| g.any_visible())
-            .unwrap_or(false)
+            .is_some_and(|t| t.mesh_pipelines_ready())
+    }
+
+    // Whether the see-through mesh (Layer 2) path is live this frame: the
+    // pipelines built AND the pass can trace (`rt_transparent_active`, which
+    // needs the TLAS). When false, those meshes render opaque + reflective in the
+    // main pass (Layer 1) and the producer / opaque-skip / BLAS-exclude all stay
+    // inert. Mirrors `MtlContext::mesh_glass_active`.
+    pub(super) fn mesh_glass_active(&self) -> bool {
+        self.seethrough_meshes_enabled() && self.rt_transparent_active()
+    }
+
+    // Whether any see-through mesh would actually draw this frame. Only then does
+    // the mesh producer contribute, so the graph's Transparent node is not
+    // scheduled for a world whose glass is all hidden or evicted.
+    fn mesh_glass_visible(&self) -> bool {
+        self.mesh_glass_active()
+            && self.transparent.as_ref().is_some_and(|t| {
+                t.seethrough_mesh_indices().iter().any(|&i| {
+                    self.draw
+                        .objects
+                        .get(i)
+                        .is_some_and(|o| o.visible && o.resident)
+                })
+            })
     }
 
     // Bump this frame's CPU-issued draw-call counter. Called from each draw

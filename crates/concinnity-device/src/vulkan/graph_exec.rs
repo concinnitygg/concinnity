@@ -972,25 +972,25 @@ impl VkContext {
                 self.encode_raymarch(cmd, params.frame_idx, &view)?;
             }
             PassId::Transparent => {
-                // Generic translucent pass: draws the world's glass panels
-                // back-to-front over the post-SSR scene. Gated by
+                // Generic translucent pass: draws the world's glass panes and
+                // water surfaces back-to-front over the post-SSR scene. Gated by
                 // `FrameGraphInputs::transparent_enabled` (set from
-                // `glass.any_visible()`), so it only appears when the world
-                // declared visible `GlassPanel`s. Uses the jittered VP (the
-                // matrix the main pass rasterised depth with) so the glass
-                // quad's clip-space depth matches the stored main-depth the
-                // fragment shader tests against. Water is a separate
-                // (Metal-only) producer not ported here.
+                // `transparent.any_visible()`), so it only appears when the world
+                // declared a visible `GlassPanel` or `WaterSurface`. Uses the
+                // jittered VP (the matrix the main pass rasterised depth with) so a
+                // record's clip-space depth matches the stored main-depth the
+                // fragment shader tests against.
                 // Planar reflections run inline at the head of the pass (same cmd
-                // buffer -> each plane's mirror target is ready before the glass
-                // draws sample it). A no-op when the world has no planar set.
-                // Skipped when the per-pixel RT glass trace is live: it supersedes
-                // planar (sharp + off-screen-correct), so the mirror re-render would
-                // be wasted. Gating on `rt_glass_active` (not `rt_reflections_active`)
-                // keeps planar alive when RT is live but the glass RT pipelines
-                // failed to build, so the glass probe / planar fallback samples a
-                // freshly rendered resolve. Mirrors DirectX.
-                if !self.rt_glass_active() {
+                // buffer -> each plane's mirror target is ready before the
+                // transparent draws sample it). A no-op when the world has no planar
+                // set. `planar_pass_needed` decides: a visible water surface holding
+                // a slot always needs it (water takes the mirror over the trace), and
+                // so does any reflector when the per-pixel trace will not run. Gating
+                // on `rt_transparent_active` (not `rt_reflections_active`) keeps
+                // planar alive when RT is live but a producer's RT pipelines failed to
+                // build, so its probe / planar fallback samples a freshly rendered
+                // resolve. Mirrors DirectX.
+                if self.planar_pass_needed() {
                     self.encode_planar_reflections(
                         cmd,
                         params.frame_idx,

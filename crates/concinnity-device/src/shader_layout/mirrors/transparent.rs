@@ -1,13 +1,19 @@
 // src/shader_layout/mirrors/transparent.rs
 //
-// The glass family, the ray-traced reflection resolve, and the fog pair. The
-// fog froxel kernel carries the third declaration of `ShadowUniforms` -- the
-// only one that spells out the trailing pad the CPU uploads.
+// The transparent pass's three producers, the ray-traced reflection resolve, and
+// the fog pair. `TransparentView` is declared by glass.slang, glass_mesh.slang
+// and water.slang alike, so all three are mirrored: they are separate
+// declarations that can drift apart. The fog froxel kernel carries the third declaration of
+// `ShadowUniforms` -- the only one that spells out the trailing pad the CPU
+// uploads.
 
 use concinnity_core::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
 };
-use concinnity_render::uniforms::{GlassParams, ProbeSet, ProbeUniforms, TransparentView};
+use concinnity_render::uniforms::{
+    GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterParams,
+    WaterWaveGpu,
+};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
 use crate::shader_layout::programs::Target;
@@ -43,6 +49,56 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             count,
             [_pad] => ["_pad0", "_pad1", "_pad2"],
             probes,
+        })),
+    ]
+}
+
+pub(in crate::shader_layout) fn glass_mesh() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(TransparentView => "TransparentView" {
+            vp,
+            inv_vp,
+            camera_pos,
+            viewport,
+            time,
+            prefilter_mip_count,
+        })),
+        everywhere(mirror!(GlassMeshParams => "GlassMeshParams" {
+            model,
+            tint,
+            opacity,
+            refraction_strength,
+            fresnel_power,
+            prefilter_mip_count,
+        })),
+    ]
+}
+
+pub(in crate::shader_layout) fn water() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(TransparentView => "TransparentView" {
+            vp,
+            inv_vp,
+            camera_pos,
+            viewport,
+            time,
+            prefilter_mip_count,
+        })),
+        everywhere(mirror!(WaterWaveGpu => "WaterWave" { dir_amp_wave, speed_steep_pad, })),
+        everywhere(mirror!(WaterParams => "WaterParams" {
+            centre,
+            deep_colour,
+            shallow_colour,
+            depth_falloff,
+            foam_width,
+            foam_intensity,
+            fresnel_power,
+            roughness,
+            refraction_strength,
+            wave_count,
+            _pad,
+            waves,
+            planar,
         })),
     ]
 }

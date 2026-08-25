@@ -315,8 +315,8 @@ pub(super) struct WaterState {
     pub pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // One GPU record per `WaterSurface` asset: tessellated VB+IB plus the
-    // per-surface fragment / vertex uniforms (rebuilt at init from the asset;
-    // `prefilter_mip_count` is patched per-frame).
+    // per-surface fragment / vertex uniforms, built once at init from the
+    // asset.
     pub surfaces: Vec<super::water::WaterSurfaceRecord>,
 }
 
@@ -328,7 +328,7 @@ pub(super) struct GlassState {
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Ray-traced transparent glass MESH pipelines (`glass_mesh_rt.metal`): an
+    // Ray-traced see-through glass MESH pipelines (`glass_mesh.slang`): an
     // imported `Material` with `transparent: true` routed through the transparent
     // pass with a per-pixel RT trace off the interpolated mesh normal, instead of
     // the Layer-1 opaque-reflective fallback. Built only on RT-capable devices

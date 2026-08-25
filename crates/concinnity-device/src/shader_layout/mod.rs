@@ -24,9 +24,8 @@
 //
 // Not every layout assert can move here. `cull`, `rt_skin`, the legacy per-draw
 // main pass and the raymarch templates are still hand-written per backend, and
-// `glass_mesh_rt` / `water` are deliberately Metal-only, so a struct used only
-// by those has no `.slang` to reflect and its hand assert is the only check it
-// has. The reverse gap exists too: slangc rejects `TraceRayInline` on the Metal
+// so a struct used only by those has no `.slang` to reflect and its hand assert
+// is the only check it has. The reverse gap exists too: slangc rejects `TraceRayInline` on the Metal
 // target, so `rt_reflections.slang` reflects on Vulkan and DirectX only and
 // `RtParams` / `RtGeomEntry` have no check against the Metal RT sources. Vertex payloads are the other exclusion: slangc binds a vertex input by
 // attribute index, not byte offset, so `Vertex` / `SkinnedVertex` /
@@ -161,6 +160,19 @@ fn text_layouts_match_the_shader() {
 #[test]
 fn glass_layouts_match_the_shader() {
     check(&programs::GLASS_VERT, &mirrors::transparent::glass());
+}
+
+#[test]
+fn glass_mesh_layouts_match_the_shader() {
+    check(
+        &programs::GLASS_MESH_VERT,
+        &mirrors::transparent::glass_mesh(),
+    );
+}
+
+#[test]
+fn water_layouts_match_the_shader() {
+    check(&programs::WATER_VERT, &mirrors::transparent::water());
 }
 
 #[test]

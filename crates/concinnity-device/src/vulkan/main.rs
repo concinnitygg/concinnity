@@ -306,6 +306,7 @@ impl VkContext {
         // the bindless indirect draw as their own records). Shared with the
         // instanced + skinned passes' fragment shader.
         let legacy_needed = !use_bindless || !self.clone.slot_by_draw_idx.is_empty();
+        let skip_seethrough = self.mesh_glass_active();
         if legacy_needed {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
@@ -338,6 +339,13 @@ impl VkContext {
                 }
                 let obj = &self.draw.objects[i];
                 if !obj.visible || !obj.resident {
+                    continue;
+                }
+                // See-through glass meshes (Layer 2) draw in the transparent
+                // pass when the RT path is live, so skip them here: leaving one in
+                // would both paint it opaque and stamp its depth over the scene
+                // the refraction tap reads.
+                if skip_seethrough && obj.material.see_through != 0 {
                     continue;
                 }
 

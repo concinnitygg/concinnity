@@ -241,6 +241,63 @@ const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
         profile: "ps_6_5",
         registers: GLASS_RT_TEXTURED_REGISTERS,
     },
+    // The see-through glass MESH producer. Ray-traced only, so it declares the
+    // RT register set unconditionally; its vertex stage reads the model matrix
+    // out of b1, which is why b1 is visible to every stage in the root
+    // signature.
+    DxilAbi {
+        file: "glass_mesh.slang",
+        gates: &[],
+        entry: "glass_mesh_vertex",
+        profile: "vs_6_0",
+        registers: &[("view", "b0"), ("params", "b1")],
+    },
+    DxilAbi {
+        file: "glass_mesh.slang",
+        gates: &[],
+        entry: "glass_mesh_rt_fragment",
+        profile: "ps_6_5",
+        registers: GLASS_MESH_RT_REGISTERS,
+    },
+    DxilAbi {
+        file: "glass_mesh.slang",
+        gates: &["RT_TEXTURED"],
+        entry: "glass_mesh_rt_fragment",
+        profile: "ps_6_5",
+        registers: GLASS_RT_TEXTURED_REGISTERS,
+    },
+    // Water shares every register glass declares, which is what lets one root
+    // signature per path serve both producers of the transparent pass. The RT
+    // pair additionally reads the planar resolve at t3 (see
+    // WATER_RT_REGISTERS), which the shared RT signature has a table for.
+    DxilAbi {
+        file: "water.slang",
+        gates: &[],
+        entry: "water_vertex",
+        profile: "vs_6_0",
+        registers: &[("view", "b0"), ("params", "b1")],
+    },
+    DxilAbi {
+        file: "water.slang",
+        gates: &[],
+        entry: "water_fragment",
+        profile: "ps_6_0",
+        registers: GLASS_REGISTERS,
+    },
+    DxilAbi {
+        file: "water.slang",
+        gates: &["WATER_RT"],
+        entry: "water_rt_fragment",
+        profile: "ps_6_5",
+        registers: WATER_RT_REGISTERS,
+    },
+    DxilAbi {
+        file: "water.slang",
+        gates: &["WATER_RT", "RT_TEXTURED"],
+        entry: "water_rt_fragment",
+        profile: "ps_6_5",
+        registers: WATER_RT_TEXTURED_REGISTERS,
+    },
     // The raster remainder, from `src/directx/{particle,decal,line}.rs` and
     // `pipeline.rs`. Only the particle pair carries a `DXIL_ABI` block, and only
     // to swap the two constant buffers; the rest are here because slangc
@@ -337,9 +394,10 @@ const RT_REFLECTIONS_REGISTERS: &[(&str, &str)] = &[
 const RT_REFLECTIONS_TEXTURED_REGISTERS: &[(&str, &str)] =
     &[("tex_pool", "t0, space1"), ("pool_sampler", "s2")];
 
-// The glass root signatures, from `src/directx/glass.rs`. The base pass leaves
-// the probe cubes at their default t7; the RT variant moves them to t20 because
-// the array spans MAX_PROBES registers and the trace's SRVs sit at t4..t10.
+// The transparent pass's root signatures, from `src/directx/transparent.rs`,
+// which glass and water both draw under. The base pass leaves the probe cubes at
+// their default t7; the RT variant moves them to t20 because the array spans
+// MAX_PROBES registers and the trace's SRVs sit at t4..t10.
 const GLASS_REGISTERS: &[(&str, &str)] = &[
     ("view", "b0"),
     ("params", "b1"),
@@ -372,6 +430,56 @@ const GLASS_RT_REGISTERS: &[(&str, &str)] = &[
 
 const GLASS_RT_TEXTURED_REGISTERS: &[(&str, &str)] =
     &[("tex_pool", "t0, space1"), ("pool_sampler", "s1")];
+
+// Water's RT fragments, which are glass's set plus the planar resolve at t3: a
+// water surface with a mirror plane samples it in place of tracing, so unlike
+// glass the register survives into the RT variant and the RT root signature
+// carries a table for it.
+const WATER_RT_REGISTERS: &[(&str, &str)] = &[
+    ("view", "b0"),
+    ("params", "b1"),
+    ("rt_params", "b5"),
+    ("probe_set", "b4"),
+    ("scene_color", "t0"),
+    ("scene_depth", "t1"),
+    ("prefilter_cube", "t2"),
+    ("planar_reflection", "t3"),
+    ("scene_tlas", "t4"),
+    ("verts", "t5"),
+    ("indices", "t6"),
+    ("sverts", "t8"),
+    ("sidx", "t9"),
+    ("geom", "t10"),
+    ("probe_cubes", "t20"),
+];
+
+const WATER_RT_TEXTURED_REGISTERS: &[(&str, &str)] = &[
+    ("planar_reflection", "t3"),
+    ("tex_pool", "t0, space1"),
+    ("pool_sampler", "s1"),
+];
+
+// The see-through glass mesh fragment: the RT set above, minus the planar
+// resolve at t3 (a curved mesh has no mirror plane) and with the same t20 probe
+// cube base, so the pass's RT root signature covers it unchanged.
+const GLASS_MESH_RT_REGISTERS: &[(&str, &str)] = &[
+    ("view", "b0"),
+    ("params", "b1"),
+    ("rt_params", "b5"),
+    ("probe_set", "b4"),
+    ("scene_color", "t0"),
+    ("scene_depth", "t1"),
+    ("prefilter_cube", "t2"),
+    ("scene_tlas", "t4"),
+    ("verts", "t5"),
+    ("indices", "t6"),
+    ("sverts", "t8"),
+    ("sidx", "t9"),
+    ("geom", "t10"),
+    ("probe_cubes", "t20"),
+    ("post_samp", "s0"),
+    ("cube_sampler", "s2"),
+];
 
 // The single-source engine shaders the Metal backend precompiles to metallibs.
 // One spec per variant library; `name` is the renderer's lookup key.
@@ -652,6 +760,48 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         entries: &["glass_rt_fragment"],
         defines: SLANG_GLASS_RT_TEXTURED_DEFINES,
     },
+    SlangLibSpec {
+        name: "glass_mesh_vert.slang",
+        file: "glass_mesh.slang",
+        entries: &["glass_mesh_vertex"],
+        defines: SLANG_GLASS_MESH_DEFINES,
+    },
+    SlangLibSpec {
+        name: "glass_mesh_frag_rt.slang",
+        file: "glass_mesh.slang",
+        entries: &["glass_mesh_rt_fragment"],
+        defines: SLANG_GLASS_MESH_DEFINES,
+    },
+    SlangLibSpec {
+        name: "glass_mesh_frag_rt_textured.slang",
+        file: "glass_mesh.slang",
+        entries: &["glass_mesh_rt_fragment"],
+        defines: SLANG_GLASS_MESH_TEXTURED_DEFINES,
+    },
+    SlangLibSpec {
+        name: "water_vert.slang",
+        file: "water.slang",
+        entries: &["water_vertex"],
+        defines: SLANG_WATER_DEFINES,
+    },
+    SlangLibSpec {
+        name: "water_frag.slang",
+        file: "water.slang",
+        entries: &["water_fragment"],
+        defines: SLANG_WATER_DEFINES,
+    },
+    SlangLibSpec {
+        name: "water_frag_rt.slang",
+        file: "water.slang",
+        entries: &["water_rt_fragment"],
+        defines: SLANG_WATER_RT_DEFINES,
+    },
+    SlangLibSpec {
+        name: "water_frag_rt_textured.slang",
+        file: "water.slang",
+        entries: &["water_rt_fragment"],
+        defines: SLANG_WATER_RT_TEXTURED_DEFINES,
+    },
 ];
 
 // The ray-traced families. Both bake the Metal binding layout in; the textured
@@ -669,6 +819,24 @@ const SLANG_GLASS_RT_DEFINES: &[(&str, &str)] =
 const SLANG_GLASS_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
     ("METAL_ABI", "1"),
     ("GLASS_RT", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
+];
+// The glass mesh family is ray-traced only, so there is no non-RT gate to set.
+const SLANG_GLASS_MESH_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const SLANG_GLASS_MESH_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
+];
+const SLANG_WATER_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const SLANG_WATER_RT_DEFINES: &[(&str, &str)] =
+    &[("METAL_ABI", "1"), ("WATER_RT", "1"), ("MAX_PROBES", "8")];
+const SLANG_WATER_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("WATER_RT", "1"),
     ("RT_TEXTURED", "1"),
     ("POOL_SIZE", "1024"),
     ("MAX_PROBES", "8"),

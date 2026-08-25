@@ -127,11 +127,16 @@ impl Bench {
 
     #[cfg(test)]
     fn for_test() -> Bench {
+        Bench::for_test_with_target(10_000)
+    }
+
+    #[cfg(test)]
+    fn for_test_with_target(target_sample_ns: u128) -> Bench {
         Bench {
             filters: Vec::new(),
             json_path: None,
             samples: 3,
-            target_sample_ns: 10_000,
+            target_sample_ns,
             records: Vec::new(),
         }
     }
@@ -419,7 +424,8 @@ mod tests {
 
     // Runs a real measurement against a body with a known allocation profile.
     // The counters are process-global and tests run in parallel, so only lower
-    // bounds hold.
+    // bounds hold. Timings are checked for shape only: a body this cheap can
+    // read as zero at the platform clock's resolution.
     #[test]
     fn a_measured_body_reports_its_allocations() {
         let mut bench = Bench::for_test();
@@ -429,13 +435,29 @@ mod tests {
         let record = &bench.records[0];
         assert_eq!(record.items, 4);
         assert!(record.iters >= 1);
-        assert!(record.median_ns > 0.0);
+        assert!(record.median_ns.is_finite() && record.median_ns >= 0.0);
         assert!(record.p95_ns >= record.median_ns);
         assert!(
             record.allocs_per_iter >= 1.0,
             "one Vec per call must show at least one allocation, got {}",
             record.allocs_per_iter
         );
+    }
+
+    // The clock-resolution case the timings above must tolerate. A zero sample
+    // target ends calibration at one iteration, and a body cheaper than one
+    // clock tick then measures as zero.
+    #[test]
+    fn a_body_cheaper_than_a_clock_tick_still_reports() {
+        let mut bench = Bench::for_test_with_target(0);
+        bench.run("test/one_iteration", 1, || {
+            core::hint::black_box(Vec::<u8>::with_capacity(256));
+        });
+        let record = &bench.records[0];
+        assert_eq!(record.iters, 1);
+        assert!(record.median_ns.is_finite() && record.median_ns >= 0.0);
+        assert!(record.p95_ns >= record.median_ns);
+        assert!(record.allocs_per_iter >= 1.0);
     }
 
     #[test]

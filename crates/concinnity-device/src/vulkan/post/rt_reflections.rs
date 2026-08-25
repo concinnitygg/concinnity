@@ -898,15 +898,36 @@ impl VkContext {
         self.rt_reflections.is_some() && self.rt_accel.is_some()
     }
 
-    // True when the glass pass should trace per-pixel RT reflections this frame:
-    // RT is live (the scene TLAS is built) AND the glass RT pipelines compiled at
-    // init. Single-sources the glass encoder's RT-vs-base selection and the
-    // `graph_exec` planar skip, so the two always agree -- gating the skip on
-    // `rt_reflections_active()` alone would drop the planar re-render even when the
-    // glass RT pipelines failed to build, leaving the glass fallback sampling a
-    // stale resolve. Mirrors `DxContext::rt_glass_active`.
-    pub(in crate::vulkan) fn rt_glass_active(&self) -> bool {
-        self.rt_reflections_active() && self.glass.as_ref().is_some_and(|g| g.rt_pipelines_ready())
+    // True when the transparent pass should trace per-pixel RT reflections this
+    // frame: RT is live (the scene TLAS is built) AND every live producer's RT
+    // pipelines compiled at init. Single-sources the transparent encoder's
+    // RT-vs-base selection and the `graph_exec` planar skip, so the two always
+    // agree -- gating the skip on `rt_reflections_active()` alone would drop the
+    // planar re-render even when a producer's RT pipelines failed to build,
+    // leaving its fallback sampling a stale resolve. Mirrors
+    // `DxContext::rt_transparent_active`.
+    // True when the transparent pass has to render its planar mirrors this frame.
+    // Water takes the mirror over its own trace wherever it holds a slot (see
+    // `water.slang`), so a visible water surface keeps the re-render alive even
+    // while the trace is live; a glass-only world under a live trace skips it as
+    // before. Shared with the other backends through
+    // `planar_reflection::planar_pass_needed`.
+    pub(in crate::vulkan) fn planar_pass_needed(&self) -> bool {
+        crate::gfx::planar_reflection::planar_pass_needed(
+            self.planar_reflection.is_some(),
+            self.transparent
+                .as_ref()
+                .is_some_and(|t| t.water_planar_slot_live()),
+            self.rt_transparent_active(),
+        )
+    }
+
+    pub(in crate::vulkan) fn rt_transparent_active(&self) -> bool {
+        self.rt_reflections_active()
+            && self
+                .transparent
+                .as_ref()
+                .is_some_and(|t| t.rt_pipelines_ready())
     }
 
     // Run the per-frame dynamic acceleration-structure update on `cmd` (the
@@ -953,6 +974,10 @@ impl VkContext {
                 None
             };
 
+        // Read before `rt_accel` is taken: `seethrough_meshes_enabled` borrows
+        // `self.transparent`, which the block below holds `&self` across.
+        let exclude_seethrough = self.seethrough_meshes_enabled();
+
         // Take `rt_accel` out so its `&mut` borrow does not overlap the shared
         // `&self` reads (`skinned_draw_objects` / `draw_objects`) the inputs need;
         // put it back immediately after.
@@ -982,6 +1007,7 @@ impl VkContext {
                     policy: super::super::raytrace::RtRebuildPolicy {
                         mode,
                         topology_dirty,
+                        exclude_seethrough,
                     },
                     frame_idx,
                     skinned,
@@ -1012,14 +1038,15 @@ impl VkContext {
                 skinned_indices,
             },
         );
-        // Re-point the glass pass's RT descriptor ring at the same live handles, so
-        // a glass trace this frame samples the current TLAS / geometry table. A
-        // no-op when the world has no glass or the glass RT pipelines are absent.
-        if let Some(glass) = self.glass.as_ref() {
-            glass.wire_rt_dynamic(
+        // Re-point the transparent pass's RT descriptor ring at the same live
+        // handles, so a trace this frame samples the current TLAS / geometry table.
+        // A no-op when the world has no transparent content or the RT pipelines are
+        // absent.
+        if let Some(transparent) = self.transparent.as_ref() {
+            transparent.wire_rt_dynamic(
                 &device,
                 frame_idx,
-                super::super::glass::GlassRtDynamic {
+                super::super::transparent::TransparentRtDynamic {
                     tlas,
                     geom_buffer,
                     geom_size,

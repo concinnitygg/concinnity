@@ -725,19 +725,22 @@ impl MtlContext {
                     time: params.elapsed,
                     prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
                 };
-                // Planar reflection: when RT is off and the world has flat
-                // reflectors (water surfaces / glass panes), re-render the scene
-                // mirrored across each distinct reflector plane into its planar
-                // target (reusing this frame's cull ICB + bindless buffers) so the
-                // surface samples a sharp scene reflection instead of the blurry
-                // probe cube. RT on uses the per-pixel trace instead, so the planar
-                // pass is skipped. Encoded before `encode_transparent` on the same
-                // command buffer, which samples the resolves.
-                let planar_live = self.rt.accel.is_none()
-                    && self
-                        .planar_reflection
+                // Planar reflection: re-render the scene mirrored across each
+                // distinct reflector plane into its planar target (reusing this
+                // frame's cull ICB + bindless buffers) so a flat reflector samples a
+                // sharp scene reflection instead of the blurry probe cube. A visible
+                // water surface holding a slot always wants it -- water takes the
+                // mirror over its own trace (see `water.slang`) -- and so does any
+                // reflector when RT is off; a glass-only world under a live trace
+                // skips it. Encoded before `encode_transparent` on the same command
+                // buffer, which samples the resolves.
+                let planar_live = crate::gfx::planar_reflection::planar_pass_needed(
+                    self.planar_reflection
                         .as_ref()
-                        .is_some_and(|s| !s.targets.is_empty());
+                        .is_some_and(|s| !s.targets.is_empty()),
+                    self.water_planar_slot_live(),
+                    self.rt_transparent_active(),
+                );
                 if planar_live {
                     self.encode_planar_reflections(cmd_buf, params)?;
                 }

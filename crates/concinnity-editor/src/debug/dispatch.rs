@@ -226,7 +226,7 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 // unsupported backend) or `tick` has not run yet.
                 None => serde_json::json!({
                     "ok": false,
-                    "error": "shader hot-reload not available (cn debug only, Metal-only today)",
+                    "error": "shader hot-reload not available (cn debug only)",
                 }),
             }
         }

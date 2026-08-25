@@ -335,12 +335,12 @@ float4 glass_resolve(GlassSurface s, float3 view_dir, float3 reflection)
 }
 
 // The reflection a ray that hit nothing (or a pane with no trace at all) falls
-// back to: the box-projected probe set where the world has baked probes, else
-// the sky prefilter cube, else a white rim so a probe-less, env-less world
+// back to: the box-projected probe set where a probe actually covers this pane,
+// else the sky prefilter cube, else a white rim so a probe-less, env-less world
 // still reads as glass. A pane is smooth, so every path is sharp (mip 0).
 float3 glass_environment(float3 world_pos, float3 r)
 {
-    if (probe_set.count > 0u)
+    if (probe_set.count > 0u && probe_set_covers(world_pos))
     {
         return probe_set_specular(world_pos, r, 0.0);
     }

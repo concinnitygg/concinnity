@@ -43,7 +43,7 @@ fn declare(spec: &mut WorldBuilder) {
     spec.add(
         "window",
         Window {
-            title: "Concinnity cube".to_string(),
+            title: "Cube".to_string(),
             width: 1280,
             height: 720,
             resizable: true,

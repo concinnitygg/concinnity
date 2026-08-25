@@ -68,6 +68,8 @@ const LINE_SLANG: &str = include_str!("../shaders/line.slang");
 const TEXT_SLANG: &str = include_str!("../shaders/text.slang");
 const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
 const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
+const GLASS_MESH_SLANG: &str = include_str!("../shaders/glass_mesh.slang");
+const WATER_SLANG: &str = include_str!("../shaders/water.slang");
 
 // The SSR resolve reads the reflection-probe array, so it bakes in the same
 // probe count the main pass does.
@@ -406,6 +408,26 @@ const GLASS_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
     ("POOL_SIZE", "1024"),
     ("MAX_PROBES", "8"),
 ];
+// The see-through glass mesh family is ray-traced only, so there is no non-RT
+// gate to set: the trace is what makes the mesh see-through rather than the
+// opaque reflective glass the main pass draws when RT is off.
+const GLASS_MESH_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const GLASS_MESH_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
+];
+const WATER_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const WATER_RT_DEFINES: &[(&str, &str)] =
+    &[("METAL_ABI", "1"), ("WATER_RT", "1"), ("MAX_PROBES", "8")];
+const WATER_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("WATER_RT", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
+];
 
 pub(super) static RT_REFLECTIONS_FRAG: SlangLib = SlangLib {
     name: "rt_reflections_frag.slang",
@@ -448,6 +470,57 @@ pub(super) static GLASS_FRAG_RT_TEXTURED: SlangLib = SlangLib {
     embedded: GLASS_SLANG,
     entries: &["glass_rt_fragment"],
     defines: GLASS_RT_TEXTURED_DEFINES,
+};
+
+pub(super) static GLASS_MESH_VERT: SlangLib = SlangLib {
+    name: "glass_mesh_vert.slang",
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entries: &["glass_mesh_vertex"],
+    defines: GLASS_MESH_DEFINES,
+};
+pub(super) static GLASS_MESH_FRAG_RT: SlangLib = SlangLib {
+    name: "glass_mesh_frag_rt.slang",
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entries: &["glass_mesh_rt_fragment"],
+    defines: GLASS_MESH_DEFINES,
+};
+pub(super) static GLASS_MESH_FRAG_RT_TEXTURED: SlangLib = SlangLib {
+    name: "glass_mesh_frag_rt_textured.slang",
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entries: &["glass_mesh_rt_fragment"],
+    defines: GLASS_MESH_TEXTURED_DEFINES,
+};
+
+pub(super) static WATER_VERT: SlangLib = SlangLib {
+    name: "water_vert.slang",
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entries: &["water_vertex"],
+    defines: WATER_DEFINES,
+};
+pub(super) static WATER_FRAG: SlangLib = SlangLib {
+    name: "water_frag.slang",
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entries: &["water_fragment"],
+    defines: WATER_DEFINES,
+};
+pub(super) static WATER_FRAG_RT: SlangLib = SlangLib {
+    name: "water_frag_rt.slang",
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entries: &["water_rt_fragment"],
+    defines: WATER_RT_DEFINES,
+};
+pub(super) static WATER_FRAG_RT_TEXTURED: SlangLib = SlangLib {
+    name: "water_frag_rt_textured.slang",
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entries: &["water_rt_fragment"],
+    defines: WATER_RT_TEXTURED_DEFINES,
 };
 
 // Every registered variant, for the coverage test in `metallib.rs`.
@@ -499,6 +572,13 @@ pub(super) static ALL: &[&SlangLib] = &[
     &GLASS_FRAG,
     &GLASS_FRAG_RT,
     &GLASS_FRAG_RT_TEXTURED,
+    &GLASS_MESH_VERT,
+    &GLASS_MESH_FRAG_RT,
+    &GLASS_MESH_FRAG_RT_TEXTURED,
+    &WATER_VERT,
+    &WATER_FRAG,
+    &WATER_FRAG_RT,
+    &WATER_FRAG_RT_TEXTURED,
 ];
 
 impl SlangLib {

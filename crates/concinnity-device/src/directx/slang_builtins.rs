@@ -74,6 +74,8 @@ const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
 const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
 const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
+const WATER_SLANG: &str = include_str!("../shaders/water.slang");
+const GLASS_MESH_SLANG: &str = include_str!("../shaders/glass_mesh.slang");
 const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
 const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
 const LINE_SLANG: &str = include_str!("../shaders/line.slang");
@@ -523,6 +525,158 @@ pub(super) static GLASS_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
     ],
 };
 
+const GLASS_MESH_DEFINES: &[(&str, &str)] =
+    &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "0")];
+const GLASS_MESH_MSAA_DEFINES: &[(&str, &str)] =
+    &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "1")];
+const GLASS_MESH_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("DXIL_ABI", "1"),
+    ("RT_TEXTURED", "1"),
+    ("MAX_PROBES", "8"),
+    ("USE_MSAA", "0"),
+];
+const GLASS_MESH_TEXTURED_MSAA_DEFINES: &[(&str, &str)] = &[
+    ("DXIL_ABI", "1"),
+    ("RT_TEXTURED", "1"),
+    ("MAX_PROBES", "8"),
+    ("USE_MSAA", "1"),
+];
+
+// The see-through glass MESH family, the transparent pass's third producer.
+// Ray-traced only -- the per-pixel trace is what makes the mesh see-through
+// rather than the opaque reflective glass the main pass draws -- so there is no
+// base pair, only the MSAA x hit-shading matrix at SM 6.5. Its vertex stage is
+// its own (it applies the per-draw model matrix) but shares b0/b1 with the rest
+// of the pass.
+pub(super) static GLASS_MESH_VERT: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_vertex",
+    profile: "vs_6_0",
+    label: "glass_mesh_vert.slang",
+    defines: GLASS_MESH_DEFINES,
+};
+
+pub(super) static GLASS_MESH_RT_FRAG: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_frag_rt.slang",
+    defines: GLASS_MESH_DEFINES,
+};
+
+pub(super) static GLASS_MESH_RT_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_frag_rt_msaa.slang",
+    defines: GLASS_MESH_MSAA_DEFINES,
+};
+
+pub(super) static GLASS_MESH_RT_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_frag_rt_textured.slang",
+    defines: GLASS_MESH_TEXTURED_DEFINES,
+};
+
+pub(super) static GLASS_MESH_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_frag_rt_textured_msaa.slang",
+    defines: GLASS_MESH_TEXTURED_MSAA_DEFINES,
+};
+
+// The water surface family, the transparent pass's other producer. Same shape as
+// the glass table above -- one vertex stage for every pipeline, an MSAA pair of
+// base fragments, and the two ray-traced fragments at shader model 6.5 -- and
+// deliberately the same registers, so `transparent.rs` builds one root signature
+// per path and both producers draw under it.
+pub(super) static WATER_VERT: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_vertex",
+    profile: "vs_6_0",
+    label: "water_vert.slang",
+    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")],
+};
+pub(super) static WATER_FRAG: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_fragment",
+    profile: "ps_6_0",
+    label: "water_frag.slang",
+    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "0")],
+};
+pub(super) static WATER_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_fragment",
+    profile: "ps_6_0",
+    label: "water_frag_msaa.slang",
+    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "1")],
+};
+pub(super) static WATER_RT_FRAG: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_rt_fragment",
+    profile: "ps_6_5",
+    label: "water_frag_rt.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("WATER_RT", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "0"),
+    ],
+};
+pub(super) static WATER_RT_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_rt_fragment",
+    profile: "ps_6_5",
+    label: "water_frag_rt_msaa.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("WATER_RT", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "1"),
+    ],
+};
+pub(super) static WATER_RT_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_rt_fragment",
+    profile: "ps_6_5",
+    label: "water_frag_rt_textured.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("WATER_RT", "1"),
+        ("RT_TEXTURED", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "0"),
+    ],
+};
+pub(super) static WATER_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_rt_fragment",
+    profile: "ps_6_5",
+    label: "water_frag_rt_textured_msaa.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("WATER_RT", "1"),
+        ("RT_TEXTURED", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "1"),
+    ],
+};
+
 // The remaining raster families: the particle billboard pair, the projected
 // decal, world-space lines and the text / sprite overlay. Each has real vertex
 // geometry, so unlike the post passes they keep their own vertex entry rather
@@ -670,6 +824,18 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &GLASS_RT_FRAG_MSAA,
     &GLASS_RT_FRAG_TEXTURED,
     &GLASS_RT_FRAG_TEXTURED_MSAA,
+    &GLASS_MESH_VERT,
+    &GLASS_MESH_RT_FRAG,
+    &GLASS_MESH_RT_FRAG_MSAA,
+    &GLASS_MESH_RT_FRAG_TEXTURED,
+    &GLASS_MESH_RT_FRAG_TEXTURED_MSAA,
+    &WATER_VERT,
+    &WATER_FRAG,
+    &WATER_FRAG_MSAA,
+    &WATER_RT_FRAG,
+    &WATER_RT_FRAG_MSAA,
+    &WATER_RT_FRAG_TEXTURED,
+    &WATER_RT_FRAG_TEXTURED_MSAA,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,
     &DECAL_VERT,

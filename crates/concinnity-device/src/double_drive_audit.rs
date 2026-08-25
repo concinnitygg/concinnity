@@ -139,7 +139,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("directx", "post/ssgi.rs", "hdr_scene_target()"),
     // The translucent pass's refraction snapshot, on whichever scene the graph
     // handed it.
-    ("directx", "glass.rs", "post_scene_target()"),
+    ("directx", "transparent.rs", "post_scene_target()"),
     // The bloom chain: the graph drives `bloom_top` (mip 0) across the node, and
     // these order the octaves inside it -- including mip 0's own borrow, which
     // the downsample samples between the prefilter and the final upsample.

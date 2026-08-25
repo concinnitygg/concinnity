@@ -19,11 +19,12 @@ use super::context::{DxContext, InstanceBucketLayout};
 
 impl DxContext {
     // Walk the visible build-time / runtime static draw objects, gating on
-    // `visible && resident` and picking the camera-distance LOD slice, then
-    // invoke `emit` with the object, its draw index, and the chosen LOD's
-    // `(index_offset, index_count)`. The caller binds the pipeline + shared
-    // root state once before calling; `emit` sets only the per-draw state
-    // (material/model constants, object SRV table) and issues the draw.
+    // `visible && resident` and on the see-through reroute, picking the
+    // camera-distance LOD slice, then invoking `emit` with the object, its draw
+    // index, and the chosen LOD's `(index_offset, index_count)`. The caller binds
+    // the pipeline + shared root state once before calling; `emit` sets only the
+    // per-draw state (material/model constants, object SRV table) and issues the
+    // draw.
     pub(in crate::directx) fn draw_static_objects<F>(
         &self,
         visible: &[u32],
@@ -32,12 +33,22 @@ impl DxContext {
     ) where
         F: FnMut(&DrawObject, usize, usize, usize),
     {
+        // See-through glass meshes (Layer 2) draw in the transparent pass when the
+        // RT path is live, so skip them here and in every pre-pass that shares
+        // this walk: leaving one in would both paint it opaque and stamp its depth
+        // over the scene the refraction tap reads. A no-op on non-RT worlds and
+        // worlds with no see-through material. The GPU-driven path takes the same
+        // decision through `build_draw_args_buffer`'s ENABLED clear.
+        let skip_seethrough = self.mesh_glass_active();
         for &draw_idx in visible {
             let i = draw_idx as usize;
             let Some(obj) = self.draw.objects.get(i) else {
                 continue;
             };
             if !obj.visible || !obj.resident {
+                continue;
+            }
+            if skip_seethrough && obj.material.see_through != 0 {
                 continue;
             }
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);

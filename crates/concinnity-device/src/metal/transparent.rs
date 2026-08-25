@@ -86,6 +86,22 @@ const GLASS_PLANAR_SAMPLER_INDEX: usize = 10;
 const GLASS_POOL_SAMPLER_INDEX: usize = 11;
 
 impl MtlContext {
+    // True when the transparent pass traces a per-pixel RT reflection this frame:
+    // RT is live AND every live producer's RT pipeline built. A producer is live
+    // when its base pipeline built (the world declared one), so a world with no
+    // panes cannot hold the pass back over a glass metallib it never needed.
+    //
+    // Single-sources the decision the way `DxContext::rt_transparent_active` does,
+    // and for the same reason: a producer whose RT metallib failed to build falls
+    // back to its probe / planar path, so the planar gate has to keep the mirror
+    // re-render alive for it. `slangc` rejecting `TraceRayInline` on the Metal
+    // target is exactly that failure, and it is not hypothetical.
+    pub(in crate::metal) fn rt_transparent_active(&self) -> bool {
+        let water_ready = self.water.pipeline.is_none() || self.water.pipeline_rt.is_some();
+        let glass_ready = self.glass.pipeline.is_none() || self.glass.pipeline_rt.is_some();
+        self.rt.accel.is_some() && water_ready && glass_ready
+    }
+
     // Encode the transparent pass: snapshot the scene for refraction, then
     // draw every contributed translucent surface back-to-front into
     // `scene_pre_taa`. Returns the number of draws issued (0 short-circuits
@@ -193,7 +209,7 @@ impl MtlContext {
         enc.set_fragment_value(&self.probe.set, 7);
         // A planar reflection resolve at texture(11), the default for every
         // transparent draw so the slot is always bound (validation-safe) even
-        // for slotless / probe-path draws. water.metal + glass.slang sample it
+        // for slotless / probe-path draws. water.slang + glass.slang sample it
         // when their `planar.x` flag is set; a planar draw overrides this with
         // ITS plane's resolve per-draw (see the collect paths). The first
         // slot's resolve is a valid stand-in for draws that do not sample it.

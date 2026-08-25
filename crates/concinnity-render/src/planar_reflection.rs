@@ -317,6 +317,28 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
     }
 }
 
+/// Whether the transparent pass has to render its planar mirrors this frame.
+///
+/// Water prefers the mirror to the per-pixel ray trace: a water surface is a
+/// plane, so one mirrored scene render resolves it exactly, at a fraction of the
+/// cost of a ray per pixel, and the wave normal only has to perturb the lookup.
+/// A trace off the per-fragment wave normal is hypersensitive at grazing angles
+/// and lands on the probe / sky fallback wherever it misses, which reads as a
+/// chrome sheet rather than water. Glass keeps the trace (a pane shows what is
+/// genuinely behind it), so a world of glass alone still skips the re-render
+/// while ray tracing is live.
+///
+/// `has_targets` is whether any mirror target exists at all, `water_has_slot`
+/// whether a visible water surface holds one, and `rt_transparent_active`
+/// whether the pass would otherwise trace.
+pub fn planar_pass_needed(
+    has_targets: bool,
+    water_has_slot: bool,
+    rt_transparent_active: bool,
+) -> bool {
+    has_targets && (water_has_slot || !rt_transparent_active)
+}
+
 /// The matrices a planar reflection pass needs for one mirror plane.
 pub struct PlanarMatrices {
     /// Reflected view matrix (world -> mirrored view).
@@ -669,5 +691,19 @@ mod tests {
         assert_eq!(a.slots[0], Some(0));
         assert_eq!(a.slots[1], None);
         assert_eq!(a.slots[2], Some(0));
+    }
+
+    #[test]
+    fn planar_runs_for_water_even_while_ray_tracing() {
+        // The whole point of the gate: a water surface holding a mirror slot keeps
+        // the re-render alive under a live trace.
+        assert!(planar_pass_needed(true, true, true));
+        // Glass alone under a live trace still skips it.
+        assert!(!planar_pass_needed(true, false, true));
+        // With no trace, any reflector needs the mirror.
+        assert!(planar_pass_needed(true, false, false));
+        // No mirror target, nothing to render.
+        assert!(!planar_pass_needed(false, true, true));
+        assert!(!planar_pass_needed(false, false, false));
     }
 }

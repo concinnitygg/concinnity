@@ -296,6 +296,10 @@ impl VkContext {
         cascade_idx: usize,
         cam_pos: [f32; 3],
     ) {
+        // See-through glass (Layer 2) casts no shadow: it is rerouted out of every
+        // opaque rasterisation while RT is live, and the GPU-driven cascade takes
+        // the same decision through the cull kernel's ENABLED bit.
+        let skip_seethrough = self.mesh_glass_active();
         if self.clone.slot_by_draw_idx.is_empty() {
             return;
         }
@@ -331,6 +335,9 @@ impl VkContext {
             for (i, obj) in self.draw.objects.iter().enumerate() {
                 if i < self.draw.n_objects || !obj.visible || !obj.resident {
                     continue;
+                }
+                if skip_seethrough && obj.material.see_through != 0 {
+                    continue; // see-through glass casts no shadow (Layer 2)
                 }
                 if !self.clone.slot_by_draw_idx.contains_key(&i) {
                     continue; // streamed chunk -> folded into the cull records
@@ -376,6 +383,10 @@ impl VkContext {
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
+        // See-through glass (Layer 2) casts no shadow: it is rerouted out of every
+        // opaque rasterisation while RT is live, and the GPU-driven cascade takes
+        // the same decision through the cull kernel's ENABLED bit.
+        let skip_seethrough = self.mesh_glass_active();
         let device = &self.device;
         let ShadowSliceBinding {
             pipeline: shadow_pipeline,
@@ -411,6 +422,9 @@ impl VkContext {
                 // shared buffers yet -- skip it everywhere.
                 if !obj.visible || !obj.resident {
                     continue;
+                }
+                if skip_seethrough && obj.material.see_through != 0 {
+                    continue; // see-through glass casts no shadow (Layer 2)
                 }
                 // Pick the LOD by camera distance: the shadow pass uses
                 // the same slice the main pass will, so silhouettes track

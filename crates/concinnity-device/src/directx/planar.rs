@@ -7,7 +7,7 @@
 // fragment shader then samples that target projectively for a sharp,
 // scene-correct reflection instead of the blurry box-projected probe cube.
 //
-// Mirrors src/metal/planar.rs, glass-only (water is a Metal-only producer). One
+// Mirrors src/metal/planar.rs. One
 // mirror render per DISTINCT plane: near-coplanar panes (one wall of windows)
 // share a render, and panes past the budget (`MAX_PLANAR_PLANES`) fall back to
 // the probe cube. The plane -> slot grouping + the mirror matrices come from the

@@ -787,6 +787,17 @@ pub(super) fn build_rt_skin_pipeline(
     build_skin_pipeline(device, hot_reload)
 }
 
+// Whether a draw object contributes geometry to the BVH. When the Layer 2
+// see-through path is enabled, see-through glass meshes are left out: they trace
+// their own per-pixel reflection in the transparent pass, and excluding them
+// means glass neither reflects glass nor self-hits. Off keeps every transparent
+// mesh IN the BVH so Layer 1 opaque glass reflects and is reflected like any
+// other surface. Driven by `seethrough_meshes_enabled` (opt-in per
+// `Material::see_through`), not a global flag.
+fn participates_in_bvh(o: &DrawObject, exclude_seethrough: bool) -> bool {
+    o.resident && o.index_count >= 3 && !(exclude_seethrough && o.material.see_through != 0)
+}
+
 // Geometry + counts the RT acceleration-structure build reads.
 #[derive(Clone, Copy)]
 pub(super) struct RtInitGeometry<'a> {
@@ -806,6 +817,8 @@ pub(super) struct RtInitGeometry<'a> {
     // Real-texture count in the shared pool (resolves per-object pool indices;
     // the flat-normal fallback sits at this index).
     pub albedo_count: u32,
+    // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
+    pub exclude_seethrough: bool,
 }
 
 // Per-frame dynamic-update policy + skinned inputs for `dynamic_update`.
@@ -818,6 +831,10 @@ pub(super) struct RtDynamicInputs<'a> {
     pub frame_idx: usize,
     // Set when the participating draw set changed since the last update.
     pub topology_dirty: bool,
+    // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
+    // Must match what the init build used, or a refresh would silently re-add
+    // geometry the transparent pass is already drawing.
+    pub exclude_seethrough: bool,
 }
 
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
@@ -838,6 +855,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         clusters,
         total_vertices,
         albedo_count,
+        exclude_seethrough,
     } = geometry;
     let device = alloc.device();
     let queue = alloc.queue();
@@ -845,11 +863,12 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         .cast()
         .map_err(|e| format!("ID3D12Device5 cast (DXR unsupported?): {e}"))?;
 
-    // Participating static objects + clusters (real triangles, resident).
+    // Participating static objects + clusters (real triangles, resident, and not
+    // rerouted to the see-through transparent path).
     let object_indices: Vec<usize> = draw_objects
         .iter()
         .enumerate()
-        .filter(|(_, o)| o.resident && o.index_count >= 3)
+        .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
         .map(|(i, _)| i)
         .collect();
     let cluster_list: Vec<(usize, &InstancedCluster)> = clusters
@@ -1138,6 +1157,7 @@ impl RtAccelData {
             skinned,
             frame_idx,
             topology_dirty,
+            exclude_seethrough,
         } = inputs;
         // Advance the deferred-free clock and drop any topology-refresh orphans /
         // scratch whose frames-in-flight window has elapsed (the frame-begin fence
@@ -1176,7 +1196,9 @@ impl RtAccelData {
         // the static TLAS FIRST (before the transform path re-reads `object_indices`).
         // The refresh always rebuilds a static TLAS; on the skinned path
         // `rebuild_skinned` below then overlays the skinned tail on top.
-        if topology_dirty && let Err(e) = self.refresh_topology(alloc, cmd, draw_objects, now) {
+        if topology_dirty
+            && let Err(e) = self.refresh_topology(alloc, cmd, draw_objects, exclude_seethrough, now)
+        {
             tracing::warn!("RT topology refresh failed (keeping live BVH): {e}");
         }
 
@@ -1258,6 +1280,7 @@ impl RtAccelData {
         alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
+        exclude_seethrough: bool,
         now: u64,
     ) -> Result<(), String> {
         let device = alloc.device();
@@ -1272,7 +1295,7 @@ impl RtAccelData {
         let new_indices: Vec<usize> = draw_objects
             .iter()
             .enumerate()
-            .filter(|(_, o)| o.resident && o.index_count >= 3)
+            .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
             .map(|(i, _)| i)
             .collect();
         let new_sigs: Vec<GeomSig> = new_indices
@@ -2082,6 +2105,9 @@ impl super::context::DxContext {
             .map(|b| b.as_slice())
             .unwrap_or(&[]);
 
+        // Read before `rt_accel` is borrowed mutably below.
+        let exclude_seethrough = self.seethrough_meshes_enabled();
+
         let Some(accel) = self.rt_accel.as_mut() else {
             return;
         };
@@ -2100,6 +2126,7 @@ impl super::context::DxContext {
                 skinned,
                 frame_idx,
                 topology_dirty,
+                exclude_seethrough,
             },
         );
     }
@@ -2140,6 +2167,7 @@ impl super::context::DxContext {
             clusters: &self.instanced.clusters,
             total_vertices: self.rt_static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,
+            exclude_seethrough: self.seethrough_meshes_enabled(),
         }) {
             Ok(Some(accel)) => accel,
             Ok(None) => return None,

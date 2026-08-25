@@ -278,6 +278,13 @@ impl DxContext {
             return;
         };
         let stride = std::mem::size_of::<GpuDrawArgs>();
+        // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
+        // the RT path is live: it draws in the transparent pass instead. Clearing
+        // ENABLED makes the cull kernel reset its command to a no-op (the same
+        // path invisible / non-resident objects take), so it neither draws opaque
+        // nor occludes the refraction snapshot. The object keeps its slot, so
+        // every parallel cull / object-buffer / prev-model index stays intact.
+        let mesh_glass_active = self.mesh_glass_active();
         for (i, obj) in self
             .draw
             .objects
@@ -289,13 +296,15 @@ impl DxContext {
             // straight through to LOD0.
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
+            let opaque_visible =
+                obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
             let rec = GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 // The record's shader bucket rides the upper flag bits so the
                 // cull kernel can route its command into that bucket's region.
-                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable())
+                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
                     | draw_args_bucket_bits(obj.shader_bucket),
             };
             // SAFETY: the buffer was sized for `draw.n_objects` records and the

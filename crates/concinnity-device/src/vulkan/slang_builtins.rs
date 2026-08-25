@@ -73,6 +73,8 @@ const LINE_SLANG: &str = include_str!("../shaders/line.slang");
 const TEXT_SLANG: &str = include_str!("../shaders/text.slang");
 const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
 const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
+const WATER_SLANG: &str = include_str!("../shaders/water.slang");
+const GLASS_MESH_SLANG: &str = include_str!("../shaders/glass_mesh.slang");
 
 pub(super) static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
     file: "main_bindless.slang",
@@ -522,6 +524,80 @@ pub(super) static GLASS_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
     msaa: true,
 };
 
+// The see-through glass MESH family, the transparent pass's third producer.
+// Ray-traced only -- the per-pixel trace is what makes the mesh see-through
+// rather than the opaque reflective glass the main pass draws -- so there is no
+// base pair. Its vertex stage is its own (it applies the per-draw model matrix)
+// but shares every descriptor binding with the rest of the pass.
+pub(super) static GLASS_MESH_VERT: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_vertex",
+    label: "glass_mesh_vert.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static GLASS_MESH_FRAG_RT: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_rt_fragment",
+    label: "glass_mesh_frag_rt.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static GLASS_MESH_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    embedded: GLASS_MESH_SLANG,
+    entry: "glass_mesh_rt_fragment",
+    label: "glass_mesh_frag_rt_textured.slang",
+    gates: &["RT_TEXTURED"],
+    sizes: Sizes::PoolAndProbes,
+    msaa: true,
+};
+
+// The water surface family, the transparent pass's other producer. Same shape as
+// the glass table above, and deliberately the same descriptor bindings, so
+// `transparent.rs` builds one set of set layouts and both producers draw under
+// them.
+pub(super) static WATER_VERT: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_vertex",
+    label: "water_vert.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static WATER_FRAG: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_fragment",
+    label: "water_frag.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static WATER_FRAG_RT: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_rt_fragment",
+    label: "water_frag_rt.slang",
+    gates: &["WATER_RT"],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static WATER_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
+    file: "water.slang",
+    embedded: WATER_SLANG,
+    entry: "water_rt_fragment",
+    label: "water_frag_rt_textured.slang",
+    gates: &["WATER_RT", "RT_TEXTURED"],
+    sizes: Sizes::PoolAndProbes,
+    msaa: true,
+};
+
 // mode, and a bundle should be warm for either.
 pub(crate) static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
@@ -571,6 +647,13 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &GLASS_FRAG,
     &GLASS_FRAG_RT,
     &GLASS_FRAG_RT_TEXTURED,
+    &GLASS_MESH_VERT,
+    &GLASS_MESH_FRAG_RT,
+    &GLASS_MESH_FRAG_RT_TEXTURED,
+    &WATER_VERT,
+    &WATER_FRAG,
+    &WATER_FRAG_RT,
+    &WATER_FRAG_RT_TEXTURED,
 ];
 
 impl SlangProgram {
@@ -699,8 +782,15 @@ mod tests {
                 "glass_frag.slang",
                 "glass_frag_rt.slang",
                 "glass_frag_rt_textured.slang",
+                "glass_mesh_frag_rt.slang",
+                "glass_mesh_frag_rt_textured.slang",
+                "glass_mesh_vert.slang",
                 "glass_vert.slang",
                 "line_frag.slang",
+                "water_frag.slang",
+                "water_frag_rt.slang",
+                "water_frag_rt_textured.slang",
+                "water_vert.slang",
             ]
         );
     }

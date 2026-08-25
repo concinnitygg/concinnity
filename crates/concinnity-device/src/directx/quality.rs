@@ -325,6 +325,7 @@ impl DxContext {
             clusters: &self.instanced.clusters,
             total_vertices: self.rt_static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,
+            exclude_seethrough: self.seethrough_meshes_enabled(),
         }) {
             Ok(Some(accel)) => accel,
             Ok(None) => {

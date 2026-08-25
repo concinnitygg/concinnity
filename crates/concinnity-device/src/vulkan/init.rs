@@ -131,8 +131,7 @@ impl VkContext {
                     decals,
                     particles,
                     fog: fog_settings,
-                    // The Vulkan water port is still open.
-                    water_surfaces: _,
+                    water_surfaces,
                     glass_panels,
                     sdf_volumes,
                 },
@@ -2376,6 +2375,28 @@ impl VkContext {
         // `None` and the graph keeps `SsrResolve`. RT takes precedence over the
         // SSR resolve in the shared graph slot, so `ssr_resolve_on` is ANDed with
         // `!rt_active` once the build outcome is known.
+        // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
+        // arg, which implies `transparent`): see-through only looks right when the
+        // space behind the glass is modelled. A material that is `transparent` but
+        // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
+        // reflections) = tinted reflective glass that hides the interior. This list
+        // drives the transparent-pass producer, the opaque-pass skip and the
+        // RT-BLAS exclude together.
+        let seethrough_mesh_indices: Vec<usize> = draw_objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.material.transparent != 0 && o.material.see_through != 0)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Whether those meshes will be rerouted, decided here because the initial
+        // BLAS is built before the transparent pass that owns the mesh producer.
+        // It is the same predicate that producer is gated on. The one divergence
+        // is a mesh-shader compile failure, which leaves the producer absent (and
+        // logs): the meshes then render opaque but stay out of this BLAS until a
+        // topology refresh re-reads `seethrough_meshes_enabled` and puts them back.
+        let has_seethrough_meshes = !seethrough_mesh_indices.is_empty() && rt_capable;
+
         let (rt_accel_opt, rt_opt) = if rt_wanted {
             match crate::vulkan::raytrace::build_rt_accel(
                 crate::vulkan::raytrace::RtDeviceCtx {
@@ -2393,6 +2414,7 @@ impl VkContext {
                     clusters: &instanced_clusters,
                     albedo_count: gpu_textures.len(),
                     total_vertices: vertices.len(),
+                    exclude_seethrough: has_seethrough_meshes,
                 },
                 frames,
                 hot_reload,
@@ -3500,15 +3522,24 @@ impl VkContext {
             hot_reload,
         )?;
 
-        // Planar reflections: group each glass pane's world-space plane into a
-        // bounded set of distinct reflector planes (near-coplanar panes share one
-        // mirror render; panes past the budget fall back to the probe cube), then
-        // build one render-resolution mirror target per distinct plane. Built
-        // before glass so each pane's planar binding can point at its plane's
-        // target. `slots[i]` is pane `i`'s target slot (or `None`).
-        let planar_reflectors: Vec<[f32; 4]> = glass_panels
+        // Planar reflections: group each transparent reflector's world-space plane
+        // into a bounded set of distinct planes (near-coplanar reflectors share one
+        // mirror render; reflectors past the budget fall back to the probe cube),
+        // then build one render-resolution mirror target per distinct plane. Built
+        // before the transparent pass so each record's planar binding can point at
+        // its plane's target. `slots[i]` is reflector `i`'s target slot (or `None`).
+        //
+        // Water first, then glass, matching the Metal backend, so the two slot
+        // ranges are the leading `water_surfaces.len()` entries and the rest.
+        let planar_reflectors: Vec<[f32; 4]> = water_surfaces
             .iter()
-            .map(|p| crate::vulkan::planar::pane_plane(p.normal, p.centre))
+            // A water surface's rest plane: horizontal at the surface base height.
+            .map(|s| [0.0, 1.0, 0.0, -s.centre[1]])
+            .chain(
+                glass_panels
+                    .iter()
+                    .map(|p| crate::vulkan::planar::pane_plane(p.normal, p.centre)),
+            )
             .collect();
         // Cap at the capacity ceiling the reserved planar targets are sized to, so a
         // stale/over-large preset value can never over-allocate.
@@ -3583,83 +3614,89 @@ impl VkContext {
             .map(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect())
             .unwrap_or_default();
 
-        // Translucent glass panels: the generic producer for the shared
-        // transparent pass. `Some` only when the world declared any
-        // `GlassPanel`. The pass blends into the post-SSR scene image (SSR
-        // output when SSR is on, else this slot's HDR resolve), so the scene
-        // target per frame slot is resolved here from `ssr_opt`; the main-depth
-        // views feed the fragment shader's manual occlusion test.
-        let glass = if glass_panels.is_empty() {
-            None
-        } else {
-            let (glass_scene_views, glass_scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0
-                ..frames)
-                .map(|i| {
-                    // Glass blends into the post-reflection scene: the reflection
-                    // composite output when a reflection path is active, else the raw
-                    // HDR resolve.
-                    if let Some(c) = composite_opt.as_ref() {
-                        (c.output.view, c.output.image)
-                    } else {
-                        (hdr_resolve_images[i].view, hdr_resolve_images[i].image)
+        // The shared transparent pass and its producers: water surfaces,
+        // translucent glass panes, and see-through glass meshes. `Some` only when
+        // the world declared at least one of the three; the mesh case additionally
+        // needs an RT-capable device, since its producer is ray-traced only and a
+        // pane-less, water-less world would otherwise build the whole pass for a
+        // producer that cannot exist. The pass blends into the post-reflection
+        // scene image (the reflection composite output when a reflection path is
+        // active, else this slot's HDR resolve), so the scene target per frame slot
+        // is resolved here; the main-depth views feed the fragments' manual
+        // occlusion test.
+        let transparent =
+            if glass_panels.is_empty() && water_surfaces.is_empty() && !has_seethrough_meshes {
+                None
+            } else {
+                let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..frames)
+                    .map(|i| {
+                        if let Some(c) = composite_opt.as_ref() {
+                            (c.output.view, c.output.image)
+                        } else {
+                            (hdr_resolve_images[i].view, hdr_resolve_images[i].image)
+                        }
+                    })
+                    .unzip();
+                let transparent_depth_views: Vec<vk::ImageView> =
+                    depth_images.iter().map(|img| img.view).collect();
+                // The initial acceleration-structure handles for the RT path (`None`
+                // when RT is off at launch; the per-frame `rt_dynamic_update` fills the
+                // ring before the RT path is taken). The RT pipelines themselves are
+                // built whenever the device is RT-capable.
+                let rt_inputs = rt_accel_opt.as_ref().map(|a| {
+                    let (geom_buffer, geom_size) = a.geom_table();
+                    crate::vulkan::transparent::TransparentRtInputs {
+                        tlas: a.tlas(),
+                        geom_buffer,
+                        geom_size,
+                        deformed_verts: a.deformed_verts(),
+                        skinned_indices: a.skinned_indices(),
                     }
-                })
-                .unzip();
-            let glass_depth_views: Vec<vk::ImageView> =
-                depth_images.iter().map(|img| img.view).collect();
-            // The initial acceleration-structure handles for the glass RT path
-            // (`None` when RT is off at launch; the per-frame `rt_dynamic_update`
-            // fills the ring before the RT path is taken). The glass RT pipelines
-            // themselves are built whenever the device is RT-capable.
-            let glass_rt_inputs = rt_accel_opt.as_ref().map(|a| {
-                let (geom_buffer, geom_size) = a.geom_table();
-                crate::vulkan::glass::GlassRtInputs {
-                    tlas: a.tlas(),
-                    geom_buffer,
-                    geom_size,
-                    deformed_verts: a.deformed_verts(),
-                    skinned_indices: a.skinned_indices(),
-                }
-            });
-            Some(crate::vulkan::glass::GlassResources::new(
-                crate::vulkan::glass::GlassDeviceCtx {
-                    alloc: &alloc,
-                    instance: &instance,
-                    device: &device,
-                    physical_device,
-                    command_pool,
-                    queue: graphics_queue,
-                },
-                crate::vulkan::glass::GlassBuildConfig {
-                    frames,
-                    msaa_samples,
-                    width: render_extent.width,
-                    height: render_extent.height,
-                    global_set_layout: global_set_layout.handle(),
-                    probe_cube_count,
-                    hot_reload,
-                },
-                crate::vulkan::glass::GlassSceneTargets {
-                    scene_views: &glass_scene_views,
-                    scene_images: &glass_scene_images,
-                    depth_views: &glass_depth_views,
-                    sampler: linear_sampler.handle(),
-                },
-                crate::vulkan::glass::GlassPlanarTargets {
-                    slots: &planar_assignment.slots,
-                    target_views: &planar_target_views,
-                },
-                crate::vulkan::glass::GlassRtSetup {
-                    rt_capable,
-                    vertex_buffer: vertex_buffer.buffer(),
-                    index_buffer: index_buffer.buffer(),
-                    rt_inputs: glass_rt_inputs,
-                    bindless_set_layout: bindless_set_layout.as_ref().map(|l| l.handle()),
-                    bindless_pool_size,
-                },
-                &glass_panels,
-            )?)
-        };
+                });
+                let (water_planar_slots, glass_planar_slots) =
+                    planar_assignment.slots.split_at(water_surfaces.len());
+                Some(crate::vulkan::transparent::TransparentResources::new(
+                    crate::vulkan::transparent::TransparentDeviceCtx {
+                        alloc: &alloc,
+                        instance: &instance,
+                        device: &device,
+                        physical_device,
+                        command_pool,
+                        queue: graphics_queue,
+                    },
+                    crate::vulkan::transparent::TransparentBuildConfig {
+                        frames,
+                        msaa_samples,
+                        width: render_extent.width,
+                        height: render_extent.height,
+                        global_set_layout: global_set_layout.handle(),
+                        probe_cube_count,
+                        hot_reload,
+                    },
+                    crate::vulkan::transparent::TransparentSceneTargets {
+                        scene_views: &scene_views,
+                        scene_images: &scene_images,
+                        depth_views: &transparent_depth_views,
+                        sampler: linear_sampler.handle(),
+                    },
+                    crate::vulkan::transparent::TransparentContent {
+                        glass_panels: &glass_panels,
+                        glass_planar_slots,
+                        water_surfaces: &water_surfaces,
+                        water_planar_slots,
+                        planar_target_views: &planar_target_views,
+                        seethrough_mesh_indices: &seethrough_mesh_indices,
+                    },
+                    crate::vulkan::transparent::TransparentRtSetup {
+                        rt_capable,
+                        vertex_buffer: vertex_buffer.buffer(),
+                        index_buffer: index_buffer.buffer(),
+                        rt_inputs,
+                        bindless_set_layout: bindless_set_layout.as_ref().map(|l| l.handle()),
+                        bindless_pool_size,
+                    },
+                )?)
+            };
 
         // Auto-exposure (EV adaptation): histogram + average compute
         // pipelines, the device-local histogram + output buffers, and the
@@ -3998,7 +4035,7 @@ impl VkContext {
                 sun_color: fog_sun_color,
             },
             raymarch,
-            glass,
+            transparent,
             planar_reflection,
             auto_exposure: super::context::AutoExposureState {
                 resources: auto_exposure,

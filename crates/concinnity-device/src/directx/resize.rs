@@ -399,16 +399,16 @@ impl DxContext {
         }
         self.cull.hiz_valid.set(false);
 
-        // 7c) Transparent glass: recreate the scene snapshot at the new dims
-        //     and rewrite its SRV in place. The depth SRV the glass pass also
-        //     binds is the main-depth slot, rewritten by the decal path.
-        if let Some(glass) = self.glass.as_mut() {
-            glass.resize_to(&self.device, render_w, render_h)?;
+        // 7c) The transparent pass: recreate the scene snapshot at the new dims
+        //     and rewrite its SRV in place. The depth SRV the pass also binds is
+        //     the main-depth slot, rewritten by the decal path.
+        if let Some(transparent) = self.transparent.as_mut() {
+            transparent.resize_to(&self.device, render_w, render_h)?;
         }
 
         // 7d) Planar reflections: recreate the shared mirror colour + depth + the
         //     per-plane resolves at the new render dims and rewrite their RTV / DSV /
-        //     SRVs in place, so the glass pass's per-pane resolve bindings stay valid.
+        //     SRVs in place, so each reflector's resolve binding stays valid.
         if let Some(planar) = self.planar_reflection.as_mut() {
             planar.resize_to(&self.device, render_w, render_h)?;
         }

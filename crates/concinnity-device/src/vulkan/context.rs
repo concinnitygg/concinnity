@@ -1207,19 +1207,20 @@ pub(crate) struct VkContext {
     // pass (MSAA) so this pass can load + re-resolve the multisampled colour.
     pub(super) raymarch: Option<crate::vulkan::raymarch::RaymarchResources>,
 
-    // Translucent glass panels: the generic producer for the shared
-    // `PassId::Transparent` slot. `Some` only when the world declared any
-    // `GlassPanel`; with none the field stays `None` and the transparent pass
-    // is omitted from the frame graph (gated on `glass.any_visible()`). Built
-    // at init; the encoder draws the panels back-to-front over the post-SSR
-    // scene between `SsrResolve` and `TaaResolve`. Water is a separate
-    // (Metal-only) producer not ported here. Mirrors `src/directx/glass.rs`.
-    pub(super) glass: Option<crate::vulkan::glass::GlassResources>,
+    // The shared `PassId::Transparent` slot and its two producers, translucent
+    // glass panes and water surfaces. `Some` only when the world declared a
+    // `GlassPanel` or a `WaterSurface`; with neither the field stays `None` and
+    // the pass is omitted from the frame graph (gated on
+    // `transparent.any_visible()`). Built at init; the encoder draws every record
+    // back-to-front over the post-SSR scene between `SsrResolve` and
+    // `TaaResolve`. Mirrors `src/directx/transparent.rs`.
+    pub(super) transparent: Option<crate::vulkan::transparent::TransparentResources>,
 
-    // Planar reflections for flat glass panes: one render-resolution mirror render
-    // per distinct reflector plane, sampled projectively by the glass pass. `Some`
-    // only when the world declared glass panes assigned to a planar slot. Mirrors
-    // `src/directx/planar.rs`.
+    // Planar reflections for the transparent pass's flat reflectors: one
+    // render-resolution mirror render per distinct reflector plane (a water
+    // surface's rest plane, a glass pane's plane), sampled by the shaders at
+    // screen UV. `Some` only when the world declared reflectors assigned to a
+    // planar slot. Mirrors `src/directx/planar.rs`.
     pub(super) planar_reflection: Option<crate::vulkan::planar::PlanarReflectionSet>,
 
     // Resolved swapchain colour-output mode, selected when the world's
@@ -2340,17 +2341,17 @@ impl VkContext {
         }
 
         // Planar reflection resources (mirror targets + framebuffers + per-(plane,
-        // frame) view ring + global sets + descriptor pool). Destroyed before glass,
-        // whose per-pane sets reference the planar target views.
+        // frame) view ring + global sets + descriptor pool). Destroyed before the
+        // transparent pass, whose per-record sets reference the planar target views.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.destroy(device);
         }
 
-        // Glass / transparent-pass resources (pipeline, per-panel buffers +
-        // UBOs, per-frame view ring, descriptor pool, render pass, framebuffers,
-        // snapshot image).
-        if let Some(mut glass) = self.glass.take() {
-            glass.destroy(device);
+        // Transparent-pass resources (both producers' pipelines, their per-record
+        // buffers + UBOs, the per-frame view ring, descriptor pool, render pass,
+        // framebuffers, snapshot image).
+        if let Some(mut transparent) = self.transparent.take() {
+            transparent.destroy(device);
         }
 
         // Auto-exposure resources (pipelines + histogram + per-frame readbacks).

@@ -245,8 +245,9 @@ impl DxContext {
             // `velocity_enabled = true` (FSR needs motion vectors).
             upscale_enabled: self.upscale.backend.is_some(),
             // Generic translucent pass: on when the world declared visible
-            // `GlassPanel`s. The shared builder then seeds the Transparent
-            // node and the executor draws the glass over the post-SSR scene.
+            // `GlassPanel` or `WaterSurface`. The shared builder then seeds the
+            // Transparent node and the executor draws every record back-to-front
+            // over the post-SSR scene.
             transparent_enabled: self.transparent_enabled(),
             // Raymarched SDF volumes.
             // Gated on whether any `.hlsl`-payload `SdfVolume` survived

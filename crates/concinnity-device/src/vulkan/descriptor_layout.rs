@@ -141,12 +141,13 @@ fn object_fragment_samplers() -> u32 {
     count_fragment_samplers(&object_set())
 }
 
-// Fragment samplers the glass pipeline layouts declare outside the global set:
-// two on the view set (the scene snapshot + main depth) and one on the per-panel
-// params set (that pane's planar reflection). Mirrors `glass.rs`'s
-// `create_view_set_layout` + `create_params_set_layout`; the flat and RT glass
-// layouts share both sets, so both pay exactly this.
-const GLASS_PASS_SAMPLERS: u32 = 3;
+// Fragment samplers the transparent pipeline layouts declare outside the global
+// set: two on the view set (the scene snapshot + main depth) and one on the
+// per-record params set (that record's planar reflection). Mirrors
+// `transparent.rs`'s `create_view_set_layout` + `create_params_set_layout`; both
+// producers and both their flat and RT layouts share those two sets, so every one
+// of them pays exactly this.
+const TRANSPARENT_PASS_SAMPLERS: u32 = 3;
 
 // Fragment samplers the reflection-resolve pipeline layouts declare outside the
 // global set: scene, G-buffer, roughness, and the prefilter cube they fall back
@@ -156,11 +157,12 @@ const REFLECTION_RESOLVE_SAMPLERS: u32 = 4;
 
 // The largest per-stage sampler cost any pipeline layout declares outside the
 // global set. The global set is bound by the geometry path (which adds per-object
-// set 1), by glass, and by the SSR / RT reflection resolves, so this is what the
-// global set's own cost has to fit alongside on the tightest of them.
+// set 1), by the transparent pass, and by the SSR / RT reflection resolves, so
+// this is what the global set's own cost has to fit alongside on the tightest of
+// them.
 fn widest_pass_samplers() -> u32 {
     object_fragment_samplers()
-        .max(GLASS_PASS_SAMPLERS)
+        .max(TRANSPARENT_PASS_SAMPLERS)
         .max(REFLECTION_RESOLVE_SAMPLERS)
 }
 
@@ -375,7 +377,7 @@ mod tests {
     #[test]
     fn widest_pass_is_the_reflection_resolve() {
         assert_eq!(object_fragment_samplers(), 2);
-        assert_eq!(GLASS_PASS_SAMPLERS, 3);
+        assert_eq!(TRANSPARENT_PASS_SAMPLERS, 3);
         assert_eq!(REFLECTION_RESOLVE_SAMPLERS, 4);
         assert_eq!(widest_pass_samplers(), REFLECTION_RESOLVE_SAMPLERS);
     }
@@ -393,10 +395,10 @@ mod tests {
 
     // The overflow this budget model exists to remove, pinned to the counts
     // MoltenVK's validation layer actually reported: with global set 0 left
-    // plain, geometry sits at exactly the 16 limit with zero room, glass
-    // overflows at 17, and the SSR resolve at 18.
+    // plain, geometry sits at exactly the 16 limit with zero room, the
+    // transparent pass overflows at 17, and the SSR resolve at 18.
     #[test]
-    fn plain_global_set_overflows_glass_and_ssr_on_moltenvk() {
+    fn plain_global_set_overflows_transparent_and_ssr_on_moltenvk() {
         let probes = probe_cube_array_count(16, false);
         assert_eq!(probes, 7);
         assert_eq!(
@@ -404,7 +406,7 @@ mod tests {
             16
         );
         assert_eq!(
-            layout_plain_samplers(probes, false, GLASS_PASS_SAMPLERS),
+            layout_plain_samplers(probes, false, TRANSPARENT_PASS_SAMPLERS),
             17
         );
         assert_eq!(
@@ -423,7 +425,7 @@ mod tests {
         assert_eq!(probes, MAX_PROBES as u32);
         for pass in [
             object_fragment_samplers(),
-            GLASS_PASS_SAMPLERS,
+            TRANSPARENT_PASS_SAMPLERS,
             REFLECTION_RESOLVE_SAMPLERS,
         ] {
             assert_eq!(layout_plain_samplers(probes, true, pass), pass);

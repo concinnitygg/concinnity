@@ -9,7 +9,7 @@
 //! reflection per target. The hand-written asserts below are for the families
 //! whose shaders are still per backend -- the cull kernel, the skinning and
 //! morph kernels, the raymarch SDF templates, the legacy per-draw main and
-//! velocity passes, and Metal's water / glass_mesh_rt.
+//! velocity passes.
 
 /// Per-draw-call model matrix pushed at buffer(2) before each draw.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
@@ -88,88 +88,6 @@ pub struct VelocityUniforms {
     pub cur_vp: [[f32; 4]; 4],
     /// Un-jittered previous-frame view-projection.
     pub prev_vp: [[f32; 4]; 4],
-}
-
-/// One Gerstner wave coefficient set, packed for MSL float4 alignment.
-/// Matches `WaterWave` in `shaders/water.metal`. 32 bytes.
-#[derive(Copy, Clone, Default, bytemuck::Zeroable, bytemuck::Pod)]
-#[repr(C)]
-pub struct WaterWaveGpu {
-    /// `[direction.x, direction.y, amplitude, wavelength]`.
-    pub dir_amp_wave: [f32; 4],
-    /// `[speed, steepness, pad, pad]`.
-    pub speed_steep_pad: [f32; 4],
-}
-
-/// Maximum waves per `WaterParams`. Mirrors `MAX_WATER_WAVES` in the MSL.
-pub const WATER_MAX_WAVES: usize = 4;
-
-/// Per-surface tunables uploaded once per WaterSurface per frame. Layout
-/// matches `WaterParams` in `shaders/water.metal`. Vec3-ish fields are
-/// stored as `[f32; 4]` (with the trailing element unused) so the layout
-/// is byte-identical to MSL's `float4` regardless of how the MSL
-/// compiler packs `float3` and adjacent scalars: that packing rule has
-/// already bitten this struct once.
-/// 48 + 32 + 32 × WATER_MAX_WAVES = 208 bytes.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-pub struct WaterParams {
-    /// `[x, y, z, _]`: world-space surface centre.
-    pub centre: [f32; 4],
-    /// `[r, g, b, _]`: water tint at full depth.
-    pub deep_colour: [f32; 4],
-    /// `[r, g, b, _]`: water tint just above the seabed.
-    pub shallow_colour: [f32; 4],
-    /// How fast the effect fades with water depth.
-    pub depth_falloff: f32,
-    /// Width of the shoreline foam band, in world units.
-    pub foam_width: f32,
-    /// Foam brightness multiplier.
-    pub foam_intensity: f32,
-    /// Exponent of the Fresnel reflectance curve.
-    pub fresnel_power: f32,
-    /// Perceptual roughness in `[0, 1]`.
-    pub roughness: f32,
-    /// How far refraction offsets the sampled background.
-    pub refraction_strength: f32,
-    /// Live entries in `waves`.
-    pub wave_count: u32,
-    /// Mip count of the bound IBL prefilter cube; 0 disables the
-    /// cube-sample path and the shader falls back to a hand-tuned sky tint.
-    pub prefilter_mip_count: f32,
-    /// Wave parameters; the first `wave_count` entries are live.
-    pub waves: [WaterWaveGpu; WATER_MAX_WAVES],
-    /// Planar reflection control: `[strength, distortion, _, _]`. `strength > 0.5`
-    /// selects the sharp planar reflection (the scene re-rendered mirrored across
-    /// the water plane, sampled projectively at screen UV) over the probe / sky
-    /// cube; `distortion` scales the wave-normal screen-space ripple offset. A
-    /// float4 so the trailing struct stays 16-byte aligned. 0 when planar is off
-    /// (RT on, no water plane, or unsupported), keeping the probe/sky path.
-    pub planar: [f32; 4],
-}
-
-/// Per-draw tunables for a transparent glass MESH (an imported `Material` with
-/// `transparent: true` on an RT-capable device), uploaded at vertex + fragment
-/// buffer(6). Unlike `GlassParams` (a pre-baked world-space pane), a mesh is
-/// LOCAL-space, so this carries the model matrix the vertex shader applies; the
-/// fragment uses the interpolated per-vertex world normal. Matches
-/// `GlassMeshParams` in `shaders/glass_mesh_rt.metal`. 96 bytes (model is the
-/// first field, so its 16-byte GPU alignment is satisfied at offset 0).
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-pub struct GlassMeshParams {
-    /// Column-major local-to-world model matrix.
-    pub model: [[f32; 4]; 4],
-    /// `[r, g, b, _]`: colour multiplied into the refracted scene (material tint).
-    pub tint: [f32; 4],
-    /// Base alpha at normal incidence (from `Material.opacity`).
-    pub opacity: f32,
-    /// Screen-space refraction offset strength.
-    pub refraction_strength: f32,
-    /// Schlick-Fresnel exponent for the grazing-angle rim.
-    pub fresnel_power: f32,
-    /// Mip count of the bound IBL prefilter cube (ray-miss fallback); 0 = none.
-    pub prefilter_mip_count: f32,
 }
 
 /// Per-frame view inputs the raymarch pass binds at buffer(0). Layout matches
@@ -304,51 +222,6 @@ mod tests {
         assert_eq!(offset_of!(VelocityUniforms, jittered_vp), 0);
         assert_eq!(offset_of!(VelocityUniforms, cur_vp), 64);
         assert_eq!(offset_of!(VelocityUniforms, prev_vp), 128);
-    }
-
-    #[test]
-    fn water_wave_gpu_layout_matches_msl() {
-        // MSL `WaterWave` in water.metal: two float4.
-        assert_eq!(size_of::<WaterWaveGpu>(), 32);
-        assert_eq!(offset_of!(WaterWaveGpu, dir_amp_wave), 0);
-        assert_eq!(offset_of!(WaterWaveGpu, speed_steep_pad), 16);
-    }
-
-    #[test]
-    fn water_params_layout_matches_msl() {
-        // MSL `WaterParams` in water.metal: three float4, eight scalars, the
-        // WaterWave array at the 16-aligned offset 80, then a trailing float4
-        // `planar` at 208.
-        assert_eq!(size_of::<WaterParams>(), 224);
-        assert_eq!(offset_of!(WaterParams, centre), 0);
-        assert_eq!(offset_of!(WaterParams, deep_colour), 16);
-        assert_eq!(offset_of!(WaterParams, shallow_colour), 32);
-        assert_eq!(offset_of!(WaterParams, depth_falloff), 48);
-        assert_eq!(offset_of!(WaterParams, foam_width), 52);
-        assert_eq!(offset_of!(WaterParams, foam_intensity), 56);
-        assert_eq!(offset_of!(WaterParams, fresnel_power), 60);
-        assert_eq!(offset_of!(WaterParams, roughness), 64);
-        assert_eq!(offset_of!(WaterParams, refraction_strength), 68);
-        assert_eq!(offset_of!(WaterParams, wave_count), 72);
-        assert_eq!(offset_of!(WaterParams, prefilter_mip_count), 76);
-        assert_eq!(offset_of!(WaterParams, waves), 80);
-        assert_eq!(offset_of!(WaterParams, planar), 208);
-        assert_eq!(size_of::<WaterParams>() % 16, 0);
-    }
-
-    #[test]
-    fn glass_mesh_params_layout_matches_msl() {
-        // MSL `GlassMeshParams` in glass_mesh_rt.metal: a float4x4 model, a float4
-        // tint, then four scalars. model is first, so its 16-byte GPU alignment is
-        // satisfied at offset 0 and the Rust [[f32; 4]; 4] matches byte-for-byte.
-        assert_eq!(size_of::<GlassMeshParams>(), 96);
-        assert_eq!(offset_of!(GlassMeshParams, model), 0);
-        assert_eq!(offset_of!(GlassMeshParams, tint), 64);
-        assert_eq!(offset_of!(GlassMeshParams, opacity), 80);
-        assert_eq!(offset_of!(GlassMeshParams, refraction_strength), 84);
-        assert_eq!(offset_of!(GlassMeshParams, fresnel_power), 88);
-        assert_eq!(offset_of!(GlassMeshParams, prefilter_mip_count), 92);
-        assert_eq!(size_of::<GlassMeshParams>() % 16, 0);
     }
 
     #[test]

@@ -662,8 +662,10 @@ impl MtlContext {
         // SSR off `scene_input` aliases `hdr_resolve`, which is the correct
         // RMW target: the transparent encoder blits a scene copy first, so the
         // self-read for refraction is safe.
-        let transparent_active = (self.water.pipeline.is_some() && !self.water.surfaces.is_empty())
-            || (self.glass.pipeline.is_some() && !self.glass.panels.is_empty());
+        let transparent_active = (self.water.pipeline.is_some()
+            && self.water.surfaces.iter().any(|s| s.visible))
+            || (self.glass.pipeline.is_some() && self.glass.panels.iter().any(|p| p.visible))
+            || self.mesh_glass_visible();
 
         // Line pipeline: built on the first frame that publishes lines,
         // so the graph gate below can see it live this same frame.

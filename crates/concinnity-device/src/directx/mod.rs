@@ -42,7 +42,9 @@ mod screenshot;
 pub(crate) mod slang_builtins;
 mod texture;
 mod transient_pool;
+mod transparent;
 mod upload_ring;
+mod water;
 mod wireframe;
 mod world_shaders;
 

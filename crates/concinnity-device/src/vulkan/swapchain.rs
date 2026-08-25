@@ -9,7 +9,6 @@ use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
 use super::allocator::DeviceAllocator;
 use super::context::*;
 use super::device::*;
-use super::glass::{GlassDeviceCtx, GlassRebuildTargets};
 use super::hiz::{HiZDeviceCtx, HiZTarget};
 use super::post::bloom::{
     BloomDeviceContext, alloc_bloom_input_sets, create_bloom_chain, create_bloom_framebuffers,
@@ -25,6 +24,7 @@ use super::post::taa::{TaaDeviceContext, TaaSceneInputs};
 use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
 use super::texture::*;
+use super::transparent::{TransparentDeviceCtx, TransparentRebuildTargets};
 
 //  Swapchain rebuild
 
@@ -593,16 +593,16 @@ impl VkContext {
             self.raymarch = Some(rm);
         }
 
-        // Rebuild the glass scene snapshot + per-frame framebuffers at the new
-        // resolution + re-point the snapshot / depth bindings. The scene target
-        // moved with the rebuilt reflection composite output / HDR resolve, so
-        // resolve it again here (composite output when a reflection path is active,
-        // else this slot's HDR resolve). The composite + HDR resolve rebuilds above
-        // already ran, so the handles are current. The pipeline, layouts, panel
-        // buffers, view UBOs, and render pass all survive.
+        // Rebuild the transparent pass's scene snapshot + per-frame framebuffers at
+        // the new resolution + re-point the snapshot / depth bindings. The scene
+        // target moved with the rebuilt reflection composite output / HDR resolve,
+        // so resolve it again here (composite output when a reflection path is
+        // active, else this slot's HDR resolve). The composite + HDR resolve
+        // rebuilds above already ran, so the handles are current. The pipelines,
+        // layouts, record buffers, view UBOs, and render pass all survive.
         // Planar reflection mirror targets follow the render resolution; rebuild
-        // them before glass so the per-pane planar binding re-point below picks up
-        // the new target views.
+        // them first so the per-record planar binding re-point below picks up the
+        // new target views.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.rebuild(
                 &self.alloc,
@@ -617,7 +617,7 @@ impl VkContext {
             .as_ref()
             .map(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect())
             .unwrap_or_default();
-        if let Some(mut glass) = self.glass.take() {
+        if let Some(mut transparent) = self.transparent.take() {
             let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..self
                 .frames_in_flight)
                 .map(|i| match self.reflection_composite.as_ref() {
@@ -630,8 +630,8 @@ impl VkContext {
                 .unzip();
             let depth_views: Vec<vk::ImageView> =
                 self.depth_images.iter().map(|img| img.view).collect();
-            glass.rebuild(
-                GlassDeviceCtx {
+            transparent.rebuild(
+                TransparentDeviceCtx {
                     alloc: &self.alloc,
                     instance: &self.instance,
                     device: &self.device,
@@ -641,14 +641,14 @@ impl VkContext {
                 },
                 render_ext.width,
                 render_ext.height,
-                GlassRebuildTargets {
+                TransparentRebuildTargets {
                     scene_views: &scene_views,
                     scene_images: &scene_images,
                     depth_views: &depth_views,
                     planar_target_views: &planar_target_views,
                 },
             )?;
-            self.glass = Some(glass);
+            self.transparent = Some(transparent);
         }
 
         // Rebuild the Hi-Z pyramid at the new resolution + re-point its init
