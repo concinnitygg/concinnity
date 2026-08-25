@@ -50,7 +50,7 @@ pub use counters::MemStats;
 pub use detail::{SizeClass, size_classes};
 pub use inline_vec::{InlineVec, IntoIter as InlineVecIntoIter};
 pub use ledger::{Ledger, LedgerSnapshot};
-pub use pool::Pool;
+pub use pool::{Pool, PoolHandle};
 pub use tag::{MemTag, Realm};
 pub use tracking::TrackingAlloc;
 

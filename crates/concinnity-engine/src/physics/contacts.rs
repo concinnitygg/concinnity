@@ -1,66 +1,22 @@
-// concinnity-physics/src/contacts.rs
+// src/physics/contacts.rs
 //
-// Contact-event shaping between the Rapier pipeline and the published queue:
-// extraction of one hit per force event, per-frame batching that keeps the
-// strongest sample per body pair, and a per-pair refractory gate so a pair in
-// sustained contact reports once, not every tick.
+// Contact-event shaping between the simulation and the published queue:
+// per-frame batching that keeps the strongest sample per body pair, and a
+// per-pair refractory gate so a pair in sustained contact reports once, not
+// every tick. Which contacts are worth reporting at all is the simulation's
+// own gate.
 
 use std::collections::HashMap;
 
-use rapier3d::geometry::{ColliderSet, ContactPair};
-use rapier3d::math::Real;
-
-use crate::BodyHandle;
-use crate::convert::from_vec;
+use concinnity_physics::{BodyHandle, ContactHit};
 
 // Ticks a body pair stays silent after reporting a contact (0.25 s at the
 // fixed 60 Hz tick).
 const REPORT_COOLDOWN_TICKS: u64 = 15;
 
-/// One contact strong enough to pass the pipeline's force threshold: the two
-/// bodies, the deepest contact point with its world-space normal (pointing
-/// from `a` toward `b`), and the total contact impulse.
-#[derive(Debug, Clone, Copy)]
-pub struct ContactHit {
-    /// One side of the contact.
-    pub a: BodyHandle,
-    /// The other side of the contact.
-    pub b: BodyHandle,
-    /// Deepest contact point, in world space.
-    pub point: [f32; 3],
-    /// Unit-length normal.
-    pub normal: [f32; 3],
-    /// Total contact impulse magnitude.
-    pub impulse: f32,
-}
-
-// The `ContactHit` for one Rapier contact-force event, resolved while the
-// collider set still contains both sides. None when either collider is gone
-// or the pair has no manifold point left.
-pub(crate) fn extract_hit(
-    dt: Real,
-    colliders: &ColliderSet,
-    pair: &ContactPair,
-    total_force_magnitude: Real,
-) -> Option<ContactHit> {
-    let (manifold, contact) = pair.find_deepest_contact()?;
-    let c1 = colliders.get(pair.collider1)?;
-    let c2 = colliders.get(pair.collider2)?;
-    let a = BodyHandle(c1.parent()?);
-    let b = BodyHandle(c2.parent()?);
-    Some(ContactHit {
-        a,
-        b,
-        point: from_vec(c1.position().transform_point(contact.local_p1)),
-        normal: from_vec(manifold.data.normal),
-        impulse: total_force_magnitude * dt,
-    })
-}
-
 // The unordered pair key for a hit, so (a, b) and (b, a) batch together.
-// Rapier handles have no ordering; the raw arena parts give a stable one.
 fn pair_key(hit: &ContactHit) -> (BodyHandle, BodyHandle) {
-    if hit.a.0.into_raw_parts() <= hit.b.0.into_raw_parts() {
+    if hit.a <= hit.b {
         (hit.a, hit.b)
     } else {
         (hit.b, hit.a)
@@ -75,6 +31,14 @@ pub(crate) struct ContactBatch {
 }
 
 impl ContactBatch {
+    // Reserved for the body pairs the world's budget can produce, so a frame's
+    // batching never allocates.
+    pub(crate) fn with_capacity(pairs: usize) -> Self {
+        Self {
+            hits: HashMap::with_capacity(pairs),
+        }
+    }
+
     pub(crate) fn add(&mut self, hit: ContactHit) {
         let entry = self.hits.entry(pair_key(&hit)).or_insert(hit);
         if hit.impulse > entry.impulse {
@@ -97,6 +61,15 @@ pub(crate) struct ContactGate {
 }
 
 impl ContactGate {
+    // Reserved for the body pairs the world's budget can produce; the sweep in
+    // `advance_tick` keeps it from growing past live contact.
+    pub(crate) fn with_capacity(pairs: usize) -> Self {
+        Self {
+            last_report: HashMap::with_capacity(pairs),
+            tick: 0,
+        }
+    }
+
     pub(crate) fn advance_tick(&mut self) {
         self.tick += 1;
         // Long-cooled entries are dead pairs; sweep occasionally so the map
@@ -125,12 +98,10 @@ impl ContactGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rapier3d::dynamics::{RigidBodyBuilder, RigidBodySet};
 
     fn handles(n: usize) -> Vec<BodyHandle> {
-        let mut set = RigidBodySet::new();
         (0..n)
-            .map(|_| BodyHandle(set.insert(RigidBodyBuilder::fixed().build())))
+            .map(|i| BodyHandle::from_parts(i as u32, 0))
             .collect()
     }
 

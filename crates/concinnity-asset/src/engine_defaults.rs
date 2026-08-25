@@ -2,10 +2,11 @@
 
 /// Opts a world out of individual engine-injected defaults.
 ///
-/// A rendering world is completed at build time with standard assets it does
-/// not declare itself: the [DebugHud](#debughud) with its chip
-/// [TextLabel](#textlabel)s and font, the [StatHud](#stathud) and its chips
-/// when the world declares a [MainMenu](#mainmenu), and, when an
+/// A world is completed at build time with standard assets it does not declare
+/// itself: the [DebugHud](#debughud) with its chip [TextLabel](#textlabel)s
+/// and font, the [StatHud](#stathud) and its chips when the world declares a
+/// [MainMenu](#mainmenu), the [PhysicsConfig](#physicsconfig) a world with
+/// physics content simulates on, and, when an
 /// [EnvironmentMap](#environmentmap) is present, the sky mesh that displays
 /// it. Declaring the same asset yourself replaces the injected one; declaring
 /// `EngineDefaults` with a flag set to `false` removes it entirely.
@@ -48,6 +49,14 @@ pub struct EngineDefaults {
     /// jump between scenes with no loading screen while their content streams
     /// in.
     pub loading_overlay: bool,
+    /// Inject a [PhysicsConfig](#physicsconfig) with the engine's own values
+    /// when the world has physics content -- a [RigidBody](#rigidbody), a
+    /// [PropBody](#propbody), a [TriggerVolume](#triggervolume), or a
+    /// [SkinnedMesh](#skinnedmesh) with a `capsule` -- but declares no
+    /// `PhysicsConfig`. Physics runs on those values either way; the injected
+    /// asset is what makes them visible in `world-lock.json` and editable,
+    /// `spawn_headroom` above all. Disable to leave them implicit.
+    pub physics_config: bool,
 }
 
 impl Default for EngineDefaults {
@@ -58,6 +67,7 @@ impl Default for EngineDefaults {
             sky: true,
             story_pause_menu: true,
             loading_overlay: true,
+            physics_config: true,
         }
     }
 }
@@ -76,10 +86,12 @@ mod tests {
         assert!(d.sky);
         assert!(d.story_pause_menu);
         assert!(d.loading_overlay);
+        assert!(d.physics_config);
 
         let declared: EngineDefaults = serde_json::from_str("{}").unwrap();
         assert!(declared.hud && declared.debug_hud && declared.sky);
         assert!(declared.story_pause_menu && declared.loading_overlay);
+        assert!(declared.physics_config);
     }
 
     #[test]
@@ -87,6 +99,7 @@ mod tests {
         let d: EngineDefaults = serde_json::from_str(r#"{"sky":false}"#).unwrap();
         assert!(!d.sky);
         assert!(d.hud && d.debug_hud && d.story_pause_menu && d.loading_overlay);
+        assert!(d.physics_config);
 
         let bytes = postcard::to_allocvec(&d).unwrap();
         let back: EngineDefaults = postcard::from_bytes(&bytes).unwrap();

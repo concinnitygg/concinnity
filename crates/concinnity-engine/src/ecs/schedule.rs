@@ -163,12 +163,15 @@ pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
     if !needs {
         return None;
     }
+    // Cook injects the config into every shipped world with physics content,
+    // so the fallback covers worlds built directly (tests, the editor's
+    // in-memory path).
     let config = world
         .query::<crate::assets::PhysicsConfig>()
         .next()
         .cloned()
         .unwrap_or_default();
-    Some(concinnity_physics::PhysicsSystem::new(config).into())
+    Some(crate::physics::PhysicsSystem::new(config).into())
 }
 
 // The first controlled `Camera3D` picks the controller flavor: no `follow`

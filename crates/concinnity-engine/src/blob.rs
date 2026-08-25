@@ -24,12 +24,14 @@ use crate::result::CnResult;
 type NamedComponent = (Option<AssetId>, ComponentAsset);
 
 // The decoded primary blob: resolved components, the resource stream, the
-// baked per-scene groups, the manifest, and the lazy payload reader.
+// baked per-scene groups, the physics reservation, the manifest, and the lazy
+// payload reader.
 pub(crate) struct LoadedBlob {
     pub(crate) components: Vec<NamedComponent>,
     pub(crate) resources: Vec<ResourceRecord>,
     pub(crate) scene_groups: Vec<concinnity_core::ecs::SceneGroup>,
     pub(crate) mesh_bounds: Vec<concinnity_core::ecs::MeshBoundsRecord>,
+    pub(crate) physics_budget: Option<concinnity_core::ecs::PhysicsBudgetRecord>,
     pub(crate) manifest: WorldManifest,
     pub(crate) blob: BlobData,
 }
@@ -56,6 +58,7 @@ pub(crate) fn load() -> Result<LoadedBlob, CnResult> {
         resources: meta.resources,
         scene_groups: meta.scene_groups,
         mesh_bounds: meta.mesh_bounds,
+        physics_budget: meta.physics_budget,
         manifest: meta.manifest,
         blob: blob_data,
     })

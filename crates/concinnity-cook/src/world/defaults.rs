@@ -1,12 +1,14 @@
 // src/world/defaults.rs
-// Engine-default injection: complete a rendering world with the standard
-// assets it does not declare itself. A world that renders (has a
-// GraphicsConfig after the first companion round) receives a DebugHud with
-// its chip TextLabels and font, a StatHud with its chips when the world
-// declares a MainMenu (the menu's performance-stats toggles drive them), a
-// LoadingOverlay with its screen and progress bar when the world declares
-// Scenes and a StreamingConfig, and, when an EnvironmentMap is present, the
-// sky mesh that displays it.
+// Engine-default injection: complete a world with the standard assets it does
+// not declare itself. A world that renders (has a GraphicsConfig after the
+// first companion round) receives a DebugHud with its chip TextLabels and
+// font, a StatHud with its chips when the world declares a MainMenu (the
+// menu's performance-stats toggles drive them), a LoadingOverlay with its
+// screen and progress bar when the world declares Scenes and a
+// StreamingConfig, and, when an EnvironmentMap is present, the sky mesh that
+// displays it. A world with physics content receives the PhysicsConfig its
+// simulation already runs on, so those settings are visible rather than
+// implicit.
 //
 // Override and opt-out rules:
 //   - Declaring an asset of the same type pre-empts the whole default (an
@@ -22,6 +24,8 @@ use crate::assets::EngineDefaults;
 
 pub(crate) const HUD_FONT_NAME: &str = "hud_font";
 const HUD_FONT_SIZE_PX: u32 = 20;
+
+const PHYSICS_CONFIG_NAME: &str = "physics_config";
 
 // The sky mesh must stay inside the camera far plane.
 const SKY_SIZE_MAX: f32 = 400.0;
@@ -42,6 +46,11 @@ pub(crate) fn inject_engine_defaults(
 
     if toggles.sky {
         inject_sky(assets, report)?;
+    }
+    // Physics is gated on content, not on rendering, so a headless world with
+    // bodies gets its config too.
+    if toggles.physics_config {
+        inject_physics_config(assets, report)?;
     }
     if !renders {
         return Ok(());
@@ -685,6 +694,57 @@ fn inject_sky(
     if !name_claimed(assets, report, "sky", "sky", "Prop", Some(&prop_args))? {
         inject(assets, report, "sky", "sky", "Prop", prop_args);
     }
+    Ok(())
+}
+
+// Whether the world runs physics, mirroring the engine's schedule gate: a
+// PhysicsConfig, a RigidBody, a PropBody, a TriggerVolume, or a SkinnedMesh
+// that declared a character capsule.
+fn has_physics_content(assets: &[serde_json::Value]) -> bool {
+    assets.iter().any(|v| match type_norm(v).as_str() {
+        "physicsconfig" | "rigidbody" | "propbody" | "triggervolume" => true,
+        "skinnedmesh" => v
+            .get("args")
+            .and_then(|a| a.get("capsule"))
+            .is_some_and(|c| !c.is_null()),
+        _ => false,
+    })
+}
+
+// Give a world with physics content the PhysicsConfig it does not declare. The
+// simulation already runs on these values; injecting them puts the settings in
+// world-lock.json where they can be read and overridden.
+fn inject_physics_config(
+    assets: &mut Vec<serde_json::Value>,
+    report: &mut ExpandReport,
+) -> Result<(), String> {
+    if assets.iter().any(|v| type_norm(v) == "physicsconfig") || !has_physics_content(assets) {
+        return Ok(());
+    }
+    // Serialized from the type, so the injected settings cannot drift from the
+    // values the runtime falls back to.
+    let args = serde_json::to_value(crate::assets::PhysicsConfig::default())
+        .map_err(|e| format!("PhysicsConfig: default args are not representable: {}", e))?;
+    if name_claimed(
+        assets,
+        report,
+        "physics_config",
+        PHYSICS_CONFIG_NAME,
+        "PhysicsConfig",
+        None,
+    )? {
+        // Unreachable in practice: a same-name same-type asset would have
+        // matched the type scan above.
+        return Ok(());
+    }
+    inject(
+        assets,
+        report,
+        "physics_config",
+        PHYSICS_CONFIG_NAME,
+        "PhysicsConfig",
+        args,
+    );
     Ok(())
 }
 
@@ -1347,6 +1407,179 @@ mod tests {
         let mut report = ExpandReport::default();
         let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
         assert!(err.contains("loading_screen"), "{err}");
+    }
+
+    fn prop_body() -> serde_json::Value {
+        serde_json::json!({"name":"crate_body","type":"PropBody","args":{"prop_name":"crate_a"}})
+    }
+
+    fn injected_physics(assets: &[serde_json::Value]) -> Option<&serde_json::Value> {
+        assets.iter().find(|v| type_norm(v) == "physicsconfig")
+    }
+
+    #[test]
+    fn physics_content_without_a_config_gets_the_default_one() {
+        let mut assets = world(&[gfx(), prop_body()]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+
+        let config = injected_physics(&assets).expect("PhysicsConfig injected");
+        assert_eq!(asset_name(config), PHYSICS_CONFIG_NAME);
+        // The engine's own defaults, strict spawn cap included.
+        assert_eq!(config["args"]["spawn_headroom"], serde_json::json!(0));
+        assert_eq!(config["args"]["floor_y"], serde_json::json!(0.0));
+        assert_eq!(config["args"]["layers"], serde_json::json!([]));
+        let entry = report
+            .injected
+            .iter()
+            .find(|i| i.asset_type == "PhysicsConfig")
+            .expect("recorded in the lock");
+        assert_eq!(entry.injected_by, "physics_config");
+        assert_eq!(entry.args["spawn_headroom"], serde_json::json!(0));
+    }
+
+    // The injected args are exactly what the runtime falls back to when a world
+    // declares no config, so injection cannot change how a world simulates.
+    #[test]
+    fn the_injected_args_deserialize_to_the_engine_default() {
+        let mut assets = world(&[gfx(), prop_body()]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        let args = injected_physics(&assets).unwrap()["args"].clone();
+        let parsed: crate::assets::PhysicsConfig = serde_json::from_value(args).unwrap();
+        let default = crate::assets::PhysicsConfig::default();
+        assert_eq!(parsed.floor_y, default.floor_y);
+        assert_eq!(parsed.terrain_half_width, default.terrain_half_width);
+        assert_eq!(parsed.terrain_half_depth, default.terrain_half_depth);
+        assert_eq!(parsed.terrain_subdivisions, default.terrain_subdivisions);
+        assert_eq!(parsed.terrain_amplitude, default.terrain_amplitude);
+        assert_eq!(parsed.terrain_offset_y, default.terrain_offset_y);
+        assert_eq!(parsed.terrain_mesh, default.terrain_mesh);
+        assert_eq!(parsed.layers, default.layers);
+        assert_eq!(parsed.no_collide, default.no_collide);
+        assert_eq!(parsed.contact_min_impulse, default.contact_min_impulse);
+        assert_eq!(parsed.spawn_headroom, default.spawn_headroom);
+    }
+
+    #[test]
+    fn an_authored_physics_config_is_left_alone() {
+        let mut assets = world(&[
+            gfx(),
+            prop_body(),
+            serde_json::json!({"name":"physics","type":"PhysicsConfig","args":{
+                "spawn_headroom": 8
+            }}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert_eq!(names_of_type(&assets, "physicsconfig"), vec!["physics"]);
+        let config = injected_physics(&assets).unwrap();
+        assert_eq!(config["args"]["spawn_headroom"], serde_json::json!(8));
+        assert!(
+            !report
+                .injected
+                .iter()
+                .any(|i| i.asset_type == "PhysicsConfig")
+        );
+    }
+
+    #[test]
+    fn a_world_without_physics_content_gets_no_config() {
+        let mut assets = world(&[gfx()]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert!(names_of_type(&assets, "physicsconfig").is_empty());
+    }
+
+    // Every asset the engine's physics gate reads turns the injection on by
+    // itself, so cook and the runtime agree on which worlds run physics.
+    #[test]
+    fn each_gating_asset_triggers_the_injection() {
+        let gates = [
+            serde_json::json!({"name":"hero_body","type":"RigidBody","args":{}}),
+            prop_body(),
+            serde_json::json!({"name":"gate","type":"TriggerVolume","args":{}}),
+            serde_json::json!({"name":"hero","type":"SkinnedMesh","args":{
+                "capsule": {"half_height": 0.9, "radius": 0.3}
+            }}),
+        ];
+        for gate in gates {
+            let label = asset_name(&gate);
+            let mut assets = world(&[gfx(), gate]);
+            let mut report = ExpandReport::default();
+            inject_engine_defaults(&mut assets, &mut report).unwrap();
+            assert_eq!(
+                names_of_type(&assets, "physicsconfig"),
+                vec![PHYSICS_CONFIG_NAME],
+                "{label} should turn physics on"
+            );
+        }
+    }
+
+    // A SkinnedMesh with no capsule is a rendered mesh, not physics content.
+    #[test]
+    fn a_skinned_mesh_without_a_capsule_is_not_physics_content() {
+        let mut assets = world(&[
+            gfx(),
+            serde_json::json!({"name":"banner","type":"SkinnedMesh","args":{"capsule":null}}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert!(names_of_type(&assets, "physicsconfig").is_empty());
+    }
+
+    // Physics does not need a GraphicsConfig, so a headless world with bodies
+    // still gets its config.
+    #[test]
+    fn a_non_rendering_physics_world_still_gets_the_config() {
+        let mut assets = world(&[prop_body()]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert_eq!(
+            names_of_type(&assets, "physicsconfig"),
+            vec![PHYSICS_CONFIG_NAME]
+        );
+    }
+
+    #[test]
+    fn engine_defaults_opts_out_of_the_physics_config() {
+        let mut assets = world(&[
+            gfx(),
+            prop_body(),
+            serde_json::json!({"name":"d","type":"EngineDefaults","args":{
+                "physics_config": false
+            }}),
+        ]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert!(names_of_type(&assets, "physicsconfig").is_empty());
+    }
+
+    #[test]
+    fn the_physics_config_name_held_by_another_type_is_an_error() {
+        let mut assets = world(&[
+            gfx(),
+            prop_body(),
+            serde_json::json!({"name": PHYSICS_CONFIG_NAME, "type":"Window","args":{}}),
+        ]);
+        let mut report = ExpandReport::default();
+        let err = inject_engine_defaults(&mut assets, &mut report).unwrap_err();
+        assert!(err.contains(PHYSICS_CONFIG_NAME), "{err}");
+        assert!(err.contains("Window"), "{err}");
+    }
+
+    // Running the pass twice (a re-cook of an already expanded list) must not
+    // stack a second config.
+    #[test]
+    fn injecting_twice_yields_one_physics_config() {
+        let mut assets = world(&[gfx(), prop_body()]);
+        let mut report = ExpandReport::default();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        inject_engine_defaults(&mut assets, &mut report).unwrap();
+        assert_eq!(
+            names_of_type(&assets, "physicsconfig"),
+            vec![PHYSICS_CONFIG_NAME]
+        );
     }
 
     #[test]

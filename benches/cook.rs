@@ -77,6 +77,7 @@ fn main() {
             resources: result.resources,
             scene_groups: result.scene_groups,
             mesh_bounds: result.mesh_bounds,
+            physics_budget: result.physics_budget,
         };
         let payload = result.payloads.first().map(Vec::as_slice).unwrap_or(&[]);
         let image = encode_cnb(concinnity_core::SCHEMA_HASH, &meta, payload).expect("blob encodes");

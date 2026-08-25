@@ -260,9 +260,9 @@ macro_rules! define_systems {
         /// the per-system state behind a pointer for no real gain here.
         // Gated on where the lint actually fires: the gap between the two
         // largest variants clears the threshold on macOS but not on Windows or
-        // Linux, and the test build's variant set narrows it either way.
+        // Linux.
         #[cfg_attr(
-            all(not(test), target_os = "macos"),
+            target_os = "macos",
             expect(
                 clippy::large_enum_variant,
                 reason = "boxing would only move the per-system state behind a pointer"

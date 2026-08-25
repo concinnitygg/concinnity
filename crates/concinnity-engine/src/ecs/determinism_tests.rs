@@ -110,12 +110,16 @@ fn build_world() -> World {
         });
     }
 
-    // Dynamic boxes above a flat floor: eight well-separated jostling stacks,
-    // so the solver has several independent islands and its parallel path has
-    // real work to reorder if it ever could.
+    // Dynamic boxes above a flat floor: thirty-two well-separated jostling
+    // stacks, so the solver has many independent islands and its parallel path
+    // has real work to reorder if it ever could.
+    //
+    // The count is load bearing. A step only hands its work out once it is
+    // worth more than gathering the workers, so a handful of boxes would run
+    // the same way under both modes and prove nothing about the split.
     world.add_component(PhysicsConfig::default());
-    for i in 0..32 {
-        let (stack, level) = (i / 4, i % 4);
+    for i in 0..256 {
+        let (stack, level) = (i / 8, i % 8);
         let e = world.push(Transform {
             position: [
                 stack as f32 * 25.0,

@@ -94,7 +94,7 @@ crate::define_systems! {
         after: [StreamingSystem],
         before: [UiInputSystem],
     },
-    PhysicsSystem => concinnity_physics::PhysicsSystem {
+    PhysicsSystem => crate::physics::PhysicsSystem {
         gate: schedule::physics,
         present_when: "the world declares a PhysicsConfig, RigidBody, PropBody, or TriggerVolume, or a skinned mesh bakes a character capsule",
         after: [OverlaySystem],

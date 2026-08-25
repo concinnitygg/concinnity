@@ -180,27 +180,36 @@ fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()>
     fs::write(path, image)
 }
 
+// The record streams one build produces, packed into blob 0's metadata block.
+// Grouped because they travel together: every one of them is derived from the
+// same compiled asset list and is written exactly once.
+pub(crate) struct BlobStreams<'a> {
+    pub(crate) defs: &'a [BlobAssetDef],
+    pub(crate) resources: &'a [ResourceRecord],
+    pub(crate) scene_groups: &'a [concinnity_blob::SceneGroup],
+    pub(crate) mesh_bounds: &'a [concinnity_blob::MeshBoundsRecord],
+    pub(crate) physics_budget: Option<concinnity_blob::PhysicsBudgetRecord>,
+}
+
 // Pack the metadata (component defs + resource records) and their payloads into
 // one or more blobs. The full metadata rides in blob 0; overflow blobs carry an
 // empty metadata section and pure payload bytes.
 pub(crate) fn write_blobs(
-    defs: &[BlobAssetDef],
-    resources: &[ResourceRecord],
-    scene_groups: &[concinnity_blob::SceneGroup],
-    mesh_bounds: &[concinnity_blob::MeshBoundsRecord],
+    streams: BlobStreams<'_>,
     blob_payloads: &[Vec<u8>],
 ) -> std::io::Result<PackResult> {
     fs::create_dir_all(concinnity_store::paths::data_dir())?;
 
     // The manifest is derived from the very streams it summarizes, so the
-    // shipped copy is consistent by construction; the runtime re-derives and
-    // debug-asserts it at load.
+    // shipped copy is consistent by construction; the runtime re-derives it and
+    // debug-asserts it matches.
     let primary_meta = || BlobMeta {
-        defs: defs.to_vec(),
-        resources: resources.to_vec(),
-        manifest: concinnity_blob::WorldManifest::from_records(defs, resources),
-        scene_groups: scene_groups.to_vec(),
-        mesh_bounds: mesh_bounds.to_vec(),
+        defs: streams.defs.to_vec(),
+        resources: streams.resources.to_vec(),
+        manifest: concinnity_blob::WorldManifest::from_records(streams.defs, streams.resources),
+        scene_groups: streams.scene_groups.to_vec(),
+        mesh_bounds: streams.mesh_bounds.to_vec(),
+        physics_budget: streams.physics_budget,
     };
 
     let mut blob_paths = Vec::new();
@@ -435,6 +444,17 @@ mod tests {
         }
     }
 
+    // The record streams of a build that only has components and resources.
+    fn streams<'a>(defs: &'a [BlobAssetDef], resources: &'a [ResourceRecord]) -> BlobStreams<'a> {
+        BlobStreams {
+            defs,
+            resources,
+            scene_groups: &[],
+            mesh_bounds: &[],
+            physics_budget: None,
+        }
+    }
+
     #[test]
     fn write_blobs_keeps_metadata_in_blob_zero_and_splits_payload_bytes() {
         let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -452,7 +472,7 @@ mod tests {
         }];
         let payloads = vec![vec![1, 2, 3], vec![4, 5, 6, 7]];
         let data_dir = state.data_dir();
-        let paths = write_blobs(&defs, &resources, &[], &[], &payloads)
+        let paths = write_blobs(streams(&defs, &resources), &payloads)
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 2);
@@ -482,6 +502,43 @@ mod tests {
         );
     }
 
+    // The physics reservation rides in blob 0's metadata beside the manifest,
+    // so the runtime reads what cook counted without re-deriving it.
+    #[test]
+    fn write_blobs_ships_the_physics_budget_in_blob_zero() {
+        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _state = StateDir::new();
+
+        let defs = vec![component_def(3, None)];
+        let budget = concinnity_blob::PhysicsBudgetRecord {
+            fixed: 3,
+            dynamic: 2,
+            kinematic: 1,
+            sensors: 1,
+            joints: 2,
+            anchors: 1,
+            spawn_headroom: 8,
+        };
+        let paths = write_blobs(
+            BlobStreams {
+                physics_budget: Some(budget),
+                ..streams(&defs, &[])
+            },
+            &[],
+        )
+        .expect("write_blobs")
+        .blob_paths;
+        let (meta, _) = read_cnb(&paths[0]).expect("blob 0 parses");
+        assert_eq!(meta.physics_budget, Some(budget));
+
+        // A world with no physics ships no reservation at all.
+        let paths = write_blobs(streams(&defs, &[]), &[])
+            .expect("write_blobs")
+            .blob_paths;
+        let (meta, _) = read_cnb(&paths[0]).expect("blob 0 parses");
+        assert_eq!(meta.physics_budget, None);
+    }
+
     #[test]
     fn write_blobs_removes_stale_overflow_blobs_from_a_larger_build() {
         let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -489,12 +546,12 @@ mod tests {
 
         let defs = vec![component_def(3, None)];
         let payloads = vec![vec![1], vec![2], vec![3]];
-        let first = write_blobs(&defs, &[], &[], &[], &payloads)
+        let first = write_blobs(streams(&defs, &[]), &payloads)
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(first.len(), 3);
 
-        let second = write_blobs(&defs, &[], &[], &[], &[vec![1]])
+        let second = write_blobs(streams(&defs, &[]), &[vec![1]])
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(second.len(), 1);
@@ -508,7 +565,7 @@ mod tests {
         let _state = StateDir::new();
 
         let defs = vec![component_def(5, None)];
-        let paths = write_blobs(&defs, &[], &[], &[], &[])
+        let paths = write_blobs(streams(&defs, &[]), &[])
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 1, "a payload-less world still ships blob 0");
@@ -525,7 +582,7 @@ mod tests {
         let state = StateDir::new();
         fs::create_dir_all(state.data_dir().join("0")).expect("occupy blob 0");
 
-        let result = write_blobs(&[component_def(1, None)], &[], &[], &[], &[]);
+        let result = write_blobs(streams(&[component_def(1, None)], &[]), &[]);
         assert!(result.is_err(), "an unwritable blob path must fail");
     }
 
@@ -539,7 +596,7 @@ mod tests {
             component_def(3, Some(locator(0, 0, 3))),
             component_def(4, None),
         ];
-        let paths = write_blobs(&defs, &[], &[], &[], &[vec![1, 2, 3]])
+        let paths = write_blobs(streams(&defs, &[]), &[vec![1, 2, 3]])
             .expect("write_blobs")
             .blob_paths;
         let named: Vec<(&str, &BlobAssetDef)> = vec![("floor", &defs[0]), ("wall", &defs[1])];

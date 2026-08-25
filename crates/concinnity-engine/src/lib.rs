@@ -64,6 +64,9 @@ pub(crate) mod error_screen;
 pub mod gfx;
 pub(crate) mod hud;
 pub(crate) mod input;
+// The rigid-body simulation driver: builds a `concinnity_physics::Simulation`
+// from the world's physics content and steps it on the fixed tick.
+pub(crate) mod physics;
 // Declarative logic (Behavior components + the shared world variables
 // store), scheduled before SpawnSystem so its requests apply the same tick.
 pub(crate) mod behavior;

@@ -5,8 +5,8 @@
 # RustSec advisory database (https://github.com/rustsec/advisory-db).
 ignore = [
     # paste is unmaintained and archived. Pulled in only transitively
-    # (glfw -> image -> ravif -> rav1e, and rapier3d -> simba); there is no
-    # direct dependency and no fix until those upstreams drop it.
+    # (glfw -> image -> ravif -> rav1e); there is no direct dependency and no
+    # fix until those upstreams drop it.
     "RUSTSEC-2024-0436",
     # ttf-parser is unmaintained. Pulled in only transitively (fontdue ->
     # ttf-parser, fontdue being the cook-time glyph rasterizer); the advisory

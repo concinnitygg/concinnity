@@ -33,13 +33,12 @@ const WARMUP_FRAMES: usize = 64;
 const QUIET_FRAME_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 // The pinned steady-state heap cost of one `World::step` of the static world
-// below. As measured, the engine's own systems cost zero: the whole budget is
-// rapier's internal solve (2 per `PhysicsPipeline::step`, attributed to
-// PhysicsSystem in the failure breakdown), which is third-party churn the
-// engine accepts. Re-pin (with a commit-message explanation) only when a
-// change legitimately moves it; a bump without one is the regression this
-// gate exists to catch.
-const STATIC_WORLD_ALLOCS_PER_FRAME: u64 = 2;
+// below. Zero: every system reserves its working memory at init and reuses it,
+// and the simulation reserves the world's whole body budget the same way, so a
+// frame that changes nothing allocates nothing. Re-pin (with a commit-message
+// explanation) only when a change legitimately moves it; a bump without one is
+// the regression this gate exists to catch.
+const STATIC_WORLD_ALLOCS_PER_FRAME: u64 = 0;
 
 // Step until one frame allocates at most `budget` times, returning the
 // quietest delta seen: at most `budget` when the pin holds, or the closest
@@ -113,8 +112,9 @@ fn static_world_frame_allocs_stay_pinned() {
     let min = quietest_frame(STATIC_WORLD_ALLOCS_PER_FRAME, || {
         world.step();
     });
-    assert!(
-        min <= STATIC_WORLD_ALLOCS_PER_FRAME,
+    assert_eq!(
+        min,
+        STATIC_WORLD_ALLOCS_PER_FRAME,
         "static world's quietest frame allocated {min} times \
          (pinned at {STATIC_WORLD_ALLOCS_PER_FRAME}); a per-frame allocation crept in.\n\
          last frame by system: {:?}",

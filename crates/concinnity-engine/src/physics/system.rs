@@ -1,30 +1,33 @@
-// concinnity-physics/src/system.rs
+// src/physics/system.rs
 //
-// The Rapier rigid-body simulation. An internal system (not a declarable
+// The rigid-body simulation driver. An internal system (not a declarable
 // asset): the engine schedule constructs one when the world declares a
 // `PhysicsConfig`, a `RigidBody`, a `PropBody`, or a `TriggerVolume`, reading
 // the optional `PhysicsConfig` for the floor / terrain.
 
-use crate::contacts::{ContactBatch, ContactGate};
-use crate::interp::PointInterp;
-use crate::layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerTable};
-use crate::props::{PropBodies, PropCollSnap, STATIC_FRICTION};
-use crate::{
-    BodyHandle, CharacterMoveInput, CharacterShape, ColliderShape, LayerMask, PhysicsWorld,
-};
+use std::collections::{HashMap, HashSet};
+
 use concinnity_core::assets::{
     BodyDynamics, Camera3D, Collider, ContactEvent, Held, PhysicsConfig, PhysicsJoint, Pickup,
     RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, SimTiming, StepResult, System,
+    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, ScheduleMode, SimTiming,
+    StepResult, System, WorldPhysicsBudget,
 };
-use std::collections::{HashMap, HashSet};
+use concinnity_physics::{
+    BodyHandle, CharacterCapsule, CharacterMoveInput, ColliderShape, ContactHit, GRAVITY,
+    LayerMask, PhysicsBudget, SensorCrossing, SimConfig, Simulation,
+};
 
-/// Acceleration due to gravity in world units per second squared. Shared with
-/// the third-person controller so its jump takeoff matches the rig's fall.
-pub const GRAVITY: f32 = 20.0;
+use super::budget::DriverCapacities;
+use super::contacts::{ContactBatch, ContactGate};
+use super::convert::{collider_shape, joint_spec};
+use super::fanout::PoolFanout;
+use super::interp::PointInterp;
+use super::layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerTable};
+use super::props::{PropBodies, PropCollSnap, STATIC_FRICTION};
 
 // Reach distance for picking up a Prop, in world units.
 const PICKUP_REACH: f32 = 3.0;
@@ -37,8 +40,8 @@ const HOLD_DROP: f32 = 0.35;
 // Launch speed applied to a prop when it is dropped/thrown.
 const THROW_SPEED: f32 = 6.0;
 
-/// Rapier rigid-body simulation behavior. Constructed internally by
-/// `World::start` from the world's `PhysicsConfig`; never a declarable asset.
+/// Rigid-body simulation behavior. Constructed internally by `World::start`
+/// from the world's `PhysicsConfig`; never a declarable asset.
 #[derive(Debug)]
 pub struct PhysicsSystem {
     // Camera eye Y at spawn; the flat-floor fallback derives nothing from it,
@@ -54,8 +57,8 @@ pub struct PhysicsSystem {
     // (procedural noise or heightfield mesh). Matches the rendering Prop's
     // `position[1]`.
     terrain_offset_y: f32,
-    // The Rapier simulation, built in init().
-    world: Option<PhysicsWorld>,
+    // The simulation, built in init() and sized from the world's budget.
+    world: Option<Simulation>,
     // The player capsule, when the world has a Camera3D + RigidBody.
     player: Option<PlayerPhysics>,
     // One capsule per root-motion character rig (see `super::rig`).
@@ -69,8 +72,8 @@ pub struct PhysicsSystem {
     new_props: Vec<(Entity, PropCollSnap)>,
     // Per-step drain scratch, reused so the event handoffs never reallocate.
     motion_scratch: Vec<concinnity_core::assets::RootMotionEvent>,
-    contact_scratch: Vec<crate::contacts::ContactHit>,
-    sensor_scratch: Vec<crate::SensorCrossing>,
+    contact_scratch: Vec<ContactHit>,
+    sensor_scratch: Vec<SensorCrossing>,
     // Index into `props` of the prop currently being carried.
     held: Option<usize>,
     // Sensor tag -> the TriggerVolume it senses for, with its filter. Tags are
@@ -84,6 +87,12 @@ pub struct PhysicsSystem {
     contact_batch: ContactBatch,
     // Per-pair refractory so sustained contact reports once per impact.
     contact_gate: ContactGate,
+    // Bodies the world authored room for beyond the ones it declares.
+    spawn_headroom: u32,
+    // Hard ceiling on live bodies: the simulation's whole reservation, so a
+    // spawn past it is refused rather than silently declined by a full pool.
+    // Resolved at init, along with the reservation itself.
+    body_cap: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +110,7 @@ struct PlayerPhysics {
     handle: BodyHandle,
     // The capsule each tick's move is resolved against. Its dimensions come
     // from the RigidBody at init and never change afterwards.
-    shape: CharacterShape,
+    shape: CharacterCapsule,
     // Camera eye Y minus capsule-centre Y.
     eye_offset: f32,
     // False for a free-flying camera (no RigidBody): no gravity, no jump.
@@ -169,7 +178,52 @@ impl PhysicsSystem {
             contact_min_impulse: config.contact_min_impulse.max(0.0),
             contact_batch: ContactBatch::default(),
             contact_gate: ContactGate::default(),
+            spawn_headroom: config.spawn_headroom,
+            body_cap: 0,
         }
+    }
+
+    // The world's body budget: the record cook shipped, or, when no record
+    // shipped, the same derivation over the loaded components with the
+    // headroom its `PhysicsConfig` authored. Only a shipped record is checked
+    // against the live world.
+    //
+    // The two headrooms can differ: a shipped one is already raised to cover
+    // the spawners whose cadence bounds their population, while a directly
+    // constructed World gets only what its config authored, since nothing
+    // counted its spawners.
+    //
+    // Whichever it came from, the budget is the whole reservation: the
+    // simulation is sized from it and never grows, so its cap is the ceiling
+    // spawns are refused against.
+    fn resolve_budget(&self, ctx: &PipelineContext) -> PhysicsBudget {
+        let scan = super::budget::scan_counts(ctx);
+        let Some(record) = ctx.resource::<WorldPhysicsBudget>().map(|b| b.0) else {
+            tracing::debug!("PhysicsSystem: no shipped budget; reserving from the loaded world");
+            return PhysicsBudget::derive(&scan, self.spawn_headroom);
+        };
+        let shipped = super::budget::budget_of(&record);
+        debug_assert_eq!(
+            shipped,
+            PhysicsBudget::derive(&scan, record.spawn_headroom),
+            "the shipped physics budget does not match the loaded world"
+        );
+        shipped
+    }
+
+    // Size every container the driver holds per body from the budget, once,
+    // before anything is built.
+    fn reserve(&mut self, budget: &PhysicsBudget) {
+        let caps = DriverCapacities::derive(budget);
+        self.props = PropBodies::with_capacity(&caps);
+        self.rigs = Vec::with_capacity(caps.rigs);
+        self.new_props = Vec::with_capacity(caps.new_props);
+        self.motion_scratch = Vec::with_capacity(caps.root_motions);
+        self.contact_scratch = Vec::with_capacity(caps.contacts);
+        self.sensor_scratch = Vec::with_capacity(caps.sensor_crossings);
+        self.contact_batch = ContactBatch::with_capacity(caps.contact_pairs);
+        self.contact_gate = ContactGate::with_capacity(caps.contact_pairs);
+        self.sensor_filters = HashMap::with_capacity(caps.sensor_filters);
     }
 
     // Build one body per collider-bearing entity from its per-instance
@@ -179,7 +233,7 @@ impl PhysicsSystem {
     fn build_prop_bodies(
         &mut self,
         ctx: &PipelineContext,
-        world: &mut PhysicsWorld,
+        world: &mut Simulation,
         body_handles: &mut HashMap<AssetId, BodyHandle>,
     ) {
         let entity_name: HashMap<Entity, AssetId> = ctx
@@ -197,7 +251,7 @@ impl PhysicsSystem {
                 (
                     entity,
                     PropCollSnap {
-                        shape: crate::collider_shape(&collider.0, transform.scale),
+                        shape: collider_shape(&collider.0, transform.scale),
                         layer: collider.0.layer.clone(),
                         position: transform.position,
                         rotation_deg: transform.rotation_deg,
@@ -209,7 +263,9 @@ impl PhysicsSystem {
             .collect();
 
         for (entity, snap) in snaps {
-            let handle = self.props.add(&self.layers, world, entity, snap);
+            let Some(handle) = self.props.add(&self.layers, world, entity, snap) else {
+                continue;
+            };
             if let Some(&id) = entity_name.get(&entity) {
                 body_handles.insert(id, handle);
             }
@@ -219,8 +275,29 @@ impl PhysicsSystem {
 
 impl System for PhysicsSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        let mut world = PhysicsWorld::new(GRAVITY);
+        // Before anything is built, and before the joint wiring below drains
+        // the column the scan counts.
+        let budget = self.resolve_budget(ctx);
+        self.body_cap = budget.body_cap();
+        self.reserve(&budget);
+
+        // The simulation reserves the whole budget here, so nothing on the
+        // step path allocates and a body past the reservation is refused
+        // rather than grown into.
+        let mut world = Simulation::new(
+            SimConfig {
+                gravity: GRAVITY,
+                ..SimConfig::default()
+            },
+            budget.body_cap() as usize,
+        );
         world.set_contact_min_impulse(self.contact_min_impulse, SimTiming::TICK_DT);
+        // The step's per-worker scratch, reserved from the schedule this world
+        // will run under. A serial schedule reserves one worker's worth, which
+        // is what a simulation that is never lent threads keeps.
+        world.reserve_workers(
+            PoolFanout::for_mode(ScheduleMode::current(ctx.resources)).worker_count(),
+        );
         let world_mask = self.layers.mask(LAYER_WORLD);
 
         // floor: heightfield-mesh-driven, procedural noise, or flat slab
@@ -262,19 +339,22 @@ impl System for PhysicsSystem {
             }
         }
         if !floor_built {
-            if let Some(terrain) = self.terrain.clone() {
-                build_heightfield(&mut world, &terrain, world_mask);
+            let floor = if let Some(terrain) = self.terrain.clone() {
+                build_heightfield(&mut world, &terrain, world_mask)
             } else {
                 // A large thin slab whose top face sits at Y = 0.
                 world.add_fixed(
-                    &crate::ColliderShape::Cuboid {
+                    &ColliderShape::Cuboid {
                         half_extents: [500.0, 5.0, 500.0],
                     },
                     [0.0, -5.0, 0.0],
                     [0.0; 3],
                     STATIC_FRICTION,
                     world_mask,
-                );
+                )
+            };
+            if floor.is_none() {
+                tracing::error!("physics: the world's reservation had no room for its floor");
             }
         }
 
@@ -283,15 +363,20 @@ impl System for PhysicsSystem {
         let trigger_mask = self.layers.mask(LAYER_TRIGGER);
         let volumes: Vec<TriggerVolume> = ctx.query::<TriggerVolume>().cloned().collect();
         for volume in &volumes {
-            let shape = crate::collider_shape(&volume.collider, [1.0; 3]);
+            let shape = collider_shape(&volume.collider, [1.0; 3]);
             let tag = u64::from(volume.asset_id.0);
-            world.add_sensor(
-                &shape,
-                volume.position,
-                volume.rotation_deg,
-                tag,
-                trigger_mask,
-            );
+            if world
+                .add_sensor(
+                    &shape,
+                    volume.position,
+                    volume.rotation_deg,
+                    tag,
+                    trigger_mask,
+                )
+                .is_none()
+            {
+                continue;
+            }
             self.sensor_filters
                 .insert(tag, (volume.asset_id, volume.detects));
         }
@@ -345,14 +430,18 @@ impl System for PhysicsSystem {
                 }
             } else {
                 // Static world anchor at anchor_b. Sub-millimetre ball so it
-                // takes effectively no space in the broad-phase BVH.
-                world.add_fixed(
+                // takes effectively no space in the broad phase.
+                let anchor = world.add_fixed(
                     &ColliderShape::Ball { radius: 0.001 },
                     joint.anchor_b,
                     [0.0; 3],
                     0.0,
                     world_mask,
-                )
+                );
+                match anchor {
+                    Some(handle) => handle,
+                    None => continue,
+                }
             };
             // When body_b is the implicit world anchor, the anchor sits at the
             // origin of that hidden body, not at the authored offset.
@@ -361,13 +450,19 @@ impl System for PhysicsSystem {
             } else {
                 [0.0, 0.0, 0.0]
             };
-            world.add_joint(
+            if !world.add_joint(
                 handle_a,
                 handle_b,
                 joint.anchor_a,
                 anchor_b,
-                crate::joint_spec(&joint),
-            );
+                joint_spec(&joint),
+            ) {
+                tracing::warn!(
+                    "PhysicsJoint '{}': the simulation declined it; skipping",
+                    joint.asset_id
+                );
+                continue;
+            }
             wired += 1;
         }
         if wired > 0 {
@@ -413,9 +508,9 @@ impl System for PhysicsSystem {
                 center,
                 self.layers.mask(LAYER_CHARACTER),
             );
-            self.player = Some(PlayerPhysics {
+            self.player = handle.map(|handle| PlayerPhysics {
                 handle,
-                shape: CharacterShape::capsule(half_height, radius),
+                shape: CharacterCapsule::new(half_height, radius),
                 eye_offset,
                 has_gravity,
                 gravity_scale: rb.gravity_scale.max(0.0),
@@ -435,8 +530,29 @@ impl System for PhysicsSystem {
 
         // Kinematic capsules for the root-motion character rigs published by
         // GraphicsSystem (which ran init first this tick).
-        self.rigs = super::rig::init_rigs(&mut world, ctx, self.layers.mask(LAYER_CHARACTER));
+        super::rig::init_rigs(
+            &mut world,
+            ctx,
+            self.layers.mask(LAYER_CHARACTER),
+            &mut self.rigs,
+        );
 
+        // Everything the budget reserved has now been built. A shortfall means
+        // the counts the reservation came from disagree with what the world
+        // actually holds, which leaves bodies missing from the simulation
+        // rather than merely mis-sized.
+        let built = world.body_count() as u32;
+        if built != budget.body_total() {
+            tracing::error!(
+                "physics: the world built {} of the {} bodies its budget reserved",
+                built,
+                budget.body_total()
+            );
+        }
+
+        // Published from the built world: the simulation's own storage is only
+        // knowable once it is reserved.
+        super::budget::publish_reservation(concinnity_memory::ledger(), &budget, &world);
         self.world = Some(world);
     }
 
@@ -484,6 +600,10 @@ impl System for PhysicsSystem {
             -(cam_yaw.cos() * cam_pitch.cos()),
         ];
 
+        // Whichever pool the schedule names, chosen once for the frame. Both
+        // land in the same place; only how long the step takes differs.
+        let fanout = PoolFanout::for_mode(ScheduleMode::current(ctx.resources));
+
         let world = self.world.as_mut().expect("world checked above");
 
         // Reap bodies whose entity was despawned before the step, keeping
@@ -500,12 +620,14 @@ impl System for PhysicsSystem {
         self.new_props.clear();
         self.new_props.extend(
             ctx.join2::<Collider, Transform>()
-                .filter(|(entity, _, _)| !self.props.is_tracked(*entity))
+                .filter(|(entity, _, _)| {
+                    !self.props.is_tracked(*entity) && !self.props.is_refused(*entity)
+                })
                 .map(|(entity, collider, transform)| {
                     (
                         entity,
                         PropCollSnap {
-                            shape: crate::collider_shape(&collider.0, transform.scale),
+                            shape: collider_shape(&collider.0, transform.scale),
                             layer: collider.0.layer.clone(),
                             position: transform.position,
                             rotation_deg: transform.rotation_deg,
@@ -518,7 +640,8 @@ impl System for PhysicsSystem {
         for (entity, mut snap) in self.new_props.drain(..) {
             snap.pickup = ctx.get::<Pickup>(entity).is_some();
             snap.dynamics = ctx.get::<BodyDynamics>(entity).copied();
-            self.props.add(&self.layers, world, entity, snap);
+            self.props
+                .adopt(&self.layers, world, entity, snap, self.body_cap);
         }
 
         // pickup / drop on the interact edge; held_changed carries the entity to
@@ -594,14 +717,6 @@ impl System for PhysicsSystem {
         super::rig::drain_motions_into(ctx, &mut self.root_cursor, &mut self.motion_scratch);
         super::rig::sync_rigs(ctx, &mut self.rigs);
 
-        // The solver's internal parallelism (rapier's rayon islands) runs
-        // inside the bounded job pool; the serial schedule pins it to the
-        // single-worker pool so the determinism oracle exercises the same
-        // code with one thread.
-        let solve_pool = match concinnity_core::ecs::ScheduleMode::current(ctx.resources) {
-            concinnity_core::ecs::ScheduleMode::Parallel => concinnity_cpu::jobs::pool(),
-            concinnity_core::ecs::ScheduleMode::Serial => concinnity_cpu::jobs::serial_pool(),
-        };
         for tick in 0..timing.ticks {
             let dt = timing.tick_dt;
 
@@ -658,7 +773,7 @@ impl System for PhysicsSystem {
             );
 
             // advance the simulation
-            solve_pool.install(|| world.step(dt));
+            world.step_with(dt, &fanout);
 
             // batch the tick's contact hits (strongest per pair this frame)
             self.contact_gate.advance_tick();
@@ -782,7 +897,7 @@ impl System for PhysicsSystem {
     }
 }
 
-// Build a Rapier heightfield collider for a heightfield-generator
+// Build a heightfield collider for a heightfield-generator
 // `ProceduralMesh` from the collider grid baked into its compiled payload. The
 // build step stores the mesh's own per-vertex heights (an `n x n` row-major
 // world-Y grid) as a trailer on the payload, so the collider tracks the
@@ -790,7 +905,7 @@ impl System for PhysicsSystem {
 // runtime. The terrain mesh's blob is held resident past GraphicsSystem init
 // for exactly this read (see the release sweep in `graphics_system::init`).
 fn build_heightfield_collider(
-    world: &mut PhysicsWorld,
+    world: &mut Simulation,
     mesh: &concinnity_core::assets::ProceduralMesh,
     offset_y: f32,
     mask: LayerMask,
@@ -813,19 +928,25 @@ fn build_heightfield_collider(
     }
     let width = mesh.half_width * 2.0;
     let depth = mesh.half_depth * 2.0;
-    world.add_heightfield(
-        grid.rows,
-        grid.cols,
-        grid.heights,
-        [width, 1.0, depth],
-        [0.0, offset_y, 0.0],
-        mask,
-    );
+    world
+        .add_heightfield(
+            grid.rows,
+            grid.cols,
+            grid.heights,
+            [width, 1.0, depth],
+            [0.0, offset_y, 0.0],
+            mask,
+        )
+        .ok_or("the simulation declined the heightfield")?;
     Ok(())
 }
 
-// Build a Rapier heightfield collider matching the procedural terrain mesh.
-fn build_heightfield(world: &mut PhysicsWorld, terrain: &TerrainParams, mask: LayerMask) {
+// Build a heightfield collider matching the procedural terrain mesh.
+fn build_heightfield(
+    world: &mut Simulation,
+    terrain: &TerrainParams,
+    mask: LayerMask,
+) -> Option<BodyHandle> {
     let n = (terrain.subdivisions as usize) + 1;
     let width = terrain.half_width * 2.0;
     let depth = terrain.half_depth * 2.0;
@@ -846,7 +967,7 @@ fn build_heightfield(world: &mut PhysicsWorld, terrain: &TerrainParams, mask: La
         [width, 1.0, depth],
         [0.0, terrain.offset_y, 0.0],
         mask,
-    );
+    )
 }
 
 // Compute terrain surface height at world-space (x, z) using the same bilinear
@@ -908,7 +1029,8 @@ fn lcg_hash(mut v: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::assets::{CameraController, FollowController, PropCollider};
+    use crate::physics::budget::{record_of, scan_counts};
+    use concinnity_core::assets::{CameraController, CharacterRig, FollowController, PropCollider};
     use concinnity_core::ecs::{
         Arena, ComponentStorage, FrameContext, Resources, SkinnedMeshHandle,
     };
@@ -917,7 +1039,7 @@ mod tests {
 
     // Hand-assembled stand-in for the engine's `World`: owns the storage a
     // `PipelineContext` borrows so a `PhysicsSystem` can be init/stepped in
-    // isolation. `World` stays in the engine, so this crate cannot use it.
+    // isolation, without a renderer or a compiled blob behind it.
     struct TestWorld {
         components: ComponentStorage,
         blob: BlobData,
@@ -1231,7 +1353,7 @@ mod tests {
         );
     }
 
-    // Despawning a decomposed prop reaps its Rapier body, so it stops simulating
+    // Despawning a decomposed prop reaps its body, so it stops simulating
     // (and colliding) once its entity is gone.
     #[test]
     fn despawning_a_prop_reaps_its_physics_body() {
@@ -1290,10 +1412,15 @@ mod tests {
 
     // A collider-bearing entity that appears after init (a runtime spawn) is
     // adopted on the next step: it gets a body and falls like an authored one.
+    // The headroom is what reserves the body for it: the simulation is sized
+    // once at init and a spawn past the reservation is refused.
     #[test]
     fn runtime_spawned_prop_gets_a_body_and_falls() {
         let mut world = TestWorld::new();
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(PhysicsConfig {
+            spawn_headroom: 1,
+            ..PhysicsConfig::default()
+        });
         physics.init(&mut world.ctx());
         let baseline = physics.physics_body_count();
 
@@ -1320,11 +1447,16 @@ mod tests {
         );
     }
 
-    // Spawn, despawn, and respawn leave no bodies or colliders behind.
+    // Spawn, despawn, and respawn leave no bodies or colliders behind: a
+    // reaped body hands its slot back, so one body's worth of headroom covers
+    // any number of rounds.
     #[test]
     fn spawn_despawn_respawn_cycle_is_leak_free() {
         let mut world = TestWorld::new();
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(PhysicsConfig {
+            spawn_headroom: 1,
+            ..PhysicsConfig::default()
+        });
         physics.init(&mut world.ctx());
         let bodies = physics.physics_body_count();
         let colliders = physics.physics_collider_count();
@@ -1347,6 +1479,164 @@ mod tests {
                 "round {round} reaped the collider"
             );
         }
+    }
+
+    // A world whose shipped budget was counted from the same content it holds
+    // passes the init assert, and reserves the cap that budget implies.
+    #[test]
+    fn a_shipped_budget_matching_the_world_is_adopted() {
+        let mut world = TestWorld::new();
+        let entity = world.spawn_prop(AssetId(1), [0.0, 3.0, 0.0], false);
+        world.make_dynamic(entity);
+        world.components.push_typed(controlled_camera());
+
+        // The record cook would have written for this world: one dynamic prop,
+        // the floor, the player capsule, and room for two spawns.
+        let counts = scan_counts(&world.ctx());
+        let budget = PhysicsBudget::derive(&counts, 2);
+        assert_eq!(budget.dynamic, 1);
+        assert_eq!(budget.kinematic, 1, "the first-person camera capsule");
+        world
+            .resources
+            .insert(WorldPhysicsBudget(record_of(&budget)));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        assert_eq!(physics.body_cap, budget.body_cap());
+        assert_eq!(
+            physics.physics_body_count(),
+            budget.body_total() as usize,
+            "init built exactly the bodies the budget reserved"
+        );
+    }
+
+    // A world with no shipped budget (built in memory, as every test world is)
+    // reserves from what it holds plus the headroom its config authored, and
+    // caps spawns there. The cap used to be left open for such a world, on the
+    // grounds that nothing had counted its spawns; a fixed-capacity simulation
+    // cannot honour that -- a spawn past the reservation gets no body either
+    // way, and the cap is what turns a silently declined one into a refusal
+    // naming the knob to raise.
+    #[test]
+    fn a_world_without_a_shipped_budget_reserves_from_what_it_holds() {
+        let mut world = TestWorld::new();
+        let entity = world.spawn_prop(AssetId(1), [0.0, 3.0, 0.0], false);
+        world.make_dynamic(entity);
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig {
+            spawn_headroom: 4,
+            ..PhysicsConfig::default()
+        });
+        physics.init(&mut world.ctx());
+
+        assert_eq!(
+            physics.physics_body_count(),
+            2,
+            "the floor and the one authored prop"
+        );
+        assert_eq!(physics.body_cap, 2 + 4, "plus the authored headroom");
+    }
+
+    // Past the cap, a spawned prop gets no body and the world keeps stepping.
+    // The refusal happens once: the next tick's scan passes over the entity
+    // rather than re-refusing it.
+    #[test]
+    fn a_spawn_past_the_shipped_budget_is_refused() {
+        let mut world = TestWorld::new();
+        let authored = world.spawn_prop(AssetId(1), [0.0, 3.0, 0.0], false);
+        world.make_dynamic(authored);
+
+        // A budget with no headroom: the floor and the one authored prop.
+        let counts = scan_counts(&world.ctx());
+        let budget = PhysicsBudget::derive(&counts, 0);
+        world
+            .resources
+            .insert(WorldPhysicsBudget(record_of(&budget)));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        let full = physics.physics_body_count();
+        assert_eq!(full, budget.body_cap() as usize, "the budget is spent");
+
+        let spawned = world.spawn_prop(AssetId(2), [0.0, 6.0, 0.0], false);
+        world.make_dynamic(spawned);
+        physics.step(&mut world.ctx());
+        assert_eq!(physics.physics_body_count(), full, "no body was built");
+        assert!(physics.props.is_refused(spawned));
+
+        // Stepping on keeps the refusal: the entity is skipped, not retried,
+        // and the authored prop carries on simulating.
+        for _ in 0..10 {
+            physics.step(&mut world.ctx());
+        }
+        assert_eq!(physics.physics_body_count(), full);
+        let refused_y = world.components.get::<Transform>(spawned).unwrap().position[1];
+        assert_eq!(refused_y, 6.0, "a refused prop is not simulated at all");
+        let live_y = world
+            .components
+            .get::<Transform>(authored)
+            .unwrap()
+            .position[1];
+        assert!(live_y < 3.0, "the authored prop still falls");
+    }
+
+    // A rig capsule authored standing exactly on the floor stays there: it
+    // neither sinks tick after tick nor is lifted off it. The driver used to
+    // spawn one a fingernail above its authored position, because the
+    // controller ignored a hit a downward move started already touching and
+    // the capsule sank a little every frame; the controller now separates
+    // along the contact normal instead, so the authored position is the one
+    // that holds.
+    #[test]
+    fn a_rig_capsule_spawned_on_the_floor_neither_sinks_nor_rises() {
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let mut world = TestWorld::new();
+        world.components.push_typed(CharacterRig::new(
+            SkinnedMeshHandle(1),
+            0,
+            identity,
+            0.6,
+            0.3,
+        ));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        let rig_y = |world: &mut TestWorld| {
+            world
+                .ctx()
+                .query::<CharacterRig>()
+                .next()
+                .expect("the rig is there")
+                .position[1]
+        };
+        assert_eq!(
+            rig_y(&mut world),
+            0.0,
+            "the capsule spawns at its authored position, unlifted"
+        );
+
+        for _ in 0..30 {
+            physics.step(&mut world.ctx());
+        }
+        let settled = rig_y(&mut world);
+        for _ in 0..300 {
+            physics.step(&mut world.ctx());
+        }
+        let held = rig_y(&mut world);
+
+        assert!(
+            settled.abs() < 0.01,
+            "the capsule stayed on the floor (y = {settled})"
+        );
+        assert!(
+            (held - settled).abs() < 1.0e-4,
+            "and stopped moving ({settled} -> {held})"
+        );
     }
 
     // A hard landing publishes one ContactEvent naming the prop; resting
@@ -1392,6 +1682,83 @@ mod tests {
                 );
             }
         }
+    }
+
+    // A sensor region reports a prop crossing it, in and then out, naming the
+    // volume that saw it.
+    #[test]
+    fn a_trigger_volume_reports_a_prop_crossing_it() {
+        let volume_id = AssetId(9);
+        let mut world = TestWorld::new();
+        world.components.push_typed(TriggerVolume {
+            asset_id: volume_id,
+            position: [0.0, 3.0, 0.0],
+            rotation_deg: [0.0; 3],
+            collider: PropCollider {
+                shape: "cuboid".to_string(),
+                half_extents: [1.0, 0.5, 1.0],
+                ..Default::default()
+            },
+            detects: TriggerFilter::Props,
+        });
+        let ball = world.spawn_prop(AssetId(1), [0.0, 6.0, 0.0], false);
+        world.make_dynamic(ball);
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+
+        let mut cursor = EventCursor::default();
+        let mut crossings: Vec<VolumeEvent> = Vec::new();
+        for _ in 0..180 {
+            physics.step(&mut world.ctx());
+            let ctx = world.ctx();
+            if let Some(events) = ctx.events::<VolumeEvent>() {
+                crossings.extend(events.read(&mut cursor).copied());
+            }
+        }
+        assert_eq!(crossings.len(), 2, "in, then out: {crossings:?}");
+        assert!(crossings.iter().all(|c| c.volume == volume_id));
+        assert!(crossings[0].entered, "the ball entered first");
+        assert!(!crossings[1].entered, "and left afterwards");
+    }
+
+    // A joint anchored to the world holds its body up: the hidden anchor body
+    // the driver mints for it is part of the reservation, and the prop hangs
+    // off it instead of falling.
+    #[test]
+    fn a_world_anchored_joint_holds_its_prop_up() {
+        let bob_id = AssetId(1);
+        let mut world = TestWorld::new();
+        let bob = world.spawn_prop(bob_id, [1.0, 4.0, 0.0], false);
+        world.make_dynamic(bob);
+        world.components.push_typed(PhysicsJoint {
+            asset_id: AssetId(2),
+            kind: "spherical".to_string(),
+            body_a: Some(bob_id),
+            body_b: None,
+            // The bob's own centre hangs one unit from the anchor point.
+            anchor_a: [-1.0, 0.0, 0.0],
+            anchor_b: [0.0, 4.0, 0.0],
+            ..Default::default()
+        });
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        for _ in 0..240 {
+            physics.step(&mut world.ctx());
+        }
+
+        let position = world.components.get::<Transform>(bob).unwrap().position;
+        let reach =
+            ((position[0]).powi(2) + (position[1] - 4.0).powi(2) + (position[2]).powi(2)).sqrt();
+        assert!(
+            (reach - 1.0).abs() < 0.05,
+            "the bob hangs one unit from the anchor, at {position:?} ({reach})"
+        );
+        assert!(
+            position[1] > 2.5,
+            "and is held up rather than falling ({position:?})"
+        );
     }
 
     // The config's no_collide pairs reach the built colliders: a prop on a

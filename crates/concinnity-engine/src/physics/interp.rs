@@ -1,4 +1,4 @@
-// concinnity-physics/src/interp.rs
+// src/physics/interp.rs
 //
 // Render interpolation state for the fixed-timestep simulation. Each fixed
 // tick pushes the newly simulated pose; each rendered frame samples a blend of

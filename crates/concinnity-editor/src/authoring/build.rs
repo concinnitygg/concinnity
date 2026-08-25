@@ -123,6 +123,9 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     crate::resource::install_resource_tables(&mut world, &mut result.resources);
     world.insert_resource(crate::ecs::BlobSceneGroups(result.scene_groups));
     world.insert_resource(crate::ecs::BlobMeshBounds(result.mesh_bounds));
+    if let Some(budget) = result.physics_budget {
+        world.insert_resource(concinnity_core::ecs::WorldPhysicsBudget(budget));
+    }
     // Dev-only source catalogues for the hot-reload watcher (see the scan above).
     world.insert_resource(crate::resource::ColorLutSources(color_lut_source));
     world.insert_resource(crate::resource::EnvironmentMapSources(

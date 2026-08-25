@@ -1,4 +1,4 @@
-// concinnity-physics/src/rig.rs
+// src/physics/rig.rs
 //
 // The character-rig drive: one kinematic capsule per `CharacterRig`
 // component (a `SkinnedMesh` that declared a `capsule`). Each fixed tick the
@@ -10,9 +10,9 @@
 use concinnity_core::assets::{CharacterRig, RootMotionEvent};
 use concinnity_core::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
 use concinnity_core::gfx::root_motion::add3;
+use concinnity_physics::{BodyHandle, CharacterCapsule, CharacterMoveInput, LayerMask, Simulation};
 
 use super::interp::PointInterp;
-use super::{BodyHandle, CharacterMoveInput, CharacterShape, LayerMask, PhysicsWorld};
 
 // Physics-side state for one rig.
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub(crate) struct RigPhysics {
     pub handle: BodyHandle,
     // The capsule the tick's move is resolved against, resized when the rig
     // component's dimensions change.
-    shape: CharacterShape,
+    shape: CharacterCapsule,
     // Current vertical velocity (world units/second).
     pub vy: f32,
     // Authoritative simulated capsule centre with its render blend snapshots.
@@ -41,39 +41,28 @@ fn center_of(rig: &CharacterRig) -> [f32; 3] {
     ]
 }
 
-// Small height a rig capsule spawns above its authored position. A capsule
-// whose bottom starts exactly in contact with the ground never gets its
-// downward moves clipped (the character shape-cast ignores hits it starts
-// inside), so it would sink a little every frame; spawning just above lets
-// the first gravity steps settle it onto the controller's contact offset.
-const SPAWN_LIFT: f32 = 0.05;
-
-// Create one kinematic capsule per published `CharacterRig`.
+// Create one kinematic capsule per published `CharacterRig`, filling the
+// caller's list so its reserved capacity survives.
 pub(crate) fn init_rigs(
-    world: &mut PhysicsWorld,
-    ctx: &mut PipelineContext,
+    world: &mut Simulation,
+    ctx: &PipelineContext,
     mask: LayerMask,
-) -> Vec<RigPhysics> {
-    let rigs: Vec<RigPhysics> = ctx
-        .query_mut::<CharacterRig>()
-        .map(|rig| {
-            rig.position[1] += SPAWN_LIFT;
-            rig.moved = true;
-            let center = center_of(rig);
-            RigPhysics {
-                target: rig.target,
-                handle: world.add_character(rig.half_height, rig.radius, center, mask),
-                shape: CharacterShape::capsule(rig.half_height, rig.radius),
-                vy: 0.0,
-                center: PointInterp::new(center),
-                written_pos: Some(rig.position),
-            }
+    rigs: &mut Vec<RigPhysics>,
+) {
+    rigs.extend(ctx.query::<CharacterRig>().filter_map(|rig| {
+        let center = center_of(rig);
+        Some(RigPhysics {
+            target: rig.target,
+            handle: world.add_character(rig.half_height, rig.radius, center, mask)?,
+            shape: CharacterCapsule::new(rig.half_height, rig.radius),
+            vy: 0.0,
+            center: PointInterp::new(center),
+            written_pos: Some(rig.position),
         })
-        .collect();
+    }));
     if !rigs.is_empty() {
         tracing::debug!("PhysicsSystem: {} character rig(s)", rigs.len());
     }
-    rigs
 }
 
 // Read the root-motion displacements published since last frame (by
@@ -111,7 +100,7 @@ pub(crate) fn sync_rigs(ctx: &mut PipelineContext, rigs: &mut [RigPhysics]) {
 // gravity, resolved against the scene. A rig with no motion still settles
 // under gravity.
 pub(crate) fn tick_rigs(
-    world: &mut PhysicsWorld,
+    world: &mut Simulation,
     ctx: &mut PipelineContext,
     rigs: &mut [RigPhysics],
     motions: &[RootMotionEvent],

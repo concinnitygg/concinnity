@@ -21,8 +21,11 @@ struct Slot<T> {
     generation: u32,
 }
 
-// A reference to one object in a pool. Copyable and small: pass it around
-// instead of the object.
+/// A reference to one object in a pool. Copyable and small: pass it around
+/// instead of the object.
+///
+/// The generation is what makes a handle to a removed object read as absent
+/// rather than silently addressing whatever took its slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PoolHandle {
     index: u32,
@@ -30,9 +33,22 @@ pub struct PoolHandle {
 }
 
 impl PoolHandle {
-    // Position in the pool, for a caller keeping a table alongside it.
-    pub fn index(self) -> usize {
+    /// Rebuild a handle from parts a caller stored elsewhere.
+    ///
+    /// Parts that never named a live object read as absent, exactly as a
+    /// stale handle does, so this widens no access the pool did not grant.
+    pub const fn from_parts(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
+
+    /// Position in the pool, for a caller keeping a table alongside it.
+    pub const fn index(self) -> usize {
         self.index as usize
+    }
+
+    /// The generation this handle was minted at.
+    pub const fn generation(self) -> u32 {
+        self.generation
     }
 }
 
@@ -134,6 +150,31 @@ impl<T> Pool<T> {
         slot.value.as_mut()
     }
 
+    /// Borrow whatever occupies a slot, by position rather than by handle.
+    ///
+    /// For a caller that keeps its own tables alongside the pool and indexes
+    /// them by slot: the position came from the pool, so re-checking a
+    /// generation it never left would only cost a branch.
+    pub fn get_at(&self, index: usize) -> Option<&T> {
+        self.slots.get(index)?.value.as_ref()
+    }
+
+    /// Mutably borrow whatever occupies a slot, by position.
+    pub fn get_at_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.slots.get_mut(index)?.value.as_mut()
+    }
+
+    /// The handle naming whatever occupies a slot, so a caller that walks
+    /// positions can hand one back out. `None` when the slot is vacant.
+    pub fn handle_at(&self, index: usize) -> Option<PoolHandle> {
+        let slot = self.slots.get(index)?;
+        slot.value.as_ref()?;
+        Some(PoolHandle {
+            index: index as u32,
+            generation: slot.generation,
+        })
+    }
+
     /// Whether a handle still names a live object.
     pub fn contains(&self, handle: PoolHandle) -> bool {
         self.get(handle).is_some()
@@ -224,6 +265,27 @@ mod tests {
         assert_eq!(pool.get(c), Some(&3));
     }
 
+    // A caller walking positions has to be able to hand a handle back out,
+    // and the handle it gets must be the one the pool minted.
+    #[test]
+    fn a_slot_hands_back_the_handle_naming_its_occupant() {
+        let mut pool = Pool::with_capacity(2);
+        let a = pool.insert("a").expect("room");
+        assert_eq!(pool.handle_at(a.index()), Some(a));
+        assert_eq!(pool.handle_at(1), None, "vacant");
+        assert_eq!(pool.handle_at(99), None, "out of range");
+
+        pool.remove(a);
+        assert_eq!(pool.handle_at(a.index()), None);
+        let b = pool.insert("b").expect("the freed slot");
+        assert_eq!(pool.handle_at(b.index()), Some(b));
+        assert_ne!(
+            pool.handle_at(b.index()),
+            Some(a),
+            "the generation moved on"
+        );
+    }
+
     // The point of the generation: a handle to a removed object must not reach
     // whatever took its slot.
     #[test]
@@ -239,6 +301,25 @@ mod tests {
         assert_eq!(pool.get_mut(old), None);
         assert_eq!(pool.remove(old), None);
         assert_eq!(pool.get(new), Some(&"second"));
+    }
+
+    // Slot access is for callers holding their own table: it must reach the
+    // live occupant and report an empty or out-of-range slot as absent.
+    #[test]
+    fn slot_access_reaches_the_occupant_and_skips_the_vacancies() {
+        let mut pool = Pool::with_capacity(3);
+        let a = pool.insert(1).expect("room");
+        let b = pool.insert(2).expect("room");
+        assert_eq!(pool.get_at(a.index()), Some(&1));
+        assert_eq!(pool.get_at(b.index()), Some(&2));
+        assert_eq!(pool.get_at(2), None);
+        assert_eq!(pool.get_at(99), None);
+
+        *pool.get_at_mut(b.index()).expect("live") = 20;
+        assert_eq!(pool.get(b), Some(&20));
+        pool.remove(a);
+        assert_eq!(pool.get_at(a.index()), None);
+        assert_eq!(pool.get_at_mut(99), None);
     }
 
     #[test]
@@ -301,6 +382,31 @@ mod tests {
         assert_eq!(pool.get(b), None);
         // And the storage is all available again, in order.
         assert_eq!(pool.insert(9).expect("room").index(), 0);
+    }
+
+    // A handle a caller stored as parts and rebuilt must still address the same
+    // object, and a rebuilt handle whose parts never named one must not.
+    #[test]
+    fn handles_rebuild_from_their_parts() {
+        let mut pool = Pool::with_capacity(2);
+        let a = pool.insert("a").expect("room");
+        let rebuilt = PoolHandle::from_parts(a.index() as u32, a.generation());
+        assert_eq!(rebuilt, a);
+        assert_eq!(pool.get(rebuilt), Some(&"a"));
+
+        assert_eq!(pool.get(PoolHandle::from_parts(0, 7)), None);
+        assert_eq!(pool.get(PoolHandle::from_parts(99, 0)), None);
+    }
+
+    #[test]
+    fn a_reused_slot_reports_a_later_generation() {
+        let mut pool = Pool::with_capacity(1);
+        let first = pool.insert(1).expect("room");
+        assert_eq!(first.generation(), 0);
+        pool.remove(first);
+        let second = pool.insert(2).expect("the freed slot");
+        assert_eq!(second.index(), first.index());
+        assert_eq!(second.generation(), 1);
     }
 
     // The pool's cost is its reservation, not its occupancy: that is the figure

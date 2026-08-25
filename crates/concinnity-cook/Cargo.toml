@@ -25,6 +25,7 @@ concinnity-core = { workspace = true }
 concinnity-cpu = { workspace = true }
 concinnity-store = { workspace = true }
 concinnity-blob = { workspace = true }
+concinnity-physics = { workspace = true }
 concinnity-world = { workspace = true }
 concinnity-docs = { workspace = true }
 concinnity-font = { workspace = true }

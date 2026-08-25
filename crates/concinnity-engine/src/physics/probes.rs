@@ -1,4 +1,4 @@
-// concinnity-physics/src/probes.rs
+// src/physics/probes.rs
 //
 // Raycast probe answering: each frame the ground probes the animation IK
 // published and the third-person camera's occlusion probe get their rays
@@ -8,9 +8,9 @@
 
 use concinnity_core::assets::{AudioOcclusionProbe, CameraProbe, GroundProbes};
 use concinnity_core::ecs::PipelineContext;
+use concinnity_physics::{LayerMask, Simulation};
 
 use super::rig::RigPhysics;
-use super::{LayerMask, PhysicsWorld};
 
 // Kept between the camera and the nearest obstruction so the near plane
 // never clips into it.
@@ -24,7 +24,7 @@ const CAMERA_MIN_DISTANCE: f32 = 0.3;
 // (world and prop layers), so trigger regions and other characters never
 // register as ground or as a camera obstruction.
 pub(crate) fn step_probes(
-    world: &PhysicsWorld,
+    world: &Simulation,
     ctx: &mut PipelineContext,
     rigs: &[RigPhysics],
     mask: LayerMask,
@@ -75,9 +75,9 @@ pub(crate) fn step_probes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ColliderShape;
     use concinnity_core::ecs::{Arena, ComponentStorage, FrameContext, Resources};
     use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_physics::ColliderShape;
     use concinnity_store::blob::BlobData;
 
     struct ProbeWorld {
@@ -115,17 +115,19 @@ mod tests {
     // zero-length segment.
     #[test]
     fn audio_probes_answer_blocked_and_clear() {
-        let mut world = PhysicsWorld::new(20.0);
+        let mut world = Simulation::with_capacity(1);
         // A wall at x = 5 crossing the first probe's segment.
-        world.add_fixed(
-            &ColliderShape::Cuboid {
-                half_extents: [0.5, 5.0, 5.0],
-            },
-            [5.0, 0.0, 0.0],
-            [0.0; 3],
-            0.8,
-            LayerMask::ALL,
-        );
+        world
+            .add_fixed(
+                &ColliderShape::Cuboid {
+                    half_extents: [0.5, 5.0, 5.0],
+                },
+                [5.0, 0.0, 0.0],
+                [0.0; 3],
+                0.8,
+                LayerMask::ALL,
+            )
+            .expect("room in the pool");
         world.step(1.0 / 60.0);
 
         let mut w = ProbeWorld::new();

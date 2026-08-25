@@ -148,6 +148,34 @@ pub struct BlobMeta {
     pub scene_groups: Vec<SceneGroup>,
     /// Baked geometry summaries, keyed by mesh-source handle.
     pub mesh_bounds: Vec<MeshBoundsRecord>,
+    /// The world's physics reservation, or `None` when it declares no physics.
+    pub physics_budget: Option<PhysicsBudgetRecord>,
+}
+
+/// The bodies a world's physics reserves, counted by cook from the authored
+/// content and grouped by the kind of body the simulation builds for it. The
+/// runtime reserves exactly this at load and refuses to exceed it; debug builds
+/// re-derive it from the loaded components and assert the two agree.
+///
+/// A plain record on purpose: this crate is the container format and knows
+/// nothing about simulation, so the conversion to and from the simulation's own
+/// budget type lives with the driver that reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct PhysicsBudgetRecord {
+    /// Immovable bodies: the world's static colliders plus its floor.
+    pub fixed: u32,
+    /// Freely simulated bodies.
+    pub dynamic: u32,
+    /// Position-driven bodies: the player capsule and the character rigs.
+    pub kinematic: u32,
+    /// Sensor bodies, one per trigger volume.
+    pub sensors: u32,
+    /// Joints connecting two bodies.
+    pub joints: u32,
+    /// Hidden static bodies minted to anchor a world-anchored joint.
+    pub anchors: u32,
+    /// Bodies held back for props created after load.
+    pub spawn_headroom: u32,
 }
 
 /// Baked geometry summary of one static mesh payload, keyed by its unified
@@ -222,6 +250,15 @@ mod tests {
                 vertex_count: 24,
                 index_count: 36,
             }],
+            physics_budget: Some(PhysicsBudgetRecord {
+                fixed: 3,
+                dynamic: 2,
+                kinematic: 1,
+                sensors: 1,
+                joints: 2,
+                anchors: 1,
+                spawn_headroom: 16,
+            }),
         }
     }
 

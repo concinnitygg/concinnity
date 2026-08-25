@@ -7,9 +7,12 @@ use alloc::vec::Vec;
 /// Configures the world's physics floor / terrain.
 ///
 /// Optional: a world with physics bodies but no `PhysicsConfig` simulates over a
-/// flat floor at Y = 0. Physics runs whenever the world declares a
-/// `PhysicsConfig`, a [RigidBody](#rigidbody), or a [PropBody](#propbody).
-/// Declare a `PhysicsConfig` to put bodies on terrain or a non-zero floor.
+/// flat floor at Y = 0, and the build injects one carrying these values so the
+/// settings are visible in `world-lock.json`. Physics runs whenever the world
+/// declares a `PhysicsConfig`, a [RigidBody](#rigidbody), a
+/// [PropBody](#propbody), a [TriggerVolume](#triggervolume), or a
+/// [SkinnedMesh](#skinnedmesh) with a `capsule`. Declare a `PhysicsConfig` to
+/// put bodies on terrain or a non-zero floor.
 ///
 /// For terrain-based outdoor scenes the terrain parameters must match the
 /// terrain mesh exactly.
@@ -59,6 +62,20 @@ pub struct PhysicsConfig {
     /// publish a contact event. Resting contact stays below it; raise to hear
     /// only hard impacts.
     pub contact_min_impulse: f32,
+    /// Extra physics bodies reserved for props created while the world runs
+    /// (by a [Spawner](#spawner), a [Behavior](#behavior) `spawn` node, or the
+    /// host). Physics reserves every body it will ever need when the world
+    /// loads and never grows: once the declared bodies plus this many are
+    /// live, a further spawn gets no physics body and is reported as an error.
+    ///
+    /// This is a floor beneath what the build reserves on its own, not the
+    /// whole reservation. Every [Spawner](#spawner) whose `interval` and
+    /// `lifetime` bound how many copies can be alive at once is already
+    /// reserved for, and the larger of the two numbers wins. Set a value here
+    /// for the sources the build cannot count: a `Spawner` with `lifetime: 0`
+    /// (its copies live forever), a `spawn` node in a behavior, and spawns the
+    /// host drives itself.
+    pub spawn_headroom: u32,
 }
 
 impl Default for PhysicsConfig {
@@ -74,6 +91,7 @@ impl Default for PhysicsConfig {
             layers: Vec::new(),
             no_collide: Vec::new(),
             contact_min_impulse: 1.0,
+            spawn_headroom: 0,
         }
     }
 }
@@ -97,6 +115,20 @@ mod tests {
         assert!(p.layers.is_empty());
         assert!(p.no_collide.is_empty());
         assert_eq!(p.contact_min_impulse, 1.0);
+        // Nothing is held back for runtime spawns unless a world asks for it.
+        assert_eq!(p.spawn_headroom, 0);
+    }
+
+    #[test]
+    fn authored_spawn_headroom_round_trips_through_postcard() {
+        let p: PhysicsConfig = serde_json::from_str(r#"{"spawn_headroom":64}"#).unwrap();
+        assert_eq!(p.spawn_headroom, 64);
+
+        // The runtime reads the headroom off the baked component, so it has to
+        // survive the wire, not just the JSON parse.
+        let bytes = postcard::to_allocvec(&p).unwrap();
+        let back: PhysicsConfig = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.spawn_headroom, 64);
     }
 
     #[test]

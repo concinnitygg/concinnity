@@ -191,8 +191,18 @@ pub use concinnity_asset::{
 // historical path so the runtime, cook, and the registry macros keep naming
 // `ecs::{BlobAssetDef, ResourceKind, ...}` unchanged.
 pub use concinnity_blob::{
-    AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, ResourceKind, ResourceRecord, SceneGroup,
+    AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind,
+    ResourceRecord, SceneGroup,
 };
+
+/// The world's physics reservation as cook counted it, published at blob load.
+/// Absent when the world declares no physics content, or when the world was
+/// built in memory rather than loaded from a blob; the simulation then counts
+/// the loaded components itself.
+///
+/// Lives here rather than with the engine's other blob resources because the
+/// simulation driver reads it, and the engine depends on the driver.
+pub struct WorldPhysicsBudget(pub PhysicsBudgetRecord);
 
 /// PipelineContext -- systems' view of the world during a tick. Renderer-free:
 /// it exposes typed component storage, the in-memory blob payload store, and the

@@ -224,6 +224,7 @@ mod tests {
             resources: Vec::new(),
             scene_groups: Vec::new(),
             mesh_bounds: Vec::new(),
+            physics_budget: None,
         };
         std::fs::write(
             path_for(0),

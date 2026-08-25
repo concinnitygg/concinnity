@@ -1,63 +1,14 @@
-// concinnity-physics/src/convert.rs
+// src/physics/convert.rs
 //
-// Conversions between the engine's plain [f32; 3] / Euler-degree representation
-// and the glam-based math types Rapier uses. Keeping these here means no other
-// module ever has to name a Rapier or glam type.
+// Conversions from the engine's authored representation to the simulation
+// vocabulary: the asset data types (PhysicsJoint, Prop, PropBody) turned into
+// the shapes, joint specs and body parameters the simulation is built from.
 
-use rapier3d::glamx::EulerRot;
-use rapier3d::math::{Rotation, Vector};
-
-use crate::{ColliderShape, DynamicParams, JointMotor, JointSpec};
 use concinnity_core::assets::{BodyDynamics, PhysicsJoint, PhysicsJointKind, PropCollider};
+use concinnity_physics::{ColliderShape, DynamicParams, JointMotor, JointSpec};
 
-// Convert an engine `[x, y, z]` array into a Rapier vector.
-pub(crate) fn to_vec(v: [f32; 3]) -> Vector {
-    Vector::new(v[0], v[1], v[2])
-}
-
-// Convert a Rapier vector back into an engine `[x, y, z]` array.
-pub(crate) fn from_vec(v: Vector) -> [f32; 3] {
-    [v.x, v.y, v.z]
-}
-
-// Build a Rapier rotation from engine Euler degrees `[pitch, yaw, roll]`,
-// applied in YXZ order to match `Prop::model_matrix`.
-pub(crate) fn to_rotation(euler_deg: [f32; 3]) -> Rotation {
-    let [pitch, yaw, roll] = euler_deg;
-    Rotation::from_euler(
-        EulerRot::YXZ,
-        yaw.to_radians(),
-        pitch.to_radians(),
-        roll.to_radians(),
-    )
-}
-
-// Decompose a Rapier rotation back into engine Euler degrees
-// `[pitch, yaw, roll]` (YXZ order).
-pub(crate) fn from_rotation(rot: Rotation) -> [f32; 3] {
-    let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
-    [pitch.to_degrees(), yaw.to_degrees(), roll.to_degrees()]
-}
-
-// A Rapier rotation's components as a plain `[x, y, z, w]` quaternion.
-pub(crate) fn to_quat(rot: Rotation) -> [f32; 4] {
-    [rot.x, rot.y, rot.z, rot.w]
-}
-
-// The `[x, y, z, w]` quaternion for engine Euler degrees. Pose interpolation
-// blends in quaternion space, so the lossy Euler decomposition happens only
-// once, at the Transform write boundary.
-pub(crate) fn quat_from_euler_deg(euler_deg: [f32; 3]) -> [f32; 4] {
-    to_quat(to_rotation(euler_deg))
-}
-
-// Engine Euler degrees `[pitch, yaw, roll]` for an `[x, y, z, w]` quaternion.
-pub(crate) fn euler_deg_from_quat(q: [f32; 4]) -> [f32; 3] {
-    from_rotation(Rotation::from_xyzw(q[0], q[1], q[2], q[3]).normalize())
-}
-
-// The `JointSpec` a `PhysicsJoint` asset describes, converting authored degrees to
-// the radians Rapier expects for revolute joints.
+// The `JointSpec` a `PhysicsJoint` asset describes, converting authored degrees
+// to the radians a revolute joint is specified in.
 pub(crate) fn joint_spec(joint: &PhysicsJoint) -> JointSpec {
     let limits = if joint.limits_enabled {
         Some(joint.limits)
@@ -77,7 +28,6 @@ pub(crate) fn joint_spec(joint: &PhysicsJoint) -> JointSpec {
         PhysicsJointKind::Spherical => JointSpec::Spherical,
         PhysicsJointKind::Revolute => JointSpec::Revolute {
             axis: joint.axis,
-            // Convert authored degrees to the radians Rapier expects.
             limits: limits.map(|[a, b]| [a.to_radians(), b.to_radians()]),
             motor: motor.map(|m| JointMotor {
                 target_velocity: m.target_velocity.to_radians(),
@@ -92,8 +42,8 @@ pub(crate) fn joint_spec(joint: &PhysicsJoint) -> JointSpec {
     }
 }
 
-// The Rapier collision shape for a `PropCollider`, baking in the prop's
-// `scale` (the simulation has no separate scale concept).
+// The collision shape for a `PropCollider`, baking in the prop's `scale` (the
+// simulation has no separate scale concept).
 pub(crate) fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> ColliderShape {
     let [sx, sy, sz] = [scale[0].abs(), scale[1].abs(), scale[2].abs()];
     match collider.shape.as_str() {
@@ -115,7 +65,7 @@ pub(crate) fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> Collid
     }
 }
 
-// The Rapier dynamic-body parameters a `BodyDynamics` component describes.
+// The dynamic-body parameters a `BodyDynamics` component describes.
 pub(crate) fn dynamic_params(body: &BodyDynamics) -> DynamicParams {
     DynamicParams {
         mass: body.mass.max(0.0),
@@ -129,42 +79,6 @@ pub(crate) fn dynamic_params(body: &BodyDynamics) -> DynamicParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn vec_round_trips() {
-        let v = [1.5, -2.0, 7.25];
-        assert_eq!(from_vec(to_vec(v)), v);
-    }
-
-    #[test]
-    fn rotation_round_trips_away_from_gimbal_lock() {
-        // Pitch kept well clear of +-90 deg so the YXZ decomposition is unique.
-        for euler in [[0.0, 0.0, 0.0], [12.0, 45.0, -30.0], [-20.0, 170.0, 60.0]] {
-            let back = from_rotation(to_rotation(euler));
-            for axis in 0..3 {
-                let diff = (back[axis] - euler[axis]).rem_euclid(360.0);
-                let diff = diff.min(360.0 - diff);
-                assert!(diff < 0.01, "axis {axis}: {back:?} != {euler:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn identity_rotation_is_zero_euler() {
-        assert_eq!(from_rotation(Rotation::IDENTITY), [0.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn quat_round_trips_through_euler() {
-        let euler = [12.0, 45.0, -30.0];
-        let back = euler_deg_from_quat(quat_from_euler_deg(euler));
-        for axis in 0..3 {
-            assert!(
-                (back[axis] - euler[axis]).abs() < 0.01,
-                "axis {axis}: {back:?} != {euler:?}"
-            );
-        }
-    }
 
     #[test]
     fn joint_spec_converts_revolute_units_to_radians() {

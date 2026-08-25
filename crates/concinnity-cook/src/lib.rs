@@ -94,11 +94,13 @@ pub mod mesh_reimport;
 /// Recognises a `.glb` that packages an environment image as a sphere you stand
 /// inside, so it imports as an EnvironmentMap instead of scene geometry.
 pub mod panorama;
+pub(crate) mod physics_budget;
 pub mod pipeline;
 pub mod resource_handles;
 pub(crate) mod root_motion;
 pub(crate) mod scene_partition;
 pub mod shader;
+pub(crate) mod spawn_population;
 pub mod texture;
 pub mod tga;
 pub mod thumbnail;

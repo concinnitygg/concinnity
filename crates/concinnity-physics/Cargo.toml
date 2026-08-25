@@ -7,9 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Physics system for the Concinnity engine, over rapier3d"
+description = "Deterministic rigid-body simulation for the Concinnity engine"
 keywords = ["gamedev", "physics", "concinnity"]
-categories = ["game-engines", "simulation"]
+categories = ["game-engines", "simulation", "no-std"]
 include = [
     "/src",
 ]
@@ -18,14 +18,8 @@ include = [
 name = "concinnity_physics"
 
 [dependencies]
-concinnity-core = { workspace = true }
-concinnity-cpu = { workspace = true }
-
-rapier3d = { version = "0.32", features = ["parallel"] }
-tracing = "0.1.44"
-
-[dev-dependencies]
-concinnity-store = { workspace = true }
+concinnity-memory = { workspace = true }
+libm = "0.2"
 
 [lints]
 workspace = true

@@ -421,6 +421,7 @@ mod tests {
             resources: Vec::new(),
             scene_groups: Vec::new(),
             mesh_bounds: Vec::new(),
+            physics_budget: None,
             mesh_component_names: Vec::new(),
             payloads: Vec::new(),
             cache_hits: 0,

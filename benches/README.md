@@ -49,12 +49,16 @@ cargo bench -p concinnity-bench -- --json out.json  # machine-readable report
   over a 10k-object scene, light packing for the clustered forward pass,
   the streaming planner's per-frame re-rank under sustained pool pressure
   (churn asserted), and draw-slot recycling. No backend is involved.
-- `physics`: the physics wrapper and rapier. Stepping benches rebuild an
+- `physics`: the engine's rigid-body simulation. Stepping benches rebuild an
   identical stacked world and step it a fixed count per iteration, so the
-  measured work is bit-identical run to run (asserted, so a rapier upgrade
-  that breaks determinism fails loudly): sustained-contact settling,
-  contact-free fall, the sleeping-island idle step, world build, body
-  churn, raycasts, and the character-move solve.
+  measured work is bit-identical run to run (asserted, so a change that breaks
+  determinism fails loudly): sustained-contact settling, contact-free fall,
+  the sleeping-island idle step, world build, body churn, joints, sensor
+  regions, contact reporting, terrain, raycasts, shape casts, and the
+  character-move solve. Stepping is measured on the engine's job pool, the way
+  the driver runs it; the `_serial` twins step the same world on the calling
+  thread, so a pair reads as the scaling the split bought. Both must land in
+  the same place, which the determinism assertion checks.
 
 ## Reading the report
 

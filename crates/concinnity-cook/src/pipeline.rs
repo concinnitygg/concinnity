@@ -65,10 +65,13 @@ pub fn write_build_outputs(
     shadowed: &[crate::world::ShadowedAsset],
 ) -> std::io::Result<crate::blob::PackResult> {
     let pack_result = crate::blob::write_blobs(
-        &result.defs,
-        &result.resources,
-        &result.scene_groups,
-        &result.mesh_bounds,
+        crate::blob::BlobStreams {
+            defs: &result.defs,
+            resources: &result.resources,
+            scene_groups: &result.scene_groups,
+            mesh_bounds: &result.mesh_bounds,
+            physics_budget: result.physics_budget,
+        },
         &result.payloads,
     )?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
@@ -153,6 +156,8 @@ pub struct PipelineResult {
     pub scene_groups: Vec<concinnity_blob::SceneGroup>,
     /// Baked AABB + counts per static mesh payload, by mesh-source handle.
     pub mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
+    /// The world's physics reservation, or `None` when it runs no physics.
+    pub physics_budget: Option<concinnity_blob::PhysicsBudgetRecord>,
     // Unified mesh-source handle -> asset name for mesh payloads compiled as
     // component defs (ProceduralMesh and friends). Resource-stream Mesh
     // handles lead the space and resolve through `resources`; these resolve
@@ -500,6 +505,11 @@ pub fn build_compiled_with_progress(
     // the reference graph; drives the grouped packing below.
     let partition = crate::scene_partition::partition_scenes(&assets);
 
+    // The world's physics reservation, counted from the same fully expanded
+    // asset list the blob is emitted from.
+    let physics_budget = crate::physics_budget::compute(&assets);
+    crate::physics_budget::report_spawn_reservation(&assets);
+
     let compiled = compile_and_pack_payloads(
         &mut named,
         &named_src,
@@ -565,6 +575,7 @@ pub fn build_compiled_with_progress(
         resources: compiled.resources,
         scene_groups: compiled.scene_groups,
         mesh_bounds: compiled.mesh_bounds,
+        physics_budget,
         mesh_component_names: compiled.mesh_component_names,
         payloads: compiled.blobs,
         cache_hits: compiled.cache_hits,
@@ -1989,6 +2000,46 @@ mod tests {
         assert_eq!(baked.scene, Some(crate::ecs::asset_id::AssetId(1)));
     }
 
+    // A world with physics content but no PhysicsConfig has one injected during
+    // expansion; it must compile to the same values the runtime falls back to,
+    // and leave the shipped budget alone.
+    #[test]
+    fn an_injected_physics_config_round_trips_through_the_blob() {
+        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::shader::install_stub_toolchain();
+        let world = concat!(
+            r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            "\n",
+            r#"{"name":"crate_a","type":"Prop","args":{"mesh":"box","collider":{"shape":"cuboid"}}}"#,
+            "\n",
+            r#"{"name":"crate_body","type":"PropBody","args":{"prop_name":"crate_a"}}"#,
+            "\n",
+        );
+        let result = build_pipeline_from_str(world, None).expect("build pipeline");
+
+        let index = result
+            .names
+            .iter()
+            .position(|n| n == "physics_config")
+            .expect("the injected config compiled into the blob");
+        let baked: crate::assets::PhysicsConfig =
+            postcard::from_bytes(&result.defs[index].args_bytes).unwrap();
+        let default = crate::assets::PhysicsConfig::default();
+        assert_eq!(baked.floor_y, default.floor_y);
+        assert_eq!(baked.terrain_subdivisions, default.terrain_subdivisions);
+        assert_eq!(baked.terrain_mesh, default.terrain_mesh);
+        assert!(baked.layers.is_empty());
+        assert!(baked.no_collide.is_empty());
+        assert_eq!(baked.contact_min_impulse, default.contact_min_impulse);
+        assert_eq!(baked.spawn_headroom, 0, "the strict spawn cap is untouched");
+
+        // The reservation is the authored content plus the floor, unchanged by
+        // the config becoming visible.
+        let budget = result.physics_budget.expect("a physics budget");
+        assert_eq!(budget.spawn_headroom, 0);
+        assert_eq!(budget.dynamic, 1, "the crate");
+    }
+
     #[test]
     fn resource_payload_slices_the_named_resource() {
         let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2357,6 +2408,7 @@ mod tests {
             resources: Vec::new(),
             scene_groups: Vec::new(),
             mesh_bounds: Vec::new(),
+            physics_budget: None,
             mesh_component_names: Vec::new(),
             payloads: vec![vec![1, 2, 3]],
             cache_hits: 0,
