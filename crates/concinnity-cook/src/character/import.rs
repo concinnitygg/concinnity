@@ -9,9 +9,9 @@ use std::path::Path;
 use super::builtin_schema;
 use super::synthesize::{MorphSet, synthesize};
 use super::validate;
-use crate::components::{CharacterModel, CharacterSchema};
 use crate::glb::{ImportedSkinnedMesh, import_skinned_from_doc};
 use crate::gltf_source::GltfDoc;
+use concinnity_asset::cook::{CharacterModel, CharacterSchema};
 use concinnity_world::world::WorldJsonlAsset;
 
 // Import `model`'s source against `schema`.
@@ -93,7 +93,7 @@ impl CharacterModelArg {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{KeyPolarity, SchemaJoint, SchemaKey};
+    use concinnity_asset::cook::{KeyPolarity, SchemaJoint, SchemaKey};
 
     // The customize_character example's body, the only real one in the tree.
     // Absent from a crate checkout outside the workspace, in which case the

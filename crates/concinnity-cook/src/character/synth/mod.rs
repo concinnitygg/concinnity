@@ -12,7 +12,9 @@ pub(crate) mod surface_offset;
 pub(crate) mod taper;
 
 use super::frame::BoneFrame;
-use crate::components::{KeyPolarity, MorphDelta, SkinnedVertexData, SynthParams};
+use concinnity_asset::cook::{KeyPolarity, SynthParams};
+
+use crate::components::{MorphDelta, SkinnedVertexData};
 use concinnity_core::math::vec3;
 
 // What every generator reads.

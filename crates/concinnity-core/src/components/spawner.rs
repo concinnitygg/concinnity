@@ -3,7 +3,8 @@
 // Runtime `Spawner` component. Its authored args live in the schema crate
 // (concinnity_asset::spawner).
 
-use crate::components::SpawnerArgs;
+use concinnity_asset::cook;
+
 use crate::ecs::Component;
 use crate::ecs::asset_id::AssetId;
 
@@ -37,7 +38,7 @@ impl Spawner {
     /// Translate the authored args into the runtime spawner: clamp the timing
     /// knobs and zero the runtime counters. Run by cook at build time (the
     /// baked blob record carries the result).
-    pub fn bake(args: SpawnerArgs) -> Self {
+    pub fn bake(args: cook::Spawner) -> Self {
         Self {
             template: args.template,
             interval: args.interval.max(0.0),

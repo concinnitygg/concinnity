@@ -40,7 +40,7 @@ impl World {
     ///
     /// ```
     /// # use concinnity::World;
-    /// # use concinnity::assets::TextLabel;
+    /// # use concinnity::components::TextLabel;
     /// let mut world = World::new();
     /// world.add_component(TextLabel {
     ///     content: "Hello, world!".to_string(),

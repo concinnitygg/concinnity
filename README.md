@@ -11,7 +11,7 @@ Runtime behavior is defined declaratively through a static set of assets
 compiled into runnable worlds.
 
 ```rust
-use concinnity::assets::{GraphicsConfig, TextLabel};
+use concinnity::components::{GraphicsConfig, TextLabel};
 use concinnity::{App, World};
 
 fn main() {

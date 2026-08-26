@@ -3,7 +3,9 @@
 // Runtime 3D camera component. Its authored args and controller config live in
 // the schema crate (concinnity_asset::camera3d).
 
-use crate::components::{Camera3DArgs, CameraController};
+use concinnity_asset::cook;
+
+use crate::components::CameraController;
 use crate::ecs::Component;
 
 /// Declares the 3D camera. One per scene.
@@ -40,7 +42,7 @@ impl Camera3D {
     /// Translate the authored args into the runtime camera: compose the initial
     /// view matrix and zero the runtime state. Run by cook at build time (the
     /// baked blob record carries the result) and by tests that need a camera.
-    pub fn bake(args: Camera3DArgs) -> Self {
+    pub fn bake(args: cook::Camera3D) -> Self {
         Self {
             fov_y_degrees: args.fov_y_degrees,
             near: args.near,
@@ -75,7 +77,7 @@ mod tests {
     fn follow_block_deserializes_names_and_defaults() {
         crate::test_support::reset_interner();
         crate::test_support::intern_all(&["hero"]);
-        let args: Camera3DArgs = serde_json::from_value(serde_json::json!({
+        let args: cook::Camera3D = serde_json::from_value(serde_json::json!({
             "controller": {"follow": {"target": "hero", "drive": "direct"}}
         }))
         .unwrap();
@@ -91,7 +93,7 @@ mod tests {
         assert_eq!(follow.jump_height, 0.0);
 
         // No follow block keeps the first-person modes.
-        let bare: Camera3DArgs =
+        let bare: cook::Camera3D =
             serde_json::from_value(serde_json::json!({"controller": {}})).unwrap();
         assert!(bare.controller.unwrap().follow.is_none());
     }

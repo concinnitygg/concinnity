@@ -4,11 +4,11 @@
 // than a world.jsonl file. A field that points at another asset holds a
 // resolved handle, so its name is given with `reference` beside the value.
 
-use concinnity::assets::{
-    Animation, Camera3DArgs, CameraController, CharacterCapsule, CharacterModel, CharacterShape,
-    DirectionalLight, GraphicsConfig, JointProportion, Material, ProceduralMesh, Prop, ShapeSlider,
+use concinnity::components::{
+    Animation, CameraController, CharacterShape, DirectionalLight, GraphicsConfig, JointProportion,
+    ProceduralMesh, Prop, ShapeSlider,
 };
-use concinnity::cook::WorldBuilder;
+use concinnity::cook::{self, WorldBuilder};
 
 use crate::BODY_GLB;
 
@@ -28,7 +28,7 @@ pub(crate) fn declare(world: &mut WorldBuilder) {
         )
         .add(
             "cam",
-            Camera3DArgs {
+            cook::Camera3D {
                 position: [0.0, 1.1, 3.2],
                 fov_y_degrees: 50.0,
                 yaw: 0.0,
@@ -52,7 +52,7 @@ pub(crate) fn declare(world: &mut WorldBuilder) {
         )
         .add(
             "mat_floor",
-            Material {
+            cook::Material {
                 roughness: 0.8,
                 tint: [0.5, 0.5, 0.5],
                 ..Default::default()
@@ -72,7 +72,7 @@ pub(crate) fn declare(world: &mut WorldBuilder) {
         .reference("material", "mat_floor")
         .add(
             "mat_skin",
-            Material {
+            cook::Material {
                 roughness: 0.55,
                 tint: [0.85, 0.62, 0.5],
                 ..Default::default()
@@ -82,13 +82,13 @@ pub(crate) fn declare(world: &mut WorldBuilder) {
         // source, switching at 6 m and 12 m.
         .add(
             "body",
-            CharacterModel {
+            cook::CharacterModel {
                 schema: SCHEMA.into(),
                 source: BODY_GLB.into(),
                 lod_levels: 3,
                 lod_distances: vec![6.0, 12.0],
                 position: [0.0, 0.03, 0.0],
-                capsule: Some(CharacterCapsule {
+                capsule: Some(cook::CharacterCapsule {
                     half_height: 0.88,
                     radius: 0.3,
                 }),

@@ -1,11 +1,15 @@
 [workspace.package]
-version = "0.18.58"
+version = "0.18.59"
+description = "Asset-driven application world framework"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
 rust-version = "1.97"
 repository = "https://github.com/concinnitygg/concinnity"
 homepage = "https://concinnity.gg"
+readme = "README.md"
+keywords = ["gamedev", "graphics", "engine", "rendering", "3d"]
+categories = ["game-engines", "graphics", "rendering::engine"]
 
 [workspace.dependencies]
 concinnity-asset = { path = "crates/concinnity-asset", version = "0.18" }
@@ -32,16 +36,16 @@ concinnity-world = { path = "crates/concinnity-world", version = "0.18" }
 [package]
 name = "concinnity"
 version.workspace = true
+description.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Asset-driven application world framework"
-readme = "README.md"
-keywords = ["gamedev", "graphics", "engine", "rendering", "3d"]
-categories = ["game-engines", "graphics", "rendering::engine"]
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 autobenches = false
 autotests = false
 autobins = false
@@ -78,11 +82,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = ["std"]
 std = ["dep:concinnity-engine", "dep:concinnity-memory"]
-cook = ["std", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
+cook = ["std", "dep:concinnity-asset", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
 vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
+concinnity-asset = { workspace = true, optional = true }
 concinnity-engine = { workspace = true, optional = true }
 concinnity-memory = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }

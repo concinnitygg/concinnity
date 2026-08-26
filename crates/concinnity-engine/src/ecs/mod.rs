@@ -28,11 +28,11 @@ pub(crate) mod waves;
 // `PipelineContext`, re-exported from concinnity-core so the rest of the client
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
-    Access, Arena, AudioClipHandle, BlobAssetDef, BuildOnlyAsset, ColumnTicks, Component,
-    ComponentAsset, ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity,
-    EventCursor, EventStore, Events, FontHandle, FrameContext, FrameVec, MAX_CHANGE_AGE,
-    MaterialHandle, MeshBoundsRecord, MeshHandle, PayloadLocator, PipelineContext, Resources,
-    RuntimeComponent, SceneGroup, ScratchStats, SkinnedMeshHandle, TextureHandle, Tick,
+    Access, Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset,
+    ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity, EventCursor, EventStore,
+    Events, FontHandle, FrameContext, FrameVec, MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord,
+    MeshHandle, PayloadLocator, PipelineContext, Resources, RuntimeComponent, SceneGroup,
+    ScratchStats, SkinnedMeshHandle, TextureHandle, Tick,
 };
 
 // The name interner keeps a per-thread table, so it lives in concinnity-cpu;

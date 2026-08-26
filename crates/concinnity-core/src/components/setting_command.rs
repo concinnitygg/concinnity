@@ -7,7 +7,7 @@ use crate::ecs::asset_id::AssetId;
 
 /// What a "setting:*" action does to its value: cycle one step (for a stepper
 /// row), jump to an absolute option index (for a dropdown pick), set an absolute
-/// position in [0, 1] (for a Slider row's drag), or bind a key (for a key-rebind
+/// position in [0, 1] (for a slider row's drag), or bind a key (for a key-rebind
 /// row).
 ///
 /// Eq is intentionally not derived: SetFraction carries an f32.

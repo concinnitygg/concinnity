@@ -15,9 +15,8 @@ use crate::result::CnResult;
 ///
 /// The bound on [`World::add_component`](crate::ecs::World::add_component).
 /// Exactly the registry's `stored` group, which is also the group with a
-/// `ComponentTag`, a `ComponentAsset` variant, and a column; the `build_only`
-/// group implements [`BuildOnlyAsset`] instead. The two are mutually exclusive
-/// by construction: an entry is in one group or the other.
+/// `ComponentTag`, a `ComponentAsset` variant, and a column. The groups
+/// partition the registry, so a type carrying this marker carries no other.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be added to a world",
     label = "not a runtime component",
@@ -25,23 +24,14 @@ use crate::result::CnResult;
 )]
 pub trait RuntimeComponent: Into<ComponentAsset> {}
 
-/// An asset the cook consumes and never hands to the runtime.
-///
-/// A world declares one of these, cook expands it into the components it stands
-/// for, and nothing of it reaches a blob. Exactly the registry's `build_only`
-/// group: no tag, no `ComponentAsset` variant, no column, no `Component` impl.
-/// Carries no methods: it exists so the groups are checkable at compile time and
-/// so the list is discoverable in the docs.
-pub trait BuildOnlyAsset {}
-
 /// An asset compiled into the blob's resource stream rather than stored as a
 /// component.
 ///
 /// A world declares one of these, cook compiles its payload and assigns it a
 /// dense per-kind handle, and the runtime keeps it in the resource table owned
-/// by the system that reads it. Exactly the registry's `resource` group. Like
-/// [`BuildOnlyAsset`], a marker only: the three groups partition the registry,
-/// so a type carries exactly one of these.
+/// by the system that reads it. Exactly the registry's `resource` group. A
+/// marker only, like [`RuntimeComponent`]: it exists so the groups are
+/// checkable at compile time.
 pub trait ResourceAsset {}
 
 /// Where an asset comes from and whether it persists to a blob.
@@ -94,24 +84,22 @@ pub trait Component: Sized + Send + core::fmt::Debug + 'static {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildOnlyAsset, RuntimeComponent};
-    use crate::components::{CharacterSchema, MainMenu, Prefab, TextLabel, Transform};
+    use super::{ResourceAsset, RuntimeComponent};
+    use crate::components::{TextLabel, Texture, Transform};
 
     fn runtime<C: RuntimeComponent>() {}
-    fn build_only<A: BuildOnlyAsset>() {}
+    fn resource<A: ResourceAsset>() {}
 
     // One representative per group. The calls are the assertion: each fails to
-    // compile if an entry moves between the registry's two groups. An entry
-    // cannot be in neither, and the storage half is generated from the same
-    // grouping, so a type reaching the wrong marker also loses (or gains) its
-    // column.
+    // compile if an entry moves between the registry's groups, and the storage
+    // half is generated from the same grouping, so a type reaching the wrong
+    // marker also loses (or gains) its column. The authoring-only group's
+    // marker lives with its list in concinnity-world.
     #[test]
     fn origin_markers_follow_the_registry() {
         runtime::<TextLabel>();
         runtime::<Transform>();
 
-        build_only::<Prefab>();
-        build_only::<MainMenu>();
-        build_only::<CharacterSchema>();
+        resource::<Texture>();
     }
 }

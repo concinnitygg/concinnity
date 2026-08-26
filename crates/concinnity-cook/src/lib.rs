@@ -6,7 +6,9 @@
 //!
 //! Bridge: the vocabulary and compute modules below are re-exported crate-wide
 //! so code moved here keeps resolving its `crate::{components,ecs,gfx,result}`
-//! paths. The payload *decoders* and shared payload types live in
+//! paths. `crate::components` is the runtime half only; the authoring-only
+//! types this crate expands away are named from `concinnity_asset::cook` where
+//! they are used, so a use site says which half it works on. The payload *decoders* and shared payload types live in
 //! `concinnity_cpu::build`; this crate's modules call back into them.
 //! The source importers parse artist-supplied files, so a panic here is a crash
 //! on a malformed asset rather than a bug. Invariants that genuinely cannot fail

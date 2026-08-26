@@ -8,25 +8,24 @@
 // (`define_components!`, invoked below in this crate) and the authoring metadata
 // registry (`RegisteredType`, invoked in the build crate from the same list).
 //
-// It arrives in three groups, and which group an entry is in is the whole of
-// what separates a component from a cook input from a resource:
+// It arrives in two groups, and which group an entry is in is the whole of what
+// separates a component from a resource:
 //
-//   stored      has a `ComponentTag`, a `ComponentAsset` variant, a column, an
-//               `impl Component`, and an `impl RuntimeComponent`, so a world can
-//               hold one. Split further by the entry's own origin flag into
-//               `external` (declared in a world, survives into a blob) and
-//               `runtime` (only ever minted by a running world).
-//   build_only  declared in a world, expanded by the cook into the components it
-//               stands for, gone before a blob is written. None of the above,
-//               and `impl BuildOnlyAsset` instead.
-//   resource    declared in a world and compiled into the blob's resource
-//               stream, addressed at runtime by a per-kind handle rather than a
-//               column. `impl ResourceAsset`; the entry names its `ResourceKind`.
+//   stored    has a `ComponentTag`, a `ComponentAsset` variant, a column, an
+//             `impl Component`, and an `impl RuntimeComponent`, so a world can
+//             hold one. Split further by the entry's own origin flag into
+//             `external` (declared in a world, survives into a blob) and
+//             `runtime` (only ever minted by a running world).
+//   resource  declared in a world and compiled into the blob's resource stream,
+//             addressed at runtime by a per-kind handle rather than a column.
+//             `impl ResourceAsset`; the entry names its `ResourceKind`. Carries
+//             no origin flag, because being in the group is the origin.
 //
-// Entries in the last two groups carry no origin flag, because being in the
-// group is the origin. One list rather than three so the authoring registry can
-// answer "what type is this?" from one place: every declarable type is here,
-// and what it is follows from its group.
+// A third group -- the types a world declares and the cook expands away before a
+// blob is written -- is the authoring vocabulary, which this crate does not
+// name: its list lives in `concinnity_world::registry::build_only`, and the
+// authoring registry composes the two by passing it through the `$extra` tail
+// below.
 //
 // Components are pure data, registered with one entry each. There is no system
 // registry: every system is internal client code, constructed at runtime from
@@ -52,10 +51,16 @@ use crate::result::CnResult;
 /// The one component list. `$cb` is a macro that receives the `Variant => Type`
 /// entries and expands to whatever registry it builds from them. Type paths are
 /// absolute so the list resolves from any crate that consumes it.
+///
+/// The `$cb; $extra` form prepends arbitrary tokens to what `$cb` receives, so a
+/// consumer holding a group this crate does not name (the authoring-only
+/// vocabulary in concinnity-world) can hand its own list to the same callback.
 #[macro_export]
 macro_rules! for_each_component {
-    ($cb:ident) => {
+    ($cb:ident) => { $crate::for_each_component!($cb;); };
+    ($cb:ident; $($extra:tt)*) => {
         $cb! {
+            $($extra)*
             // Stored: every type with a column, a `ComponentTag`, and a
             // `ComponentAsset` variant. `external` entries are declared in a
             // world and survive into a blob; `runtime` entries are only ever
@@ -64,12 +69,12 @@ macro_rules! for_each_component {
                 Window            => $crate::components::Window { gen, external, singleton, consumed },
                 GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
                 Shader            => $crate::components::Shader { manual, external, compiled, consumed },
-                Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, args: Camera3DArgs },
+                Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, args: Camera3D },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
                 Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("texture", "Texture"), ("scene", "Scene"), ("parent", "Prop")], consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
                 PropBody          => $crate::components::PropBody { gen, external, consumed },
-                Room              => $crate::components::Room { manual, external, compiled, useful_blank, args: RoomArgs, refs: [("texture", "Texture"), ("wall_texture", "Texture"), ("floor_texture", "Texture"), ("ceiling_texture", "Texture")], consumed },
+                Room              => $crate::components::Room { manual, external, compiled, useful_blank, args: Room, refs: [("texture", "Texture"), ("wall_texture", "Texture"), ("floor_texture", "Texture"), ("ceiling_texture", "Texture")], consumed },
                 DirectionalLight  => $crate::components::DirectionalLight { gen, external, useful_blank, validate: directional_light },
                 PointLight        => $crate::components::PointLight { gen, external, useful_blank, validate: point_light },
                 SpotLight         => $crate::components::SpotLight { gen, external, useful_blank, validate: spot_light },
@@ -79,7 +84,7 @@ macro_rules! for_each_component {
                 Scene             => $crate::components::Scene { gen, external, id, refs: [("camera_shot", "Camera3D")], consumed },
                 TextLabel         => $crate::components::TextLabel { gen, external, id, useful_blank, renders, refs: [("font", "Font"), ("screen", "Screen")] },
                 HitRegion         => $crate::components::HitRegion { gen, external, useful_blank, refs: [("label", "TextLabel"), ("screen", "Screen")], consumed },
-                File              => $crate::components::File { manual, external, compiled, args: FileArgs, consumed },
+                File              => $crate::components::File { manual, external, compiled, args: File, consumed },
                 BlockType         => $crate::components::BlockType { gen, external, id, useful_blank, consumed },
                 VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk, consumed },
                 InstancedProp     => $crate::components::InstancedProp { gen, external, id, renders, validate: instanced_prop, refs: [("material", "Material"), ("texture", "Texture")], consumed },
@@ -120,11 +125,11 @@ macro_rules! for_each_component {
                 RenderHandle      => $crate::components::RenderHandle { runtime },
                 Held              => $crate::components::Held { runtime },
                 Lifetime          => $crate::components::Lifetime { runtime },
-                Spawner           => $crate::components::Spawner { manual, external, args: SpawnerArgs },
+                Spawner           => $crate::components::Spawner { manual, external, args: Spawner },
                 DebugHud          => $crate::components::DebugHud { gen, external, renders, refs: [("passes_label", "TextLabel"), ("mouse_label", "TextLabel"), ("camera_label", "TextLabel"), ("sys_label", "TextLabel")] },
                 AudioCue          => $crate::components::AudioCue { gen, external, useful_blank, refs: [("clip", "AudioClip"), ("screen", "Screen")] },
                 Story             => $crate::components::Story { gen, external, id },
-                AppConfig         => $crate::components::AppConfig { manual, external, singleton, args: AppConfigArgs },
+                AppConfig         => $crate::components::AppConfig { manual, external, singleton, args: AppConfig },
                 AnimationGraph         => $crate::components::AnimationGraph { gen, external, id, consumed },
                 AnimationParams        => $crate::components::AnimationParams { runtime, build: anim_params },
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
@@ -138,27 +143,6 @@ macro_rules! for_each_component {
                 LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders, refs: [("screen", "Screen"), ("backdrop", "Sprite"), ("track", "Sprite"), ("fill", "Sprite"), ("label", "TextLabel")] },
                 AudioOcclusionProbe => $crate::components::AudioOcclusionProbe { runtime },
                 CharacterShape    => $crate::components::CharacterShape { gen, external, id, refs: [("target", "SkinnedMesh")] },
-            },
-
-            // Build-only: declared in a world, expanded by the cook into the
-            // components they stand for, and gone by the time a blob is
-            // written. No column, no tag, no `ComponentAsset` variant, no
-            // `impl Component` -- being in this group IS the origin, so the
-            // entries carry no origin flag.
-            build_only: {
-                LightRig          => $crate::components::LightRig { },
-                MaterialPalette   => $crate::components::MaterialPalette { },
-                CameraShot        => $crate::components::CameraShot { },
-                Prefab            => $crate::components::Prefab { },
-                SceneImport       => $crate::components::SceneImport { },
-                MainMenu          => $crate::components::MainMenu { renders },
-                OptionSelect      => $crate::components::OptionSelect { },
-                Slider            => $crate::components::Slider { },
-                EngineDefaults    => $crate::components::EngineDefaults { },
-                StoryImport       => $crate::components::StoryImport { },
-                Panel             => $crate::components::Panel { },
-                CharacterSchema   => $crate::components::CharacterSchema { },
-                CharacterModel    => $crate::components::CharacterModel { },
             },
 
             // Resource: declared in a world and compiled into the blob's
@@ -198,7 +182,7 @@ crate::for_each_component!(define_components);
 // Metadata grammar (inside the braces):
 //   manual, <flags...>          -- skip; the impl is hand-written elsewhere
 //   gen, <flags...>             -- generated impl:
-//     external | build_only | runtime -- the authoring origin (world-side only)
+//     external | runtime        -- the authoring origin (world-side only)
 //     compiled                  -- an `inject_locator` that stores into
 //                                  `self.locator` (and marks the payload
 //                                  world-side)
@@ -219,17 +203,18 @@ crate::for_each_component!(define_components);
 //                                  place (world-side only)
 //     validate: <fn>            -- the bake-time validator (world-side only)
 //     refs: [ ("field", "Type"), ... ] -- the reference fields (world-side only)
-//     args: <Type>              -- the authored args schema when it differs
-//                                  from the component (world-side only)
+//     args: <Asset>             -- names the asset whose authored schema
+//                                  differs from the component it bakes into;
+//                                  the schema is that asset's `cook` form
+//                                  (world-side only)
 //   runtime [, build: <fn>]     -- RuntimeOnly: never authored, never in a
 //                                  blob; the impl is NAME + the default
 //                                  (rejecting) `from_baked`.
 macro_rules! cn_impl_components {
-    // Entry point: one impl per stored entry. The other two groups are skipped
-    // whole -- neither is ever loaded from a component record.
+    // Entry point: one impl per stored entry. The resource group is skipped
+    // whole -- a resource is never loaded from a component record.
     (
         stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
-        build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? },
         resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
     ) => {
         $( cn_impl_components!(@one $variant $ty { $($meta)* }); )+

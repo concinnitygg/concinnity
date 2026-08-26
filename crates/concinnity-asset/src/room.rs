@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 /// runtime state.
 ///
 /// ```rust
-/// # use concinnity_asset::RoomArgs;
+/// # use concinnity_asset::cook::Room as RoomArgs;
 /// RoomArgs {
 ///     size: Some([16.0, 20.0, 3.5]),
 ///     ..Default::default()

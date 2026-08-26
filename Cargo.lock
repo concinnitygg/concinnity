@@ -569,8 +569,9 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
+ "concinnity-asset",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-engine",
@@ -582,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-asset"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-toolchain",
  "postcard",
@@ -592,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-audio"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-core",
  "concinnity-store",
@@ -603,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-bench"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-asset",
  "concinnity-cook",
@@ -617,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cli"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "ash",
  "clap",
@@ -640,10 +641,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "basisu",
  "bytemuck",
+ "concinnity-asset",
  "concinnity-core",
  "concinnity-cpu",
  "concinnity-docs",
@@ -673,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "bytemuck",
  "concinnity-asset",
@@ -690,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cpu"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "bytemuck",
  "concinnity-asset",
@@ -705,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "ash",
  "block2",
@@ -740,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-docs"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-asset",
  "concinnity-core",
@@ -749,13 +751,14 @@ dependencies = [
 
 [[package]]
 name = "concinnity-editor"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "argon2",
  "async-stream",
  "bitflags 2.11.1",
  "chrono",
  "ciborium",
+ "concinnity-asset",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-cpu",
@@ -794,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "ciborium",
  "concinnity-audio",
@@ -826,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-font"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-cpu",
  "fontdue",
@@ -834,11 +837,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-memory"
-version = "0.18.58"
+version = "0.18.59"
 
 [[package]]
 name = "concinnity-physics"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-memory",
  "libm",
@@ -846,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-render"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -861,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-runtime"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-engine",
  "concinnity-memory",
@@ -871,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -884,11 +887,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.18.58"
+version = "0.18.59"
 
 [[package]]
 name = "concinnity-store"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-core",
  "tempfile",
@@ -897,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
  "concinnity-slang",
  "syn",
@@ -908,8 +911,9 @@ dependencies = [
 
 [[package]]
 name = "concinnity-world"
-version = "0.18.58"
+version = "0.18.59"
 dependencies = [
+ "concinnity-asset",
  "concinnity-core",
  "concinnity-cpu",
  "concinnity-store",

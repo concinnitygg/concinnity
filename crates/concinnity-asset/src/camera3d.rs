@@ -130,7 +130,7 @@ fn default_controller() -> Option<CameraController> {
 /// intent are not declared.
 ///
 /// ```rust
-/// # use concinnity_asset::Camera3DArgs;
+/// # use concinnity_asset::cook::Camera3D as Camera3DArgs;
 /// Camera3DArgs {
 ///     fov_y_degrees: 80.0,
 ///     near: 0.05,

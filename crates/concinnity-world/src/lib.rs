@@ -19,7 +19,10 @@
 //! `spec::json`.
 
 // Bridge: re-export the modules the moved code names under crate::* so its
-// `crate::<module>` import paths resolve unchanged.
+// `crate::<module>` import paths resolve unchanged. `components` is the runtime
+// half of the vocabulary; the authoring-only half is named from
+// `concinnity_asset::cook`, whose registry group this crate owns
+// (`registry::build_only`).
 pub(crate) use concinnity_core::{components, platform, result};
 
 // The vocabulary's ECS surface, with the build-time name interner shadowing its

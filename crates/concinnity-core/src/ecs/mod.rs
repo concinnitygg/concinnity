@@ -76,9 +76,7 @@ pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};
 
 // The runtime-facing component contract and the metadata enums the registry and
 // the blob format are built from.
-pub use component::{
-    AssetOrigin, AssetPayload, BuildOnlyAsset, Component, ResourceAsset, RuntimeComponent,
-};
+pub use component::{AssetOrigin, AssetPayload, Component, ResourceAsset, RuntimeComponent};
 
 // Systems' view of the world during a tick.
 pub use context::PipelineContext;

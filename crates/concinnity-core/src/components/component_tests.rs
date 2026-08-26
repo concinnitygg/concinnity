@@ -5,6 +5,9 @@
 // checks are uniform in shape and were kept beside each type before its
 // hand-written impl was removed; they live together here now that the per-type
 // modules are gone. One submodule per component.
+//
+// The authoring-only vocabulary is not covered here: those types are not
+// components, and their schema checks live beside them in concinnity-asset.
 
 use alloc::string::ToString;
 use alloc::vec;
@@ -380,34 +383,12 @@ mod streaming_config {
 mod app_config {
     use super::*;
 
-    #[test]
-    fn bare_args_default_to_the_engine_name() {
-        let a: AppConfigArgs = serde_json::from_str("{}").unwrap();
-        assert_eq!(a.name, "Concinnity");
-        assert_eq!(a.version, "0.1.0");
-        assert!(a.id.is_empty() && a.author.is_empty() && a.icon.is_empty());
-        assert!(a.home.is_empty());
-    }
-
-    #[test]
-    fn fields_round_trip_through_args() {
-        let a: AppConfigArgs = serde_json::from_str(
-                r#"{"name":"My Game","id":"gg.studio.mygame","version":"1.2.3","author":"Studio","icon":"art/icon.png"}"#,
-            )
-            .unwrap();
-        assert_eq!(a.name, "My Game");
-        assert_eq!(a.id, "gg.studio.mygame");
-        assert_eq!(a.version, "1.2.3");
-        assert_eq!(a.author, "Studio");
-        assert_eq!(a.icon, "art/icon.png");
-    }
-
     // The bake keeps only what the running process needs: the state location
     // and the budgets. The distribution strings are consumed at build / export
     // time and never ship in the blob.
     #[test]
     fn bake_keeps_the_home_and_the_budgets() {
-        let args: AppConfigArgs = serde_json::from_str(
+        let args: concinnity_asset::cook::AppConfig = serde_json::from_str(
             r#"{"name":"My Game","home":"state","max_memory_mb":512,"job_threads":2}"#,
         )
         .unwrap();
@@ -724,85 +705,6 @@ mod layout_container {
     }
 }
 
-mod main_menu {
-    use super::*;
-    use crate::components::SettingsProfile;
-
-    #[test]
-    fn bare_args_default_to_return_settings_quit() {
-        let m: MainMenu = serde_json::from_str("{}").unwrap();
-        let labels: Vec<&str> = m.items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["Return", "Settings", "Quit"]);
-        // Closed on load by default: the scene shows first, Escape opens.
-        assert!(!m.initial);
-        assert_eq!(m.toggle_key, "Escape");
-        assert!(m.cursor);
-    }
-
-    #[test]
-    fn explicit_items_replace_the_default() {
-        let json = r#"{"items":[{"label":"Play","action":"scene:level_1"}]}"#;
-        let m: MainMenu = serde_json::from_str(json).unwrap();
-        assert_eq!(m.items.len(), 1);
-        assert_eq!(m.items[0].label, "Play");
-        assert_eq!(m.items[0].action, "scene:level_1");
-    }
-
-    #[test]
-    fn settings_profile_defaults_to_full_and_parses_lowercase() {
-        let m: MainMenu = serde_json::from_str("{}").unwrap();
-        assert_eq!(m.settings_profile, SettingsProfile::Full);
-        let m: MainMenu = serde_json::from_str(r#"{"settings_profile":"minimal"}"#).unwrap();
-        assert_eq!(m.settings_profile, SettingsProfile::Minimal);
-    }
-}
-
-mod option_select {
-    use super::*;
-
-    #[test]
-    fn bare_args_deserialize_with_defaults() {
-        let o: OptionSelect = serde_json::from_str("{}").unwrap();
-        assert!(o.setting.is_empty());
-        assert_eq!(o.width, 360.0);
-        assert_eq!(o.text_scale, 1.0);
-    }
-
-    #[test]
-    fn explicit_setting_and_label_round_trip() {
-        let json = r#"{"setting":"vsync","label":"Vsync"}"#;
-        let o: OptionSelect = serde_json::from_str(json).unwrap();
-        assert_eq!(o.setting, "vsync");
-        assert_eq!(o.label, "Vsync");
-        let back = serde_json::to_value(&o).unwrap();
-        assert_eq!(back["setting"], "vsync");
-    }
-}
-
-mod panel {
-    use super::*;
-
-    #[test]
-    fn bare_args_deserialize_with_defaults() {
-        let p: Panel = serde_json::from_str("{}").unwrap();
-        assert!(p.title.is_empty());
-        assert_eq!(p.width, 400.0);
-        assert_eq!(p.corner_radius, 8.0);
-        assert_eq!(p.title_scale, 1.0);
-    }
-
-    #[test]
-    fn explicit_fields_round_trip() {
-        let json = r#"{"title":"Paused","x":440,"y":220,"width":400,"height":280}"#;
-        let p: Panel = serde_json::from_str(json).unwrap();
-        assert_eq!(p.title, "Paused");
-        assert_eq!(p.x, 440.0);
-        let back = serde_json::to_value(&p).unwrap();
-        assert_eq!(back["title"], "Paused");
-        assert!(back.is_object());
-    }
-}
-
 mod scroll_panel {
     use super::*;
     use crate::components::{ScrollGroup, ScrollRow};
@@ -881,50 +783,6 @@ mod scroll_panel {
         assert_eq!(back.rows.len(), 1);
         assert_eq!(back.rows[0].elements, vec![AssetId(5)]);
         assert_eq!(back.groups[0].title, "Advanced");
-    }
-}
-
-mod slider {
-    use super::*;
-
-    #[test]
-    fn bare_args_deserialize_with_defaults() {
-        let s: Slider = serde_json::from_str("{}").unwrap();
-        assert!(s.setting.is_empty());
-        assert_eq!(s.width, 360.0);
-        assert_eq!(s.text_scale, 1.0);
-        assert_eq!(s.handle_color, [1.0, 0.85, 0.3, 1.0]);
-    }
-
-    #[test]
-    fn explicit_setting_and_label_round_trip() {
-        let json = r#"{"setting":"exposure","label":"Exposure"}"#;
-        let s: Slider = serde_json::from_str(json).unwrap();
-        assert_eq!(s.setting, "exposure");
-        assert_eq!(s.label, "Exposure");
-        let back = serde_json::to_value(&s).unwrap();
-        assert_eq!(back["setting"], "exposure");
-    }
-}
-
-mod engine_defaults {
-    use super::*;
-
-    #[test]
-    fn bare_args_enable_every_default() {
-        let d: EngineDefaults = serde_json::from_str("{}").unwrap();
-        assert!(d.hud && d.debug_hud && d.sky && d.story_pause_menu);
-    }
-
-    #[test]
-    fn individual_flags_opt_out() {
-        let d: EngineDefaults = serde_json::from_str(r#"{"sky":false}"#).unwrap();
-        assert!(!d.sky);
-        assert!(d.hud && d.debug_hud && d.story_pause_menu);
-
-        let d: EngineDefaults = serde_json::from_str(r#"{"story_pause_menu":false}"#).unwrap();
-        assert!(!d.story_pause_menu);
-        assert!(d.hud && d.debug_hud && d.sky);
     }
 }
 

@@ -7,7 +7,9 @@
 // world-free; the hook owns the entries and `character_shape_panel.rs` the
 // layout.
 
-use crate::components::{CharacterSchema, JointProportion, ShapePreset, ShapeSlider};
+use concinnity_asset::cook::{CharacterSchema, ShapePreset};
+
+use crate::components::{JointProportion, ShapeSlider};
 use rand::{Rng, SeedableRng};
 
 // The trailing section for keys and groups the schema does not place.

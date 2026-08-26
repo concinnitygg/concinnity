@@ -5,12 +5,19 @@
 //! editor; never by the runtime ECS, which loads components straight from their
 //! blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
 //!
-//! The component list itself is the single source of truth in
-//! `concinnity_core::ecs::registry` (the `for_each_component!` macro); this
-//! module instantiates the authoring half of it.
+//! The vocabulary arrives in three groups. The two the runtime can reach -- the
+//! components a world stores and the resources the cook compiles into the blob
+//! -- are the single source of truth in `concinnity_core::ecs::registry` (the
+//! `for_each_component!` macro). The third, the authoring-only types the cook
+//! expands away, is this crate's own: it lives in [`build_only`], and
+//! `for_each_authored_type!` composes the two so `RegisteredType` spans the
+//! whole declarable vocabulary from one enum.
+
+pub mod build_only;
 
 use crate::result::CnResult;
 
+pub use build_only::BuildOnlyAsset;
 pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
 
 /// Static authoring metadata for an asset type: how it is declared, whether it
@@ -95,12 +102,12 @@ pub(crate) struct NoArgs {}
 // generic `$t:tt` arm skips unrecognized tokens (other flags, `,`, `:`, and
 // bracketed lists are each one token tree).
 
-// The authoring origin: `external` / `build_only` / `runtime` (RuntimeOnly is
-// also the fallback for entries with no origin flag).
+// The authoring origin of a stored entry: `external` / `runtime` (RuntimeOnly is
+// also the fallback for entries with no origin flag). The other two groups take
+// theirs from the group itself, in `__group_origin`.
 macro_rules! __meta_origin {
     () => { AssetOrigin::RuntimeOnly };
     (external $($r:tt)*) => { AssetOrigin::External };
-    (build_only $($r:tt)*) => { AssetOrigin::BuildOnly };
     (runtime $($r:tt)*) => { AssetOrigin::RuntimeOnly };
     ($t:tt $($r:tt)*) => { __meta_origin!($($r)*) };
 }
@@ -113,20 +120,23 @@ macro_rules! __meta_payload {
 }
 
 // The authored args schema TYPE: the component itself by default, `NoArgs` for
-// runtime-only entries, or the `args: <Type>` override for the types whose
-// authored shape diverges from the runtime component.
+// runtime-only entries, or the authoring form of the asset the `args: <Asset>`
+// override names, for the types whose authored shape diverges from the runtime
+// component.
 macro_rules! __meta_args_ty {
     ($default:path;) => { $default };
     ($default:path; runtime $($r:tt)*) => { NoArgs };
-    ($default:path; args: $a:ident $($r:tt)*) => { crate::components::$a };
+    ($default:path; args: $a:ident $($r:tt)*) => { concinnity_asset::cook::$a };
     ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
 }
 
 // The args schema's NAME, for the docs pipeline (which renders the args
-// struct's fields).
+// struct's fields, keyed by the struct's own name). concinnity-asset declares a
+// divergent asset's schema as `<Asset>Args` and exposes it under the asset's
+// name in `cook`, so the entry's `args: <Asset>` yields both.
 macro_rules! __meta_args_name {
     ($default:ident;) => { stringify!($default) };
-    ($default:ident; args: $a:ident $($r:tt)*) => { stringify!($a) };
+    ($default:ident; args: $a:ident $($r:tt)*) => { concat!(stringify!($a), "Args") };
     ($default:ident; $t:tt $($r:tt)*) => { __meta_args_name!($default; $($r)*) };
 }
 
@@ -242,11 +252,32 @@ macro_rules! __meta_is_data {
     ($t:tt $($r:tt)*) => { __meta_is_data!($($r)*) };
 }
 
-// Generate `RegisteredType` and its authoring methods from the shared component
-// list. Invoked once, below, via `concinnity_core::for_each_component!`. All
-// authoring metadata (origin, payload, args schema, validators, reference
-// fields) derives from each entry's `{ ... }` metadata block; the runtime
-// `Component` trait carries none of it.
+// Hand a callback the whole declarable vocabulary: concinnity-core's `stored`
+// and `resource` groups plus the `build_only` group this crate owns, in one
+// invocation shaped like a single list.
+//
+// Core's list is the outer one (it cannot name the group this crate holds), so
+// the composition goes through an adapter: core passes its groups to
+// `__append_build_only`, which forwards them as the prefix of
+// `for_each_build_only_type!`, which appends its own group and calls the real
+// callback.
+macro_rules! __append_build_only {
+    ($cb:ident; $($core_groups:tt)*) => {
+        $crate::for_each_build_only_type!($cb, $($core_groups)*);
+    };
+}
+
+macro_rules! for_each_authored_type {
+    ($cb:ident) => {
+        concinnity_core::for_each_component!(__append_build_only; $cb;);
+    };
+}
+
+// Generate `RegisteredType` and its authoring methods from the composed
+// vocabulary. Invoked once, below, via `for_each_authored_type!`. All authoring
+// metadata (origin, payload, args schema, validators, reference fields) derives
+// from each entry's `{ ... }` metadata block; the runtime `Component` trait
+// carries none of it.
 macro_rules! define_registered_type {
     // Every registered type is here, whichever group it came from: one registry
     // means one `parse`, so a caller asking "what type is this?" cannot miss a
@@ -255,8 +286,8 @@ macro_rules! define_registered_type {
     // reaches them through the `__group_*!` helpers.
     (
         stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
-        build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? },
-        resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
+        resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? },
+        build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? } $(,)?
     ) => {
         define_registered_type!(@all
             $( $variant => $ty { $($meta)* } [stored] ),+ ,
@@ -501,7 +532,7 @@ macro_rules! define_registered_type {
     };
 }
 
-concinnity_core::for_each_component!(define_registered_type);
+for_each_authored_type!(define_registered_type);
 
 /// The authored-value trait: the bridge from a typed authoring struct to the
 /// world line that declares it. Implemented for every declarable asset's args
@@ -520,12 +551,12 @@ pub trait Authored: serde::Serialize {
 macro_rules! __authored_component {
     (
         stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
-        build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? },
-        resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
+        resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? },
+        build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? } $(,)?
     ) => {
         $( __authored_component!(@one $variant $ty { $($meta)* }); )+
-        $( __authored_component!(@one $bvariant $bty { $($bmeta)* }); )+
         $( __authored_component!(@one $rvariant $rty { $($rmeta)* }); )+
+        $( __authored_component!(@one $bvariant $bty { $($bmeta)* }); )+
     };
     (@one $variant:ident $ty:path { runtime $($rest:tt)* }) => {};
     (@one $variant:ident $ty:path { $($meta:tt)* }) => {
@@ -535,7 +566,7 @@ macro_rules! __authored_component {
     };
 }
 
-concinnity_core::for_each_component!(__authored_component);
+for_each_authored_type!(__authored_component);
 
 /// Serialize one authored asset into the world line that declares it, newline
 /// included. The caller never names a JSON type: the line is finished text.
@@ -595,7 +626,7 @@ mod authored_tests {
     // pass-through component, and a resource asset.
     #[test]
     fn authored_types_report_their_registered_name() {
-        assert_eq!(<crate::components::RoomArgs as Authored>::TYPE, "Room");
+        assert_eq!(<concinnity_asset::cook::Room as Authored>::TYPE, "Room");
         assert_eq!(
             <crate::components::DirectionalLight as Authored>::TYPE,
             "DirectionalLight"
@@ -612,8 +643,8 @@ mod authored_tests {
     #[test]
     fn the_reported_name_round_trips_through_the_registry() {
         for name in [
-            <crate::components::RoomArgs as Authored>::TYPE,
-            <crate::components::Camera3DArgs as Authored>::TYPE,
+            <concinnity_asset::cook::Room as Authored>::TYPE,
+            <concinnity_asset::cook::Camera3D as Authored>::TYPE,
             <crate::components::DirectionalLight as Authored>::TYPE,
         ] {
             assert!(
@@ -652,17 +683,20 @@ pub fn bake_divergent(
     }
     match ct {
         RegisteredType::Camera3D => {
-            bake!(crate::components::Camera3D, crate::components::Camera3DArgs)
+            bake!(
+                crate::components::Camera3D,
+                concinnity_asset::cook::Camera3D
+            )
         }
-        RegisteredType::Room => bake!(crate::components::Room, crate::components::RoomArgs),
-        RegisteredType::File => bake!(crate::components::File, crate::components::FileArgs),
+        RegisteredType::Room => bake!(crate::components::Room, concinnity_asset::cook::Room),
+        RegisteredType::File => bake!(crate::components::File, concinnity_asset::cook::File),
         RegisteredType::Spawner => {
-            bake!(crate::components::Spawner, crate::components::SpawnerArgs)
+            bake!(crate::components::Spawner, concinnity_asset::cook::Spawner)
         }
         RegisteredType::AppConfig => {
             bake!(
                 crate::components::AppConfig,
-                crate::components::AppConfigArgs
+                concinnity_asset::cook::AppConfig
             )
         }
         _ => Ok(None),
@@ -815,6 +849,29 @@ mod tests {
             );
             assert!(seen.insert(d), "duplicate discriminant {d}");
         }
+    }
+
+    // The docs pipeline renders an asset's parameters from the fields of the
+    // struct this names, looked up by the struct's own name in the extracted
+    // schema. A divergent asset's registry entry names the asset (`args: Room`)
+    // and concinnity-asset declares its schema as `RoomArgs`, so the two are
+    // bridged by that naming convention; a rename on either side that broke it
+    // would silently render an empty parameter table.
+    #[test]
+    fn a_divergent_asset_names_the_schema_struct_the_docs_render() {
+        assert_eq!(RegisteredType::Room.args_struct_name(), "RoomArgs");
+        assert_eq!(RegisteredType::Camera3D.args_struct_name(), "Camera3DArgs");
+        assert_eq!(RegisteredType::File.args_struct_name(), "FileArgs");
+        assert_eq!(RegisteredType::Spawner.args_struct_name(), "SpawnerArgs");
+        assert_eq!(
+            RegisteredType::AppConfig.args_struct_name(),
+            "AppConfigArgs"
+        );
+        // A pass-through asset's schema is the asset itself, whichever group it
+        // is in.
+        assert_eq!(RegisteredType::PointLight.args_struct_name(), "PointLight");
+        assert_eq!(RegisteredType::Prefab.args_struct_name(), "Prefab");
+        assert_eq!(RegisteredType::Texture.args_struct_name(), "Texture");
     }
 
     #[test]

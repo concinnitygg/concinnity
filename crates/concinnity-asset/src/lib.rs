@@ -125,92 +125,18 @@ mod voxel_world;
 mod water_surface;
 mod window;
 
-pub use app_config::AppConfigArgs;
-pub use audio_bus::AudioBus;
-pub use audio_clip::AudioClip;
-pub use audio_cue::{AudioCue, CueKind};
-pub use audio_emitter::{AudioEmitter, Rolloff};
-pub use behavior::{
-    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
-    BehaviorSource,
-};
-pub use block_type::BlockType;
-pub use camera_shot::CameraShot;
-pub use camera3d::{Camera3DArgs, CameraController, FollowController, FollowDrive};
-pub use character_model::CharacterModel;
-pub use character_schema::{
-    CharacterSchema, KeyPolarity, PanelSection, ProportionGroup, SchemaJoint, SchemaKey,
-    SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
-};
-pub use character_shape::{CharacterShape, JointProportion, ResolvedSliders, ShapeSlider};
-pub use color_lut::ColorLut;
-pub use cubemap_texture::CubemapTexture;
-pub use debug_hud::DebugHud;
-pub use decal::Decal;
-pub use directional_light::DirectionalLight;
-pub use engine_defaults::EngineDefaults;
-pub use environment_map::EnvironmentMap;
-pub use file::{FileArgs, FileKind};
-pub use font::Font;
-pub use fps_counter::FpsCounter;
-pub use glass_panel::GlassPanel;
-pub use graphics_config::{GraphicsConfig, ShadowUpdate};
-pub use hit_region::HitRegion;
-pub use instanced_prop::{InstanceTransform, InstancedProp};
-pub use key_binding::KeyBinding;
-pub use layout_container::{Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow};
-pub use light_rig::LightRig;
-pub use loading_overlay::LoadingOverlay;
-pub use main_menu::{MainMenu, MainMenuItem, SettingsProfile};
-pub use material::Material;
-pub use material_palette::{MaterialPalette, PaletteEntry};
-pub use mesh::{Mesh, VertexData};
-pub use model::{Model, SubMeshRef};
-pub use option_select::OptionSelect;
-pub use panel::Panel;
-pub use particle_emitter::ParticleEmitter;
-pub use physics_config::PhysicsConfig;
-pub use physics_joint::{PhysicsJoint, PhysicsJointKind};
-pub use point_light::PointLight;
-pub use post_process_config::{
-    AaMode, DEFAULT_SSGI_RAYS, DEFAULT_SSGI_STEPS, IndirectLighting, PostProcessConfig,
-    ReflectionBlurResolution, SsgiResolution, UpscaleQuality, UpscalerBackend,
-};
-pub use prefab::{Prefab, PrefabEntry, PrefabKind};
-pub use procedural_mesh::ProceduralMesh;
-pub use prop::{Prop, PropCollider};
-pub use prop_body::PropBody;
-pub use rect_area_light::RectAreaLight;
-pub use reflection_probe::ReflectionProbe;
-pub use rigid_body::RigidBody;
-pub use room::RoomArgs;
-pub use scene::Scene;
-pub use scene_import::SceneImport;
-pub use screen::{Screen, ScreenInput};
-pub use scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
-pub use sdf_volume::{SDF_PARAMS_LEN, SdfVolume};
-pub use shader::{Shader, ShaderKind, ShaderPayload, StageSource};
-pub use skinned_mesh::{
-    CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
-};
-pub use slider::Slider;
-pub use spawner::SpawnerArgs;
-pub use spot_light::SpotLight;
-pub use sprite::{Sprite, SpriteFit};
-pub use stat_hud::StatHud;
-pub use story::{
-    Story, StoryChoice, StoryCompareOp, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
-    StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
-};
-pub use story_import::StoryImport;
-pub use streaming_config::StreamingConfig;
-pub use text_input::TextInput;
-pub use text_label::{TextAlign, TextLabel};
-pub use texture::Texture;
-pub use trigger_volume::{TriggerFilter, TriggerVolume};
-pub use variables::{VariableDecl, Variables};
-pub use volumetric_fog::VolumetricFog;
-pub use voxel_chunk::VoxelChunk;
-pub use voxel_world::VoxelWorld;
-pub use water_surface::{MAX_WATER_WAVES, WaterSurface, WaterWave};
-pub use window::{Window, WindowMode};
+pub mod components;
+pub mod cook;
+
+// The flat vocabulary surface, assembled from the two namespaces above so the
+// partition is the only place membership is decided. Engine-internal code names
+// these types directly; `concinnity::components` and `concinnity::cook` are the
+// modules, globbed.
+pub use components::*;
+pub use cook::*;
+
+// Bounds and capacities the engine reads off the schema. Not vocabulary: they
+// declare nothing, so they stay out of both namespaces.
+pub use post_process_config::{DEFAULT_SSGI_RAYS, DEFAULT_SSGI_STEPS};
+pub use sdf_volume::SDF_PARAMS_LEN;
+pub use water_surface::MAX_WATER_WAVES;

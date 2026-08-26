@@ -9,7 +9,9 @@
 // per-frame drag preview lives in `shape_drag.rs`.
 
 use super::*;
-use crate::components::{CharacterCapsule, CharacterSchema, ShapePreset};
+use concinnity_asset::cook::{CharacterSchema, ShapePreset};
+
+use crate::components::CharacterCapsule;
 use crate::editor::character_shape::{self, Row, Rows, ShapeValues};
 use crate::editor::character_shape_panel::{self, ShapeAction, ShapeView};
 use crate::gfx::shape_preview::{self, ShapeTarget};

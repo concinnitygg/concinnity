@@ -417,7 +417,7 @@ fn first_paragraph(doc: &str) -> String {
         .join(" ")
 }
 
-// Drop ```rust blocks. They are for the Rust caller reading `concinnity::assets`;
+// Drop ```rust blocks. They are for the Rust caller reading `concinnity::components`;
 // this reference is for the world.jsonl author, who is never shown a Rust name.
 fn strip_rust_blocks(doc: &str) -> String {
     let mut out = String::new();

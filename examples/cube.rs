@@ -11,11 +11,10 @@
 //!
 //! Run it with `cargo run --release --example cube --features cook`.
 
-use concinnity::assets::{
-    AaMode, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Camera3DArgs, DirectionalLight,
-    EngineDefaults, EnvironmentMap, GraphicsConfig, IndirectLighting, Material, PointLight,
-    PostProcessConfig, ProceduralMesh, Prop, ReflectionBlurResolution, ShadowUpdate,
-    SsgiResolution, WaterSurface, WaterWave, Window,
+use concinnity::components::{
+    AaMode, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, DirectionalLight, GraphicsConfig,
+    IndirectLighting, PointLight, PostProcessConfig, ProceduralMesh, Prop,
+    ReflectionBlurResolution, ShadowUpdate, SsgiResolution, WaterSurface, WaterWave, Window,
 };
 use concinnity::cook::{self, WorldBuilder};
 use concinnity::{App, World};
@@ -64,7 +63,7 @@ fn declare(spec: &mut WorldBuilder) {
     // No controller: the viewpoint is fixed on the cube.
     .add(
         "camera",
-        Camera3DArgs {
+        cook::Camera3D {
             fov_y_degrees: 40.0,
             near: 0.05,
             far: 100.0,
@@ -103,7 +102,7 @@ fn declare(spec: &mut WorldBuilder) {
     // front of the spin behavior below.
     .add(
         "sky",
-        EnvironmentMap {
+        cook::EnvironmentMap {
             generator: "sky".to_string(),
             prefilter_face_size: 256,
             irradiance_face_size: 32,
@@ -112,7 +111,7 @@ fn declare(spec: &mut WorldBuilder) {
     )
     .add(
         "defaults",
-        EngineDefaults {
+        cook::EngineDefaults {
             sky: false,
             ..Default::default()
         },
@@ -196,7 +195,7 @@ fn declare(spec: &mut WorldBuilder) {
     )
     .add(
         "cube_material",
-        Material {
+        cook::Material {
             roughness: 0.20,
             metallic: 0.30,
             tint: [0.88, 0.86, 0.84],

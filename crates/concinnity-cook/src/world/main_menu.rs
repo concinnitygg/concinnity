@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{centered_label, font_sizes, label_value, sprite};
-use crate::components::{MainMenu, SettingsProfile};
+use concinnity_asset::cook::{MainMenu, SettingsProfile};
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 use concinnity_world::spec::{asset, spec_to_value};
 

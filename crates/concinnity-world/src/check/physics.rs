@@ -176,7 +176,7 @@ pub fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpawnSource
     let is_collider_prop =
         |name: &serde_json::Value| name.as_str().is_some_and(|n| collider_props.contains(&n));
 
-    let defaults = crate::components::SpawnerArgs::default();
+    let defaults = concinnity_asset::cook::Spawner::default();
     for asset in assets {
         match norm(&asset.asset_type).as_str() {
             "spawner" if asset.args.get("template").is_some_and(is_collider_prop) => {
@@ -373,7 +373,7 @@ mod tests {
         );
     }
 
-    // An unauthored cadence is the SpawnerArgs default: one a second, and
+    // An unauthored cadence is the authored Spawner default: one a second, and
     // copies that are never removed.
     #[test]
     fn an_unauthored_cadence_reads_back_as_the_spawner_default() {
@@ -385,7 +385,7 @@ mod tests {
             ),
             asset("drop", "Spawner", serde_json::json!({"template": "crate"})),
         ];
-        let defaults = crate::components::SpawnerArgs::default();
+        let defaults = concinnity_asset::cook::Spawner::default();
         let spawner = &collider_spawn_sources(&assets).spawners[0];
         assert_eq!(spawner.interval, defaults.interval);
         assert_eq!(spawner.lifetime, defaults.lifetime);

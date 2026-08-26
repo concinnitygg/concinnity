@@ -5,7 +5,9 @@
 
 use alloc::string::String;
 
-use crate::components::{FileArgs, FileKind};
+use concinnity_asset::cook;
+
+use crate::components::FileKind;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Component, PayloadLocator};
 
@@ -29,7 +31,7 @@ impl File {
     /// Translate the authored args into the runtime file reference: derive
     /// `kind` from the path extension when unset. Run by cook at build time
     /// (the baked blob record carries the result).
-    pub fn bake(args: FileArgs) -> Self {
+    pub fn bake(args: cook::File) -> Self {
         let kind = args
             .kind
             .clone()
@@ -90,20 +92,20 @@ mod tests {
     #[test]
     fn from_args_infers_kind_from_the_extension() {
         // No explicit kind -> inferred from the path.
-        let f = File::bake(FileArgs {
+        let f = File::bake(cook::File {
             path: "models/box.obj".into(),
             kind: None,
         });
         assert_eq!(f.kind, Some(FileKind::Obj));
         assert_eq!(f.path, "models/box.obj");
         // An explicit kind is kept even when it disagrees with the extension.
-        let g = File::bake(FileArgs {
+        let g = File::bake(cook::File {
             path: "data.obj".into(),
             kind: Some(FileKind::Txt),
         });
         assert_eq!(g.kind, Some(FileKind::Txt));
         // An unknown extension leaves the kind unset.
-        let h = File::bake(FileArgs {
+        let h = File::bake(cook::File {
             path: "notes.zzz".into(),
             kind: None,
         });
@@ -119,12 +121,12 @@ mod tests {
 
     #[test]
     fn file_args_and_kind_round_trip_through_json() {
-        let args = FileArgs {
+        let args = cook::File {
             path: "x.png".into(),
             kind: Some(FileKind::Png),
         };
         let value = serde_json::to_value(&args).unwrap();
-        let back: FileArgs = serde_json::from_value(value).unwrap();
+        let back: cook::File = serde_json::from_value(value).unwrap();
         assert_eq!(back.path, "x.png");
         assert_eq!(back.kind, Some(FileKind::Png));
         // FileKind serializes to its lowercase name.

@@ -3,7 +3,8 @@
 // Runtime `Room` component. Its authored args live in the schema crate
 // (concinnity_asset::room).
 
-use crate::components::RoomArgs;
+use concinnity_asset::cook;
+
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Component, PayloadLocator, TextureHandle};
 
@@ -60,7 +61,7 @@ impl Room {
     /// Translate the authored args into the runtime room: resolve the `size`
     /// shorthand into half extents. Run by cook at build time (the baked blob
     /// record carries the result).
-    pub fn bake(args: RoomArgs) -> Self {
+    pub fn bake(args: cook::Room) -> Self {
         let (half_width, half_depth, ceiling_height) = if let Some([w, d, h]) = args.size {
             (w / 2.0, d / 2.0, h)
         } else {
@@ -134,15 +135,15 @@ mod tests {
 
     #[test]
     fn effective_texture_returns_none_when_all_unset() {
-        let room = Room::bake(RoomArgs::default());
+        let room = Room::bake(cook::Room::default());
         assert_eq!(room.effective_texture(), None);
     }
 
     #[test]
     fn from_args_resolves_size_shorthand() {
-        let args = RoomArgs {
+        let args = cook::Room {
             size: Some([16.0, 20.0, 3.5]),
-            ..RoomArgs::default()
+            ..cook::Room::default()
         };
         let room = Room::bake(args);
         assert_eq!(room.half_width, 8.0);
@@ -152,12 +153,12 @@ mod tests {
 
     #[test]
     fn from_args_uses_explicit_half_extents_when_no_size() {
-        let args = RoomArgs {
+        let args = cook::Room {
             half_width: 5.0,
             half_depth: 7.0,
             ceiling_height: 4.0,
             size: None,
-            ..RoomArgs::default()
+            ..cook::Room::default()
         };
         let room = Room::bake(args);
         assert_eq!(room.half_width, 5.0);

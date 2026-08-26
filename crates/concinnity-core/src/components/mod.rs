@@ -1,5 +1,6 @@
 //! Every component type the runtime can store: the ones an authored world
-//! declares and the ones only the runtime mints.
+//! declares and the ones only the runtime mints, plus the resources the cook
+//! compiles into the blob's resource stream.
 //!
 //! An authored component's data schema lives in concinnity-asset, so those
 //! arrive here as re-exports; the modules defined here are the runtime-only
@@ -8,6 +9,12 @@
 //! build-time `SourceBacked` binding, or a helper the generated `Component`
 //! impl can't express. Most components are pure data whose impl is generated
 //! from the registry (see `cn_impl_components!` in `ecs::registry`).
+//!
+//! The authoring-only vocabulary -- the types a world declares and the cook
+//! expands away, and the authored args schemas that diverge from the component
+//! they bake into -- is not named here. It lives in
+//! [`concinnity_asset::cook`], and the registry half of it in
+//! `concinnity_world::registry::build_only`.
 //!
 //! Systems are not components: every system is internal client code (see the
 //! client's `World::build_internal_systems`), driven by the presence of the
@@ -76,6 +83,8 @@ mod render_handle;
 mod scene_member;
 mod transform;
 
+pub mod stored;
+
 // Serde / default / round-trip coverage for the generated data-only
 // components, gathered here after their per-type modules were removed.
 #[cfg(test)]
@@ -94,29 +103,23 @@ pub use camera_probe::CameraProbe;
 pub use camera3d::Camera3D;
 pub use character_rig::CharacterRig;
 pub use concinnity_asset::AaMode;
-pub use concinnity_asset::AppConfigArgs;
 pub use concinnity_asset::AudioBus;
 pub use concinnity_asset::AudioClip;
 pub use concinnity_asset::BlockType;
-pub use concinnity_asset::CameraShot;
-pub use concinnity_asset::CharacterModel;
 pub use concinnity_asset::ColorLut;
 pub use concinnity_asset::CubemapTexture;
 pub use concinnity_asset::Decal;
 pub use concinnity_asset::DirectionalLight;
-pub use concinnity_asset::EngineDefaults;
 pub use concinnity_asset::EnvironmentMap;
+pub use concinnity_asset::FileKind;
 pub use concinnity_asset::Font;
 pub use concinnity_asset::GlassPanel;
 pub use concinnity_asset::GraphicsConfig;
 pub use concinnity_asset::HitRegion;
 pub use concinnity_asset::IndirectLighting;
 pub use concinnity_asset::KeyBinding;
-pub use concinnity_asset::LightRig;
 pub use concinnity_asset::LoadingOverlay;
 pub use concinnity_asset::Material;
-pub use concinnity_asset::OptionSelect;
-pub use concinnity_asset::Panel;
 pub use concinnity_asset::ParticleEmitter;
 pub use concinnity_asset::PhysicsConfig;
 pub use concinnity_asset::PointLight;
@@ -129,15 +132,10 @@ pub use concinnity_asset::RectAreaLight;
 pub use concinnity_asset::ReflectionBlurResolution;
 pub use concinnity_asset::ReflectionProbe;
 pub use concinnity_asset::RigidBody;
-pub use concinnity_asset::RoomArgs;
 pub use concinnity_asset::Scene;
-pub use concinnity_asset::SceneImport;
 pub use concinnity_asset::ShadowUpdate;
-pub use concinnity_asset::Slider;
-pub use concinnity_asset::SpawnerArgs;
 pub use concinnity_asset::SpotLight;
 pub use concinnity_asset::SsgiResolution;
-pub use concinnity_asset::StoryImport;
 pub use concinnity_asset::StreamingConfig;
 pub use concinnity_asset::TextInput;
 pub use concinnity_asset::Texture;
@@ -152,25 +150,17 @@ pub use concinnity_asset::{
     Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
     BehaviorSource, VariableDecl, Variables,
 };
-pub use concinnity_asset::{Camera3DArgs, CameraController, FollowController, FollowDrive};
+pub use concinnity_asset::{CameraController, FollowController, FollowDrive};
 pub use concinnity_asset::{
     CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
 };
-pub use concinnity_asset::{
-    CharacterSchema, KeyPolarity, PanelSection, ProportionGroup, SchemaJoint, SchemaKey,
-    SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
-};
 pub use concinnity_asset::{CharacterShape, JointProportion, ResolvedSliders, ShapeSlider};
-pub use concinnity_asset::{FileArgs, FileKind};
 pub use concinnity_asset::{InstanceTransform, InstancedProp};
 pub use concinnity_asset::{Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow};
 pub use concinnity_asset::{MAX_WATER_WAVES, WaterSurface, WaterWave};
-pub use concinnity_asset::{MainMenu, MainMenuItem, SettingsProfile};
-pub use concinnity_asset::{MaterialPalette, PaletteEntry};
 pub use concinnity_asset::{Mesh, VertexData};
 pub use concinnity_asset::{Model, SubMeshRef};
 pub use concinnity_asset::{PhysicsJoint, PhysicsJointKind};
-pub use concinnity_asset::{Prefab, PrefabEntry, PrefabKind};
 pub use concinnity_asset::{Screen, ScreenInput};
 pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use concinnity_asset::{Sprite, SpriteFit};

@@ -57,14 +57,13 @@ macro_rules! __define_asset_kind {
 /// consumes; this macro captures and ignores it.
 #[macro_export]
 macro_rules! define_components {
-    // Only the `stored` group gets a tag, an enum variant, and a column. The
-    // `build_only` group is named here solely to mark it: the cook expands those
-    // types away, so the runtime carries no storage for them. Each entry's
-    // `{ ... }` metadata block is authoring metadata for `cn_impl_components!`
-    // and the world-side registry; this macro captures and ignores it.
+    // Only the `stored` group gets a tag, an enum variant, and a column; the
+    // `resource` group is named here solely to mark it, since a resource is
+    // reached by handle rather than stored in one. Each entry's `{ ... }`
+    // metadata block is authoring metadata for `cn_impl_components!` and the
+    // world-side registry; this macro captures and ignores it.
     (
         stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
-        build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? },
         resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
     ) => {
         /// The component type tag: one fieldless variant per component, in list
@@ -206,7 +205,6 @@ macro_rules! define_components {
 
         // Which group an entry is in decides whether a world can hold it.
         $( impl $crate::ecs::RuntimeComponent for $ty {} )+
-        $( impl $crate::ecs::BuildOnlyAsset for $bty {} )+
         $( impl $crate::ecs::ResourceAsset for $rty {} )+
     };
 }

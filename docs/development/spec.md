@@ -183,6 +183,16 @@ system: `SkeletonPose`, `FrameInput`) or `build_only` (an authoring macro that
 expands away during the cook and never reaches the blob: `LightRig`, `Prefab`,
 `CameraShot`, `MaterialPalette`).
 
+The framework crate exposes that split as two namespaces. `concinnity::components`
+is the registry's stored group, which is exactly what `World::add_component`
+accepts; `concinnity::cook` is the build-only and resource groups, plus the
+authored form of the five assets whose args diverge from the component they bake
+into (`AppConfig`, `Camera3D`, `File`, `Room`, `Spawner`). The naming rule is
+that the authoring form of `X` is `cook::X` and the runtime form is
+`components::X`; for most assets the two are one struct, and no `Args` name
+reaches the surface. Glob-importing both namespaces is ambiguous on those five,
+so the convention is to glob `components` and path-qualify `cook`.
+
 ### 3.2 Identity
 
 | Type                               | Meaning                                                                                            |

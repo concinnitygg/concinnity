@@ -8,8 +8,9 @@
 
 use alloc::string::String;
 
+use concinnity_asset::cook;
+
 use crate::ecs::Component;
-use concinnity_asset::AppConfigArgs;
 
 /// Runtime half of the AppConfig asset: where the application keeps what it
 /// writes, and its process resource budgets.
@@ -29,7 +30,7 @@ impl AppConfig {
     /// Translate the authored args into the runtime component: keep the state
     /// location and the resource budgets. Run by cook at build time (the baked
     /// blob record carries the result).
-    pub fn bake(args: AppConfigArgs) -> Self {
+    pub fn bake(args: cook::AppConfig) -> Self {
         Self {
             home: args.home,
             max_memory_mb: args.max_memory_mb,

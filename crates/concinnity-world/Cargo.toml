@@ -27,6 +27,7 @@ name = "concinnity_world"
 path = "src/lib.rs"
 
 [dependencies]
+concinnity-asset = { workspace = true }
 concinnity-core = { workspace = true }
 # Only for the build-time name interner (`ecs::asset_id`), which is std-bound.
 concinnity-cpu = { workspace = true }

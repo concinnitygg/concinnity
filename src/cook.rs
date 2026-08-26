@@ -10,6 +10,22 @@
 //! under `.concinnity/cache/` (relative to the current directory), so a second
 //! run with unchanged sources skips the expensive decode.
 //!
+//! # The authoring vocabulary
+//!
+//! This module is also the other half of the asset vocabulary: the types a
+//! world declares and the cook consumes, which never reach a running world as
+//! components. Those are the build-only assets it expands (`Prefab`,
+//! `MainMenu`, `CharacterSchema`, ...) and the resources it compiles into the
+//! blob (`Texture`, `Mesh`, `Material`, `Font`, ...). The stored half is
+//! [`components`](crate::components).
+//!
+//! Five assets are authored as something other than what they bake into, and
+//! are named here for the asset they declare: `cook::AppConfig`,
+//! `cook::Camera3D`, `cook::File`, `cook::Room`, and `cook::Spawner` are the
+//! authored forms of the components of the same name. That makes those five
+//! names ambiguous when both namespaces are glob-imported, so glob
+//! [`components`](crate::components) and path-qualify this module.
+//!
 //! # Declaring a world in code
 //!
 //! Each asset is declared by its own authored struct, so the type is carried
@@ -17,7 +33,7 @@
 //!
 //! ```no_run
 //! use concinnity::App;
-//! use concinnity::assets::{DirectionalLight, RoomArgs};
+//! use concinnity::components::DirectionalLight;
 //! use concinnity::cook;
 //!
 //! fn main() {
@@ -27,7 +43,7 @@
 //!             direction: [-0.35, 0.85, 0.35],
 //!             intensity: 2.2,
 //!         })
-//!         .add("room", RoomArgs {
+//!         .add("room", cook::Room {
 //!             size: Some([16.0, 20.0, 5.0]),
 //!             ..Default::default()
 //!         })
@@ -43,20 +59,19 @@
 //! [`reference`](WorldBuilder::reference):
 //!
 //! ```no_run
-//! # use concinnity::assets::{Material, Prop};
+//! # use concinnity::components::Prop;
 //! # use concinnity::cook;
 //! cook::world()
-//!     .add("stone", Material { roughness: 0.9, ..Default::default() })
+//!     .add("stone", cook::Material { roughness: 0.9, ..Default::default() })
 //!     .add("pillar", Prop::default())
 //!     .reference("material", "stone");
 //! ```
 //!
 //! Most assets are plain runtime components, so an asset needing no compile
 //! step can equally be added straight to a [`World`] with
-//! [`add_component`](World::add_component). The cook is what a
-//! [`RoomArgs`](crate::assets::RoomArgs) needs: its geometry is generated into
-//! the blob, and its texture names resolve to handles, neither of which exists
-//! before the compile.
+//! [`add_component`](World::add_component). The cook is what a [`Room`] needs:
+//! its geometry is generated into the blob, and its texture names resolve to
+//! handles, neither of which exists before the compile.
 //!
 //! # Compiling ahead of time
 //!
@@ -67,7 +82,7 @@
 //! module nor the importers behind it.
 //!
 //! ```no_run
-//! # use concinnity::assets::DirectionalLight;
+//! # use concinnity::components::DirectionalLight;
 //! # use concinnity::cook;
 //! cook::world()
 //!     .add("sun", DirectionalLight::default())
@@ -86,6 +101,12 @@ use concinnity_engine::ecs::ComponentAsset;
 use concinnity_world::registry::{asset_line, set_reference};
 
 pub use concinnity_world::registry::Authored;
+
+// The authoring-only half of the asset vocabulary, globbed from the schema
+// crate's own partition: the build-only assets the cook expands, the resources
+// it compiles into the blob, and the five authored forms that diverge from the
+// component they bake into.
+pub use concinnity_asset::cook::*;
 
 use crate::World;
 
@@ -140,7 +161,7 @@ impl WorldBuilder {
     /// pending declaration, where the compile resolves it.
     ///
     /// ```no_run
-    /// # use concinnity::assets::{CharacterShape, ShapeSlider};
+    /// # use concinnity::components::{CharacterShape, ShapeSlider};
     /// # use concinnity::cook;
     /// cook::world()
     ///     .add(
@@ -244,7 +265,7 @@ mod tests {
     // all three shapes (args override, pass-through component, resource).
     #[test]
     fn typed_builder_compiles_a_world() {
-        use concinnity_engine::components::{DirectionalLight, RoomArgs};
+        use concinnity_engine::components::DirectionalLight;
 
         let world = world()
             .add(
@@ -255,9 +276,11 @@ mod tests {
                     intensity: 2.2,
                 },
             )
+            // `Room` here is this module's authored form, not the component of
+            // the same name the query below reads back.
             .add(
                 "room",
-                RoomArgs {
+                Room {
                     size: Some([16.0, 20.0, 5.0]),
                     ..Default::default()
                 },

@@ -71,7 +71,7 @@ impl App {
 #[cfg(all(test, feature = "cook"))]
 mod tests {
     use super::App;
-    use crate::assets::DirectionalLight;
+    use crate::components::DirectionalLight;
     use crate::cook;
 
     // The ahead-of-time pair, end to end: what `write_blob` puts on disk is
