@@ -8,14 +8,17 @@
 /// payload. The `heightfield` generator's source PNG is decoded here in the
 /// build crate; every other generator delegates to
 /// `crate::geometry::compile_mesh_payload`.
-pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub fn compile_mesh_payload(
+    args: &serde_json::Value,
+    assets_dir: Option<&std::path::Path>,
+) -> Result<Vec<u8>, String> {
     if args.get("generator").and_then(|v| v.as_str()) == Some("heightfield") {
         let source = args
             .get("source")
             .and_then(|v| v.as_str())
             .ok_or("heightfield generator requires a `source` PNG path")?;
-        let (w, h, rgba) =
-            crate::texture::decode_source(source, 0).map_err(|e| format!("heightfield: {e}"))?;
+        let (w, h, rgba) = crate::texture::decode_source(source, 0, assets_dir)
+            .map_err(|e| format!("heightfield: {e}"))?;
         crate::geometry::compile_heightfield_payload(args, w, h, rgba)
     } else {
         crate::geometry::compile_mesh_payload(args)
@@ -56,7 +59,7 @@ mod tests {
             "elevation_min": 0.0,
             "elevation_max": 10.0,
         });
-        let payload = compile_mesh_payload(&args).expect("compiles");
+        let payload = compile_mesh_payload(&args, None).expect("compiles");
 
         let grid = concinnity_cpu::gfx::mesh_payload::deserialise_heightfield(&payload)
             .expect("parse")
@@ -89,7 +92,7 @@ mod tests {
     #[test]
     fn heightfield_missing_source_errors() {
         let args = serde_json::json!({ "generator": "heightfield", "elevation_max": 1.0 });
-        let err = compile_mesh_payload(&args).unwrap_err();
+        let err = compile_mesh_payload(&args, None).unwrap_err();
         assert!(err.contains("source"), "got: {err}");
     }
 
@@ -100,7 +103,7 @@ mod tests {
             "source": "/no/such/terrain.png",
             "elevation_max": 1.0,
         });
-        let err = compile_mesh_payload(&args).unwrap_err();
+        let err = compile_mesh_payload(&args, None).unwrap_err();
         assert!(err.starts_with("heightfield: "), "got: {err}");
         assert!(err.contains("/no/such/terrain.png"), "got: {err}");
     }
@@ -108,6 +111,6 @@ mod tests {
     #[test]
     fn non_heightfield_generator_delegates_to_the_generator_module() {
         let args = serde_json::json!({ "generator": "sphere", "radius": 1.0 });
-        assert!(compile_mesh_payload(&args).is_ok());
+        assert!(compile_mesh_payload(&args, None).is_ok());
     }
 }

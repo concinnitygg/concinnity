@@ -49,7 +49,7 @@ fn compile_metal(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std:
     use std::process::Stdio;
 
     // Transient intermediates go to a UNIQUE path in the OS temp dir (not a shared
-    // `.concinnity/data/<name>` under the working directory): parallel compiles of
+    // the state root's `data/<name>`): parallel compiles of
     // the same shader -- concurrent builds, or the test suite cooking several worlds
     // at once -- must not race on one path (one removing the file mid-read of
     // another), and a cook must not read or write the working directory.

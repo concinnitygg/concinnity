@@ -415,10 +415,6 @@ pub(crate) mod test_output {
         pub(crate) fn data_dir(&self) -> std::path::PathBuf {
             self.0.path().join("data")
         }
-
-        pub(crate) fn assets_dir(&self) -> std::path::PathBuf {
-            self.0.path().join("assets")
-        }
     }
 
     impl Drop for StateDir {
@@ -467,7 +463,7 @@ mod tests {
     // The default primary blob path: blob 0 under the anchored state dir, which
     // is what the build writes when nothing names a file.
     fn primary() -> std::path::PathBuf {
-        std::path::PathBuf::from(blob_path(0))
+        std::path::PathBuf::from(blob_path(0).expect("the scoped state dir is installed"))
     }
 
     // The record streams of a build that only has components and resources.

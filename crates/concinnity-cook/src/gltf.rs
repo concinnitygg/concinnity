@@ -11,6 +11,8 @@
 // The `.glb` container decode lives in `crate::glb`; the asset-level desugar
 // wrappers here call into it for parsing, shared geometry reads, and the
 // Imported* payload types.
+use std::path::Path;
+
 use crate::glb::{
     ImportedAnimation, ImportedSkinnedMesh, import_glb_animations_from_doc,
     import_skinned_from_doc, parse_glb,
@@ -23,8 +25,9 @@ use crate::glb::{
 pub(crate) fn import_skinned_glb(
     source: &str,
     skin_index: u32,
+    assets_dir: Option<&Path>,
 ) -> Result<ImportedSkinnedMesh, String> {
-    let doc = parse_glb(source)?;
+    let doc = parse_glb(source, assets_dir)?;
     import_skinned_from_doc(&doc, source, skin_index)
 }
 
@@ -53,8 +56,9 @@ pub(crate) fn primitive_vertex_count(
 pub(crate) fn import_glb_animations(
     source: &str,
     skin_index: u32,
+    assets_dir: Option<&Path>,
 ) -> Result<Vec<ImportedAnimation>, String> {
-    let doc = parse_glb(source)?;
+    let doc = parse_glb(source, assets_dir)?;
     import_glb_animations_from_doc(&doc, source, skin_index)
 }
 
@@ -64,8 +68,9 @@ pub(crate) fn import_glb_animation(
     source: &str,
     index: usize,
     skin_index: u32,
+    assets_dir: Option<&Path>,
 ) -> Result<ImportedAnimation, String> {
-    let mut anims = import_glb_animations(source, skin_index)?;
+    let mut anims = import_glb_animations(source, skin_index, assets_dir)?;
     if index >= anims.len() {
         return Err(format!(
             "'{}': animation_index {} out of range (file has {} animation{})",
@@ -81,8 +86,11 @@ pub(crate) fn import_glb_animation(
 // Names of every animation in a `.glb`, in file declaration order. Useful
 // for the desugar pass when the user authored `animation_name` instead of
 // `animation_index` and we need to look up the index.
-pub(crate) fn glb_animation_names(source: &str) -> Result<Vec<String>, String> {
-    Ok(crate::glb::parse_glb(source)?
+pub(crate) fn glb_animation_names(
+    source: &str,
+    assets_dir: Option<&Path>,
+) -> Result<Vec<String>, String> {
+    Ok(crate::glb::parse_glb(source, assets_dir)?
         .doc
         .document
         .animations()
@@ -106,7 +114,7 @@ mod tests {
     fn import_skinned_glb_reads_mesh_and_skeleton() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let imported = import_skinned_glb(&src, 0).expect("skinned import");
+        let imported = import_skinned_glb(&src, 0, None).expect("skinned import");
         assert_eq!(imported.vertices.len(), 3);
         assert_eq!(imported.skeleton.len(), 2);
     }
@@ -115,7 +123,7 @@ mod tests {
     fn import_skinned_glb_reports_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("missing.glb");
-        let err = import_skinned_glb(src.to_str().unwrap(), 0)
+        let err = import_skinned_glb(src.to_str().unwrap(), 0, None)
             .err()
             .expect("expected error");
         assert!(err.contains("failed to read"), "got: {err}");
@@ -125,7 +133,7 @@ mod tests {
     fn primitive_vertex_count_reads_the_indexed_primitive() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "t.glb", &static_triangle_glb());
-        let doc = parse_glb(&src).expect("parse");
+        let doc = parse_glb(&src, None).expect("parse");
         assert_eq!(primitive_vertex_count(&doc, 0), Some(3));
         assert_eq!(primitive_vertex_count(&doc, 1), None);
     }
@@ -134,7 +142,7 @@ mod tests {
     fn import_glb_animations_returns_every_clip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let anims = import_glb_animations(&src, 0).expect("animations");
+        let anims = import_glb_animations(&src, 0, None).expect("animations");
         assert_eq!(anims.len(), 1);
         assert_eq!(anims[0].name, "wave");
     }
@@ -143,7 +151,7 @@ mod tests {
     fn import_glb_animation_returns_the_indexed_clip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let anim = import_glb_animation(&src, 0, 0).expect("clip");
+        let anim = import_glb_animation(&src, 0, 0, None).expect("clip");
         assert_eq!(anim.name, "wave");
     }
 
@@ -151,7 +159,7 @@ mod tests {
     fn import_glb_animation_rejects_an_out_of_range_index() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        let err = import_glb_animation(&src, 3, 0).unwrap_err();
+        let err = import_glb_animation(&src, 3, 0, None).unwrap_err();
         assert!(err.contains("animation_index 3 out of range"), "got: {err}");
         assert!(err.contains("1 animation"), "got: {err}");
     }
@@ -160,14 +168,17 @@ mod tests {
     fn glb_animation_names_lists_clips_in_declaration_order() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "s.glb", &skinned_glb());
-        assert_eq!(glb_animation_names(&src).expect("names"), vec!["wave"]);
+        assert_eq!(
+            glb_animation_names(&src, None).expect("names"),
+            vec!["wave"]
+        );
     }
 
     #[test]
     fn glb_animation_names_is_empty_for_a_file_without_animations() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_glb(&dir, "t.glb", &static_triangle_glb());
-        assert!(glb_animation_names(&src).expect("names").is_empty());
+        assert!(glb_animation_names(&src, None).expect("names").is_empty());
     }
 
     #[test]
@@ -176,7 +187,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let bytes = make_glb(&skinned_json(true, true, false), Some(&skinned_bin()));
         let src = write_glb(&dir, "s.glb", &bytes);
-        let err = import_glb_animation(&src, 0, 0).unwrap_err();
+        let err = import_glb_animation(&src, 0, 0, None).unwrap_err();
         assert!(err.contains("animation_index 0 out of range"), "got: {err}");
         assert!(err.contains("0 animations"), "got: {err}");
     }
@@ -185,7 +196,7 @@ mod tests {
     fn glb_animation_names_reports_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("missing.glb");
-        let err = glb_animation_names(src.to_str().unwrap()).unwrap_err();
+        let err = glb_animation_names(src.to_str().unwrap(), None).unwrap_err();
         assert!(err.contains("failed to read"), "got: {err}");
         assert!(err.contains("missing.glb"), "got: {err}");
     }
@@ -195,7 +206,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("junk.glb");
         std::fs::write(&path, b"garbage").expect("write junk");
-        let err = glb_animation_names(path.to_str().unwrap()).unwrap_err();
+        let err = glb_animation_names(path.to_str().unwrap(), None).unwrap_err();
         assert!(err.contains("not a valid glTF/GLB file"), "got: {err}");
     }
 }

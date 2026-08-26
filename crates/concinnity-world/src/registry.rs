@@ -659,10 +659,10 @@ pub fn bake_divergent(
         RegisteredType::Spawner => {
             bake!(crate::components::Spawner, crate::components::SpawnerArgs)
         }
-        RegisteredType::Application => {
+        RegisteredType::AppConfig => {
             bake!(
-                crate::components::Application,
-                crate::components::ApplicationArgs
+                crate::components::AppConfig,
+                crate::components::AppConfigArgs
             )
         }
         _ => Ok(None),
@@ -964,7 +964,7 @@ mod tests {
                 "PostProcessConfig",
                 "StreamingConfig",
                 "PhysicsConfig",
-                "Application",
+                "AppConfig",
                 "Variables",
                 "LoadingOverlay",
             ]

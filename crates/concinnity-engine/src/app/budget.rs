@@ -1,7 +1,7 @@
 // src/app/budget.rs
 //
 // Process-level resource budgets computed once at App start from the host
-// machine and the world's `Application` limits, then published as world
+// machine and the world's `AppConfig` overrides, then published as world
 // resources so systems (and the debug server) can read them. Two budgets:
 //
 //   ThreadBudget  how many worker threads the shared job pool runs.
@@ -13,18 +13,18 @@
 
 // Absolute default cap on the memory budget regardless of how much RAM the
 // machine has, so a workstation with hundreds of GiB does not implicitly invite
-// the runtime to grow without bound. An `Application` override or a smaller
+// the runtime to grow without bound. An `AppConfig` override or a smaller
 // machine lowers it; nothing but an override raises it.
 const HARD_CEILING_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 // Default budget as a percentage of total RAM (whichever is smaller than the
 // hard ceiling wins).
 const DEFAULT_FRACTION_PCT: u64 = 70;
-// An `Application` override may not exceed this percentage of total RAM: a game
+// An `AppConfig` override may not exceed this percentage of total RAM: a game
 // cannot ask for more memory than the machine can safely give.
 const MAX_FRACTION_PCT: u64 = 85;
 
 /// How many threads the runtime plans to run, computed from the machine's core
-/// count and the optional `Application` override. Advisory: it sizes the shared
+/// count and the optional `AppConfig` override. Advisory: it sizes the shared
 /// job pool (`jobs::configure`) and is reported, but does not cap the streaming
 /// workers or the audio thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +56,7 @@ impl ThreadBudget {
 }
 
 /// A soft ceiling on host memory the runtime aims to stay under, computed from
-/// total RAM and the optional `Application` override.
+/// total RAM and the optional `AppConfig` override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryBudget {
     /// Total physical RAM, or `None` when the platform query failed (the budget
@@ -64,7 +64,7 @@ pub struct MemoryBudget {
     pub total_ram_bytes: Option<u64>,
     /// The effective budget in bytes.
     pub budget_bytes: u64,
-    /// Whether an `Application` override set the budget (vs. the computed default).
+    /// Whether an `AppConfig` override set the budget (vs. the computed default).
     pub overridden: bool,
 }
 

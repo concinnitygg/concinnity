@@ -22,8 +22,9 @@ pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
     // here costs nothing when the CLI already installed at startup.
     concinnity_shader::install();
 
-    let loaded = concinnity_cook::prepare_world(content)
-        .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
+    let loaded =
+        concinnity_cook::prepare_world(content, super::assets_root::assets_dir().as_deref())
+            .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
 
     Ok(loaded)
 }
@@ -94,7 +95,11 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     let color_lut_source = scan_color_lut_source(&loaded.assets);
     let environment_map_source = scan_environment_map_source(&loaded.assets);
 
-    let mut result = build_compiled(loaded.assets, None)?;
+    let mut result = build_compiled(
+        loaded.assets,
+        super::assets_root::assets_dir().as_deref(),
+        None,
+    )?;
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = World::from_blob(crate::blob::BlobData::new(payload_sections));
@@ -181,7 +186,7 @@ pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
 }
 
 /// Compile a world.jsonl file and write the compiled blobs + world-lock.json to
-/// the active `.concinnity/data/` state dir, exactly as `cn build` does. This is
+/// the active state dir's `data/`, exactly as `cn build` does. This is
 /// `cn build` as a library call: the editor's SAVE goes through here to persist
 /// edits, reusing the validated compile + blob-write tail rather than patching
 /// blobs directly. Same-process recompiles are fast because the payload / expand
@@ -206,7 +211,12 @@ pub(crate) fn build_world_str_to_disk_with_progress(
     progress: Option<&(dyn Fn(concinnity_cook::BuildProgress) + Sync)>,
 ) -> std::io::Result<()> {
     let loaded = prepare(content)?;
-    let result = concinnity_cook::build_compiled_with_progress(loaded.assets, None, progress)?;
+    let result = concinnity_cook::build_compiled_with_progress(
+        loaded.assets,
+        super::assets_root::assets_dir().as_deref(),
+        None,
+        progress,
+    )?;
     if let Some(p) = progress {
         p(concinnity_cook::BuildProgress {
             stage: "write",
@@ -404,8 +414,16 @@ mod tests {
         }
     }
 
+    // Clears the process-global state root on the way out, for the same reason.
+    struct StateDirGuard;
+    impl Drop for StateDirGuard {
+        fn drop(&mut self) {
+            concinnity_store::paths::clear_state_dir();
+        }
+    }
+
     // build_world_to_disk compiles a world.jsonl and writes the blobs + lock to
-    // the cwd-relative state tree, exactly as `cn build` does. Runs under the
+    // the installed state tree, exactly as `cn build` does. Runs under the
     // process cwd lock in an isolated temp dir so it neither races other tests
     // nor pollutes the repo. Uses a payload-free world (PhysicsConfig) so it
     // needs no source files or shader compilation.
@@ -416,6 +434,10 @@ mod tests {
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
         let _cwd = CwdGuard(prev);
+        // The lock file is written relative to the cwd; the blobs go wherever
+        // the state root points, which nothing installs by default.
+        concinnity_store::paths::set_state_dir(dir.path());
+        let _state = StateDirGuard;
 
         std::fs::write(
             "world.jsonl",
@@ -427,7 +449,10 @@ mod tests {
 
         // The primary blob (data/0) and the provenance lock are both written.
         assert!(
-            concinnity_store::paths::data_dir().join("0").exists(),
+            concinnity_store::paths::data_dir()
+                .expect("the test installs a state dir")
+                .join("0")
+                .exists(),
             "data/0 blob written"
         );
         assert!(

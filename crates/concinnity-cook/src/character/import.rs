@@ -4,6 +4,8 @@
 // mesh's own `lod_levels` decimation, which keeps every vertex (so every
 // target and skin weight) and only shortens the index list.
 
+use std::path::Path;
+
 use super::builtin_schema;
 use super::synthesize::{MorphSet, synthesize};
 use super::validate;
@@ -17,13 +19,14 @@ pub(crate) fn import_model(
     name: &str,
     schema: &CharacterSchema,
     model: &CharacterModel,
+    assets_dir: Option<&Path>,
 ) -> Result<ImportedSkinnedMesh, String> {
     let errors = validate::model_errors(model);
     if !errors.is_empty() {
         return Err(format!("CharacterModel '{name}': {}", errors.join("; ")));
     }
     let source = &model.source;
-    let doc = GltfDoc::parse_file(source)?;
+    let doc = GltfDoc::parse_file(&crate::glb::resolve_source(source, assets_dir))?;
     let mut mesh = import_skinned_from_doc(&doc, source, model.skin_index)?;
     let errors = validate::source_errors(schema, &mesh.skeleton, &mesh.morph_target_names);
     if !errors.is_empty() {
@@ -117,7 +120,7 @@ mod tests {
             ..Default::default()
         };
         let schema = builtin_schema::humanoid();
-        let g = import_model("body", schema, &model).expect("import");
+        let g = import_model("body", schema, &model, None).expect("import");
         assert_eq!(g.skeleton.len(), 25);
         assert!(g.vertices.len() > 15_000 && g.vertices.len() < 25_000);
         let expected_targets = 22
@@ -159,7 +162,7 @@ mod tests {
             lod_levels: 3,
             ..Default::default()
         };
-        let g = import_model("body", builtin_schema::humanoid(), &model).expect("import");
+        let g = import_model("body", builtin_schema::humanoid(), &model, None).expect("import");
         let payload = crate::geometry::compile_skinned_mesh_payload_with_lods(
             &g.vertices,
             &g.indices,
@@ -229,7 +232,7 @@ mod tests {
             source,
             ..Default::default()
         };
-        let err = import_model("body", &schema, &model)
+        let err = import_model("body", &schema, &model, None)
             .err()
             .expect("refused");
         assert!(err.contains("missing joint 'tail'"), "{err}");
@@ -237,7 +240,7 @@ mod tests {
             err.contains("missing shape key pair 'wings+' / 'wings-'"),
             "{err}"
         );
-        let err = import_model("body", &schema, &CharacterModel::default())
+        let err = import_model("body", &schema, &CharacterModel::default(), None)
             .err()
             .expect("refused");
         assert!(err.contains("no source"), "{err}");

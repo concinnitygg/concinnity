@@ -1,10 +1,15 @@
 // src/world/camera_shot.rs
 // Build-time expansion: CameraShot → Camera3D.
 
+use std::path::Path;
+
 use super::expand::{asset_name, type_norm};
 use super::preset::load_preset_obj;
 
-pub(crate) fn expand_camera_shots(asset_values: &mut Vec<serde_json::Value>) {
+pub(crate) fn expand_camera_shots(
+    asset_values: &mut Vec<serde_json::Value>,
+    assets_dir: Option<&Path>,
+) {
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in asset_values.drain(..) {
         if type_norm(&value) != "camerashot" {
@@ -18,7 +23,7 @@ pub(crate) fn expand_camera_shots(asset_values: &mut Vec<serde_json::Value>) {
         let preset_args: serde_json::Value = if !preset_str.is_empty() {
             let hardcoded = camera_shot_preset(preset_str);
             if hardcoded.is_null() {
-                load_preset_obj(preset_str, "shots")
+                load_preset_obj(preset_str, "shots", assets_dir)
                     .get("args")
                     .cloned()
                     .unwrap_or(serde_json::json!({}))
@@ -111,7 +116,7 @@ mod tests {
             "type": "CameraShot",
             "args": {"fov_y_degrees": 80.0, "position": [0.0, 1.75, 8.0], "yaw": std::f64::consts::PI}
         })];
-        expand_camera_shots(&mut assets);
+        expand_camera_shots(&mut assets, None);
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0]["name"], "wide");
         assert_eq!(assets[0]["type"], "Camera3D");
@@ -125,7 +130,7 @@ mod tests {
             "type": "CameraShot",
             "args": {"preset": "shot_eye_level"}
         })];
-        expand_camera_shots(&mut assets);
+        expand_camera_shots(&mut assets, None);
         assert_eq!(assets[0]["type"], "Camera3D");
         let fov = assets[0]["args"]["fov_y_degrees"].as_f64().unwrap();
         assert!((fov - 75.0).abs() < 0.01);
@@ -138,7 +143,7 @@ mod tests {
             "type": "CameraShot",
             "args": {"preset": "shot_eye_level", "fov_y_degrees": 90.0}
         })];
-        expand_camera_shots(&mut assets);
+        expand_camera_shots(&mut assets, None);
         let fov = assets[0]["args"]["fov_y_degrees"].as_f64().unwrap();
         assert!((fov - 90.0).abs() < 0.01);
     }
@@ -146,7 +151,7 @@ mod tests {
     #[test]
     fn non_camera_shot_assets_pass_through() {
         let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
-        expand_camera_shots(&mut assets);
+        expand_camera_shots(&mut assets, None);
         assert_eq!(assets[0]["type"], "Logger");
     }
 
@@ -157,7 +162,7 @@ mod tests {
             "type": "CameraShot",
             "args": args
         })];
-        expand_camera_shots(&mut assets);
+        expand_camera_shots(&mut assets, None);
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0]["type"], "Camera3D");
         assets[0]["args"].clone()
@@ -214,7 +219,7 @@ mod tests {
             "type": "CameraShot",
             "args": {}
         })];
-        expand_camera_shots(&mut assets);
+        expand_camera_shots(&mut assets, None);
         assert_eq!(assets[0]["type"], "Camera3D");
         let fov = assets[0]["args"]["fov_y_degrees"].as_f64().unwrap();
         assert!((fov - 75.0).abs() < 0.01);

@@ -24,9 +24,10 @@ pub(crate) struct WorldSession {
     pub bookmarks: [Option<CameraPose>; BOOKMARK_SLOTS],
 }
 
-// The per-project store file, beside `saves/` and `settings`.
-pub(crate) fn default_path() -> PathBuf {
-    concinnity_store::paths::writable_state_dir().join("editor")
+// The per-project store file, beside `saves/` and `settings`. `None` when no
+// state root is installed, which leaves bookmarks in memory for the session.
+pub(crate) fn default_path() -> Option<PathBuf> {
+    concinnity_store::paths::writable_state_dir().map(|d| d.join("editor"))
 }
 
 // The store key for a world file: its stem, so `world.jsonl` and a sibling

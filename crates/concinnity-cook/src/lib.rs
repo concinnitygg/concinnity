@@ -31,14 +31,17 @@ pub(crate) mod ecs {
     pub(crate) use concinnity_cpu::ecs::asset_id;
 }
 // The source-asset lookup lives in concinnity-store, re-exported so cook code
-// keeps naming it under `crate::source`.
+// keeps naming it under `crate::source`. It resolves against a directory its
+// caller supplies; every build threads that root down from its entry point
+// rather than reading one for itself.
 pub(crate) use concinnity_store::source;
 
 // Build-host API, re-exported deliberately: a host driving the pipeline (the
 // CLI, an example harness) works against cook alone, the way a runtime host
 // works against concinnity-engine. `paths` is the state tree cook builds into
-// (anchoring it, locating `data/`); `platform` is the backend platform whose
-// shader payloads cook compiles and caches.
+// (anchoring it, locating `data/`, and naming the `assets/` a host passes as a
+// build's search root); `platform` is the backend platform whose shader
+// payloads cook compiles and caches.
 pub use concinnity_core::platform;
 pub use concinnity_store::paths;
 

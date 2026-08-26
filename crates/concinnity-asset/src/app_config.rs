@@ -1,12 +1,13 @@
-// Application distribution metadata schema. The runtime component keeps only
-// the resource budgets (see the core assets module); everything else here is
-// consumed at build / export time and never ships in the blob.
+// Application configuration schema. The runtime component keeps the process
+// budgets and the state-tree location (see the core components module);
+// everything else here is consumed at build / export time and never ships in
+// the blob.
 
 use alloc::string::{String, ToString};
 
-/// Names and identifies the application for distribution.
+/// Names, identifies, and sizes the application.
 ///
-/// Declare at most one `Application` per world. It supplies the display name,
+/// Declare at most one `AppConfig` per world. It supplies the display name,
 /// bundle identifier, version, author, and icon that the export step reads when
 /// it packages the world into a distributable game (the archive and executable
 /// name, and on macOS the `.app` bundle metadata and icon). When the world
@@ -18,9 +19,21 @@ use alloc::string::{String, ToString};
 /// into the world's data. `id` is a reverse-DNS bundle identifier
 /// (e.g. `gg.studio.mygame`); when left empty the export derives one from
 /// `name`. Empty string fields mean "unset".
+///
+/// `home` chooses where the running application keeps what it writes: the
+/// settings file, the save files, crash reports, and the shader caches. Leave
+/// it empty and those sit beside the application's data, which is what a
+/// portable install wants. A relative path resolves against that same content
+/// directory, so `"state"` puts them in a `state/` subfolder; an absolute path
+/// is used verbatim. A read-only install that sets no `home` relocates them to
+/// a per-user directory on its own.
+///
+/// `max_memory_mb` and `job_threads` are `0` for "auto", where the engine sizes
+/// both from the host machine. A non-zero value overrides that choice, clamped
+/// to what the machine can safely give.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct ApplicationArgs {
+pub struct AppConfigArgs {
     /// Display name of the application: the game's window title, the exported
     /// archive and executable name, and the macOS bundle display name.
     pub name: String,
@@ -35,19 +48,10 @@ pub struct ApplicationArgs {
     /// to the world, used to build the platform icon at export time. Empty for
     /// no custom icon.
     pub icon: String,
-    /// Optional overrides for the runtime's process resource budgets. When
-    /// omitted (or left at their defaults) the engine sizes both from the host
-    /// machine.
-    pub limits: AppLimits,
-}
-
-/// Optional per-application overrides for the runtime's thread and memory
-/// budgets. Each field of `0` means "auto" (the engine picks a value from the
-/// host machine); a non-zero value overrides that choice, clamped to what the
-/// machine can safely give.
-#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct AppLimits {
+    /// Where the running application writes its settings, saves, crash reports,
+    /// and shader caches. Empty means beside the application's data; a relative
+    /// path resolves against that directory; an absolute path is used verbatim.
+    pub home: String,
     /// Soft ceiling on host memory the runtime aims to stay under, in
     /// mebibytes. `0` = auto (a fraction of total RAM, capped by a built-in
     /// ceiling). A non-zero value is clamped so it never exceeds what the
@@ -58,7 +62,7 @@ pub struct AppLimits {
     pub job_threads: u32,
 }
 
-impl Default for ApplicationArgs {
+impl Default for AppConfigArgs {
     fn default() -> Self {
         Self {
             name: "Concinnity".to_string(),
@@ -66,7 +70,9 @@ impl Default for ApplicationArgs {
             version: "0.1.0".to_string(),
             author: String::new(),
             icon: String::new(),
-            limits: AppLimits::default(),
+            home: String::new(),
+            max_memory_mb: 0,
+            job_threads: 0,
         }
     }
 }
@@ -77,35 +83,39 @@ mod tests {
 
     #[test]
     fn defaults_name_an_unversioned_unlimited_application() {
-        let a = ApplicationArgs::default();
+        let a = AppConfigArgs::default();
         assert_eq!(a.name, "Concinnity");
         assert_eq!(a.version, "0.1.0");
         assert!(a.id.is_empty());
         assert!(a.author.is_empty());
         assert!(a.icon.is_empty());
+        // Empty is "beside the data", not "the filesystem root".
+        assert!(a.home.is_empty());
         // Zero is "no budget declared", not "no memory and no threads".
-        assert_eq!(a.limits.max_memory_mb, 0);
-        assert_eq!(a.limits.job_threads, 0);
+        assert_eq!(a.max_memory_mb, 0);
+        assert_eq!(a.job_threads, 0);
     }
 
     #[test]
     fn export_metadata_parses_and_round_trips_through_postcard() {
-        let a: ApplicationArgs = serde_json::from_str(
-            r#"{"name":"Ash","id":"com.example.ash","version":"1.2.0","author":"Grant",
-                "icon":"icon.png","limits":{"max_memory_mb":2048,"job_threads":8}}"#,
+        let a: AppConfigArgs = serde_json::from_str(
+            r#"{"name":"Pong","id":"com.example.pong","version":"1.2.0","author":"Bob",
+                "icon":"icon.png","home":"state","max_memory_mb":2048,"job_threads":8}"#,
         )
         .unwrap();
-        assert_eq!(a.id, "com.example.ash");
-        assert_eq!(a.limits.job_threads, 8);
+        assert_eq!(a.id, "com.example.pong");
+        assert_eq!(a.job_threads, 8);
 
-        // Only the budgets ship in the blob, but the whole struct is what the
-        // export step reads back, so it has to survive the baked format.
+        // Only `home` and the budgets ship in the blob, but the whole struct is
+        // what the export step reads back, so it has to survive the baked
+        // format.
         let bytes = postcard::to_allocvec(&a).unwrap();
-        let back: ApplicationArgs = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.name, "Ash");
+        let back: AppConfigArgs = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.name, "Pong");
         assert_eq!(back.version, "1.2.0");
-        assert_eq!(back.author, "Grant");
+        assert_eq!(back.author, "Bob");
         assert_eq!(back.icon, "icon.png");
-        assert_eq!(back.limits.max_memory_mb, 2048);
+        assert_eq!(back.home, "state");
+        assert_eq!(back.max_memory_mb, 2048);
     }
 }

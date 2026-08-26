@@ -87,7 +87,10 @@ pub fn run(options: RunOptions) -> std::io::Result<()> {
     let mut app = App::new();
 
     if let Err(e) = app.load_blob() {
-        report_startup_error(StartupError::from_blob_failure(primary_blob_path(), e));
+        report_startup_error(match primary_blob_path() {
+            Some(blob) => StartupError::from_blob_failure(blob, e),
+            None => StartupError::NoStateRoot,
+        });
         return Ok(());
     }
 
@@ -95,8 +98,9 @@ pub fn run(options: RunOptions) -> std::io::Result<()> {
 }
 
 // The primary blob's path, which is what a load failure is reported against.
-fn primary_blob_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(concinnity_store::blob::blob_path(0))
+// `None` when nothing anchored the state tree, so there is no path to name.
+fn primary_blob_path() -> Option<std::path::PathBuf> {
+    concinnity_store::blob::blob_path(0).map(std::path::PathBuf::from)
 }
 
 // Report a fatal startup failure: always to the log, and on screen as well when
@@ -111,25 +115,63 @@ fn report_startup_error(error: StartupError) {
     }
 }
 
+/// Where a shipped app's compiled world sits. Both forms make the same file
+/// blob 0; they differ in whether the world is allowed to spill into overflow
+/// payload blobs, which are always siblings named by index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobSource<'a> {
+    /// A directory holding blob 0 plus any overflow blobs beside it.
+    Directory(&'a Path),
+    /// A single self-contained blob file. A world that needs overflow blobs is
+    /// refused rather than half-loaded, since its siblings would be written
+    /// into whatever directory the file happens to sit in.
+    File(&'a Path),
+}
+
+impl BlobSource<'_> {
+    // The primary blob file: the named file itself, or blob 0 in the directory.
+    fn primary(&self) -> std::path::PathBuf {
+        match self {
+            BlobSource::Directory(dir) => dir.join("0"),
+            BlobSource::File(file) => file.to_path_buf(),
+        }
+    }
+
+    // The refusal a single-file source owes a world that spans more blobs.
+    fn check_span(&self, max_blob_index: u32) -> Option<StartupError> {
+        match self {
+            BlobSource::File(file) if max_blob_index > 0 => {
+                Some(StartupError::OverflowUnsupported {
+                    blob: file.to_path_buf(),
+                    needed: max_blob_index,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Production entry point for a shipped app: like `run`, but with the state root
-/// pinned to `state_dir` (the flat tree beside the executable or inside an app
-/// bundle, holding `data/`, `saves/`, and `settings`), and a missing blob is a
-/// hard error rather than a silent no-op -- a packaged app without its data
-/// cannot do anything useful. The concinnity-runtime binary calls this.
-pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
+/// pinned to `state_dir` (the tree beside the executable or inside an app
+/// bundle, holding `saves/` and `settings`) and the world read from `blob`. A
+/// missing blob is a hard error rather than a silent no-op -- a packaged app
+/// without its data cannot do anything useful. The concinnity-runtime binary
+/// calls this.
+pub fn run_from(state_dir: &Path, blob: BlobSource<'_>) -> std::io::Result<()> {
     init_logging();
     concinnity_store::paths::set_state_dir(state_dir);
 
+    let primary = blob.primary();
     let mut app = App::new();
-    if let Err(e) = app.load_blob() {
-        let error = StartupError::from_blob_failure(primary_blob_path(), e);
+    let failure = match app.load_blob_from(&primary) {
+        Ok(max_blob_index) => blob.check_span(max_blob_index),
+        Err(e) => Some(StartupError::from_blob_failure(primary, e)),
+    };
+    if let Some(error) = failure {
         report_startup_error(error.clone());
         // The process still exits non-zero: the screen is how the user learns
         // what happened, not a substitute for failing.
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            error.log_line(),
-        ));
+        return Err(std::io::Error::new(error.io_kind(), error.log_line()));
     }
     start_runtime(app, RunOptions::default())
 }
@@ -226,6 +268,47 @@ mod tests {
         // The fallback string must parse as an EnvFilter, otherwise log_filter
         // would panic when RUST_LOG is unset.
         EnvFilter::new(default_log_directive());
+    }
+
+    // Both forms make the same file blob 0: the file itself, or `0` inside the
+    // directory. This is what lets one runtime entry point serve both.
+    #[test]
+    fn each_blob_source_names_the_same_primary_file() {
+        let dir = Path::new("/apps/MyGame/data");
+        assert_eq!(
+            BlobSource::Directory(dir).primary(),
+            dir.join("0"),
+            "a directory holds blob 0"
+        );
+
+        let file = Path::new("/apps/MyGame/data");
+        assert_eq!(
+            BlobSource::File(file).primary(),
+            file.to_path_buf(),
+            "a single file is blob 0"
+        );
+    }
+
+    // Overflow blobs are siblings named by index, so only the directory form
+    // has somewhere to hold them. A single file whose world spans more is
+    // refused rather than half-loaded, and the message names the fix.
+    #[test]
+    fn a_single_file_source_refuses_a_world_that_overflows() {
+        let file = Path::new("/apps/MyGame/data");
+
+        assert_eq!(BlobSource::File(file).check_span(0), None);
+        assert_eq!(
+            BlobSource::File(file).check_span(2),
+            Some(StartupError::OverflowUnsupported {
+                blob: file.to_path_buf(),
+                needed: 2,
+            })
+        );
+
+        // The directory form carries any span, which is why export picks it.
+        let dir = Path::new("/apps/MyGame/data");
+        assert_eq!(BlobSource::Directory(dir).check_span(0), None);
+        assert_eq!(BlobSource::Directory(dir).check_span(7), None);
     }
 
     // A world that refuses to start reports it through the return value. The

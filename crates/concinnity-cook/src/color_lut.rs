@@ -30,7 +30,7 @@
 use concinnity_cpu::build::color_lut::{
     LutFormat, classify_source, parse_cube, serialise, validate_size,
 };
-use concinnity_store::source::resolve_source_path as resolve_lut_source;
+use std::path::Path;
 
 // The `source` path a `ColorLut`'s args declare.
 fn color_lut_source(args: &serde_json::Value) -> Result<&str, String> {
@@ -49,39 +49,38 @@ pub(crate) fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), St
 }
 
 // Compile a `ColorLut` component's JSON args into a packed binary payload.
-pub(crate) fn compile_color_lut_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_color_lut_payload(
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> Result<Vec<u8>, String> {
     let source = color_lut_source(args)?;
-    let format = classify_source(source)?;
-    let resolved = resolve_lut_source(source);
-
-    let (size, data) = match format {
-        LutFormat::Cube => {
-            let text = std::fs::read_to_string(&resolved)
-                .map_err(|e| format!("failed to read LUT source '{}': {}", resolved, e))?;
-            parse_cube(&text)?
-        }
-        LutFormat::Png => parse_png_strip(&resolved)?,
-    };
+    let (size, data) = decode(&concinnity_store::source::resolve_source_path(
+        source, assets_dir,
+    ))?;
     Ok(serialise(size, &data))
 }
 
-/// Decode a ColorLut source path the same way `compile_color_lut_payload` does
-/// at build time. Dispatches between `.cube` text parse and PNG-strip parse
-/// based on the resolved file extension. Exposed for the runtime asset
-/// hot-reload path (`cn debug` only); production reads the compiled payload via
-/// `concinnity_cpu::build::color_lut::deserialise` instead. The `source`
-/// argument is the raw string from the asset declaration; this function applies
-/// the same asset-dir resolution the build pipeline uses.
-pub fn decode_source(source: &str) -> Result<(u32, Vec<u8>), String> {
-    let format = classify_source(source)?;
-    let resolved = resolve_lut_source(source);
-    match format {
+/// Decode the ColorLut source at `path` the same way `compile_color_lut_payload`
+/// does at build time. Dispatches between `.cube` text parse and PNG-strip parse
+/// based on the file extension. Exposed for the runtime asset hot-reload path
+/// (`cn debug` only); production reads the compiled payload via
+/// `concinnity_cpu::build::color_lut::deserialise` instead. `path` is read as
+/// given -- the caller holds the path the load already resolved.
+pub fn decode_source(path: &str) -> Result<(u32, Vec<u8>), String> {
+    decode(path)
+}
+
+// Read the LUT at `path` in the format its extension names. Resolution never
+// renames a source, so this classifies the same way whether it is handed the
+// authored string or the path that string resolved to.
+fn decode(path: &str) -> Result<(u32, Vec<u8>), String> {
+    match classify_source(path)? {
         LutFormat::Cube => {
-            let text = std::fs::read_to_string(&resolved)
-                .map_err(|e| format!("failed to read LUT source '{}': {}", resolved, e))?;
+            let text = std::fs::read_to_string(path)
+                .map_err(|e| format!("failed to read LUT source '{}': {}", path, e))?;
             parse_cube(&text)
         }
-        LutFormat::Png => parse_png_strip(&resolved),
+        LutFormat::Png => parse_png_strip(path),
     }
 }
 
@@ -300,7 +299,7 @@ LUT_3D_SIZE 2
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_cube(&dir, CUBE_2);
         let payload =
-            compile_color_lut_payload(&serde_json::json!({"source": src})).expect("compile");
+            compile_color_lut_payload(&serde_json::json!({"source": src}), None).expect("compile");
         // Header: magic "LUT3", size, format 0 (RGBA8), then 2^3 texels.
         assert_eq!(&payload[0..4], &0x3354554cu32.to_le_bytes());
         assert_eq!(&payload[4..8], &2u32.to_le_bytes());
@@ -310,12 +309,32 @@ LUT_3D_SIZE 2
         assert_eq!(&payload[40..44], &[255, 255, 255, 255]);
     }
 
+    // The build's asset search root is a parameter, so a bare `source` resolves
+    // under whichever tree the caller passes and nowhere else.
+    #[test]
+    fn compile_color_lut_payload_finds_a_bare_source_under_the_assets_dir() {
+        let assets = tempfile::tempdir().expect("tempdir");
+        let nested = assets.path().join("grades");
+        std::fs::create_dir_all(&nested).expect("assets tree");
+        std::fs::write(nested.join("t.cube"), CUBE_2).expect("write cube");
+        let args = serde_json::json!({"source": "t.cube"});
+
+        let payload =
+            compile_color_lut_payload(&args, Some(assets.path())).expect("bare source resolves");
+        assert_eq!(&payload[4..8], &2u32.to_le_bytes());
+
+        // Another root, and no root at all, both leave the bare name unresolved.
+        let elsewhere = tempfile::tempdir().expect("tempdir");
+        assert!(compile_color_lut_payload(&args, Some(elsewhere.path())).is_err());
+        assert!(compile_color_lut_payload(&args, None).is_err());
+    }
+
     #[test]
     fn compile_color_lut_payload_packs_a_png_strip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_png(&dir, "s.png", 4, 2, png::ColorType::Rgba, &strip2_pixels());
         let payload =
-            compile_color_lut_payload(&serde_json::json!({"source": src})).expect("compile");
+            compile_color_lut_payload(&serde_json::json!({"source": src}), None).expect("compile");
         assert_eq!(&payload[0..4], &0x3354554cu32.to_le_bytes());
         assert_eq!(&payload[4..8], &2u32.to_le_bytes());
         assert_eq!(payload.len(), 12 + 8 * 4);
@@ -330,7 +349,7 @@ LUT_3D_SIZE 2
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing.cube");
         let args = serde_json::json!({"source": path.to_str().unwrap()});
-        let err = compile_color_lut_payload(&args).unwrap_err();
+        let err = compile_color_lut_payload(&args, None).unwrap_err();
         assert!(err.contains("failed to read LUT source"), "got: {err}");
     }
 
@@ -359,7 +378,7 @@ LUT_3D_SIZE 2
         let dir = tempfile::tempdir().expect("tempdir");
         // Declares a size-2 LUT but supplies a single triplet.
         let src = write_cube(&dir, "LUT_3D_SIZE 2\n0 0 0\n");
-        let err = compile_color_lut_payload(&serde_json::json!({"source": src})).unwrap_err();
+        let err = compile_color_lut_payload(&serde_json::json!({"source": src}), None).unwrap_err();
         assert_eq!(err, "ColorLut .cube has 1 entries, expected 8 for size 2");
     }
 
@@ -367,7 +386,7 @@ LUT_3D_SIZE 2
     fn compile_color_lut_payload_surfaces_a_bad_png_strip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_png(&dir, "s.png", 3, 2, png::ColorType::Rgba, &[0u8; 3 * 2 * 4]);
-        let err = compile_color_lut_payload(&serde_json::json!({"source": src})).unwrap_err();
+        let err = compile_color_lut_payload(&serde_json::json!({"source": src}), None).unwrap_err();
         assert!(err.contains("must be 4x2"), "got: {err}");
     }
 

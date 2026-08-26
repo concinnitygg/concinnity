@@ -344,7 +344,7 @@ matters because later passes must see what earlier passes produced:
 | 6     | Prefabs              | Instantiated prop templates.                                                  |
 | 7     | Room textures        | Per-surface texture assignment.                                               |
 | 8     | Companions (round 1) | The render marker and its window / shader stack, implied by everything above. |
-| 9     | Application          | World name and window title for distribution.                                 |
+| 9     | AppConfig            | World name and window title for distribution.                                 |
 | 10    | Engine defaults      | Main menu, HUDs, chips, font, sky mesh, for a rendering world.                |
 | 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                          |
 | 12    | Option selects       | Settings rows to their primitives.                                            |
@@ -675,27 +675,38 @@ Everything the engine writes for a project lives under one state directory.
 
 ### 7.1 Root resolution
 
-Three roots exist, resolved without touching the filesystem:
+There is no default root, and no engine crate reads the environment to find
+one. A host installs the state directory before anything reads the tree; until
+it does, every path above resolves to nothing. Reads that cannot proceed without
+a state tree report `NoStateRoot`; the caches, the settings file, and the save
+files simply do nothing, so a library embedded in someone else's program never
+scatters state beside whatever directory it was launched from.
 
-**Development.** No root installed. The tree is wrapped in `.concinnity/`
-addressed relative to the current working directory, so it sits wherever a
-command runs. A host that must change the working directory for an unrelated
-reason (an example that chdirs so its world's relative asset paths resolve)
-captures the invocation directory and installs it before chdirring, so state
-stays put while content resolution follows the working directory.
+Where each host points it:
 
-**Shipped, portable.** A flat state root is installed at a directory: the tree
-sits directly there with no `.concinnity/` wrapper, so `data/`, `saves/`, and
-`settings` resolve beside the executable or inside the app bundle.
+**Development.** The `concinnity` CLI installs `.concinnity/` under the
+directory the command was run from. That name is the CLI's convention and lives
+in the CLI binary; no library crate knows it.
 
-**Shipped, read-only install.** An application installed where it cannot write
-beside its data (Program Files) installs a separate writable root, so only
-`saves/`, `settings/`, `crashes/`, and the two shader caches relocate to a
-per-user directory while `data/` stays beside the executable.
+**Shipped.** The player installs the directory beside its own executable (or
+`Contents/Resources` inside a macOS bundle), so `data`, `saves/`, and `settings`
+sit together in one folder.
 
-The runtime player probes writability at startup and installs the split root
-only when needed, so the portable single-folder layout is preserved whenever it
-works.
+**Embedded.** `App::from_blob` anchors the tree beside the blob it was handed,
+stepping out of a directory named `data` so the layout matches what a build
+produces. A host that names its own directory overrides that.
+
+A world's `AppConfig.home` overrides where the runtime-writable half goes: an
+absolute path verbatim, a relative one against the content root, empty for
+"beside the data".
+
+**Read-only install.** An application installed where it cannot write beside its
+data (Program Files) installs a separate writable root, so only `saves/`,
+`settings`, `crashes/`, and the two shader caches relocate to a per-user
+directory while the data stays beside the executable. The runtime player probes
+writability at startup and does this only when needed, so the portable
+single-folder layout is preserved whenever it works; an authored `home` takes
+precedence over the probe.
 
 Per-user base directories: `%LOCALAPPDATA%` on Windows (falling back to
 `%APPDATA%`), `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or
@@ -811,12 +822,12 @@ Before systems start, the app computes two budgets and publishes them as
 resources:
 
 **Thread budget.** Derived from the host core count, or from the world's
-`Application` limits when it declares an override. This sizes the shared job
+`AppConfig` when it declares an override. This sizes the shared job
 pool before the first system uses it. The default is `cores - 1`, floored at one.
 
 **Memory budget.** A soft ceiling on host memory the runtime aims to stay under.
 Automatically it is the lesser of a hard ceiling (16 GiB) and 70% of total
-physical RAM. An `Application` override is honoured but still capped at 85% of
+physical RAM. An `AppConfig` override is honoured but still capped at 85% of
 total RAM. When the platform RAM query fails, the hard ceiling stands, or the
 bare override if one was given.
 
@@ -1878,8 +1889,11 @@ against real-looking state while the real saves are never touched.
 2. **Cook.** Run the normal cook (validate, compile, write blobs and lock,
    reuse the cache).
 3. **Assemble.** Copy the prebuilt runtime player beside the world's compiled
-   `data/` blobs, in the flat layout the shipped runtime resolves relative to
-   its own executable.
+   blobs, in the layout the shipped runtime resolves relative to its own
+   executable. A world that fits in one blob ships as a single file named
+   `data`; one that overflows ships as a `data/` directory holding `0`, `1`,
+   ... Export picks the form, because overflow blobs are siblings named by
+   index and the single-file form has no directory of its own to hold them.
 4. **Warm the shader cache.** Backends whose shaders compile at renderer init
    declare their compile set as data; export compiles it in-process with no GPU
    device, so a player's first launch does not pay the compile. Because these
@@ -1912,12 +1926,22 @@ The shipped player anchors its state root to its own executable, not the launch
 working directory, so it finds its data whether it is double-clicked, launched
 from a shell, or run from inside a macOS `.app` bundle:
 
-- Inside a bundle (`Contents/MacOS/<exe>`), data resolves to
+- Inside a bundle (`Contents/MacOS/<exe>`), the root resolves to
   `Contents/Resources/`.
-- Everywhere else, data sits directly beside the executable.
+- Everywhere else, it sits directly beside the executable.
+
+Inside that root the world is either a file named `data` (one self-contained
+blob) or a directory named `data` holding blob `0` and its overflow siblings. A
+single positional argument overrides both, naming a blob file or a directory of
+blobs; it moves only what is read, never where the app writes.
+
+A single-file `data` whose world reports overflow blobs is refused with a
+message naming the fix, rather than half-loaded: its siblings would otherwise be
+read from whatever directory the file happens to sit in.
 
 If the content directory is not writable, runtime-writable state relocates to a
-per-user directory while `data/` stays put.
+per-user directory while the data stays put. A world that declares
+`AppConfig.home` chooses that location itself.
 
 ---
 

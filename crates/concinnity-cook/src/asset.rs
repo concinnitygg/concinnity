@@ -9,6 +9,8 @@
 //! and the `SourceBacked` trait stay in concinnity-core, since the engine reads
 //! a Shader stage's current-platform source at runtime.
 
+use std::path::Path;
+
 use crate::ecs::Component;
 use crate::world::WorldJsonlAsset;
 
@@ -37,6 +39,9 @@ pub(crate) struct BuildCtx<'a> {
     // The asset's declared name (used in error messages and as a key for
     // build-time intermediates such as compiled shader filenames).
     pub name: &'a str,
+    // The build's asset search root: the tree a bare `source` filename is
+    // searched under. `None` leaves bare filenames unresolved.
+    pub(crate) assets_dir: Option<&'a Path>,
     // Optional directory of user-supplied artifacts (e.g. account-uploaded
     // shader source files) consulted when resolving bare filenames.
     pub(crate) artifacts_dir: Option<&'a str>,

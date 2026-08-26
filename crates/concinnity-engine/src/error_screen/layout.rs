@@ -269,7 +269,7 @@ mod tests {
     fn each_message_line_is_centered_independently() {
         let (fonts, handle) = fonts();
         let layout = build(
-            "Failed to find the data blob:\n.concinnity/data/0",
+            "Failed to find the data blob:\nMyGame/data/0",
             1280.0,
             720.0,
             &fonts,

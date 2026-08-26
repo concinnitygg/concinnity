@@ -1,9 +1,9 @@
 // src/config.rs: the persistent runtime settings store.
 //
 // `Settings` (runtime choices made in the in-engine settings menu: graphics,
-// audio, controls) lives in the project at `.concinnity/settings` (the
+// audio, controls) lives in the project at the state root's `settings` (the
 // `settings` file under the state directory), the mutable sibling of the
-// build-regenerated `.concinnity/data`. It is
+// build-regenerated `data`. It is
 // stored as CBOR: binary like the data blobs, but self-describing, so adding
 // or removing a setting never invalidates an existing file (a missing field
 // falls back to its default, an unknown field is ignored). bincode, which the
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 // The runtime settings store: choices made in the in-engine settings menu.
-// Persisted as CBOR at `.concinnity/settings`. Each field is
+// Persisted as CBOR at the state root's `settings`. Each field is
 // `Option` (via the sub-structs): `None` means "use the world's default" so an
 // unchanged setting never overrides the authored value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -290,13 +290,19 @@ impl Settings {
     // (a settings change). Returns defaults when nothing is stored or the file
     // is unreadable.
     pub(crate) fn load() -> Self {
-        Self::load_from(&concinnity_store::paths::settings_path())
+        concinnity_store::paths::settings_path()
+            .map(|path| Self::load_from(&path))
+            .unwrap_or_default()
     }
 
     // Persist to the `settings` file as CBOR. Creates the state directory as
-    // needed.
+    // needed. A host that installed no state root has nowhere to persist to,
+    // which is not an error: the choices apply for the rest of the run.
     pub(crate) fn save(&self) -> std::io::Result<()> {
-        self.save_to(&concinnity_store::paths::settings_path())
+        match concinnity_store::paths::settings_path() {
+            Some(path) => self.save_to(&path),
+            None => Ok(()),
+        }
     }
 
     // Read settings from `path`. Split from `load` so the serialize-read path
@@ -434,7 +440,7 @@ mod tests {
     }
 
     // Regression guard: the on-disk `save`/`load` path must stay sandboxable so a
-    // test can never clobber the developer's real `.concinnity/settings` file.
+    // test can never clobber the developer's real `settings` file.
     // Drives the real serialize-write-read cycle, but against a temp file. A
     // non-default `render_scale` mirrors a real persisted choice and proves a
     // populated field survives the round trip (it is the field whose loss the
@@ -454,7 +460,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings");
         // The sandbox is somewhere else entirely, never the real settings file.
-        assert_ne!(path, concinnity_store::paths::settings_path());
+        assert_ne!(
+            Some(&path),
+            concinnity_store::paths::settings_path().as_ref()
+        );
 
         s.save_to(&path).unwrap();
         // The write landed in the sandbox under the expected file name.
@@ -464,11 +473,19 @@ mod tests {
         assert_eq!(loaded, s);
     }
 
-    // Settings resolve to the `settings` file directly under the state dir.
+    // Settings resolve to the `settings` file directly under the state dir,
+    // and to nothing at all when no host installed one.
     #[test]
     fn settings_path_is_under_state_dir() {
-        let p = concinnity_store::paths::settings_path();
-        assert_eq!(p.file_name().unwrap(), "settings");
-        assert_eq!(p, concinnity_store::paths::state_dir().join("settings"));
+        match concinnity_store::paths::settings_path() {
+            Some(p) => {
+                assert_eq!(p.file_name().unwrap(), "settings");
+                assert_eq!(
+                    Some(p),
+                    concinnity_store::paths::state_dir().map(|d| d.join("settings"))
+                );
+            }
+            None => assert_eq!(concinnity_store::paths::state_dir(), None),
+        }
     }
 }

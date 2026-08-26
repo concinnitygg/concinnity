@@ -16,6 +16,7 @@ use serde::Deserialize;
 use crate::ecs::asset_id::AssetId;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Once;
 
 // The vocabulary half -- `RegisteredType` and the classifiers
@@ -30,13 +31,18 @@ pub use concinnity_world::resource_type::{ResourceKind, asset_resource_kind, is_
 // enum lives in concinnity-world (which links no compilers), so the per-type
 // compile arms attach here in cook, where the compilers live.
 pub(crate) trait ResourceAssetCompile {
-    // Compile this resource's payload from its authored args. Bypasses the
-    // `BuildAsset` trait (which requires `Component`, a thing a resource no
-    // longer is) and calls the concrete compiler directly.
-    fn compile_payload(self, args: &serde_json::Value) -> std::io::Result<Vec<u8>>;
+    // Compile this resource's payload from its authored args, resolving bare
+    // source filenames under `assets_dir`. Bypasses the `BuildAsset` trait
+    // (which requires `Component`, a thing a resource no longer is) and calls
+    // the concrete compiler directly.
+    fn compile_payload(
+        self,
+        args: &serde_json::Value,
+        assets_dir: Option<&Path>,
+    ) -> std::io::Result<Vec<u8>>;
     // The source files this resource reads, folded into its payload cache key
     // so an unchanged source is a cache hit.
-    fn source_files(self, args: &serde_json::Value) -> Vec<String>;
+    fn source_files(self, args: &serde_json::Value, assets_dir: Option<&Path>) -> Vec<String>;
     // The baked runtime data that rides the resource record's `data_bytes`
     // ALONGSIDE a compiled payload, or `None`. SkinnedMesh is the only such
     // hybrid today: its geometry compiles into a blob payload while its
@@ -49,23 +55,29 @@ pub(crate) trait ResourceAssetCompile {
 }
 
 impl ResourceAssetCompile for RegisteredType {
-    fn compile_payload(self, args: &serde_json::Value) -> std::io::Result<Vec<u8>> {
+    fn compile_payload(
+        self,
+        args: &serde_json::Value,
+        assets_dir: Option<&Path>,
+    ) -> std::io::Result<Vec<u8>> {
         match self {
             Self::AudioClip => crate::audio_clip::compile_audio_clip_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Texture => crate::texture::compile_texture_payload(args)
+            Self::Texture => crate::texture::compile_texture_payload(args, assets_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::CubemapTexture => crate::cubemap::compile_cubemap_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::EnvironmentMap => crate::environment_map::compile_environment_map_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::ColorLut => crate::color_lut::compile_color_lut_payload(args)
+            Self::EnvironmentMap => {
+                crate::environment_map::compile_environment_map_payload(args, assets_dir)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }
+            Self::ColorLut => crate::color_lut::compile_color_lut_payload(args, assets_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Font => crate::font::compile_font_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Material => compile_material_data(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Mesh => crate::mesh_compile::compile_mesh_payload(args)
+            Self::Mesh => crate::mesh_compile::compile_mesh_payload(args, assets_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::SkinnedMesh => compile_skinned_mesh_payload(args),
             // The registry spans every declarable type; only the resource group
@@ -77,7 +89,7 @@ impl ResourceAssetCompile for RegisteredType {
         }
     }
 
-    fn source_files(self, args: &serde_json::Value) -> Vec<String> {
+    fn source_files(self, args: &serde_json::Value, assets_dir: Option<&Path>) -> Vec<String> {
         match self {
             Self::AudioClip
             | Self::Texture
@@ -99,7 +111,7 @@ impl ResourceAssetCompile for RegisteredType {
                 if let Some(src) = files.first().cloned()
                     && src.to_lowercase().ends_with(".gltf")
                 {
-                    files.extend(crate::gltf_source::referenced_files(&src));
+                    files.extend(crate::gltf_source::referenced_files(&src, assets_dir));
                 }
                 // A character model reads its source file.
                 if let Some(arg) = args.get("character_model").and_then(|v| {
@@ -469,7 +481,10 @@ mod tests {
 
         assert!(
             RegisteredType::Material
-                .source_files(&serde_json::json!({"albedo": "wall_tex", "source": "m.json"}))
+                .source_files(
+                    &serde_json::json!({"albedo": "wall_tex", "source": "m.json"}),
+                    None
+                )
                 .is_empty()
         );
 
@@ -566,14 +581,14 @@ mod tests {
         install_resource_handles(handles);
 
         let bytes = RegisteredType::Material
-            .compile_payload(&serde_json::json!({"shader": "shader_b"}))
+            .compile_payload(&serde_json::json!({"shader": "shader_b"}), None)
             .unwrap();
         let mat: crate::components::Material = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(mat.shader, Some(ShaderHandle(1)));
 
         // An unreferenced shader field stays None.
         let bytes = RegisteredType::Material
-            .compile_payload(&serde_json::json!({}))
+            .compile_payload(&serde_json::json!({}), None)
             .unwrap();
         let mat: crate::components::Material = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(mat.shader, None);
@@ -616,7 +631,7 @@ mod tests {
         // `data_bytes` is the serialized Material) rather than `reserialize_args`.
         let bake = |field_json: serde_json::Value| -> crate::components::Material {
             let bytes = RegisteredType::Material
-                .compile_payload(&field_json)
+                .compile_payload(&field_json, None)
                 .unwrap();
             postcard::from_bytes(&bytes).unwrap()
         };

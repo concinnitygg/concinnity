@@ -6,15 +6,18 @@ use concinnity_core::components::{Shader, ShaderKind, ShaderPayload};
 use concinnity_world::source_args::resolve_source_from_args;
 
 // Resolve a raw per-platform source string to the on-disk path the build will
-// read. A bare filename is looked up recursively under `.concinnity/assets/`
-// first, then under `<artifacts_dir>` when set, then directly under
-// `.concinnity/assets/<raw>`. A path with a directory component is used
-// verbatim. Mirrors the resolution `compile_payload` applies; built-in shaders
-// short-circuit upstream and never reach this.
+// read. A bare filename is looked up recursively under the build's asset search
+// root first, then under `<artifacts_dir>` when set, then directly under
+// `<assets>/<raw>`. A path with a directory component is used verbatim. Mirrors
+// the resolution `compile_payload` applies; built-in shaders short-circuit
+// upstream and never reach this.
 pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     let p = std::path::Path::new(raw);
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
-        if let Some(path) = concinnity_store::source::find_in_assets(raw) {
+        if let Some(path) = ctx
+            .assets_dir
+            .and_then(|dir| concinnity_store::source::find_in(dir, raw))
+        {
             return path;
         }
         if let Some(dir) = ctx.artifacts_dir {
@@ -23,10 +26,9 @@ pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
                 return artifact_path;
             }
         }
-        return concinnity_store::paths::assets_dir()
-            .join(raw)
-            .to_string_lossy()
-            .into_owned();
+        if let Some(assets) = ctx.assets_dir {
+            return assets.join(raw).to_string_lossy().into_owned();
+        }
     }
     raw.to_string()
 }
@@ -163,8 +165,16 @@ mod tests {
     use crate::asset::{BuildAsset, SourceFiles};
 
     fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
+        with_assets(None, artifacts_dir)
+    }
+
+    fn with_assets<'a>(
+        assets_dir: Option<&'a std::path::Path>,
+        artifacts_dir: Option<&'a str>,
+    ) -> BuildCtx<'a> {
         BuildCtx {
             name: "s",
+            assets_dir,
             artifacts_dir,
             all_assets: &[],
         }
@@ -181,12 +191,37 @@ mod tests {
 
     #[test]
     fn resolve_source_path_for_keeps_paths_with_a_directory_component() {
-        // A path that already contains a directory is returned verbatim; the
-        // `.concinnity/assets/` recursive search consults process-global asset
-        // anchors and is left to integration coverage.
+        // A path that already contains a directory is returned verbatim: no
+        // search applies, with or without an asset root.
+        let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             resolve_source_path_for("shaders/x.metal", &ctx(None)),
             "shaders/x.metal"
+        );
+        assert_eq!(
+            resolve_source_path_for("shaders/x.metal", &with_assets(Some(dir.path()), None)),
+            "shaders/x.metal"
+        );
+    }
+
+    // A bare filename is found by recursive search under the asset root, which
+    // wins over the artifacts dir.
+    #[test]
+    fn resolve_source_path_for_prefers_a_nested_asset_over_an_artifact() {
+        let assets = tempfile::tempdir().unwrap();
+        let nested = assets.path().join("shaders");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("user.metal"), "// msl").unwrap();
+        let artifact_dir = tempfile::tempdir().unwrap();
+        std::fs::write(artifact_dir.path().join("user.metal"), "// msl").unwrap();
+        let artifacts = artifact_dir.path().to_string_lossy().into_owned();
+
+        assert_eq!(
+            resolve_source_path_for(
+                "user.metal",
+                &with_assets(Some(assets.path()), Some(&artifacts))
+            ),
+            nested.join("user.metal").to_string_lossy()
         );
     }
 
@@ -201,28 +236,33 @@ mod tests {
         );
     }
 
-    // The fallback reads the process-global assets anchor, so it shares the
-    // build-output lock with the other tests that install a state dir.
     #[test]
     fn resolve_source_path_for_falls_back_to_the_assets_dir() {
-        let _guard = crate::blob::test_output::LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let expected = concinnity_store::paths::assets_dir()
+        let assets = tempfile::tempdir().unwrap();
+        let expected = assets
+            .path()
             .join("cn_no_such.metal")
             .to_string_lossy()
             .into_owned();
         // No artifacts dir at all...
         assert_eq!(
-            resolve_source_path_for("cn_no_such.metal", &ctx(None)),
+            resolve_source_path_for("cn_no_such.metal", &with_assets(Some(assets.path()), None)),
             expected
         );
         // ...and an artifacts dir that doesn't hold the file both land there.
         let dir = tempfile::tempdir().unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path_for("cn_no_such.metal", &ctx(Some(&artifacts))),
+            resolve_source_path_for(
+                "cn_no_such.metal",
+                &with_assets(Some(assets.path()), Some(&artifacts))
+            ),
             expected
+        );
+        // With no search root at all the bare name is left as it was authored.
+        assert_eq!(
+            resolve_source_path_for("cn_no_such.metal", &ctx(None)),
+            "cn_no_such.metal"
         );
     }
 

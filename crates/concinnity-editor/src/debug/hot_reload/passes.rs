@@ -46,7 +46,10 @@ pub(super) fn reload_volumetric_fog(
             return result;
         }
     };
-    let entries = match concinnity_cook::world::expand_world_from_str(&content) {
+    let entries = match concinnity_cook::world::expand_world_from_str(
+        &content,
+        crate::authoring::assets_root::assets_dir().as_deref(),
+    ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
@@ -156,7 +159,10 @@ pub(super) fn reload_procedural_meshes(
     // Expand prefabs / etc. so auto-injected ProceduralMeshes match the
     // init-time captured set; otherwise an unchanged entry shows up as
     // "missing from JSONL" every reload.
-    let entries = match concinnity_cook::world::expand_world_from_str(&content) {
+    let entries = match concinnity_cook::world::expand_world_from_str(
+        &content,
+        crate::authoring::assets_root::assets_dir().as_deref(),
+    ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
@@ -230,7 +236,10 @@ pub(super) fn reload_procedural_meshes(
         // Regenerate from the new args. Routed through the build wrapper so a
         // live-edited `heightfield` ProceduralMesh still decodes its source
         // image (core's compile_mesh_payload links no image decoders).
-        let payload = match concinnity_cook::mesh_compile::compile_mesh_payload(raw_args) {
+        let payload = match concinnity_cook::mesh_compile::compile_mesh_payload(
+            raw_args,
+            crate::authoring::assets_root::assets_dir().as_deref(),
+        ) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(
@@ -384,7 +393,10 @@ pub(super) fn reload_stories(
             return Vec::new();
         }
     };
-    let entries = match concinnity_cook::world::expand_world_from_str(&content) {
+    let entries = match concinnity_cook::world::expand_world_from_str(
+        &content,
+        crate::authoring::assets_root::assets_dir().as_deref(),
+    ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(

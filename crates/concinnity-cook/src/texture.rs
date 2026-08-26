@@ -22,6 +22,8 @@
 // `downscale_rgba` stay in concinnity-cpu (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
+use std::path::Path;
+
 use serde::Deserialize;
 
 use concinnity_core::components::Texture;
@@ -40,7 +42,10 @@ pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(),
 }
 
 // Compile a Texture component's JSON args into the tagged texture payload.
-pub(crate) fn compile_texture_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_texture_payload(
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> Result<Vec<u8>, String> {
     let tex: Texture =
         Deserialize::deserialize(args).map_err(|e| format!("Texture: invalid args: {}", e))?;
 
@@ -60,7 +65,7 @@ pub(crate) fn compile_texture_payload(args: &serde_json::Value) -> Result<Vec<u8
             if tex.source.is_empty() {
                 return Err("file-backed Texture requires a `source` path".to_string());
             }
-            compile_image_source(&tex.source, tex.image_index, tex.max_size)?
+            compile_image_source(&tex.source, tex.image_index, tex.max_size, assets_dir)?
         }
         other => return Err(format!("unknown texture generator '{other}'")),
     };
@@ -78,6 +83,7 @@ fn compile_image_source(
     source: &str,
     image_index: u32,
     max_size: u32,
+    assets_dir: Option<&Path>,
 ) -> Result<TextureImage, String> {
     let lower = source.to_lowercase();
     let image = if lower.ends_with(".ktx2") {
@@ -86,7 +92,7 @@ fn compile_image_source(
     } else if lower.ends_with(".dds") {
         compile_dds_source(source, max_size)?
     } else {
-        let (w, h, px) = decode_source(source, image_index)?;
+        let (w, h, px) = decode_source(source, image_index, assets_dir)?;
         TextureImage::rgba8(w, h, px)
     };
     Ok(cap_image(image, max_size))
@@ -155,11 +161,17 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 /// Dispatches on the lower-cased extension: an image embedded in a `.glb`, a
 /// `.jpg` / `.jpeg`, a `.dds`, a `.ktx2`, a `.tga`, or a PNG (the default).
 /// The single dispatch behind both the compiled payload and a re-decode of an
-/// edited file, so a texture that builds also reloads.
-pub fn decode_source(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
+/// edited file, so a texture that builds also reloads. Only a `.glb` / `.gltf`
+/// source is searched for under `assets_dir`; the flat image formats read the
+/// path the world declared.
+pub fn decode_source(
+    source: &str,
+    image_index: u32,
+    assets_dir: Option<&Path>,
+) -> Result<(u32, u32, Vec<u8>), String> {
     let lower = source.to_lowercase();
     if lower.ends_with(".glb") || lower.ends_with(".gltf") {
-        load_gltf_image(source, image_index)
+        load_gltf_image(source, image_index, assets_dir)
     } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
         load_jpg(source)
     } else if lower.ends_with(".dds") {
@@ -377,8 +389,12 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 // Extract the indexed image from a `.glb` / `.gltf`. The image's bytes can
 // live in a `bufferView`, in an external file beside the source, or in a data
 // URI. The MIME type (or file extension) selects the decoder.
-fn load_gltf_image(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
-    let doc = crate::glb::parse_glb(source)?;
+fn load_gltf_image(
+    source: &str,
+    image_index: u32,
+    assets_dir: Option<&Path>,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    let doc = crate::glb::parse_glb(source, assets_dir)?;
     decode_glb_image_from_doc(&doc, source, image_index)
 }
 
@@ -906,7 +922,7 @@ mod tests {
             "t.png",
             &encode_png(2, 1, png::ColorType::Rgba, &data),
         );
-        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (2, 1));
         assert_eq!(px, data);
     }
@@ -916,7 +932,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let data = [10u8, 20, 30, 40, 50, 60];
         let src = write_file(&dir, "t.png", &encode_png(2, 1, png::ColorType::Rgb, &data));
-        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (2, 1));
         assert_eq!(px, vec![10, 20, 30, 255, 40, 50, 60, 255]);
     }
@@ -929,7 +945,7 @@ mod tests {
             "t.png",
             &encode_png(2, 1, png::ColorType::Grayscale, &[7, 200]),
         );
-        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        let (_, _, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!(px, vec![7, 7, 7, 255, 200, 200, 200, 255]);
     }
 
@@ -941,7 +957,7 @@ mod tests {
             "t.png",
             &encode_png(1, 1, png::ColorType::GrayscaleAlpha, &[9, 128]),
         );
-        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        let (_, _, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!(px, vec![9, 9, 9, 128]);
     }
 
@@ -963,7 +979,7 @@ mod tests {
             writer.finish().expect("png finish");
         }
         let src = write_file(&dir, "t.png", &out);
-        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (2, 1));
         // Two pixels of RGBA, one byte per channel rather than two.
         assert_eq!(px.len(), 8);
@@ -974,7 +990,7 @@ mod tests {
     fn decode_source_rejects_garbage_png_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.png", b"definitely not a png");
-        let err = decode_source(&src, 0).unwrap_err();
+        let err = decode_source(&src, 0, None).unwrap_err();
         assert!(err.contains("failed to read PNG info"), "got: {err}");
     }
 
@@ -992,7 +1008,7 @@ mod tests {
             writer.finish().expect("png finish");
         }
         let src = write_file(&dir, "t.png", &out);
-        let err = decode_source(&src, 0).unwrap_err();
+        let err = decode_source(&src, 0, None).unwrap_err();
         assert!(
             err.contains("unsupported PNG color type Indexed"),
             "got: {err}"
@@ -1052,7 +1068,7 @@ mod tests {
     fn decode_source_expands_a_grayscale_jpeg_to_opaque_rgba() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.jpg", &jpeg_1x1(1, false));
-        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (1, 1));
         assert_eq!(px, vec![128, 128, 128, 255]);
     }
@@ -1061,7 +1077,7 @@ mod tests {
     fn decode_source_expands_an_rgb_jpeg_to_opaque_rgba() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.jpg", &jpeg_1x1(3, false));
-        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (1, 1));
         assert_eq!(px, vec![128, 128, 128, 255]);
     }
@@ -1071,7 +1087,7 @@ mod tests {
         // The 16-bit mid-point sample is 0x8000, whose high byte is 128.
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.jpg", &jpeg_1x1(1, true));
-        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        let (_, _, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!(px, vec![128, 128, 128, 255]);
     }
 
@@ -1080,7 +1096,7 @@ mod tests {
         // Every ink at the mid-point: (1 - 0.502) * (1 - 0.502) * 255.
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.jpg", &jpeg_1x1(4, false));
-        let (_, _, px) = decode_source(&src, 0).expect("decode");
+        let (_, _, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!(px, vec![64, 64, 64, 255]);
     }
 
@@ -1090,7 +1106,7 @@ mod tests {
     fn decode_source_rejects_garbage_jpeg_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.jpg", b"not a jpeg");
-        let err = decode_source(&src, 0).unwrap_err();
+        let err = decode_source(&src, 0, None).unwrap_err();
         assert!(err.contains("failed to decode JPEG"), "got: {err}");
     }
 
@@ -1098,7 +1114,7 @@ mod tests {
     fn decode_source_rejects_garbage_dds_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", b"nope");
-        let err = decode_source(&src, 0).unwrap_err();
+        let err = decode_source(&src, 0, None).unwrap_err();
         assert!(err.contains(".dds"), "got: {err}");
     }
 
@@ -1106,7 +1122,7 @@ mod tests {
     fn decode_source_rejects_garbage_tga_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.tga", b"x");
-        assert!(decode_source(&src, 0).is_err());
+        assert!(decode_source(&src, 0, None).is_err());
     }
 
     // GLB-embedded images
@@ -1192,7 +1208,7 @@ mod tests {
             "images": [{"uri": "albedo.png"}]
         });
         let src = write_file(&dir, "scene.gltf", &serde_json::to_vec(&json).unwrap());
-        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (1, 1));
         assert_eq!(px, vec![9, 8, 7, 255]);
     }
@@ -1258,7 +1274,8 @@ mod tests {
             "t.png",
             &encode_png(2, 1, png::ColorType::Rgba, &data),
         );
-        let payload = compile_texture_payload(&serde_json::json!({"source": src})).expect("ok");
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src}), None).expect("ok");
         let image = deserialise(&payload);
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (2, 1));
@@ -1275,8 +1292,9 @@ mod tests {
             "t.png",
             &encode_png(4, 4, png::ColorType::Rgba, &data),
         );
-        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}))
-            .expect("ok");
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}), None)
+                .expect("ok");
         let image = deserialise(&payload);
         assert_eq!((image.width(), image.height()), (2, 2));
         assert_eq!(image.mips[0].data.len(), 2 * 2 * 4);
@@ -1291,8 +1309,9 @@ mod tests {
             "t.png",
             &encode_png(2, 1, png::ColorType::Rgba, &data),
         );
-        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 64}))
-            .expect("ok");
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src, "max_size": 64}), None)
+                .expect("ok");
         let image = deserialise(&payload);
         assert_eq!((image.width(), image.height()), (2, 1));
         assert_eq!(image.mips[0].data, data);
@@ -1309,7 +1328,7 @@ mod tests {
             &crate::ktx2::test_fixtures::bc1_mip_chain_ktx2(),
         );
         let payload =
-            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
+            compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
         let image = deserialise(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!(image.mips.len(), 2);
@@ -1326,8 +1345,9 @@ mod tests {
             "t.ktx2",
             &crate::ktx2::test_fixtures::bc1_mip_chain_ktx2(),
         );
-        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}))
-            .expect("compile");
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}), None)
+                .expect("compile");
         let image = deserialise(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!((image.width(), image.height()), (2, 2));
@@ -1338,7 +1358,7 @@ mod tests {
     fn compile_texture_payload_surfaces_a_corrupt_ktx2() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
-        let err = compile_texture_payload(&serde_json::json!({"source": src})).unwrap_err();
+        let err = compile_texture_payload(&serde_json::json!({"source": src}), None).unwrap_err();
         assert!(err.contains("not a valid KTX2 container"), "got: {err}");
         assert!(
             err.contains("t.ktx2"),
@@ -1349,7 +1369,7 @@ mod tests {
     #[test]
     fn compile_texture_payload_surfaces_a_missing_ktx2() {
         let args = serde_json::json!({"source": "zzz_missing_texture.ktx2"});
-        let err = compile_texture_payload(&args).unwrap_err();
+        let err = compile_texture_payload(&args, None).unwrap_err();
         assert!(err.contains("failed to open KTX2 texture"), "got: {err}");
     }
 
@@ -1361,14 +1381,14 @@ mod tests {
             "t.ktx2",
             &crate::ktx2::test_fixtures::bc1_mip_chain_ktx2(),
         );
-        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (4, 4));
         assert!(px.chunks_exact(4).all(|c| c == [255, 0, 0, 255]));
     }
 
     #[test]
     fn decode_source_routes_ktx2_to_the_ktx2_loader() {
-        let err = decode_source("zzz_missing_texture.ktx2", 0).unwrap_err();
+        let err = decode_source("zzz_missing_texture.ktx2", 0, None).unwrap_err();
         assert!(
             err.contains("failed to open KTX2 texture"),
             "expected .ktx2 to route to the KTX2 loader, got: {err}"
@@ -1392,7 +1412,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", &bc1_dds(8, 8, 4));
         let payload =
-            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
+            compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
         let image = deserialise(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!(image.mips.len(), 4);
@@ -1406,8 +1426,9 @@ mod tests {
     fn compile_texture_payload_caps_a_dds_chain_by_dropping_mips() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", &bc1_dds(8, 8, 4));
-        let payload = compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}))
-            .expect("compile");
+        let payload =
+            compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}), None)
+                .expect("compile");
         let image = deserialise(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!((image.width(), image.height()), (2, 2));
@@ -1426,7 +1447,7 @@ mod tests {
         let src = write_file(&dir, "n.dds", &dds);
 
         let payload =
-            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
+            compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
         let image = deserialise(&payload);
 
         assert_eq!(image.format, TextureFormat::Bc5);
@@ -1442,7 +1463,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", &bc1_dds(4, 4, 1));
         let payload =
-            compile_texture_payload(&serde_json::json!({"source": src})).expect("compile");
+            compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
         let image = deserialise(&payload);
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (4, 4));
@@ -1458,7 +1479,7 @@ mod tests {
     fn compile_texture_payload_surfaces_a_corrupt_dds() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", b"nope");
-        let err = compile_texture_payload(&serde_json::json!({"source": src})).unwrap_err();
+        let err = compile_texture_payload(&serde_json::json!({"source": src}), None).unwrap_err();
         assert!(err.contains("DDS too short"), "got: {err}");
         assert!(err.contains("t.dds"), "error should name the source: {err}");
     }
@@ -1466,14 +1487,14 @@ mod tests {
     #[test]
     fn compile_texture_payload_surfaces_a_missing_dds() {
         let args = serde_json::json!({"source": "zzz_missing_texture.dds"});
-        let err = compile_texture_payload(&args).unwrap_err();
+        let err = compile_texture_payload(&args, None).unwrap_err();
         assert!(err.contains("failed to open DDS texture"), "got: {err}");
     }
 
     #[test]
     fn compile_texture_payload_surfaces_a_missing_png() {
         let args = serde_json::json!({"source": "zzz_missing_texture.png"});
-        let err = compile_texture_payload(&args).unwrap_err();
+        let err = compile_texture_payload(&args, None).unwrap_err();
         assert!(err.contains("failed to open texture source"), "got: {err}");
     }
 
@@ -1481,7 +1502,7 @@ mod tests {
     fn decode_source_surfaces_a_corrupt_ktx2() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
-        let err = decode_source(&src, 0).unwrap_err();
+        let err = decode_source(&src, 0, None).unwrap_err();
         assert!(err.contains("not a valid KTX2 container"), "got: {err}");
     }
 
@@ -1492,7 +1513,7 @@ mod tests {
         // Keep the header chunks but cut the compressed image data short.
         bytes.truncate(bytes.len() - 20);
         let src = write_file(&dir, "t.png", &bytes);
-        let err = decode_source(&src, 0).unwrap_err();
+        let err = decode_source(&src, 0, None).unwrap_err();
         assert!(err.contains("failed to decode PNG frame"), "got: {err}");
     }
 
@@ -1500,7 +1521,7 @@ mod tests {
     fn decode_source_surfaces_a_corrupt_glb() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.glb", b"not a glb");
-        assert!(decode_source(&src, 0).is_err());
+        assert!(decode_source(&src, 0, None).is_err());
     }
 
     #[test]
@@ -1513,21 +1534,23 @@ mod tests {
 
     #[test]
     fn compile_texture_payload_requires_a_source_when_no_generator() {
-        let err = compile_texture_payload(&serde_json::json!({})).unwrap_err();
+        let err = compile_texture_payload(&serde_json::json!({}), None).unwrap_err();
         assert!(err.contains("requires a `source` path"), "got: {err}");
     }
 
     #[test]
     fn compile_texture_payload_rejects_mistyped_args() {
-        let err = compile_texture_payload(&serde_json::json!({"generator": 5})).unwrap_err();
+        let err = compile_texture_payload(&serde_json::json!({"generator": 5}), None).unwrap_err();
         assert!(err.contains("invalid args"), "got: {err}");
     }
 
     #[test]
     fn compile_texture_payload_sky_is_a_narrow_vertical_gradient() {
-        let payload =
-            compile_texture_payload(&serde_json::json!({"generator": "sky", "resolution": 64}))
-                .expect("ok");
+        let payload = compile_texture_payload(
+            &serde_json::json!({"generator": "sky", "resolution": 64}),
+            None,
+        )
+        .expect("ok");
         // Sky is always 4 pixels wide by `resolution` tall.
         let image = deserialise(&payload);
         assert_eq!((image.width(), image.height()), (4, 64));
@@ -1541,7 +1564,7 @@ mod tests {
 
     #[test]
     fn decode_source_routes_jpg_to_jpeg_loader() {
-        let err = decode_source("zzz_missing_texture.jpg", 0).unwrap_err();
+        let err = decode_source("zzz_missing_texture.jpg", 0, None).unwrap_err();
         assert!(
             err.contains("failed to open JPEG texture"),
             "expected .jpg to route to the JPEG loader, got: {err}"
@@ -1550,7 +1573,7 @@ mod tests {
 
     #[test]
     fn decode_source_routes_jpeg_extension_to_jpeg_loader() {
-        let err = decode_source("zzz_missing_texture.jpeg", 0).unwrap_err();
+        let err = decode_source("zzz_missing_texture.jpeg", 0, None).unwrap_err();
         assert!(
             err.contains("failed to open JPEG texture"),
             "expected .jpeg to route to the JPEG loader, got: {err}"
@@ -1560,7 +1583,7 @@ mod tests {
     #[test]
     fn decode_source_routes_uppercase_jpg_to_jpeg_loader() {
         // Extension matching is case-insensitive (build path lower-cases too).
-        let err = decode_source("zzz_missing_texture.JPG", 0).unwrap_err();
+        let err = decode_source("zzz_missing_texture.JPG", 0, None).unwrap_err();
         assert!(
             err.contains("failed to open JPEG texture"),
             "expected .JPG to route to the JPEG loader, got: {err}"
@@ -1569,7 +1592,7 @@ mod tests {
 
     #[test]
     fn decode_source_routes_png_to_png_loader() {
-        let err = decode_source("zzz_missing_texture.png", 0).unwrap_err();
+        let err = decode_source("zzz_missing_texture.png", 0, None).unwrap_err();
         assert!(
             err.contains("failed to open texture source"),
             "expected .png to route to the PNG loader, got: {err}"
@@ -1578,7 +1601,7 @@ mod tests {
 
     #[test]
     fn decode_source_routes_dds_to_dds_loader() {
-        let err = decode_source("zzz_missing_texture.dds", 0).unwrap_err();
+        let err = decode_source("zzz_missing_texture.dds", 0, None).unwrap_err();
         assert!(
             err.contains("failed to open DDS texture"),
             "expected .dds to route to the DDS loader, got: {err}"
@@ -1588,7 +1611,7 @@ mod tests {
     #[test]
     fn decode_source_routes_tga_to_tga_loader() {
         // Mixed-case extension still routes correctly (dispatch lower-cases).
-        let err = decode_source("zzz_missing_texture.TGA", 0).unwrap_err();
+        let err = decode_source("zzz_missing_texture.TGA", 0, None).unwrap_err();
         assert!(
             err.contains("failed to open TGA texture"),
             "expected .TGA to route to the TGA loader, got: {err}"
@@ -1598,37 +1621,37 @@ mod tests {
     #[test]
     fn compile_texture_payload_checker_succeeds() {
         let args = serde_json::json!({"generator": "checker", "resolution": 64});
-        assert!(compile_texture_payload(&args).is_ok());
+        assert!(compile_texture_payload(&args, None).is_ok());
     }
 
     #[test]
     fn compile_texture_payload_wood_succeeds() {
         let args = serde_json::json!({"generator": "wood", "resolution": 64});
-        assert!(compile_texture_payload(&args).is_ok());
+        assert!(compile_texture_payload(&args, None).is_ok());
     }
 
     #[test]
     fn compile_texture_payload_tile_succeeds() {
         let args = serde_json::json!({"generator": "tile", "resolution": 64});
-        assert!(compile_texture_payload(&args).is_ok());
+        assert!(compile_texture_payload(&args, None).is_ok());
     }
 
     #[test]
     fn compile_texture_payload_metal_succeeds() {
         let args = serde_json::json!({"generator": "metal", "resolution": 64});
-        assert!(compile_texture_payload(&args).is_ok());
+        assert!(compile_texture_payload(&args, None).is_ok());
     }
 
     #[test]
     fn compile_texture_payload_terrain_succeeds() {
         let args = serde_json::json!({"generator": "terrain", "resolution": 64});
-        assert!(compile_texture_payload(&args).is_ok());
+        assert!(compile_texture_payload(&args, None).is_ok());
     }
 
     #[test]
     fn compile_texture_payload_unknown_generator_errors() {
         let args = serde_json::json!({"generator": "nonexistent"});
-        assert!(compile_texture_payload(&args).is_err());
+        assert!(compile_texture_payload(&args, None).is_err());
     }
 
     #[test]
@@ -1690,13 +1713,13 @@ mod tests {
     #[test]
     fn compile_texture_payload_stone_succeeds() {
         let args = serde_json::json!({"generator": "stone", "resolution": 64});
-        assert!(compile_texture_payload(&args).is_ok());
+        assert!(compile_texture_payload(&args, None).is_ok());
     }
 
     #[test]
     fn compile_texture_payload_plaster_succeeds() {
         let args = serde_json::json!({"generator": "plaster", "resolution": 64});
-        assert!(compile_texture_payload(&args).is_ok());
+        assert!(compile_texture_payload(&args, None).is_ok());
     }
 
     #[test]
@@ -1725,7 +1748,7 @@ mod tests {
         let res = 64u32;
         for generator in ["grass", "brick", "concrete"] {
             let args = serde_json::json!({"generator": generator, "resolution": res});
-            let payload = compile_texture_payload(&args)
+            let payload = compile_texture_payload(&args, None)
                 .unwrap_or_else(|e| panic!("{generator} should compile: {e}"));
             let image = deserialise(&payload);
             assert_eq!(

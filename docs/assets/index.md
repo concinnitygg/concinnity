@@ -4,7 +4,7 @@
 
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
 - [AnimationGraph](AnimationGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
-- [Application](Application.md) - Runtime half of the Application asset: the process resource budgets.
+- [AppConfig](AppConfig.md) - Runtime half of the AppConfig asset: where the application keeps what it writes, and its process resource budgets.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
 - [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
 - [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.
@@ -88,7 +88,6 @@
 - [AnimationState](AnimationState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.
 - [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
 - [AnimationTransition](AnimationTransition.md) - One directed transition between two states.
-- [AppLimits](AppLimits.md) - Optional per-application overrides for the runtime's thread and memory budgets. Each field of `0` means "auto" (the engine picks a value from the host machine); a non-zero value overrides that choice, clamped to what the machine can safely give.
 - [AudioBus](AudioBus.md) - A mix bus grouping related sounds under one user volume.
 - [BehaviorLocal](BehaviorLocal.md) - A per-entity state slot declared by a [Behavior](Behavior.md). The declared value fixes both the slot's type and its starting value.
 - [BehaviorQuery](BehaviorQuery.md) - A world read declared by a [Behavior](Behavior.md), resolved once per tick into the entities carrying every named component.

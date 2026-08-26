@@ -7,6 +7,7 @@
 // options, so an unchanged source skips the parse entirely on a rebuild.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use super::expand::{ExpandReport, asset_name, type_norm};
 use crate::import::{ImportOptions, entries_from_scene, sanitize_name};
@@ -22,6 +23,7 @@ use crate::import::{ImportOptions, entries_from_scene, sanitize_name};
 pub(crate) fn expand_scene_imports(
     assets: &mut Vec<serde_json::Value>,
     report: &mut ExpandReport,
+    assets_dir: Option<&Path>,
 ) -> Result<(), String> {
     if !assets.iter().any(|v| type_norm(v) == "sceneimport") {
         return Ok(());
@@ -91,7 +93,7 @@ pub(crate) fn expand_scene_imports(
             emit_camera: want_camera && !world_has_camera && !camera_emitted,
         };
 
-        let entries = expand_one(&source, &opts)
+        let entries = expand_one(&source, &opts, assets_dir)
             .map_err(|e| format!("SceneImport '{}': {}", import_name, e))?;
 
         for entry in entries {
@@ -174,14 +176,18 @@ fn norm(type_str: &str) -> String {
 // JSON entry list, so a rebuild of an unchanged import never re-parses the
 // (potentially very large) source file. Best-effort: a corrupt or absent entry
 // falls back to a fresh expansion.
-fn expand_one(source: &str, opts: &ImportOptions) -> std::io::Result<Vec<serde_json::Value>> {
+fn expand_one(
+    source: &str,
+    opts: &ImportOptions,
+    assets_dir: Option<&Path>,
+) -> std::io::Result<Vec<serde_json::Value>> {
     let key_args = serde_json::json!({
         "prefix": opts.name_prefix,
         "texture_max_size": opts.texture_max_size,
         "emissive_map_strength": opts.emissive_map_strength,
         "emit_camera": opts.emit_camera,
     });
-    let key = crate::cache::expand_key(source, &key_args);
+    let key = crate::cache::expand_key(source, &key_args, assets_dir);
 
     if let Some(bytes) = crate::cache::load(&key)
         && let Ok(entries) = serde_json::from_slice::<Vec<serde_json::Value>>(&bytes)
@@ -189,7 +195,7 @@ fn expand_one(source: &str, opts: &ImportOptions) -> std::io::Result<Vec<serde_j
         return Ok(entries);
     }
 
-    let entries = entries_from_scene(source, opts)?;
+    let entries = entries_from_scene(source, opts, assets_dir)?;
     if let Ok(bytes) = serde_json::to_vec(&entries) {
         crate::cache::store(&key, &bytes);
     }
@@ -205,7 +211,7 @@ mod tests {
     fn passes_through_without_imports() {
         let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
         let mut report = ExpandReport::default();
-        expand_scene_imports(&mut assets, &mut report).unwrap();
+        expand_scene_imports(&mut assets, &mut report, None).unwrap();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0]["type"], "Logger");
     }
@@ -216,7 +222,7 @@ mod tests {
             "name": "scene", "type": "SceneImport", "args": {}
         })];
         let mut report = ExpandReport::default();
-        let err = expand_scene_imports(&mut assets, &mut report).unwrap_err();
+        let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
         assert!(err.contains("missing `source`"));
     }
 
@@ -225,7 +231,7 @@ mod tests {
     fn an_import_without_args_is_a_missing_source() {
         let mut assets = vec![serde_json::json!({"name":"scene","type":"SceneImport"})];
         let mut report = ExpandReport::default();
-        let err = expand_scene_imports(&mut assets, &mut report).unwrap_err();
+        let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
         assert!(
             err.contains("SceneImport 'scene': missing `source`"),
             "{err}"
@@ -238,7 +244,7 @@ mod tests {
             "name": "scene", "type": "SceneImport", "args": {"source": "thing.txt"}
         })];
         let mut report = ExpandReport::default();
-        let err = expand_scene_imports(&mut assets, &mut report).unwrap_err();
+        let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
         // The import name is included so the user knows which entry failed.
         assert!(err.contains("scene"));
         assert!(err.contains(".txt"));
@@ -279,7 +285,7 @@ mod tests {
             scene_import("bistro", &source, serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
-        expand_scene_imports(&mut assets, &mut report).unwrap();
+        expand_scene_imports(&mut assets, &mut report, None).unwrap();
 
         assert_eq!(assets[0]["name"], "gfx");
         assert!(!assets.iter().any(|v| type_norm(v) == "sceneimport"));
@@ -312,7 +318,7 @@ mod tests {
         };
 
         let mut alone = vec![scene_import("a", &source, serde_json::json!({}))];
-        expand_scene_imports(&mut alone, &mut ExpandReport::default()).unwrap();
+        expand_scene_imports(&mut alone, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&alone), 1);
 
         // Two imports: only the first frames a camera.
@@ -320,7 +326,7 @@ mod tests {
             scene_import("a", &source, serde_json::json!({})),
             scene_import("b", &source, serde_json::json!({})),
         ];
-        expand_scene_imports(&mut pair, &mut ExpandReport::default()).unwrap();
+        expand_scene_imports(&mut pair, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&pair), 1);
 
         // A CameraShot has not expanded to its Camera3D yet, but still counts
@@ -329,7 +335,7 @@ mod tests {
             serde_json::json!({"name":"cam","type":"CameraShot","args":{}}),
             scene_import("a", &source, serde_json::json!({})),
         ];
-        expand_scene_imports(&mut authored, &mut ExpandReport::default()).unwrap();
+        expand_scene_imports(&mut authored, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&authored), 0);
 
         // Or the import can decline to frame one at all.
@@ -338,7 +344,7 @@ mod tests {
             &source,
             serde_json::json!({"emit_camera": false}),
         )];
-        expand_scene_imports(&mut declined, &mut ExpandReport::default()).unwrap();
+        expand_scene_imports(&mut declined, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&declined), 0);
     }
 
@@ -365,7 +371,7 @@ mod tests {
             serde_json::json!({"texture_max_size": 128, "emissive_map_strength": 5.0}),
         )];
         let mut report = ExpandReport::default();
-        expand_scene_imports(&mut assets, &mut report).unwrap();
+        expand_scene_imports(&mut assets, &mut report, None).unwrap();
 
         let tex = assets
             .iter()
@@ -387,7 +393,7 @@ mod tests {
             scene_import("bistro", &source, serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
-        let err = expand_scene_imports(&mut assets, &mut report).unwrap_err();
+        let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
         assert!(err.contains("bistro_mat_default"), "{err}");
         assert!(err.contains("Sprite"), "{err}");
     }
@@ -417,7 +423,7 @@ mod tests {
             scene_import("bistro", &source, serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
-        expand_scene_imports(&mut assets, &mut report).unwrap();
+        expand_scene_imports(&mut assets, &mut report, None).unwrap();
 
         let mats: Vec<&serde_json::Value> = assets
             .iter()

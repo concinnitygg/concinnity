@@ -1017,8 +1017,8 @@ mod tests {
             (
                 "glb",
                 vec![
-                    crate::gltf::import_skinned_glb(&glb_path, 0).expect("glb part 0"),
-                    crate::gltf::import_skinned_glb(&glb_path, 1).expect("glb part 1"),
+                    crate::gltf::import_skinned_glb(&glb_path, 0, None).expect("glb part 0"),
+                    crate::gltf::import_skinned_glb(&glb_path, 1, None).expect("glb part 1"),
                 ],
             ),
         ] {
@@ -1072,7 +1072,7 @@ mod tests {
                 name_prefix: "rig".to_string(),
                 ..Default::default()
             };
-            let entries = crate::import::entries_from_scene(source, &opts).expect("expand");
+            let entries = crate::import::entries_from_scene(source, &opts, None).expect("expand");
             let named =
                 |name: &str, ty: &str| entries.iter().any(|e| e["name"] == name && e["type"] == ty);
             assert!(named("rig_skin_0", "SkinnedMesh"), "{source}: part 0");
@@ -1105,7 +1105,7 @@ mod tests {
         let glb_path = format!("{base}/rig.glb");
 
         let fbx = crate::fbx::import_skinned_fbx(&fbx_path, 0).expect("fbx skinned import");
-        let glb = crate::gltf::import_skinned_glb(&glb_path, 0).expect("glb skinned import");
+        let glb = crate::gltf::import_skinned_glb(&glb_path, 0, None).expect("glb skinned import");
 
         // World matrix per joint name via the same JointPose math the runtime
         // uses to rebuild bind poses.
@@ -1189,7 +1189,8 @@ mod tests {
         // every evaluated channel plus PreRotation composition).
         let fbx_anim =
             crate::fbx::import_fbx_animation(&fbx_path, 0, "", 30.0, 0).expect("fbx animation");
-        let glb_anim = crate::gltf::import_glb_animation(&glb_path, 0, 0).expect("glb animation");
+        let glb_anim =
+            crate::gltf::import_glb_animation(&glb_path, 0, 0, None).expect("glb animation");
 
         fn sample(
             tracks: &[crate::glb::ImportedAnimationTrack],

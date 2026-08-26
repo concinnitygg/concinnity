@@ -16,7 +16,7 @@ pub fn check_at_path(world_path: &str) -> std::io::Result<()> {
 /// Run validation against an in-memory world JSONL string. `label` is the
 /// origin used in messages (typically the source path).
 pub fn check_from_str(content: &str, label: &str) -> std::io::Result<()> {
-    match concinnity_cook::prepare_world(content) {
+    match concinnity_cook::prepare_world(content, super::assets_root::assets_dir().as_deref()) {
         Ok(loaded) => {
             println!("ok: {} asset(s) passed in {}", loaded.assets.len(), label);
             Ok(())

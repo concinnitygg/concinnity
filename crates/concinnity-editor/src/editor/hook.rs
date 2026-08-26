@@ -627,10 +627,13 @@ mod variables_edit;
 
 impl EditorHook {
     pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {
-        let bookmarks = session_store::load(&session_store::default_path())
-            .worlds
-            .get(&session_store::world_key(&world_path))
-            .map(|w| w.bookmarks)
+        let bookmarks = session_store::default_path()
+            .and_then(|path| {
+                session_store::load(&path)
+                    .worlds
+                    .get(&session_store::world_key(&world_path))
+                    .map(|w| w.bookmarks)
+            })
             .unwrap_or_default();
         Self {
             world_path,

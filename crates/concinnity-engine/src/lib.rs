@@ -32,7 +32,7 @@ pub mod app;
 // Flat entry point for a shipped player: run a compiled world from a state dir.
 // The runtime bin calls `concinnity_engine::run_from` rather than reaching
 // through the `app::run` module path.
-pub use app::run::run_from;
+pub use app::run::{BlobSource, run_from};
 // The application surface a host embeds: construct an App, populate its world,
 // and drive it with `App::run` / `App::run_with`. Exported flat so the
 // `concinnity` facade crate re-exports these under its own root.

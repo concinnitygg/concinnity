@@ -30,7 +30,7 @@ struct AppMeta {
     identifier: String,
     // Version string (macOS CFBundle[Short]Version).
     version: String,
-    // Source icon path (relative to the world), if the Application asset set one.
+    // Source icon path (relative to the world), if the AppConfig asset set one.
     icon: Option<PathBuf>,
 }
 
@@ -76,13 +76,18 @@ pub(crate) fn export(
     // Read the app metadata from the expanded world. The build above already
     // validated it, so this cannot fail on validation; map any error plainly.
     let content = fs::read_to_string(&world_path)?;
-    let loaded = prepare_world(&content)
+    let loaded = prepare_world(&content, concinnity_cook::paths::assets_dir().as_deref())
         .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
     let meta = read_app_meta(name, version, &loaded.assets);
 
     let out_dir = Path::new(out);
     fs::create_dir_all(out_dir)?;
-    let data_dir = concinnity_cook::paths::data_dir();
+    let data_dir = concinnity_cook::paths::data_dir().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "no project state directory to read the built blobs from",
+        )
+    })?;
 
     if cfg!(target_os = "macos") {
         export_macos(&meta, &runtime, out_dir, &data_dir, make_zip, dmg)
@@ -125,7 +130,7 @@ fn export_portable(
     // player resolves its state root to the bundle folder, so `shader-cache/`
     // sits beside the exe.
     precompile_shaders(&bundle_dir);
-    report_export(&meta.display_name, &bundle_dir, blobs)?;
+    report_export(&meta.display_name, &bundle_dir, blobs);
 
     if make_zip {
         let stem = artifact_stem(meta, platform_tag(std::env::consts::OS));
@@ -167,7 +172,7 @@ fn export_macos(
     // Metal, whose shaders precompile at build time.
     precompile_shaders(&resources);
 
-    // Build the .icns from the Application's icon, falling back to the bundled
+    // Build the .icns from the AppConfig's icon, falling back to the bundled
     // engine default so every macOS bundle carries an icon.
     let icon_file = Some(match &meta.icon {
         Some(src) => build_icns(src, &resources, &slug)?,
@@ -179,7 +184,7 @@ fn export_macos(
         info_plist(meta, &slug, icon_file.as_deref()),
     )?;
 
-    report_export(&meta.display_name, &app_dir, blobs)?;
+    report_export(&meta.display_name, &app_dir, blobs);
 
     let stem = artifact_stem(meta, platform_tag(std::env::consts::OS));
     if make_zip {
@@ -250,13 +255,9 @@ fn precompile_shaders(state_dir: &Path) {
 #[cfg(not(any(backend_dx, backend_vk)))]
 fn precompile_shaders(_state_dir: &Path) {}
 
-fn report_export(display_name: &str, bundle: &Path, blobs: usize) -> io::Result<()> {
-    if blobs == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "the build produced no data blobs to package",
-        ));
-    }
+// Announce the finished bundle. `copy_blobs` has already refused a build that
+// produced none, so the count here is always at least one.
+fn report_export(display_name: &str, bundle: &Path, blobs: usize) {
     println!(
         "Exported \"{}\" -> {} ({} blob{})",
         display_name,
@@ -264,7 +265,6 @@ fn report_export(display_name: &str, bundle: &Path, blobs: usize) -> io::Result<
         blobs,
         if blobs == 1 { "" } else { "s" },
     );
-    Ok(())
 }
 
 // Remove `dir` if it exists, then create it fresh, so re-exports are clean.
@@ -278,25 +278,64 @@ fn reset_dir(dir: &Path) -> io::Result<()> {
 // Copy every compiled blob (the integer-named files) from the build's data
 // directory into `data_dst`, skipping the shader-compile intermediates the
 // build leaves there (named after their asset). Returns the number copied.
+// Copy the built blobs into the bundle as the `data` entry the player looks
+// for, and report how many were copied.
+//
+// A world that fits in one blob ships as a single file named `data`; one that
+// overflows ships as a `data/` directory holding `0`, `1`, ... Overflow blobs
+// are always siblings of blob 0 named by index, so the single-file form can
+// only carry a world that has none -- the player refuses the mismatch rather
+// than reading `1` and `2` out of the folder it was launched from.
 fn copy_blobs(data_src: &Path, data_dst: &Path) -> io::Result<usize> {
+    let blobs = blobs_in(data_src)?;
+    if blobs.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no compiled blobs in {}", data_src.display()),
+        ));
+    }
+    // Whatever the previous export left here: the two forms occupy the same
+    // name, so a shrinking world would otherwise write a file over a directory.
+    let _ = fs::remove_file(data_dst);
+    let _ = fs::remove_dir_all(data_dst);
+
+    if let [(_, only)] = blobs.as_slice() {
+        if let Some(parent) = data_dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(only, data_dst)?;
+        return Ok(1);
+    }
+
     fs::create_dir_all(data_dst)?;
-    let mut count = 0;
-    for entry in fs::read_dir(data_src)? {
+    for (index, path) in &blobs {
+        fs::copy(path, data_dst.join(index.to_string()))?;
+    }
+    Ok(blobs.len())
+}
+
+// Every blob file in `dir`, paired with its index and ordered by it.
+fn blobs_in(dir: &Path) -> io::Result<Vec<(u32, PathBuf)>> {
+    let mut blobs = Vec::new();
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
-        if is_blob_name(&name) {
-            fs::copy(entry.path(), data_dst.join(&*name))?;
-            count += 1;
+        if let Some(index) = blob_index(&name) {
+            blobs.push((index, entry.path()));
         }
     }
-    Ok(count)
+    blobs.sort_by_key(|(index, _)| *index);
+    Ok(blobs)
 }
 
 // A blob file is named by its integer index with no extension (blob_path uses
 // `index.to_string()`); everything else in data/ is build scratch.
-fn is_blob_name(name: &str) -> bool {
-    !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit())
+fn blob_index(name: &str) -> Option<u32> {
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    name.parse().ok()
 }
 
 // Reject a target that is not the platform this `cn` was built for. Cross-
@@ -469,7 +508,7 @@ fn make_executable(_path: &Path) -> io::Result<()> {
 }
 
 // Read the app metadata from the expanded world, applying the `--name` /
-// `--version` overrides and deriving anything the Application asset left unset.
+// `--version` overrides and deriving anything the AppConfig asset left unset.
 fn read_app_meta(
     cli_name: Option<&str>,
     cli_version: Option<&str>,
@@ -477,14 +516,14 @@ fn read_app_meta(
 ) -> AppMeta {
     let display_name = resolve_display_name(cli_name, assets);
     let identifier =
-        string_arg(assets, "application", "id").unwrap_or_else(|| derive_identifier(&display_name));
+        string_arg(assets, "appconfig", "id").unwrap_or_else(|| derive_identifier(&display_name));
     let version = cli_version
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .or_else(|| string_arg(assets, "application", "version"))
+        .or_else(|| string_arg(assets, "appconfig", "version"))
         .unwrap_or_else(|| "0.1.0".to_string());
-    let icon = string_arg(assets, "application", "icon").map(PathBuf::from);
+    let icon = string_arg(assets, "appconfig", "icon").map(PathBuf::from);
     AppMeta {
         display_name,
         identifier,
@@ -493,13 +532,13 @@ fn read_app_meta(
     }
 }
 
-// The app name, by precedence: an explicit `--name`, then the Application
+// The app name, by precedence: an explicit `--name`, then the AppConfig
 // asset's name, then a MainMenu title, then the engine default.
 fn resolve_display_name(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> String {
     if let Some(n) = cli_name.map(str::trim).filter(|s| !s.is_empty()) {
         return n.to_string();
     }
-    if let Some(n) = string_arg(assets, "application", "name") {
+    if let Some(n) = string_arg(assets, "appconfig", "name") {
         return n;
     }
     if let Some(n) = string_arg(assets, "mainmenu", "title") {
@@ -508,7 +547,7 @@ fn resolve_display_name(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> S
     "Concinnity".to_string()
 }
 
-// A reverse-DNS bundle identifier derived from the name when the Application
+// A reverse-DNS bundle identifier derived from the name when the AppConfig
 // asset declares none: `gg.concinnity.<name>`, the name reduced to bundle-id
 // characters (ascii alphanumerics, lowercased; other runs become a single `-`).
 fn derive_identifier(name: &str) -> String {
@@ -654,7 +693,7 @@ fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result<String> {
     if !src.exists() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("Application icon not found: {}", src.display()),
+            format!("AppConfig icon not found: {}", src.display()),
         ));
     }
     let iconset = std::env::temp_dir().join(format!("cn-export-{slug}.iconset"));
@@ -697,7 +736,7 @@ fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result<String> {
 }
 
 // The engine's built-in fallback icon (the Concinnity mark on a dark gradient),
-// used when the Application asset sets no icon. Baked into the `cn` binary so a
+// used when the AppConfig asset sets no icon. Baked into the `cn` binary so a
 // shipped toolchain, which has no engine source tree, still carries it.
 const DEFAULT_ICON_PNG: &[u8] = include_bytes!("../../assets/default-icon.png");
 
@@ -899,22 +938,18 @@ mod tests {
     }
 
     #[test]
-    fn is_blob_name_matches_only_integer_files() {
-        assert!(is_blob_name("0"));
-        assert!(is_blob_name("42"));
-        assert!(!is_blob_name(""));
-        assert!(!is_blob_name("0.metallib"));
-        assert!(!is_blob_name("default_vertex_shader.air"));
-        assert!(!is_blob_name("settings"));
+    fn blob_index_matches_only_integer_files() {
+        assert_eq!(blob_index("0"), Some(0));
+        assert_eq!(blob_index("42"), Some(42));
+        assert_eq!(blob_index(""), None);
+        assert_eq!(blob_index("0.metallib"), None);
+        assert_eq!(blob_index("default_vertex_shader.air"), None);
+        assert_eq!(blob_index("settings"), None);
     }
 
     #[test]
-    fn name_precedence_is_cli_then_application_then_menu_then_default() {
-        let app = asset(
-            "app",
-            "Application",
-            serde_json::json!({"name": "App Name"}),
-        );
+    fn name_precedence_is_cli_then_app_config_then_menu_then_default() {
+        let app = asset("app", "AppConfig", serde_json::json!({"name": "App Name"}));
         let menu = asset("m", "MainMenu", serde_json::json!({"title": "Menu Title"}));
 
         assert_eq!(
@@ -956,17 +991,17 @@ mod tests {
 
     #[test]
     fn app_meta_derives_id_and_version_defaults() {
-        // No Application: name falls to default, id derived, version defaulted.
+        // No AppConfig: name falls to default, id derived, version defaulted.
         let meta = read_app_meta(Some("My Cool App"), None, &[]);
         assert_eq!(meta.display_name, "My Cool App");
         assert_eq!(meta.identifier, "gg.concinnity.my-cool-app");
         assert_eq!(meta.version, "0.1.0");
         assert!(meta.icon.is_none());
 
-        // Application supplies id / version / icon verbatim.
+        // AppConfig supplies id / version / icon verbatim.
         let app = asset(
             "app",
-            "Application",
+            "AppConfig",
             serde_json::json!({
                 "name": "Named", "id": "gg.studio.thing", "version": "2.3.4", "icon": "art/i.png"
             }),
@@ -980,25 +1015,21 @@ mod tests {
 
     #[test]
     fn version_precedence_is_cli_then_application_then_default() {
-        let app = asset(
-            "app",
-            "Application",
-            serde_json::json!({"version": "2.3.4"}),
-        );
+        let app = asset("app", "AppConfig", serde_json::json!({"version": "2.3.4"}));
 
-        // --version overrides the Application version.
+        // --version overrides the AppConfig version.
         assert_eq!(
             read_app_meta(None, Some("9.9.9"), std::slice::from_ref(&app)).version,
             "9.9.9"
         );
-        // A blank --version is ignored, falling back to the Application version.
+        // A blank --version is ignored, falling back to the AppConfig version.
         assert_eq!(
             read_app_meta(None, Some("  "), std::slice::from_ref(&app)).version,
             "2.3.4"
         );
-        // --version with no Application still wins over the default.
+        // --version with no AppConfig still wins over the default.
         assert_eq!(read_app_meta(None, Some("3.0"), &[]).version, "3.0");
-        // No override, no Application: the default.
+        // No override, no AppConfig: the default.
         assert_eq!(read_app_meta(None, None, &[]).version, "0.1.0");
     }
 
@@ -1155,7 +1186,7 @@ mod tests {
     fn default_icon_is_a_nonempty_png() {
         // The bundled fallback must be a real PNG so sips can rasterize it into
         // the iconset ladder; a missing/corrupt file would fail every export
-        // without an Application icon.
+        // without an AppConfig icon.
         assert!(DEFAULT_ICON_PNG.len() > 1024);
         assert_eq!(&DEFAULT_ICON_PNG[..8], b"\x89PNG\r\n\x1a\n");
     }
@@ -1251,10 +1282,68 @@ mod tests {
         let dst = tmp.path().join("out");
         let count = copy_blobs(&src, &dst).unwrap();
         assert_eq!(count, 2);
+        assert!(dst.is_dir(), "an overflowing world ships a directory");
         assert_eq!(fs::read(dst.join("0")).unwrap(), b"blob0");
         assert_eq!(fs::read(dst.join("12")).unwrap(), b"blob12");
         assert!(!dst.join("default_vert.air").exists());
         assert!(!dst.join("settings").exists());
+    }
+
+    // A world that fits in one blob ships as a file named `data`, which is what
+    // keeps a small game's bundle from carrying integer-named files at all.
+    #[test]
+    fn a_single_blob_world_ships_as_one_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("data");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("0"), b"blob0").unwrap();
+        fs::write(src.join("default_vert.air"), b"scratch").unwrap();
+
+        let dst = tmp.path().join("bundle").join("data");
+        assert_eq!(copy_blobs(&src, &dst).unwrap(), 1);
+        assert!(dst.is_file(), "one blob ships as the `data` file itself");
+        assert_eq!(fs::read(&dst).unwrap(), b"blob0");
+    }
+
+    // The two forms occupy the same name, so a re-export across the boundary
+    // has to clear whatever the last one left rather than write a file over a
+    // directory (or leave a stale `1` beside a now-single blob).
+    #[test]
+    fn re_exporting_across_the_form_boundary_replaces_the_previous_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("data");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("0"), b"blob0").unwrap();
+        fs::write(src.join("1"), b"blob1").unwrap();
+        let dst = tmp.path().join("bundle").join("data");
+
+        assert_eq!(copy_blobs(&src, &dst).unwrap(), 2);
+        assert!(dst.is_dir());
+
+        // The world shrinks to one blob: the directory gives way to a file.
+        fs::remove_file(src.join("1")).unwrap();
+        assert_eq!(copy_blobs(&src, &dst).unwrap(), 1);
+        assert!(dst.is_file());
+        assert_eq!(fs::read(&dst).unwrap(), b"blob0");
+
+        // ...and back the other way.
+        fs::write(src.join("1"), b"blob1").unwrap();
+        assert_eq!(copy_blobs(&src, &dst).unwrap(), 2);
+        assert!(dst.is_dir());
+        assert_eq!(fs::read(dst.join("1")).unwrap(), b"blob1");
+    }
+
+    // A build that produced nothing is caught here rather than shipping a
+    // bundle whose player has no world to open.
+    #[test]
+    fn copy_blobs_refuses_a_data_dir_with_no_blobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("data");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("default_vert.air"), b"scratch").unwrap();
+
+        let err = copy_blobs(&src, &tmp.path().join("out")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -1379,17 +1468,6 @@ mod tests {
         assert_ne!(fs::metadata(&f).unwrap().permissions().mode() & 0o111, 0);
     }
 
-    #[test]
-    fn report_export_errors_on_zero_blobs_and_succeeds_otherwise() {
-        let tmp = tempfile::tempdir().unwrap();
-        // No blobs is a hard error: a bundle with an empty data/ cannot run.
-        let err = report_export("My Game", tmp.path(), 0).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        // One and many blobs both succeed (singular / plural wording).
-        report_export("My Game", tmp.path(), 1).unwrap();
-        report_export("My Game", tmp.path(), 3).unwrap();
-    }
-
     // A folder bundle assembles the renamed player beside the copied blobs and
     // archives them. Cross-platform: a `metal` runtime pulls in no Windows
     // sidecars, so this runs identically on macOS and Linux.
@@ -1453,16 +1531,17 @@ mod tests {
             version: "1.0.0".to_string(),
             icon: None,
         };
-        // No Application icon -> the bundled default flows through the icon
+        // No AppConfig icon -> the bundled default flows through the icon
         // pipeline. make_zip on, make_dmg off (dmg needs a slow hdiutil).
         export_macos(&meta, &runtime, &out, &data, true, false).unwrap();
 
         let app = out.join("My-Game.app");
         assert!(app.join("Contents/MacOS/My-Game").exists(), "exe missing");
-        assert!(
-            app.join("Contents/Resources/data/0").exists(),
-            "blob missing"
-        );
+        // One blob, so the bundle carries `data` as a file rather than a
+        // directory -- the form the player reads as blob 0 directly.
+        let data_entry = app.join("Contents/Resources/data");
+        assert!(data_entry.is_file(), "blob missing");
+        assert_eq!(fs::read(&data_entry).unwrap(), b"blob0");
         assert!(
             app.join("Contents/Resources/My-Game.icns").exists(),
             "icns missing"

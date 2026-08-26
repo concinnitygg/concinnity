@@ -1,6 +1,6 @@
 // src/editor/thumbs.rs
 //
-// The editor's view of the baked thumbnail store (`.concinnity/thumbnails/`,
+// The editor's view of the baked thumbnail store (the state root's `thumbnails/`,
 // written by the cook's disk-build tail): loads `index.json` plus its PNGs,
 // assigns each a reserved `TextureHandle`, and hands the decoded images to
 // HUD injection as the `OverlayImages` resource so the Content panel's cell
@@ -65,7 +65,9 @@ fn cache() -> &'static Mutex<Cache> {
 
 // The freshest loaded set, reloading when the index file changed on disk.
 fn current() -> Arc<ThumbSet> {
-    let dir = concinnity_store::paths::thumbnails_dir();
+    let Some(dir) = concinnity_store::paths::thumbnails_dir() else {
+        return Arc::new(ThumbSet::default());
+    };
     let stamp = std::fs::metadata(dir.join("index.json"))
         .and_then(|m| m.modified())
         .ok();

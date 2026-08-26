@@ -177,7 +177,8 @@ fn boot_world(
     world_exists: bool,
     entries: &[serde_json::Value],
 ) -> std::io::Result<()> {
-    let blobs_present = || concinnity_store::paths::data_dir().join("0").exists();
+    let blobs_present =
+        || concinnity_store::paths::data_dir().is_some_and(|d| d.join("0").exists());
 
     // Build if the world has content the compiled blobs do not reflect yet.
     if world_exists && !blobs_present() {

@@ -4,6 +4,7 @@
 // bridge, shared by the `concinnity` CLI (concinnity-cli).
 
 mod add;
+pub(crate) mod assets_root;
 mod build;
 mod check;
 pub(crate) mod name_table;

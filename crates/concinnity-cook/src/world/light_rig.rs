@@ -1,10 +1,15 @@
 // src/world/light_rig.rs
 // Build-time expansion: LightRig → DirectionalLight / PointLight assets.
 
+use std::path::Path;
+
 use super::expand::{asset_name, type_norm};
 use super::preset::load_preset_obj;
 
-pub(crate) fn expand_light_rigs(asset_values: &mut Vec<serde_json::Value>) {
+pub(crate) fn expand_light_rigs(
+    asset_values: &mut Vec<serde_json::Value>,
+    assets_dir: Option<&Path>,
+) {
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in asset_values.drain(..) {
         if type_norm(&value) != "lightrig" {
@@ -15,7 +20,7 @@ pub(crate) fn expand_light_rigs(asset_values: &mut Vec<serde_json::Value>) {
         let args = value.get("args").cloned().unwrap_or(serde_json::json!({}));
         let preset = args.get("preset").and_then(|v| v.as_str()).unwrap_or("");
         if !preset.is_empty() {
-            for light in expand_light_rig_preset(&rig_name, preset) {
+            for light in expand_light_rig_preset(&rig_name, preset, assets_dir) {
                 result.push(light);
             }
         }
@@ -25,11 +30,15 @@ pub(crate) fn expand_light_rigs(asset_values: &mut Vec<serde_json::Value>) {
     *asset_values = result;
 }
 
-fn expand_light_rig_preset(rig_name: &str, preset: &str) -> Vec<serde_json::Value> {
+fn expand_light_rig_preset(
+    rig_name: &str,
+    preset: &str,
+    assets_dir: Option<&Path>,
+) -> Vec<serde_json::Value> {
     let defs = {
         let hardcoded = rig_preset_lights(preset);
         if hardcoded.is_empty() {
-            load_preset_obj(preset, "light_rigs")
+            load_preset_obj(preset, "light_rigs", assets_dir)
                 .get("args")
                 .and_then(|a| a.get("lights"))
                 .and_then(|v| v.as_array())
@@ -108,7 +117,7 @@ mod tests {
             serde_json::json!({"name":"torch","type":"PointLight","args":{"position":[3.0,2.0,-5.0]}}),
             serde_json::json!({"name":"rig","type":"LightRig","args":{"lights":["sun","torch"]}}),
         ];
-        expand_light_rigs(&mut assets);
+        expand_light_rigs(&mut assets, None);
         assert_eq!(assets.len(), 2);
         assert_eq!(assets[0]["name"], "sun");
         assert_eq!(assets[1]["name"], "torch");
@@ -121,7 +130,7 @@ mod tests {
             "type": "LightRig",
             "args": {"preset": "rig_outdoor_sun_fill"}
         })];
-        expand_light_rigs(&mut assets);
+        expand_light_rigs(&mut assets, None);
         assert_eq!(assets.len(), 2);
         assert_eq!(assets[0]["name"], "rig_sun");
         assert_eq!(assets[1]["name"], "rig_fill");
@@ -135,7 +144,7 @@ mod tests {
             "type": "LightRig",
             "args": {"preset": "rig_interior_candles"}
         })];
-        expand_light_rigs(&mut assets);
+        expand_light_rigs(&mut assets, None);
         assert_eq!(assets.len(), 4);
         let point_count = assets.iter().filter(|v| v["type"] == "PointLight").count();
         assert_eq!(point_count, 3);
@@ -148,14 +157,14 @@ mod tests {
             "type": "LightRig",
             "args": {"preset": "rig_studio_three_point"}
         })];
-        expand_light_rigs(&mut assets);
+        expand_light_rigs(&mut assets, None);
         assert_eq!(assets.len(), 3);
     }
 
     #[test]
     fn non_rig_assets_pass_through() {
         let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
-        expand_light_rigs(&mut assets);
+        expand_light_rigs(&mut assets, None);
         assert_eq!(assets[0]["type"], "Logger");
     }
 
@@ -165,7 +174,7 @@ mod tests {
             "type": "LightRig",
             "args": {"preset": preset}
         })];
-        expand_light_rigs(&mut assets);
+        expand_light_rigs(&mut assets, None);
         assets
     }
 
@@ -228,7 +237,7 @@ mod tests {
     #[test]
     fn rig_without_a_preset_expands_to_nothing() {
         let mut assets = vec![serde_json::json!({"name":"rig","type":"LightRig"})];
-        expand_light_rigs(&mut assets);
+        expand_light_rigs(&mut assets, None);
         assert!(assets.is_empty());
     }
 }

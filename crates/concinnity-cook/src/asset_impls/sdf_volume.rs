@@ -5,11 +5,12 @@ use concinnity_core::components::SdfVolume;
 use concinnity_world::source_args::current_platform_source_arg;
 
 // Resolve a raw `fragment_shader` arg to an on-disk path, picking the first
-// candidate that exists. Resolution order:
-//   1. `.concinnity/assets/<raw>`: runtime-fetched cache (the production
+// candidate that exists. `<assets>` is the build's asset search root.
+// Resolution order:
+//   1. `<assets>/<raw>`: runtime-fetched cache (the production
 //      location once a world has been built and `cn run` fetches its
 //      dependencies).
-//   2. `.concinnity/assets/<bare>` recursive search: same bare-filename
+//   2. `<assets>/<bare>` recursive search: same bare-filename
 //      match `Shader` does.
 //   3. `<artifacts_dir>/<raw>`: LLM-written artifact under
 //      `data/artifacts/<account_id>/`, matching the existing Shader stage path.
@@ -26,17 +27,16 @@ pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<Strin
     if raw_path.is_absolute() {
         candidates.push(raw.to_string());
     } else {
-        candidates.push(
-            concinnity_store::paths::assets_dir()
-                .join(raw)
-                .to_string_lossy()
-                .into_owned(),
-        );
+        if let Some(assets) = ctx.assets_dir {
+            candidates.push(assets.join(raw).to_string_lossy().into_owned());
+        }
         if raw_path
             .parent()
             .map(|d| d.as_os_str().is_empty())
             .unwrap_or(true)
-            && let Some(found) = concinnity_store::source::find_in_assets(raw)
+            && let Some(found) = ctx
+                .assets_dir
+                .and_then(|dir| concinnity_store::source::find_in(dir, raw))
         {
             candidates.push(found);
         }
@@ -129,6 +129,7 @@ mod tests {
     fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
         BuildCtx {
             name: "blob",
+            assets_dir: None,
             artifacts_dir,
             all_assets: &[],
         }

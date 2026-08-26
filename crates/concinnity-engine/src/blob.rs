@@ -41,7 +41,7 @@ pub(crate) fn load() -> Result<LoadedBlob, CnResult> {
 }
 
 // `load` against a primary blob file named directly, rather than the
-// `.concinnity/data/` layout. Overflow blobs are its siblings by index.
+// state root's `data/` layout. Overflow blobs are its siblings by index.
 pub(crate) fn load_at(primary: &std::path::Path) -> Result<LoadedBlob, CnResult> {
     resolve(concinnity_store::blob::load_raw_at(primary)?)
 }

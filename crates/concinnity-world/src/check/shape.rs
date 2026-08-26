@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn one_of_each_singleton_passes() {
         let mut assets = render_stack();
-        assets.push(asset("app", "Application", serde_json::json!({})));
+        assets.push(asset("app", "AppConfig", serde_json::json!({})));
         assets.push(asset("phys", "PhysicsConfig", serde_json::json!({})));
         assert!(errors_for(&assets).is_empty());
     }

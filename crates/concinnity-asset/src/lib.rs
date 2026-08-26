@@ -49,7 +49,7 @@ pub use resolver::{
 // Asset data schema: one module per asset type, mirroring the impl-side layout
 // under concinnity-core/src/components. Each holds the plain struct(s), enum(s),
 // `Default`, and serde derives; the matching ECS behavior lives in core.
-mod application;
+mod app_config;
 mod audio_bus;
 mod audio_clip;
 mod audio_cue;
@@ -125,7 +125,7 @@ mod voxel_world;
 mod water_surface;
 mod window;
 
-pub use application::{AppLimits, ApplicationArgs};
+pub use app_config::AppConfigArgs;
 pub use audio_bus::AudioBus;
 pub use audio_clip::AudioClip;
 pub use audio_cue::{AudioCue, CueKind};

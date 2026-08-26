@@ -41,7 +41,13 @@ pub(crate) struct ThumbReport {
 
 // Bake into the project's thumbnails directory.
 pub(crate) fn bake_thumbnails(result: &PipelineResult) -> std::io::Result<ThumbReport> {
-    bake_thumbnails_in(&concinnity_store::paths::thumbnails_dir(), result)
+    let dir = concinnity_store::paths::thumbnails_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no project state directory to bake thumbnails into",
+        )
+    })?;
+    bake_thumbnails_in(&dir, result)
 }
 
 // Bake into `dir` (tests point this at a scratch directory).

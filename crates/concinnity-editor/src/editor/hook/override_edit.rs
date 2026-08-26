@@ -143,8 +143,12 @@ impl EditorHook {
                 ));
             }
             if !authored
-                && !concinnity_cook::world::preset::load_preset_obj(&prefab_ref, "prefabs")
-                    .is_null()
+                && !concinnity_cook::world::preset::load_preset_obj(
+                    &prefab_ref,
+                    "prefabs",
+                    crate::authoring::assets_root::assets_dir().as_deref(),
+                )
+                .is_null()
             {
                 options.push((
                     OverrideOption::Materialize(prefab_ref.clone()),
@@ -311,7 +315,11 @@ impl EditorHook {
         {
             return Ok(());
         }
-        let preset = concinnity_cook::world::preset::load_preset_obj(name, "prefabs");
+        let preset = concinnity_cook::world::preset::load_preset_obj(
+            name,
+            "prefabs",
+            crate::authoring::assets_root::assets_dir().as_deref(),
+        );
         if preset.is_null() {
             return Err(format!("no prefab preset named '{name}'"));
         }

@@ -44,7 +44,11 @@ impl EditorHook {
         &self,
     ) -> Result<concinnity_cook::world::LoadedWorld, String> {
         let content = crate::world::write_world_jsonl(&self.entries).map_err(|e| e.to_string())?;
-        concinnity_cook::prepare_world(&content).map_err(|errs| {
+        concinnity_cook::prepare_world(
+            &content,
+            crate::authoring::assets_root::assets_dir().as_deref(),
+        )
+        .map_err(|errs| {
             errs.first()
                 .cloned()
                 .unwrap_or_else(|| "the world does not build".to_string())

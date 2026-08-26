@@ -1,7 +1,7 @@
 // src/crash/mod.rs
 //
 // Crash reporting: a panic hook, native fault capture, and local report files
-// under the crashes dir (`.concinnity/crashes/` in a dev project). Reports
+// under the crashes dir (`crashes/` under the state root). Reports
 // are plain text written section by section, so a partial report still leads
 // with what matters; macOS and Windows also write a minidump beside the
 // report. The directory is pruned to the newest reports after each write.

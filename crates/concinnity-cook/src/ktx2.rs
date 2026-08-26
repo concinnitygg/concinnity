@@ -956,7 +956,8 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../private/assets/images/ktx2_test/wood_256.png"
         );
-        let (sw, sh, source) = crate::texture::decode_source(png, 0).expect("decode source png");
+        let (sw, sh, source) =
+            crate::texture::decode_source(png, 0, None).expect("decode source png");
         assert_eq!((sw, sh), (256, 256));
 
         let image = compile_ktx2(&fixture("wood_256_etc1s.ktx2")).expect("etc1s compile");

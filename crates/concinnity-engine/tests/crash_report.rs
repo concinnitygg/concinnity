@@ -1,8 +1,15 @@
 //! End-to-end panic reporting: a child process (this test binary re-run with
 //! the ignored probe selected) installs the crash hooks and panics; the parent
 //! asserts a complete report lands under the state root's crashes dir.
+//!
+//! The engine reads no environment of its own, so the parent hands the child a
+//! scratch root through a variable this file owns and the probe installs it.
 
 use std::process::Command;
+
+// How the parent tells the spawned probe where to write. Read here and nowhere
+// else: the state root is installed through the engine's own API below.
+const PROBE_ROOT_ENV: &str = "CN_CRASH_PROBE_ROOT";
 
 // An integration test links the engine as an ordinary dependency, so it
 // inherits nothing from the engine's own `#[cfg(test)]` allocator, and without
@@ -12,6 +19,9 @@ concinnity_memory::install_global_allocator!();
 #[test]
 #[ignore = "probe body: spawned by crash_report_lands_for_a_panicking_process"]
 fn panicking_probe() {
+    if let Some(root) = std::env::var_os(PROBE_ROOT_ENV) {
+        concinnity_engine::paths::set_state_dir(root);
+    }
     concinnity_engine::crash::install();
     panic!("crash report end to end probe");
 }
@@ -28,7 +38,7 @@ fn crash_report_lands_for_a_panicking_process() {
     let exe = std::env::current_exe().unwrap();
     let output = Command::new(exe)
         .args(["--exact", "panicking_probe", "--ignored"])
-        .env("CN_HOME", root.path())
+        .env(PROBE_ROOT_ENV, root.path())
         .output()
         .unwrap();
     assert!(
@@ -37,7 +47,7 @@ fn crash_report_lands_for_a_panicking_process() {
         String::from_utf8_lossy(&output.stdout)
     );
 
-    let crashes = root.path().join(".concinnity").join("crashes");
+    let crashes = root.path().join("crashes");
     let paths: Vec<_> = std::fs::read_dir(&crashes)
         .expect("crashes dir created by the hook")
         .flatten()

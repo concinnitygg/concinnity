@@ -124,7 +124,7 @@ macro_rules! for_each_component {
                 DebugHud          => $crate::components::DebugHud { gen, external, renders, refs: [("passes_label", "TextLabel"), ("mouse_label", "TextLabel"), ("camera_label", "TextLabel"), ("sys_label", "TextLabel")] },
                 AudioCue          => $crate::components::AudioCue { gen, external, useful_blank, refs: [("clip", "AudioClip"), ("screen", "Screen")] },
                 Story             => $crate::components::Story { gen, external, id },
-                Application       => $crate::components::Application { manual, external, singleton, args: ApplicationArgs },
+                AppConfig         => $crate::components::AppConfig { manual, external, singleton, args: AppConfigArgs },
                 AnimationGraph         => $crate::components::AnimationGraph { gen, external, id, consumed },
                 AnimationParams        => $crate::components::AnimationParams { runtime, build: anim_params },
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },

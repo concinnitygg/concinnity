@@ -25,6 +25,11 @@ pub enum CnResult {
     #[error("File I/O error")]
     /// A file could not be read or written.
     FileIo,
+
+    #[error("No state directory installed")]
+    /// Project state was read before any host anchored the state tree. See
+    /// `concinnity_store::paths::set_state_dir`.
+    NoStateRoot,
 }
 
 // Baked blob records are postcard; a decode failure means the record and the
@@ -49,6 +54,10 @@ mod tests {
         assert_eq!(CnResult::InvalidState.to_string(), "Invalid state");
         assert_eq!(CnResult::InvalidArgument.to_string(), "Invalid argument");
         assert_eq!(CnResult::FileIo.to_string(), "File I/O error");
+        assert_eq!(
+            CnResult::NoStateRoot.to_string(),
+            "No state directory installed"
+        );
     }
 
     #[test]

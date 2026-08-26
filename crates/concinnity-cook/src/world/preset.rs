@@ -1,20 +1,21 @@
 // Preset file loading utilities shared by the expansion modules. A preset is a
-// named JSON snippet under `.concinnity/assets/<subdir>/` (palettes, prefabs,
-// light_rigs, shots) that an authored asset references by name; the cook
-// pipeline inlines it at build time. Build-only, so it lives here rather than
-// in the runtime foundation.
+// named JSON snippet under the build's asset search root, in a `<subdir>/`
+// (palettes, prefabs, light_rigs, shots) that an authored asset references by
+// name; the cook pipeline inlines it at build time. Build-only, so it lives
+// here rather than in the runtime foundation.
 
 use std::path::Path;
 
-fn find_preset_path(filename: &str, subdir: &str) -> Option<String> {
-    if let Some(p) = crate::source::find_in_assets(filename) {
+fn find_preset_path(filename: &str, subdir: &str, assets_dir: Option<&Path>) -> Option<String> {
+    let assets = assets_dir?;
+    if let Some(p) = crate::source::find_in(assets, filename) {
         return Some(p);
     }
-    preset_path_in(&crate::paths::assets_dir(), filename, subdir)
+    preset_path_in(assets, filename, subdir)
 }
 
 // The `<assets>/<subdir>/<filename>` path when it exists. Split out so the
-// direct-path rule is unit-testable without the process-global assets anchor.
+// direct-path rule is testable apart from the recursive search.
 fn preset_path_in(assets: &Path, filename: &str, subdir: &str) -> Option<String> {
     let path = assets.join(subdir).join(filename);
     if path.exists() {
@@ -23,10 +24,10 @@ fn preset_path_in(assets: &Path, filename: &str, subdir: &str) -> Option<String>
     None
 }
 
-/// Load a JSON object from `assets/<subdir>/<name>.json`.
-pub fn load_preset_obj(name: &str, subdir: &str) -> serde_json::Value {
+/// Load a JSON object from `<assets_dir>/<subdir>/<name>.json`.
+pub fn load_preset_obj(name: &str, subdir: &str, assets_dir: Option<&Path>) -> serde_json::Value {
     let filename = format!("{}.json", name);
-    let path = find_preset_path(&filename, subdir);
+    let path = find_preset_path(&filename, subdir, assets_dir);
     let Some(path) = path else {
         return serde_json::Value::Null;
     };
@@ -47,13 +48,19 @@ fn read_preset_json(path: &str) -> serde_json::Value {
 mod tests {
     use super::*;
 
-    // Only the miss path is exercised here: the hit path resolves against the
-    // process-global assets-dir anchor, which paths.rs tests may redirect
-    // concurrently, so pointing it at a temp tree in this test would race them.
     #[test]
-    fn load_preset_obj_returns_null_when_absent() {
-        let v = load_preset_obj("cn_test_no_such_preset", "cn_test_subdir");
-        assert!(v.is_null());
+    fn load_preset_obj_reads_the_named_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let rigs = dir.path().join("light_rigs");
+        std::fs::create_dir_all(&rigs).unwrap();
+        std::fs::write(rigs.join("noon.json"), r#"{"args":{"lights":[]}}"#).unwrap();
+
+        let v = load_preset_obj("noon", "light_rigs", Some(dir.path()));
+        assert!(v["args"]["lights"].is_array());
+        // A name with no preset file, and a build with no asset search root at
+        // all, both read as Null.
+        assert!(load_preset_obj("absent", "light_rigs", Some(dir.path())).is_null());
+        assert!(load_preset_obj("noon", "light_rigs", None).is_null());
     }
 
     #[test]

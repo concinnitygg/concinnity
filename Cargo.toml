@@ -1,9 +1,9 @@
 [workspace.package]
-version = "0.18.57"
+version = "0.18.58"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
-rust-version = "1.96"
+rust-version = "1.97"
 repository = "https://github.com/concinnitygg/concinnity"
 homepage = "https://concinnity.gg"
 

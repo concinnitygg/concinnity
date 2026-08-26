@@ -74,6 +74,7 @@ impl Default for ImportOptions {
 pub(crate) fn entries_from_scene(
     source: &str,
     opts: &ImportOptions,
+    assets_dir: Option<&Path>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let ext = Path::new(source)
         .extension()
@@ -82,7 +83,7 @@ pub(crate) fn entries_from_scene(
         .unwrap_or_default();
     match ext.as_str() {
         "fbx" => entries_from_fbx(source, opts),
-        "glb" | "gltf" => entries_from_glb(source, opts),
+        "glb" | "gltf" => entries_from_glb(source, opts, assets_dir),
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
@@ -350,10 +351,17 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
     Ok(entries)
 }
 
-// glTF (.glb / .gltf) -> asset entries.
-fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<serde_json::Value>> {
-    let doc = crate::gltf_source::GltfDoc::parse_file(path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+// glTF (.glb / .gltf) -> asset entries. The generated entries name the source
+// exactly as the world declared it, so each compiles through the same
+// resolution the import ran here.
+fn entries_from_glb(
+    path: &str,
+    opts: &ImportOptions,
+    assets_dir: Option<&Path>,
+) -> std::io::Result<Vec<serde_json::Value>> {
+    let doc =
+        crate::gltf_source::GltfDoc::parse_file(&crate::glb::resolve_source(path, assets_dir))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     let prefix = &opts.name_prefix;
     let mut entries: Vec<serde_json::Value> = Vec::new();
@@ -799,7 +807,7 @@ mod tests {
 
     #[test]
     fn unsupported_format_errors() {
-        let err = entries_from_scene("model.obj", &ImportOptions::default())
+        let err = entries_from_scene("model.obj", &ImportOptions::default(), None)
             .expect_err("'.obj' is not a SceneImport container format");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains(".obj"));
@@ -1002,7 +1010,7 @@ mod tests {
             name_prefix: "scn".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path, &opts).expect("expand glb");
+        let entries = entries_from_scene(path, &opts, None).expect("expand glb");
 
         // Material 0 maps the glTF PBR factors; the powers of two used in the
         // fixture are exact in f32/f64, so equality holds.
@@ -1055,7 +1063,7 @@ mod tests {
             name_prefix: "hero".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path, &opts).expect("expand glb");
+        let entries = entries_from_scene(path, &opts, None).expect("expand glb");
 
         // One SkinnedMesh per skinned node, each selecting its own part and
         // taking its mesh's material.
@@ -1112,7 +1120,7 @@ mod tests {
             name_prefix: "mix".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts, None).expect("expand glb");
 
         // Mesh 1 keeps its static entries for the plain node...
         find(&entries, "mix_prim_1", "Mesh");
@@ -1135,8 +1143,8 @@ mod tests {
         let path = dir.path().join("tri.glb");
         std::fs::write(&path, triangle_glb(3)).unwrap();
 
-        let entries =
-            entries_from_scene(path.to_str().unwrap(), &ImportOptions::default()).expect("expand");
+        let entries = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default(), None)
+            .expect("expand");
         assert!(entries.iter().all(|e| e["type"] != "SkinnedMesh"));
         assert!(entries.iter().all(|e| e["type"] != "Animation"));
     }
@@ -1155,7 +1163,7 @@ mod tests {
             name_prefix: "rig".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand");
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts, None).expect("expand");
         find(&entries, "rig_skin_0", "SkinnedMesh");
         assert!(entries.iter().all(|e| e["type"] != "Animation"));
     }
@@ -1171,7 +1179,7 @@ mod tests {
             emit_camera: false,
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts, None).expect("expand glb");
         assert!(entries.iter().all(|e| e["type"] != "Camera3D"));
     }
 
@@ -1187,7 +1195,7 @@ mod tests {
             name_prefix: "big".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path, &opts).expect("expand glb");
+        let entries = entries_from_scene(path, &opts, None).expect("expand glb");
 
         // The single triangle re-chunks into one u16-safe slice; the entry
         // carries the chunk index and there is no unchunked mesh entry.
@@ -1232,7 +1240,7 @@ mod tests {
             name_prefix: "scn".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts, None).expect("expand glb");
         find(&entries, "scn_prim_0", "Mesh");
         find(&entries, "scn_model_0", "Model");
         assert!(entries.iter().all(|e| e["type"] != "Prop"));
@@ -1248,7 +1256,7 @@ mod tests {
         let path = dir.path().join("points.glb");
         std::fs::write(&path, triangle_glb_with_mode(U16_CAPACITY + 1, 0)).unwrap();
 
-        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default())
+        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default(), None)
             .expect_err("POINTS topology is unsupported");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(
@@ -1263,14 +1271,14 @@ mod tests {
         let path = dir.path().join("upper.GLB");
         std::fs::write(&path, triangle_glb(3)).unwrap();
 
-        let entries =
-            entries_from_scene(path.to_str().unwrap(), &ImportOptions::default()).expect("expand");
+        let entries = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default(), None)
+            .expect("expand");
         assert!(entries.iter().any(|e| e["type"] == "Mesh"));
     }
 
     #[test]
     fn missing_glb_file_errors_with_the_path() {
-        let err = entries_from_scene("/no/such/scene.glb", &ImportOptions::default())
+        let err = entries_from_scene("/no/such/scene.glb", &ImportOptions::default(), None)
             .expect_err("missing file");
         assert!(err.to_string().contains("/no/such/scene.glb"));
     }
@@ -1281,7 +1289,7 @@ mod tests {
         let path = dir.path().join("junk.glb");
         std::fs::write(&path, b"definitely not a glb").unwrap();
 
-        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default())
+        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default(), None)
             .expect_err("corrupt file");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("not a valid glTF"));
@@ -1289,7 +1297,7 @@ mod tests {
 
     #[test]
     fn missing_fbx_file_errors() {
-        let err = entries_from_scene("/no/such/scene.fbx", &ImportOptions::default())
+        let err = entries_from_scene("/no/such/scene.fbx", &ImportOptions::default(), None)
             .expect_err("missing file");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("/no/such/scene.fbx"));
@@ -1575,7 +1583,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("scene.fbx");
         write_scene_fbx(&path);
-        let entries = entries_from_scene(path.to_str().unwrap(), &scene_opts()).expect("expand");
+        let entries =
+            entries_from_scene(path.to_str().unwrap(), &scene_opts(), None).expect("expand");
 
         // Each referenced texture is interned once, in material/slot order, and
         // resolves relative to the .fbx directory.
@@ -1647,7 +1656,7 @@ mod tests {
         let path = dir.path().join("scene.fbx");
         write_scene_fbx(&path);
         let source = path.to_str().unwrap();
-        let entries = entries_from_scene(source, &scene_opts()).expect("expand");
+        let entries = entries_from_scene(source, &scene_opts(), None).expect("expand");
 
         // One Mesh per material group, referencing the source by path only.
         for i in 0..3 {
@@ -1697,7 +1706,7 @@ mod tests {
             emit_camera: false,
             ..scene_opts()
         };
-        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand");
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts, None).expect("expand");
         assert!(entries.iter().all(|e| e["type"] != "Camera3D"));
     }
 
@@ -1736,7 +1745,7 @@ mod tests {
             name_prefix: "big".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand");
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts, None).expect("expand");
 
         // 65538 vertices split into a full u16 chunk plus the remainder, each
         // emitted as its own Mesh carrying the chunk index to re-slice on.
@@ -1759,7 +1768,7 @@ mod tests {
             name_prefix: "hero".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(file.path(), &opts).expect("expand fbx");
+        let entries = entries_from_scene(file.path(), &opts, None).expect("expand fbx");
 
         // Both skin-deformed geometries expand, ranked in Geometry declaration
         // order so the selector matches the importer's own scan.
@@ -1792,7 +1801,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("scene.fbx");
         write_scene_fbx(&path);
-        let entries = entries_from_scene(path.to_str().unwrap(), &scene_opts()).expect("expand");
+        let entries =
+            entries_from_scene(path.to_str().unwrap(), &scene_opts(), None).expect("expand");
         assert!(entries.iter().all(|e| e["type"] != "SkinnedMesh"));
         assert!(entries.iter().all(|e| e["type"] != "Animation"));
         // The static expansion is untouched: every prop and mesh still lands.
@@ -1806,7 +1816,7 @@ mod tests {
         let path = dir.path().join("junk.fbx");
         std::fs::write(&path, b"definitely not an fbx").unwrap();
 
-        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default())
+        let err = entries_from_scene(path.to_str().unwrap(), &ImportOptions::default(), None)
             .expect_err("corrupt file");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("not a valid FBX file"), "{err}");
@@ -1823,7 +1833,7 @@ mod tests {
             name_prefix: "scn".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path, &opts).expect("expand glb");
+        let entries = entries_from_scene(path, &opts, None).expect("expand glb");
 
         // The image yields a Texture entry referencing the GLB by path + index.
         let tex = find(&entries, "scn_tex_0", "Texture");
@@ -1884,7 +1894,7 @@ mod tests {
             name_prefix: "pbr".to_string(),
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path, &opts).expect("expand glb");
+        let entries = entries_from_scene(path, &opts, None).expect("expand glb");
 
         // Metal sphere: a packed metallic-roughness image, no cutout.
         let plate = find(&entries, "pbr_mat_0", "Material");
@@ -1920,7 +1930,7 @@ mod tests {
             texture_max_size: 0,
             ..ImportOptions::default()
         };
-        let entries = entries_from_scene(path.to_str().unwrap(), &opts).expect("expand glb");
+        let entries = entries_from_scene(path.to_str().unwrap(), &opts, None).expect("expand glb");
         let tex = find(&entries, "scn_tex_0", "Texture");
         assert!(tex["args"].get("max_size").is_none());
     }

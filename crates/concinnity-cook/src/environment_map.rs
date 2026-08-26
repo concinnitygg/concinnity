@@ -40,7 +40,7 @@ use concinnity_cpu::build::environment_map::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, compute_irradiance,
     compute_prefilter, max_mip_count, serialise_payload,
 };
-use concinnity_store::source::resolve_source_path;
+use std::path::Path;
 
 // Validation + entry point
 //
@@ -117,7 +117,10 @@ fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
     }
 }
 
-pub(crate) fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_environment_map_payload(
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> Result<Vec<u8>, String> {
     let params = resolve_args(args)?;
     let prefilter_face = params.prefilter_face_size;
     let irradiance_face = params.irradiance_face_size;
@@ -125,10 +128,10 @@ pub(crate) fn compile_environment_map_payload(args: &serde_json::Value) -> Resul
 
     let hdr = if !params.source.is_empty() {
         // A bare filename (no directory component) is resolved via the same
-        // asset-search the build pipeline uses for shader sources: search
-        // .concinnity/assets/ recursively, falling back to the raw path so an
-        // absolute or relative path also works.
-        let resolved = resolve_source_path(&params.source);
+        // asset-search the build pipeline uses for shader sources: search the
+        // asset root recursively, falling back to the raw path so an absolute
+        // or relative path also works.
+        let resolved = concinnity_store::source::resolve_source_path(&params.source, assets_dir);
         load_equirect_source(&resolved)?
     } else {
         match params.generator.as_str() {
@@ -182,24 +185,24 @@ fn bake_payload(
     )
 }
 
-/// Decode an EnvironmentMap source path the same way
+/// Decode the EnvironmentMap source at `path` the same way
 /// `compile_environment_map_payload` does at build time, returning the
 /// serialised payload (header + irradiance + prefilter mips). Exposed for the
 /// asset hot-reload path (`cn debug` only), which the editor drives; production
-/// reads the compiled payload from a blob locator instead. `prefilter_face`,
-/// `irradiance_face`, and `prefilter_samples` should be the values from the
-/// declared `EnvironmentMap` asset so the decode produces the same texture sizes
-/// as the build pass. The convolutions are CPU-bound and take seconds at default
-/// sizes: the caller pays this on the render thread.
+/// reads the compiled payload from a blob locator instead. `path` is read as
+/// given -- the caller holds the path the load already resolved.
+/// `prefilter_face`, `irradiance_face`, and `prefilter_samples` should be the
+/// values from the declared `EnvironmentMap` asset so the decode produces the
+/// same texture sizes as the build pass. The convolutions are CPU-bound and
+/// take seconds at default sizes: the caller pays this on the render thread.
 pub fn decode_source(
-    source: &str,
+    path: &str,
     prefilter_face: u32,
     irradiance_face: u32,
     prefilter_samples: u32,
     prefilter_clamp: f32,
 ) -> Result<Vec<u8>, String> {
-    let resolved = resolve_source_path(source);
-    let hdr = load_equirect_source(&resolved)?;
+    let hdr = load_equirect_source(path)?;
     Ok(bake_payload(
         &hdr,
         prefilter_face,
@@ -315,7 +318,7 @@ mod tests {
             "irradiance_face_size": 8,
             "prefilter_samples": 32,
         });
-        let blob = compile_environment_map_payload(&args).expect("compile");
+        let blob = compile_environment_map_payload(&args, None).expect("compile");
         let view = deserialise(&blob).expect("deserialise");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
@@ -330,7 +333,7 @@ mod tests {
         std::fs::write(&path, ordinary_scene_glb_bytes()).expect("write glb");
 
         let args = serde_json::json!({ "source": path.to_str().unwrap() });
-        let err = compile_environment_map_payload(&args).unwrap_err();
+        let err = compile_environment_map_payload(&args, None).unwrap_err();
         assert!(err.contains("exactly one mesh"), "got: {err}");
     }
 
@@ -393,7 +396,7 @@ mod tests {
         let path = dir.path().join("broken.hdr");
         std::fs::write(&path, b"not a radiance file\n").expect("write hdr");
         let args = serde_json::json!({ "source": path.to_str().unwrap() });
-        let err = compile_environment_map_payload(&args).unwrap_err();
+        let err = compile_environment_map_payload(&args, None).unwrap_err();
         assert!(err.contains("failed to decode HDR"), "got: {err}");
         assert!(err.contains("missing Radiance magic"), "got: {err}");
     }
@@ -402,7 +405,7 @@ mod tests {
     fn compile_environment_map_payload_surfaces_a_missing_hdr() {
         // A directory-qualified path resolves verbatim, so the load fails on open.
         let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr" });
-        let err = compile_environment_map_payload(&args).unwrap_err();
+        let err = compile_environment_map_payload(&args, None).unwrap_err();
         assert!(err.contains("HDR"), "got: {err}");
     }
 
@@ -414,7 +417,7 @@ mod tests {
             "irradiance_face_size": 8,
             "prefilter_samples": 32,
         });
-        let blob = compile_environment_map_payload(&args).expect("compile");
+        let blob = compile_environment_map_payload(&args, None).expect("compile");
         let view = deserialise(&blob).expect("deserialise");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);

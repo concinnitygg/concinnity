@@ -225,9 +225,13 @@ impl WorldBuilder {
         // before any ShaderStage is compiled.
         concinnity_shader::install();
 
-        let loaded: LoadedWorld =
-            prepare_world(&self.lines.concat()).map_err(|errs| report_validation_errors(&errs))?;
-        build_compiled(loaded.assets, None)
+        // Bare `source` filenames resolve under the installed state root's
+        // `assets/`. An embedder that installed no state root has no tree to
+        // search, so only paths that stand on their own resolve.
+        let assets_dir = concinnity_cook::paths::assets_dir();
+        let loaded: LoadedWorld = prepare_world(&self.lines.concat(), assets_dir.as_deref())
+            .map_err(|errs| report_validation_errors(&errs))?;
+        build_compiled(loaded.assets, assets_dir.as_deref(), None)
     }
 }
 

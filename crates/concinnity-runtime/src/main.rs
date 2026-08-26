@@ -2,10 +2,16 @@
 //!
 //! A minimal standalone binary that plays a world's pre-compiled blobs.
 //!
-//! The state root (holding `data/`, plus the `saves/` and `settings` the app
-//! writes at runtime) is anchored to the executable, not the launch working
-//! directory, so the app finds its data whether it is double-clicked, launched
-//! from a shell, or run from inside a macOS `.app` bundle.
+//! The state root (holding the world's data, plus the `saves/` and `settings`
+//! the app writes at runtime) is anchored to the executable, not the launch
+//! working directory, so the app finds its data whether it is double-clicked,
+//! launched from a shell, or run from inside a macOS `.app` bundle.
+//!
+//! Inside that directory the world is either a file named `data` (one
+//! self-contained blob, what `cn export` ships for a small game) or a directory
+//! named `data` holding blob `0` and its overflow siblings. A single positional
+//! argument overrides both with a blob file or a directory of blobs; it moves
+//! only what is read, never where the app writes.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -48,21 +54,67 @@ fn main() -> std::io::Result<()> {
     // Redirect runtime-writable state (`saves/` + `settings`) to a per-user
     // directory when the content dir cannot be written -- a read-only install
     // such as Program Files. In the portable case (content dir writable) both
-    // stay beside the data, preserving the single-folder layout.
+    // stay beside the data, preserving the single-folder layout. The world's
+    // own `AppConfig.home`, applied once the blob is read, overrides either.
     if !dir_is_writable(&content_dir)
         && let Some(writable) = per_user_state_dir(&app_name_from_exe(&exe))
     {
         concinnity_engine::set_writable_state_dir(writable);
     }
 
-    concinnity_engine::run_from(&content_dir)
+    // One positional argument names the world instead of the bundled `data`.
+    // It moves only what is read: `saves/` and `settings` stay anchored above,
+    // so pointing the player at a blob in a read-only place never relocates a
+    // player's saves.
+    let requested = std::env::args_os()
+        .nth(1)
+        .map_or_else(|| content_dir.join("data"), PathBuf::from);
+    let blob = blob_source(&requested).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no world data at {}", requested.display()),
+        )
+    })?;
+
+    concinnity_engine::run_from(&content_dir, blob.as_source())
 }
 
-// Resolve the flat state root that holds the world's `data/` blobs (and, unless
-// redirected, the `saves/` + `settings` written at runtime) from the
-// executable's directory. Inside a macOS `.app` the executable sits at
-// `Contents/MacOS/<exe>` and the data lives in `Contents/Resources/`;
-// everywhere else the data sits directly beside the executable.
+// Where a resolved world lives, owning its path so it outlives the borrow the
+// engine takes. A directory holds blob 0 and any overflow siblings; a file is
+// a single self-contained blob.
+#[derive(Debug, PartialEq, Eq)]
+enum ResolvedBlob {
+    Directory(PathBuf),
+    File(PathBuf),
+}
+
+impl ResolvedBlob {
+    fn as_source(&self) -> concinnity_engine::BlobSource<'_> {
+        match self {
+            ResolvedBlob::Directory(dir) => concinnity_engine::BlobSource::Directory(dir),
+            ResolvedBlob::File(file) => concinnity_engine::BlobSource::File(file),
+        }
+    }
+}
+
+// Classify `path` as a world: a directory holds blob 0, a file is blob 0
+// itself. `None` when nothing is there, which is the same answer for a missing
+// `data` entry and a mistyped argument.
+fn blob_source(path: &Path) -> Option<ResolvedBlob> {
+    if path.is_dir() {
+        return Some(ResolvedBlob::Directory(path.to_path_buf()));
+    }
+    if path.is_file() {
+        return Some(ResolvedBlob::File(path.to_path_buf()));
+    }
+    None
+}
+
+// Resolve the state root that holds the world's `data` (and, unless redirected,
+// the `saves/` + `settings` written at runtime) from the executable's
+// directory. Inside a macOS `.app` the executable sits at `Contents/MacOS/<exe>`
+// and the data lives in `Contents/Resources/`; everywhere else the data sits
+// directly beside the executable.
 fn state_dir_for_exe(exe_dir: &Path) -> PathBuf {
     let in_app_bundle = exe_dir.file_name() == Some(OsStr::new("MacOS"))
         && exe_dir.parent().and_then(Path::file_name) == Some(OsStr::new("Contents"));
@@ -164,6 +216,48 @@ mod tests {
         );
         assert!(after.peak_bytes >= after.live_bytes);
         drop(core::hint::black_box(held));
+    }
+
+    // A `data` directory is the overflow-capable layout; a `data` file is one
+    // self-contained blob. The same two rules decide a positional argument.
+    #[test]
+    fn a_data_directory_and_a_data_file_resolve_to_their_own_forms() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let dir = tmp.path().join("data");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("0"), b"blob").unwrap();
+        assert_eq!(
+            blob_source(&dir),
+            Some(ResolvedBlob::Directory(dir.clone()))
+        );
+
+        let single = tmp.path().join("single").join("data");
+        std::fs::create_dir_all(single.parent().unwrap()).unwrap();
+        std::fs::write(&single, b"blob").unwrap();
+        assert_eq!(
+            blob_source(&single),
+            Some(ResolvedBlob::File(single.clone()))
+        );
+
+        // The directory form owns blob 0 plus its siblings; the file form is
+        // blob 0 itself.
+        assert_eq!(
+            ResolvedBlob::Directory(dir.clone()).as_source(),
+            concinnity_engine::BlobSource::Directory(&dir)
+        );
+        assert_eq!(
+            ResolvedBlob::File(single.clone()).as_source(),
+            concinnity_engine::BlobSource::File(&single)
+        );
+    }
+
+    // Nothing there is not an empty world: the caller turns this into a
+    // not-found naming the path it looked at.
+    #[test]
+    fn a_missing_path_resolves_to_no_world() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(blob_source(&tmp.path().join("data")), None);
     }
 
     #[test]

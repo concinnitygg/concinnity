@@ -716,7 +716,7 @@ fn save_dir(test: &str) -> std::path::PathBuf {
 
 fn persisting_system(world: &mut TestWorld, dir: &std::path::Path) -> BehaviorSystem {
     let mut sys = BehaviorSystem::new();
-    sys.save_dir = dir.to_path_buf();
+    sys.save_dir = Some(dir.to_path_buf());
     sys.init(&mut world.ctx());
     sys
 }

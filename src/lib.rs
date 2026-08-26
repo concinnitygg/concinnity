@@ -55,7 +55,7 @@ mod world;
 pub use app::App;
 pub use world::World;
 
-/// The runtime asset vocabulary (`Application`, `Camera3D`, `Room`,
+/// The runtime asset vocabulary (`AppConfig`, `Camera3D`, `Room`,
 /// `DirectionalLight`, ...), each addable to a [`World`] as a component.
 pub mod assets {
     // Named one by one rather than glob-imported. The glob also re-exported
@@ -67,14 +67,14 @@ pub mod assets {
     pub use concinnity_core::components::{
         AaMode, Animation, AnimationBlend, AnimationBlendPoint, AnimationCondition, AnimationGraph,
         AnimationIkChain, AnimationParam, AnimationParams, AnimationState, AnimationTrack,
-        AnimationTransition, AppLimits, Application, ApplicationArgs, AudioBus, AudioClip,
-        AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
-        BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery, BehaviorSource,
-        BlockType, BodyDynamics, Camera3D, Camera3DArgs, CameraController, CameraProbe, CameraShot,
-        CharacterCapsule, CharacterModel, CharacterRig, CharacterSchema, CharacterShape, Children,
-        Collider, ColorLut, ContactEvent, ControlsCommand, CubemapTexture, CueKind, DebugHud,
-        Decal, DespawnRequest, DirectionalLight, EngineDefaults, EntityTarget, EnvironmentMap,
-        File, FileArgs, FileKind, FollowController, FollowDrive, Font, FpsCounter, FrameInput,
+        AnimationTransition, AppConfig, AppConfigArgs, AudioBus, AudioClip, AudioCommand, AudioCue,
+        AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior, BehaviorExpr, BehaviorLiteral,
+        BehaviorLocal, BehaviorNode, BehaviorQuery, BehaviorSource, BlockType, BodyDynamics,
+        Camera3D, Camera3DArgs, CameraController, CameraProbe, CameraShot, CharacterCapsule,
+        CharacterModel, CharacterRig, CharacterSchema, CharacterShape, Children, Collider,
+        ColorLut, ContactEvent, ControlsCommand, CubemapTexture, CueKind, DebugHud, Decal,
+        DespawnRequest, DirectionalLight, EngineDefaults, EntityTarget, EnvironmentMap, File,
+        FileArgs, FileKind, FollowController, FollowDrive, Font, FpsCounter, FrameInput,
         GamepadAction, GamepadButton, GamepadMap, GlassPanel, GlobalTransform, GraphicsConfig,
         GroundProbe, GroundProbes, Held, Hidden, HitRegion, IndirectLighting, InputKey,
         InstanceTransform, InstancedProp, InteractEvent, Interactable, JointProportion, Justify,

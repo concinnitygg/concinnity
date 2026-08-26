@@ -15,6 +15,13 @@ pub(crate) enum StartupError {
     /// The data is present but did not load: a truncated file, a schema the
     /// binary no longer understands, or a failed read.
     UnreadableData { blob: PathBuf, cause: CnResult },
+    /// The world was packaged as one self-contained blob file, but it needs
+    /// overflow payload blobs, which only the directory layout can hold. Their
+    /// siblings would land beside the executable, so this is refused rather
+    /// than half-loaded.
+    OverflowUnsupported { blob: PathBuf, needed: u32 },
+    /// Nothing anchored the state tree, so there is nowhere to look for data.
+    NoStateRoot,
 }
 
 impl StartupError {
@@ -31,6 +38,18 @@ impl StartupError {
         }
     }
 
+    // How the failure surfaces to the process's exit status.
+    pub(crate) fn io_kind(&self) -> std::io::ErrorKind {
+        match self {
+            StartupError::MissingData { .. } | StartupError::NoStateRoot => {
+                std::io::ErrorKind::NotFound
+            }
+            StartupError::UnreadableData { .. } | StartupError::OverflowUnsupported { .. } => {
+                std::io::ErrorKind::InvalidData
+            }
+        }
+    }
+
     // The sentence shown on the error screen. Names the path, because the
     // path is the actionable part, and stays free of internal vocabulary.
     pub(crate) fn user_message(&self) -> String {
@@ -41,6 +60,10 @@ impl StartupError {
             StartupError::UnreadableData { blob, .. } => {
                 format!("Failed to read the data blob:\n{}", blob.display())
             }
+            StartupError::OverflowUnsupported { blob, .. } => {
+                format!("This app's data is incomplete:\n{}", blob.display())
+            }
+            StartupError::NoStateRoot => "Failed to find this app's data.".to_string(),
         }
     }
 
@@ -58,6 +81,18 @@ impl StartupError {
                     "compiled world data at {} failed to load: {cause}",
                     blob.display()
                 )
+            }
+            StartupError::OverflowUnsupported { blob, needed } => {
+                format!(
+                    "{} is a single blob file, but this world spans {} more; \
+                     re-export it so the player ships a `data/` directory",
+                    blob.display(),
+                    needed
+                )
+            }
+            StartupError::NoStateRoot => {
+                "no state directory was installed, so there is nowhere to read world data from"
+                    .to_string()
             }
         }
     }
@@ -103,9 +138,36 @@ mod tests {
                 blob: PathBuf::from("/somewhere/data/0"),
                 cause: CnResult::FileIo,
             },
+            StartupError::OverflowUnsupported {
+                blob: PathBuf::from("/somewhere/data/0"),
+                needed: 2,
+            },
         ] {
             assert!(err.user_message().contains("/somewhere/data/0"));
             assert!(err.log_line().contains("/somewhere/data/0"));
         }
+    }
+
+    // The refusal has to say what to do about it, since a player cannot tell
+    // from a half-loaded world that its data was packaged in the wrong shape.
+    #[test]
+    fn the_overflow_refusal_names_the_fix() {
+        let err = StartupError::OverflowUnsupported {
+            blob: PathBuf::from("/apps/MyGame/data"),
+            needed: 3,
+        };
+        assert!(err.log_line().contains("single blob file"), "{err:?}");
+        assert!(err.log_line().contains("`data/` directory"), "{err:?}");
+        assert!(err.log_line().contains('3'), "{err:?}");
+        assert_eq!(err.io_kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // A missing state root is a not-found, not a corrupt-data report: there is
+    // no path to name because nothing anchored one.
+    #[test]
+    fn no_state_root_reports_not_found_without_a_path() {
+        let err = StartupError::NoStateRoot;
+        assert_eq!(err.io_kind(), std::io::ErrorKind::NotFound);
+        assert!(err.log_line().contains("no state directory"));
     }
 }

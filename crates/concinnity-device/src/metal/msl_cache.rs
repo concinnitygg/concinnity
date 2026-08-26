@@ -62,11 +62,11 @@ fn source_library(
 
 // Compile `source` to metallib bytes with `xcrun metal` / `xcrun metallib`,
 // the same two-step pipeline the build script runs for the built-in shaders.
-// Scratch files live beside the shader cache (under the writable state dir)
-// and are removed on every exit path.
+// Scratch files share the compiler work directory and are removed on every
+// exit path.
 fn compile_to_metallib(source: &str, label: &str) -> Result<Vec<u8>, String> {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    let dir = concinnity_store::paths::shader_cache_dir();
+    let dir = crate::shader_cache::slang_work_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let stem = dir.join(format!(
         "msl.{}.{}",

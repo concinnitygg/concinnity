@@ -12,6 +12,7 @@
 //! `crate::gltf` and call into here.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::components::{SkeletonJoint, SkinnedVertexData, VertexData};
 use crate::gfx::skinning::{JointPose, euler_yxz_from_quat};
@@ -89,11 +90,13 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
         .collect()
 }
 
-/// Parse a `.glb` or `.gltf` file from disk with every buffer resolved. Shared
-/// by the skinned and static importers; the desugar pass uses this directly so
-/// it can memoize one document across many primitive/material/image lookups.
-pub fn parse_glb(source: &str) -> Result<GltfDoc, String> {
-    GltfDoc::parse_file(source)
+/// Parse the `.glb` or `.gltf` an authored `source` names, with every buffer
+/// resolved. A bare `source` filename is searched for under `assets_dir` first;
+/// a path with a directory component is read as written. Shared by the skinned
+/// and static importers; the desugar pass uses this directly so it can memoize
+/// one document across many primitive/material/image lookups.
+pub fn parse_glb(source: &str, assets_dir: Option<&Path>) -> Result<GltfDoc, String> {
+    GltfDoc::parse_file(&resolve_source(source, assets_dir))
 }
 
 // Import the indexed primitive (flattened across glTF meshes in declaration
@@ -283,26 +286,13 @@ pub(crate) fn split_into_u16_chunks(
     chunks
 }
 
-// Resolve a `SkinnedMesh.source` to an on-disk path. A bare filename (no
-// directory component) is searched for under the fetched-assets directory
-// (the same resolution `ColorLut` and `EnvironmentMap` sources use) while a
-// path with a directory component is taken as-is, so a relative or absolute
-// path still works for local test worlds.
-pub(crate) fn resolve_source(source: &str) -> String {
-    let bare = std::path::Path::new(source)
-        .parent()
-        .map(|d| d.as_os_str().is_empty())
-        .unwrap_or(true);
-    if !bare {
-        return source.to_string();
-    }
-    if let Some(found) = crate::source::find_in_assets(source) {
-        return found;
-    }
-    concinnity_store::paths::assets_dir()
-        .join(source)
-        .to_string_lossy()
-        .into_owned()
+// Resolve a `SkinnedMesh.source` to an on-disk path against the build's asset
+// search root. A bare filename (no directory component) is searched for under
+// that root (the same resolution `ColorLut` and `EnvironmentMap` sources use)
+// while a path with a directory component is taken as-is, so a relative or
+// absolute path still works for local test worlds.
+pub(crate) fn resolve_source(source: &str, assets_dir: Option<&Path>) -> String {
+    crate::source::resolve_source_path(source, assets_dir)
 }
 
 // A skeleton reordered into parents-before-children order, plus the lookup
@@ -2084,7 +2074,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../private/assets/models/rig_oracle/rig_morph.glb"
         );
-        let doc = parse_glb(path).expect("parse");
+        let doc = parse_glb(path, None).expect("parse");
         let mesh = import_skinned_from_doc(&doc, path, 0).expect("skinned import");
         assert_eq!(mesh.morph_target_names, vec!["bulge", "shift"]);
         assert_eq!(mesh.morph_deltas.len(), 2 * mesh.vertices.len());
@@ -2117,7 +2107,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("tri.glb");
         std::fs::write(&path, static_triangle_glb()).expect("write glb");
-        let doc = parse_glb(path.to_str().unwrap()).expect("parse");
+        let doc = parse_glb(path.to_str().unwrap(), None).expect("parse");
         assert_eq!(doc.doc.document.meshes().count(), 1);
     }
 
@@ -2125,7 +2115,7 @@ mod tests {
     fn parse_glb_reports_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing.glb");
-        let err = parse_glb(path.to_str().unwrap()).unwrap_err();
+        let err = parse_glb(path.to_str().unwrap(), None).unwrap_err();
         assert!(err.contains("failed to read"), "got: {err}");
     }
 
@@ -2134,29 +2124,40 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("junk.glb");
         std::fs::write(&path, b"not a glb at all").expect("write junk");
-        let err = parse_glb(path.to_str().unwrap()).unwrap_err();
+        let err = parse_glb(path.to_str().unwrap(), None).unwrap_err();
         assert!(err.contains("not a valid glTF/GLB file"), "got: {err}");
     }
 
     #[test]
     fn resolve_source_keeps_paths_with_a_directory_component() {
-        assert_eq!(resolve_source("sub/f.glb"), "sub/f.glb");
-        assert_eq!(resolve_source("./f.glb"), "./f.glb");
-        assert_eq!(resolve_source("/abs/f.glb"), "/abs/f.glb");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let assets = Some(dir.path());
+        assert_eq!(resolve_source("sub/f.glb", assets), "sub/f.glb");
+        assert_eq!(resolve_source("./f.glb", assets), "./f.glb");
+        assert_eq!(resolve_source("/abs/f.glb", assets), "/abs/f.glb");
     }
 
     #[test]
     fn resolve_source_anchors_a_bare_filename_under_the_assets_dir() {
         // Nothing by this name exists to be found, so the fallback is the
-        // assets directory joined with the filename. Both reads consult the
-        // process-global anchor, so this shares the build-output lock with the
-        // tests that install a state dir.
-        let _guard = crate::blob::test_output::LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let resolved = resolve_source("cn_test_no_such_model.glb");
-        let expected = concinnity_store::paths::assets_dir().join("cn_test_no_such_model.glb");
-        assert_eq!(resolved, expected.to_string_lossy());
+        // asset search root joined with the filename.
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            resolve_source("cn_test_no_such_model.glb", Some(dir.path())),
+            dir.path()
+                .join("cn_test_no_such_model.glb")
+                .to_string_lossy()
+        );
+    }
+
+    // With no asset search root there is nowhere to anchor a bare filename, so
+    // it comes back untouched rather than joined onto a guessed directory.
+    #[test]
+    fn resolve_source_without_an_assets_dir_returns_the_bare_name() {
+        assert_eq!(
+            resolve_source("cn_test_no_such_model.glb", None),
+            "cn_test_no_such_model.glb"
+        );
     }
 
     // split_into_u16_chunks

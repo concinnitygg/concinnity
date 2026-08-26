@@ -35,7 +35,13 @@ impl EditorHook {
             yaw: cam.yaw,
             pitch: cam.pitch,
         });
-        let path = session_store::default_path();
+        let Some(path) = session_store::default_path() else {
+            self.console_sink.info(&format!(
+                "camera bookmark {} set for this session",
+                slot + 1
+            ));
+            return;
+        };
         let mut store = session_store::load(&path);
         store
             .worlds

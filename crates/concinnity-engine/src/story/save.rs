@@ -24,7 +24,9 @@ impl StorySystem {
         let save = if self.story.save_key.is_empty() {
             None
         } else {
-            read_save(&save_file(&self.save_dir))
+            self.save_dir
+                .as_deref()
+                .and_then(|dir| read_save(&save_file(dir)))
         };
         match save {
             Some(save) => self.resume_from(save, ctx),
@@ -74,8 +76,11 @@ impl StorySystem {
         if self.story.save_key.is_empty() {
             return;
         }
+        let Some(dir) = self.save_dir.as_deref() else {
+            return;
+        };
         let save = self.current_save();
-        if let Err(e) = write_save(&save_file(&self.save_dir), &save) {
+        if let Err(e) = write_save(&save_file(dir), &save) {
             tracing::warn!("StorySystem: save failed: {e}");
         }
     }
@@ -86,13 +91,18 @@ impl StorySystem {
         if self.story.save_key.is_empty() {
             return;
         }
-        let _ = std::fs::remove_file(save_file(&self.save_dir));
+        if let Some(dir) = self.save_dir.as_deref() {
+            let _ = std::fs::remove_file(save_file(dir));
+        }
     }
 
     // Whether any manual slot save exists (the title's Load lights up). Scans
     // every logical slot, not just the overlay's visible window.
     pub(super) fn any_slot_save(&self) -> bool {
         !self.story.save_key.is_empty()
-            && (0..SLOT_COUNT).any(|i| slot_file(&self.save_dir, i).exists())
+            && self
+                .save_dir
+                .as_deref()
+                .is_some_and(|dir| (0..SLOT_COUNT).any(|i| slot_file(dir, i).exists()))
     }
 }

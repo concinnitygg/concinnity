@@ -12,7 +12,7 @@ pub use concinnity_world::world::{
     write_world_jsonl,
 };
 
-pub(crate) mod application;
+pub(crate) mod app_config;
 pub(crate) mod camera_shot;
 pub(crate) mod character_model;
 pub(crate) mod companion;
@@ -64,14 +64,20 @@ pub struct LoadedWorld {
 /// semantic validation (`crate::check::check_world`). Returns everything the
 /// compile stage needs, computed exactly once. Errors from every stage are
 /// collected, so the caller gets the full picture in a single pass.
-pub fn prepare_world(content: &str) -> Result<LoadedWorld, Vec<String>> {
+///
+/// `assets_dir` is the asset search root the expansion passes resolve bare
+/// source filenames and preset names against; `None` leaves them unresolved.
+pub fn prepare_world(
+    content: &str,
+    assets_dir: Option<&std::path::Path>,
+) -> Result<LoadedWorld, Vec<String>> {
     let mut expanded = load_world(content)?;
     let authored: Vec<String> = expanded
         .iter()
         .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
         .map(str::to_string)
         .collect();
-    let report = expand_world(&mut expanded).map_err(|e| vec![e])?;
+    let report = expand_world(&mut expanded, assets_dir).map_err(|e| vec![e])?;
 
     let assets: Vec<WorldJsonlAsset> = expanded.iter().map(WorldJsonlAsset::from_value).collect();
 
@@ -96,7 +102,7 @@ mod tests {
     #[test]
     fn prepare_world_expands_and_validates() {
         let content = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#;
-        let loaded = prepare_world(content).unwrap();
+        let loaded = prepare_world(content, None).unwrap();
         // GraphicsConfig pulls in its companions, so the prepared world holds
         // more than the single declared asset.
         assert!(loaded.assets.len() > 1);
@@ -116,7 +122,7 @@ mod tests {
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
         let content = r#"{"name":"p","type":"Prop","args":{"prefab":"ghost"}}"#;
-        let errs = prepare_world(content).err().unwrap_or_default();
+        let errs = prepare_world(content, None).err().unwrap_or_default();
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("ghost"), "{errs:?}");
     }
@@ -126,8 +132,54 @@ mod tests {
     #[test]
     fn prepare_world_reports_semantic_errors() {
         let content = r#"{"name":"prop","type":"Prop","args":{"mesh":"nope"}}"#;
-        let errs = prepare_world(content).err().unwrap_or_default();
+        let errs = prepare_world(content, None).err().unwrap_or_default();
         assert!(!errs.is_empty());
         assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
+    }
+
+    // The asset search root is the caller's, so one world expands differently
+    // under two roots in the same process, and under none it falls back to the
+    // type defaults. This is what the root being a parameter rather than a
+    // process-wide anchor buys.
+    #[test]
+    fn prepare_world_expands_presets_from_the_root_it_is_given() {
+        fn rig_root(intensity: f64) -> tempfile::TempDir {
+            let dir = tempfile::tempdir().unwrap();
+            let rigs = dir.path().join("light_rigs");
+            std::fs::create_dir_all(&rigs).unwrap();
+            std::fs::write(
+                rigs.join("dusk.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "args": {"lights": [{"kind": "directional", "name": "key", "intensity": intensity}]}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            dir
+        }
+        fn key_intensity(loaded: &LoadedWorld) -> Option<f64> {
+            loaded
+                .assets
+                .iter()
+                .find(|a| a.name == "rig_key")?
+                .args
+                .get("intensity")?
+                .as_f64()
+        }
+
+        let content = r#"{"name":"rig","type":"LightRig","args":{"preset":"dusk"}}"#;
+        let bright = rig_root(3.5);
+        let dim = rig_root(0.25);
+
+        assert_eq!(
+            key_intensity(&prepare_world(content, Some(bright.path())).unwrap()),
+            Some(3.5)
+        );
+        assert_eq!(
+            key_intensity(&prepare_world(content, Some(dim.path())).unwrap()),
+            Some(0.25)
+        );
+        // No root: the preset is never found, so the rig expands to nothing.
+        assert_eq!(key_intensity(&prepare_world(content, None).unwrap()), None);
     }
 }

@@ -72,12 +72,12 @@ fn run(args: &[&str]) -> Output {
 const HELLO_WORLD: &str =
     "{\"name\":\"hello_world\",\"type\":\"TextLabel\",\"args\":{\"content\":\"Hello, world!\"}}\n";
 
-// An isolated project for one test: a temp directory the spawned binary treats
-// as both its working directory and its state root (`CN_HOME`), so `.concinnity/`
-// resolves inside it. Isolation is per-process rather than per-thread, which is
-// what makes these tests safe to run in parallel: the path anchors they steer
-// are process-global, so an in-crate unit test could not do the same without
-// racing every other test in its binary.
+// An isolated project for one test: a temp directory the spawned binary runs
+// in, so the `.concinnity/` it anchors to its working directory resolves inside
+// it. Isolation is per-process rather than per-thread, which is what makes
+// these tests safe to run in parallel: the path anchors they steer are
+// process-global, so an in-crate unit test could not do the same without racing
+// every other test in its binary.
 //
 // A temp root also keeps the discovery fallback honest. `find_world_jsonl` walks
 // up from the working directory looking for a `world.jsonl`, and the repository
@@ -124,7 +124,6 @@ impl Project {
         Command::new(BIN)
             .args(args)
             .current_dir(self.path())
-            .env("CN_HOME", self.path())
             .output()
             .expect("spawn concinnity binary")
     }

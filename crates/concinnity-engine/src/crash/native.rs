@@ -40,7 +40,9 @@ fn report_fault(ctx: &CrashContext) {
     // formatting the message, snapshotting the notes and the log ring, querying
     // process memory -- runs after the artifact with the compromised-context
     // writer is already on disk.
-    let dir = concinnity_store::paths::crashes_dir();
+    let Some(dir) = concinnity_store::paths::crashes_dir() else {
+        return;
+    };
     let time = UtcTime::now();
     let stem = write::unique_stem(&dir, &file_stem_at(time));
     super::minidump::write_fault_dump(&dir, &stem, ctx);

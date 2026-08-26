@@ -1,29 +1,29 @@
-// src/world/application.rs
-// The Application asset names the world for distribution. At most one may be
+// src/world/app_config.rs
+// The AppConfig asset names the world for distribution. At most one may be
 // declared. When a Window carries no title of its own, the application name
 // fills it, so a running game shows its own name in the title bar.
 
 use super::expand::{ExpandReport, asset_name, type_norm};
 
-// Enforce the single-Application rule and feed its name into any untitled
+// Enforce the single-AppConfig rule and feed its name into any untitled
 // Window. Runs after the first companion round, so a rendering world's
-// companion-injected Window is present to receive the title. The Application
+// companion-injected Window is present to receive the title. The AppConfig
 // asset itself is External and stays in the world (the runtime and the export
 // both read it); only the Window title is adjusted here.
-pub(crate) fn apply_application(
+pub(crate) fn apply_app_config(
     assets: &mut [serde_json::Value],
     report: &mut ExpandReport,
 ) -> Result<(), String> {
     let mut app_name: Option<String> = None;
     let mut first: Option<String> = None;
     for v in assets.iter() {
-        if type_norm(v) != "application" {
+        if type_norm(v) != "appconfig" {
             continue;
         }
         let name = asset_name(v);
         if let Some(prev) = &first {
             return Err(format!(
-                "Application '{}': the world already declares Application '{}'; \
+                "AppConfig '{}': the world already declares AppConfig '{}'; \
                  declare at most one",
                 name, prev
             ));
@@ -37,7 +37,7 @@ pub(crate) fn apply_application(
             .filter(|s| !s.is_empty());
     }
 
-    // Nothing to feed when there is no Application or its name is empty.
+    // Nothing to feed when there is no AppConfig or its name is empty.
     let Some(app_name) = app_name else {
         return Ok(());
     };
@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     fn app(name: &str) -> serde_json::Value {
-        serde_json::json!({"name":"app","type":"Application","args":{"name": name}})
+        serde_json::json!({"name":"app","type":"AppConfig","args":{"name": name}})
     }
 
     fn window(args: serde_json::Value) -> serde_json::Value {
@@ -105,7 +105,7 @@ mod tests {
     fn name_fills_an_untitled_window() {
         let mut assets = vec![app("My Game"), window(serde_json::json!({}))];
         let mut report = ExpandReport::default();
-        apply_application(&mut assets, &mut report).unwrap();
+        apply_app_config(&mut assets, &mut report).unwrap();
         assert_eq!(title_of(&assets).as_deref(), Some("My Game"));
     }
 
@@ -113,34 +113,34 @@ mod tests {
     fn authored_title_is_not_overridden() {
         let mut assets = vec![app("My Game"), window(serde_json::json!({"title": "Kept"}))];
         let mut report = ExpandReport::default();
-        apply_application(&mut assets, &mut report).unwrap();
+        apply_app_config(&mut assets, &mut report).unwrap();
         assert_eq!(title_of(&assets).as_deref(), Some("Kept"));
     }
 
     #[test]
-    fn no_application_leaves_the_window_untitled() {
+    fn no_app_config_leaves_the_window_untitled() {
         let mut assets = vec![window(serde_json::json!({}))];
         let mut report = ExpandReport::default();
-        apply_application(&mut assets, &mut report).unwrap();
+        apply_app_config(&mut assets, &mut report).unwrap();
         assert_eq!(title_of(&assets), None);
     }
 
     #[test]
-    fn empty_application_name_fills_nothing() {
+    fn empty_app_config_name_fills_nothing() {
         let mut assets = vec![app(""), window(serde_json::json!({}))];
         let mut report = ExpandReport::default();
-        apply_application(&mut assets, &mut report).unwrap();
+        apply_app_config(&mut assets, &mut report).unwrap();
         assert_eq!(title_of(&assets), None);
     }
 
     #[test]
-    fn duplicate_application_is_an_error() {
+    fn duplicate_app_config_is_an_error() {
         let mut assets = vec![
-            serde_json::json!({"name":"a","type":"Application","args":{"name":"A"}}),
-            serde_json::json!({"name":"b","type":"Application","args":{"name":"B"}}),
+            serde_json::json!({"name":"a","type":"AppConfig","args":{"name":"A"}}),
+            serde_json::json!({"name":"b","type":"AppConfig","args":{"name":"B"}}),
         ];
         let mut report = ExpandReport::default();
-        let err = apply_application(&mut assets, &mut report).unwrap_err();
+        let err = apply_app_config(&mut assets, &mut report).unwrap_err();
         assert!(err.contains("at most one"));
     }
 
@@ -150,7 +150,7 @@ mod tests {
     fn non_object_window_args_are_an_error() {
         let mut assets = vec![app("My Game"), window(serde_json::json!("wide"))];
         let mut report = ExpandReport::default();
-        let err = apply_application(&mut assets, &mut report).unwrap_err();
+        let err = apply_app_config(&mut assets, &mut report).unwrap_err();
         assert!(err.contains("Window 'w'"), "{err}");
         assert!(err.contains("args must be an object"), "{err}");
     }
@@ -163,7 +163,7 @@ mod tests {
             serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
         ];
         let mut report = ExpandReport::default();
-        apply_application(&mut assets, &mut report).unwrap();
+        apply_app_config(&mut assets, &mut report).unwrap();
         assert!(assets[1]["args"].get("title").is_none());
     }
 
@@ -172,7 +172,7 @@ mod tests {
         let mut assets = vec![app("My Game"), window(serde_json::json!({}))];
         let mut report = ExpandReport::default();
         report.record("w", "Window", serde_json::json!({}), "companion");
-        apply_application(&mut assets, &mut report).unwrap();
+        apply_app_config(&mut assets, &mut report).unwrap();
         let entry = report
             .injected
             .iter()

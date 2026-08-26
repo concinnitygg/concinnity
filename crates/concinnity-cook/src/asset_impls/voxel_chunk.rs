@@ -46,6 +46,7 @@ mod tests {
             let assets = [block_type("stone", type_name)];
             let ctx = BuildCtx {
                 name: "chunk",
+                assets_dir: None,
                 artifacts_dir: None,
                 all_assets: &assets,
             };
@@ -63,6 +64,7 @@ mod tests {
         let assets = [block_type("dirt", "BlockType")];
         let ctx = BuildCtx {
             name: "chunk",
+            assets_dir: None,
             artifacts_dir: None,
             all_assets: &assets,
         };
@@ -79,6 +81,7 @@ mod tests {
     fn a_compile_error_is_reported_as_invalid_data() {
         let ctx = BuildCtx {
             name: "chunk",
+            assets_dir: None,
             artifacts_dir: None,
             all_assets: &[],
         };

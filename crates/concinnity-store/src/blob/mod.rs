@@ -1,4 +1,4 @@
-//! Runtime blob access: the `.concinnity/data/` path layout, the payload
+//! Runtime blob access: the state root's `data/` path layout, the payload
 //! residency store, and all blob file I/O. The concinnity-blob crate owns the
 //! format contract (schema, header, version, bytes <-> metadata) and is
 //! deliberately I/O-free, so every read below is `fs` here plus a pure parse
@@ -20,7 +20,7 @@ pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
 // Where the blob files live when a host named a primary blob directly, rather
-// than taking the `.concinnity/data/` layout. Holds that file's path; every
+// than taking the state root's `data/` layout. Holds that file's path; every
 // overflow blob is its sibling named by index.
 fn primary_override() -> &'static Mutex<Option<PathBuf>> {
     static PRIMARY: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -32,26 +32,35 @@ fn primary_override() -> &'static Mutex<Option<PathBuf>> {
 /// payload blobs, which are always siblings of blob 0. The format crate is
 /// path-agnostic; this layout knowledge stays here.
 ///
-/// Blob 0 is `.concinnity/data/0` unless [`load_raw_at`] anchored the layout on
+/// Blob 0 is `<state dir>/data/0` unless [`load_raw_at`] anchored the layout on
 /// a blob file named directly, in which case that file is blob 0 and its
-/// directory holds the rest.
-pub fn blob_path(index: u32) -> String {
+/// directory holds the rest. `None` when neither applies: no host installed a
+/// state root and none named a blob, so there is no layout to resolve against.
+pub fn blob_path(index: u32) -> Option<String> {
     let primary = primary_override().lock().unwrap().clone();
-    resolve_blob_path(primary.as_deref(), index)
+    resolve_blob_path(
+        primary.as_deref(),
+        crate::paths::data_dir().as_deref(),
+        index,
+    )
 }
 
 // Pure resolution split out so the two layouts are unit-testable without the
-// process-global anchor.
-fn resolve_blob_path(primary: Option<&Path>, index: u32) -> String {
+// process-global anchor or the process-global state root.
+fn resolve_blob_path(
+    primary: Option<&Path>,
+    data_dir: Option<&Path>,
+    index: u32,
+) -> Option<String> {
     let path = match primary {
         Some(p) if index == 0 => p.to_path_buf(),
         Some(p) => p
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
             .join(index.to_string()),
-        None => crate::paths::data_dir().join(index.to_string()),
+        None => data_dir?.join(index.to_string()),
     };
-    path.to_string_lossy().into_owned()
+    Some(path.to_string_lossy().into_owned())
 }
 
 /// Read and deserialize a blob's metadata section (component defs + resource
@@ -120,7 +129,7 @@ pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnResult> {
 }
 
 /// Load the primary blob's metadata and the `BlobData` payload store from the
-/// `.concinnity/data/` layout, without resolving defs into runtime `Asset`s
+/// state root's `data/` layout, without resolving defs into runtime `Asset`s
 /// (that resolution depends on the client runtime registry, so it lives in the
 /// client `blob::load` shim).
 ///
@@ -133,8 +142,10 @@ pub fn load_raw() -> Result<(BlobMeta, BlobData), CnResult> {
 
 // `load_raw` against an injected layout, so the eager/deferred split can be
 // exercised without the process-global data-dir anchor.
-fn load_raw_from(blob_path: impl Fn(u32) -> String) -> Result<(BlobMeta, BlobData), CnResult> {
-    let (meta, _payload_start) = read_cnb(&blob_path(0))?;
+fn load_raw_from(
+    blob_path: impl Fn(u32) -> Option<String>,
+) -> Result<(BlobMeta, BlobData), CnResult> {
+    let (meta, _payload_start) = read_cnb(&blob_path(0).ok_or(CnResult::NoStateRoot)?)?;
 
     // Cook derives the manifest from the very streams it summarizes, so a
     // mismatch means a corrupt or hand-edited blob.
@@ -144,9 +155,11 @@ fn load_raw_from(blob_path: impl Fn(u32) -> String) -> Result<(BlobMeta, BlobDat
         "blob manifest does not match its record streams"
     );
 
-    let blob0_payload = read_payload_section(&blob_path(0))?;
+    let blob0_payload = read_payload_section(&blob_path(0).ok_or(CnResult::NoStateRoot)?)?;
     tracing::debug!("Loaded blob 0 payload ({} bytes)", blob0_payload.len());
-    let overflow_paths = (1..=meta.manifest.max_blob_index).map(blob_path).collect();
+    let overflow_paths = (1..=meta.manifest.max_blob_index)
+        .map(|i| blob_path(i).ok_or(CnResult::NoStateRoot))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let blob_data = BlobData::from_blob_files(blob0_payload, overflow_paths);
     Ok((meta, blob_data))
@@ -157,7 +170,7 @@ fn load_raw_from(blob_path: impl Fn(u32) -> String) -> Result<(BlobMeta, BlobDat
 /// length; `cn export` uses it to precompile the built-in shaders whose bindless
 /// texture pool is sized per world.
 pub fn texture_resource_count() -> Result<usize, CnResult> {
-    let (meta, _) = read_cnb(&blob_path(0))?;
+    let (meta, _) = read_cnb(&blob_path(0).ok_or(CnResult::NoStateRoot)?)?;
     let tag = concinnity_core::ecs::ResourceKind::Texture as u8;
     Ok(meta
         .resources
@@ -168,7 +181,7 @@ pub fn texture_resource_count() -> Result<usize, CnResult> {
 
 /// Load defs without resolving (for callers that apply overlays first)
 pub fn load_defs() -> Result<Vec<BlobAssetDef>, CnResult> {
-    read_cnb(&blob_path(0)).map(|(meta, _)| meta.defs)
+    read_cnb(&blob_path(0).ok_or(CnResult::NoStateRoot)?).map(|(meta, _)| meta.defs)
 }
 
 #[cfg(test)]
@@ -177,36 +190,49 @@ mod tests {
     use concinnity_core::blob::encode_cnb;
 
     #[test]
-    fn blob_path_appends_the_index() {
-        // Tolerant of whatever the process-global data-dir anchor currently is:
-        // only the trailing index and distinctness are asserted.
-        assert!(blob_path(5).ends_with('5'));
-        assert_ne!(blob_path(0), blob_path(1));
-    }
-
-    #[test]
     fn an_anchored_primary_owns_blob_zero_and_its_siblings() {
         // Blob 0 is the file named verbatim (whatever it is called); every
         // overflow blob is its sibling named by index. Built through `join` so
         // the separator is the platform's.
         let primary = Path::new("out").join("blobs").join("0");
         assert_eq!(
-            resolve_blob_path(Some(&primary), 0),
-            primary.to_string_lossy()
+            resolve_blob_path(Some(&primary), None, 0).as_deref(),
+            Some(&*primary.to_string_lossy())
         );
         assert_eq!(
-            resolve_blob_path(Some(&primary), 2),
-            Path::new("out").join("blobs").join("2").to_string_lossy()
+            resolve_blob_path(Some(&primary), None, 2),
+            Some(
+                Path::new("out")
+                    .join("blobs")
+                    .join("2")
+                    .to_string_lossy()
+                    .into_owned()
+            )
         );
 
         // A bare file name hangs its siblings off the working directory.
-        assert_eq!(resolve_blob_path(Some(Path::new("0")), 1), "1");
+        assert_eq!(
+            resolve_blob_path(Some(Path::new("0")), None, 1).as_deref(),
+            Some("1")
+        );
     }
 
     #[test]
     fn without_an_anchor_blobs_sit_under_the_data_dir() {
-        let expected = crate::paths::data_dir().join("3");
-        assert_eq!(resolve_blob_path(None, 3), expected.to_string_lossy());
+        let data = Path::new("/proj").join("data");
+        assert_eq!(
+            resolve_blob_path(None, Some(&data), 3),
+            Some(data.join("3").to_string_lossy().into_owned())
+        );
+    }
+
+    // With neither an anchor nor a state root there is no layout to resolve
+    // against, which is what turns a blob read into `NoStateRoot` rather than a
+    // read of some path relative to the working directory.
+    #[test]
+    fn without_an_anchor_or_a_state_root_there_is_no_path() {
+        assert_eq!(resolve_blob_path(None, None, 0), None);
+        assert_eq!(resolve_blob_path(None, None, 3), None);
     }
 
     #[test]
@@ -259,10 +285,12 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path_for = |idx: u32| {
-            dir.path()
-                .join(idx.to_string())
-                .to_string_lossy()
-                .into_owned()
+            Some(
+                dir.path()
+                    .join(idx.to_string())
+                    .to_string_lossy()
+                    .into_owned(),
+            )
         };
 
         // Blob 0: one def whose payload lives in overflow blob 1. The manifest
@@ -288,12 +316,12 @@ mod tests {
             physics_budget: None,
         };
         std::fs::write(
-            path_for(0),
+            path_for(0).unwrap(),
             encode_cnb(SCHEMA_HASH, &meta, b"primary").unwrap(),
         )
         .unwrap();
         std::fs::write(
-            path_for(1),
+            path_for(1).unwrap(),
             encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"overflow").unwrap(),
         )
         .unwrap();
@@ -309,5 +337,12 @@ mod tests {
         let loc = meta.defs[0].payload.clone().unwrap();
         assert_eq!(bd.read(&loc).expect("overflow read"), b"overflow");
         assert!(bd.is_loaded(1));
+    }
+
+    // A layout that resolves to nothing is the uninstalled-state-root case, and
+    // it has to name itself rather than folding onto a file-not-found.
+    #[test]
+    fn load_raw_without_a_layout_reports_no_state_root() {
+        assert_eq!(load_raw_from(|_| None).err(), Some(CnResult::NoStateRoot));
     }
 }

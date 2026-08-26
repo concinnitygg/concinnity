@@ -31,23 +31,25 @@ pub(crate) mod tests_support {
 
 use crate::gltf_source::GltfDoc;
 
-/// Whether the `.glb` / `.gltf` at `source` is a panorama sphere, i.e. an
-/// environment image rather than scene geometry. A file that fails to parse is
-/// not a panorama; the geometry import path reports the real parse error.
-pub fn file_is_panorama_sphere(source: &str) -> bool {
-    GltfDoc::parse_file(source)
+/// Whether the `.glb` / `.gltf` at `path` is a panorama sphere, i.e. an
+/// environment image rather than scene geometry. `path` is read as given. A
+/// file that fails to parse is not a panorama; the geometry import path
+/// reports the real parse error.
+pub fn file_is_panorama_sphere(path: &str) -> bool {
+    GltfDoc::parse_file(path)
         .ok()
         .map(|doc| detect(&doc).is_ok())
         .unwrap_or(false)
 }
 
-// Decode the panorama image embedded in the `.glb` / `.gltf` at `source` into
-// a linear-light equirectangular image. Errors when the file is not a
-// panorama sphere, naming the criterion it missed.
-pub(crate) fn load_panorama_file(source: &str) -> Result<crate::hdr::HdrImage, String> {
-    let doc = GltfDoc::parse_file(source)?;
-    let panorama = detect(&doc).map_err(|e| format!("'{}': {}", source, e))?;
-    load_equirect(&doc, source, panorama.image_index)
+// Decode the panorama image embedded in the `.glb` / `.gltf` at `path` into a
+// linear-light equirectangular image; `path` is read as given (the caller
+// resolved the authored source). Errors when the file is not a panorama
+// sphere, naming the criterion it missed.
+pub(crate) fn load_panorama_file(path: &str) -> Result<crate::hdr::HdrImage, String> {
+    let doc = GltfDoc::parse_file(path)?;
+    let panorama = detect(&doc).map_err(|e| format!("'{}': {}", path, e))?;
+    load_equirect(&doc, path, panorama.image_index)
 }
 
 #[cfg(test)]

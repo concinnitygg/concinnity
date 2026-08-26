@@ -45,13 +45,18 @@ fn world_jsonl(props: usize) -> String {
 }
 
 fn main() {
-    // Anchor .concinnity/ (the payload cache) inside the workspace target/
-    // dir so bench runs never read or write a real project's build state.
-    // Absolute, because cargo runs bench binaries from the package dir.
-    concinnity_cook::paths::set_root(concat!(
+    // Anchor the state tree (holding the payload cache) inside the workspace
+    // target/ dir so bench runs never read or write a real project's build
+    // state. Absolute, because cargo runs bench binaries from the package dir.
+    concinnity_cook::paths::set_state_dir(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../target/bench-cook-state"
     ));
+
+    // The bench worlds are generator-backed: every source they name resolves
+    // without a search, so the compile runs against the same anchored tree the
+    // cache lives in.
+    let assets_dir = concinnity_cook::paths::assets_dir();
 
     let mut bench = Bench::from_env();
 
@@ -59,18 +64,21 @@ fn main() {
         let content = world_jsonl(n);
 
         bench.run(&format!("cook/prepare_world/{label}"), n as u64, || {
-            let loaded = prepare_world(&content).expect("bench world validates");
+            let loaded =
+                prepare_world(&content, assets_dir.as_deref()).expect("bench world validates");
             loaded.assets.len()
         });
 
         bench.run(&format!("cook/build/{label}"), n as u64, || {
-            let result = build_pipeline_from_str(&content, None).expect("bench world compiles");
+            let result = build_pipeline_from_str(&content, assets_dir.as_deref(), None)
+                .expect("bench world compiles");
             result.defs.len()
         });
 
         // The blob image the compile above would ship: full metadata plus the
         // primary payload section, assembled the way the cook's writer does.
-        let result = build_pipeline_from_str(&content, None).expect("bench world compiles");
+        let result = build_pipeline_from_str(&content, assets_dir.as_deref(), None)
+            .expect("bench world compiles");
         let meta = BlobMeta {
             manifest: WorldManifest::from_records(&result.defs, &result.resources),
             defs: result.defs,

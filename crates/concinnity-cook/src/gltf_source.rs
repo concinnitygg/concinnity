@@ -27,17 +27,16 @@ pub struct GltfDoc {
 }
 
 impl GltfDoc {
-    // Parse a `.glb` or `.gltf` from disk, resolving the source path the same
-    // way other file-backed assets do (see `crate::glb::resolve_source`).
-    pub(crate) fn parse_file(source: &str) -> Result<Self, String> {
-        let path = crate::glb::resolve_source(source);
-        let bytes =
-            std::fs::read(&path).map_err(|e| format!("failed to read '{}': {}", path, e))?;
-        let base_dir = Path::new(&path)
+    // Parse a `.glb` or `.gltf` at `path`, which is read as given. A caller
+    // holding an authored `source` string resolves it against the build's
+    // asset search root first (see `crate::glb::resolve_source`).
+    pub(crate) fn parse_file(path: &str) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("failed to read '{}': {}", path, e))?;
+        let base_dir = Path::new(path)
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map(PathBuf::from);
-        Self::from_slice(&bytes, base_dir, &path)
+        Self::from_slice(&bytes, base_dir, path)
     }
 
     /// Parse from bytes already in memory. `base_dir` anchors external URIs;
@@ -153,7 +152,7 @@ fn mime_from_uri(uri: &str) -> Option<String> {
 // missing or fails to parse contributes nothing (the compile will surface the
 // real error). Memoized by `FileStamp` like `cache::file_content_hash`, since
 // cache-key computation calls this once per asset sharing the file.
-pub(crate) fn referenced_files(source: &str) -> Vec<String> {
+pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<String> {
     use crate::file_stamp::FileStamp;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -161,7 +160,7 @@ pub(crate) fn referenced_files(source: &str) -> Vec<String> {
     type Memo = Mutex<HashMap<String, (FileStamp, Vec<String>)>>;
     static MEMO: OnceLock<Memo> = OnceLock::new();
 
-    let path = crate::glb::resolve_source(source);
+    let path = crate::glb::resolve_source(source, assets_dir);
     let Some(stamp) = FileStamp::read(&path) else {
         return Vec::new();
     };
@@ -647,7 +646,7 @@ mod tests {
         let gltf_path = dir.path().join("tri.gltf");
         std::fs::write(&gltf_path, serde_json::to_vec(&json).unwrap()).unwrap();
 
-        let files = referenced_files(gltf_path.to_str().unwrap());
+        let files = referenced_files(gltf_path.to_str().unwrap(), None);
         assert_eq!(
             files.len(),
             2,
@@ -666,8 +665,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let glb_path = dir.path().join("t.glb");
         std::fs::write(&glb_path, crate::glb::test_fixtures::static_triangle_glb()).unwrap();
-        assert!(referenced_files(glb_path.to_str().unwrap()).is_empty());
-        assert!(referenced_files("/no/such/file.gltf").is_empty());
+        assert!(referenced_files(glb_path.to_str().unwrap(), None).is_empty());
+        assert!(referenced_files("/no/such/file.gltf", None).is_empty());
     }
 
     #[test]
@@ -679,7 +678,7 @@ mod tests {
             serde_json::to_vec(&triangle_gltf_json("a.bin")).unwrap(),
         )
         .unwrap();
-        let first = referenced_files(gltf_path.to_str().unwrap());
+        let first = referenced_files(gltf_path.to_str().unwrap(), None);
         assert!(first[0].ends_with("a.bin"));
 
         std::fs::write(
@@ -687,7 +686,7 @@ mod tests {
             serde_json::to_vec(&triangle_gltf_json("b.bin")).unwrap(),
         )
         .unwrap();
-        let second = referenced_files(gltf_path.to_str().unwrap());
+        let second = referenced_files(gltf_path.to_str().unwrap(), None);
         assert!(
             second[0].ends_with("b.bin"),
             "memo must not serve stale: {second:?}"

@@ -1028,7 +1028,7 @@ fn slot_summaries_and_slot_presence() {
     story.save_key = "q".to_string();
     story.scaffold = scaffold();
     let mut sys = StorySystem::new(story);
-    sys.save_dir = dir.path().to_path_buf();
+    sys.save_dir = Some(dir.path().to_path_buf());
     sys.ids = StageIds::from_scaffold(&scaffold());
     assert!(!sys.any_slot_save());
     assert!(sys.slot_summary(0).contains("empty"));
@@ -1059,7 +1059,7 @@ fn save_overlay_writes_and_load_resumes() {
     // it).
     for system in world.systems_mut() {
         if let crate::ecs::SystemAsset::StorySystem(s) = system {
-            s.save_dir = dir.path().to_path_buf();
+            s.save_dir = Some(dir.path().to_path_buf());
         }
     }
     world.step();
@@ -1140,7 +1140,7 @@ fn slot_overlay_scrolls_the_window_over_all_slots() {
     world.start().unwrap();
     for system in world.systems_mut() {
         if let crate::ecs::SystemAsset::StorySystem(s) = system {
-            s.save_dir = dir.path().to_path_buf();
+            s.save_dir = Some(dir.path().to_path_buf());
         }
     }
     // A save in a far slot (index 6) so a scrolled row can show and load it.
@@ -1192,7 +1192,7 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
     world.start().unwrap();
     for system in world.systems_mut() {
         if let crate::ecs::SystemAsset::StorySystem(s) = system {
-            s.save_dir = dir.path().to_path_buf();
+            s.save_dir = Some(dir.path().to_path_buf());
         }
     }
     world.step();
@@ -1320,7 +1320,7 @@ fn title_load_works_after_returning_to_the_title() {
     world.start().unwrap();
     for system in world.systems_mut() {
         if let crate::ecs::SystemAsset::StorySystem(s) = system {
-            s.save_dir = dir.path().to_path_buf();
+            s.save_dir = Some(dir.path().to_path_buf());
         }
     }
     world.step(); // stage active, started == true
@@ -1423,7 +1423,7 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
     // Point saves at an empty directory so the layout is the two-button case.
     for system in world.systems_mut() {
         if let crate::ecs::SystemAsset::StorySystem(s) = system {
-            s.save_dir = dir.path().to_path_buf();
+            s.save_dir = Some(dir.path().to_path_buf());
         }
     }
 
@@ -1448,7 +1448,7 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
 fn point_saves(world: &mut World, dir: &std::path::Path) {
     for system in world.systems_mut() {
         if let crate::ecs::SystemAsset::StorySystem(s) = system {
-            s.save_dir = dir.to_path_buf();
+            s.save_dir = Some(dir.to_path_buf());
         }
     }
 }

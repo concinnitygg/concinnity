@@ -377,20 +377,21 @@ mod streaming_config {
     }
 }
 
-mod application {
+mod app_config {
     use super::*;
 
     #[test]
     fn bare_args_default_to_the_engine_name() {
-        let a: ApplicationArgs = serde_json::from_str("{}").unwrap();
+        let a: AppConfigArgs = serde_json::from_str("{}").unwrap();
         assert_eq!(a.name, "Concinnity");
         assert_eq!(a.version, "0.1.0");
         assert!(a.id.is_empty() && a.author.is_empty() && a.icon.is_empty());
+        assert!(a.home.is_empty());
     }
 
     #[test]
     fn fields_round_trip_through_args() {
-        let a: ApplicationArgs = serde_json::from_str(
+        let a: AppConfigArgs = serde_json::from_str(
                 r#"{"name":"My Game","id":"gg.studio.mygame","version":"1.2.3","author":"Studio","icon":"art/icon.png"}"#,
             )
             .unwrap();
@@ -401,17 +402,19 @@ mod application {
         assert_eq!(a.icon, "art/icon.png");
     }
 
-    // The bake keeps only the runtime budgets: the distribution strings are
-    // consumed at build / export time and never ship in the blob.
+    // The bake keeps only what the running process needs: the state location
+    // and the budgets. The distribution strings are consumed at build / export
+    // time and never ship in the blob.
     #[test]
-    fn bake_keeps_only_the_limits() {
-        let args: ApplicationArgs = serde_json::from_str(
-            r#"{"name":"My Game","limits":{"max_memory_mb":512,"job_threads":2}}"#,
+    fn bake_keeps_the_home_and_the_budgets() {
+        let args: AppConfigArgs = serde_json::from_str(
+            r#"{"name":"My Game","home":"state","max_memory_mb":512,"job_threads":2}"#,
         )
         .unwrap();
-        let baked = Application::bake(args);
-        assert_eq!(baked.limits.max_memory_mb, 512);
-        assert_eq!(baked.limits.job_threads, 2);
+        let baked = AppConfig::bake(args);
+        assert_eq!(baked.home, "state");
+        assert_eq!(baked.max_memory_mb, 512);
+        assert_eq!(baked.job_threads, 2);
     }
 }
 

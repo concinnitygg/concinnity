@@ -646,7 +646,9 @@ mod tests {
             r#"{"name":"drop","type":"Spawner","args":{"template":"crate_a"}}"#,
             "\n",
         );
-        let expanded = crate::world::prepare_world(world).expect("prepare").assets;
+        let expanded = crate::world::prepare_world(world, None)
+            .expect("prepare")
+            .assets;
         assert!(
             expanded
                 .iter()

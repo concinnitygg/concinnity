@@ -1185,7 +1185,7 @@ mod tests {
     use super::*;
     use crate::components::{Sprite, TextInput, TextLabel};
 
-    // Point the cook's `.concinnity/` (its content-addressed cache) at a private
+    // Point the cook's state tree (its content-addressed cache) at a private
     // temp dir for the whole test process, so the cook-based tests below never read
     // or write the working directory (the shader compile itself already uses a unique
     // temp path). Set once per process; the shared cache is race-tolerant.
@@ -1195,7 +1195,7 @@ mod tests {
         ONCE.call_once(|| {
             let dir = std::env::temp_dir().join(format!("cn-editor-tests-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&dir);
-            concinnity_store::paths::set_root(dir);
+            concinnity_store::paths::set_state_dir(dir);
         });
     }
 
@@ -1951,7 +1951,12 @@ mod tests {
                  {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
             )
         };
-        crate::build_pipeline_from_str(&world, None).map(|_| ())
+        crate::build_pipeline_from_str(
+            &world,
+            crate::authoring::assets_root::assets_dir().as_deref(),
+            None,
+        )
+        .map(|_| ())
     }
 
     // Every offered add-type is a real External type whose default args cook in a

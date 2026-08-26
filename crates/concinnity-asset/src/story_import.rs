@@ -56,8 +56,8 @@ use alloc::string::String;
 /// (numbered save slots). A pulsing marker shows when a fully revealed page
 /// waits for a click.
 ///
-/// Play position and variables auto-save page by page (under the project's
-/// `.concinnity/data/`); the generated title screen's Continue resumes
+/// Play position and variables auto-save page by page (into the project's
+/// save files); the generated title screen's Continue resumes
 /// them, and finishing the story clears the auto-save. Save writes one of
 /// three numbered slots, resumed from the title screen's Load. The title
 /// menu keeps only the buttons that apply, laid out contiguously: Continue

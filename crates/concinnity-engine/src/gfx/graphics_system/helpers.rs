@@ -120,7 +120,8 @@ pub(super) fn build_texture_payload_source(
     let mut section_starts: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
     let mut disk_locators = Vec::with_capacity(locators.len());
     for loc in locators {
-        let path = crate::blob::blob_path(loc.blob_index);
+        let path = crate::blob::blob_path(loc.blob_index)
+            .ok_or_else(|| format!("blob {}: no blob layout installed", loc.blob_index))?;
         let start = match section_starts.get(&loc.blob_index) {
             Some(&s) => s,
             None => {

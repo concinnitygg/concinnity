@@ -230,7 +230,8 @@ pub struct StorySystem {
     // mutated by page and menu ops. An unset variable reads as 0.
     vars: HashMap<String, i32>,
     // Where the saves live (the project data directory).
-    save_dir: PathBuf,
+    // `None` when no host installed a state root: play works, saving does not.
+    save_dir: Option<PathBuf>,
     // The open menu's option indices into the node's choices (conditions
     // filter gated options out); button i picks menu[i].
     menu: Vec<usize>,
@@ -340,7 +341,9 @@ impl System for StorySystem {
             .is_some_and(|t| t.0)
         {
             self.save_dir = concinnity_store::paths::preview_saves_dir();
-            let _ = std::fs::remove_dir_all(&self.save_dir);
+            if let Some(dir) = &self.save_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
         }
         // The scaffold references were resolved to ids at build time, like
         // every other cross-reference, so this works identically for a

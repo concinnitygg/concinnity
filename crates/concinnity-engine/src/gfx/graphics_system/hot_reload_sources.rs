@@ -163,23 +163,14 @@ impl ProceduralMeshSourceMap {
 }
 
 // Resolve a Shader stage's declared source to the on-disk path the watcher
-// subscribes to and the runtime recompile reads, applying the same
-// bare-filename fallback the build pipeline runs: bare filenames are searched
-// in `.concinnity/assets/` (recursively), then fall back to a direct path under
-// that directory. Paths already carrying a directory component are returned
-// unchanged. Fills a [`ShaderStageSourceEntry`]'s `resolved_path`.
+// subscribes to and the runtime recompile reads, searching the running
+// project's `assets/` the way the build pipeline searches the root it was
+// given. Fills a [`ShaderStageSourceEntry`]'s `resolved_path`.
 pub(crate) fn resolve_runtime_source_path(raw: &str) -> String {
-    let p = Path::new(raw);
-    if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
-        if let Some(path) = concinnity_store::source::find_in_assets(raw) {
-            return path;
-        }
-        return concinnity_store::paths::assets_dir()
-            .join(raw)
-            .to_string_lossy()
-            .into_owned();
-    }
-    raw.to_string()
+    concinnity_store::source::resolve_source_path(
+        raw,
+        concinnity_store::paths::assets_dir().as_deref(),
+    )
 }
 
 /// One world-loaded Shader stage reload entry. Captures
@@ -397,9 +388,9 @@ mod tests {
     #[test]
     fn resolve_keeps_paths_with_a_directory_component() {
         // A path that already contains a directory is returned verbatim; the
-        // bare-filename branch consults process-global asset anchors and is left
-        // to integration coverage. The build-side `resolve_source_path_for`
-        // (which takes a `BuildCtx`) is covered in concinnity-cook.
+        // bare-filename branch consults the installed state root and is left to
+        // integration coverage. The resolution itself is covered in
+        // concinnity-store, and the build-side variant in concinnity-cook.
         assert_eq!(
             resolve_runtime_source_path("shaders/x.metal"),
             "shaders/x.metal"

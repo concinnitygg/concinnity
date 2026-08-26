@@ -180,11 +180,12 @@ pub(super) fn decode_asset_batch(
     // Helper: fetch (or parse + cache) the glTF doc for `source`. Returns a
     // cloned `GltfDoc`: the parsed document is reference-counted internally
     // and the resolved buffers are `Arc`-backed, so the clone is cheap.
+    let assets_dir = crate::authoring::assets_root::assets_dir();
     let load_glb = |source: &str| -> Result<concinnity_cook::gltf_source::GltfDoc, String> {
         if let Some(doc) = parsed_glb_cache.lock().unwrap().get(source) {
             return Ok(doc.clone());
         }
-        let doc = concinnity_cook::glb::parse_glb(source)?;
+        let doc = concinnity_cook::glb::parse_glb(source, assets_dir.as_deref())?;
         parsed_glb_cache
             .lock()
             .unwrap()
@@ -208,7 +209,11 @@ pub(super) fn decode_asset_batch(
                     Err(e) => Err(e),
                 }
             } else {
-                concinnity_cook::texture::decode_source(&entry.source, entry.image_index)
+                concinnity_cook::texture::decode_source(
+                    &entry.source,
+                    entry.image_index,
+                    assets_dir.as_deref(),
+                )
             };
             (entry.clone(), decoded)
         })

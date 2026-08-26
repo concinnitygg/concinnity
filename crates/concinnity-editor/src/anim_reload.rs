@@ -28,6 +28,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
     // Parse each unique source .glb once per reload; many clips can target the
     // same character file.
     let mut parsed_cache: HashMap<String, concinnity_cook::gltf_source::GltfDoc> = HashMap::new();
+    let assets_dir = crate::authoring::assets_root::assets_dir();
     let mut reloaded = 0usize;
     let mut failed = 0usize;
 
@@ -47,7 +48,8 @@ fn reload_clips(anim: &mut AnimationSystem) {
         } else {
             match parsed_cache.get(&entry.source) {
                 Some(d) => Ok(d),
-                None => match concinnity_cook::glb::parse_glb(&entry.source) {
+                None => match concinnity_cook::glb::parse_glb(&entry.source, assets_dir.as_deref())
+                {
                     Ok(d) => Ok(&*parsed_cache.entry(entry.source.clone()).or_insert(d)),
                     Err(e) => Err(e),
                 },

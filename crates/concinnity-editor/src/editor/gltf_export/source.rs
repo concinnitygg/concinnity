@@ -18,7 +18,11 @@ use concinnity_cpu::geometry::payload_joints_to_defs;
 // as GLB bytes. With `bake`, the current CharacterShape targeting the mesh is
 // folded into the vertices and bind pose instead of exporting morph targets.
 pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result<Vec<u8>, String> {
-    let loaded = concinnity_cook::prepare_world(content).map_err(|errs| errs.join("; "))?;
+    let loaded = concinnity_cook::prepare_world(
+        content,
+        crate::authoring::assets_root::assets_dir().as_deref(),
+    )
+    .map_err(|errs| errs.join("; "))?;
     let mut assets = loaded.assets;
     let entry = assets
         .iter()
@@ -42,7 +46,12 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
             obj.insert("bake".into(), serde_json::Value::Bool(false));
         }
     }
-    let result = concinnity_cook::build_compiled(assets, None).map_err(|e| e.to_string())?;
+    let result = concinnity_cook::build_compiled(
+        assets,
+        crate::authoring::assets_root::assets_dir().as_deref(),
+        None,
+    )
+    .map_err(|e| e.to_string())?;
     let bytes = result
         .resource_payload(ResourceKind::SkinnedMesh, mesh)
         .ok_or_else(|| format!("'{mesh}' compiled without a skinned payload"))?;

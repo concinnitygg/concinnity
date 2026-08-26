@@ -48,8 +48,10 @@ fn enabled() -> bool {
     !cfg!(test)
 }
 
-fn file_path(name: &str) -> PathBuf {
-    concinnity_store::paths::pipeline_cache_dir().join(name)
+// `None` when no host installed a state root, which turns every operation
+// below into a no-op: pipelines are created fresh rather than warmed from disk.
+fn file_path(name: &str) -> Option<PathBuf> {
+    concinnity_store::paths::pipeline_cache_dir().map(|dir| dir.join(name))
 }
 
 // Read the persisted blob for `name`. An empty or over-budget file is deleted
@@ -58,7 +60,7 @@ pub(crate) fn load(name: &str) -> Option<Vec<u8>> {
     if !enabled() {
         return None;
     }
-    load_in(&file_path(name))
+    load_in(&file_path(name)?)
 }
 
 fn load_in(path: &std::path::Path) -> Option<Vec<u8>> {
@@ -81,7 +83,10 @@ pub(crate) fn store_if_grown(name: &str, bytes: &[u8], previous_len: usize) -> b
     if !enabled() {
         return false;
     }
-    store_in(&file_path(name), bytes, previous_len)
+    match file_path(name) {
+        Some(path) => store_in(&path, bytes, previous_len),
+        None => false,
+    }
 }
 
 fn store_in(path: &std::path::Path, bytes: &[u8], previous_len: usize) -> bool {
@@ -109,7 +114,9 @@ fn store_in(path: &std::path::Path, bytes: &[u8], previous_len: usize) -> bool {
 
 // Drop the persisted blob for `name`; used when the driver rejects it.
 pub(crate) fn delete(name: &str) {
-    let _ = std::fs::remove_file(file_path(name));
+    if let Some(path) = file_path(name) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[cfg(test)]

@@ -124,7 +124,8 @@ fn deferred_shader_source(
             .to_vec();
         return Ok(ShaderPayloadSource::Bytes(bytes));
     }
-    let path = crate::blob::blob_path(locator.blob_index);
+    let path = crate::blob::blob_path(locator.blob_index)
+        .ok_or_else(|| format!("blob {}: no blob layout installed", locator.blob_index))?;
     let start = crate::blob::payload_section_start(&path).map_err(|e| format!("{e:?}"))?;
     Ok(ShaderPayloadSource::Disk {
         path,
@@ -1773,7 +1774,10 @@ impl GraphicsSystem {
                 .and_then(|s| s.0.clone())
         {
             environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
-                resolved_path: concinnity_store::source::resolve_source_path(&info.source),
+                resolved_path: concinnity_store::source::resolve_source_path(
+                    &info.source,
+                    concinnity_store::paths::assets_dir().as_deref(),
+                ),
                 prefilter_face_size: info.prefilter_face_size,
                 irradiance_face_size: info.irradiance_face_size,
                 prefilter_samples: info.prefilter_samples,
@@ -1825,7 +1829,10 @@ impl GraphicsSystem {
                 .and_then(|c| c.0.clone())
         {
             color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
-                resolved_path: concinnity_store::source::resolve_source_path(&src),
+                resolved_path: concinnity_store::source::resolve_source_path(
+                    &src,
+                    concinnity_store::paths::assets_dir().as_deref(),
+                ),
             });
         }
         Some((color_lut_bytes, color_lut_source))
@@ -3110,7 +3117,13 @@ impl GraphicsSystem {
                 let payload = match &seed.bytes {
                     Some(bytes) => DeferredMeshPayload::Bytes(bytes.clone()),
                     None => {
-                        let path = crate::blob::blob_path(seed.locator.blob_index);
+                        let Some(path) = crate::blob::blob_path(seed.locator.blob_index) else {
+                            tracing::warn!(
+                                "GraphicsSystem: deferred mesh blob {} has no layout to read from",
+                                seed.locator.blob_index
+                            );
+                            continue;
+                        };
                         match crate::blob::payload_section_start(&path) {
                             Ok(start) => DeferredMeshPayload::Disk {
                                 path,

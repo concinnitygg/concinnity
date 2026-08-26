@@ -164,8 +164,10 @@ pub(crate) fn report_init_and_prune() {
         "shader cache: {hits} reused, {misses} compiled ({:.0} ms) at renderer init",
         micros as f64 / 1000.0
     );
-    if misses > 0 {
-        prune(&cache_dir(), CACHE_BUDGET_BYTES);
+    if misses > 0
+        && let Some(dir) = cache_dir()
+    {
+        prune(&dir, CACHE_BUDGET_BYTES);
     }
 }
 
@@ -175,7 +177,9 @@ fn enabled() -> bool {
     !cfg!(test)
 }
 
-fn cache_dir() -> PathBuf {
+// `None` when no host installed a state root, which turns every cache
+// operation below into a no-op: compiling is still correct, just not persisted.
+fn cache_dir() -> Option<PathBuf> {
     concinnity_store::paths::shader_cache_dir()
 }
 
@@ -183,8 +187,14 @@ fn cache_dir() -> PathBuf {
 // files; source and artifact are removed after each compile). Lives beside
 // the cache so it stays inside the engine's state root. Entries in `prune`'s
 // walk are filtered to files, so the subdirectory never confuses eviction.
+//
+// Compiler scratch is not project state, so with no state root it falls back to
+// the platform temp directory rather than failing the compile.
 pub(crate) fn slang_work_dir() -> PathBuf {
-    cache_dir().join("slang-work")
+    cache_dir().map_or_else(
+        || std::env::temp_dir().join("concinnity-slang-work"),
+        |dir| dir.join("slang-work"),
+    )
 }
 
 // Names the shader toolchains this directory's entries were produced by. Not a
@@ -203,7 +213,9 @@ const TOOLCHAIN_STAMP: &str = "toolchain";
 fn verify_toolchain() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        let dir = cache_dir();
+        let Some(dir) = cache_dir() else {
+            return;
+        };
         let current = concinnity_slang::compiler_id();
         let stamp = dir.join(TOOLCHAIN_STAMP);
         if std::fs::read_to_string(&stamp).is_ok_and(|found| found == current) {
@@ -241,11 +253,13 @@ fn load(digest: &str) -> Option<Vec<u8>> {
 // then the read-only tier a bundle ships. Split from `load` so the de-duplication
 // is unit-testable: the two resolve to the same path unless a read-only install
 // redirected writable state, and searching it twice would be wasted syscalls.
-fn dirs_to_read(writable: PathBuf, bundled: PathBuf) -> Vec<PathBuf> {
-    if bundled == writable {
-        vec![writable]
-    } else {
-        vec![writable, bundled]
+// Empty when no state root is installed: there is nothing to search.
+fn dirs_to_read(writable: Option<PathBuf>, bundled: Option<PathBuf>) -> Vec<PathBuf> {
+    match (writable, bundled) {
+        (Some(w), Some(b)) if w == b => vec![w],
+        (Some(w), Some(b)) => vec![w, b],
+        (Some(d), None) | (None, Some(d)) => vec![d],
+        (None, None) => Vec::new(),
     }
 }
 
@@ -258,7 +272,10 @@ fn load_in(dir: &Path, digest: &str) -> Option<Vec<u8>> {
 }
 
 fn store(digest: &str, bytes: &[u8]) {
-    store_in(&cache_dir(), digest, bytes);
+    let Some(dir) = cache_dir() else {
+        return;
+    };
+    store_in(&dir, digest, bytes);
 }
 
 // Write via a process-unique temp file and rename, so a concurrent reader (a
@@ -423,7 +440,7 @@ mod tests {
     #[test]
     fn a_shared_path_is_searched_once() {
         let p = PathBuf::from("/state/shader-cache");
-        assert_eq!(dirs_to_read(p.clone(), p.clone()), vec![p]);
+        assert_eq!(dirs_to_read(Some(p.clone()), Some(p.clone())), vec![p]);
     }
 
     #[test]
@@ -431,9 +448,16 @@ mod tests {
         let writable = PathBuf::from("/user/appdata/shader-cache");
         let bundled = PathBuf::from("/program files/game/shader-cache");
         assert_eq!(
-            dirs_to_read(writable.clone(), bundled.clone()),
+            dirs_to_read(Some(writable.clone()), Some(bundled.clone())),
             vec![writable, bundled]
         );
+    }
+
+    // With no state root installed there is nothing to search, so every lookup
+    // misses and every compile is simply not persisted.
+    #[test]
+    fn no_state_root_searches_nothing() {
+        assert!(dirs_to_read(None, None).is_empty());
     }
 
     // A bundle ships its artifacts read-only; a player's first launch must find
@@ -446,7 +470,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         store_in(&bundled, "cafe", &[9, 9]);
 
-        let dirs = dirs_to_read(writable.clone(), bundled.clone());
+        let dirs = dirs_to_read(Some(writable.clone()), Some(bundled.clone()));
         assert_eq!(
             dirs.iter().find_map(|d| load_in(d, "cafe")),
             Some(vec![9, 9])

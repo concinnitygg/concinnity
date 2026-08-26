@@ -523,10 +523,10 @@ fn picker_lists_types_alphabetically() {
         "every offered type shown (addables + config singletons)"
     );
     // Concretely: AudioCue sorts before Sprite, and a config singleton is mixed
-    // in alphabetically (Application sorts before AudioCue).
+    // in alphabetically (AppConfig sorts before AudioCue).
     let pos = |t: &str| opts.iter().position(|o| o == t).unwrap();
     assert!(pos("AudioCue") < pos("Sprite"));
-    assert!(pos("Application") < pos("AudioCue"));
+    assert!(pos("AppConfig") < pos("AudioCue"));
 }
 
 #[test]

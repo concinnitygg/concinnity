@@ -6,7 +6,7 @@
 //! compiles it, the postcard-visible asset schema, the component discriminant,
 //! the asset's args JSON, and the contents of any source files the args
 //! reference. This module hashes those inputs into a key and stores the compiled
-//! bytes under `.concinnity/cache/`. A later build that produces the same key
+//! bytes under the state root's `cache/`. A later build that produces the same key
 //! reuses the cached payload instead of recompiling.
 //!
 //! Every operation here is best-effort: a cache miss, a read error, or a write
@@ -108,9 +108,13 @@ const EXPAND_FORMAT_VERSION: u32 = 4;
 // and the expansion format version, so editing the source file or changing an
 // option busts the entry. Like `payload_key` this is platform-independent: the
 // entries are plain JSON with no per-backend branching. `load` / `store` are
-// shared with the payload cache (same `.concinnity/cache/` directory); the two
+// shared with the payload cache (same `cache/` directory); the two
 // key spaces stay distinct because they hash structurally different inputs.
-pub(crate) fn expand_key(source: &str, args: &serde_json::Value) -> String {
+pub(crate) fn expand_key(
+    source: &str,
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(EXPAND_FORMAT_VERSION.to_le_bytes());
     if let Some(h) = file_content_hash(source) {
@@ -120,7 +124,7 @@ pub(crate) fn expand_key(source: &str, args: &serde_json::Value) -> String {
     // hash alone cannot see; fold their contents in so editing a referenced
     // `.bin` or image re-expands the import.
     if source.to_lowercase().ends_with(".gltf") {
-        for path in crate::gltf_source::referenced_files(source) {
+        for path in crate::gltf_source::referenced_files(source, assets_dir) {
             if let Some(h) = file_content_hash(&path) {
                 hasher.update(h);
             }
@@ -139,7 +143,7 @@ pub fn load(key: &str) -> Option<Vec<u8>> {
     if cfg!(test) {
         return None;
     }
-    std::fs::read(crate::paths::cache_dir().join(key)).ok()
+    std::fs::read(crate::paths::cache_dir()?.join(key)).ok()
 }
 
 /// Store a compiled payload under `key`. Best-effort: any error is ignored.
@@ -149,7 +153,10 @@ pub fn store(key: &str, bytes: &[u8]) {
     if cfg!(test) {
         return;
     }
-    store_in(&crate::paths::cache_dir(), key, bytes);
+    let Some(dir) = crate::paths::cache_dir() else {
+        return;
+    };
+    store_in(&dir, key, bytes);
 }
 
 // Hash the fixed parts of a key. Split out from `payload_key` so tests can
@@ -197,9 +204,10 @@ fn key_from_parts(
 // Collect (path, content-hash) for every source file the args reference.
 // Walks the args JSON for string leaves and resolves each one to a file using
 // the same lookup rules the asset compilers use: a bare filename is searched
-// under `.concinnity/assets/`, a relative or absolute path is used directly,
-// and `artifacts_dir` is consulted when set. Strings that do not resolve to a
-// file (asset names, generator keywords, colors) contribute nothing.
+// under the build's asset search root, a relative or absolute path is used
+// directly, and `artifacts_dir` is consulted when set. Strings that do not
+// resolve to a file (asset names, generator keywords, colors) contribute
+// nothing.
 fn referenced_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> Vec<(String, [u8; 32])> {
     let mut strings = Vec::new();
     collect_strings(args, &mut strings);
@@ -237,8 +245,11 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
     if Path::new(s).is_file() {
         return Some(s.to_string());
     }
-    // Bare filename searched recursively under .concinnity/assets/.
-    if let Some(p) = crate::source::find_in_assets(s) {
+    // Bare filename searched recursively under the asset search root.
+    if let Some(p) = ctx
+        .assets_dir
+        .and_then(|dir| crate::source::find_in(dir, s))
+    {
         return Some(p);
     }
     // Account artifact directory, when the build supplied one.
@@ -274,6 +285,7 @@ mod tests {
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "test",
+            assets_dir: None,
             artifacts_dir: None,
             all_assets: &[],
         }
@@ -472,17 +484,21 @@ mod tests {
         let src = file.to_str().unwrap();
         let args = json!({ "prefix": "scn", "texture_max_size": 512 });
 
-        let base = expand_key(src, &args);
+        let base = expand_key(src, &args, None);
         // Stable for identical inputs.
-        assert_eq!(base, expand_key(src, &args));
+        assert_eq!(base, expand_key(src, &args, None));
         // Changing an option busts the key.
         assert_ne!(
             base,
-            expand_key(src, &json!({ "prefix": "scn", "texture_max_size": 256 }))
+            expand_key(
+                src,
+                &json!({ "prefix": "scn", "texture_max_size": 256 }),
+                None
+            )
         );
         // Editing the source file busts the key.
         std::fs::write(&file, b"second").unwrap();
-        assert_ne!(base, expand_key(src, &args));
+        assert_ne!(base, expand_key(src, &args, None));
     }
 
     // A text `.gltf` SceneImport must re-expand when a referenced sibling file
@@ -504,12 +520,12 @@ mod tests {
         let src = gltf.to_str().unwrap();
         let args = json!({ "prefix": "scn" });
 
-        let before = expand_key(src, &args);
-        assert_eq!(before, expand_key(src, &args));
+        let before = expand_key(src, &args, None);
+        assert_eq!(before, expand_key(src, &args, None));
         std::fs::write(dir.path().join("geo.bin"), b"second").unwrap();
         assert_ne!(
             before,
-            expand_key(src, &args),
+            expand_key(src, &args, None),
             "editing a referenced .bin must bust the expansion key"
         );
     }
@@ -520,7 +536,7 @@ mod tests {
     fn expansion_and_payload_key_spaces_stay_distinct() {
         let args = json!({ "prefix": "scn" });
         assert_ne!(
-            expand_key("/no/such/scene.glb", &args),
+            expand_key("/no/such/scene.glb", &args, None),
             payload_key(0, &args, &ctx(), &CacheInputs::extra(vec![])),
         );
     }
@@ -613,13 +629,14 @@ mod tests {
     #[test]
     fn referenced_files_resolve_through_the_artifacts_dir() {
         // A bare filename that exists neither directly nor under
-        // .concinnity/assets/ still resolves when the build supplied an
+        // The assets dir still resolves when the build supplied an
         // account artifacts directory.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("fx.hdr"), b"pixels").unwrap();
         let artifacts = dir.path().to_str().unwrap().to_string();
         let artifact_ctx = BuildCtx {
             name: "test",
+            assets_dir: None,
             artifacts_dir: Some(&artifacts),
             all_assets: &[],
         };
@@ -635,22 +652,25 @@ mod tests {
     }
 
     // A bare filename that exists neither directly nor in the artifacts dir is
-    // searched recursively under the state root's `assets/` tree. The lookup
-    // runs against the process-global anchor, so it shares the build-output
-    // lock with the other tests that install one.
+    // searched recursively under the build's asset search root.
     #[test]
     fn resolve_source_finds_a_bare_filename_under_the_assets_tree() {
-        let _guard = crate::blob::test_output::LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let state = crate::blob::test_output::StateDir::new();
-        let nested = state.assets_dir().join("hdri");
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("hdri");
         std::fs::create_dir_all(&nested).expect("assets tree");
         std::fs::write(nested.join("sky.hdr"), b"radiance").expect("write source");
+        let assets_ctx = BuildCtx {
+            name: "test",
+            assets_dir: Some(dir.path()),
+            artifacts_dir: None,
+            all_assets: &[],
+        };
 
-        let found = resolve_source("sky.hdr", &ctx()).expect("bare filename resolves");
+        let found = resolve_source("sky.hdr", &assets_ctx).expect("bare filename resolves");
         assert!(found.ends_with("sky.hdr"), "got: {found}");
-        assert_eq!(resolve_source("missing.hdr", &ctx()), None);
+        assert_eq!(resolve_source("missing.hdr", &assets_ctx), None);
+        // Without a search root the same bare filename resolves nothing.
+        assert_eq!(resolve_source("sky.hdr", &ctx()), None);
     }
 
     // An artifacts dir that does not hold the file contributes nothing, so the
@@ -661,6 +681,7 @@ mod tests {
         let artifacts = dir.path().to_str().unwrap().to_string();
         let artifact_ctx = BuildCtx {
             name: "test",
+            assets_dir: None,
             artifacts_dir: Some(&artifacts),
             all_assets: &[],
         };
@@ -690,6 +711,7 @@ mod tests {
         let artifacts = dir.path().to_str().unwrap().to_string();
         let artifact_ctx = BuildCtx {
             name: "test",
+            assets_dir: None,
             artifacts_dir: Some(&artifacts),
             all_assets: &[],
         };
@@ -701,12 +723,12 @@ mod tests {
         // A missing source file contributes no hash; the key is still a
         // deterministic function of the remaining inputs.
         let args = json!({ "prefix": "scn" });
-        let a = expand_key("/no/such/scene.glb", &args);
-        let b = expand_key("/no/such/scene.glb", &args);
+        let a = expand_key("/no/such/scene.glb", &args, None);
+        let b = expand_key("/no/such/scene.glb", &args, None);
         assert_eq!(a, b);
         assert_ne!(
             a,
-            expand_key("/no/such/scene.glb", &json!({ "prefix": "x" }))
+            expand_key("/no/such/scene.glb", &json!({ "prefix": "x" }), None)
         );
     }
 }

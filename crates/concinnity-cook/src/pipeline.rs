@@ -6,6 +6,8 @@
 //! - Packs all payloads into blobs using PayloadPacker (fills locators)
 //! - Sorts: components first, then systems in declared order
 
+use std::path::Path;
+
 use concinnity_core::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
 use serde::Deserialize;
 
@@ -32,13 +34,18 @@ fn job_resource_kind(rt: crate::registry::RegisteredType) -> crate::resource_han
 const MESH_TYPE: &str = "Mesh";
 const SKINNED_MESH_TYPE: &str = "SkinnedMesh";
 
-/// Build the world at `json_path` and write its blobs to disk.
+/// Build the world at `json_path` and write its blobs to disk, against the
+/// installed state root: sources resolve under its `assets/` and the blobs land
+/// in its `data/`. The one entry point anchored to the process-wide state tree;
+/// a host that builds against its own directories calls
+/// [`prepare_world`](crate::world::prepare_world) + [`build_compiled`].
 pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
-    let loaded = crate::world::prepare_world(&content)
+    let assets_dir = crate::paths::assets_dir();
+    let loaded = crate::world::prepare_world(&content, assets_dir.as_deref())
         .map_err(|errs| crate::check::report_validation_errors(&errs))?;
 
-    let result = build_compiled(loaded.assets, None)?;
+    let result = build_compiled(loaded.assets, assets_dir.as_deref(), None)?;
 
     let pack_result = write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
     for (blob_idx, path) in pack_result.blob_paths.iter().enumerate() {
@@ -93,7 +100,13 @@ pub fn write_build_outputs(
     injected: &[crate::world::InjectedAsset],
     shadowed: &[crate::world::ShadowedAsset],
 ) -> std::io::Result<crate::blob::PackResult> {
-    let pack_result = write_blobs_to(result, std::path::Path::new(&crate::blob::blob_path(0)))?;
+    let primary = crate::blob::blob_path(0).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no project state directory to write blobs into",
+        )
+    })?;
+    let pack_result = write_blobs_to(result, std::path::Path::new(&primary))?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
@@ -281,17 +294,19 @@ pub fn validate_asset(
     Ok(())
 }
 
-/// Run the full build pipeline on an in-memory JSONL string without touching
-/// disk. Loads, expands, and validates the world (crate::world::prepare_world),
-/// then compiles it. `artifacts_dir` is an optional directory consulted when
-/// resolving bare shader filenames not found under assets/; pass the account's
-/// artifact directory so test_world can compile user-written shaders.
+/// Run the full build pipeline on an in-memory JSONL string without writing any
+/// blobs. Loads, expands, and validates the world (crate::world::prepare_world),
+/// then compiles it. `assets_dir` is the asset search root a bare `source`
+/// filename is searched under; `artifacts_dir` is an optional directory
+/// consulted when resolving bare shader filenames not found there, so pass the
+/// account's artifact directory to compile user-written shaders.
 pub fn build_pipeline_from_str(
     content: &str,
+    assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
 ) -> std::io::Result<PipelineResult> {
-    let loaded = crate::world::prepare_world(content).map_err(errors_to_io)?;
-    build_compiled(loaded.assets, artifacts_dir)
+    let loaded = crate::world::prepare_world(content, assets_dir).map_err(errors_to_io)?;
+    build_compiled(loaded.assets, assets_dir, artifacts_dir)
 }
 
 /// A progress report from the compile pipeline: the stage's name and its
@@ -309,12 +324,15 @@ pub struct BuildProgress {
 
 /// Compile an already-prepared world (expanded + structurally and semantically
 /// validated) into in-memory blobs. This is the compile-only stage; it assumes
-/// the assets have passed crate::world::prepare_world.
+/// the assets have passed crate::world::prepare_world, which should have been
+/// given the same `assets_dir`: an asset resolves its source the same way in
+/// both halves.
 pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
+    assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
 ) -> std::io::Result<PipelineResult> {
-    build_compiled_with_progress(assets, artifacts_dir, None)
+    build_compiled_with_progress(assets, assets_dir, artifacts_dir, None)
 }
 
 /// [`build_compiled`] with a progress callback. The callback fires from the
@@ -322,6 +340,7 @@ pub fn build_compiled(
 /// `Sync`); it must be cheap and non-blocking.
 pub fn build_compiled_with_progress(
     mut assets: Vec<WorldJsonlAsset>,
+    assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
     progress: Option<&(dyn Fn(BuildProgress) + Sync)>,
 ) -> std::io::Result<PipelineResult> {
@@ -340,18 +359,18 @@ pub fn build_compiled_with_progress(
     // means no work). On a miss, the recorded key is used when the compile
     // step stores the freshly produced payload, so the next build's probe
     // can re-use it.
-    let mesh_cache = probe_mesh_payload_cache(&assets, artifacts_dir);
+    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, artifacts_dir);
 
     // Expand any glTF-sourced SkinnedMesh and Mesh assets into inline geometry
     // before anything else looks at their args. Animations expand after the
     // skinned-mesh pass so an importer that wanted to share state could read
     // already-imported skeletons; today both passes parse the .glb fresh,
     // but the ordering keeps that option open without an API churn.
-    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache)?;
+    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache, assets_dir)?;
     desugar_fbx_skinned_meshes(&mut assets, &mesh_cache)?;
-    desugar_gltf_meshes(&mut assets, &mesh_cache)?;
+    desugar_gltf_meshes(&mut assets, &mesh_cache, assets_dir)?;
     desugar_fbx_meshes(&mut assets, &mesh_cache)?;
-    desugar_animation_imports(&mut assets)?;
+    desugar_animation_imports(&mut assets, assets_dir)?;
     desugar_root_motion(&mut assets)?;
     crate::character_shape::warn_unresolved(&assets);
     crate::character::bake::bake_shapes(&mut assets, |name| {
@@ -536,6 +555,7 @@ pub fn build_compiled_with_progress(
             partition: &partition,
             mesh_source_handles: &resource_handles,
             max_blob_bytes: crate::blob::DEFAULT_MAX_BLOB_BYTES,
+            assets_dir,
             artifacts_dir,
             mesh_cache: &mesh_cache,
             progress,
@@ -622,6 +642,7 @@ struct MeshCacheEntry {
 // regular per-asset cache path inside compile_and_pack_payloads is sufficient.
 fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
+    assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
     use crate::resource_handles::{RegisteredType, ResourceAssetCompile};
@@ -650,11 +671,12 @@ fn probe_mesh_payload_cache(
         };
         let ctx = crate::asset::BuildCtx {
             name: asset.name.as_str(),
+            assets_dir,
             artifacts_dir,
             all_assets: &empty,
         };
         let discriminant = RESOURCE_CACHE_DISC_BASE + job_resource_kind(rt) as u8;
-        let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
+        let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args, assets_dir));
         // A shape baked into the mesh changes its payload as much as the
         // source does, so its args join the key.
         let keyed = match crate::character::bake::baking_shape_args(assets, &asset.name) {
@@ -700,6 +722,7 @@ fn skin_index_by_target(assets: &[WorldJsonlAsset]) -> std::collections::HashMap
 fn desugar_gltf_skinned_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
+    assets_dir: Option<&Path>,
 ) -> std::io::Result<()> {
     for asset in assets.iter_mut() {
         if asset.asset_type != SKINNED_MESH_TYPE {
@@ -729,20 +752,25 @@ fn desugar_gltf_skinned_meshes(
         }
 
         let invalid = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidData, msg);
-        let imported =
-            match character_model {
-                Some(arg) => {
-                    let arg: crate::character::import::CharacterModelArg =
-                        serde_json::from_value(arg).map_err(|e| {
-                            invalid(format!("Asset '{}': character_model: {e}", asset.name))
-                        })?;
-                    crate::character::import::import_model(&asset.name, &arg.schema, &arg.model)
-                        .map_err(invalid)?
-                }
-                None => crate::gltf::import_skinned_glb(&source, skin_index_arg(asset)).map_err(
-                    |e| invalid(format!("Asset '{}': glTF import failed: {}", asset.name, e)),
-                )?,
-            };
+        let imported = match character_model {
+            Some(arg) => {
+                let arg: crate::character::import::CharacterModelArg = serde_json::from_value(arg)
+                    .map_err(|e| {
+                        invalid(format!("Asset '{}': character_model: {e}", asset.name))
+                    })?;
+                crate::character::import::import_model(
+                    &asset.name,
+                    &arg.schema,
+                    &arg.model,
+                    assets_dir,
+                )
+                .map_err(invalid)?
+            }
+            None => crate::gltf::import_skinned_glb(&source, skin_index_arg(asset), assets_dir)
+                .map_err(|e| {
+                    invalid(format!("Asset '{}': glTF import failed: {}", asset.name, e))
+                })?,
+        };
 
         let name = asset.name.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
@@ -890,6 +918,7 @@ fn desugar_fbx_skinned_meshes(
 fn desugar_gltf_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
+    assets_dir: Option<&Path>,
 ) -> std::io::Result<()> {
     use crate::components::VertexData;
     use std::collections::HashMap;
@@ -942,7 +971,7 @@ fn desugar_gltf_meshes(
             .map(|n| n as usize);
 
         if !parsed_cache.contains_key(&source) {
-            let doc = crate::glb::parse_glb(&source).map_err(|e| {
+            let doc = crate::glb::parse_glb(&source, assets_dir).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Asset '{}': glTF import failed: {}", asset.name, e),
@@ -1186,7 +1215,10 @@ fn desugar_fbx_meshes(
 // with no `source` is left untouched, so inline-authored clips are
 // byte-for-byte unchanged. Channels targeting non-joint nodes are dropped
 // silently by the importers.
-fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
+fn desugar_animation_imports(
+    assets: &mut [WorldJsonlAsset],
+    assets_dir: Option<&Path>,
+) -> std::io::Result<()> {
     use crate::components::Animation;
     use crate::ecs::Component;
 
@@ -1246,7 +1278,7 @@ fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<
         } else {
             // Look up by name when authored; fall back to the numeric index.
             let resolved_index = if !animation_name.is_empty() {
-                let names = crate::gltf::glb_animation_names(&source).map_err(|e| {
+                let names = crate::gltf::glb_animation_names(&source, assets_dir).map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!("Asset '{}': glTF import failed: {}", asset.name, e),
@@ -1269,12 +1301,13 @@ fn desugar_animation_imports(assets: &mut [WorldJsonlAsset]) -> std::io::Result<
                 animation_index
             };
 
-            crate::gltf::import_glb_animation(&source, resolved_index, skin_index).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': glTF import failed: {}", asset.name, e),
-                )
-            })?
+            crate::gltf::import_glb_animation(&source, resolved_index, skin_index, assets_dir)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                    )
+                })?
         };
 
         // Convert ImportedAnimation -> the asset's serialised track shape.
@@ -1402,9 +1435,11 @@ fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
 /// of the pipeline (load, expand, semantic checks) plus a per-asset type/args
 /// resolution, but stops short of compiling payloads: intended for fast
 /// server-side pre-deploy checks where shader compilation is not needed.
-/// Every problem found is reported in a single newline-joined error.
-pub fn validate_world_jsonl(content: &str) -> std::io::Result<()> {
-    let loaded = crate::world::prepare_world(content).map_err(errors_to_io)?;
+/// `assets_dir` is the asset search root the expansion passes resolve their
+/// sources and presets against. Every problem found is reported in a single
+/// newline-joined error.
+pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io::Result<()> {
+    let loaded = crate::world::prepare_world(content, assets_dir).map_err(errors_to_io)?;
 
     let mut errors: Vec<String> = Vec::new();
     for asset in &loaded.assets {
@@ -1494,6 +1529,7 @@ struct PackContext<'a> {
     partition: &'a crate::scene_partition::ScenePartition,
     mesh_source_handles: &'a crate::resource_handles::ResourceHandles,
     max_blob_bytes: u64,
+    assets_dir: Option<&'a Path>,
     artifacts_dir: Option<&'a str>,
     mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     progress: Option<&'a (dyn Fn(BuildProgress) + Sync)>,
@@ -1513,6 +1549,7 @@ fn compile_and_pack_payloads(
         partition,
         mesh_source_handles,
         max_blob_bytes,
+        assets_dir,
         artifacts_dir,
         mesh_cache,
         progress,
@@ -1589,6 +1626,7 @@ fn compile_and_pack_payloads(
 
                 let ctx = crate::asset::BuildCtx {
                     name: name.as_str(),
+                    assets_dir,
                     artifacts_dir,
                     all_assets: assets,
                 };
@@ -1635,6 +1673,7 @@ fn compile_and_pack_payloads(
         let asset = &assets[*asset_idx];
         let ctx = crate::asset::BuildCtx {
             name: asset.name.as_str(),
+            assets_dir,
             artifacts_dir,
             all_assets: assets,
         };
@@ -1651,7 +1690,7 @@ fn compile_and_pack_payloads(
                     bytes.clone()
                 }
                 None => {
-                    let compiled = rt.compile_payload(&asset.args)?;
+                    let compiled = rt.compile_payload(&asset.args, assets_dir)?;
                     crate::cache::store(&entry.key, &compiled);
                     compiled
                 }
@@ -1659,7 +1698,7 @@ fn compile_and_pack_payloads(
         } else {
             // Every resource asset compiles identically on every backend, so its
             // entry is shared across a DirectX and a Vulkan cook.
-            let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
+            let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args, assets_dir));
             let key = crate::cache::payload_key(
                 RESOURCE_CACHE_DISC_BASE + job_resource_kind(*rt) as u8,
                 &asset.args,
@@ -1672,7 +1711,7 @@ fn compile_and_pack_payloads(
                     bytes
                 }
                 None => {
-                    let compiled = rt.compile_payload(&asset.args)?;
+                    let compiled = rt.compile_payload(&asset.args, assets_dir)?;
                     crate::cache::store(&key, &compiled);
                     compiled
                 }
@@ -1988,7 +2027,7 @@ mod tests {
     use super::*;
 
     // Default-shader compilation writes intermediates to a shared
-    // .concinnity/data path keyed by asset name, so tests whose worlds pull in
+    // data path keyed by asset name, so tests whose worlds pull in
     // the default Shader (any rendering world) must not build concurrently.
     static SHADER_BUILD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -2005,7 +2044,7 @@ mod tests {
             r#"{"name":"day_crate","type":"Prop","args":{"mesh":"box"}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None).expect("build pipeline");
+        let result = build_pipeline_from_str(world, None, None).expect("build pipeline");
 
         // The Prop def's identity is the interned id, not a name string.
         let prop = result
@@ -2036,7 +2075,7 @@ mod tests {
             r#"{"name":"crate_body","type":"PropBody","args":{"prop_name":"crate_a"}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None).expect("build pipeline");
+        let result = build_pipeline_from_str(world, None, None).expect("build pipeline");
 
         let index = result
             .names
@@ -2072,7 +2111,7 @@ mod tests {
             r#""scale":[1,1,1]}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None).expect("build");
+        let result = build_pipeline_from_str(world, None, None).expect("build");
         let bytes = result
             .resource_payload(ResourceKind::SkinnedMesh, "prism")
             .expect("named payload");
@@ -2106,7 +2145,7 @@ mod tests {
             r#"{"name":"pause","type":"Screen","args":{}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None).expect("build");
+        let result = build_pipeline_from_str(world, None, None).expect("build");
 
         assert_eq!(result.resource_locks.len(), result.resources.len());
         let font = result
@@ -2146,7 +2185,7 @@ mod tests {
 {"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}}
 {"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}
 "#;
-        validate_world_jsonl(world).expect("visual_novel-shaped world should validate");
+        validate_world_jsonl(world, None).expect("visual_novel-shaped world should validate");
     }
 
     // `screen:show:<name>` / `screen:toggle:<name>` action targets are
@@ -2161,7 +2200,7 @@ mod tests {
             r#"{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None).expect("build");
+        let result = build_pipeline_from_str(world, None, None).expect("build");
         // pause_menu interned id = 0 (first declared name).
         let btn = result
             .defs
@@ -2198,7 +2237,7 @@ mod tests {
             r#"{"name":"f","type":"Font","args":{"size_px":16}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None).expect("build");
+        let result = build_pipeline_from_str(world, None, None).expect("build");
         // pause_menu interned id = 0; the UI assets intern in declaration order.
         let baked_view = |id: u32, expect: &str| {
             let def = result
@@ -2287,7 +2326,7 @@ mod tests {
             asset_type: "Animation".to_string(),
             args: original.clone(),
         }];
-        desugar_animation_imports(&mut assets).expect("desugar succeeds");
+        desugar_animation_imports(&mut assets, None).expect("desugar succeeds");
         assert_eq!(assets[0].args, original);
     }
 
@@ -2378,6 +2417,7 @@ mod tests {
     fn ctx() -> crate::asset::BuildCtx<'static> {
         crate::asset::BuildCtx {
             name: "test",
+            assets_dir: None,
             artifacts_dir: None,
             all_assets: &[],
         }
@@ -2501,7 +2541,7 @@ mod tests {
 
     #[test]
     fn build_pipeline_from_str_rejects_malformed_jsonl() {
-        let Err(err) = build_pipeline_from_str("{not json\n", None) else {
+        let Err(err) = build_pipeline_from_str("{not json\n", None, None) else {
             panic!("malformed line must not build");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -2510,7 +2550,7 @@ mod tests {
     #[test]
     fn build_pipeline_from_str_reports_unknown_asset_types() {
         let world = r#"{"name":"mystery","type":"NotAType","args":{}}"#;
-        let Err(err) = build_pipeline_from_str(world, None) else {
+        let Err(err) = build_pipeline_from_str(world, None, None) else {
             panic!("unknown type must not build");
         };
         assert!(
@@ -2585,7 +2625,7 @@ mod tests {
             wja("inline", SKINNED_MESH_TYPE, inline_args.clone()),
             wja("cached", SKINNED_MESH_TYPE, cached_args.clone()),
         ];
-        desugar_gltf_skinned_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &hit_cache("cached"), None).expect("desugar");
         // No source: untouched. Cache hit: the missing .glb is never parsed
         // and the args stay pre-desugar so the next probe key matches.
         assert_eq!(assets[0].args, inline_args);
@@ -2611,7 +2651,7 @@ mod tests {
             SKINNED_MESH_TYPE,
             serde_json::json!({"source": src}),
         )];
-        desugar_gltf_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
 
         let args = &assets[0].args;
         assert_eq!(args["vertices"].as_array().unwrap().len(), 3);
@@ -2670,7 +2710,7 @@ mod tests {
             SKINNED_MESH_TYPE,
             serde_json::json!({"source": src}),
         )];
-        desugar_gltf_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
 
         let args = &assets[0].args;
         assert_eq!(args["morph_target_names"], serde_json::json!(["bulge"]));
@@ -2689,7 +2729,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": src, "animation_index": 0}),
         )];
-        desugar_animation_imports(&mut assets).expect("desugar");
+        desugar_animation_imports(&mut assets, None).expect("desugar");
 
         let morph = assets[0].args["morph_track"]
             .as_array()
@@ -2706,7 +2746,7 @@ mod tests {
             SKINNED_MESH_TYPE,
             serde_json::json!({"source": "/no/such/hero.glb"}),
         )];
-        let err = desugar_gltf_skinned_meshes(&mut assets, &Default::default())
+        let err = desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None)
             .expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'hero'"), "got: {err}");
     }
@@ -2721,7 +2761,7 @@ mod tests {
             wja("cached", MESH_TYPE, cached_args.clone()),
             wja("inline", MESH_TYPE, inline_args.clone()),
         ];
-        desugar_gltf_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &hit_cache("cached"), None).expect("desugar");
         assert_eq!(
             assets[0].args, fbx_args,
             ".fbx sources belong to the fbx pass"
@@ -2737,7 +2777,8 @@ mod tests {
             MESH_TYPE,
             serde_json::json!({"source": "/no/such/scene.glb"}),
         )];
-        let err = desugar_gltf_meshes(&mut assets, &Default::default()).expect_err("missing .glb");
+        let err =
+            desugar_gltf_meshes(&mut assets, &Default::default(), None).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'crate_mesh'"), "got: {err}");
     }
 
@@ -2761,7 +2802,7 @@ mod tests {
             MESH_TYPE,
             serde_json::json!({"source": gltf.to_str().unwrap(), "primitive_index": 0}),
         )];
-        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
         let vertices = assets[0].args.get("vertices").expect("inline vertices");
         assert_eq!(vertices.as_array().unwrap().len(), 3);
         assert_eq!(
@@ -2798,7 +2839,7 @@ mod tests {
                 serde_json::json!({"source": src, "primitive_index": 0}),
             ),
         ];
-        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
         for asset in &assets {
             assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
             assert_eq!(asset.args["indices"].as_array().unwrap().len(), 3);
@@ -2821,7 +2862,7 @@ mod tests {
                 args[k] = v.clone();
             }
             let mut assets = vec![wja("ghost", MESH_TYPE, args)];
-            let err = desugar_gltf_meshes(&mut assets, &Default::default())
+            let err = desugar_gltf_meshes(&mut assets, &Default::default(), None)
                 .expect_err("primitive 7 does not exist");
             let msg = err.to_string();
             assert!(msg.contains("Asset 'ghost'"), "got: {msg}");
@@ -2847,7 +2888,7 @@ mod tests {
             )
         };
         let mut assets = vec![chunk("part_a"), chunk("part_b")];
-        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
         for asset in &assets {
             assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
         }
@@ -2869,7 +2910,7 @@ mod tests {
             MESH_TYPE,
             serde_json::json!({"source": src, "chunk_index": 0}),
         )];
-        desugar_gltf_meshes(&mut assets, &Default::default()).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
         assert_eq!(assets[0].args["vertices"].as_array().unwrap().len(), 3);
 
         let mut past_end = vec![wja(
@@ -2877,7 +2918,7 @@ mod tests {
             MESH_TYPE,
             serde_json::json!({"source": src, "chunk_index": 9}),
         )];
-        let err = desugar_gltf_meshes(&mut past_end, &Default::default())
+        let err = desugar_gltf_meshes(&mut past_end, &Default::default(), None)
             .expect_err("chunk 9 does not exist");
         let msg = err.to_string();
         assert!(msg.contains("Asset 'chunk9'"), "got: {msg}");
@@ -3304,7 +3345,7 @@ mod tests {
                 serde_json::json!({"source": src, "skin_index": 1}),
             ),
         ];
-        desugar_gltf_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
 
         // Each asset inlines its own part's geometry.
         assert_eq!(
@@ -3338,7 +3379,7 @@ mod tests {
         // The clip carries no selector of its own; resolving it against the
         // target's skin is what keeps the joint indices in the same space.
         assert_eq!(skin_index_by_target(&assets).get("hair"), Some(&1));
-        desugar_animation_imports(&mut assets).expect("desugar");
+        desugar_animation_imports(&mut assets, None).expect("desugar");
         assert!(
             !assets[1].args["tracks"]
                 .as_array()
@@ -3429,7 +3470,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": src, "sample_rate": 10.0}),
         )];
-        desugar_animation_imports(&mut assets).expect("desugar");
+        desugar_animation_imports(&mut assets, None).expect("desugar");
 
         let args = &assets[0].args;
         assert!(
@@ -3457,7 +3498,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": src, "animation_name": "sprint"}),
         )];
-        let err = desugar_animation_imports(&mut assets).expect_err("no 'sprint' clip");
+        let err = desugar_animation_imports(&mut assets, None).expect_err("no 'sprint' clip");
         let msg = err.to_string();
         assert!(msg.contains("Asset 'run'"), "got: {msg}");
         assert!(msg.contains("FBX import failed"), "got: {msg}");
@@ -3470,7 +3511,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": "/no/such/anim.glb"}),
         )];
-        let err = desugar_animation_imports(&mut assets).expect_err("missing .glb");
+        let err = desugar_animation_imports(&mut assets, None).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'walk'"), "got: {err}");
     }
 
@@ -3483,7 +3524,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": "/no/such/anim.glb", "animation_name": "Run"}),
         )];
-        let err = desugar_animation_imports(&mut assets).expect_err("missing .glb");
+        let err = desugar_animation_imports(&mut assets, None).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'run'"), "got: {err}");
     }
 
@@ -3499,7 +3540,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": src, "animation_index": 0}),
         )];
-        desugar_animation_imports(&mut assets).expect("desugar");
+        desugar_animation_imports(&mut assets, None).expect("desugar");
 
         let args = &assets[0].args;
         assert_eq!(args["duration"], 1.0);
@@ -3524,7 +3565,7 @@ mod tests {
             "Animation",
             serde_json::json!({"source": src, "animation_name": "wave"}),
         )];
-        desugar_animation_imports(&mut assets).expect("desugar");
+        desugar_animation_imports(&mut assets, None).expect("desugar");
         assert_eq!(assets[0].args["tracks"].as_array().unwrap().len(), 1);
 
         let mut missing = vec![wja(
@@ -3532,8 +3573,8 @@ mod tests {
             "Animation",
             serde_json::json!({"source": src, "animation_name": "sprint"}),
         )];
-        let err =
-            desugar_animation_imports(&mut missing).expect_err("the file has no 'sprint' clip");
+        let err = desugar_animation_imports(&mut missing, None)
+            .expect_err("the file has no 'sprint' clip");
         let msg = err.to_string();
         assert!(
             msg.contains("has no animation named 'sprint'"),
@@ -3711,7 +3752,7 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let probed = probe_mesh_payload_cache(&assets, None);
+        let probed = probe_mesh_payload_cache(&assets, None, None);
 
         let mut names: Vec<&str> = probed.keys().map(|s| s.as_str()).collect();
         names.sort_unstable();
@@ -3729,7 +3770,7 @@ mod tests {
     #[test]
     fn build_compiled_names_the_asset_whose_type_will_not_resolve() {
         let assets = vec![wja("mystery", "NotAType", serde_json::json!({}))];
-        let Err(err) = build_compiled(assets, None) else {
+        let Err(err) = build_compiled(assets, None, None) else {
             panic!("unknown type must not compile");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -3745,7 +3786,7 @@ mod tests {
             "ProceduralMesh",
             serde_json::json!({"generator": "not_a_generator"}),
         )];
-        let Err(err) = build_compiled(assets, None) else {
+        let Err(err) = build_compiled(assets, None, None) else {
             panic!("an uncompilable payload must not build");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -3762,7 +3803,7 @@ mod tests {
             r#"{"name":"clip","type":"AudioClip","args":{"source":"a.wav"}}"#,
             "\n",
         );
-        validate_world_jsonl(world).expect("a resolvable world validates");
+        validate_world_jsonl(world, None).expect("a resolvable world validates");
 
         // Args of the wrong shape survive the structural world checks and are
         // rejected when the def is built.
@@ -3772,7 +3813,7 @@ mod tests {
             r#"{"name":"t2","type":"PointLight","args":{"intensity":"later"}}"#,
             "\n",
         );
-        let err = validate_world_jsonl(bad).expect_err("mistyped args do not resolve");
+        let err = validate_world_jsonl(bad, None).expect_err("mistyped args do not resolve");
         let msg = err.to_string();
         assert!(msg.contains("Asset 't1'"), "got: {msg}");
         assert!(msg.contains("Asset 't2'"), "got: {msg}");
@@ -3830,7 +3871,7 @@ mod tests {
                 }),
             ),
         ];
-        let result = build_compiled(assets, None).expect("build");
+        let result = build_compiled(assets, None, None).expect("build");
 
         assert_eq!(result.texture_sources.len(), 2);
         assert_eq!(
@@ -3911,7 +3952,7 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let result = build_compiled(assets, None).expect("build");
+        let result = build_compiled(assets, None, None).expect("build");
 
         assert_eq!(result.resources.len(), 1);
         let material = &result.resources[0];
@@ -3945,7 +3986,7 @@ mod tests {
                 serde_json::json!({"path": png, "kind": "png"}),
             ),
         ];
-        let result = build_compiled(assets, None).expect("build");
+        let result = build_compiled(assets, None, None).expect("build");
 
         assert_eq!(result.names, vec!["model".to_string(), "icon".to_string()]);
         let mesh_payload = result.defs[0]
@@ -3967,7 +4008,7 @@ mod tests {
             wja("tex", "Texture", serde_json::json!({"source": "wall.png"})),
             wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
         ];
-        let probed = probe_mesh_payload_cache(&assets, None);
+        let probed = probe_mesh_payload_cache(&assets, None, None);
         assert_eq!(probed.len(), 1);
         assert!(probed.contains_key("m"));
     }
@@ -4027,6 +4068,7 @@ mod tests {
                 partition: &crate::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
+                assets_dir: None,
                 artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
@@ -4106,6 +4148,7 @@ mod tests {
                 partition: &crate::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
+                assets_dir: None,
                 artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
@@ -4149,6 +4192,7 @@ mod tests {
                 partition: &crate::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
+                assets_dir: None,
                 artifacts_dir: None,
                 mesh_cache: &Default::default(),
                 progress: None,
@@ -4200,6 +4244,7 @@ mod tests {
                 partition: &crate::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
+                assets_dir: None,
                 artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
@@ -4242,6 +4287,7 @@ mod tests {
                 partition: &crate::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
+                assets_dir: None,
                 artifacts_dir: None,
                 mesh_cache: &Default::default(),
                 progress: None,
@@ -4285,6 +4331,7 @@ mod tests {
                 partition: &crate::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
+                assets_dir: None,
                 artifacts_dir: None,
                 mesh_cache: &Default::default(),
                 progress: None,
@@ -4334,6 +4381,7 @@ mod tests {
                 partition: &crate::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 8,
+                assets_dir: None,
                 artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
@@ -4392,25 +4440,28 @@ mod tests {
         use crate::registry::RegisteredType;
         let rt = RegisteredType::parse("AudioClip").expect("AudioClip is a resource asset");
         let err = rt
-            .compile_payload(&serde_json::json!({}))
+            .compile_payload(&serde_json::json!({}), None)
             .expect_err("a source-less AudioClip must fail to compile");
         assert!(err.to_string().contains("missing 'source'"), "got: {err}");
         assert_eq!(
-            rt.source_files(&serde_json::json!({"source": "a.wav"})),
+            rt.source_files(&serde_json::json!({"source": "a.wav"}), None),
             vec!["a.wav".to_string()]
         );
-        assert!(rt.source_files(&serde_json::json!({})).is_empty());
+        assert!(rt.source_files(&serde_json::json!({}), None).is_empty());
 
         // Texture is also a resource asset (it left the component registry). A
         // procedural texture compiles a non-empty payload, and a file-backed one
         // folds its source into the payload cache key.
         let tex = RegisteredType::parse("Texture").expect("Texture is a resource asset");
         let bytes = tex
-            .compile_payload(&serde_json::json!({"generator": "checker", "resolution": 32}))
+            .compile_payload(
+                &serde_json::json!({"generator": "checker", "resolution": 32}),
+                None,
+            )
             .expect("a procedural texture compiles");
         assert!(!bytes.is_empty());
         assert_eq!(
-            tex.source_files(&serde_json::json!({"source": "a.png"})),
+            tex.source_files(&serde_json::json!({"source": "a.png"}), None),
             vec!["a.png".to_string()]
         );
 
@@ -4419,14 +4470,14 @@ mod tests {
         let cube =
             RegisteredType::parse("CubemapTexture").expect("CubemapTexture is a resource asset");
         let err = cube
-            .compile_payload(&serde_json::json!({}))
+            .compile_payload(&serde_json::json!({}), None)
             .expect_err("a source-less CubemapTexture must fail to compile");
         assert!(
             err.to_string().contains("requires a `source` path"),
             "got: {err}"
         );
         assert_eq!(
-            cube.source_files(&serde_json::json!({"source": "c.hdr"})),
+            cube.source_files(&serde_json::json!({"source": "c.hdr"}), None),
             vec!["c.hdr".to_string()]
         );
 
@@ -4436,7 +4487,7 @@ mod tests {
         let env =
             RegisteredType::parse("EnvironmentMap").expect("EnvironmentMap is a resource asset");
         let err = env
-            .compile_payload(&serde_json::json!({}))
+            .compile_payload(&serde_json::json!({}), None)
             .expect_err("a source-less EnvironmentMap must fail to compile");
         assert!(
             err.to_string()
@@ -4444,20 +4495,20 @@ mod tests {
             "got: {err}"
         );
         assert_eq!(
-            env.source_files(&serde_json::json!({"source": "e.hdr"})),
+            env.source_files(&serde_json::json!({"source": "e.hdr"}), None),
             vec!["e.hdr".to_string()]
         );
 
         let lut = RegisteredType::parse("ColorLut").expect("ColorLut is a resource asset");
         let err = lut
-            .compile_payload(&serde_json::json!({}))
+            .compile_payload(&serde_json::json!({}), None)
             .expect_err("a source-less ColorLut must fail to compile");
         assert!(
             err.to_string().contains("requires a `source` path"),
             "got: {err}"
         );
         assert_eq!(
-            lut.source_files(&serde_json::json!({"source": "l.cube"})),
+            lut.source_files(&serde_json::json!({"source": "l.cube"}), None),
             vec!["l.cube".to_string()]
         );
 
@@ -4466,15 +4517,15 @@ mod tests {
         // into the payload cache key.
         let font = RegisteredType::parse("Font").expect("Font is a resource asset");
         let bytes = font
-            .compile_payload(&serde_json::json!({"size_px": 20}))
+            .compile_payload(&serde_json::json!({"size_px": 20}), None)
             .expect("the built-in font compiles");
         assert!(!bytes.is_empty());
         assert_eq!(
-            font.source_files(&serde_json::json!({"path": "f.ttf"})),
+            font.source_files(&serde_json::json!({"path": "f.ttf"}), None),
             vec!["f.ttf".to_string()]
         );
         assert!(
-            font.source_files(&serde_json::json!({"source": "x.ttf"}))
+            font.source_files(&serde_json::json!({"source": "x.ttf"}), None)
                 .is_empty()
         );
     }
@@ -4497,7 +4548,7 @@ mod tests {
         let src = gltf_path.to_str().unwrap().to_string();
 
         for rt in [RegisteredType::Mesh, RegisteredType::SkinnedMesh] {
-            let files = rt.source_files(&serde_json::json!({"source": src}));
+            let files = rt.source_files(&serde_json::json!({"source": src}), None);
             assert_eq!(files.len(), 3, "{rt:?}: {files:?}");
             assert_eq!(files[0], src);
             assert!(files.iter().any(|f| f.ends_with("geo.bin")), "{files:?}");
@@ -4505,7 +4556,8 @@ mod tests {
         }
 
         // A `.glb` source reports only itself.
-        let glb = RegisteredType::Mesh.source_files(&serde_json::json!({"source": "scene.glb"}));
+        let glb =
+            RegisteredType::Mesh.source_files(&serde_json::json!({"source": "scene.glb"}), None);
         assert_eq!(glb, vec!["scene.glb".to_string()]);
     }
 
@@ -4524,7 +4576,10 @@ mod tests {
         // Mesh is a resource asset now: it compiles through
         // `RegisteredType::compile_payload`, not the RegisteredType dispatch.
         let mesh_bytes = crate::registry::RegisteredType::Mesh
-            .compile_payload(&serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}))
+            .compile_payload(
+                &serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
+                None,
+            )
             .expect("Mesh compiles through the resource path");
         assert!(!mesh_bytes.is_empty());
 
@@ -4579,11 +4634,11 @@ mod tests {
         let rt = RegisteredType::SkinnedMesh;
 
         let ok = serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "indices": []});
-        let bytes = rt.compile_payload(&ok).expect("skinned compiles");
+        let bytes = rt.compile_payload(&ok, None).expect("skinned compiles");
         assert!(!bytes.is_empty());
 
         let no_verts = rt
-            .compile_payload(&serde_json::json!({}))
+            .compile_payload(&serde_json::json!({}), None)
             .expect_err("no vertices");
         assert!(
             no_verts.to_string().contains("at least one vertex"),
@@ -4593,6 +4648,7 @@ mod tests {
         let bad_skeleton = rt
             .compile_payload(
                 &serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "skeleton": 5}),
+                None,
             )
             .expect_err("malformed skeleton");
         assert!(
@@ -4639,6 +4695,7 @@ mod tests {
         ];
         let vctx = crate::asset::BuildCtx {
             name: "chunk",
+            assets_dir: None,
             artifacts_dir: None,
             all_assets: &blocks,
         };

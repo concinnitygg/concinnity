@@ -147,7 +147,8 @@ pub struct BehaviorSystem {
     press_cursor: EventCursor,
     crossings: Vec<VolumeEvent>,
     presses: Vec<InteractEvent>,
-    save_dir: PathBuf,
+    // `None` when no host installed a state root: behaviors run, saving does not.
+    save_dir: Option<PathBuf>,
     // Sampled from the `TransientSaves` resource at init: while true, the
     // state file is neither read nor written, so a preview session starts
     // fresh and leaves the user's saves untouched.
@@ -247,7 +248,8 @@ impl System for BehaviorSystem {
         let mut restored = 0usize;
         if !self.transient_saves
             && self.programs.iter().any(|p| p.def.saves_state())
-            && let Some(state) = save::read_save(&save::state_file(&self.save_dir))
+            && let Some(dir) = self.save_dir.as_deref()
+            && let Some(state) = save::read_save(&save::state_file(dir))
         {
             for (name, value) in &state.vars {
                 let Some(slot) = self.var_table.slot_of(name) else {
@@ -825,7 +827,10 @@ impl BehaviorSystem {
                 .map(|(_, p)| (p.def.asset_id.0, save::def_hash(&p.def)))
                 .collect(),
         };
-        if let Err(e) = save::write_save(&save::state_file(&self.save_dir), &state) {
+        let Some(dir) = self.save_dir.as_deref() else {
+            return;
+        };
+        if let Err(e) = save::write_save(&save::state_file(dir), &state) {
             tracing::warn!("BehaviorSystem: state save failed: {e}");
         }
     }

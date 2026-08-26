@@ -36,6 +36,12 @@ impl App {
     /// file's siblings named by index, so a world written to `data/0` reads
     /// `data/1`, `data/2`, ... beside it.
     ///
+    /// What the app writes at runtime -- its settings, save files, crash
+    /// reports, and shader caches -- lands beside the world it read, stepping
+    /// out of a directory named `data`, so `from_blob("mygame/data/0")` keeps
+    /// them under `mygame/`. A world that declares an `AppConfig` with a `home`
+    /// chooses the location itself.
+    ///
     /// ```no_run
     /// # use concinnity::App;
     /// App::from_blob("data/0")

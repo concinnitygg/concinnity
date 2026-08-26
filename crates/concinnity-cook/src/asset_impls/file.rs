@@ -29,6 +29,7 @@ mod tests {
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "model",
+            assets_dir: None,
             artifacts_dir: None,
             all_assets: &[],
         }

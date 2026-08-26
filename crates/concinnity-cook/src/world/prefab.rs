@@ -4,13 +4,26 @@
 // authored line with a generated asset's name is the user's patch of it: the
 // authored fields win and the rest keep the generated values.
 
+use std::path::Path;
+
 use super::expand::{ExpandReport, asset_name, type_norm};
 use super::preset::load_preset_obj;
+
+// The Prop instance a prefab is expanded under: the name its generated assets
+// are prefixed with, and the placement its entries are composed onto. Nested
+// prefabs recurse with the composed placement as the new instance.
+struct Instance<'a> {
+    name: &'a str,
+    position: [f32; 3],
+    rotation_deg: [f32; 3],
+    scale: [f32; 3],
+}
 
 pub(crate) fn expand_prefabs(
     asset_values: &mut Vec<serde_json::Value>,
     authored: &std::collections::HashMap<String, String>,
     report: &mut ExpandReport,
+    assets_dir: Option<&Path>,
 ) -> Result<(), String> {
     // Collect all Prefab definitions.
     let mut prefab_defs: std::collections::HashMap<String, serde_json::Value> =
@@ -62,7 +75,7 @@ pub(crate) fn expand_prefabs(
         let prefab_def = if let Some(def) = prefab_defs.get(prefab_ref) {
             def.clone()
         } else {
-            let loaded = load_preset_obj(prefab_ref, "prefabs");
+            let loaded = load_preset_obj(prefab_ref, "prefabs", assets_dir);
             if loaded.is_null() {
                 return Err(format!(
                     "Prop '{}': prefab '{}' not found, declare a Prefab asset with that name",
@@ -74,13 +87,16 @@ pub(crate) fn expand_prefabs(
 
         let mut call_stack: Vec<String> = vec![prefab_ref.to_string()];
         let expanded = expand_prefab_entries(
-            &instance_name,
-            inst_pos,
-            inst_rot,
-            inst_scale,
+            &Instance {
+                name: &instance_name,
+                position: inst_pos,
+                rotation_deg: inst_rot,
+                scale: inst_scale,
+            },
             &prefab_def,
             &prefab_defs,
             &mut call_stack,
+            assets_dir,
         )?;
         for entry in expanded {
             if resolve_generated(
@@ -147,14 +163,14 @@ fn resolve_generated(
 }
 
 fn expand_prefab_entries(
-    instance_name: &str,
-    inst_pos: [f32; 3],
-    inst_rot: [f32; 3],
-    inst_scale: [f32; 3],
+    instance: &Instance<'_>,
     prefab_def: &serde_json::Value,
     prefab_defs: &std::collections::HashMap<String, serde_json::Value>,
     call_stack: &mut Vec<String>,
+    assets_dir: Option<&Path>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    let (inst_pos, inst_rot, inst_scale) =
+        (instance.position, instance.rotation_deg, instance.scale);
     let entries = prefab_def
         .get("args")
         .and_then(|a| a.get("props"))
@@ -167,7 +183,7 @@ fn expand_prefab_entries(
     for entry in &entries {
         let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("prop");
         let entry_name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("obj");
-        let expanded_name = format!("{}_{}", instance_name, entry_name);
+        let expanded_name = format!("{}_{}", instance.name, entry_name);
 
         let local_pos = f32_arr3(entry, "position", [0.0, 0.0, 0.0]);
         let local_rot = f32_arr3(entry, "rotation_deg", [0.0, 0.0, 0.0]);
@@ -233,7 +249,7 @@ fn expand_prefab_entries(
                 let nested_def = if let Some(def) = prefab_defs.get(nested_ref) {
                     def.clone()
                 } else {
-                    let loaded = load_preset_obj(nested_ref, "prefabs");
+                    let loaded = load_preset_obj(nested_ref, "prefabs", assets_dir);
                     if loaded.is_null() {
                         return Err(format!(
                             "Prefab entry '{}': nested prefab '{}' not found",
@@ -244,13 +260,16 @@ fn expand_prefab_entries(
                 };
                 call_stack.push(nested_ref.to_string());
                 let nested = expand_prefab_entries(
-                    &expanded_name,
-                    world_pos,
-                    world_rot,
-                    world_scale,
+                    &Instance {
+                        name: &expanded_name,
+                        position: world_pos,
+                        rotation_deg: world_rot,
+                        scale: world_scale,
+                    },
                     &nested_def,
                     prefab_defs,
                     call_stack,
+                    assets_dir,
                 )?;
                 call_stack.pop();
                 result.extend(nested);
@@ -350,7 +369,7 @@ mod tests {
             .filter(|(n, _)| !n.is_empty())
             .collect();
         let mut report = ExpandReport::default();
-        expand_prefabs(assets, &authored, &mut report)?;
+        expand_prefabs(assets, &authored, &mut report, None)?;
         Ok(report)
     }
 
