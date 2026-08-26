@@ -27,20 +27,15 @@ use super::pipeline::shader_source;
 // a silent layout-drift hazard.
 const OBJECT_COMMON_HLSL: &str = include_str!("shaders/object_common.hlsl");
 
-pub(crate) enum Compiler {
-    // FXC (`D3DCompile`), shader model 5.1.
-    Fxc,
-    // DXC (`dxcompiler.dll`), shader model 6.5 for DXR 1.1 inline ray tracing.
-    Dxc,
-}
-
+// Every program left on this table is FXC (`D3DCompile`, shader model 5.1).
+// The SM 6 programs all became single-source `.slang`, which slangc emits as
+// DXIL directly, so the DXC path this table used to carry has no consumer.
 pub(crate) struct HlslProgram {
     // File name under `src/directx/shaders/` for the `cn debug` disk-first resolve.
     pub file: &'static str,
     pub embedded: &'static str,
     pub entry: &'static str,
     pub target: &'static str,
-    pub compiler: Compiler,
     // Substitute `{OBJECT_DATA}` with the shared `GpuObjectData` declaration.
     pub object_data: bool,
 }
@@ -62,28 +57,17 @@ impl HlslProgram {
 
     pub(crate) fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
         let source = self.source(hot_reload);
-        match self.compiler {
-            Compiler::Fxc => super::pipeline::compile_hlsl(&source, self.entry, self.target),
-            Compiler::Dxc => super::dxc::compile_hlsl_dxc(&source, self.entry, self.target),
-        }
+        super::pipeline::compile_hlsl(&source, self.entry, self.target)
     }
 }
 
 // Compile every declared program into `out_dir`, reusing local cache artifacts
-// where present. DXC programs are skipped as a group when `dxcompiler.dll` is
-// unavailable, mirroring the runtime fallback (RT stays off, SSR takes over),
-// and reported rather than failing the export.
+// where present. A failure is reported rather than failing the export.
 pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompile::Report) {
     for program in ALL {
         let source = program.source(false);
-        let key = match program.compiler {
-            Compiler::Fxc => super::pipeline::fxc_cache_key(&source, program.entry, program.target),
-            Compiler::Dxc => super::dxc::dxc_cache_key(&source, program.entry, program.target),
-        };
-        let compile = || match program.compiler {
-            Compiler::Fxc => super::pipeline::compile_hlsl(&source, program.entry, program.target),
-            Compiler::Dxc => super::dxc::compile_hlsl_dxc(&source, program.entry, program.target),
-        };
+        let key = super::pipeline::fxc_cache_key(&source, program.entry, program.target);
+        let compile = || super::pipeline::compile_hlsl(&source, program.entry, program.target);
         report.record(
             &format!("{} {}", program.entry, program.target),
             crate::shader_cache::ensure_in(out_dir, &key, compile),
@@ -103,7 +87,6 @@ const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static s
         embedded,
         entry: "main",
         target,
-        compiler: Compiler::Fxc,
         object_data: false,
     }
 }
@@ -114,7 +97,6 @@ pub(super) static MAIN_VERT: HlslProgram = HlslProgram {
     embedded: MAIN_VERT_HLSL,
     entry: "vertex_main",
     target: "vs_5_1",
-    compiler: Compiler::Fxc,
     object_data: false,
 };
 pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
@@ -122,7 +104,6 @@ pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
     embedded: MAIN_VERT_HLSL,
     entry: "vertex_main_instanced",
     target: "vs_5_1",
-    compiler: Compiler::Fxc,
     object_data: false,
 };
 pub(super) static MAIN_FRAG: HlslProgram = fxc_main("main_frag.hlsl", MAIN_FRAG_HLSL, "ps_5_1");
@@ -144,17 +125,6 @@ pub(super) static CULL: HlslProgram = fxc_cull("main");
 pub(super) static CULL_PHASE2: HlslProgram = fxc_cull("main_phase2");
 pub(super) static CULL_SHADOW: HlslProgram = fxc_cull("main_shadow");
 
-// The one SM 6.5 program left on this table (DXC): the RT skinned-vertex refit
-// kernel. Its ray-traced siblings are single-source now.
-pub(super) static RT_SKIN: HlslProgram = HlslProgram {
-    file: "rt_skin.hlsl",
-    embedded: include_str!("shaders/rt_skin.hlsl"),
-    entry: "rt_skin",
-    target: "cs_6_5",
-    compiler: Compiler::Dxc,
-    object_data: false,
-};
-
 // Every declared program, iterated by the export-time precompile.
 pub(crate) static ALL: &[&HlslProgram] = &[
     &MAIN_VERT,
@@ -164,7 +134,6 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,
-    &RT_SKIN,
 ];
 
 #[cfg(test)]
@@ -172,18 +141,13 @@ mod tests {
     use super::*;
 
     // Two programs collide when they would compile identical source text to
-    // the same entry + target with the same compiler; the table must not
-    // declare the same slot twice.
+    // the same entry + target; the table must not declare the same slot twice.
     #[test]
     fn table_has_no_duplicate_programs() {
         let mut seen = std::collections::HashSet::new();
         for p in ALL {
-            let compiler = match p.compiler {
-                Compiler::Fxc => "fxc",
-                Compiler::Dxc => "dxc",
-            };
             assert!(
-                seen.insert((compiler, p.source(false), p.entry, p.target)),
+                seen.insert((p.source(false), p.entry, p.target)),
                 "duplicate program: {} {}",
                 p.entry,
                 p.target

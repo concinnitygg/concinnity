@@ -2,13 +2,16 @@
 
 [![crates.io][crates-img]][crates-link]
 [![docs.rs][docs-img]][docs-link]
+[![License][license-img]][license-link]
 [![Build Status][gh-img]][gh-checks]
 [![codecov.io][codecov-img]][codecov-link]
-[![License][license-img]][license-link]
 
-Concinnity is an asset-driven world application builder and runner.
-Runtime behavior is defined declaratively through a static set of assets
-compiled into runnable worlds.
+Concinnity is an asset-driven world engine. A world is a set of components
+describing what exists -- a camera, lights, geometry, UI -- and the engine runs
+it. Behaviour is declared as data rather than assembled from calls, so building
+an application is mostly a matter of saying what is in it.
+
+Use it as a Rust crate:
 
 ```rust
 use concinnity::components::{GraphicsConfig, TextLabel};
@@ -27,7 +30,20 @@ fn main() {
 }
 ```
 
-Check out the [Rust Documentation][docs-link] to explore the features.
+Or through the `concinnity` command line tool, which scaffolds a project,
+compiles its worlds, and runs them without any Rust of your own:
+
+```sh
+concinnity new hello     # scaffold a project
+concinnity build         # compile its worlds
+concinnity run           # play the result
+```
+
+`concinnity editor` opens a compiled world in-engine and saves changes back to
+it, and `concinnity debug` runs one straight from source while you edit.
+
+Check out the [Rust Documentation][docs-link] to explore the crate, and the
+[Asset Reference][asset-ref] for the components a world can hold.
 
 This project is in **early development** and may not build reliably depending
 on the platform requirements installed. See the [Build Guide][build-guide]
@@ -43,4 +59,5 @@ for all available support options.
 [codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
 [license-img]: https://img.shields.io/crates/l/concinnity.svg
 [license-link]: https://github.com/concinnitygg/concinnity/blob/main/LICENSE
+[asset-ref]: https://github.com/concinnitygg/concinnity/blob/main/docs/assets/index.md
 [build-guide]: https://github.com/concinnitygg/concinnity/blob/main/docs/development/building.md

@@ -1,11 +1,13 @@
-//! Concinnity is a graphics application framework: construct an `App`,
-//! populate its [`World`] with components, and run it on the engine's
-//! runtime loop.
+//! Concinnity is a graphics application framework. A [`World`] holds the
+//! components describing what exists -- a camera, lights, geometry, text -- and
+//! an `App` runs that world on the engine's loop. Behaviour is declared as data
+//! rather than assembled from calls, so an application's job is to hand over a
+//! world and let the runtime drive it.
 //!
-//! # Running an application
+//! # Running a compiled world
 //!
-//! The most common use-case for a client will be running an `App` from
-//! locally saved binary data.
+//! A shipped application usually plays a world that was compiled ahead of time.
+//! That needs nothing but the runtime, which is the crate's default build:
 //!
 //! ```no_run
 //! use concinnity::App;
@@ -18,12 +20,53 @@
 //! }
 //! ```
 //!
-//! The `cook` module manages this world binary data.
+//! Worlds are authored and compiled by the `cook` module, which is where to go
+//! next: it declares assets as typed values, resolves the references between
+//! them, and either compiles a [`World`] in memory or writes one out for a
+//! build like the above to play. It sits behind the `cook` feature, off by
+//! default.
+#![cfg_attr(feature = "cook", doc = " Start at [`cook`](mod@cook).")]
+//!
+//! # Assembling a world in code
+//!
+//! Compiling is not always needed. Every type in the [`components`] vocabulary
+//! can be handed straight to [`World::add_component`], so an application built
+//! only from those runs on the default feature set alone -- no authoring step
+//! and no file on disk.
+//!
+//! Adding a [`GraphicsConfig`](components::GraphicsConfig) is what opens a
+//! window. A world without one still runs, with everything but the rendering,
+//! which is how a test or a simulation-only tool drives one:
+//!
+//! ```no_run
+//! use concinnity::components::{PhysicsConfig, TriggerVolume};
+//! use concinnity::{App, World};
+//!
+//! fn main() {
+//!     let mut world = World::new();
+//!     world.add_component(PhysicsConfig::default());
+//!     world.add_component(TriggerVolume {
+//!         position: [0.0, 1.0, 0.0],
+//!         ..Default::default()
+//!     });
+//!
+//!     App::from_world(world).run().expect("the app runs");
+//! }
+//! ```
+//!
+//! # Choosing between the two
+//!
+//! Add components directly when a world is small, or when it is decided at
+//! runtime and there is nothing to prepare in advance. Reach for the `cook`
+//! module when an asset needs work before it can run: an image or model to read
+//! from disk, a room to generate geometry for, a prefab to expand into the
+//! components it stands for. Both end at the same place, an `App` holding a
+//! [`World`], and one application can use both.
 //!
 //! # Features
 //!
 //! The default build is the runtime alone: the world loop, the renderer, and
-//! the [`components`] vocabulary, which is all the example needs.
+//! the [`components`] vocabulary, which is all the examples above need.
 //!
 //! `std` is that runtime, and it is on by default. Turning it off leaves
 //! [`components`] and a [`World`] to build with it, so a `no_std` crate can
@@ -31,12 +74,10 @@
 //! that runs: there is no `App` and no `cook`, and a [`World`] carries
 //! components but nothing to step them.
 //!
-//! `cook` adds the `cook` module, which compiles authored assets into a
-//! runnable [`World`] in process, or writes them to a blob file for a shipped
-//! application to play. It carries the authoring-only half of the vocabulary
-//! (textures, meshes, prefabs, menus) and pulls in the asset importers (glTF,
-//! FBX, textures, fonts), so an application that only plays an
-//! already-compiled world should leave it off.
+//! `cook` adds the `cook` module described above. It carries the authoring half
+//! of the vocabulary (textures, meshes, prefabs, menus) and pulls in the
+//! importers that read them (glTF, FBX, images, fonts), so an application that
+//! only plays an already-compiled world should leave it off.
 //!
 //! `vulkan` selects the Vulkan backend where the platform default is Metal or
 //! DirectX.

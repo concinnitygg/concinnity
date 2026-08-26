@@ -67,6 +67,7 @@ const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
 const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
 const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
+const RT_SKIN_SLANG: &str = include_str!("../shaders/rt_skin.slang");
 const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
 const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
 const LINE_SLANG: &str = include_str!("../shaders/line.slang");
@@ -375,6 +376,15 @@ pub(super) static AUTO_EXPOSURE_AVERAGE: SlangProgram = SlangProgram {
     sizes: Sizes::None,
     msaa: false,
 };
+pub(super) static RT_SKIN: SlangProgram = SlangProgram {
+    file: "rt_skin.slang",
+    embedded: RT_SKIN_SLANG,
+    entry: "rt_skin",
+    label: "rt_skin.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
 pub(super) static PARTICLE_SIMULATE: SlangProgram = SlangProgram {
     file: "particle_simulate.slang",
     embedded: PARTICLE_SIMULATE_SLANG,
@@ -603,6 +613,7 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &LIGHT_CULL,
+    &RT_SKIN,
     &HIZ_INIT_MSAA,
     &HIZ_INIT_SINGLE,
     &HIZ_DOWNSAMPLE,

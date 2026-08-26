@@ -303,6 +303,22 @@ impl MtlContext {
             .write_all(&self.device, ring_slot, &self.skinned.joint_matrices)
     }
 
+    // Build this frame's per-object morph-weight buffers, from the same ring
+    // slot as the joint palettes. The skin kernel reads them as a plain buffer
+    // rather than inline constants, so the encoder binds a resource that lives
+    // for the whole frame -- which a parallel per-pass encoder needs, and which
+    // is also the only shape Metal accepts for a Slang-declared read-only
+    // buffer (slangc lowers one to a mutable `device` pointer, and Metal API
+    // validation rejects `setBytes` against that).
+    pub(super) fn build_morph_weight_buffers(
+        &mut self,
+        ring_slot: usize,
+    ) -> Result<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
+        self.rings
+            .joint
+            .write_weights(&self.device, ring_slot, &self.skinned.morph_weights)
+    }
+
     // Build the previous-pose joint-palette buffers the velocity pre-pass
     // reprojects from, in a separate ring so they never alias the current
     // pose within the same frame.

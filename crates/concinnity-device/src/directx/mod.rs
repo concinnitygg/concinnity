@@ -13,7 +13,6 @@ mod cull;
 mod decal;
 mod draw;
 mod draw_iter;
-mod dxc;
 mod error;
 mod fog;
 mod geometry_rebuild;

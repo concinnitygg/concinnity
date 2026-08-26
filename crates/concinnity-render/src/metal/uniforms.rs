@@ -175,21 +175,6 @@ pub struct VsMorphParams {
     pub weights: [f32; MAX_MORPH_TARGETS],
 }
 
-/// Per-dispatch parameters for the `rt_skin` compute kernel. Matches the MSL
-/// `SkinParams` in `shaders/rt_skin.metal`. 16 bytes.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::NoUninit)]
-pub struct SkinParams {
-    /// First vertex of this slot's region in the shared vertex buffer.
-    pub vertex_base: u32,
-    /// Vertices in this slot's region.
-    pub vertex_count: u32,
-    /// Joints in the skeleton driving this slot.
-    pub joint_count: u32,
-    /// Morph targets bound at buffer(4)/(5); zero when the object has none.
-    pub target_count: u32,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,15 +259,5 @@ mod tests {
         assert_eq!(offset_of!(VsMorphParams, target_count), 8);
         assert_eq!(offset_of!(VsMorphParams, _pad), 12);
         assert_eq!(offset_of!(VsMorphParams, weights), 16);
-    }
-
-    #[test]
-    fn skin_params_layout_matches_msl() {
-        // MSL `SkinParams` in rt_skin.metal: four tightly packed uints.
-        assert_eq!(size_of::<SkinParams>(), 16);
-        assert_eq!(offset_of!(SkinParams, vertex_base), 0);
-        assert_eq!(offset_of!(SkinParams, vertex_count), 4);
-        assert_eq!(offset_of!(SkinParams, joint_count), 8);
-        assert_eq!(offset_of!(SkinParams, target_count), 12);
     }
 }

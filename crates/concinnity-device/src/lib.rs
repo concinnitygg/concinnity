@@ -22,7 +22,9 @@ pub(crate) mod gfx {
     pub(crate) use concinnity_core::gfx::{
         frustum, profile, render_types, rt_reflections, ssao, ssgi, ssr,
     };
-    pub(crate) use concinnity_cpu::gfx::{auto_exposure, image_decode, mesh_payload};
+    pub(crate) use concinnity_cpu::gfx::{
+        auto_exposure, image_decode, mesh_payload, morph_targets,
+    };
     pub(crate) use concinnity_render::{
         backend, backend_init, bvh, csm, decal, display_mode, draw_slot, error, fullscreen,
         hdr_output, input, keymap, ltc, mipmap, parallel_ctx, particles, planar_reflection,

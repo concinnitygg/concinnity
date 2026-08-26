@@ -13,6 +13,7 @@ use concinnity_core::gfx::render_types::{ParticleParams, ShadowPassPush, TextUni
 use concinnity_render::metal::uniforms::{ModelUniforms, SsrPrepassMat};
 use concinnity_render::uniforms::{
     DecalParams, DecalView, GBufferModel, GBufferView, GpuParticle, LineView, ParticleView,
+    SkinParams,
 };
 use concinnity_render::vulkan::uniforms::GbModelPush;
 
@@ -141,5 +142,14 @@ pub(in crate::shader_layout) fn text() -> Vec<Case> {
         win_width,
         win_height,
         [_pad] => ["_pad0", "_pad1"],
+    }))]
+}
+
+pub(in crate::shader_layout) fn rt_skin() -> Vec<Case> {
+    vec![everywhere(mirror!(SkinParams => "SkinParams" {
+        vertex_base,
+        vertex_count,
+        joint_count,
+        target_count,
     }))]
 }

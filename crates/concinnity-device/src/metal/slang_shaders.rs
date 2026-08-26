@@ -62,6 +62,7 @@ const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
 const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
 const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
+const RT_SKIN_SLANG: &str = include_str!("../shaders/rt_skin.slang");
 const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
 const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
 const LINE_SLANG: &str = include_str!("../shaders/line.slang");
@@ -95,6 +96,13 @@ pub(super) static LIGHT_CULL: SlangLib = SlangLib {
     embedded: LIGHT_CULL_SLANG,
     entries: &["light_cull_kernel"],
     defines: &[],
+};
+pub(super) static RT_SKIN: SlangLib = SlangLib {
+    name: "rt_skin.slang",
+    file: "rt_skin.slang",
+    embedded: RT_SKIN_SLANG,
+    entries: &["rt_skin"],
+    defines: &[("METAL_BINDINGS", "1")],
 };
 pub(super) static HIZ_INIT_MSAA: SlangLib = SlangLib {
     name: "hiz_init_msaa.slang",
@@ -529,6 +537,7 @@ pub(super) static ALL: &[&SlangLib] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &LIGHT_CULL,
+    &RT_SKIN,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,
     &GBUFFER_PREPASS_VERT,

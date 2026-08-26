@@ -76,7 +76,6 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
     let embedded: &'static str = match name {
         "cull.metal" => include_str!("shaders/cull.metal"),
         "main.metal" => include_str!("shaders/main.metal"),
-        "rt_skin.metal" => include_str!("shaders/rt_skin.metal"),
         _ => panic!(
             "shader_source: '{name}' is not a registered Metal shader. Add an \
              `include_str!(\"shaders/{name}\")` arm to shader_source in \
@@ -261,12 +260,12 @@ mod shader_source_tests {
     use super::shader_source;
 
     #[test]
-    fn embedded_path_when_hot_reload_off() {
-        // A shader with no `{OBJECT_DATA}` marker, so the embedded path is
-        // borrowed rather than spliced.
-        let s = shader_source(false, "rt_skin.metal");
-        assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
-        assert!(s.contains("kernel void rt_skin("));
+    fn embedded_path_splices_object_data() {
+        // Both registered shaders carry the marker, so the embedded source is
+        // spliced rather than handed back verbatim.
+        let s = shader_source(false, "main.metal");
+        assert!(s.contains("vertex VertexOut vertex_main("));
+        assert!(!s.contains("{OBJECT_DATA}"));
     }
 
     #[test]
@@ -291,8 +290,8 @@ mod shader_source_tests {
     fn hot_reload_prefers_disk_when_present() {
         // The shader files live in this checkout, so the disk-load path
         // succeeds and produces the same content (or a newer edit).
-        let s = shader_source(true, "rt_skin.metal");
-        assert!(s.contains("kernel void rt_skin("));
+        let s = shader_source(true, "main.metal");
+        assert!(s.contains("vertex VertexOut vertex_main("));
     }
 
     #[test]

@@ -298,6 +298,25 @@ const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
         profile: "ps_6_5",
         registers: WATER_RT_TEXTURED_REGISTERS,
     },
+    // The RT skinning kernel, from `create_skin_root_signature` in
+    // `src/directx/raytrace.rs`. Its buffers carry `register()` annotations, but
+    // the push constant deliberately does not: a bare `[[vk::push_constant]]`
+    // lands on b0 by declaration order, which is where the root signature puts
+    // its constants, and this row is the only thing holding it there.
+    DxilAbi {
+        file: "rt_skin.slang",
+        gates: &[],
+        entry: "rt_skin",
+        profile: "cs_6_5",
+        registers: &[
+            ("src", "t0"),
+            ("palette", "t1"),
+            ("dst", "u0"),
+            ("morph_data", "t2"),
+            ("morph_weights", "t3"),
+            ("params", "b0"),
+        ],
+    },
     // The raster remainder, from `src/directx/{particle,decal,line}.rs` and
     // `pipeline.rs`. Only the particle pair carries a `DXIL_ABI` block, and only
     // to swap the two constant buffers; the rest are here because slangc
@@ -671,6 +690,12 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         defines: &[("AE_AVERAGE", "1"), ("METAL_BINDINGS", "1")],
     },
     SlangLibSpec {
+        name: "rt_skin.slang",
+        file: "rt_skin.slang",
+        entries: &["rt_skin"],
+        defines: &[("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
         name: "particle_simulate.slang",
         file: "particle_simulate.slang",
         entries: &["particle_simulate"],
@@ -864,7 +889,6 @@ const SLANG_WATER_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
 const SHADER_COMPILE_SOURCES: &[&str] = &[
     "src/shader_cache.rs",
     "src/slang_source.rs",
-    "src/directx/dxc.rs",
     "src/directx/pipeline.rs",
     "src/directx/slang_builtins.rs",
     "src/metal/msl_cache.rs",

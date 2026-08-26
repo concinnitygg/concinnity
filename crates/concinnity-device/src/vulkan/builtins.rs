@@ -281,17 +281,7 @@ pub(super) static RAYMARCH_SHADOW_PROXY_VERT: GlslProgram = glsl(
 );
 
 // Every declared program, iterated by the export-time precompile.
-pub(super) static RT_SKIN: GlslProgram = GlslProgram {
-    file: "rt_skin.comp",
-    embedded: include_str!("shaders/rt_skin.comp"),
-    kind: shaderc::ShaderKind::Compute,
-    label: "rt_skin.comp",
-    rt: false,
-    assembly: PLAIN,
-};
-
 pub(crate) static ALL: &[&GlslProgram] = &[
-    &RT_SKIN,
     &MAIN_VERT,
     &MAIN_FRAG,
     &MAIN_VERT_INSTANCED,

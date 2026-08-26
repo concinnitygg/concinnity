@@ -106,6 +106,7 @@ pub(super) fn layouts(
 
 const MAIN_BINDLESS: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL: &str = include_str!("../shaders/light_cull.slang");
+pub(super) const RT_SKIN: &str = include_str!("../shaders/rt_skin.slang");
 const GBUFFER_PREPASS: &str = include_str!("../shaders/gbuffer_prepass.slang");
 const SHADOW: &str = include_str!("../shaders/shadow.slang");
 const GLASS: &str = include_str!("../shaders/glass.slang");
@@ -151,6 +152,20 @@ pub(super) static LIGHT_CULL_KERNEL: Program = Program {
     profile: "cs_6_0",
     common: &[],
     metal: &[],
+    vulkan: &[],
+    directx: &[],
+};
+
+// The RT skinning kernel. `METAL_BINDINGS` picks the Metal host's slot
+// numbering; the mesh payloads it walks are byte-addressed and so reflect no
+// layout of their own (see `mesh_payload_offsets_match_the_kernel`).
+pub(super) static RT_SKIN_KERNEL: Program = Program {
+    file: "rt_skin.slang",
+    embedded: RT_SKIN,
+    entry: "rt_skin",
+    profile: "cs_6_5",
+    common: &[],
+    metal: &[("METAL_BINDINGS", "1")],
     vulkan: &[],
     directx: &[],
 };

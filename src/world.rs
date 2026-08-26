@@ -33,10 +33,12 @@ impl World {
 
     /// Add one component to the world.
     ///
-    /// Only a runtime component can be added. A build-only asset (`Prefab`,
-    /// `MainMenu`, `CharacterSchema`, ...) is consumed by the cook and expanded
-    /// into the components it stands for, so it is rejected here at compile
-    /// time; declare it in a world and build instead.
+    /// Only a runtime component can be added, which is every type in
+    /// [`components`](crate::components). A build-only asset (`Prefab`,
+    /// `MainMenu`, `CharacterSchema`, ...) stands for several components rather
+    /// than being one, so it is rejected here at compile time; declare it
+    /// through the `cook` module instead.
+    #[cfg_attr(feature = "cook", doc = " See [`cook`](mod@crate::cook).")]
     ///
     /// ```
     /// # use concinnity::World;

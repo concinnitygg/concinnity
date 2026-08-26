@@ -268,7 +268,7 @@ impl VkContext {
         // The gate counts the objects being uploaded here: `cull_count()` reads
         // `draw.n_skinned`, which only `build_main_skin` sets, so consulting it
         // alone would leave a world whose only geometry is skinned on the legacy
-        // pass forever -- and that pass does not morph (rt_skin.comp is the only
+        // pass forever -- and that pass does not morph (rt_skin is the only
         // Vulkan shader that reads morph targets).
         if self.cull.bindless_pipeline.is_some()
             && self.cull_count() + self.skinned.draw_objects.len() > 0

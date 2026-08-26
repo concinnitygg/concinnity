@@ -63,7 +63,7 @@ use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, Skinne
 use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
 use crate::gfx::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
 use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
-use crate::vulkan::uniforms::SkinParams;
+use concinnity_render::uniforms::SkinParams;
 // The dynamic-update mode ladder lives in concinnity-render; re-exported so the
 // `crate::vulkan::raytrace::RtDynamicMode` path (init + context) keeps resolving.
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
@@ -76,9 +76,6 @@ use super::pipeline::spv_module;
 // shader fetches attributes at this stride. The deformed (posed) skinned vertex
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
-
-// `SkinParams` (the `rt_skin` compute push constant) is a GPU-free layout struct
-// that lives in concinnity-render (imported above).
 
 // Pack a column-major object-to-world `model` matrix into a Vulkan instance
 // transform: a 3x4 ROW-major affine (`VkTransformMatrixKHR`, `matrix[3][4]`),
@@ -199,7 +196,7 @@ struct DeviceBufferRef {
 }
 
 // The compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.comp`): set 0 = [src skinned verts, joint palette, deformed output,
+// (`rt_skin.slang`): set 0 = [src skinned verts, joint palette, deformed output,
 // morph deltas, morph weights] (five storage buffers) + a 16-byte `SkinParams`
 // push-constant block. Built in `build_rt_accel` (gated on RT) and held on
 // `RtAccelData`; mirrors DirectX's `SkinPipeline` / Metal's `skin_pipeline`.
@@ -906,7 +903,7 @@ pub(super) fn build_skin_pipeline(
     device: &VkDevice,
     hot_reload: bool,
 ) -> Result<SkinPipeline, String> {
-    let spv = super::builtins::RT_SKIN.compile(&super::builtins::Ctx::plain(hot_reload))?;
+    let spv = super::slang_builtins::RT_SKIN.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spv)?;
 
     // Five storage buffers: src verts (0), joint palette (1), deformed output
@@ -3183,49 +3180,22 @@ mod tests {
 
     #[test]
     fn rt_skin_kernel_compiles() {
-        // The skin compute kernel compiles to SPIR-V (ray-query target, the same
-        // Vulkan-1.2 / SPIR-V-1.4 env the trace shaders use). Guards the
-        // `GL_EXT`-free GLSL + the std430 byte indexing.
-        let spv = crate::vulkan::builtins::RT_SKIN
+        // The skin compute kernel compiles to SPIR-V. Its payload offsets and
+        // the `SkinParams` block are checked against the Rust mirrors in
+        // `shader_layout`, on all three targets rather than this one.
+        let spv = crate::vulkan::slang_builtins::RT_SKIN
             .compile(&crate::vulkan::builtins::Ctx::plain(false))
             .expect("rt skin kernel compiles");
         assert!(super::super::pipeline::is_spirv(&spv));
     }
 
-    // The `SkinParams` layout test lives with the struct in
-    // `concinnity_render::vulkan::uniforms`.
-
     #[test]
-    fn skinned_vertex_layout_pins_the_glsl_scalar_offsets() {
-        // The skin kernel (rt_skin.comp) reads the 80-byte `SkinnedVertex` as a
-        // flat float/uint array: pos@0, normal@12, tangent@24, color@36, uv@48,
-        // u16 joints[4]@56 (words 14/15), f32 weights[4]@64 (words 16..19). Pin
-        // those byte offsets here so a struct reshuffle is caught.
-        use crate::gfx::mesh_payload::SkinnedVertex;
-        use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<SkinnedVertex>(), 80);
-        assert_eq!(offset_of!(SkinnedVertex, pos), 0);
-        assert_eq!(offset_of!(SkinnedVertex, normal), 12);
-        assert_eq!(offset_of!(SkinnedVertex, tangent), 24);
-        assert_eq!(offset_of!(SkinnedVertex, color), 36);
-        assert_eq!(offset_of!(SkinnedVertex, uv), 48);
-        assert_eq!(offset_of!(SkinnedVertex, joints), 56);
-        assert_eq!(offset_of!(SkinnedVertex, weights), 64);
-    }
-
-    #[test]
-    fn vertex_layout_pins_the_deformed_buffer_offsets() {
-        // The skin kernel writes the deformed buffer in the static 56-byte
-        // `Vertex` layout (pos@0, normal@12, tangent@24, color@36, uv@48), and the
-        // trace's skinned fetchers read it back at those offsets.
-        use crate::gfx::mesh_payload::Vertex;
-        use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<Vertex>(), 56);
-        assert_eq!(size_of::<Vertex>() as u64, VERTEX_STRIDE);
-        assert_eq!(offset_of!(Vertex, pos), 0);
-        assert_eq!(offset_of!(Vertex, normal), 12);
-        assert_eq!(offset_of!(Vertex, tangent), 24);
-        assert_eq!(offset_of!(Vertex, color), 36);
-        assert_eq!(offset_of!(Vertex, uv), 48);
+    fn vertex_stride_matches_the_deformed_payload() {
+        // The BLAS strides the deformed buffer by this constant, and the skin
+        // kernel writes it in the static `Vertex` layout.
+        assert_eq!(
+            size_of::<crate::gfx::mesh_payload::Vertex>() as u64,
+            VERTEX_STRIDE
+        );
     }
 }

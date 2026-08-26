@@ -22,20 +22,24 @@
 // sizes already differ: DirectX reports a 276-byte `ShadowUniforms` block where
 // Metal and SPIR-V round it to 288.
 //
-// Not every layout assert can move here. `cull`, `rt_skin`, the legacy per-draw
-// main pass and the raymarch templates are still hand-written per backend, and
-// so a struct used only by those has no `.slang` to reflect and its hand assert
-// is the only check it has. The reverse gap exists too: slangc rejects `TraceRayInline` on the Metal
-// target, so `rt_reflections.slang` reflects on Vulkan and DirectX only and
-// `RtParams` / `RtGeomEntry` have no check against the Metal RT sources. Vertex payloads are the other exclusion: slangc binds a vertex input by
-// attribute index, not byte offset, so `Vertex` / `SkinnedVertex` /
-// `MorphEntry` / `TextVertex` / `LineVertex` reflect no layout at all. The
-// surviving asserts are listed in private/docs/shader-single-source.md.
+// Not every layout assert can move here. `cull`, the legacy per-draw main pass
+// and the raymarch templates are still hand-written per backend, and so a struct
+// used only by those has no `.slang` to reflect and its hand assert is the only
+// check it has. The reverse gap exists too: slangc rejects `TraceRayInline` on
+// the Metal target, so `rt_reflections.slang` reflects on Vulkan and DirectX
+// only and `RtParams` / `RtGeomEntry` have no check against the Metal RT
+// sources. Vertex payloads are the other exclusion: slangc binds a vertex input
+// by attribute index, not byte offset, so `Vertex` / `SkinnedVertex` /
+// `MorphEntry` / `TextVertex` / `LineVertex` reflect no layout at all -- where a
+// kernel byte-addresses those payloads instead, `byte_offsets` locks its
+// constants to the mirrors, which reflection cannot do. The surviving asserts
+// are listed in private/docs/shader-single-source.md.
 //
 // The runtime Metal reflection validator (concinnity-shader) stays as well: it
 // checks world-authored shaders, which reflection over engine `.slang` files
 // cannot see.
 
+mod byte_offsets;
 mod mirror;
 mod mirrors;
 mod programs;
@@ -114,6 +118,11 @@ fn light_cull_layouts_match_the_shader() {
         &programs::LIGHT_CULL_KERNEL,
         &mirrors::forward::light_cull(),
     );
+}
+
+#[test]
+fn rt_skin_layouts_match_the_shader() {
+    check(&programs::RT_SKIN_KERNEL, &mirrors::geometry::rt_skin());
 }
 
 #[test]

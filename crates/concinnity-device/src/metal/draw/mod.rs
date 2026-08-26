@@ -239,6 +239,9 @@ impl MtlContext {
         // main pass. Empty when no SkinnedMesh is in the world.
         let skinned_joint_bufs = self.build_joint_buffers(ring_slot)?;
 
+        // Per-object morph weights for the skinned fold, from the same ring slot.
+        let skinned_morph_weight_bufs = self.build_morph_weight_buffers(ring_slot)?;
+
         // Previous-frame joint matrices, used only by the velocity pre-pass to
         // capture skinned deformation. Empty when TAA is disabled.
         let prev_skinned_joint_bufs = if self.taa.enabled {
@@ -827,6 +830,7 @@ impl MtlContext {
             cmd_buf: &cmd_buf,
             cam_pos,
             skinned_joint_bufs: &skinned_joint_bufs,
+            skinned_morph_weight_bufs: &skinned_morph_weight_bufs,
             scene_color: Some(&scene_color),
             text_calls,
             lines,

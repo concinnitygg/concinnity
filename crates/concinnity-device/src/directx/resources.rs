@@ -1578,14 +1578,14 @@ impl DxContext {
         // into this frame's buffer and the bindless main pass's 2nd ExecuteIndirect
         // draws the skinned records the cull buffers reserved. Setting
         // `self.draw.n_skinned` here (not at init) engages the fold; a build failure
-        // (e.g. DXC unavailable) leaves it 0 and the legacy skinned main pass runs.
+        // leaves it 0 and the legacy skinned main pass runs.
         // The cull / object / draw-args / indirect buffers already reserved the
         // skinned tail at init via the threaded `n_skinned` capacity.
         //
         // The gate counts the objects being uploaded here: `cull_count()` reads
         // `draw.n_skinned`, which only the block below sets, so consulting it
         // alone would leave a world whose only geometry is skinned on the legacy
-        // pass forever -- and that pass does not morph (rt_skin.hlsl is the only
+        // pass forever -- and that pass does not morph (rt_skin is the only
         // DirectX shader that reads morph targets).
         if self.cull.main_bindless_pso.is_some()
             && self.cull_count() + self.skinned.draw_objects.len() > 0

@@ -96,6 +96,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub cmd_buf: &'a ProtocolObject<dyn MTLCommandBuffer>,
     pub cam_pos: [f32; 3],
     pub skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+    // Per-skinned-object morph weights for this frame, from the same ring slot
+    // as `skinned_joint_bufs`. Read only by the Cull pass's skin fold.
+    pub skinned_morph_weight_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     pub scene_color: Option<&'a Retained<ProtocolObject<dyn MTLTexture>>>,
     pub text_calls: &'a [TextDrawCall],
     // This frame's expanded line ribbons, consumed by the WorldLines
@@ -421,7 +424,14 @@ impl MtlContext {
                 // write ahead of the main pass's vertex read. Only when the fold
                 // is active (deformed buffer supplied).
                 if let Some(deformed) = params.deformed_skinned {
-                    self.encode_main_skin(cmd_buf, deformed, params.skinned_joint_bufs)?;
+                    self.encode_main_skin(
+                        cmd_buf,
+                        deformed,
+                        super::raytrace::MainSkinBuffers {
+                            joints: params.skinned_joint_bufs,
+                            morph_weights: params.skinned_morph_weight_bufs,
+                        },
+                    )?;
                 }
                 self.encode_cull(
                     cmd_buf,

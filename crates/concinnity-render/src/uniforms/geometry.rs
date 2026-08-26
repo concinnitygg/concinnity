@@ -85,3 +85,22 @@ pub struct GpuParticle {
     /// Total lifetime in seconds.
     pub lifetime: f32,
 }
+
+/// Per-dispatch parameters for the `rt_skin` compute kernel, which deforms one
+/// skinned object's bind-pose vertices into the shared deformed buffer the RT
+/// acceleration structure traces. Matches `SkinParams` in `rt_skin.slang`.
+///
+/// Metal writes it to buffer(3), Vulkan pushes it, DirectX takes it as root
+/// constants at b0.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
+pub struct SkinParams {
+    /// First vertex of this object's region in the shared vertex buffer.
+    pub vertex_base: u32,
+    /// Vertices this dispatch deforms.
+    pub vertex_count: u32,
+    /// Palette size; joint indices are clamped below it.
+    pub joint_count: u32,
+    /// Morph targets in the delta buffer; zero when the object has none.
+    pub target_count: u32,
+}

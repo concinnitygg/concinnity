@@ -62,6 +62,7 @@ const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
 const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
 const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
 const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
+const RT_SKIN_SLANG: &str = include_str!("../shaders/rt_skin.slang");
 const GBUFFER_PREPASS_SLANG: &str = include_str!("../shaders/gbuffer_prepass.slang");
 const SHADOW_SLANG: &str = include_str!("../shaders/shadow.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
@@ -293,6 +294,17 @@ pub(super) static AUTO_EXPOSURE_AVERAGE: SlangProgram = SlangProgram {
     profile: "cs_6_0",
     label: "auto_exposure_average.slang",
     defines: &[("AE_AVERAGE", "1")],
+};
+
+// The RT skinning kernel takes the same shader model as the RT reflection
+// resolve it feeds; its own body needs no SM 6.5 feature.
+pub(super) static RT_SKIN: SlangProgram = SlangProgram {
+    file: "rt_skin.slang",
+    embedded: RT_SKIN_SLANG,
+    entry: "rt_skin",
+    profile: "cs_6_5",
+    label: "rt_skin.slang",
+    defines: &[],
 };
 
 pub(super) static PARTICLE_SIMULATE: SlangProgram = SlangProgram {
@@ -784,6 +796,7 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &LIGHT_CULL,
+    &RT_SKIN,
     &HIZ_INIT_SINGLE,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,

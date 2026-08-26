@@ -3,20 +3,22 @@
 //! Requires the `cook` feature, which is off by default: the importers this
 //! module needs are build-time weight a shipped application does not carry.
 //!
-//! The runtime plays compiled worlds, never authored declarations. This module
-//! owns the in-process compile step: validate and expand the declarations,
-//! compile each asset's payload, then either assemble the components into a
-//! [`World`] or write them to a blob file. Source-backed assets are cached
-//! under `.concinnity/cache/` (relative to the current directory), so a second
-//! run with unchanged sources skips the expensive decode.
+//! An application declares what it wants -- a texture from this file, a room of
+//! that size -- and the runtime plays only the finished result. This module is
+//! the step between: it checks the declarations, expands the ones that stand
+//! for several assets, prepares each asset's data, and then either assembles a
+//! [`World`] to run straight away or writes the result to a file for a later
+//! run to play. Assets read from disk are cached under `.concinnity/cache/`
+//! (relative to the current directory), so a second run with unchanged sources
+//! skips the expensive work.
 //!
 //! # The authoring vocabulary
 //!
 //! This module is also the other half of the asset vocabulary: the types a
 //! world declares and the cook consumes, which never reach a running world as
 //! components. Those are the build-only assets it expands (`Prefab`,
-//! `MainMenu`, `CharacterSchema`, ...) and the resources it compiles into the
-//! blob (`Texture`, `Mesh`, `Material`, `Font`, ...). The stored half is
+//! `MainMenu`, `CharacterSchema`, ...) and the resources it prepares
+//! (`Texture`, `Mesh`, `Material`, `Font`, ...). The stored half is
 //! [`components`](crate::components).
 //!
 //! Five assets are authored as something other than what they bake into, and
@@ -67,19 +69,21 @@
 //!     .reference("material", "stone");
 //! ```
 //!
-//! Most assets are plain runtime components, so an asset needing no compile
-//! step can equally be added straight to a [`World`] with
-//! [`add_component`](World::add_component). The cook is what a [`Room`] needs:
-//! its geometry is generated into the blob, and its texture names resolve to
-//! handles, neither of which exists before the compile.
+//! Most assets are plain runtime components, so one needing no preparation can
+//! equally be added straight to a [`World`] with
+//! [`add_component`](World::add_component). A [`Room`] is what this module is
+//! for: its geometry is generated here, and its texture names become the
+//! handles the runtime reads, neither of which exists beforehand.
 //!
 //! # Compiling ahead of time
 //!
-//! [`write_blob`](WorldBuilder::write_blob) compiles the same declarations to
-//! a blob file instead of a world, so the authoring cost is paid once by a
-//! build tool rather than on every launch. The shipped application plays that
-//! file with [`App::from_blob`](crate::App::from_blob) and needs neither this
-//! module nor the importers behind it.
+//! [`write_blob`](WorldBuilder::write_blob) takes the same declarations and
+//! writes them to a file instead of building a world. That file is a *blob*:
+//! the compiled form of a world, holding the components and the prepared asset
+//! data together. Producing one moves the preparation to a build tool, off
+//! every launch. The shipped application plays it with
+//! [`App::from_blob`](crate::App::from_blob) and needs neither this module nor
+//! the importers behind it.
 //!
 //! ```no_run
 //! # use concinnity::components::DirectionalLight;

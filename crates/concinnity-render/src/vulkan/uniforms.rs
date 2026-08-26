@@ -151,22 +151,6 @@ pub struct RaymarchVolumeUniforms {
     pub params: [f32; SDF_PARAMS_LEN],
 }
 
-/// The RT skinning compute push constant (rt_skin.comp `SkinParams`): four
-/// tightly-packed uints (16 bytes). `target_count` is the morph-target count in
-/// the delta buffer (0 = no morphing).
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct SkinParams {
-    /// First vertex of this slot's region in the shared vertex buffer.
-    pub vertex_base: u32,
-    /// Vertices in this slot's region.
-    pub vertex_count: u32,
-    /// Joints in the skeleton driving this slot.
-    pub joint_count: u32,
-    /// Morph targets on this slot's mesh.
-    pub target_count: u32,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,16 +220,5 @@ mod tests {
         assert_eq!(offset_of!(RaymarchVolumeUniforms, max_steps), 40);
         assert_eq!(offset_of!(RaymarchVolumeUniforms, receive_shadows), 44);
         assert_eq!(offset_of!(RaymarchVolumeUniforms, params), 48);
-    }
-
-    // GLSL `SkinParams` push-constant block in rt_skin.comp: four tightly packed
-    // uints (16 bytes).
-    #[test]
-    fn skin_params_layout_matches_glsl() {
-        assert_eq!(size_of::<SkinParams>(), 16);
-        assert_eq!(offset_of!(SkinParams, vertex_base), 0);
-        assert_eq!(offset_of!(SkinParams, vertex_count), 4);
-        assert_eq!(offset_of!(SkinParams, joint_count), 8);
-        assert_eq!(offset_of!(SkinParams, target_count), 12);
     }
 }

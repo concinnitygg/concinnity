@@ -145,6 +145,7 @@ pub(in crate::metal) struct BakeGpu {
     draw_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     tex_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     joint_bufs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    morph_weight_bufs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     deformed: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
 }
 
@@ -389,6 +390,7 @@ impl MtlContext {
             .build_bindless_texture_args(slot)?
             .ok_or("probe: no bindless texture args")?;
         let joint_bufs = self.build_joint_buffers(slot)?;
+        let morph_weight_bufs = self.build_morph_weight_buffers(slot)?;
         // The folded skinned tail draws compute-deformed vertices. The frame's
         // deformed ring is overwritten every frame, so an async capture needs its
         // OWN deformed buffer (Shared storage -- a Private one page-faults in this
@@ -433,6 +435,7 @@ impl MtlContext {
                 draw_args,
                 tex_args,
                 joint_bufs,
+                morph_weight_bufs,
                 deformed,
             },
             counts,
@@ -487,7 +490,14 @@ impl MtlContext {
         if face == 0
             && let Some(def) = gpu.deformed.as_ref()
         {
-            self.encode_main_skin(&cull_cb, def, &gpu.joint_bufs)?;
+            self.encode_main_skin(
+                &cull_cb,
+                def,
+                crate::metal::raytrace::MainSkinBuffers {
+                    joints: &gpu.joint_bufs,
+                    morph_weights: &gpu.morph_weight_bufs,
+                },
+            )?;
         }
         self.encode_cull(
             &cull_cb,

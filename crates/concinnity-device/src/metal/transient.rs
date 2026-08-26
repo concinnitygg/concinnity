@@ -149,20 +149,34 @@ impl TransientRing {
     }
 }
 
-// Ring of per-skinned-object joint-palette buffers for one pose stream (the
-// current pose, or the previous pose the velocity pre-pass reprojects from).
-// Each ring slot holds one buffer per skinned object; `write_all` fills this
+// Ring of per-skinned-object upload buffers for one pose stream (the current
+// pose, or the previous pose the velocity pre-pass reprojects from). Each ring
+// slot holds one buffer per skinned object per column; a `write_*` fills this
 // frame's slot and returns cloned handles in object order, matching the shape
-// the per-pass encoders bind so they need no change. Current and previous
-// poses use separate `JointRing`s because the velocity pass reads both in the
-// same frame and they must not alias the same slot.
-// One skinned object's palette buffer for a given ring slot, absent until the
-// slot is first written.
-type PaletteSlot = Option<Retained<ProtocolObject<dyn MTLBuffer>>>;
+// the per-pass encoders bind so they need no change. Current and previous poses
+// use separate `JointRing`s because the velocity pass reads both in the same
+// frame and they must not alias the same slot.
+//
+// The morph weights ride the same slot table as the joint palettes rather than a
+// ring of their own: both are per-skinned-object, per-frame, and written from
+// the same place, so one growth policy and one slot walk cover them. They stay
+// separate buffers because the kernel binds them at separate indices. Only the
+// current-pose ring writes the weights column; the previous-pose ring leaves it
+// unallocated.
+//
+// One skinned object's buffers for a given ring slot, each absent until that
+// column is first written.
+type ObjectBuffer = Option<Retained<ProtocolObject<dyn MTLBuffer>>>;
+
+#[derive(Default)]
+struct SkinSlot {
+    palette: ObjectBuffer,
+    weights: ObjectBuffer,
+}
 
 pub(super) struct JointRing {
-    // slots[ring_slot][object] -> palette buffer
-    slots: Vec<Vec<PaletteSlot>>,
+    // slots[ring_slot][object] -> that object's buffers
+    slots: Vec<Vec<SkinSlot>>,
 }
 
 impl JointRing {
@@ -172,8 +186,8 @@ impl JointRing {
         }
     }
 
-    // Ensure this frame's ring slot has a buffer per `palettes` entry (each
-    // grown to fit its matrices), copy each palette in, and return cloned
+    // Ensure this frame's ring slot has a palette buffer per `palettes` entry
+    // (each grown to fit its matrices), copy each palette in, and return cloned
     // handles in order. Empty when `palettes` is empty (no skinned meshes).
     pub(super) fn write_all(
         &mut self,
@@ -181,27 +195,59 @@ impl JointRing {
         slot: usize,
         palettes: &[Vec<[[f32; 4]; 4]>],
     ) -> Result<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>, String> {
-        let idx = slot % self.slots.len();
-        let bufs = &mut self.slots[idx];
-        if bufs.len() < palettes.len() {
-            bufs.resize_with(palettes.len(), || None);
-        }
-        let mut out = Vec::with_capacity(palettes.len());
-        for (i, mats) in palettes.iter().enumerate() {
-            let bytes = bytes_of_slice(mats.as_slice());
-            let have = bufs[i].as_ref().map_or(0, |buf| buf.length());
-            if let Some(cap) = grow_to(have, bytes.len()) {
-                let buf = device
-                    .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
-                    .ok_or("failed to allocate joint ring buffer")?;
-                bufs[i] = Some(buf);
-            }
-            let buf = bufs[i].as_ref().expect("joint ring slot was just ensured");
-            write_buffer_region(buf, 0, bytes)?;
-            out.push(buf.clone());
-        }
-        Ok(out)
+        self.objects(slot, palettes.len())
+            .iter_mut()
+            .zip(palettes)
+            .map(|(o, mats)| fill(device, &mut o.palette, bytes_of_slice(mats), "joint"))
+            .collect()
     }
+
+    // The same, for the per-object morph weights the skin kernel indexes by
+    // morph target. An object without targets still gets a buffer (the ring's
+    // size floor), because the kernel binds the slot unconditionally and reads
+    // it only when that object's `target_count` is non-zero.
+    pub(super) fn write_weights(
+        &mut self,
+        device: &ProtocolObject<dyn MTLDevice>,
+        slot: usize,
+        weights: &[Vec<f32>],
+    ) -> Result<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>, String> {
+        self.objects(slot, weights.len())
+            .iter_mut()
+            .zip(weights)
+            .map(|(o, w)| fill(device, &mut o.weights, bytes_of_slice(w), "morph weight"))
+            .collect()
+    }
+
+    // This frame's slot, grown to `count` objects.
+    fn objects(&mut self, slot: usize, count: usize) -> &mut [SkinSlot] {
+        let idx = slot % self.slots.len();
+        let slots = &mut self.slots[idx];
+        if slots.len() < count {
+            slots.resize_with(count, SkinSlot::default);
+        }
+        &mut slots[..count]
+    }
+}
+
+// Grow one ring buffer to hold `bytes`, copy them in, and return a cloned
+// handle. `what` names the column for the allocation-failure message.
+fn fill(
+    device: &ProtocolObject<dyn MTLDevice>,
+    cell: &mut ObjectBuffer,
+    bytes: &[u8],
+    what: &str,
+) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+    let have = cell.as_ref().map_or(0, |buf| buf.length());
+    if let Some(cap) = grow_to(have, bytes.len()) {
+        let buf = device
+            .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
+            .ok_or_else(|| format!("failed to allocate {what} ring buffer"))?;
+        *cell = Some(buf);
+    }
+    let buf = cell.as_ref().expect("ring slot was just ensured");
+    write_buffer_region(buf, 0, bytes)?;
+    Ok(buf.clone())
 }
 
 // Ring of instance-matrix buffers for GPU-instanced clusters. Unlike the

@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn vertex_layout_matches_msl() {
         // `Vertex` is read through a pointer by the RT skinning kernel
-        // (`VtxOut` in rt_skin.metal: five packed_float* fields, 56-byte
+        // (the deformed-vertex layout rt_skin.slang writes, 56-byte
         // stride) and as the static RT vertex format, so the field offsets
         // must match exactly. The main/shadow passes consume it through a
         // vertex descriptor declaring the same 0/12/24/36/48 attribute offsets.
@@ -704,7 +704,7 @@ mod tests {
     #[test]
     fn skinned_vertex_layout_matches_msl() {
         // `SkinnedVertex` is read through a pointer by the RT skinning kernel
-        // (`SkinnedVtxIn` in rt_skin.metal), whose packed_float* + ushort[4] +
+        // (the bind-pose layout rt_skin.slang reads), whose float3s + u16[4] +
         // packed_float4 fields must line up byte-for-byte with this 80-byte
         // struct. The main/shadow skinned passes consume it through a vertex
         // descriptor declaring the same attribute offsets.

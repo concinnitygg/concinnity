@@ -12,8 +12,8 @@
 //
 // What stays per backend is what is genuinely per backend: a block only one
 // host binds (Vulkan's combined `GbModelPush`, Metal's `ModelUniforms`), or one
-// whose shader is still hand-written per backend (the cull kernel, the skinning
-// and morph kernels, the raymarch templates, Metal's water).
+// whose shader is still hand-written per backend (the cull kernel, the legacy
+// per-draw morph kernel, the raymarch templates, Metal's water).
 //
 // Binding slots are not part of these declarations: the same block lands at a
 // different index on each backend, so where it binds belongs to the backend
@@ -26,7 +26,7 @@ pub mod probe;
 pub mod transparent;
 pub mod view;
 
-pub use geometry::{DecalParams, DecalView, GpuParticle, LineView, ParticleView};
+pub use geometry::{DecalParams, DecalView, GpuParticle, LineView, ParticleView, SkinParams};
 pub use post::{AutoExposureParams, HizParams, TaaParams};
 pub use probe::{MAX_PROBES, ProbeSet, ProbeUniforms};
 pub use transparent::{

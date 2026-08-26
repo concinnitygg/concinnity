@@ -2201,7 +2201,7 @@ impl DxContext {
         // and the resources being `Some`. The init build is static-only; skinned
         // meshes are seeded into the BVH on the first dynamic frame
         // (`rebuild_skinned`), so the compute-skinning pipeline is built here and
-        // attached. A skin-pipeline build failure (DXC absent) is non-fatal: the
+        // attached. A skin-pipeline build failure is non-fatal: the
         // RT pass still runs for static geometry, just without skinned hits.
         let rt_accel = if rt_reflections.is_some() {
             match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {

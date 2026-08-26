@@ -68,10 +68,8 @@ use crate::gfx::rt_reflections::RtReflectionSettings;
 // The dynamic-update mode ladder lives in concinnity-render; re-exported so the
 // `super::raytrace::RtDynamicMode` path (init + draw) keeps resolving.
 pub(crate) use crate::gfx::rt_geom::RtDynamicMode;
-// GPU-free repr(C) push struct; lives in concinnity-render so its layout test
-// counts toward coverage. Re-exported so this file's existing `SkinParams` path
-// is unchanged.
-use crate::metal::uniforms::SkinParams;
+// Shared with the Vulkan and DirectX hosts: one `.slang` declares it now.
+use concinnity_render::uniforms::SkinParams;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + colour + uv = 14 floats). The RT kernel reads positions at this stride; the
@@ -770,13 +768,14 @@ fn encode_skin_object(
         joint_count: joint_count as u32,
         target_count: 0,
     };
-    let zero_weight = [0.0f32];
     cenc.set_buffer(bufs.vertex, 0, 0);
     cenc.set_buffer(bufs.deformed, 0, 1);
     cenc.set_buffer(bufs.palette, 0, 2);
     cenc.set_value(&params, 3);
+    // Both morph slots take the vertex buffer as a dummy binding; the kernel
+    // leaves them unread because `target_count` is zero.
     cenc.set_buffer(bufs.vertex, 0, 4);
-    cenc.set_value(&zero_weight, 5);
+    cenc.set_buffer(bufs.vertex, 0, 5);
     cenc.dispatchThreads_threadsPerThreadgroup(
         MTLSize {
             width: obj.vertex_count.max(1),
@@ -791,6 +790,14 @@ fn encode_skin_object(
     );
 }
 
+// The per-object buffers the per-frame skin fold binds, both built from this
+// frame's ring slot and live for the whole frame.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct MainSkinBuffers<'a> {
+    pub joints: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+    pub morph_weights: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+}
+
 impl crate::metal::context::MtlContext {
     // Per-frame pre-skin for the GPU-driven skinned fold: deform every
     // skinned object's bind-pose vertices into `deformed` (this frame's ring
@@ -801,16 +808,20 @@ impl crate::metal::context::MtlContext {
     // which commits before the Main pass: Metal's automatic hazard tracking then
     // orders this compute write before the main pass's vertex read of `deformed`
     // (the same cross-command-buffer mechanism the static cull → ICB relies on).
-    // Unlike the RT seed it binds the pre-built joint buffers instead of
-    // uploading transient palettes -- the parallel per-pass encoder cannot keep a
-    // transient buffer alive past the worker, while these joint buffers live for
+    // Unlike the RT seed it binds the pre-built joint and morph-weight buffers
+    // instead of uploading transient palettes -- the parallel per-pass encoder
+    // cannot keep a transient buffer alive past the worker, while these live for
     // the whole frame. A no-op when the skin pipeline / skinned VB are unset.
     pub(in crate::metal) fn encode_main_skin(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         deformed: &ProtocolObject<dyn MTLBuffer>,
-        joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
+        bufs: MainSkinBuffers<'_>,
     ) -> Result<(), String> {
+        let MainSkinBuffers {
+            joints: joint_bufs,
+            morph_weights: weight_bufs,
+        } = bufs;
         let (Some(skin_pipeline), Some(svb)) = (
             self.skinned.skin_pipeline.as_ref(),
             self.skinned.vertex_buffer.as_ref(),
@@ -838,36 +849,27 @@ impl crate::metal::context::MtlContext {
                 .get(i)
                 .map(|m| m.len().max(1))
                 .unwrap_or(1);
+            // Morphing needs this object's deltas AND this frame's weights.
+            // Both slots are bound unconditionally, so a missing one takes the
+            // vertex buffer as a dummy and `target_count` goes to zero, which
+            // leaves the kernel reading neither.
             let morph = self.skinned.morphs.get(i).and_then(|m| m.as_ref());
+            let weights = weight_bufs.get(i);
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: joint_count as u32,
-                target_count: morph.map_or(0, |m| m.target_count),
-            };
-            // Weights are tiny (one f32 per target); set_bytes avoids a ring.
-            // With no morph targets the slots get a dummy binding the kernel
-            // never reads (`target_count == 0`).
-            let zero_weight = [0.0f32];
-            let weights: &[f32] = match self.skinned.morph_weights.get(i) {
-                Some(w) if !w.is_empty() => w.as_slice(),
-                _ => &zero_weight,
+                target_count: match (morph, weights) {
+                    (Some(m), Some(_)) => m.target_count,
+                    _ => 0,
+                },
             };
             cenc.set_buffer(svb.as_ref(), 0, 0);
             cenc.set_buffer(deformed, 0, 1);
             cenc.set_buffer(joint_buf.as_ref(), 0, 2);
             cenc.set_value(&params, 3);
-            let morph_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
-            cenc.set_buffer(morph_buf, 0, 4);
-            // SAFETY: the whole `weights` slice uploads from its first element's
-            // address, so the pointer and length describe the same live slice.
-            unsafe {
-                cenc.setBytes_length_atIndex(
-                    NonNull::from(&weights[0]).cast(),
-                    std::mem::size_of_val(weights),
-                    5,
-                );
-            }
+            cenc.set_buffer(morph.map_or(svb.as_ref(), |m| m.buffer.as_ref()), 0, 4);
+            cenc.set_buffer(weights.map_or(svb.as_ref(), |b| b.as_ref()), 0, 5);
             cenc.dispatchThreads_threadsPerThreadgroup(
                 MTLSize {
                     width: obj.vertex_count.max(1),
@@ -1982,19 +1984,14 @@ fn models_dirty(
 }
 
 // Build the compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.metal`). Compiled only when RT reflections are on and the GPU
+// (`rt_skin.slang`). Compiled only when RT reflections are on and the GPU
 // supports ray tracing, alongside the reflection pipelines.
-//
-// Still hand-written per backend: see "rt_skin did not port" in
-// private/docs/shader-single-source.md. This host binds the morph weights as
-// read-only inline bytes, and slangc has no way to spell the `constant`
-// address space for a variable-length buffer.
 pub(crate) fn build_rt_skin_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>, String> {
     use objc2_metal::{MTLDevice as _, MTLLibrary as _};
-    let library = crate::metal::pipeline::shader_library(device, hot_reload, "rt_skin.metal")?;
+    let library = crate::metal::slang_shaders::RT_SKIN.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&crate::metal::pipeline::ns_str("rt_skin"))
         .ok_or("rt_skin kernel not found")?;

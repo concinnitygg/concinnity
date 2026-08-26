@@ -47,7 +47,6 @@ use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
 // `super::raytrace::RtDynamicMode` path (init + context) keeps resolving.
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
-use super::builtins;
 use super::com;
 use super::context::FRAMES;
 use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
@@ -58,10 +57,9 @@ use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
 
-// `SkinParams` (the `rt_skin` compute root-constant block) is a GPU-free layout
-// struct that lives in concinnity-render; re-export it so
-// `crate::directx::raytrace::SkinParams` is unchanged.
-pub(in crate::directx) use crate::directx::uniforms::SkinParams;
+// Shared with the Metal and Vulkan hosts: one `.slang` declares it now.
+// Re-exported so `crate::directx::raytrace::SkinParams` keeps resolving.
+pub(in crate::directx) use concinnity_render::uniforms::SkinParams;
 
 // Whether the active GPU supports the DXR feature tier inline `RayQuery` needs.
 // Tier 1.1 is required because the reflection pass traces from a pixel shader
@@ -326,7 +324,7 @@ fn tlas_inputs(
 }
 
 // The compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.hlsl`): a root SRV for the bind-pose skinned vertices (t0), a root
+// (`rt_skin.slang`): a root SRV for the bind-pose skinned vertices (t0), a root
 // SRV for the per-object joint palette (t1), a root UAV for the deformed output
 // (u0), and a 4-DWORD `SkinParams` root-constant block (b0). Built alongside the
 // RT PSO and held on `RtAccelData`; mirrors Metal's `skin_pipeline`.
@@ -336,7 +334,7 @@ pub(super) struct SkinPipeline {
 }
 
 // DWORD count of the `SkinParams` root-constant block (vertex_base, vertex_count,
-// joint_count, _pad).
+// joint_count, target_count).
 const SKIN_PARAMS_DWORDS: u32 = 4;
 
 // Root signature for the `rt_skin` compute kernel: `SkinParams` root constants at
@@ -422,13 +420,13 @@ fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
     super::pipeline::serialize_desc_and_create(device, &desc, "rt skin root sig")
 }
 
-// Build the `rt_skin` compute pipeline (root signature + PSO). Compiled via DXC
-// to `cs_6_5` (the same SM the RT reflection shader needs). Returns `Err` when
-// DXC is unavailable or the shader fails to compile; the caller then leaves the
-// skin pipeline `None` and skinned geometry is absent from the BVH (the RT pass
-// still runs for static geometry).
+// Build the `rt_skin` compute pipeline (root signature + PSO). slangc emits it
+// as `cs_6_5` DXIL, the same SM the RT reflection shader needs. Returns `Err`
+// when the kernel fails to compile; the caller then leaves the skin pipeline
+// `None` and skinned geometry is absent from the BVH (the RT pass still runs for
+// static geometry).
 fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPipeline, String> {
-    let cs = builtins::RT_SKIN.compile(hot_reload)?;
+    let cs = super::slang_builtins::RT_SKIN.compile(hot_reload)?;
     let root_sig = create_skin_root_signature(device)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(&root_sig),
@@ -698,8 +696,8 @@ pub(super) struct RtAccelData {
     skinned_ring: Vec<SkinnedFrameRing>,
 
     // Skinned geometry.
-    // The compute-skinning pipeline (`rt_skin`). `Some` only when the DXC
-    // compile succeeded; without it skinned geometry is absent from the BVH.
+    // The compute-skinning pipeline (`rt_skin`). `Some` only when the kernel
+    // compiled; without it skinned geometry is absent from the BVH.
     skin: Option<SkinPipeline>,
     // The fresh-per-rebuild deformed (posed) skinned vertex buffer the skin pass
     // writes and the skinned BLAS + reflection trace read. A 1-element dummy when
@@ -778,8 +776,8 @@ impl RtAccelData {
 
 // Build the `rt_skin` compute pipeline for the RT skinning pass. A thin wrapper
 // over `build_skin_pipeline` so the caller (init / RT-resources setup) does not
-// reach into the private pipeline type. Returns `Err` when DXC is unavailable or
-// the kernel fails to compile (the caller then skips skinned RT geometry).
+// reach into the private pipeline type. Returns `Err` when the kernel fails to
+// compile (the caller then skips skinned RT geometry).
 pub(super) fn build_rt_skin_pipeline(
     device: &ID3D12Device,
     hot_reload: bool,
@@ -1179,7 +1177,7 @@ impl RtAccelData {
 
         // Skinned objects visible this frame, as indices into the skinned draw
         // list (which is also the joint-palette list's order). The skin pipeline
-        // must be present (DXC compiled); with none, skinned geometry stays absent
+        // must be present (the kernel compiled); with none, skinned geometry stays absent
         // (the static path runs).
         scratch.skinned.clear();
         if let (Some(_), Some(s)) = (&self.skin, &skinned) {
