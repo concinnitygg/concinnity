@@ -16,6 +16,8 @@
 //! Consumed by the DirectX + Vulkan backends. The Metal backend keeps its own
 //! equivalent copy (metal/rt_ring.rs), the same split `rt_topology` already has.
 
+use alloc::vec::Vec;
+
 /// Full rebuilds per ring slot: after this many consecutive refits the next
 /// skinned update rebuilds that slot's BLAS from scratch. Each slot counts
 /// independently and they are touched on different frames, so the rebuilds

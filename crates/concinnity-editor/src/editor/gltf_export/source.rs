@@ -12,7 +12,7 @@ use crate::components::CharacterShape;
 use crate::gfx::mesh_payload::{SkinnedPayload, deserialise_skinned_with_lods};
 use crate::world::WorldJsonlAsset;
 use concinnity_core::ecs::ResourceKind;
-use concinnity_cpu::geometry::payload_joints_to_defs;
+use concinnity_core::geometry::payload_joints_to_defs;
 
 // Compile `content` (a world.jsonl string) and export the named skinned mesh
 // as GLB bytes. With `bake`, the current CharacterShape targeting the mesh is

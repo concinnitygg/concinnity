@@ -5,13 +5,12 @@
 //! resident at once, this decides *which* items to load and *which* to evict.
 //! It performs no I/O, spawns no threads, and touches no backend.
 //!
-//! This module is deliberately written against `core` + `alloc` constructs
-//! only (`Vec`, primitives, slices) so it can move into a future `no_std`
-//! client runtime unchanged. The `std`-side half -- the background fetch
-//! thread, the channels, and the GPU upload -- lives in concinnity-engine's
-//! `app::texture_stream`. Keep that boundary: no `std::`-only types
-//! (threads, files, `HashMap`, `Instant`, ...) belong in this file.
+//! The `std`-side half -- the background fetch thread, the channels, and the
+//! GPU upload -- lives in concinnity-engine's `app::texture_stream`. Keep that
+//! boundary: no thread, file, or clock belongs in this file.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use concinnity_memory::{Arena, MemTag};
 
 /// Residency state of a single streamable item.

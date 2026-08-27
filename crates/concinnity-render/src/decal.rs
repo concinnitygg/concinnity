@@ -6,6 +6,8 @@
 //! lies inside the box.
 
 use crate::components::Decal;
+use alloc::vec::Vec;
+use concinnity_core::math::{cos, sin, sqrt};
 
 /// Per-decal data the renderer consumes each frame. Built once at
 /// `GraphicsSystem` init from the world's `Decal` components.
@@ -51,9 +53,9 @@ pub fn decal_model_matrix(
     let [pitch_deg, yaw_deg, roll_deg] = rotation_deg;
     let [sx, sy, sz] = size;
 
-    let (sp, cp) = (pitch_deg.to_radians().sin(), pitch_deg.to_radians().cos());
-    let (sy_, cy) = (yaw_deg.to_radians().sin(), yaw_deg.to_radians().cos());
-    let (sr, cr) = (roll_deg.to_radians().sin(), roll_deg.to_radians().cos());
+    let (sp, cp) = (sin(pitch_deg.to_radians()), cos(pitch_deg.to_radians()));
+    let (sy_, cy) = (sin(yaw_deg.to_radians()), cos(yaw_deg.to_radians()));
+    let (sr, cr) = (sin(roll_deg.to_radians()), cos(roll_deg.to_radians()));
 
     // R = Ry * Rx * Rz, then scaled component-wise and translated.
     [
@@ -87,9 +89,9 @@ pub fn invert_decal_model(model: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
     let col0 = [model[0][0], model[0][1], model[0][2]];
     let col1 = [model[1][0], model[1][1], model[1][2]];
     let col2 = [model[2][0], model[2][1], model[2][2]];
-    let s0 = (col0[0] * col0[0] + col0[1] * col0[1] + col0[2] * col0[2]).sqrt();
-    let s1 = (col1[0] * col1[0] + col1[1] * col1[1] + col1[2] * col1[2]).sqrt();
-    let s2 = (col2[0] * col2[0] + col2[1] * col2[1] + col2[2] * col2[2]).sqrt();
+    let s0 = sqrt(col0[0] * col0[0] + col0[1] * col0[1] + col0[2] * col0[2]);
+    let s1 = sqrt(col1[0] * col1[0] + col1[1] * col1[1] + col1[2] * col1[2]);
+    let s2 = sqrt(col2[0] * col2[0] + col2[1] * col2[1] + col2[2] * col2[2]);
     if !(s0.is_finite() && s1.is_finite() && s2.is_finite()) || s0 == 0.0 || s1 == 0.0 || s2 == 0.0
     {
         return None;
@@ -174,18 +176,7 @@ pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<Decal
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn mat_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-        let mut out = [[0.0f32; 4]; 4];
-        for col in 0..4 {
-            for row in 0..4 {
-                for k in 0..4 {
-                    out[col][row] += a[k][row] * b[col][k];
-                }
-            }
-        }
-        out
-    }
+    use concinnity_core::gfx::transform::{IDENTITY, mat4_mul};
 
     fn near(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> bool {
         a.iter().zip(b.iter()).all(|(ac, bc)| {
@@ -194,13 +185,6 @@ mod tests {
                 .all(|(av, bv)| (av - bv).abs() < 1e-4)
         })
     }
-
-    const IDENTITY: [[f32; 4]; 4] = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
 
     #[test]
     fn unit_decal_has_identity_model() {
@@ -225,8 +209,8 @@ mod tests {
     fn inverse_round_trips_through_model() {
         let m = decal_model_matrix([1.0, -2.0, 0.5], [30.0, -15.0, 45.0], [0.4, 1.2, 0.7]);
         let inv = invert_decal_model(m).expect("non-degenerate model is invertible");
-        assert!(near(mat_mul(m, inv), IDENTITY));
-        assert!(near(mat_mul(inv, m), IDENTITY));
+        assert!(near(mat4_mul(m, inv), IDENTITY));
+        assert!(near(mat4_mul(inv, m), IDENTITY));
     }
 
     #[test]
@@ -331,7 +315,7 @@ mod tests {
         let (mn, mx) = recs[0].aabb();
         let span_x = mx[0] - mn[0];
         let span_z = mx[2] - mn[2];
-        let expected = 2.0 * std::f32::consts::SQRT_2;
+        let expected = 2.0 * core::f32::consts::SQRT_2;
         assert!((span_x - expected).abs() < 1e-4);
         assert!((span_z - expected).abs() < 1e-4);
         // Y axis is unaffected by yaw; still 1 unit tall.

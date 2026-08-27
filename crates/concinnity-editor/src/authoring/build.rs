@@ -102,7 +102,8 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     )?;
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
-    let mut world = World::from_blob(crate::blob::BlobData::new(payload_sections));
+    let mut world =
+        concinnity_engine::blob::world_from(crate::blob::BlobData::new(payload_sections));
     // Index every named component's entity as it is minted, matching the
     // shipped runtime's `load_blob`, so name references resolve for any type.
     let mut by_name = std::collections::BTreeMap::new();
@@ -418,7 +419,7 @@ mod tests {
     struct StateDirGuard;
     impl Drop for StateDirGuard {
         fn drop(&mut self) {
-            concinnity_store::paths::clear_state_dir();
+            concinnity_host::store::paths::clear_state_dir();
         }
     }
 
@@ -436,7 +437,7 @@ mod tests {
         let _cwd = CwdGuard(prev);
         // The lock file is written relative to the cwd; the blobs go wherever
         // the state root points, which nothing installs by default.
-        concinnity_store::paths::set_state_dir(dir.path());
+        concinnity_host::store::paths::set_state_dir(dir.path());
         let _state = StateDirGuard;
 
         std::fs::write(
@@ -449,7 +450,7 @@ mod tests {
 
         // The primary blob (data/0) and the provenance lock are both written.
         assert!(
-            concinnity_store::paths::data_dir()
+            concinnity_host::store::paths::data_dir()
                 .expect("the test installs a state dir")
                 .join("0")
                 .exists(),

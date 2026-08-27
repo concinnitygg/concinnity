@@ -683,7 +683,7 @@ pub(crate) fn apply_camera_set(
     camera.view_matrix = crate::gfx::camera::view_matrix(camera.position, camera.yaw, camera.pitch);
 
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::Camera3DSystem(c) = system {
+        if let Some(c) = system.downcast_mut::<crate::gfx::camera_controller::Camera3DSystem>() {
             c.reset_velocity();
         }
     }
@@ -707,7 +707,7 @@ pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut crate::e
     camera.view_matrix = crate::gfx::camera::view_matrix(pos, yaw, pitch);
 
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::Camera3DSystem(c) = system {
+        if let Some(c) = system.downcast_mut::<crate::gfx::camera_controller::Camera3DSystem>() {
             c.reset_velocity();
         }
     }
@@ -878,7 +878,7 @@ mod tests {
             interact_requested: false,
             controller: Some(CameraController::default()),
         });
-        world.start().unwrap();
+        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
 
         let args = CameraSetArgs {
             position: [10.0, 20.0, 30.0],
@@ -917,7 +917,7 @@ mod tests {
             interact_requested: false,
             controller: Some(CameraController::default()),
         });
-        world.start().unwrap();
+        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
 
         let args = CameraSetArgs {
             position: [1.0, 1.0, 1.0],
@@ -1092,7 +1092,7 @@ mod tests {
             interact_requested: false,
             controller: Some(CameraController::default()),
         });
-        world.start().unwrap();
+        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
 
         let motion = CameraMotion {
             forward: 1.0,
@@ -1174,7 +1174,7 @@ mod tests {
         fn update_texture_slot(
             &mut self,
             _slot: usize,
-            _image: &concinnity_cpu::build::texture::TextureImage,
+            _image: &concinnity_core::build::texture::TextureImage,
         ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
@@ -1539,7 +1539,7 @@ mod tests {
 
         let mut world = World::new();
         world.add_component(controlled_camera());
-        world.start().unwrap();
+        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_camera_set(

@@ -216,12 +216,13 @@ fn list_systems(content: &str, json_path: &str) -> std::io::Result<()> {
 // capturing stdout. The reason column is the `present_when` from the static
 // schedule table (`ecs::SYSTEMS`), keyed by the manifest's system name.
 fn manifest_lines(world: &concinnity_engine::ecs::World) -> Vec<String> {
-    let manifest = world.system_manifest();
+    let manifest = world.system_manifest(concinnity_engine::ecs::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
     manifest
         .iter()
         .map(|name| {
             let reason = concinnity_engine::ecs::SYSTEMS
+                .entries
                 .iter()
                 .find(|e| e.name == *name)
                 .map(|e| e.present_when)

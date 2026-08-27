@@ -11,10 +11,11 @@
 // serialize same-queue systems in table order and keep event order
 // bit-identical to serial.
 //
-// The validator half installs the core `access_check` hook: while a stepping
-// system's declared access is active (set by `World::step`), every context
-// accessor's touch is asserted against it. Exclusive systems pass everything;
-// structural change and blob access require exclusivity. Debug builds only.
+// The validator half installs the core `access_check` hooks: `World::step`
+// announces the stepping system through one, and every context accessor's touch
+// is asserted against that system's declared access through the other.
+// Exclusive systems pass everything; structural change and blob access require
+// exclusivity. Debug builds only.
 
 use std::any::TypeId;
 use std::sync::OnceLock;
@@ -157,13 +158,16 @@ mod validate {
     // Mark the given system's declared access active on this thread for the
     // duration of its step. `None` clears it (init, decompose, and editor
     // drives run unvalidated).
-    pub(crate) fn set_active(active: Option<(Access, &'static str)>) {
+    fn set_active(active: Option<(Access, &'static str)>) {
         ACTIVE.with(|a| a.set(active));
     }
 
     pub(crate) fn install_hook() {
         static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| access_check::install(check));
+        ONCE.call_once(|| {
+            access_check::install(check);
+            access_check::install_active(set_active);
+        });
     }
 
     fn check(touch: &Touch) {
@@ -213,7 +217,7 @@ mod validate {
 }
 
 #[cfg(debug_assertions)]
-pub(crate) use validate::{install_hook, set_active};
+pub(crate) use validate::install_hook;
 
 #[cfg(test)]
 mod tests {
@@ -255,6 +259,7 @@ mod tests {
         use crate::ecs::{Access, ComponentStorage, FrameContext, PipelineContext, Resources};
         use crate::gfx::profile::FrameProfile;
         use concinnity_core::ecs::Arena;
+        use concinnity_core::ecs::access_check::set_active;
 
         struct Parts {
             components: ComponentStorage,

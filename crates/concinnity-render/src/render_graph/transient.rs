@@ -35,6 +35,11 @@ use super::alias::plan_aliasing_for;
 use super::compile::CompiledGraph;
 use super::frame::FrameGraphInputs;
 use super::types::{ClearValue, PixelFormat, TextureUsage};
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// One pooled transient, resolved against a concrete drawable extent. The
 /// backend translates this into its native texture descriptor; nothing here is
@@ -279,8 +284,8 @@ pub(crate) struct SlotConflict {
     pub b: &'static str,
 }
 
-impl std::fmt::Display for SlotConflict {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SlotConflict {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "slot {}: {} and {} are both live",

@@ -10,6 +10,7 @@
 //   composite.rs           ACES tonemap + composite + text overlay
 //   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
@@ -21,7 +22,8 @@ use crate::gfx::render_types::{
 use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
-use super::math::{mat4_inverse, mat4_mul, perspective};
+use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::transform::mat4_mul;
 
 mod composite;
 mod main;
@@ -308,7 +310,7 @@ impl DxContext {
             crate::gfx::render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
 
         // Compute the camera VPs the main + velocity passes consume.
-        let proj = perspective(fov_y_radians, aspect, near, far);
+        let proj = perspective_rh(fov_y_radians, aspect, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
         let cur_vp = mat4_mul(proj, self.view.matrix);

@@ -957,22 +957,23 @@ impl VkContext {
 
         // Assemble this frame's skinned-geometry inputs while `self` is still
         // fully borrowable: the shared skinned VB/IB handles. `None` when there is
-        // no skinned geometry resident (the static path runs). Read up-front so
+        // no skinned geometry resident or the launch excluded it (the static path
+        // runs). Read up-front so
         // they do not overlap the `rt_accel` mutable borrow below; the per-object
         // joint palettes are borrowed straight out of this frame's slot instead of
         // being collected into a per-frame list.
-        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> =
-            if !self.skinned.draw_objects.is_empty()
-                && !self.skinned.vertex_buffer.is_null()
-                && !self.skinned.index_buffer.is_null()
-            {
-                Some((
-                    self.skinned.vertex_buffer.buffer(),
-                    self.skinned.index_buffer.buffer(),
-                ))
-            } else {
-                None
-            };
+        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt_skinned_geometry
+            && !self.skinned.draw_objects.is_empty()
+            && !self.skinned.vertex_buffer.is_null()
+            && !self.skinned.index_buffer.is_null()
+        {
+            Some((
+                self.skinned.vertex_buffer.buffer(),
+                self.skinned.index_buffer.buffer(),
+            ))
+        } else {
+            None
+        };
 
         // Read before `rt_accel` is taken: `seethrough_meshes_enabled` borrows
         // `self.transparent`, which the block below holds `&self` across.

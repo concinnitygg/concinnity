@@ -42,7 +42,7 @@ mod rig;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::gfx::skinning::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use crate::gfx::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 use rig::{SkinnedPart, rig_entries};
 
 // u16 index ceiling: a primitive with more vertices than this fans into chunks.

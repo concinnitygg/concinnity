@@ -17,6 +17,7 @@ use crate::components::{
     AudioEmitter, Behavior, HitRegion, KeyBinding, PhysicsJoint, Prop, PropBody, Screen,
     ScrollPanel, TriggerVolume,
 };
+use crate::ecs::SYSTEMS;
 use crate::ecs::World;
 use concinnity_core::ecs::ComponentTag;
 
@@ -65,7 +66,7 @@ fn the_registry_agrees_with_what_start_drains() {
         );
     }
 
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     let census = world.component_census();
     for tag in covered {
@@ -95,7 +96,7 @@ fn a_drained_prop_leaves_the_tag_it_promises() {
         scale: [1.0; 3],
         ..Default::default()
     });
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     let surviving = ComponentTag::Prop
         .surviving_tag()

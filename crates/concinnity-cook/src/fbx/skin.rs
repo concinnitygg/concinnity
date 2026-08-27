@@ -19,7 +19,7 @@ use super::{
     transform_point,
 };
 use crate::components::{SkeletonJoint, SkinnedVertexData, VertexData};
-use crate::gfx::skinning::{
+use crate::gfx::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
 };
 use crate::glb::ImportedSkinnedMesh;

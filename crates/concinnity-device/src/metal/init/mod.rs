@@ -26,6 +26,7 @@ mod window;
 // Runtime vsync toggle reaches the backing CAMetalLayer through this helper.
 pub(crate) use window::set_display_sync;
 
+use concinnity_core::gfx::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -38,7 +39,6 @@ use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 
 use super::allocator::DeviceAllocator;
 use super::context::*;
-use super::math::IDENTITY4;
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::texture::{
     EnvironmentMapTextures, create_fallback_color_lut, create_fallback_cubemap,
@@ -137,6 +137,8 @@ impl MtlContext {
                     ssr: ssr_settings,
                     ssgi: ssgi_settings,
                     rt_reflections: rt_reflection_settings,
+                    rt_dynamic: rt_dynamic_mode,
+                    rt_skinned_geometry,
                     reflection_blur_scale,
                     auto_exposure: auto_exposure_settings,
                     auto_exposure_bias_ev,
@@ -1128,9 +1130,6 @@ impl MtlContext {
             None
         };
 
-        // How the BVH tracks moving props (CN_RT_DYNAMIC; Auto default:
-        // dirty-gated TLAS rebuild, so a static scene never rebuilds).
-        let rt_dynamic_mode = super::raytrace::RtDynamicMode::from_env();
         if rt_accel.is_some() {
             tracing::info!("ray-traced reflections: dynamic transform mode = {rt_dynamic_mode:?}");
         }
@@ -1194,8 +1193,8 @@ impl MtlContext {
                 status_buffer: None,
                 two_pass_occlusion,
                 hiz,
-                prev_view_proj: IDENTITY4,
-                cur_view_proj: IDENTITY4,
+                prev_view_proj: IDENTITY,
+                cur_view_proj: IDENTITY,
                 hiz_valid: false,
                 shadow_pipeline: shadow_cull_pipeline,
                 shadow_bindless_pipeline,
@@ -1237,7 +1236,7 @@ impl MtlContext {
                 scene_fade: 0.0,
                 mode: Default::default(),
                 far: 1.0,
-                matrix: IDENTITY4,
+                matrix: IDENTITY,
             },
             geometry_less,
             allocator,
@@ -1303,7 +1302,7 @@ impl MtlContext {
                 history_valid: false,
                 frame: 0,
             },
-            prev_view_proj: IDENTITY4,
+            prev_view_proj: IDENTITY,
             upscale: super::post::UpscaleState {
                 scaler: upscaler,
                 scale: upscale_scale,
@@ -1318,6 +1317,7 @@ impl MtlContext {
                 settings: rt_reflection_settings,
                 accel: rt_accel,
                 dynamic_mode: rt_dynamic_mode,
+                skinned_geometry: rt_skinned_geometry,
                 update_failed: false,
                 topology_dirty: false,
                 pipeline: rt_pipeline,

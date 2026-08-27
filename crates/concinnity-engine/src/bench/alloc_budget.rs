@@ -20,6 +20,7 @@ use crate::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Collider, GlobalTransform, PhysicsConfig,
     Prop, PropCollider, RenderHandle, Transform,
 };
+use crate::ecs::SYSTEMS;
 use crate::ecs::World;
 use crate::gfx::graphics_system::GraphicsSystem;
 use crate::gfx::snapshot::RenderSnapshot;
@@ -104,7 +105,7 @@ fn static_world() -> World {
 #[test]
 fn static_world_frame_allocs_stay_pinned() {
     let mut world = static_world();
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     for _ in 0..WARMUP_FRAMES {
         world.step();
     }
@@ -169,7 +170,7 @@ fn glam_identity_at(i: u32) -> [[f32; 4]; 4] {
 #[test]
 fn frame_loop_samples_alloc_deltas_into_the_profile() {
     let mut world = static_world();
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     // The per-system list rotates with the timings, so it is readable after
     // the second step; the frame total is written as each step ends.

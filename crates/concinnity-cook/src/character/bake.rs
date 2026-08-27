@@ -220,7 +220,7 @@ pub(crate) fn bake_shapes<'c>(
                     "Asset '{name}': bake target '{target}' has no geometry to bake"
                 ))
             })?;
-            let payload = concinnity_cpu::gfx::mesh_payload::deserialise_skinned_with_lods(bytes)
+            let payload = concinnity_core::gfx::mesh_payload::deserialise_skinned_with_lods(bytes)
                 .map_err(|e| invalid(format!("Asset '{target}': cached payload: {e}")))?;
             joints = crate::geometry::payload_joints_to_defs(payload.joints);
             let report = bake(&shape, &mut mesh, &mut joints);

@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn pass_pairs_are_unique_within_a_frame() {
-        use std::collections::HashSet;
+        use hashbrown::HashSet;
         let mut seen: HashSet<u32> = HashSet::new();
         // The whole-frame pair owns slots 0, 1.
         seen.insert(0);

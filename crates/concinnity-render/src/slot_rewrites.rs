@@ -7,6 +7,8 @@
 //! fence-waited (which is therefore not referenced by any pending work). An
 //! entry retires once every frame-in-flight copy has been rewritten.
 
+use alloc::vec::Vec;
+
 #[derive(Debug)]
 /// Defers draw-slot rewrites until every in-flight frame has retired.
 pub struct SlotRewriteQueue {
@@ -64,6 +66,7 @@ impl SlotRewriteQueue {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     #[test]
     fn a_slot_is_applied_once_per_frame_copy() {
         let mut q = SlotRewriteQueue::new(3);

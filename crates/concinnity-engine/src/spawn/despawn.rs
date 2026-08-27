@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn despawn_retires_a_skinned_instance_slot() {
         use crate::components::SkeletonPose;
-        use crate::gfx::skinning::Skeleton;
+        use crate::gfx::skeleton::Skeleton;
         run(|ctx| {
             // A skinned entity carries a SkeletonPose (no RenderHandle); its
             // skinned_index is the slot to retire.

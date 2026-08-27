@@ -1,8 +1,11 @@
-//! Small column-major matrix and vector helpers shared by the shadow projection
-//! builders (`csm.rs` for the directional cascades, `spot_shadow.rs` for the spot
-//! slices). All projections are right-handed with depth mapped to [0, 1], which
-//! is what Metal, Vulkan, and DirectX shadow sampling all expect, so the matrices
-//! built here are valid for every backend.
+//! The view and orthographic-projection builders the shadow passes share
+//! (`csm.rs` for the directional cascades, `spot_shadow.rs` for the spot slices).
+//! Right-handed with depth mapped to [0, 1], matching
+//! [`concinnity_core::gfx::projection`], so the matrices built here are valid for
+//! every backend's shadow sampling.
+
+use concinnity_core::math::sqrt;
+use concinnity_core::math::vec3::{cross, dot, sub};
 
 /// The 4x4 identity, column-major.
 pub const IDENTITY4: [[f32; 4]; 4] = [
@@ -13,14 +16,14 @@ pub const IDENTITY4: [[f32; 4]; 4] = [
 ];
 
 pub(crate) fn look_at(eye: [f32; 3], centre: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
-    let f = normalize3(sub3(centre, eye));
-    let r = normalize3(cross3(f, up));
-    let u = cross3(r, f);
+    let f = normalize3(sub(centre, eye));
+    let r = normalize3(cross(f, up));
+    let u = cross(r, f);
     [
         [r[0], u[0], -f[0], 0.0],
         [r[1], u[1], -f[1], 0.0],
         [r[2], u[2], -f[2], 0.0],
-        [-dot3(r, eye), -dot3(u, eye), dot3(f, eye), 1.0],
+        [-dot(r, eye), -dot(u, eye), dot(f, eye), 1.0],
     ]
 }
 
@@ -49,60 +52,10 @@ pub(crate) fn ortho_rh(
     ]
 }
 
-// Right-handed perspective projection with depth mapped to [0, 1]. `fov_y_rad`
-// is the full vertical field of view.
-pub(crate) fn perspective_rh(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
-    let t = (fov_y_rad * 0.5).tan().max(1e-6);
-    let fmn = far - near;
-    [
-        [1.0 / (aspect * t), 0.0, 0.0, 0.0],
-        [0.0, 1.0 / t, 0.0, 0.0],
-        [0.0, 0.0, -far / fmn, -1.0],
-        [0.0, 0.0, -(far * near) / fmn, 0.0],
-    ]
-}
-
-/// Matrix product `a * b`, column-major.
-pub fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0.0_f32; 4]; 4];
-    for col in 0..4 {
-        for row in 0..4 {
-            for k in 0..4 {
-                out[col][row] += a[k][row] * b[col][k];
-            }
-        }
-    }
-    out
-}
-
-/// Component-wise sum, `a + b`.
-pub fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-pub(crate) fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-/// Every component scaled by `s`.
-pub fn scale3(v: [f32; 3], s: f32) -> [f32; 3] {
-    [v[0] * s, v[1] * s, v[2] * s]
-}
-
-pub(crate) fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-pub(crate) fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
+// Unit-length `v`, with the length floored so a degenerate input yields a huge
+// but finite vector rather than NaNs in the shadow basis.
 pub(crate) fn normalize3(v: [f32; 3]) -> [f32; 3] {
-    let len = dot3(v, v).sqrt().max(1e-6);
+    let len = sqrt(dot(v, v)).max(1e-6);
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
@@ -128,27 +81,6 @@ mod tests {
         out
     }
 
-    // A point on the near plane maps to depth 0 and one on the far plane to
-    // depth 1 after the perspective divide -- the [0, 1] convention every
-    // backend's shadow compare assumes.
-    #[test]
-    fn perspective_maps_near_and_far_to_zero_and_one() {
-        let p = perspective_rh(90.0_f32.to_radians(), 1.0, 0.1, 50.0);
-        let near = transform(p, [0.0, 0.0, -0.1]);
-        let far = transform(p, [0.0, 0.0, -50.0]);
-        assert!((near[2] / near[3]).abs() < 1e-4);
-        assert!(((far[2] / far[3]) - 1.0).abs() < 1e-4);
-    }
-
-    // At 90 degrees vertical FOV and square aspect, the frustum edge sits at
-    // x = -z, so an edge point lands exactly on the NDC boundary.
-    #[test]
-    fn perspective_edge_lands_on_the_ndc_boundary() {
-        let p = perspective_rh(90.0_f32.to_radians(), 1.0, 0.1, 50.0);
-        let edge = transform(p, [10.0, 0.0, -10.0]);
-        assert!(((edge[0] / edge[3]) - 1.0).abs() < 1e-4);
-    }
-
     #[test]
     fn look_at_puts_the_eye_at_the_origin_looking_down_negative_z() {
         let v = look_at([0.0, 5.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
@@ -169,7 +101,7 @@ mod tests {
         // The chosen up is never parallel to the axis.
         for dir in [[0.0, -1.0, 0.0], [0.3, -0.9, 0.2], [1.0, 0.0, 0.0]] {
             let d = normalize3(dir);
-            assert!(dot3(d, up_for(d)).abs() < 0.999);
+            assert!(dot(d, up_for(d)).abs() < 0.999);
         }
     }
 }

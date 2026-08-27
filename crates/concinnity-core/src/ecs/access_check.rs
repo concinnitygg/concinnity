@@ -1,7 +1,9 @@
-//! Debug-build access validation hook. `PipelineContext` accessors report each
+//! Debug-build access validation hooks. `PipelineContext` accessors report each
 //! touch here; the client installs a hook that asserts the touch against the
-//! stepping system's declared [`Access`](crate::ecs::Access) (tracked
+//! stepping system's declared [`Access`] (tracked
 //! client-side, since this crate is no_std and holds no per-thread state).
+//! `World::step` announces which system is stepping through the second hook,
+//! for the same reason: the tracking is per-thread and belongs to the host.
 //! Compiled out of release builds entirely: release parallel-safety never rests
 //! on these checks, only on the executor handing conflicting systems to
 //! different waves.
@@ -9,6 +11,8 @@
 
 use core::any::TypeId;
 use core::sync::atomic::{AtomicPtr, Ordering};
+
+use crate::ecs::Access;
 
 /// What a context accessor touched. Component ids are the registry
 /// discriminants; resources and events report their `TypeId` for the client's
@@ -52,12 +56,24 @@ pub enum Touch {
 
 type Hook = fn(&Touch);
 
+/// Marks the stepping system's declared access active, or clears it. The
+/// client keeps the per-thread state a no_std crate cannot.
+type ActiveHook = fn(Option<(Access, &'static str)>);
+
 static HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static ACTIVE_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Install the process-wide validation hook. Idempotent by usage (the client
 /// installs one hook once); the last install wins.
 pub fn install(hook: Hook) {
     HOOK.store(hook as *mut (), Ordering::Release);
+}
+
+/// Install the process-wide hook `World::step` announces each system's declared
+/// access through. Installed alongside [`install`]; without it every touch is
+/// reported against no active system and passes.
+pub fn install_active(hook: ActiveHook) {
+    ACTIVE_HOOK.store(hook as *mut (), Ordering::Release);
 }
 
 #[inline]
@@ -69,4 +85,17 @@ pub(crate) fn touch(t: Touch) {
     // SAFETY: the pointer only ever holds a `Hook` stored by `install`.
     let hook: Hook = unsafe { core::mem::transmute::<*mut (), Hook>(raw) };
     hook(&t);
+}
+
+/// Announce the system whose step is running, or clear it with `None`. A no-op
+/// until a client installs the hook.
+pub fn set_active(active: Option<(Access, &'static str)>) {
+    let raw = ACTIVE_HOOK.load(Ordering::Acquire);
+    if raw.is_null() {
+        return;
+    }
+    // SAFETY: the pointer only ever holds an `ActiveHook` stored by
+    // `install_active`.
+    let hook: ActiveHook = unsafe { core::mem::transmute::<*mut (), ActiveHook>(raw) };
+    hook(active);
 }

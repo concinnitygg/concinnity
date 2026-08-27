@@ -25,6 +25,7 @@
 //   * Per-frame command infrastructure (allocator/list/fence), per-cluster
 //     instance upload buffers, and the final `Self { ... }` literal.
 
+use concinnity_core::gfx::transform::IDENTITY;
 use std::cell::RefCell;
 
 use windows::Win32::Graphics::Direct3D12::*;
@@ -37,7 +38,6 @@ use crate::gfx::render_types::*;
 use super::com;
 use super::context::*;
 use super::draw::*;
-use super::math::*;
 use super::post::bloom::bloom_mip_count;
 use super::texture::*;
 
@@ -133,6 +133,8 @@ impl DxContext {
                     ssr: ssr_settings,
                     ssgi: ssgi_settings,
                     rt_reflections: rt_reflection_settings,
+                    rt_dynamic: rt_dynamic_mode,
+                    rt_skinned_geometry,
                     reflection_blur_scale,
                     auto_exposure: auto_exposure_settings,
                     auto_exposure_bias_ev,
@@ -247,13 +249,11 @@ impl DxContext {
         post_process.hdr_output = hdr_mode.shader_flag();
         post_process.pq_output = hdr_mode.pq_flag();
 
-        // Hardware ray-tracing capability + update mode. RT reflection resources
-        // + the acceleration structure are built only when the world authored
+        // Hardware ray-tracing capability. RT reflection resources + the
+        // acceleration structure are built only when the world authored
         // `ray_traced_reflections` AND the GPU reports the DXR 1.1 tier inline
-        // `RayQuery` needs; otherwise the renderer falls back to SSR. The dynamic
-        // mode (how the BVH tracks moving props) is read once from `CN_RT_DYNAMIC`.
+        // `RayQuery` needs; otherwise the renderer falls back to SSR.
         let raytracing_supported = super::raytrace::raytracing_supported(&device);
-        let rt_dynamic_mode = super::raytrace::RtDynamicMode::from_env();
         let rt_enabled = rt_reflection_settings.is_some() && raytracing_supported;
         if rt_reflection_settings.is_some() && !raytracing_supported {
             tracing::warn!(
@@ -2427,7 +2427,7 @@ impl DxContext {
                 prev_model_buffer_ptrs,
                 occlusion_two_pass,
                 hiz,
-                prev_view_proj: std::cell::Cell::new(IDENTITY4),
+                prev_view_proj: std::cell::Cell::new(IDENTITY),
                 hiz_valid: std::cell::Cell::new(false),
             },
             shadow_root_sig,
@@ -2466,6 +2466,7 @@ impl DxContext {
             rt_reflections,
             rt_accel,
             rt_dynamic_mode,
+            rt_skinned_geometry,
             rt_topology_dirty: false,
             decal: super::context::DecalState {
                 state: decals_state,
@@ -2559,7 +2560,7 @@ impl DxContext {
                 mode: Default::default(),
                 show: Default::default(),
                 far: 1.0,
-                matrix: IDENTITY4,
+                matrix: IDENTITY,
             },
             wireframe: Default::default(),
             diagnostics: super::context::Diagnostics {

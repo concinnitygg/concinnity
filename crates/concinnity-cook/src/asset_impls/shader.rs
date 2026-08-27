@@ -16,7 +16,7 @@ pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
         if let Some(path) = ctx
             .assets_dir
-            .and_then(|dir| concinnity_store::source::find_in(dir, raw))
+            .and_then(|dir| concinnity_host::store::source::find_in(dir, raw))
         {
             return path;
         }

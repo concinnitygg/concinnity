@@ -35,10 +35,10 @@ fn main() {
 
 // Compile the bundled face into `OUT_DIR`, where `gfx::builtin_font` embeds it.
 fn bake_builtin_font() {
-    let payload = concinnity_font::compile(
-        concinnity_font::BUILTIN_FONT_BYTES,
+    let payload = concinnity_core::build::font::compile(
+        concinnity_core::build::font::BUILTIN_FONT_BYTES,
         BUILTIN_FONT_PX,
-        concinnity_font::BUILTIN_FONT_FILE,
+        concinnity_core::build::font::BUILTIN_FONT_FILE,
     )
     .expect("bundled face compiles");
 

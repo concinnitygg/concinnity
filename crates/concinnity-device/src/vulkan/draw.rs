@@ -5,13 +5,16 @@
 // `vulkan/graph_exec.rs` and `vulkan/composite.rs`.
 
 use ash::vk;
+use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::gfx::transform::mat4_inverse;
 
 use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
 use crate::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
 
 use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
-use super::math::{mat4_mul, perspective};
+use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::transform::mat4_mul;
 
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in concinnity-render; re-export it so
@@ -541,7 +544,7 @@ impl VkContext {
         } else {
             extent.width as f32 / extent.height as f32
         };
-        let proj = perspective(fov_y_radians, aspect, near, far);
+        let proj = perspective_rh(fov_y_radians, aspect, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
         let cur_vp = mat4_mul(proj, self.view.matrix);
@@ -586,7 +589,7 @@ impl VkContext {
         // sets bind the static `use_clusters = 0` copy instead.
         let clustered = self.light_cull.pipeline.is_some();
         let cluster_params = crate::gfx::render_types::ClusterParams {
-            inv_view_proj: super::math::mat4_inverse(mat4_mul(proj, self.view.matrix)),
+            inv_view_proj: mat4_inverse(mat4_mul(proj, self.view.matrix)),
             cam_pos,
             z_near: near.max(1e-3),
             view_forward: [
@@ -745,8 +748,7 @@ impl VkContext {
         // bookkeeping in `record_frame`.
         if let Some(gb) = &mut self.gbuffer {
             gb.prev_view_proj = cur_vp;
-            gb.prev_models
-                .resize(self.draw.objects.len(), super::math::IDENTITY4);
+            gb.prev_models.resize(self.draw.objects.len(), IDENTITY);
             for (prev, obj) in gb.prev_models.iter_mut().zip(self.draw.objects.iter()) {
                 *prev = obj.model;
             }

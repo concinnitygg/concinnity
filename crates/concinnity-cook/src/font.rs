@@ -1,6 +1,6 @@
 //! Font asset compilation: resolves a `Font`'s arguments to TTF bytes (a file on
 //! disk, or the bundled default face) and hands them to the shared rasteriser in
-//! `concinnity-font`, which packs the glyphs into an SDF atlas payload.
+//! `concinnity_core::build::font`, which packs the glyphs into an SDF atlas payload.
 
 use serde::Deserialize;
 
@@ -16,19 +16,19 @@ pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
     let path = font.path.as_str();
 
     let ttf_bytes: Vec<u8> = if path.is_empty() {
-        concinnity_font::BUILTIN_FONT_BYTES.to_vec()
+        concinnity_core::build::font::BUILTIN_FONT_BYTES.to_vec()
     } else {
         std::fs::read(path).map_err(|e| format!("Font: could not read '{}': {}", path, e))?
     };
     let source = if path.is_empty() { "<built-in>" } else { path };
 
-    concinnity_font::compile(&ttf_bytes, font.size_px, source)
+    concinnity_core::build::font::compile(&ttf_bytes, font.size_px, source)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_cpu::build::font::deserialise;
+    use concinnity_core::build::font::deserialise;
 
     // An empty or absent `path` compiles the bundled face. 48px because before
     // the atlas layout sizes were widened to u32, the high-res glyph stride
@@ -52,7 +52,7 @@ mod tests {
     fn font_compiles_from_a_ttf_on_disk() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("bundled.ttf");
-        std::fs::write(&path, concinnity_font::BUILTIN_FONT_BYTES).expect("write ttf");
+        std::fs::write(&path, concinnity_core::build::font::BUILTIN_FONT_BYTES).expect("write ttf");
 
         let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
         let payload = compile_font_payload(&args).expect("compile font read from disk");

@@ -8,6 +8,9 @@
 //! convention `max(1, base >> level)`. That keeps the CPU chain in lockstep with
 //! the image's allocated mip levels on all three backends.
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 /// One level of a mip chain: dimensions plus tightly packed RGBA8 pixels
 /// (`width * height * 4` bytes, no row padding).
 pub struct MipLevel {

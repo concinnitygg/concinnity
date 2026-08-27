@@ -24,7 +24,6 @@ mod hot_reload;
 mod init;
 mod light_cull;
 mod line;
-mod math;
 mod parallel_encoder;
 mod particle;
 mod pipeline;

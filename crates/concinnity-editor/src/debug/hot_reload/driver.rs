@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::debug_hook::DebugHook;
-use crate::ecs::{SystemAsset, World};
+use crate::ecs::World;
+use crate::gfx::animation::AnimationSystem;
+use crate::gfx::graphics_system::GraphicsSystem;
 
 use super::state::{AssetHotReloadState, FrameHotReloadEffects, run_frame};
 
@@ -67,25 +69,20 @@ impl HotReloadDriver {
         let mut effects = None;
         // The backend lives in the world's parked slot (disjoint from the
         // system list), so both are borrowed at once for the apply passes.
-        let (systems, mut backend) = world.systems_and_render_backend();
+        let (systems, mut backend) = concinnity_engine::ecs::systems_and_render_backend(world);
         for system in systems {
-            match system {
-                SystemAsset::GraphicsSystem(gs) => {
-                    // Arm (or re-arm after a world rebuild) from the init-
-                    // captured sources; must precede the apply-parts borrow
-                    // of `gs`.
-                    if let Some(sources) = gs.take_hot_reload_sources() {
-                        self.arm(sources);
-                    }
-                    if let (Some(state), Some(backend)) = (self.state.as_mut(), backend.take()) {
-                        let mut apply = gs.hot_reload_apply_parts(backend);
-                        effects = Some(run_frame(state, &mut apply, self.notifier.as_ref()));
-                    }
+            if let Some(gs) = system.downcast_mut::<GraphicsSystem>() {
+                // Arm (or re-arm after a world rebuild) from the init-captured
+                // sources; must precede the apply-parts borrow of `gs`.
+                if let Some(sources) = gs.take_hot_reload_sources() {
+                    self.arm(sources);
                 }
-                SystemAsset::AnimationSystem(anim) => {
-                    crate::anim_reload::reload_clips_if_pending(anim);
+                if let (Some(state), Some(backend)) = (self.state.as_mut(), backend.take()) {
+                    let mut apply = gs.hot_reload_apply_parts(backend);
+                    effects = Some(run_frame(state, &mut apply, self.notifier.as_ref()));
                 }
-                _ => {}
+            } else if let Some(anim) = system.downcast_mut::<AnimationSystem>() {
+                crate::anim_reload::reload_clips_if_pending(anim);
             }
         }
         if let Some(effects) = effects {
@@ -107,7 +104,7 @@ pub(crate) fn apply_effects(world: &mut World, effects: FrameHotReloadEffects) {
     // components so `AnimationSystem` produces right-sized output going
     // forward.
     if !effects.skeleton_updates.is_empty() {
-        let index_to_new: std::collections::HashMap<usize, crate::gfx::skinning::Skeleton> =
+        let index_to_new: std::collections::HashMap<usize, crate::gfx::skeleton::Skeleton> =
             effects
                 .skeleton_updates
                 .into_iter()

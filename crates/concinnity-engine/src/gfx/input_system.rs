@@ -27,7 +27,7 @@ use std::time::Instant;
 const NAV_DT_MAX: f32 = 0.25;
 
 #[derive(Debug, Default)]
-pub struct InputSystem {
+pub(crate) struct InputSystem {
     gamepad: GamepadSource,
     pad: PadState,
     map: GamepadMap,
@@ -41,7 +41,7 @@ pub struct InputSystem {
 }
 
 impl InputSystem {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             deadzone: crate::gfx::settings::DEFAULT_GAMEPAD_DEADZONE,
             ..Self::default()

@@ -98,10 +98,10 @@ fn cursor_in_field(ti: &TextInput, mx: f32, my: f32, viewport: [f32; 2]) -> bool
 }
 
 #[derive(Debug, Default)]
-pub struct TextInputSystem;
+pub(crate) struct TextInputSystem;
 
 impl TextInputSystem {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }
@@ -169,6 +169,7 @@ impl System for TextInputSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::SYSTEMS;
 
     #[test]
     fn insert_appends_and_advances_caret() {
@@ -289,7 +290,7 @@ mod tests {
             screen: None,
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.add_component(FrameInput {
             typed_char: Some('h'),
             ..Default::default()
@@ -319,7 +320,7 @@ mod tests {
             screen: None,
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         // Click inside field 2.
         world.add_component(FrameInput {
             mouse_x: 250.0,

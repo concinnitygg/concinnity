@@ -18,7 +18,6 @@ concinnity-toolchain = { workspace = true }
 concinnity-asset = { workspace = true }
 concinnity-cook = { workspace = true }
 concinnity-core = { workspace = true }
-concinnity-cpu = { workspace = true }
 concinnity-engine = { workspace = true }
 concinnity-memory = { workspace = true }
 concinnity-render = { workspace = true }

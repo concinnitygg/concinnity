@@ -5,6 +5,7 @@
 //! callers supply a concrete backend that implements the two mutation methods.
 
 use crate::ecs::asset_id::AssetId;
+use alloc::vec::Vec;
 
 const FADE_HALF_SECS: f32 = 0.3;
 
@@ -201,6 +202,7 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
 mod tests {
     use super::*;
 
+    use alloc::vec;
     // Minimal SceneControl implementation that records every call.
     #[derive(Default)]
     struct TestBackend {

@@ -5,6 +5,7 @@
 // joint-count changes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -19,7 +20,6 @@ use crate::metal::context::{
     HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice,
 };
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use crate::metal::math::IDENTITY4;
 use crate::metal::pipeline::{ns_str, stage_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
 
@@ -598,7 +598,7 @@ impl MtlContext {
         // zero skinned motion on the first frame.
         self.skinned.joint_matrices = draw_objects
             .iter()
-            .map(|o| vec![IDENTITY4; o.joint_count.max(1)])
+            .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
         self.skinned.prev_joint_matrices = self.skinned.joint_matrices.clone();
 
@@ -732,7 +732,7 @@ impl MtlContext {
             slot.clear();
             slot.extend_from_slice(matrices);
             if slot.is_empty() {
-                slot.push(IDENTITY4);
+                slot.push(IDENTITY);
             }
         }
     }
@@ -767,10 +767,10 @@ impl MtlContext {
         obj.joint_count = capped;
         let size = capped.max(1);
         if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
-            slot.resize(size, IDENTITY4);
+            slot.resize(size, IDENTITY);
         }
         if let Some(slot) = self.skinned.prev_joint_matrices.get_mut(skinned_index) {
-            slot.resize(size, IDENTITY4);
+            slot.resize(size, IDENTITY);
         }
         Ok(())
     }
@@ -787,10 +787,10 @@ impl MtlContext {
         obj.model = model;
         obj.visible = true;
         if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
-            palette.iter_mut().for_each(|m| *m = IDENTITY4);
+            palette.iter_mut().for_each(|m| *m = IDENTITY);
         }
         if let Some(palette) = self.skinned.prev_joint_matrices.get_mut(instance_index) {
-            palette.iter_mut().for_each(|m| *m = IDENTITY4);
+            palette.iter_mut().for_each(|m| *m = IDENTITY);
         }
     }
 

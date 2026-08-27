@@ -1,6 +1,6 @@
 //! Concinnity is a graphics application framework. A [`World`] holds the
 //! components describing what exists -- a camera, lights, geometry, text -- and
-//! an `App` runs that world on the engine's loop. Behaviour is declared as data
+//! an [`App`] runs that world on the engine's loop. Behaviour is declared as data
 //! rather than assembled from calls, so an application's job is to hand over a
 //! world and let the runtime drive it.
 //!
@@ -9,7 +9,7 @@
 //! A shipped application usually plays a world that was compiled ahead of time.
 //! That needs nothing but the runtime, which is the crate's default build:
 //!
-//! ```no_run
+//! ```rust,no_run
 //! use concinnity::App;
 //!
 //! fn main() {
@@ -69,10 +69,11 @@
 //! the [`components`] vocabulary, which is all the examples above need.
 //!
 //! `std` is that runtime, and it is on by default. Turning it off leaves
-//! [`components`] and a [`World`] to build with it, so a `no_std` crate can
-//! assemble world content where no runtime exists. What it drops is everything
-//! that runs: there is no `App` and no `cook`, and a [`World`] carries
-//! components but nothing to step them.
+//! [`components`], a [`World`] to build with them, and an [`App`] that steps it
+//! headless: no window, no renderer, no `cook`, and no
+//! [`from_blob`](App::from_blob) to read one from disk. That loop keeps virtual
+//! time -- one fixed simulation step per tick, unpaced -- so it runs
+//! deterministically where there is no clock to follow.
 //!
 //! `cook` adds the `cook` module described above. It carries the authoring half
 //! of the vocabulary (textures, meshes, prefabs, menus) and pulls in the
@@ -89,11 +90,9 @@
 #[cfg(all(test, not(feature = "std")))]
 extern crate std;
 
-#[cfg(feature = "std")]
 mod app;
 mod world;
 
-#[cfg(feature = "std")]
 pub use app::App;
 pub use world::World;
 
@@ -144,19 +143,32 @@ mod tests {
         );
     }
 
-    // The documented headless case: the same starter world without a
-    // GraphicsConfig, which is what lets a test or a simulation-only tool
-    // drive a world with no window.
-    #[cfg(feature = "std")]
+    // The documented headless case, on whichever tier is built: the same
+    // starter world without a GraphicsConfig, which is what lets a test or a
+    // simulation-only tool drive a world with no window.
     #[test]
     fn a_world_without_graphics_starts_headless() {
+        let mut app = super::App::from_world(starter_world());
+        assert_eq!(app.inner_mut().start(), Ok(()));
+    }
+
+    // Without `std` the same app runs to completion in process: the headless
+    // loop steps the world it was handed until nothing is left to step. The
+    // std tier's `run` opens a window and waits for it, so it has no place in
+    // a test.
+    #[cfg(not(feature = "std"))]
+    #[test]
+    fn a_headless_app_runs_the_world_it_was_given() {
+        let app = super::App::from_world(starter_world());
+        assert_eq!(app.run(), Ok(()));
+    }
+
+    fn starter_world() -> World {
         let mut world = World::new();
         world.add_component(TextLabel {
             content: "Hello, world!".into(),
             ..Default::default()
         });
-
-        let mut app = super::App::from_world(world);
-        assert_eq!(app.inner_mut().start(), Ok(()));
+        world
     }
 }

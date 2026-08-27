@@ -4,17 +4,23 @@
 
 use crate::components::{LabelBox, SpriteFit, TextAlign, TextLabel};
 use crate::ecs::FontHandle;
-use crate::ecs::asset_id::AssetId;
+use crate::overlay_maps::{ClipRects, OverlayLayers};
 use crate::render_types::{TextDrawCall, TextVertex};
+use alloc::borrow::Cow;
+use alloc::string::String;
+use alloc::vec::Vec;
 use concinnity_core::gfx::overlay::OverlayTransform;
-use std::borrow::Cow;
+use hashbrown::HashMap;
+
+/// One face's per-glyph metrics, keyed by Unicode code point.
+pub type FontMetrics = HashMap<u32, crate::font::GlyphMetrics>;
 
 /// Per-font data kept in memory after init() so step() can build text quads each frame.
 pub struct LoadedFont {
     /// Index into the backend's text atlas texture array.
     pub atlas_slot: usize,
     /// Per-glyph metrics keyed by Unicode code point.
-    pub metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics>,
+    pub metrics: FontMetrics,
     /// Atlas width in pixels.
     pub atlas_w: u32,
     /// Atlas height in pixels.
@@ -42,7 +48,7 @@ pub struct LoadedFont {
 /// leaves the fallback unset and pays nothing for it.
 #[derive(Default)]
 pub struct FontSet {
-    faces: std::collections::HashMap<FontHandle, LoadedFont>,
+    faces: HashMap<FontHandle, LoadedFont>,
     fallback: Option<FontHandle>,
 }
 
@@ -89,10 +95,7 @@ impl FontSet {
 /// Cap height (logical px) for vertical centering: the bearing of an uppercase
 /// reference glyph ('H'), falling back to the tallest uppercase glyph, then to a
 /// fraction of the em when no metrics are available.
-pub fn derive_cap_px(
-    metrics: &std::collections::HashMap<u32, crate::build::font::GlyphMetrics>,
-    size_px: f32,
-) -> f32 {
+pub fn derive_cap_px(metrics: &FontMetrics, size_px: f32) -> f32 {
     if let Some(h) = metrics.get(&('H' as u32))
         && h.bearing_y > 0.0
     {
@@ -366,8 +369,8 @@ pub fn build_text_calls(
     loaded_fonts: &FontSet,
     win_w: f32,
     win_h: f32,
-    clips: &std::collections::HashMap<AssetId, [f32; 4]>,
-    layers: &std::collections::HashMap<AssetId, i32>,
+    clips: &ClipRects,
+    layers: &OverlayLayers,
 ) -> Vec<TextDrawCall> {
     let mut out = crate::call_buffer::TextCallBuffer::default();
     build_text_calls_into(&mut out, labels, loaded_fonts, win_w, win_h, clips, layers);
@@ -383,8 +386,8 @@ pub fn build_text_calls_into(
     loaded_fonts: &FontSet,
     win_w: f32,
     win_h: f32,
-    clips: &std::collections::HashMap<AssetId, [f32; 4]>,
-    layers: &std::collections::HashMap<AssetId, i32>,
+    clips: &ClipRects,
+    layers: &OverlayLayers,
 ) {
     // Screen-owned labels are overlay UI authored in the reference canvas; map
     // them to the live window so menus scale with the window. HUD labels
@@ -598,14 +601,16 @@ pub(crate) fn band_to_window(overlay: &OverlayTransform, band: [f32; 4]) -> [f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::font::GlyphMetrics;
+    use crate::ecs::asset_id::AssetId;
+    use crate::font::GlyphMetrics;
 
+    use alloc::string::ToString;
     // No clip bands: every label draws unclipped.
-    fn no_clips() -> std::collections::HashMap<AssetId, [f32; 4]> {
-        std::collections::HashMap::new()
+    fn no_clips() -> ClipRects {
+        ClipRects::new()
     }
-    fn no_layers() -> std::collections::HashMap<AssetId, i32> {
-        std::collections::HashMap::new()
+    fn no_layers() -> OverlayLayers {
+        OverlayLayers::new()
     }
 
     fn make_glyph(atlas_w: u16, atlas_h: u16, advance_px: f32) -> GlyphMetrics {
@@ -622,8 +627,7 @@ mod tests {
     }
 
     fn make_font(chars: &[(char, GlyphMetrics)]) -> LoadedFont {
-        let metrics: std::collections::HashMap<u32, GlyphMetrics> =
-            chars.iter().map(|(c, m)| (*c as u32, *m)).collect();
+        let metrics: FontMetrics = chars.iter().map(|(c, m)| (*c as u32, *m)).collect();
         let cap_px = derive_cap_px(&metrics, 16.0);
         LoadedFont {
             atlas_slot: 0,
@@ -738,7 +742,7 @@ mod tests {
         // Two lines of five glyphs, not one line of eight.
         assert!(boxed.w <= 50.0, "{boxed:?}");
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             200.0,
             200.0,
@@ -772,7 +776,7 @@ mod tests {
 
         // With no fallback there is no face to lay the glyphs out with.
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -784,7 +788,7 @@ mod tests {
 
         fonts.set_fallback(FontHandle(0));
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -829,7 +833,7 @@ mod tests {
         let label = make_label(FontHandle(99), "hello", 0.0);
         assert!(
             build_text_calls(
-                std::slice::from_ref(&label),
+                core::slice::from_ref(&label),
                 &fonts,
                 0.0,
                 0.0,
@@ -847,7 +851,7 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let label = make_label(FontHandle(0), "A", 0.0);
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -869,7 +873,7 @@ mod tests {
         label.background = [0.0, 0.3, 0.1, 0.85];
         label.padding = 4.0;
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -892,12 +896,12 @@ mod tests {
     #[test]
     fn derive_cap_px_uses_uppercase_reference() {
         // 'H' is the cap-height reference, even when a lowercase glyph is taller.
-        let mut m = std::collections::HashMap::new();
+        let mut m = HashMap::new();
         m.insert('H' as u32, make_glyph(8, 10, 9.0)); // bearing_y = 10
         m.insert('g' as u32, make_glyph(8, 14, 9.0)); // taller, but lowercase
         assert!((derive_cap_px(&m, 16.0) - 10.0).abs() < 1e-4);
         // With no glyphs, fall back to a fraction of the em.
-        let empty = std::collections::HashMap::new();
+        let empty = HashMap::new();
         assert!((derive_cap_px(&empty, 20.0) - 14.0).abs() < 1e-4);
     }
 
@@ -912,7 +916,7 @@ mod tests {
         label.background = [0.1, 0.1, 0.1, 1.0];
         label.padding = 4.0;
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -945,7 +949,7 @@ mod tests {
         // A blanked label (e.g. a toggled-off HUD chip) draws no box.
         assert!(
             build_text_calls(
-                std::slice::from_ref(&label),
+                core::slice::from_ref(&label),
                 &fonts,
                 0.0,
                 0.0,
@@ -965,7 +969,7 @@ mod tests {
         // Two spaces then 'A': only 'A' produces geometry.
         let label = make_label(FontHandle(0), "  A", 0.0);
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -997,7 +1001,7 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[('X', zero), ('A', g)]));
         let label = make_label(FontHandle(0), "XA", 0.0);
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -1019,7 +1023,7 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let label = make_label(FontHandle(0), "A\nA", 0.0);
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,
@@ -1057,7 +1061,7 @@ mod tests {
         // baseline = 7.5 + (85 + 12*5.3125)/2 = 7.5 + 74.375 = 81.875
         // gx = x0 + bearing_x*scale = 46.875, gy = baseline - bearing_y*scale = 81.875 - 63.75 = 18.125
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             200.0,
             100.0,
@@ -1088,7 +1092,7 @@ mod tests {
         // 2x reference viewport (1280x720 -> 2560x1440): scale 2, centered.
         let vp = (2560.0, 1440.0);
         let hud_calls = build_text_calls(
-            std::slice::from_ref(&hud),
+            core::slice::from_ref(&hud),
             &fonts,
             vp.0,
             vp.1,
@@ -1096,7 +1100,7 @@ mod tests {
             &no_layers(),
         );
         let ovl_calls = build_text_calls(
-            std::slice::from_ref(&overlay_label),
+            core::slice::from_ref(&overlay_label),
             &fonts,
             vp.0,
             vp.1,
@@ -1164,7 +1168,7 @@ mod tests {
             let mut l = make_label(FontHandle(0), "AA", 100.0);
             l.align = align;
             build_text_calls(
-                std::slice::from_ref(&l),
+                core::slice::from_ref(&l),
                 &fonts,
                 0.0,
                 0.0,
@@ -1189,11 +1193,11 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let mut label = make_label(FontHandle(0), "A", 0.0);
         label.asset_id = AssetId(7);
-        let mut clips = std::collections::HashMap::new();
+        let mut clips = ClipRects::new();
         let band = [10.0, 20.0, 300.0, 40.0];
         clips.insert(AssetId(7), band);
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             1280.0,
             720.0,
@@ -1205,7 +1209,7 @@ mod tests {
         // A label absent from `clips` (asset_id 0) draws unclipped.
         let other = make_label(FontHandle(0), "A", 0.0);
         let unclipped = build_text_calls(
-            std::slice::from_ref(&other),
+            core::slice::from_ref(&other),
             &fonts,
             1280.0,
             720.0,
@@ -1243,7 +1247,7 @@ mod tests {
             l.screen = Some(AssetId(5));
             l.fit = fit;
             build_text_calls(
-                std::slice::from_ref(&l),
+                core::slice::from_ref(&l),
                 &fonts,
                 vp.0,
                 vp.1,
@@ -1274,7 +1278,7 @@ mod tests {
         // '?' has no metric; it consumes one space advance before 'A'.
         let label = make_label(FontHandle(0), "?A", 0.0);
         let calls = build_text_calls(
-            std::slice::from_ref(&label),
+            core::slice::from_ref(&label),
             &fonts,
             0.0,
             0.0,

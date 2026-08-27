@@ -28,11 +28,10 @@
 // below.
 //
 // Components are pure data, registered with one entry each. There is no system
-// registry: every system is internal client code, constructed at runtime from
-// world content (see the client's `World::build_internal_systems`), never
-// declared in a world or serialized to a blob. The runtime `SystemAsset` enum
-// that holds the constructed systems is generated client-side from each
-// system's `System` behavior impl, in the client crate's `ecs::registry`.
+// registry: every system is internal code, constructed at runtime from world
+// content (see `World::start`), never declared in a world or serialized to a
+// blob. The table that gates and orders the constructed systems is the caller's:
+// this crate's headless table, or the client crate's `ecs::registry`.
 //
 // Each component's discriminant (its on-disk blob tag and in-memory
 // `ComponentId`) is assigned by its position in this list: the runtime
@@ -274,7 +273,7 @@ macro_rules! cn_impl_components {
             const NAME: &'static str = stringify!($variant);
             $($body)*
             fn from_baked(bytes: &[u8]) -> Result<Self, $crate::result::CnResult> {
-                Ok(postcard::from_bytes(bytes)?)
+                Ok($crate::blob::decode_exact(bytes)?)
             }
         }
     };

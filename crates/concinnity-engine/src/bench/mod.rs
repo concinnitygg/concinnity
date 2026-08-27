@@ -33,8 +33,8 @@ use crate::gfx::profile::FrameProfile;
 const TARGET_NS: u128 = 200_000_000;
 const MAX_ITERS: u64 = 1 << 20;
 
-// The hand-assembled world the benches drive, mirroring `behavior::tests`'
-// fixture: a component storage plus the pieces a `PipelineContext` borrows.
+// The hand-assembled world the benches drive: a component storage plus the
+// other four pieces a `PipelineContext` borrows.
 pub(crate) struct BenchWorld {
     pub components: ComponentStorage,
     blob: BlobData,

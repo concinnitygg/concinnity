@@ -36,7 +36,7 @@ pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<Strin
             .unwrap_or(true)
             && let Some(found) = ctx
                 .assets_dir
-                .and_then(|dir| concinnity_store::source::find_in(dir, raw))
+                .and_then(|dir| concinnity_host::store::source::find_in(dir, raw))
         {
             candidates.push(found);
         }

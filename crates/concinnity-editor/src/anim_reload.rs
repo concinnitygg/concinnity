@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use crate::gfx::animation::AnimationSystem;
-use crate::gfx::skinning::{AnimationClip, JointTrack, Keyframe};
+use crate::gfx::skeleton::{AnimationClip, JointTrack, Keyframe};
 
 // Re-import every file-backed clip when an asset-source change is pending.
 // Driven by the debug server's per-frame tick. No-op when no file-backed clips
@@ -251,7 +251,7 @@ mod tests {
         concinnity_engine::app::dev_flags::set_enabled(true);
         let mut world = crate::ecs::World::new();
         world.add_component(file_backed_animation(source, animation_name));
-        let started = world.start();
+        let started = world.start(concinnity_engine::ecs::SYSTEMS);
         concinnity_engine::app::dev_flags::set_enabled(false);
         started.unwrap();
         world
@@ -259,7 +259,7 @@ mod tests {
 
     fn with_anim<R>(world: &mut crate::ecs::World, f: impl FnOnce(&mut AnimationSystem) -> R) -> R {
         for system in world.systems_mut() {
-            if let crate::ecs::SystemAsset::AnimationSystem(anim) = system {
+            if let Some(anim) = system.downcast_mut::<crate::gfx::animation::AnimationSystem>() {
                 return f(anim);
             }
         }

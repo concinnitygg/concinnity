@@ -30,7 +30,7 @@ use fbxcel::tree::any::AnyTree;
 use fbxcel::tree::v7400::NodeHandle;
 
 use crate::components::VertexData;
-use crate::gfx::skinning::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use crate::gfx::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 
 use crate::import::NEUTRAL_COLOR;
 
@@ -1095,7 +1095,7 @@ mod tests {
     #[test]
     #[ignore = "needs the local Blender rig_oracle fixture under private/assets"]
     fn fbx_and_glb_rig_imports_agree() {
-        use crate::gfx::skinning::JointPose;
+        use crate::gfx::skeleton::JointPose;
 
         let base = concat!(
             env!("CARGO_MANIFEST_DIR"),

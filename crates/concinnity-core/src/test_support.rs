@@ -1,4 +1,5 @@
-// Shared fixtures for the crate's unit tests.
+// Shared fixtures for the crate's unit tests, and the timing harness its
+// in-module benchmarks report through.
 //
 // The draw records are wide enough that constructing one inline dominates a
 // test; they are built here once so a test states only the fields it is about.
@@ -12,10 +13,60 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use std::println;
+use std::time::Instant;
 
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
 use crate::gfx::transform::IDENTITY;
+
+// One measured pass runs at least this long before its time is trusted.
+const TARGET_NS: u128 = 200_000_000;
+const MAX_ITERS: u64 = 1 << 20;
+
+// Time `body` over a calibrated iteration count and report its per-item cost
+// beside the allocations one item causes. `items` is how many units of work one
+// call performs, so a number is comparable across fixture sizes.
+//
+// The allocation pass is separate, so the counter reads sit outside the timed
+// window. Those counters are process-global, which is why every benchmark here
+// asks for `--test-threads=1`: one running beside another reads the other's
+// allocations as its own.
+pub(crate) fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
+    let mut iters: u64 = 1;
+    loop {
+        let start = Instant::now();
+        for _ in 0..iters {
+            core::hint::black_box(body());
+        }
+        if start.elapsed().as_nanos() >= TARGET_NS || iters >= MAX_ITERS {
+            break;
+        }
+        iters = iters.saturating_mul(4).min(MAX_ITERS);
+    }
+
+    let start = Instant::now();
+    for _ in 0..iters {
+        core::hint::black_box(body());
+    }
+    let elapsed = start.elapsed();
+
+    let before = concinnity_memory::alloc_count();
+    for _ in 0..iters {
+        core::hint::black_box(body());
+    }
+    let after = concinnity_memory::alloc_count();
+
+    let units = (iters * items.max(1)) as f64;
+    let per_item_ns = elapsed.as_secs_f64() * 1e9 / units;
+    match (before, after) {
+        (Some(before), Some(after)) => {
+            let allocs = (after - before) as f64 / units;
+            println!("  {name:<40} {per_item_ns:>10.2} ns/item {allocs:>10.3} allocs/item");
+        }
+        _ => println!("  {name:<40} {per_item_ns:>10.2} ns/item"),
+    }
+}
 
 // Per-thread, like the production interner: the harness runs tests in parallel
 // and each one resets before interning, so a shared table would let them

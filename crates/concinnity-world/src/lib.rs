@@ -27,12 +27,13 @@ pub(crate) use concinnity_core::{components, platform, result};
 
 // The vocabulary's ECS surface, with the build-time name interner shadowing its
 // `asset_id`: the interner keeps a per-thread table, so it lives in
-// concinnity-cpu and re-exports the vocabulary's `AssetId` / `AssetRef`.
+// `concinnity_host::thread` and re-exports the vocabulary's `AssetId` /
+// `AssetRef`.
 pub(crate) mod ecs {
     pub(crate) use concinnity_core::ecs::*;
-    pub(crate) use concinnity_cpu::ecs::asset_id;
+    pub(crate) use concinnity_host::thread::asset_id;
 }
-pub(crate) use concinnity_store::paths;
+pub(crate) use concinnity_host::store::paths;
 
 pub mod check;
 pub mod refs;

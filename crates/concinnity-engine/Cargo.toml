@@ -28,7 +28,7 @@ path = "src/lib.rs"
 # the shared native Win32 window layer; macOS Vulkan uses GLFW, as Linux does.
 vulkan = [
     "concinnity-device/vulkan",
-    "concinnity-cpu/vulkan",
+    "concinnity-core/vulkan",
     "concinnity-render/vulkan",
 ]
 
@@ -41,16 +41,16 @@ alloc-detail = ["concinnity-memory/detail"]
 
 [dependencies]
 concinnity-core = { workspace = true }
-concinnity-cpu = { workspace = true }
-concinnity-store = { workspace = true }
+concinnity-host = { workspace = true }
 concinnity-render = { workspace = true }
 concinnity-device = { workspace = true }
 concinnity-physics = { workspace = true }
-concinnity-audio = { workspace = true }
 concinnity-memory = { workspace = true }
 
 ciborium = "0.2"
 gilrs = "0.11.2"
+kira = "0.12"
+mint = "0.5"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 ctrlc = "3.5.2"
 serde = { version = "1", features = ["derive"] }
@@ -90,7 +90,7 @@ concinnity-memory = { workspace = true }
 
 [build-dependencies]
 concinnity-toolchain = { workspace = true }
-concinnity-font = { workspace = true }
+concinnity-core = { workspace = true }
 
 [lints]
 workspace = true

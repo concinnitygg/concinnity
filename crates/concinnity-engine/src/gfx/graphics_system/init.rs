@@ -12,7 +12,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::{
     draw_list::{self, MaterialEntry},
-    lights, skinning, text, transform_propagation,
+    lights, skeleton, text, transform_propagation,
 };
 use std::time::Instant;
 
@@ -55,7 +55,7 @@ struct SkinnedSkeletonEntry {
     handle: crate::ecs::SkinnedMeshHandle,
     name_id: AssetId,
     template_index: usize,
-    skeleton: skinning::Skeleton,
+    skeleton: skeleton::Skeleton,
     morph_names: Vec<String>,
     model: [[f32; 4]; 4],
     capsule: Option<crate::components::CharacterCapsule>,
@@ -274,26 +274,22 @@ impl GraphicsSystem {
             "gpu",
             &format!("{:?} {:?}", self.gpu_profile.vendor, self.gpu_profile.tier),
         );
-        // Resolve the master quality preset. An ephemeral `CN_QUALITY_PRESET`
-        // env override wins first and is never persisted, so a test / CI / GPU
-        // smoke can force a preset (e.g. `custom` for no clamp) without touching
-        // settings.bin. Otherwise the persisted choice; `None` there = never
-        // configured (a first launch, or a settings file written before the
-        // preset existed): seed `Auto` and persist once, which records the
-        // detection without baking any per-field value (the per-field overrides
-        // keep their `None = world default` meaning). `Auto` re-resolves from the
-        // detected tier each launch; `Custom` / an unclassified GPU impose no
-        // ceiling.
+        // Resolve the master quality preset. The launch's `--quality-preset` flag
+        // wins first and is never persisted, so a test / CI / GPU smoke can force
+        // a preset (e.g. `custom` for no clamp) without touching settings.bin.
+        // Otherwise the persisted choice; `None` there = never configured (a first
+        // launch, or a settings file written before the preset existed): seed
+        // `Auto` and persist once, which records the detection without baking any
+        // per-field value (the per-field overrides keep their `None = world
+        // default` meaning). `Auto` re-resolves from the detected tier each launch;
+        // `Custom` / an unclassified GPU impose no ceiling.
         use crate::gfx::quality_preset::QualityPreset;
-        let env_preset = std::env::var("CN_QUALITY_PRESET")
-            .ok()
-            .and_then(|s| QualityPreset::parse(&s));
-        let active_preset = env_preset
-            .or(user_graphics.quality_preset)
-            .unwrap_or_else(|| {
-                self.seed_first_launch_preset();
-                QualityPreset::Auto
-            });
+        let active_preset =
+            crate::app::dev_flags::resolve_quality_preset(user_graphics.quality_preset)
+                .unwrap_or_else(|| {
+                    self.seed_first_launch_preset();
+                    QualityPreset::Auto
+                });
         // Hold the resolved preset as the live value the settings-menu master
         // row cycles (and that an individual quality-row change flips to Custom).
         self.quality_preset = active_preset;
@@ -895,6 +891,8 @@ impl GraphicsSystem {
             ssr: ssr_settings,
             ssgi: ssgi_settings,
             rt_reflections: rt_reflection_settings,
+            rt_dynamic: crate::app::dev_flags::resolve_rt_dynamic(),
+            rt_skinned_geometry: crate::app::dev_flags::resolve_rt_skinned_geometry(),
             reflection_blur_scale,
             auto_exposure: auto_exposure_settings,
             auto_exposure_bias_ev,
@@ -1774,9 +1772,9 @@ impl GraphicsSystem {
                 .and_then(|s| s.0.clone())
         {
             environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
-                resolved_path: concinnity_store::source::resolve_source_path(
+                resolved_path: concinnity_host::store::source::resolve_source_path(
                     &info.source,
-                    concinnity_store::paths::assets_dir().as_deref(),
+                    concinnity_host::store::paths::assets_dir().as_deref(),
                 ),
                 prefilter_face_size: info.prefilter_face_size,
                 irradiance_face_size: info.irradiance_face_size,
@@ -1829,9 +1827,9 @@ impl GraphicsSystem {
                 .and_then(|c| c.0.clone())
         {
             color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
-                resolved_path: concinnity_store::source::resolve_source_path(
+                resolved_path: concinnity_host::store::source::resolve_source_path(
                     &src,
-                    concinnity_store::paths::assets_dir().as_deref(),
+                    concinnity_host::store::paths::assets_dir().as_deref(),
                 ),
             });
         }
@@ -1882,10 +1880,8 @@ impl GraphicsSystem {
             };
             match crate::build::font::deserialise(&bytes) {
                 Ok((aw, ah, supersample, size_px, rgba, metrics)) => {
-                    let metrics_map: std::collections::HashMap<
-                        u32,
-                        crate::build::font::GlyphMetrics,
-                    > = metrics.into_iter().map(|m| (m.char_code, m)).collect();
+                    let metrics_map: text::FontMetrics =
+                        metrics.into_iter().map(|m| (m.char_code, m)).collect();
                     let size_px = size_px as f32;
                     self.loaded_fonts.insert(
                         crate::ecs::FontHandle(slot as u32),

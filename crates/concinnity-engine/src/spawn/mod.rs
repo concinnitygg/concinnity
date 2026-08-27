@@ -6,8 +6,11 @@
 // allocator; the backend effects are recorded into the frame's op queue and
 // replayed at submission:
 //   mod.rs      system + the per-frame drains
-//   template.rs instantiate a copy of a placement (static or skinned)
 //   despawn.rs  subtree removal + draw-slot retirement
+//
+// Instantiating a copy of a placement is `concinnity_core::spawn`: what a copy
+// carries and when one is due is the world's, and the draw slot it lands in is
+// this crate's, handed over through the seams that module's builders take.
 //
 // Scheduled immediately before GraphicsSystem so a despawned entity is
 // already gone from the GlobalTransform x RenderHandle join when transforms
@@ -46,8 +49,9 @@ fn resolve_name(ctx: &PipelineContext, name: AssetId) -> Option<crate::ecs::Enti
 }
 
 mod despawn;
-mod template;
 mod visibility;
+
+use concinnity_core::spawn as template;
 
 // Allocate a destination draw slot and record the backend clone for it: the
 // `clone_slot` seam `template::spawn_from_template` drives. The slot index is
@@ -89,7 +93,7 @@ fn record_skinned_claim(
 }
 
 #[derive(Debug, Default)]
-pub struct SpawnSystem {
+pub(crate) struct SpawnSystem {
     // Cursor into the Events<DespawnRequest> queue (runtime entity despawn:
     // cn debug `despawn`, and gameplay-driven removal once that path exists).
     despawn_cmd_cursor: crate::ecs::EventCursor,
@@ -109,7 +113,7 @@ pub struct SpawnSystem {
 }
 
 impl SpawnSystem {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 }

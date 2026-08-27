@@ -184,6 +184,8 @@ fn def_interact() -> InputKey {
 mod tests {
     use super::*;
 
+    use alloc::string::String;
+    use alloc::vec::Vec;
     #[test]
     fn default_is_wasd_shift_space_e() {
         let m = KeyMap::default();
@@ -238,7 +240,8 @@ mod tests {
     fn empty_cbor_map_uses_all_defaults() {
         // A settings file predating every field (an empty map) still loads, each
         // field falling back through its `serde(default = "def_*")` helper.
-        let empty: std::collections::BTreeMap<String, InputKey> = std::collections::BTreeMap::new();
+        let empty: alloc::collections::BTreeMap<String, InputKey> =
+            alloc::collections::BTreeMap::new();
         let mut bytes = Vec::new();
         ciborium::into_writer(&empty, &mut bytes).unwrap();
         let loaded: KeyMap = ciborium::from_reader(&bytes[..]).unwrap();

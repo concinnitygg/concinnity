@@ -2,11 +2,10 @@
 
 use concinnity_core::ecs::RuntimeComponent;
 
-// The runtime's world when there is a runtime, its data half when there is
-// not. Both carry the same components; only the std one can run them.
-#[cfg(feature = "std")]
-pub(crate) type Inner = concinnity_engine::ecs::World;
-#[cfg(not(feature = "std"))]
+// One world on both tiers: it carries the components and the systems built over
+// them, and needs no operating system to do either. What differs is what a tier
+// has to put in it -- the std build's `App` starts it against the engine's
+// system table.
 pub(crate) type Inner = concinnity_core::ecs::World;
 
 /// A world: the components an application is built from.
@@ -58,7 +57,6 @@ impl World {
         Self { inner }
     }
 
-    #[cfg(feature = "std")]
     pub(crate) fn into_inner(self) -> Inner {
         self.inner
     }

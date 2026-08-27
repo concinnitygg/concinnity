@@ -25,7 +25,7 @@ enum Phase {
 }
 
 #[derive(Debug)]
-pub struct LoadingOverlaySystem {
+pub(crate) struct LoadingOverlaySystem {
     screen: Option<AssetId>,
     backdrop: Option<AssetId>,
     track: Option<AssetId>,
@@ -39,7 +39,7 @@ pub struct LoadingOverlaySystem {
 
 impl LoadingOverlaySystem {
     // Build the overlay from a world's `LoadingOverlay` request component.
-    pub fn new(config: LoadingOverlay) -> Self {
+    pub(crate) fn new(config: LoadingOverlay) -> Self {
         Self {
             screen: config.screen,
             backdrop: config.backdrop,
@@ -231,6 +231,7 @@ impl System for LoadingOverlaySystem {
 mod tests {
     use super::*;
     use crate::components::Screen;
+    use crate::ecs::SYSTEMS;
     use crate::ecs::World;
     use crate::gfx::scene_flow::SceneFlow;
 
@@ -311,7 +312,7 @@ mod tests {
     fn loading_scene_shows_the_overlay_and_drives_the_bar() {
         let mut world = overlay_world();
         set_status(&mut world, SceneLoadState::Loading, 0.25);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.step();
 
         assert!(shown(&world), "overlay screen should be on the stack");
@@ -329,7 +330,7 @@ mod tests {
     fn resident_scene_never_shows_the_overlay() {
         let mut world = overlay_world();
         set_status(&mut world, SceneLoadState::Resident, 1.0);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.step();
         assert!(!shown(&world));
     }
@@ -337,7 +338,7 @@ mod tests {
     #[test]
     fn missing_residency_status_never_shows_the_overlay() {
         let mut world = overlay_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.step();
         assert!(!shown(&world));
     }
@@ -351,7 +352,7 @@ mod tests {
             ..Default::default()
         });
         set_status(&mut world, SceneLoadState::Loading, 0.5);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         // Two steps: the first publishes the initial screen's stack, the
         // second is the earliest the overlay could react to it.
         world.step();
@@ -363,7 +364,7 @@ mod tests {
     fn resident_target_fades_the_overlay_out_and_hides_it() {
         let mut world = overlay_world();
         set_status(&mut world, SceneLoadState::Loading, 0.5);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.step();
         assert!(shown(&world));
 

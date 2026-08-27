@@ -5,5 +5,6 @@ mod scalar;
 pub mod vec3;
 
 pub use scalar::{
-    acos, asin, atan2, cos, exp, exp2, floor, fract, powf, rem_euclid, sin, sin_cos, sqrt, tan,
+    acos, asin, atan2, ceil, cos, exp, exp2, floor, fract, hypot, ln, log2, mul_add, powf, powi,
+    rem_euclid, round, sin, sin_cos, sqrt, tan, trunc,
 };

@@ -180,7 +180,7 @@ fn enabled() -> bool {
 // `None` when no host installed a state root, which turns every cache
 // operation below into a no-op: compiling is still correct, just not persisted.
 fn cache_dir() -> Option<PathBuf> {
-    concinnity_store::paths::shader_cache_dir()
+    concinnity_host::store::paths::shader_cache_dir()
 }
 
 // Scratch directory for runtime slangc invocations (the compiler works on
@@ -243,7 +243,7 @@ fn discard_entries(dir: &Path) {
 fn load(digest: &str) -> Option<Vec<u8>> {
     dirs_to_read(
         cache_dir(),
-        concinnity_store::paths::bundled_shader_cache_dir(),
+        concinnity_host::store::paths::bundled_shader_cache_dir(),
     )
     .iter()
     .find_map(|dir| load_in(dir, digest))

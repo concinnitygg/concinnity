@@ -152,7 +152,7 @@ impl SkinnedMeshTable {
     /// world needs a PhysicsSystem.
     pub fn has_capsule(&self) -> bool {
         self.0.iter().any(|e| {
-            postcard::from_bytes::<(u32, crate::components::SkinnedMesh)>(&e.data_bytes)
+            crate::blob::decode_exact::<(u32, crate::components::SkinnedMesh)>(&e.data_bytes)
                 .is_ok_and(|(_, sm)| sm.capsule.is_some())
         })
     }

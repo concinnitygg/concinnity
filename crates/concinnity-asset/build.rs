@@ -6,7 +6,7 @@
 //! header, and the only part this crate owns.
 //!
 //! The second is `ASSET_DOCS`: the rustdoc, serde keys, and `Default` literals
-//! of the authored schema, none of which survive compilation. concinnity-docs
+//! of the authored schema, none of which survive compilation. concinnity-cook
 //! assembles the asset reference from this table and the matching one
 //! concinnity-core emits for the runtime half.
 

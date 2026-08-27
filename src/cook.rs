@@ -202,7 +202,7 @@ impl WorldBuilder {
             .into_iter()
             .map(Some)
             .collect();
-        let mut world = concinnity_engine::ecs::World::from_blob(BlobData::new(payload_sections));
+        let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));
 
         for def in &result.defs {
             let mut component = ComponentAsset::from_baked(def).map_err(|e| {

@@ -15,6 +15,9 @@ pub enum BlobError {
     TruncatedMeta,
     /// metadata block is not decodable postcard
     Decode,
+    /// metadata decoded without reading the whole block; carries the number of
+    /// bytes left over
+    TrailingMeta(usize),
     /// metadata could not be serialized
     Encode,
 }

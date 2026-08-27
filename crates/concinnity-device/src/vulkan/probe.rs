@@ -681,6 +681,7 @@ impl VkContext {
         std::thread::spawn(move || {
             let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 reflection_probe::build_probe_payload(
+                    &crate::pool_rows::PoolRows,
                     &faces,
                     PROBE_FACE_SIZE,
                     PROBE_IRRADIANCE_FACE,

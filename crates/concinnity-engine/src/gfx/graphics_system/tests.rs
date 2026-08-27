@@ -287,6 +287,18 @@ fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
     gs
 }
 
+// `init_graphics` for a test that first WRITES a launch flag. The flag guard is
+// exclusive and not reentrant, so the caller holds it across init rather than
+// letting init take shared access of its own.
+fn init_graphics_under_flags(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
+    let mut gs = GraphicsSystem::new();
+    gs.test_hooks = Some(hooks);
+    let mut ctx = world.ctx();
+    crate::ecs::decompose::run(&mut ctx);
+    gs.run_init(&mut ctx);
+    gs
+}
+
 // Whether the world's parked backend slot currently holds a backend.
 fn backend_parked(world: &TestWorld) -> bool {
     world
@@ -2193,6 +2205,80 @@ fn an_explicit_override_survives_the_preset_ceiling() {
     );
 }
 
+// The `--quality-preset` launch flag has to reach the CEILING, not merely the
+// menu label. On a mid-tier GPU `Auto` resolves to the `High` ceiling, which
+// clamps ray-traced reflections off and logs nothing about it, so a probe that
+// forces `ultra` and never checks would measure a non-RT frame and read it as a
+// result. Both halves are asserted on the same GPU and the same authored world.
+#[test]
+fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
+    let authored = crate::components::PostProcessConfig {
+        ray_traced_reflections: true,
+        ..Default::default()
+    };
+    let mut settings = crate::config::Settings::default();
+    settings.graphics.quality_preset = Some(QualityPreset::Auto);
+
+    let _flags = crate::app::dev_flags::write_access();
+
+    crate::app::dev_flags::set_quality_preset(None);
+    let (clamped, hooks) = recording_hooks_with(settings.clone(), profile_at(GpuTier::MidDiscrete));
+    let mut world = post_config_scene(authored.clone()).build();
+    let gs = init_graphics_under_flags(&mut world, hooks);
+    assert_eq!(gs.quality_preset, QualityPreset::Auto);
+    assert!(
+        !lock(&clamped).init.as_ref().unwrap().rt_reflections_on,
+        "the Auto -> High ceiling clamps RT off, silently"
+    );
+
+    crate::app::dev_flags::set_quality_preset(Some(QualityPreset::Ultra));
+    let (forced, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
+    let mut world = post_config_scene(authored).build();
+    let gs = init_graphics_under_flags(&mut world, hooks);
+    assert_eq!(
+        gs.quality_preset,
+        QualityPreset::Ultra,
+        "the flag outranks the persisted Auto"
+    );
+    assert!(
+        lock(&forced).init.as_ref().unwrap().rt_reflections_on,
+        "the Ultra ceiling the flag forced permits RT on the same GPU"
+    );
+}
+
+// The two ray-tracing launch flags reach the assembled `BackendInit` the
+// backends destructure, and an absent flag lands on the shipping value.
+#[test]
+fn the_ray_tracing_flags_reach_the_backend() {
+    use crate::app::dev_flags::RtDynamicMode;
+
+    let _flags = crate::app::dev_flags::write_access();
+
+    crate::app::dev_flags::set_rt_dynamic(None);
+    crate::app::dev_flags::set_rt_skinned_geometry(None);
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    init_graphics_under_flags(&mut world, hooks);
+    {
+        let s = lock(&state);
+        let init = s.init.as_ref().unwrap();
+        assert_eq!(init.rt_dynamic, RtDynamicMode::Auto);
+        assert!(init.rt_skinned_geometry);
+    }
+
+    crate::app::dev_flags::set_rt_dynamic(Some(RtDynamicMode::Rebuild));
+    crate::app::dev_flags::set_rt_skinned_geometry(Some(false));
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    init_graphics_under_flags(&mut world, hooks);
+    {
+        let s = lock(&state);
+        let init = s.init.as_ref().unwrap();
+        assert_eq!(init.rt_dynamic, RtDynamicMode::Rebuild);
+        assert!(!init.rt_skinned_geometry);
+    }
+}
+
 // A ceiling only ever reduces: a world that authored nothing is not "upgraded"
 // by a high tier, and the resolved preset is held for the master menu row.
 #[test]
@@ -2951,8 +3037,8 @@ fn text_naming_no_font_falls_back_to_the_built_in_face() {
         &overlay.fonts,
         640.0,
         360.0,
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
+        &crate::gfx::overlay_maps::ClipRects::new(),
+        &crate::gfx::overlay_maps::OverlayLayers::new(),
     );
     assert_eq!(calls.len(), 1, "one draw call for the one label");
     // The space carries no quad of its own; every other character draws one.

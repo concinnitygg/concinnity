@@ -54,6 +54,9 @@ pub(crate) struct InitSnapshot {
     pub fog: bool,
     pub(crate) taa_enabled: bool,
     pub(crate) ssao_on: bool,
+    pub(crate) rt_reflections_on: bool,
+    pub(crate) rt_dynamic: concinnity_render::rt_geom::RtDynamicMode,
+    pub(crate) rt_skinned_geometry: bool,
     // Per shader bucket, the compiled (vertex, fragment) byte counts. A bucket
     // of (0, 0) is a world that declared no Shader for it, which every backend
     // reads as "use the engine's own main-pass program".
@@ -239,6 +242,9 @@ fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
         fog: init.fx.fog.is_some(),
         taa_enabled: init.post.taa_enabled,
         ssao_on: init.post.ssao.is_some(),
+        rt_reflections_on: init.post.rt_reflections.is_some(),
+        rt_dynamic: init.post.rt_dynamic,
+        rt_skinned_geometry: init.post.rt_skinned_geometry,
     });
 }
 

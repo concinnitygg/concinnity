@@ -39,7 +39,7 @@ pub(crate) fn turn_toward(current: f32, desired: f32, max_step: f32) -> f32 {
 }
 
 #[derive(Debug)]
-pub struct ThirdPersonSystem {
+pub(crate) struct ThirdPersonSystem {
     // From the camera controller (shared with the first-person modes).
     move_speed: f32,
     sprint_multiplier: f32,
@@ -70,7 +70,7 @@ pub struct ThirdPersonSystem {
 impl ThirdPersonSystem {
     // Build from a `Camera3D`'s controller settings; the caller has already
     // established that `controller.follow` is set.
-    pub fn new(controller: &CameraController) -> Self {
+    pub(crate) fn new(controller: &CameraController) -> Self {
         let follow = controller.follow.clone().unwrap_or_default();
         Self {
             move_speed: controller.move_speed,
@@ -354,6 +354,7 @@ impl System for ThirdPersonSystem {
 mod tests {
     use super::*;
     use crate::components::{FollowController, FrameInput};
+    use crate::ecs::SYSTEMS;
     use crate::ecs::World;
     use crate::ecs::asset_id::intern;
     use std::time::Duration;
@@ -431,7 +432,7 @@ mod tests {
         world.add_component(crate::components::CharacterRig::new(
             target,
             0,
-            crate::gfx::skinning::IDENTITY,
+            crate::gfx::transform::IDENTITY,
             0.5,
             0.3,
         ));
@@ -457,7 +458,7 @@ mod tests {
     #[test]
     fn follow_controller_spawns_third_person_system() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert!(names.contains(&"ThirdPersonSystem"), "{names:?}");
         assert!(!names.contains(&"Camera3DSystem"), "{names:?}");
@@ -469,7 +470,7 @@ mod tests {
     #[test]
     fn forward_input_steers_rig_params_and_camera() {
         let (mut world, target) = follow_world(FollowDrive::Direct, 0.0);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         step_held(
             &mut world,
             FrameInput {
@@ -510,7 +511,7 @@ mod tests {
     #[test]
     fn strafe_turns_heading_and_root_motion_drive_stays_passive() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         // The turn budget is turn_speed x accumulated wall-clock dt, so give
         // the quarter turn several times the steps it needs: with tight 5 ms
         // sleeps 4 steps sat right at the pi/2 boundary and failed on fast
@@ -541,7 +542,7 @@ mod tests {
     #[test]
     fn jump_press_sets_takeoff_velocity() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 1.0);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         step_held(
             &mut world,
             FrameInput {
@@ -569,7 +570,7 @@ mod tests {
     fn direct_drive_moves_the_capsule_through_physics() {
         let (mut world, _) = follow_world(FollowDrive::Direct, 0.0);
         world.add_component(crate::components::PhysicsConfig::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         step_held(
             &mut world,
             FrameInput {
@@ -616,7 +617,7 @@ mod tests {
             }),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         step_held(&mut world, FrameInput::default(), 6);
 
         let camera = world.query::<crate::components::Camera3D>().next().unwrap();
@@ -640,7 +641,7 @@ mod tests {
     fn idle_rig_rests_on_the_floor() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
         world.add_component(crate::components::PhysicsConfig::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         step_held(&mut world, FrameInput::default(), 120);
 
         let rig = world

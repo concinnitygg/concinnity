@@ -15,9 +15,11 @@
 //! and mixed in by `lib.rs`, which is what lets the result come out the same
 //! from a registry checkout where no sibling crate exists to read.
 //!
-//! And `RUNTIME_ASSET_DOCS`: the rustdoc, serde keys, and `Default` literals of
-//! the `impl Component` half of the asset schema, which concinnity-docs joins
-//! with `concinnity_asset::ASSET_DOCS` to build the reference. Same reason it is
+//! And two more derived constants. `RUNTIME_ASSET_DOCS`: the rustdoc, serde
+//! keys, and `Default` literals of the `impl Component` half of the asset
+//! schema, which concinnity-cook joins with `concinnity_asset::ASSET_DOCS` to
+//! build the reference. And `BUILD_SOURCE_HASH`: the payload format helpers
+//! concinnity-cook folds into every payload cache key. Same reason both are
 //! emitted here rather than read from a sibling directory.
 
 use std::path::{Path, PathBuf};
@@ -28,6 +30,7 @@ fn main() {
 
     emit_component_schema_hash(&manifest, &out);
     emit_record_schema_hash(&manifest, &out);
+    emit_build_source_hash(&manifest, &out);
     emit_runtime_asset_docs(&manifest, &out);
     emit_backend_cfg();
 }
@@ -63,6 +66,28 @@ fn emit_record_schema_hash(manifest: &Path, out: &Path) {
         ),
     )
     .expect("write schema_hash.rs");
+}
+
+// The payload format helpers concinnity-cook folds into every payload cache key.
+// A cached payload is a function of the code that produced it, and that code is
+// split across the two crates, so the half living here is published as a
+// constant rather than read out of this directory by the consumer's build
+// script: a registry checkout of concinnity-cook has no sibling copy of these
+// files. Hashed over its own directory so an edit outside it cannot invalidate
+// payloads already in the cache.
+fn emit_build_source_hash(manifest: &Path, out: &Path) {
+    let hash = concinnity_toolchain::hash_sources(&[manifest.join("src/build")]);
+
+    std::fs::write(
+        out.join("build_source_hash.rs"),
+        format!(
+            "/// Hash of the payload format helpers in `build`, folded into the\n\
+             /// cook's payload cache key so a change here misses instead of\n\
+             /// replaying bytes an older version of this code produced.\n\
+             pub const BUILD_SOURCE_HASH: u32 = {hash:#010x};\n"
+        ),
+    )
+    .expect("write build_source_hash.rs");
 }
 
 // The runtime half of the asset reference as source text: rustdoc, serde keys,

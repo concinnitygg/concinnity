@@ -353,22 +353,21 @@ impl HealthState {
         self.snapshot = HealthSnapshot {
             heap: concinnity_memory::stats(),
             rss: crate::app::sysmem::process_resident_bytes(),
-            total_ram: world.memory_budget().and_then(|b| b.total_ram_bytes),
+            total_ram: concinnity_engine::ecs::memory_budget(world).and_then(|b| b.total_ram_bytes),
             pool_bytes: pool_bytes(world),
             // A backend that cannot report its allocation reports zero; that is
             // "unknown", not "nothing allocated".
             vram_bytes: (render.vram_bytes > 0).then_some(render.vram_bytes),
-            vram_budget: world
-                .gpu_profile()
+            vram_budget: concinnity_engine::ecs::gpu_profile(world)
                 .map(|p| p.memory_budget_bytes)
                 .filter(|&b| b > 0),
             systems_cores,
             // A failed read holds the last known rate rather than blanking the row.
             process_cores: self.cpu.sample().or(self.snapshot.process_cores),
-            total_cores: world.thread_budget().map(|b| b.total_cores),
+            total_cores: concinnity_engine::ecs::thread_budget(world).map(|b| b.total_cores),
             tags: concinnity_memory::ledger().snapshot(),
             hot_class: concinnity_memory::size_classes().and_then(|c| c.busiest()),
-            drift: world.memory_drift(),
+            drift: concinnity_engine::ecs::memory_drift(world),
         };
     }
 }
@@ -377,7 +376,7 @@ impl HealthState {
 // explains. `None` when nothing is streaming, so the row reads "--" rather than
 // claiming the engine tracks zero bytes.
 fn pool_bytes(world: &World) -> Option<u64> {
-    let stats = world.streaming_stats()?;
+    let stats = concinnity_engine::ecs::streaming_stats(world)?;
     [stats.texture_bytes, stats.mesh_bytes, stats.chunk_bytes]
         .into_iter()
         .flatten()

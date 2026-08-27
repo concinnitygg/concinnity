@@ -6,7 +6,8 @@
 // *lifetimes*: it does not allocate transient GPU resources (those stay
 // backend-owned).
 
-use std::num::NonZeroU32;
+use concinnity_core::math::floor;
+use core::num::NonZeroU32;
 
 /// One side of a `PassBuilder::read_*` / `write_*` declaration. The
 /// resource is a small dense index into the graph's resource arena; the
@@ -268,7 +269,7 @@ impl ReadStages {
     }
 }
 
-impl std::ops::BitOr for ReadStages {
+impl core::ops::BitOr for ReadStages {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
         self.union(rhs)
@@ -459,7 +460,7 @@ impl TextureSize {
         match self {
             TextureSize::Absolute(n) => n.max(1),
             TextureSize::Drawable => drawable.max(1),
-            TextureSize::DrawableScaled(f) => ((drawable as f32 * f).floor() as u32).max(1),
+            TextureSize::DrawableScaled(f) => (floor(drawable as f32 * f) as u32).max(1),
         }
     }
 }
@@ -614,7 +615,7 @@ impl TextureUsage {
     }
 }
 
-impl std::ops::BitOr for TextureUsage {
+impl core::ops::BitOr for TextureUsage {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
         self.union(rhs)
@@ -654,7 +655,7 @@ impl BufferUsage {
     }
 }
 
-impl std::ops::BitOr for BufferUsage {
+impl core::ops::BitOr for BufferUsage {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
         self.union(rhs)

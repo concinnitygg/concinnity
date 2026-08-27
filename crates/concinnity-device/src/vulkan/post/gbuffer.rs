@@ -23,6 +23,7 @@
 // frames-in-flight deep; this follows the per-frame `Vec` shape of taa.rs.
 
 use ash::vk;
+use concinnity_core::gfx::transform::IDENTITY;
 
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
@@ -35,7 +36,6 @@ use concinnity_render::uniforms::GBufferView;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
-use super::super::math::IDENTITY4;
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
@@ -941,8 +941,8 @@ impl GbufferResources {
             velocity_images: Vec::new(),
             depth_images: Vec::new(),
             framebuffers: Vec::new(),
-            prev_view_proj: IDENTITY4,
-            prev_models: vec![IDENTITY4; object_count],
+            prev_view_proj: IDENTITY,
+            prev_models: vec![IDENTITY; object_count],
             hot_reload,
         };
         me.build_targets(ctx, queue, extent, pooled)?;

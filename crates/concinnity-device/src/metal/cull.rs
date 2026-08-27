@@ -5,6 +5,7 @@
 // bindless texture argument buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -911,7 +912,7 @@ impl MtlContext {
                 cam_pos: [0.0; 3],
                 object_count: object_count as u32,
                 // Unused (Hi-Z disabled); identity keeps the struct clean.
-                prev_view_proj: super::math::IDENTITY4,
+                prev_view_proj: IDENTITY,
                 hiz_size: [1.0, 1.0],
                 hiz_mip_count: 1,
                 hiz_enabled: 0,

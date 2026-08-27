@@ -162,7 +162,7 @@ pub struct GraphicsSystem {
     // texture into the text-atlas pool (appended after the font atlases); the
     // chip id lists and scroll clip bands drive the per-frame HUD layout.
     loaded_fonts: text::FontSet,
-    sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
+    sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots,
     debug_hud_chips: Vec<AssetId>,
     stat_hud_chips: Vec<AssetId>,
     // Viewport-pick candidates captured at init, one per prop entity, only
@@ -241,7 +241,7 @@ pub struct GraphicsSystem {
     // band, so the draw path scissors it and off-band rows do not bleed over the
     // panel chrome. Empty when no ScrollPanel was declared; handed to
     // OverlaySystem (inside `OverlayAssets`) at the end of init.
-    clip_rects: std::collections::HashMap<AssetId, [f32; 4]>,
+    clip_rects: crate::gfx::overlay_maps::ClipRects,
     // Live gameplay movement key map (the source of truth for the Controls-tab
     // rebind rows). Seeded at init from the persisted `ControlsSettings.keymap`
     // or the engine default, pushed to the backend once after it is built, and
@@ -444,7 +444,7 @@ impl GraphicsSystem {
             scene_flow: None,
             scene_visibility: Default::default(),
             loaded_fonts: text::FontSet::default(),
-            sprite_texture_slots: std::collections::HashMap::new(),
+            sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             pick_candidates: Vec::new(),
@@ -465,7 +465,7 @@ impl GraphicsSystem {
             post_config: crate::components::PostProcessConfig::default(),
             sliders: Vec::new(),
             cycle_value_labels: std::collections::HashMap::new(),
-            clip_rects: std::collections::HashMap::new(),
+            clip_rects: crate::gfx::overlay_maps::ClipRects::new(),
             keymap: crate::gfx::keymap::KeyMap::default(),
             rebind_rows: Vec::new(),
             gamepad_map: crate::components::GamepadMap::default(),

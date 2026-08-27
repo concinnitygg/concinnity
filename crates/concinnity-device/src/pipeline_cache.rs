@@ -51,7 +51,7 @@ fn enabled() -> bool {
 // `None` when no host installed a state root, which turns every operation
 // below into a no-op: pipelines are created fresh rather than warmed from disk.
 fn file_path(name: &str) -> Option<PathBuf> {
-    concinnity_store::paths::pipeline_cache_dir().map(|dir| dir.join(name))
+    concinnity_host::store::paths::pipeline_cache_dir().map(|dir| dir.join(name))
 }
 
 // Read the persisted blob for `name`. An empty or over-budget file is deleted

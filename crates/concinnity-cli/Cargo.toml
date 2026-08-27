@@ -46,7 +46,6 @@ concinnity-shader = { workspace = true }
 concinnity-engine = { workspace = true, features = ["alloc-detail"] }
 concinnity-memory = { workspace = true }
 concinnity-world = { workspace = true }
-concinnity-docs = { workspace = true }
 
 clap = { version = "4", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

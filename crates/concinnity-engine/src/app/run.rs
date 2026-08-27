@@ -100,7 +100,7 @@ pub fn run(options: RunOptions) -> std::io::Result<()> {
 // The primary blob's path, which is what a load failure is reported against.
 // `None` when nothing anchored the state tree, so there is no path to name.
 fn primary_blob_path() -> Option<std::path::PathBuf> {
-    concinnity_store::blob::blob_path(0).map(std::path::PathBuf::from)
+    concinnity_host::store::blob::blob_path(0).map(std::path::PathBuf::from)
 }
 
 // Report a fatal startup failure: always to the log, and on screen as well when
@@ -159,7 +159,7 @@ impl BlobSource<'_> {
 /// calls this.
 pub fn run_from(state_dir: &Path, blob: BlobSource<'_>) -> std::io::Result<()> {
     init_logging();
-    concinnity_store::paths::set_state_dir(state_dir);
+    concinnity_host::store::paths::set_state_dir(state_dir);
 
     let primary = blob.primary();
     let mut app = App::new();
@@ -192,7 +192,7 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Resul
     // Resolved before `start()` (while the GraphicsConfig is still present) and
     // reused after, so the post-start loop choice doesn't depend on the config
     // component, which `start()` drains.
-    let renders = app.world().renders();
+    let renders = crate::ecs::renders(app.world());
 
     if let Some(max) = options.max_frames {
         for config in app
@@ -239,7 +239,7 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Resul
 // requested. The backend is still parked in the world after the loop ends.
 fn capture_exit_screenshot(app: &mut App, path: Option<&str>) {
     let Some(path) = path else { return };
-    let Some(mut backend) = app.world_mut().take_render_backend() else {
+    let Some(mut backend) = crate::ecs::take_render_backend(app.world_mut()) else {
         tracing::warn!("screenshot skipped: no live backend at exit");
         return;
     };

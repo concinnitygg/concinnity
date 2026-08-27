@@ -290,7 +290,7 @@ impl Settings {
     // (a settings change). Returns defaults when nothing is stored or the file
     // is unreadable.
     pub(crate) fn load() -> Self {
-        concinnity_store::paths::settings_path()
+        concinnity_host::store::paths::settings_path()
             .map(|path| Self::load_from(&path))
             .unwrap_or_default()
     }
@@ -299,7 +299,7 @@ impl Settings {
     // needed. A host that installed no state root has nowhere to persist to,
     // which is not an error: the choices apply for the rest of the run.
     pub(crate) fn save(&self) -> std::io::Result<()> {
-        match concinnity_store::paths::settings_path() {
+        match concinnity_host::store::paths::settings_path() {
             Some(path) => self.save_to(&path),
             None => Ok(()),
         }
@@ -462,7 +462,7 @@ mod tests {
         // The sandbox is somewhere else entirely, never the real settings file.
         assert_ne!(
             Some(&path),
-            concinnity_store::paths::settings_path().as_ref()
+            concinnity_host::store::paths::settings_path().as_ref()
         );
 
         s.save_to(&path).unwrap();
@@ -477,15 +477,15 @@ mod tests {
     // and to nothing at all when no host installed one.
     #[test]
     fn settings_path_is_under_state_dir() {
-        match concinnity_store::paths::settings_path() {
+        match concinnity_host::store::paths::settings_path() {
             Some(p) => {
                 assert_eq!(p.file_name().unwrap(), "settings");
                 assert_eq!(
                     Some(p),
-                    concinnity_store::paths::state_dir().map(|d| d.join("settings"))
+                    concinnity_host::store::paths::state_dir().map(|d| d.join("settings"))
                 );
             }
-            None => assert_eq!(concinnity_store::paths::state_dir(), None),
+            None => assert_eq!(concinnity_host::store::paths::state_dir(), None),
         }
     }
 }

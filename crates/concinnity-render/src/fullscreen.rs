@@ -17,6 +17,8 @@
 //! (dead code) on a Metal build.
 
 use crate::render_types::TextDrawCall;
+use alloc::string::String;
+use concinnity_core::math::{ceil, floor};
 
 /// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
 /// units, already mapped through the overlay transform by
@@ -41,10 +43,10 @@ pub fn clip_rect_to_scissor(
     let ah = attach.1 as f32;
     let sx = if ui.0 > 0.0 { aw / ui.0 } else { 1.0 };
     let sy = if ui.1 > 0.0 { ah / ui.1 } else { 1.0 };
-    let x0 = (clip[0] * sx).floor().clamp(0.0, aw);
-    let y0 = (clip[1] * sy).floor().clamp(0.0, ah);
-    let x1 = ((clip[0] + clip[2]) * sx).ceil().clamp(0.0, aw);
-    let y1 = ((clip[1] + clip[3]) * sy).ceil().clamp(0.0, ah);
+    let x0 = floor(clip[0] * sx).clamp(0.0, aw);
+    let y0 = floor(clip[1] * sy).clamp(0.0, ah);
+    let x1 = ceil((clip[0] + clip[2]) * sx).clamp(0.0, aw);
+    let y1 = ceil((clip[1] + clip[3]) * sy).clamp(0.0, ah);
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
@@ -69,8 +71,8 @@ pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
     text_calls
         .iter()
         .map(|c| {
-            let v = std::mem::size_of_val(c.vertices.as_slice()) as u64;
-            let i = std::mem::size_of_val(c.indices.as_slice()) as u64;
+            let v = core::mem::size_of_val(c.vertices.as_slice()) as u64;
+            let i = core::mem::size_of_val(c.indices.as_slice()) as u64;
             align_up(v, align) + align_up(i, align)
         })
         .sum()
@@ -233,8 +235,12 @@ pub fn encode_fullscreen<E: FullscreenPass>(enc: &E, rec: &E::Rec) {
 mod tests {
     use super::*;
     use crate::render_types::TextDrawCall;
-    use std::cell::RefCell;
+    use core::cell::RefCell;
 
+    use alloc::format;
+    use alloc::string::ToString;
+    use alloc::vec;
+    use alloc::vec::Vec;
     #[test]
     fn clip_inside_attachment_passes_through() {
         // Logical units are attachment pixels (Windows, unscaled X11): 1:1.
@@ -370,8 +376,8 @@ mod tests {
             let mut cursor = 0u64;
             for c in &calls {
                 for block in [
-                    std::mem::size_of_val(c.vertices.as_slice()) as u64,
-                    std::mem::size_of_val(c.indices.as_slice()) as u64,
+                    core::mem::size_of_val(c.vertices.as_slice()) as u64,
+                    core::mem::size_of_val(c.indices.as_slice()) as u64,
                 ] {
                     cursor = align_up(cursor, align) + block;
                     assert!(cursor <= total, "cursor {cursor} exceeded reserved {total}");

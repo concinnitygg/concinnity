@@ -425,8 +425,8 @@ mod tests {
 
     const FONT: FontHandle = FontHandle(0);
 
-    fn make_glyph(advance_px: f32) -> crate::build::font::GlyphMetrics {
-        crate::build::font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> crate::gfx::font::GlyphMetrics {
+        crate::gfx::font::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,
@@ -441,7 +441,7 @@ mod tests {
     // A fixed-width synthetic font (every glyph 10px in a 16px em) makes the
     // built geometry exact.
     fn loaded_fonts() -> text::FontSet {
-        let metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics> = ('a'..='z')
+        let metrics: crate::gfx::text::FontMetrics = ('a'..='z')
             .chain('A'..='Z')
             .chain('0'..='9')
             .chain(['.', ' '])

@@ -12,6 +12,7 @@
 // the rest of the scene. Mirrors `src/directx/decal.rs` and
 // `src/metal/decal.rs`.
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use std::cell::Cell;
 use std::ffi::CString;
 
@@ -770,7 +771,7 @@ impl VkContext {
         let extent = self.render_extent;
 
         // Upload this frame's view UBO.
-        let inv_vp = super::math::mat4_inverse(vp);
+        let inv_vp = mat4_inverse(vp);
         let viewport_pix = [extent.width as f32, extent.height as f32];
         let view_uni = DecalView {
             vp,

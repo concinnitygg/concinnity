@@ -8,7 +8,6 @@
 
 use crate::ecs::FontHandle;
 use crate::gfx::text::{LoadedFont, derive_cap_px};
-use std::collections::HashMap;
 
 const BAKED_ATLAS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_font.bin"));
 
@@ -25,7 +24,7 @@ pub(crate) struct BuiltinFont {
 // way to draw text with it.
 pub(crate) fn load(handle: FontHandle) -> Option<BuiltinFont> {
     let (atlas_w, atlas_h, supersample, size_px, rgba, metrics) =
-        match concinnity_cpu::build::font::deserialise(BAKED_ATLAS) {
+        match concinnity_core::build::font::deserialise(BAKED_ATLAS) {
             Ok(decoded) => decoded,
             Err(e) => {
                 tracing::error!("built-in font atlas failed to decode: {e}");
@@ -33,7 +32,8 @@ pub(crate) fn load(handle: FontHandle) -> Option<BuiltinFont> {
             }
         };
 
-    let metrics: HashMap<u32, _> = metrics.into_iter().map(|m| (m.char_code, m)).collect();
+    let metrics: crate::gfx::text::FontMetrics =
+        metrics.into_iter().map(|m| (m.char_code, m)).collect();
     let size_px = size_px as f32;
     Some(BuiltinFont {
         loaded: LoadedFont {

@@ -2,6 +2,7 @@ use super::*;
 use crate::components::{
     Screen, Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker,
 };
+use crate::ecs::SYSTEMS;
 use crate::ecs::World;
 use crate::ecs::asset_id::intern;
 use crate::ecs::{AudioClipHandle, TextureHandle};
@@ -323,7 +324,7 @@ fn two_page_story() -> Story {
 #[test]
 fn initial_stage_view_auto_starts() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "First page.");
     assert_eq!(label_content(&world, "s_stage_name"), "Ayame");
@@ -333,7 +334,7 @@ fn initial_stage_view_auto_starts() {
 #[test]
 fn advance_walks_pages_to_the_ending() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     world
@@ -386,7 +387,7 @@ fn choices_fill_buttons_and_choose_jumps() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     // A click over a (still hidden) choice button fires both the advance
@@ -456,7 +457,7 @@ fn stage_dressing_applies_to_sprites() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     let bg = intern("s_stage_bg");
@@ -495,7 +496,7 @@ fn page_audio_sends_play_cues() {
     story.nodes[0].pages[0].music = Some(AudioClipHandle(0));
     story.nodes[0].pages[0].sounds = vec![AudioClipHandle(1)];
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     let mut cursor = crate::ecs::EventCursor::default();
@@ -518,7 +519,7 @@ fn typewriter_reveals_and_advance_completes() {
     // Slow enough that no character appears within the test's runtime.
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
 
@@ -583,7 +584,7 @@ fn ops_raise_flags_and_gates_redirect() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Intro.");
     // The intro's op set `asked`; the second page's gate fires instead
@@ -639,7 +640,7 @@ fn gated_choices_filter_and_remap() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -694,7 +695,7 @@ fn menu_gates_redirect_past_the_menu() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -737,7 +738,7 @@ fn story_save_round_trips() {
 #[test]
 fn continue_without_a_save_starts_fresh() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -775,7 +776,7 @@ fn jump_pages_target_their_node() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -789,7 +790,7 @@ fn jump_pages_target_their_node() {
 #[test]
 fn reload_swaps_the_graph_in_place() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -826,7 +827,7 @@ fn reload_swaps_the_graph_in_place() {
 #[test]
 fn reload_with_the_node_deleted_restarts() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     let mut edited = two_page_story();
@@ -867,7 +868,7 @@ fn reload_refreshes_an_open_menu() {
         ..Default::default()
     };
     let mut world = story_world(choice_story("Go"));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -942,7 +943,7 @@ fn numeric_ops_accumulate_and_comparisons_gate() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -962,7 +963,7 @@ fn numeric_ops_accumulate_and_comparisons_gate() {
 #[test]
 fn quick_row_toggles_and_suppresses_the_same_click_advance() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_qauto_lbl"), "Auto");
     assert_eq!(label_content(&world, "s_stage_qsave_lbl"), "Save");
@@ -991,7 +992,7 @@ fn quick_row_toggles_and_suppresses_the_same_click_advance() {
 #[test]
 fn backlog_lists_history_and_a_click_dismisses() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1053,12 +1054,12 @@ fn save_overlay_writes_and_load_resumes() {
     let mut story = two_page_story();
     story.save_key = "slot_test".to_string();
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     // Point the world-constructed system's saves at the temp directory
     // (the process-global state root must stay untouched: tests share
     // it).
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.save_dir = Some(dir.path().to_path_buf());
         }
     }
@@ -1109,7 +1110,7 @@ fn holding_ctrl_fast_forwards_and_lights_skip() {
     let mut story = two_page_story();
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
 
@@ -1137,9 +1138,9 @@ fn slot_overlay_scrolls_the_window_over_all_slots() {
     let mut story = two_page_story();
     story.save_key = "scroll_test".to_string();
     let mut world = multi_slot_world(story, 3);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.save_dir = Some(dir.path().to_path_buf());
         }
     }
@@ -1189,9 +1190,9 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
     let mut story = two_page_story();
     story.save_key = "pause_save".to_string();
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.save_dir = Some(dir.path().to_path_buf());
         }
     }
@@ -1223,7 +1224,7 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
 #[test]
 fn pause_toggle_returns_to_the_stage_not_a_blank_view() {
     let mut world = story_world_with_pause(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert!(sprite_visible(&world, "s_stage_bg"), "stage starts visible");
 
@@ -1260,7 +1261,7 @@ fn pause_toggle_returns_to_the_stage_not_a_blank_view() {
 #[test]
 fn settings_back_returns_to_the_opener() {
     let mut world = story_world_with_pause(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     // Pause -> Settings -> Back returns to the pause menu.
@@ -1317,9 +1318,9 @@ fn title_load_works_after_returning_to_the_title() {
     let mut story = two_page_story();
     story.save_key = "replay".to_string();
     let mut world = story_world_with_pause(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.save_dir = Some(dir.path().to_path_buf());
         }
     }
@@ -1380,7 +1381,7 @@ fn choice_survives_a_spurious_slot_click() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1413,7 +1414,7 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
     let mut story = two_page_story();
     story.save_key = "titletest".to_string();
     let mut world = title_menu_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     // After init the emitted positions are untouched: had init laid the menu
     // out, the follow-region offsets would already be baked in wrong.
@@ -1422,7 +1423,7 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
 
     // Point saves at an empty directory so the layout is the two-button case.
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.save_dir = Some(dir.path().to_path_buf());
         }
     }
@@ -1447,7 +1448,7 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
 // global state root must stay untouched: tests share it).
 fn point_saves(world: &mut World, dir: &std::path::Path) {
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.save_dir = Some(dir.to_path_buf());
         }
     }
@@ -1459,7 +1460,7 @@ fn point_saves(world: &mut World, dir: &std::path::Path) {
 // test module.
 fn backdate_clock(world: &mut World, secs: f32) {
     for system in world.systems_mut() {
-        if let crate::ecs::SystemAsset::StorySystem(s) = system {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.last_step = Some(Instant::now() - std::time::Duration::from_secs_f32(secs));
         }
     }
@@ -1532,7 +1533,7 @@ fn typewriter_reveals_the_page_over_time() {
     let mut story = two_page_story();
     story.text_speed = 100.0;
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     // First step's dt is zero, so nothing has revealed yet.
     assert_eq!(label_content(&world, "s_stage_text"), "");
@@ -1550,7 +1551,7 @@ fn toggle_skip_snaps_the_current_page_to_full() {
     let mut story = two_page_story();
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
 
@@ -1567,7 +1568,7 @@ fn toggle_skip_snaps_the_current_page_to_full() {
 #[test]
 fn quick_toggle_is_inert_during_a_choice_menu() {
     let mut world = story_world(one_choice_story("Go", Vec::new()));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1588,7 +1589,7 @@ fn quick_toggle_is_inert_during_a_choice_menu() {
 #[test]
 fn skip_mode_turns_pages_at_its_cadence() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "First page.");
 
@@ -1605,7 +1606,7 @@ fn skip_mode_turns_pages_at_its_cadence() {
 #[test]
 fn auto_mode_turns_a_read_page_after_the_delay() {
     let mut world = story_world(two_page_story());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     world
@@ -1643,7 +1644,7 @@ fn pageless_node_enters_its_choice_menu_directly() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
 }
@@ -1682,7 +1683,7 @@ fn pageless_choice_gate_redirects_on_entry() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
 }
@@ -1718,7 +1719,7 @@ fn first_page_gate_redirects_on_node_entry() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
 }
@@ -1755,7 +1756,7 @@ fn all_gated_choices_fall_through() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Fell through.");
 }
@@ -1798,7 +1799,7 @@ fn gate_loop_is_stopped_by_the_hop_limit() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     // Must terminate rather than hang; nothing lands on the stage.
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
@@ -1811,7 +1812,7 @@ fn skip_snaps_a_freshly_entered_page_to_full() {
     let mut story = two_page_story();
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     // Skip on: snaps page 1 now.
@@ -1834,7 +1835,7 @@ fn skip_snaps_a_freshly_entered_page_to_full() {
 fn choice_menu_fires_its_one_shot_sounds() {
     let click = AudioClipHandle(0);
     let mut world = story_world(one_choice_story("Go", vec![click]));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1859,7 +1860,7 @@ fn choice_menu_fires_its_one_shot_sounds() {
 #[test]
 fn unoccupied_option_slots_blank_and_go_transparent() {
     let mut world = two_option_world(one_choice_story("Go", Vec::new()));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1888,7 +1889,7 @@ fn continue_resumes_from_a_written_auto_save() {
     let mut story = two_page_story();
     story.save_key = "cont".to_string();
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     point_saves(&mut world, dir.path());
     world.step();
 
@@ -1916,7 +1917,7 @@ fn continue_from_an_unknown_slug_starts_fresh() {
     let mut story = two_page_story();
     story.save_key = "stale".to_string();
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     point_saves(&mut world, dir.path());
     world.step();
 
@@ -1964,7 +1965,7 @@ fn continue_into_a_pageless_node_starts_fresh() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     point_saves(&mut world, dir.path());
     world.step();
 
@@ -1993,7 +1994,7 @@ fn reaching_the_ending_clears_the_auto_save() {
     let mut story = two_page_story();
     story.save_key = "endclear".to_string();
     let mut world = story_world(story);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     point_saves(&mut world, dir.path());
     world.step();
     assert!(

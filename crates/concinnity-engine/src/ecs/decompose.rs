@@ -157,6 +157,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 mod tests {
     use super::*;
     use crate::components::{Prop, PropCollider};
+    use crate::ecs::SYSTEMS;
     use crate::ecs::{MaterialHandle, MeshHandle, World};
 
     fn prop(id: u32) -> Prop {
@@ -188,7 +189,7 @@ mod tests {
         panel.rotation_deg = [0.0, 90.0, 0.0];
         world.add_component(panel);
 
-        world.start().expect("start");
+        world.start(SYSTEMS).expect("start");
 
         // The Prop column is drained; the entities survive on their components.
         assert_eq!(world.query::<Prop>().count(), 0);
@@ -250,7 +251,7 @@ mod tests {
         parent.mesh = Some(MeshHandle(11));
         world.add_component(parent);
 
-        world.start().expect("start");
+        world.start(SYSTEMS).expect("start");
 
         let by_parent: Vec<_> = world
             .join2::<Parent, MeshRenderer>()
@@ -280,7 +281,7 @@ mod tests {
         b.model = Some(AssetId(20));
         world.add_component(b);
 
-        world.start().expect("start");
+        world.start(SYSTEMS).expect("start");
 
         // The Prop column is gone, but both entities survive on their renderers
         // and Transforms.
@@ -309,7 +310,7 @@ mod tests {
             ..Default::default()
         });
 
-        world.start().expect("start");
+        world.start(SYSTEMS).expect("start");
 
         assert_eq!(world.query::<crate::components::PropBody>().count(), 0);
         let dynamics: Vec<_> = world
@@ -318,5 +319,25 @@ mod tests {
             .collect();
         // Only the PropBody's owner is dynamic, with its authored values.
         assert_eq!(dynamics, vec![(Some(MeshHandle(10)), 4.0)]);
+    }
+
+    // Despawning an entity removes every component on it: the pass drains the
+    // authored Prop into per-entity components, and the despawn takes them all.
+    #[test]
+    fn despawn_removes_an_entitys_components() {
+        use crate::components::MeshRenderer;
+
+        let mut world = World::new();
+        world.add_component(Prop::default());
+        world.start(SYSTEMS).expect("start");
+        let entity = world
+            .join2::<Transform, MeshRenderer>()
+            .next()
+            .map(|(e, _, _)| e)
+            .expect("the Prop decomposed onto one entity");
+
+        world.despawn(entity);
+        assert_eq!(world.query::<Transform>().count(), 0);
+        assert_eq!(world.query::<MeshRenderer>().count(), 0);
     }
 }

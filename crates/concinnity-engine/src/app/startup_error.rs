@@ -27,7 +27,7 @@ pub(crate) enum StartupError {
 impl StartupError {
     // Classify a blob-load failure, distinguishing absent data from data that
     // is present but unusable, since only the first is the user's to fix.
-    // `blob` is the primary blob's path (`concinnity_store::blob::blob_path(0)`),
+    // `blob` is the primary blob's path (`concinnity_host::store::blob::blob_path(0)`),
     // passed in rather than resolved here so the classification stays a pure
     // function of its inputs.
     pub(crate) fn from_blob_failure(blob: PathBuf, cause: CnResult) -> Self {

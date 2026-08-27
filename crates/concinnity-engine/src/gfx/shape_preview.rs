@@ -106,7 +106,7 @@ pub fn apply(
 mod tests {
     use super::*;
     use crate::components::{JointProportion, ShapeSlider};
-    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     fn chain() -> Skeleton {
         let joint = |name: &str, parent: Option<usize>, y: f32| Joint {

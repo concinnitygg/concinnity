@@ -15,9 +15,9 @@ const INTERACT_REACH: f32 = 3.0;
 // Minimum facing dot product (~60-degree cone) for an interaction.
 const INTERACT_MIN_DOT: f32 = 0.5;
 
-// First-person / fly-through controller behavior. Constructed internally by
-// `World::start` from the controlling `Camera3D`'s `CameraController`;
-// never a world-declared asset.
+/// First-person / fly-through controller behavior. Constructed internally by
+/// `World::start` from the controlling `Camera3D`'s `CameraController`;
+/// never a world-declared asset.
 #[derive(Debug)]
 pub struct Camera3DSystem {
     free_fly: bool,
@@ -43,7 +43,7 @@ pub struct Camera3DSystem {
 
 impl Camera3DSystem {
     // Build a controller from a `Camera3D`'s controller settings.
-    pub fn new(c: CameraController) -> Self {
+    pub(crate) fn new(c: CameraController) -> Self {
         Self {
             free_fly: c.free_fly,
             move_speed: c.move_speed,
@@ -60,10 +60,10 @@ impl Camera3DSystem {
         }
     }
 
-    // Zero the smoothed movement velocity. Called when an external source (the
-    // cn debug `camera-set` command) teleports the camera, so free-fly velocity
-    // integration does not drift the new pose on the next step. Only reached
-    // from the binary-only debug drive, hence dead in a `--lib` build.
+    /// Zero the smoothed movement velocity. Called when an external source (the
+    /// cn debug `camera-set` command) teleports the camera, so free-fly velocity
+    /// integration does not drift the new pose on the next step. Only reached
+    /// from the binary-only debug drive, hence dead in a `--lib` build.
     pub fn reset_velocity(&mut self) {
         self.velocity = [0.0; 3];
     }
@@ -313,6 +313,7 @@ impl System for Camera3DSystem {
 #[cfg(test)]
 mod tests {
     use crate::components::{Camera3D, CameraController};
+    use crate::ecs::SYSTEMS;
     use crate::ecs::World;
 
     fn camera(controller: Option<CameraController>) -> Camera3D {
@@ -336,7 +337,7 @@ mod tests {
     fn controlled_camera_spawns_internal_system() {
         let mut world = World::new();
         world.add_component(camera(Some(CameraController::default())));
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["Camera3DSystem"]);
@@ -347,7 +348,7 @@ mod tests {
     fn uncontrolled_camera_has_no_system() {
         let mut world = World::new();
         world.add_component(camera(None));
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         assert!(world.systems().is_empty());
     }
 
@@ -366,7 +367,7 @@ mod tests {
             ..CameraController::default()
         };
         world.add_component(camera(Some(ctrl)));
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // GraphicsSystem would send this when the slider is dragged; the camera
         // reads it this tick. A mouse delta in the same frame must rotate by the
@@ -402,7 +403,7 @@ mod tests {
             ..CameraController::default()
         };
         world.add_component(camera(Some(ctrl)));
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // The camera starts at the authored 75 degrees.
         let fov0 = world
@@ -469,7 +470,7 @@ mod tests {
             action: "screen:toggle:50".to_string(),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert!(names.contains(&"Camera3DSystem"));
@@ -521,7 +522,7 @@ mod tests {
         use crate::components::{FrameInput, Interactable, Prop, Transform};
 
         let mut world = interact_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.add_component(FrameInput {
             interact: true,
             ..Default::default()
@@ -562,7 +563,7 @@ mod tests {
         // Well outside the +X wall so the containment clamp is observable.
         cam.position = [100.0, 2.0, 0.0];
         world.add_component(cam);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(FrameInput {
             forward: true,

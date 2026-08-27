@@ -30,7 +30,6 @@ mod light_cull;
 mod line;
 mod loader;
 mod main;
-mod math;
 mod owned;
 mod parallel_encoder;
 mod particle;

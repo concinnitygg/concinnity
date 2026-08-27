@@ -1,12 +1,13 @@
 // src/gfx/animation/tests.rs
 
+use crate::ecs::SYSTEMS;
 use std::time::{Duration, Instant};
 
 use super::resumed_origin;
 use crate::components::{Animation, AnimationGraph, AnimationParams};
 use crate::ecs::SkinnedMeshHandle;
+use crate::ecs::World;
 use crate::ecs::asset_id::intern;
-use crate::ecs::{SystemAsset, World};
 
 // Resuming after a pause must leave clip time `t = now - origin` exactly
 // where it was when the pause began, so playback continues from the frozen
@@ -34,7 +35,7 @@ fn resumed_origin_freezes_clip_time_across_pause() {
 fn animation_component_spawns_internal_system() {
     let mut world = World::new();
     world.add_component(Animation::default());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
     assert_eq!(names, ["AnimationSystem"]);
@@ -45,7 +46,7 @@ fn animation_component_spawns_internal_system() {
 #[test]
 fn no_animation_no_internal_system() {
     let mut world = World::new();
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     assert!(world.systems().is_empty());
 }
 
@@ -55,7 +56,7 @@ fn no_animation_no_internal_system() {
 fn anim_graph_component_spawns_internal_system() {
     let mut world = World::new();
     world.add_component(AnimationGraph::default());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
     assert_eq!(names, ["AnimationSystem"]);
@@ -104,7 +105,7 @@ fn graph_world() -> World {
     world.add_component(clip("idle_clip", 1.0));
     world.add_component(clip("run_clip", 0.8));
     world.add_component(hero_graph());
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world
 }
 
@@ -117,7 +118,7 @@ fn hero() -> SkinnedMeshHandle {
 // Match the system back out of the world for report assertions.
 fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut super::AnimationSystem) -> R) -> R {
     for system in world.systems_mut() {
-        if let SystemAsset::AnimationSystem(anim) = system {
+        if let Some(anim) = system.downcast_mut::<super::AnimationSystem>() {
             return f(anim);
         }
     }
@@ -172,7 +173,7 @@ fn blendspace_weights_follow_the_parameter() {
     .unwrap();
     g.asset_id = intern("hero_blend_graph");
     world.add_component(g);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     let report = with_anim(&mut world, |anim| anim.graph_report(target).unwrap());
@@ -258,7 +259,7 @@ fn mode_mismatched_commands_are_rejected() {
     let mut a = clip("solo_clip", 1.0);
     a.target = Some(SkinnedMeshHandle(intern("flat_hero").0));
     flat_world.add_component(a);
-    flat_world.start().unwrap();
+    flat_world.start(SYSTEMS).unwrap();
     flat_world.step();
     with_anim(&mut flat_world, |anim| {
         let target = SkinnedMeshHandle(intern("flat_hero").0);
@@ -289,7 +290,7 @@ fn root_motion_clip_publishes_displacement_events() {
     .unwrap();
     a.asset_id = intern("hero_rm_walk");
     world.add_component(a);
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     world.step();
     std::thread::sleep(Duration::from_millis(5));
@@ -337,7 +338,7 @@ fn root_motion_events_emit_in_handle_order() {
         a.asset_id = intern(&format!("{name}_clip"));
         world.add_component(a);
     }
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     // The first step has no time delta; the second emits one event per target.
     world.step();
@@ -364,7 +365,7 @@ fn root_motion_events_emit_in_handle_order() {
 // clipping through it.
 #[test]
 fn ik_pins_the_foot_to_a_raised_ledge() {
-    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     let target = SkinnedMeshHandle(intern("hero_ik").0);
     let mut world = World::new();
@@ -388,7 +389,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
     world.add_component(crate::components::CharacterRig::new(
         target,
         0,
-        crate::gfx::skinning::IDENTITY,
+        crate::gfx::transform::IDENTITY,
         0.5,
         0.3,
     ));
@@ -431,7 +432,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
         }),
         ..Default::default()
     });
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     // Ray out -> physics answer -> solve; a few extra steps let the capsule
     // settle onto the floor.
@@ -492,11 +493,11 @@ fn rig_capsule_follows_root_motion() {
     world.add_component(crate::components::CharacterRig::new(
         target,
         0,
-        crate::gfx::skinning::IDENTITY,
+        crate::gfx::transform::IDENTITY,
         0.5,
         0.3,
     ));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
 
     for _ in 0..4 {
         world.step();
@@ -549,8 +550,8 @@ fn graph_freezes_while_menu_open() {
 
 // A bare runtime clip of a given length, no tracks or root motion. Enough to
 // re-seat a bucket slot via `apply_reloaded_clip`.
-fn runtime_clip(duration: f32) -> crate::gfx::skinning::AnimationClip {
-    crate::gfx::skinning::AnimationClip {
+fn runtime_clip(duration: f32) -> crate::gfx::skeleton::AnimationClip {
+    crate::gfx::skeleton::AnimationClip {
         morph_keys: Vec::new(),
         duration,
         looping: true,
@@ -573,7 +574,7 @@ fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
     let target = SkinnedMeshHandle(intern("flat_reload").0);
     let mut world = World::new();
     world.add_component(flat_clip("fr_solo", target));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     with_anim(&mut world, |anim| {
@@ -638,7 +639,7 @@ fn debug_impl_summarizes_target_and_reload_counts() {
 
 // A one-joint pose for `target`, used to observe the flat sampling arms.
 fn single_joint_pose(target: SkinnedMeshHandle) -> crate::components::SkeletonPose {
-    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
     let skeleton = Skeleton::new(vec![Joint {
         name: "root".to_string(),
         parent: None,
@@ -655,7 +656,7 @@ fn flat_single_clip_samples_the_pose() {
     let mut world = World::new();
     world.add_component(flat_clip("fs_solo", target));
     world.add_component(single_joint_pose(target));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
 
     let matrices = world
@@ -679,7 +680,7 @@ fn flat_fade_in_blends_multiple_clips_into_the_pose() {
     world.add_component(faded);
     world.add_component(flat_clip("fb_b", target));
     world.add_component(single_joint_pose(target));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     // First step anchors the fade ramp; second advances it further. Both run
     // the multi-clip blend arm and write the pose.
     world.step();
@@ -718,7 +719,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
     world.add_component(
         single_joint_pose(target).with_shape(vec![0.5, 0.5], ProportionLayer::default()),
     );
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     let weights = world
         .query::<crate::components::SkeletonPose>()
@@ -735,7 +736,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
     world.add_component(
         single_joint_pose(target).with_shape(vec![0.25], ProportionLayer::default()),
     );
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     let pose = world
         .query::<crate::components::SkeletonPose>()
@@ -765,7 +766,7 @@ fn proportions_apply_to_the_sampled_pose() {
         }],
     );
     world.add_component(pose.with_shape(Vec::new(), layer));
-    world.start().unwrap();
+    world.start(SYSTEMS).unwrap();
     world.step();
     let pose = world
         .query::<crate::components::SkeletonPose>()

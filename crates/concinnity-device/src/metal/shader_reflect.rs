@@ -18,8 +18,6 @@
 // issue and fails open: only a layout mismatch we actually observed fails the
 // build.
 
-use std::collections::HashMap;
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSString};
@@ -31,7 +29,9 @@ use objc2_metal::{
 };
 
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use crate::metal::shader_layout::{EngineStage, ReflectedField, ReflectedStruct, validate_stage};
+use crate::metal::shader_layout::{
+    EngineStage, ReflectedField, ReflectedStruct, ReflectedStructs, validate_stage,
+};
 
 // A no-input fragment used only to make vertex/shadow reflection pipelines
 // link. Declaring no `[[stage_in]]` means it imposes no constraint on the
@@ -123,7 +123,7 @@ fn reflect_stage(
     user_lib: &ProtocolObject<dyn MTLLibrary>,
     entry: &str,
     stage: EngineStage,
-) -> Result<HashMap<u32, ReflectedStruct>, String> {
+) -> Result<ReflectedStructs, String> {
     let entry_fn = function(user_lib, entry)?;
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(&standard_vertex_descriptor()));
@@ -184,10 +184,8 @@ fn create_reflection(
 // bindings backed by a struct (a `constant X&` struct or a `constant X*`
 // pointer to one). Other buffer/texture/sampler bindings are ignored: they are
 // either user-owned or outside the engine contract.
-fn bindings_to_map(
-    bindings: &NSArray<ProtocolObject<dyn MTLBinding>>,
-) -> HashMap<u32, ReflectedStruct> {
-    let mut map = HashMap::new();
+fn bindings_to_map(bindings: &NSArray<ProtocolObject<dyn MTLBinding>>) -> ReflectedStructs {
+    let mut map = ReflectedStructs::new();
     for binding in bindings.iter() {
         let binding: &ProtocolObject<dyn MTLBinding> = &binding;
         if binding.r#type() != MTLBindingType::Buffer {

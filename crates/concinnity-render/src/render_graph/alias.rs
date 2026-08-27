@@ -36,6 +36,8 @@
 
 use super::compile::CompiledGraph;
 use super::types::{ResourceOrigin, TextureDesc};
+use alloc::vec;
+use alloc::vec::Vec;
 
 // The memory class two resources must agree on before they can share a slot.
 // Not the whole desc: differing extents and formats are fine (a slot is sized

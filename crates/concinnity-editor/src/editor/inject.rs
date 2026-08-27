@@ -81,7 +81,7 @@ pub(crate) fn editor_hud(world: &mut World) {
     world.insert_resource(crate::ecs::TransientSaves(true));
     // The editor HUD replaces the baked-in debug HUD (both would answer F1):
     // resolve the HUD font from its chips above, then drop the DebugHud so
-    // build_internal_systems never constructs its system.
+    // `World::start` never constructs its system.
     world.remove_all::<DebugHud>();
     // The billboards, selection rings, marquee rect, and gizmo go in first:
     // overlay fallback draw order is insertion order, so they stay under

@@ -4,6 +4,7 @@
 // mesh upload/eviction, chunk streaming, and skinned-mesh upload. Also owns
 // the skinned-mesh pipelines (built lazily by `upload_skinned` the first time
 // a SkinnedMesh is uploaded), mirroring metal/resources/skinning.rs.
+use concinnity_core::gfx::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -16,7 +17,6 @@ use super::builtins;
 use super::com;
 use super::context::*;
 use super::init::pipelines::{create_main_instanced_root_signature, create_main_pso};
-use super::math::*;
 use super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
 use super::slang_builtins;
 use super::texture::*;
@@ -1496,7 +1496,7 @@ impl DxContext {
         // also what the renderer wants on frame 0 before the first pose
         // arrives: every joint is identity, so the mesh shows in bind pose.
         let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
-        let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY4; MAX_JOINTS];
+        let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY; MAX_JOINTS];
         let mut joint_buffers: Vec<Vec<PooledBuffer>> = Vec::with_capacity(FRAMES);
         let mut joint_ptrs: Vec<Vec<*mut u8>> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
@@ -1549,7 +1549,7 @@ impl DxContext {
         // renders undeformed until the first `update_skinned_pose`.
         self.skinned.joint_matrices = draw_objects
             .iter()
-            .map(|o| vec![IDENTITY4; o.joint_count.max(1)])
+            .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
 
         self.skinned.pso = Some(skinned_pso);
@@ -1784,7 +1784,7 @@ impl DxContext {
         obj.joint_count = capped;
         let size = capped.max(1);
         if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
-            slot.resize(size, IDENTITY4);
+            slot.resize(size, IDENTITY);
         }
         Ok(())
     }
@@ -1797,7 +1797,7 @@ impl DxContext {
             slot.clear();
             slot.extend_from_slice(matrices);
             if slot.is_empty() {
-                slot.push(IDENTITY4);
+                slot.push(IDENTITY);
             }
         }
     }
@@ -1816,7 +1816,7 @@ impl DxContext {
         obj.model = model;
         obj.visible = true;
         if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
-            palette.iter_mut().for_each(|m| *m = IDENTITY4);
+            palette.iter_mut().for_each(|m| *m = IDENTITY);
         }
     }
 

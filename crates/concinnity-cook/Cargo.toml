@@ -14,6 +14,7 @@ include = [
     "/src",
     "/assets",
     "/build.rs",
+    "/build",
 ]
 
 [lib]
@@ -23,12 +24,9 @@ path = "src/lib.rs"
 [dependencies]
 concinnity-asset = { workspace = true }
 concinnity-core = { workspace = true }
-concinnity-cpu = { workspace = true }
-concinnity-store = { workspace = true }
+concinnity-host = { workspace = true }
 concinnity-physics = { workspace = true }
 concinnity-world = { workspace = true }
-concinnity-docs = { workspace = true }
-concinnity-font = { workspace = true }
 
 bytemuck = "1"
 serde = { version = "1", features = ["derive"] }
@@ -51,6 +49,11 @@ time = { version = "0.3.47", features = ["formatting", "parsing"] }
 
 [build-dependencies]
 concinnity-toolchain = { workspace = true }
+# The asset reference joins the two extracted schemas over the authoring
+# registry, all three read at build time.
+concinnity-asset = { workspace = true }
+concinnity-core = { workspace = true }
+concinnity-world = { workspace = true }
 
 [dev-dependencies]
 # The binary FBX writer builds synthetic .fbx fixtures for the importer tests.

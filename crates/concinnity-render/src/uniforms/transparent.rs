@@ -133,7 +133,7 @@ pub struct WaterParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
+    use core::mem::{offset_of, size_of};
 
     // Every backend binds this block under the same layout, so it is checked
     // here rather than per backend: a float4x4 model, a float4 tint, then four

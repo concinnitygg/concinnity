@@ -3,7 +3,7 @@
 //! grayscale. Colour-mapped images are not supported. The image-descriptor origin
 //! bit is honoured so bottom-left-origin files are flipped to top-row-first.
 
-use concinnity_cpu::decode::checked_product;
+use concinnity_core::decode::checked_product;
 
 const HEADER_LEN: usize = 18;
 

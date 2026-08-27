@@ -15,6 +15,9 @@
 use super::compile::CompiledGraph;
 use super::passes::PassId;
 use super::types::{ReadStages, ResourceState};
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
 
 // What kind of coverage a pass is missing for one resource.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -39,8 +42,8 @@ pub struct BarrierGap {
     pub kind: GapKind,
 }
 
-impl std::fmt::Display for BarrierGap {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for BarrierGap {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let what = match self.kind {
             GapKind::UncoveredRead => "reads",
             GapKind::UncoveredWrite => "writes",

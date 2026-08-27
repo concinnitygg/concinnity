@@ -12,7 +12,8 @@
 //! Built and consumed by every graphics backend's runtime skinned-spawn path
 //! (Metal, DirectX, Vulkan).
 
-use std::collections::HashMap;
+use alloc::vec::Vec;
+use hashbrown::HashMap;
 
 #[derive(Debug, Default)]
 /// Recycles skinned draw slots as skinned instances spawn and despawn.

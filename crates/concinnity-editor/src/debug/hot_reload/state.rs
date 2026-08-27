@@ -182,7 +182,7 @@ pub(crate) struct PendingSkeletonUpdate {
     // `SkeletonPose` (which carries the same `skinned_index`).
     pub skinned_index: usize,
     // Fresh skeleton built from the re-imported `.glb`'s joint defs.
-    pub new_skeleton: crate::gfx::skinning::Skeleton,
+    pub new_skeleton: crate::gfx::skeleton::Skeleton,
 }
 
 impl std::fmt::Debug for AssetHotReloadState {

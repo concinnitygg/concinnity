@@ -15,50 +15,41 @@
 //! its Fresnel weight, recombined by the shader as
 //! `f0 * albedo + (1 - f0) * fresnel`.
 
-// The fitter runs from build.rs, which `include!`s the file; the lib compiles
-// it too but reads only `LTC_LUT_SIZE`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the lib reads only LTC_LUT_SIZE; build.rs and this crate's tests drive the fitter"
-    )
-)]
-pub(crate) mod fit;
+// The fitter runs from build.rs, which `include!`s it next to `size.rs`. The lib
+// needs only the table size, so it compiles the fitter for its own tests alone.
+#[cfg(test)]
+mod fit;
 // The CPU twin of the shader's polygon integral, kept so the closed form can
 // be checked against brute-force Monte Carlo. Nothing else calls it.
 #[cfg(test)]
 mod polygon;
+mod size;
 
-use std::sync::OnceLock;
-
-pub use fit::LTC_LUT_SIZE;
+pub use size::LTC_LUT_SIZE;
 
 // build.rs emits raw little-endian f32 rather than Rust source, because a static
 // array of this many float literals costs rustc tens of seconds to compile.
 // Every target the engine builds for is little-endian.
-static MATRIX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ltc_matrix.bin"));
-static MAGNITUDE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ltc_magnitude.bin"));
+#[repr(C, align(4))]
+struct Aligned<T: ?Sized>(T);
 
-static MATRIX: OnceLock<Vec<f32>> = OnceLock::new();
-static MAGNITUDE: OnceLock<Vec<f32>> = OnceLock::new();
+// Aligning the bytes to f32 is what lets the tables be read where they already
+// are, with no decode pass and no copy on the heap.
+static MATRIX: &Aligned<[u8]> =
+    &Aligned(*include_bytes!(concat!(env!("OUT_DIR"), "/ltc_matrix.bin")));
+static MAGNITUDE: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/ltc_magnitude.bin"
+)));
 
-fn decode(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
-}
-
-/// RGBA32Float texels, `LTC_LUT_SIZE` square. Decoded once on first use, which is
-/// the backend's one-time texture upload.
+/// RGBA32Float texels, `LTC_LUT_SIZE` square. The backend uploads these once.
 pub fn matrix_texels() -> &'static [f32] {
-    MATRIX.get_or_init(|| decode(MATRIX_BYTES))
+    bytemuck::cast_slice(&MATRIX.0)
 }
 
 /// RG32Float texels, `LTC_LUT_SIZE` square.
 pub fn magnitude_texels() -> &'static [f32] {
-    MAGNITUDE.get_or_init(|| decode(MAGNITUDE_BYTES))
+    bytemuck::cast_slice(&MAGNITUDE.0)
 }
 
 #[cfg(test)]

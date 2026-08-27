@@ -11,7 +11,7 @@
 // the only way to reach an occluded object without gizmos.
 
 use super::*;
-use concinnity_cpu::gfx::pick::{PickRay, ray_aabb, screen_ray};
+use concinnity_core::gfx::pick::{PickRay, ray_aabb, screen_ray};
 
 // A repeat click within this many pixels of the last one cycles the hit list
 // instead of restarting it.

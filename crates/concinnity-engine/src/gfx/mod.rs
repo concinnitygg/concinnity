@@ -8,20 +8,17 @@
 //! client-only settings/quality-preset resolution.
 //!
 //! The GPU data layouts and render math (camera, frustum, post-process settings)
-//! live in concinnity-core; the CPU kernels over them (mesh payloads, skinning,
-//! IK, line expansion, the animation cursor) in concinnity-cpu. Both are
-//! re-exported here so the `crate::gfx::<module>` paths keep resolving.
-//! `pub` so the editor crate can reach them through `concinnity_engine::gfx::*`
-//! (e.g. shader-layout reflection); `chunk_coord` is named only by the
-//! chunk-streaming drive, so it stays crate-private.
+//! and the CPU kernels over them (mesh payloads, pose blending, IK, line
+//! expansion, the animation cursor) both live in concinnity-core, re-exported
+//! here so the `crate::gfx::<module>` paths keep resolving. `pub` so the editor
+//! crate can reach them through `concinnity_engine::gfx::*` (e.g. shader-layout
+//! reflection); `chunk_coord` is named only by the chunk-streaming drive, so it
+//! stays crate-private.
 pub(crate) use concinnity_core::gfx::chunk_coord;
-pub use concinnity_core::gfx::lod_select as lod;
 pub use concinnity_core::gfx::{
-    camera, frustum, morph_weights, pose_scratch, profile, proportions, render_types, root_motion,
-    rt_reflections, ssao, ssgi, ssr, view_modes,
-};
-pub use concinnity_cpu::gfx::{
-    anim_graph, auto_exposure, ik, lines, mesh_payload, mesh_seed, skinning,
+    anim_graph, auto_exposure, camera, font, frustum, ik, lines, lod, mesh_payload, mesh_seed,
+    morph_weights, pose_blend, pose_scratch, profile, proportions, render_types, root_motion,
+    rt_reflections, skeleton, ssao, ssgi, ssr, transform, transform_propagation, view_modes,
 };
 
 // Render-prep from concinnity-render that the client's own systems consume (the
@@ -33,15 +30,11 @@ pub use concinnity_render::{
     scene_residency, snapshot, volumetric_fog,
 };
 pub(crate) use concinnity_render::{
-    call_buffer, chunk_window, cursor, display_mode, keymap, lights, sprite, text,
+    call_buffer, chunk_window, cursor, display_mode, keymap, lights, overlay_maps, sprite, text,
 };
 // Seeded / driven by the client's GraphicsSystem.
 pub use concinnity_render::draw_slot;
 pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
-// Consumed by the runtime-spawn unit tests, which drive the template seams
-// with a bare pool instead of the RenderSlots resource.
-#[cfg(test)]
-pub(crate) use concinnity_render::skinned_pool;
 
 // The bundled glyph atlas baked into the binary: the face the startup error
 // screen draws with, and the fallback for a world whose labels name no Font.
@@ -52,19 +45,17 @@ pub(crate) mod builtin_font;
 /// `pub` so the editor crate can drive the clip hot-reload through the
 /// `AnimationSystem` setter API.
 pub mod animation;
-// First-person / fly-through camera controller. Internal system, constructed by
-// `World::start` from a `Camera3D`'s controller settings.
-pub(crate) mod camera_controller;
+/// First-person / fly-through camera controller. Internal system, constructed by
+/// `World::start` from a `Camera3D`'s controller settings. `pub` so the editor
+/// crate can zero the controller's velocity behind an externally driven pose.
+pub mod camera_controller;
 pub(crate) mod draw_list;
-// Transform -> GlobalTransform propagation down the Parent hierarchy, and the
-// runtime reparent that recomposes it. Driven per frame by GraphicsSystem.
 /// The renderer driver. An internal system (not a declarable asset), constructed
 /// by `World::start` when the world declares a `GraphicsConfig`.
 pub mod graphics_system;
 /// Live re-resolution of a `CharacterShape` against a running world's poses,
 /// for an editor previewing slider edits without a rebuild.
 pub mod shape_preview;
-pub(crate) mod transform_propagation;
 // Per-frame input sampling + FrameInput publish. Internal system, constructed
 // alongside GraphicsSystem (same gate) and scheduled immediately after it.
 pub(crate) mod input_system;

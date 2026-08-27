@@ -2,7 +2,7 @@
 //!
 //! Renderer-free. It exposes the typed component storage, the type-keyed
 //! resource and event surfaces, the compiled-payload store, the per-frame
-//! profiler, and the frame scratch. The engine's `World` constructs one each
+//! profiler, and the frame scratch. A `World` constructs one each
 //! tick and hands it to every `System::step`.
 //!
 //! Every accessor reports what it touched to [`crate::ecs::access_check`] in

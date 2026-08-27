@@ -5,7 +5,7 @@
 // core), so it lives here where the physics / audio subsystem crates can name it
 // without depending on the renderer. The client `ecs` module re-exports both
 // under the historical `crate::ecs::*` paths, and its `define_systems!` table
-// generates the `SystemAsset` value enum that dispatches them.
+// names each system's gate; a world holds the built systems as trait objects.
 
 use crate::ecs::{Access, PipelineContext};
 
@@ -22,11 +22,16 @@ pub enum StepResult {
 }
 
 /// System -- has behavior, receives a PipelineContext each tick. Every system
-/// is internal engine code: `World::build_internal_systems` constructs it from
-/// world components (via the system's own `new(..)`), so a system is never
-/// loaded from or written to a blob. `init` runs once at `World::start`; `step`
-/// runs every tick.
-pub trait System: Sized + core::fmt::Debug + 'static {
+/// is internal engine code: `World::start` constructs it from world components
+/// (via the system's own `new(..)`), so a system is never loaded from or
+/// written to a blob. `init` runs once at `World::start`; `step` runs every
+/// tick.
+///
+/// A world holds its systems as `dyn System`, so the trait is object-safe.
+/// `Send` is what lets a built world move to the simulation thread, and `Any`
+/// is what lets a caller holding the world reach one system as its own type
+/// (the `cn debug` / `cn editor` hot-reload drive).
+pub trait System: core::any::Any + core::fmt::Debug + Send {
     /// Run once at `World::start`, before the first step.
     fn init(&mut self, _ctx: &mut PipelineContext) {}
 

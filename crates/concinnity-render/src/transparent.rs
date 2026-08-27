@@ -9,6 +9,8 @@
 //! camera distance so the blend resolves correctly. This is a single fixed
 //! sorted draw list, not order-independent transparency.
 
+use alloc::vec::Vec;
+
 /// Return the indices `0..distances.len()` ordered farthest camera distance
 /// first (back-to-front). The sort is stable, so draws at equal distance keep
 /// their original (declaration) order. Non-finite distances (NaN) are treated
@@ -28,7 +30,7 @@ pub fn back_to_front_order(distances: &[f32]) -> Vec<usize> {
         } else {
             f32::NEG_INFINITY
         };
-        db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
+        db.partial_cmp(&da).unwrap_or(core::cmp::Ordering::Equal)
     });
     order
 }
@@ -37,6 +39,7 @@ pub fn back_to_front_order(distances: &[f32]) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     #[test]
     fn orders_farthest_first() {
         let d = [1.0, 5.0, 3.0];

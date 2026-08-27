@@ -19,6 +19,7 @@
 //
 // Mirrors src/metal/fog.rs.
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -685,7 +686,7 @@ impl DxContext {
         // Write per-frame `FogParams` + `FogFroxelParams` into their ring
         // slots. The `Fog` render pass below reads from the same slot, so
         // both passes see the same params this frame.
-        let inv_vp = super::math::mat4_inverse(vp);
+        let inv_vp = mat4_inverse(vp);
         let viewport = [
             self.extent.render_width as f32,
             self.extent.render_height as f32,

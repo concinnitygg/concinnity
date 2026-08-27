@@ -22,12 +22,13 @@ pub(crate) const RT_SKINNED_FLAG: u32 = 0x8000_0000;
 /// `index_count` indices. One index per word, so the only rounding left is the
 /// floor: no backend accepts a zero-length buffer.
 pub fn skinned_index_buffer_bytes(index_count: usize) -> usize {
-    (index_count * std::mem::size_of::<u32>()).max(4)
+    (index_count * core::mem::size_of::<u32>()).max(4)
 }
 
-/// How the scene acceleration structure is kept current when props move. Selected
-/// once at init from `CN_RT_DYNAMIC`; unset gives `Auto`, the shipping behaviour.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// How the scene acceleration structure is kept current when props move.
+/// Selected once at init from the launch's `--rt-dynamic` request; `Auto` is
+/// the shipping behaviour and what an unset request resolves to.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum RtDynamicMode {
     /// Build once, never update. Forces a static BVH even if props move: the
     /// pre-dynamic behaviour, kept as a fast path / diagnostic (`off`).
@@ -35,6 +36,7 @@ pub enum RtDynamicMode {
     /// Default. Rebuild the TLAS + table (fresh allocations, static BLAS) only on
     /// the frames a participating transform actually changed. Static scenes never
     /// rebuild, so they pay only a cheap per-frame matrix compare.
+    #[default]
     Auto,
     /// Force a full BVH rebuild every frame, dirty or not. Diagnostic (`rebuild`);
     /// the most expensive path.
@@ -45,16 +47,6 @@ pub enum RtDynamicMode {
 }
 
 impl RtDynamicMode {
-    /// Parse the mode from `CN_RT_DYNAMIC`. Unset / unrecognised -> `Auto`.
-    pub fn from_env() -> Self {
-        match std::env::var("CN_RT_DYNAMIC").as_deref() {
-            Ok("off") => Self::Off,
-            Ok("rebuild") => Self::Rebuild,
-            Ok("tlas") => Self::Tlas,
-            _ => Self::Auto,
-        }
-    }
-
     /// Whether this mode updates the BVH after the initial build at all.
     pub fn is_dynamic(self) -> bool {
         self != Self::Off
@@ -158,6 +150,7 @@ pub fn models_dirty(cached: &[[[f32; 4]; 4]], current: &[[[f32; 4]; 4]]) -> bool
 mod tests {
     use super::*;
 
+    use alloc::vec::Vec;
     // One u32 index per word, and never a zero-length allocation.
     #[test]
     fn skinned_index_buffer_holds_one_word_per_index() {
@@ -175,9 +168,8 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_mode_from_env_default_is_auto() {
-        // The env var isn't set in the test process, so it resolves to Auto.
-        assert_eq!(RtDynamicMode::from_env(), RtDynamicMode::Auto);
+    fn only_off_stops_updating_the_bvh() {
+        assert_eq!(RtDynamicMode::default(), RtDynamicMode::Auto);
         assert!(RtDynamicMode::Auto.is_dynamic());
         assert!(RtDynamicMode::Rebuild.is_dynamic());
         assert!(RtDynamicMode::Tlas.is_dynamic());

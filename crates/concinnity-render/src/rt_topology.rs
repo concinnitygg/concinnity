@@ -13,6 +13,8 @@
 //! cleanup could converge it here once Metal can be rebuilt alongside.
 
 use crate::render_types::DrawObject;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// Identifies the geometry a draw-object BLAS traces, on the shared
 /// vertex/index buffers. Two draw objects with the same signature trace
@@ -71,7 +73,7 @@ pub fn plan_topology_refresh(
     new_indices: &[usize],
     new_sigs: &[GeomSig],
 ) -> TopologyPlan {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
     // draw_objects index -> (position in the old draw BLAS head, its signature).
     // `object_indices` entries are unique (one per draw slot), so this is 1:1.
     let mut by_idx: HashMap<usize, (usize, GeomSig)> = HashMap::with_capacity(old_indices.len());

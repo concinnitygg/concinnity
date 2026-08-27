@@ -1,34 +1,18 @@
-// src/physics/mod.rs
+// What this crate lends `concinnity_core::physics::PhysicsSystem`: the one
+// thing the driver needs that only a host has.
 //
-// The engine's rigid-body simulation driver: it builds a simulation from the
-// world's physics content at init, steps it on the fixed tick, and writes the
-// results back as component data.
+//   fanout.rs   the job pool a step's independent work is offered to
 //
-// The simulation itself is `concinnity_physics::Simulation`, whose vocabulary
-// is engine-native `[f32; 3]` / Euler-degree data addressed by an opaque
-// `BodyHandle`. This module holds the driver around it: prop bodies, character
-// rigs, probes, contact shaping, and layer resolution.
+// The simulation, the driver around it, and everything a tick does to the
+// world are in concinnity-core; the gate in `ecs::schedule` builds the system
+// with the pool attached.
 
-// What the simulation reserves for a world, and the ledger row reporting it.
-mod budget;
-// Contact-event shaping: per-frame batching and the per-pair refractory.
-mod contacts;
-// The authored assets turned into the simulation's shapes and parameters.
-mod convert;
-// The job pool the step's independent work is offered to.
-mod fanout;
-// Prev/curr pose snapshots blended by the frame's accumulator alpha.
-mod interp;
-// Named collision layers over the simulation's 32-bit interaction groups.
-mod layers;
-// Raycast probe answering for animation IK and the follow camera.
-mod probes;
-// Prop bodies with their handle -> entity and tracked-entity indices.
-mod props;
-// Root-motion character rigs: one kinematic capsule per `CharacterRig`.
-mod rig;
-// The internal physics system that builds and steps the simulation from the
-// world's bodies, driven by an optional `PhysicsConfig`.
-mod system;
+pub(crate) mod fanout;
 
-pub(crate) use system::PhysicsSystem;
+use concinnity_core::physics::PhysicsSystem;
+
+// The physics system as this host runs it: steps fanned out across the job
+// pool the frame's schedule names.
+pub(crate) fn build(config: concinnity_core::components::PhysicsConfig) -> PhysicsSystem {
+    PhysicsSystem::new(config).with_fanout(Box::new(fanout::PoolFanout))
+}

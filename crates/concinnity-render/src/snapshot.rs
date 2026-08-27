@@ -7,6 +7,7 @@
 
 use crate::render_types::{LineVertex, TextDrawCall};
 use crate::scene_flow::SceneControl;
+use alloc::vec::Vec;
 use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 
 type Mat4 = [[f32; 4]; 4];
@@ -186,6 +187,7 @@ const _: () = {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     #[test]
     fn span_buffer_round_trips_slots_in_push_order() {
         let mut spans: SpanBuffer<u32> = SpanBuffer::default();

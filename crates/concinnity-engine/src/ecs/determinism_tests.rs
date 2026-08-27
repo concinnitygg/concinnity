@@ -15,6 +15,7 @@ use crate::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, BodyDynamics, Collider, PhysicsConfig,
     Prop, PropCollider, Transform,
 };
+use crate::ecs::SYSTEMS;
 use crate::ecs::{ScheduleMode, StepResult, World};
 
 fn fnv(hash: &mut u64, bytes: &[u8]) {
@@ -152,7 +153,7 @@ fn build_world() -> World {
 fn run(mode: ScheduleMode, ticks: u32) -> u64 {
     let mut world = build_world();
     world.insert_resource(mode);
-    world.start().expect("world starts");
+    world.start(SYSTEMS).expect("world starts");
     for _ in 0..ticks {
         assert_eq!(world.step(), StepResult::Continue);
     }
@@ -181,7 +182,7 @@ fn repeated_serial_runs_are_reproducible() {
 fn the_world_actually_moves() {
     let start = {
         let mut world = build_world();
-        world.start().expect("world starts");
+        world.start(SYSTEMS).expect("world starts");
         hash_world(&world)
     };
     assert_ne!(

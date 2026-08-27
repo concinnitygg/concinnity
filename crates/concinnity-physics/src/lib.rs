@@ -8,15 +8,6 @@
 //! and Euler-degree representation, addressed by an opaque [`BodyHandle`].
 //! That is what lets the simulation hold whatever math types it likes without
 //! those types reaching a caller.
-//!
-//! The crate is `#![no_std]` because nothing here needs an operating system or
-//! an allocator beyond `alloc`: it opens no file, spawns no thread, and reads
-//! no clock. Its two dependencies are leaves and neither is an engine domain
-//! type: `libm` for the float functions `core` lacks, preferred to std's even
-//! where std exists because a software implementation is bit-identical across
-//! platforms where a system libm is not, and `concinnity-memory` for the
-//! fixed-capacity pool the simulation stores its bodies in. The dependency
-//! arrow is concinnity-physics <- concinnity-engine.
 
 #![no_std]
 

@@ -63,7 +63,7 @@ impl Component for Camera3D {
     const NAME: &'static str = "Camera3D";
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
-        Ok(postcard::from_bytes(bytes)?)
+        Ok(crate::blob::decode_exact(bytes)?)
     }
 }
 

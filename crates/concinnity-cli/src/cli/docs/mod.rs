@@ -1,13 +1,13 @@
 // `cn docs`: write the asset reference pages under docs/assets/.
 //
-// The reference itself is embedded in the binary by concinnity-docs, extracted
+// The reference itself is embedded in the binary by concinnity-cook, extracted
 // from the asset sources when that crate was built. This command only puts it on
 // disk, so it needs no source tree and cannot disagree with the registry.
 //
 // The pages are committed to the repository; `committed_pages_are_current` fails
 // when they drift from the embedded reference.
 
-use concinnity_docs::AUTOGEN_MARKER;
+use concinnity_cook::docs::AUTOGEN_MARKER;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -23,7 +23,7 @@ pub(crate) fn docs(root: Option<&str>) -> io::Result<()> {
     let dir = PathBuf::from(root.unwrap_or(".")).join(PAGES_DIR);
     fs::create_dir_all(&dir)?;
 
-    let pages = concinnity_docs::pages();
+    let pages = concinnity_cook::docs::pages();
     let mut written = 0usize;
     for (file, content) in &pages {
         let path = dir.join(file);
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn committed_pages_are_current() {
         let dir = repo_root().join(PAGES_DIR);
-        for (file, expected) in &concinnity_docs::pages() {
+        for (file, expected) in &concinnity_cook::docs::pages() {
             let path = dir.join(file);
             let on_disk = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("read {}: {e}; run `cn docs`", path.display()));
@@ -95,7 +95,7 @@ mod tests {
     // No generated page lingers for a type the reference no longer covers.
     #[test]
     fn no_generated_page_is_orphaned() {
-        let pages = concinnity_docs::pages();
+        let pages = concinnity_cook::docs::pages();
         for entry in fs::read_dir(repo_root().join(PAGES_DIR)).expect("read the pages directory") {
             let path = entry.expect("directory entry").path();
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -123,7 +123,7 @@ mod tests {
         docs(Some(root.to_str().unwrap())).expect("first run writes the pages");
 
         let dir = root.join(PAGES_DIR);
-        for (file, content) in &concinnity_docs::pages() {
+        for (file, content) in &concinnity_cook::docs::pages() {
             assert_eq!(
                 &fs::read_to_string(dir.join(file)).expect("page written"),
                 content

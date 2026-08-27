@@ -1,0 +1,35 @@
+[package]
+name = "concinnity-host"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Host services for Concinnity: the on-disk state tree and the thread-scoped services"
+keywords = ["gamedev", "filesystem", "threadpool", "concinnity"]
+categories = ["game-engines", "filesystem"]
+include = [
+    "/src",
+]
+
+[lib]
+name = "concinnity_host"
+path = "src/lib.rs"
+
+[dependencies]
+concinnity-asset = { workspace = true }
+concinnity-core = { workspace = true }
+concinnity-memory = { workspace = true }
+
+rayon = "1"
+tracing = "0.1.44"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+tempfile = "3.25.0"
+
+[lints]
+workspace = true

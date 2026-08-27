@@ -6,6 +6,8 @@
 //! boundary with the snapshot that carries it.
 
 use crate::backend::RenderBackend;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use concinnity_core::gfx::chunk_coord::ChunkCoord;
 
 type BackendOp = Box<dyn FnOnce(&mut dyn RenderBackend, &mut ReplayOutcome) + Send>;
@@ -43,8 +45,8 @@ pub struct RenderOps {
     ops: Vec<BackendOp>,
 }
 
-impl std::fmt::Debug for RenderOps {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for RenderOps {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RenderOps")
             .field("len", &self.ops.len())
             .finish()
@@ -101,6 +103,7 @@ impl RenderOps {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     // Replay hands ops the backend in record order and drains the queue.
     // The mock records call order through the outcome's failure list.
     #[test]

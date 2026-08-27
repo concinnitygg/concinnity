@@ -41,6 +41,7 @@
 //     (compute sim + render draw). `PassId::ParticlesSim` stays
 //     timing-only and the executor rejects it as a graph node.
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use std::sync::Mutex;
 
 use windows::Win32::Graphics::Direct3D12::*;
@@ -849,7 +850,7 @@ impl DxContext {
     // Main pass rasterises with (the un-jittered VP), so raymarched
     // surfaces share their NDC depth space with rasterised geometry.
     fn build_raymarch_view(&self, params: &GraphFrameParams<'_>) -> super::raymarch::RaymarchView {
-        let inv_vp = super::math::mat4_inverse(params.cur_vp);
+        let inv_vp = mat4_inverse(params.cur_vp);
         super::raymarch::RaymarchView {
             vp: params.cur_vp,
             inv_vp,
@@ -869,7 +870,7 @@ impl DxContext {
         &self,
         params: &GraphFrameParams<'_>,
     ) -> super::transparent::TransparentView {
-        let inv_vp = super::math::mat4_inverse(params.vp_mat);
+        let inv_vp = mat4_inverse(params.vp_mat);
         super::transparent::TransparentView {
             vp: params.vp_mat,
             inv_vp,

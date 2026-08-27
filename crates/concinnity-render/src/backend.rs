@@ -33,6 +33,9 @@ use crate::ssao::SsaoSettings;
 use crate::ssgi::SsgiSettings;
 use crate::ssr::SsrSettings;
 use crate::volumetric_fog::FogSettings;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 
 /// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
 /// an opaque menu backdrop covers the scene: the backend skips every world pass
@@ -425,7 +428,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// backend without a morph deformation path.
     fn upload_skinned_morphs(
         &mut self,
-        _morphs: Vec<Option<std::sync::Arc<crate::mesh_payload::PayloadMorphs>>>,
+        _morphs: Vec<Option<alloc::sync::Arc<crate::mesh_payload::PayloadMorphs>>>,
     ) {
     }
 
@@ -745,7 +748,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// that have not implemented hot-reload yet. The debug server reads this
     /// to forward `reload-shaders` commands; the filesystem watcher writes
     /// it directly. Default: `None`.
-    fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+    fn shader_reload_flag(&self) -> Option<alloc::sync::Arc<core::sync::atomic::AtomicBool>> {
         None
     }
 
@@ -898,7 +901,7 @@ pub trait RenderBackend: SceneControl + Send {
 
     /// Replace the live IBL environment map with a freshly precomputed payload.
     /// `payload` is the serialised byte format emitted by
-    /// `concinnity_cpu::build::environment_map::compile_environment_map_payload`
+    /// `concinnity_core::build::environment_map::compile_environment_map_payload`
     /// (header + irradiance cube + prefilter mip chain), so init and hot-reload
     /// share a single byte format. Driven by asset hot-reload (`cn debug`
     /// only). Default no-op: backends that have not implemented the swap leave
@@ -1201,6 +1204,7 @@ pub(crate) mod test_stub {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     const GB: u64 = 1 << 30;
 
     fn input(
@@ -1525,6 +1529,8 @@ mod tests {
                 ssr: None,
                 ssgi: None,
                 rt_reflections: None,
+                rt_dynamic: crate::rt_geom::RtDynamicMode::Auto,
+                rt_skinned_geometry: true,
                 reflection_blur_scale: 1,
                 auto_exposure: None,
                 auto_exposure_bias_ev: 0.0,

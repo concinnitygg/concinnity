@@ -16,6 +16,7 @@
 // un-jittered current / previous VPs in-shader so projection jitter never
 // contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
+use concinnity_core::gfx::transform::IDENTITY;
 use std::cell::RefCell;
 
 use windows::Win32::Foundation::RECT;
@@ -25,7 +26,6 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::math::IDENTITY4;
 use crate::directx::pipeline::{
     main_input_layout, serialize_and_create_root_sig, skinned_input_layout,
 };
@@ -700,7 +700,7 @@ impl GbufferResources {
             instanced_pso,
             skinned_root_sig,
             skinned_pso,
-            prev_view_proj: RefCell::new(IDENTITY4),
+            prev_view_proj: RefCell::new(IDENTITY),
             prev_models: RefCell::new(Vec::new()),
         })
     }

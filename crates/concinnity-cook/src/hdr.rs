@@ -17,7 +17,8 @@
 //   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z. The equirect is resampled into
 // six cube faces using bilinear interpolation in HDR space.
 
-use concinnity_cpu::decode::{ByteReader, checked_product};
+use concinnity_core::decode::{ByteReader, checked_product};
+use concinnity_core::math::vec3::length;
 
 pub(crate) const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
 pub(crate) const CUBE_FORMAT_RGBA32F: u32 = 0;
@@ -320,7 +321,7 @@ fn face_uv_to_dir(face: usize, u: f32, v: f32) -> [f32; 3] {
 }
 
 fn normalize3(v: [f32; 3]) -> [f32; 3] {
-    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-20);
+    let l = length(v).max(1e-20);
     [v[0] / l, v[1] / l, v[2] / l]
 }
 

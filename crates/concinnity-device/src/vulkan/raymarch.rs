@@ -23,6 +23,7 @@
 // consumes `.glsl` payloads; `.metal` / `.hlsl` SDFs are skipped at init with a
 // logged warning and the rest of the world renders unchanged.
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use std::ffi::CString;
 
 use ash::vk;
@@ -1353,7 +1354,7 @@ impl VkContext {
     ) -> RaymarchView {
         RaymarchView {
             vp,
-            inv_vp: super::math::mat4_inverse(vp),
+            inv_vp: mat4_inverse(vp),
             cam_pos,
             _pad0: 0.0,
             viewport: [

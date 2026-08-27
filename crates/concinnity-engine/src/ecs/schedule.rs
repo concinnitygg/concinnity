@@ -1,115 +1,97 @@
 //! Gate builders for the system table (`define_systems!` in `registry`). Each
 //! gate inspects the world's content and returns the constructed system when
 //! its gating components are present, or `None` to leave it out of the
-//! schedule. `World::build_internal_systems` and `World::system_manifest` both
-//! run these same gates, so what the manifest reports and what `start()`
-//! builds cannot drift.
+//! schedule. `World::start` and `World::system_manifest` both run these same
+//! gates, so what the manifest reports and what `start` builds cannot drift.
 //!
 //! Gates construct their system, so every system constructor must stay cheap
 //! and side-effect-free: the manifest probe discards the value, and anything
 //! heavy (device acquisition, payload reads) belongs in `System::init`.
 
-use crate::ecs::{SystemAsset, World};
-
-/// One row of the system table: the schedule entry `define_systems!` generates
-/// per system. Table order is run order.
-pub struct SystemEntry {
-    /// The `SystemAsset` variant name; the system's stable display name.
-    pub name: &'static str,
-    /// Human-readable gate condition, for docs and CLI reporting.
-    pub present_when: &'static str,
-    /// Constructs the system from world content when its gate holds.
-    pub gate: fn(&World) -> Option<SystemAsset>,
-    /// Systems (by variant name) that must run earlier in the tick than this
-    /// one, and systems this one must precede. Validated against table order
-    /// at schedule build: the table stays the one execution order, and an edge
-    /// that contradicts it is a startup panic, not a silent reorder.
-    pub after: &'static [&'static str],
-    /// Systems this one must run before.
-    pub before: &'static [&'static str],
-}
+use crate::ecs::World;
 
 // OverlaySystem: paired with GraphicsSystem (same gate) -- it shapes the
 // overlay draw list graphics submits. Scheduled first so the menu state it
 // publishes gates every later system this same tick.
-pub(crate) fn overlay(world: &World) -> Option<SystemAsset> {
+pub(crate) fn overlay(world: &World) -> Option<crate::gfx::overlay::OverlaySystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::overlay::OverlaySystem::new().into())
+        .map(|_| crate::gfx::overlay::OverlaySystem::new())
 }
 
 // BehaviorSystem: present whenever the world declares any `Behavior`.
 // Scheduled before SpawnSystem / SettingsSystem / StorySystem / AudioSystem so
-// the requests its firing bodies emit are drained the same tick.
-pub(crate) fn behavior(world: &World) -> Option<SystemAsset> {
+// the requests its firing bodies emit are drained the same tick. Built with
+// what this host lends it: the job pool and a file-backed state store.
+pub(crate) fn behavior(world: &World) -> Option<concinnity_core::behavior::BehaviorSystem> {
     world
         .query::<crate::components::Behavior>()
         .next()
-        .map(|_| crate::behavior::BehaviorSystem::new().into())
+        .map(|_| crate::behavior::build())
 }
 
 // SpawnSystem: paired with GraphicsSystem (same gate) -- its churn retires and
 // clones the GPU draw slots graphics owns. Scheduled immediately before it so
 // a despawn is applied before the transform push and a spawn reuses slots
 // freed this same frame.
-pub(crate) fn spawn(world: &World) -> Option<SystemAsset> {
+pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::spawn::SpawnSystem::new().into())
+        .map(|_| crate::spawn::SpawnSystem::new())
 }
 
 // SettingsSystem: paired with GraphicsSystem (same gate) -- it applies the
 // settings/scene command batches against the backend graphics owns and holds
 // the settings snapshot GraphicsSystem's init resolves. Scheduled just before
 // GraphicsSystem so a change lands for this frame's submit.
-pub(crate) fn settings(world: &World) -> Option<SystemAsset> {
+pub(crate) fn settings(world: &World) -> Option<crate::gfx::settings_system::SettingsSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::settings_system::SettingsSystem::new().into())
+        .map(|_| crate::gfx::settings_system::SettingsSystem::new())
 }
 
 // StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
 // streaming pools and publishes the camera-relative screen graphics draws.
 // Scheduled immediately before GraphicsSystem so a chunk world's screen rebase is
 // ready for this frame's submit and any texture/mesh upload lands before it.
-pub(crate) fn streaming(world: &World) -> Option<SystemAsset> {
+pub(crate) fn streaming(world: &World) -> Option<crate::gfx::streaming_system::StreamingSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::streaming_system::StreamingSystem::new().into())
+        .map(|_| crate::gfx::streaming_system::StreamingSystem::new())
 }
 
 // GraphicsSystem: present whenever the world declares a `GraphicsConfig`
 // (the render marker).
-pub(crate) fn graphics(world: &World) -> Option<SystemAsset> {
+pub(crate) fn graphics(world: &World) -> Option<crate::gfx::graphics_system::GraphicsSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::graphics_system::GraphicsSystem::new().into())
+        .map(|_| crate::gfx::graphics_system::GraphicsSystem::new())
 }
 
 // InputSystem: paired with GraphicsSystem (same gate) -- it samples the window
 // backend graphics drives. Scheduled immediately after it so the snapshot is
 // taken right after the draw (the OS event pump on Metal runs inside
 // draw_frame) and is fresh for every consumer below.
-pub(crate) fn input(world: &World) -> Option<SystemAsset> {
+pub(crate) fn input(world: &World) -> Option<crate::gfx::input_system::InputSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::input_system::InputSystem::new().into())
+        .map(|_| crate::gfx::input_system::InputSystem::new())
 }
 
 // StatHud: present whenever the world declares a `StatHud`; built from that
 // component (the HUD's TextLabel refs).
-pub(crate) fn stat_hud(world: &World) -> Option<SystemAsset> {
+pub(crate) fn stat_hud(world: &World) -> Option<crate::hud::stat_hud::StatHudSystem> {
     world
         .query::<crate::components::StatHud>()
         .next()
         .cloned()
-        .map(|cfg| crate::hud::stat_hud::StatHudSystem::new(cfg).into())
+        .map(crate::hud::stat_hud::StatHudSystem::new)
 }
 
 // DebugHud: present whenever the world declares a `DebugHud`, but only in
@@ -117,7 +99,7 @@ pub(crate) fn stat_hud(world: &World) -> Option<SystemAsset> {
 // DebugHud into every rendering world), so the running binary is the one
 // place its own profile is knowable: a debug build or a `cn debug` session
 // activates the HUD, a release `cn run` leaves it inert.
-pub(crate) fn debug_hud(world: &World) -> Option<SystemAsset> {
+pub(crate) fn debug_hud(world: &World) -> Option<crate::hud::debug_hud::DebugHudSystem> {
     if !(cfg!(debug_assertions) || crate::app::dev_flags::enabled()) {
         return None;
     }
@@ -125,17 +107,19 @@ pub(crate) fn debug_hud(world: &World) -> Option<SystemAsset> {
         .query::<crate::components::DebugHud>()
         .next()
         .cloned()
-        .map(|cfg| crate::hud::debug_hud::DebugHudSystem::new(cfg).into())
+        .map(crate::hud::debug_hud::DebugHudSystem::new)
 }
 
 // LoadingOverlaySystem: present whenever the world declares a `LoadingOverlay`;
 // built from that component (its screen + element refs).
-pub(crate) fn loading_overlay(world: &World) -> Option<SystemAsset> {
+pub(crate) fn loading_overlay(
+    world: &World,
+) -> Option<crate::hud::loading_overlay::LoadingOverlaySystem> {
     world
         .query::<crate::components::LoadingOverlay>()
         .next()
         .cloned()
-        .map(|cfg| crate::hud::loading_overlay::LoadingOverlaySystem::new(cfg).into())
+        .map(crate::hud::loading_overlay::LoadingOverlaySystem::new)
 }
 
 // PhysicsSystem: present whenever the world has physics content, namely a
@@ -143,7 +127,7 @@ pub(crate) fn loading_overlay(world: &World) -> Option<SystemAsset> {
 // capsule), a `PropBody` (dynamic prop), or a `TriggerVolume` (sensor
 // region). Reads the `PhysicsConfig` if present, otherwise a flat-floor
 // default.
-pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
+pub(crate) fn physics(world: &World) -> Option<concinnity_core::physics::PhysicsSystem> {
     let needs = world
         .query::<crate::components::PhysicsConfig>()
         .next()
@@ -171,27 +155,27 @@ pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
         .next()
         .cloned()
         .unwrap_or_default();
-    Some(crate::physics::PhysicsSystem::new(config).into())
+    Some(crate::physics::build(config))
 }
 
 // The first controlled `Camera3D` picks the controller flavor: no `follow`
 // block selects this first-person / fly controller, a `follow` block selects
 // the adjacent ThirdPersonSystem entry instead (a camera never gets both). A
 // `controller: null` camera opts out entirely (cutscene cameras).
-pub(crate) fn camera3d(world: &World) -> Option<SystemAsset> {
+pub(crate) fn camera3d(world: &World) -> Option<crate::gfx::camera_controller::Camera3DSystem> {
     let ctrl = controlled_camera(world)?;
     ctrl.follow
         .is_none()
-        .then(|| crate::gfx::camera_controller::Camera3DSystem::new(ctrl).into())
+        .then(|| crate::gfx::camera_controller::Camera3DSystem::new(ctrl))
 }
 
 // Counterpart of `camera3d`: the first controlled camera declares a `follow`
 // block, so the third-person controller drives it.
-pub(crate) fn third_person(world: &World) -> Option<SystemAsset> {
+pub(crate) fn third_person(world: &World) -> Option<crate::gfx::third_person::ThirdPersonSystem> {
     let ctrl = controlled_camera(world)?;
     ctrl.follow
         .is_some()
-        .then(|| crate::gfx::third_person::ThirdPersonSystem::new(&ctrl).into())
+        .then(|| crate::gfx::third_person::ThirdPersonSystem::new(&ctrl))
 }
 
 fn controlled_camera(world: &World) -> Option<crate::components::CameraController> {
@@ -202,19 +186,19 @@ fn controlled_camera(world: &World) -> Option<crate::components::CameraControlle
 
 // FpsCounter: present whenever the world declares an `FpsCounter`; built from
 // that component (its optional TextLabel ref).
-pub(crate) fn fps_counter(world: &World) -> Option<SystemAsset> {
+pub(crate) fn fps_counter(world: &World) -> Option<crate::hud::fps_counter::FpsCounterSystem> {
     world
         .query::<crate::components::FpsCounter>()
         .next()
         .cloned()
-        .map(|cfg| crate::hud::fps_counter::FpsCounterSystem::new(cfg).into())
+        .map(crate::hud::fps_counter::FpsCounterSystem::new)
 }
 
 // AnimationSystem: present whenever the world declares any `Animation` or
 // `AnimationGraph`. It drains both at init and writes `SkeletonPose` each
 // frame. (A graph without clips is a build error, so the second check
 // only matters for hand-assembled worlds.)
-pub(crate) fn animation(world: &World) -> Option<SystemAsset> {
+pub(crate) fn animation(world: &World) -> Option<crate::gfx::animation::AnimationSystem> {
     let declared = world
         .query::<crate::components::Animation>()
         .next()
@@ -223,26 +207,26 @@ pub(crate) fn animation(world: &World) -> Option<SystemAsset> {
             .query::<crate::components::AnimationGraph>()
             .next()
             .is_some();
-    declared.then(|| crate::gfx::animation::AnimationSystem::new().into())
+    declared.then(crate::gfx::animation::AnimationSystem::new)
 }
 
 // StorySystem: present whenever the world declares a `Story` (a compiled
 // story graph). It runs before AudioSystem so its page-audio requests are
 // heard the same tick, and before UiInputSystem like every other event
 // producer (its screen commands apply next frame).
-pub(crate) fn story(world: &World) -> Option<SystemAsset> {
+pub(crate) fn story(world: &World) -> Option<crate::story::StorySystem> {
     world
         .query::<crate::components::Story>()
         .next()
         .cloned()
-        .map(|story| crate::story::StorySystem::new(story).into())
+        .map(crate::story::StorySystem::new)
 }
 
 // AudioSystem: present whenever the world declares any `AudioEmitter`
 // (positional sound), `AudioCue` (screen-triggered sound), `Story`
 // (page-triggered sound), or `Behavior` with a sound node. Its init opens
 // an audio device, so a world with none of them stays silent and device-free.
-pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
+pub(crate) fn audio(world: &World) -> Option<crate::audio::AudioSystem> {
     let needs = world
         .query::<crate::components::AudioEmitter>()
         .next()
@@ -273,20 +257,17 @@ pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
     // here and hand them to the system so the audio crate stays free of the
     // engine's `Settings` type.
     let audio = crate::config::Settings::load().audio;
-    Some(
-        concinnity_audio::AudioSystem::new(concinnity_audio::AudioVolumes {
-            master: audio.master_volume,
-            music: audio.music_volume,
-            sfx: audio.sfx_volume,
-            voice: audio.voice_volume,
-        })
-        .into(),
-    )
+    Some(crate::audio::AudioSystem::new(crate::audio::AudioVolumes {
+        master: audio.master_volume,
+        music: audio.music_volume,
+        sfx: audio.sfx_volume,
+        voice: audio.voice_volume,
+    }))
 }
 
 // UiInputSystem: present whenever the world declares any `HitRegion`, `Screen`,
 // or `KeyBinding`. It drains all three at init.
-pub(crate) fn ui_input(world: &World) -> Option<SystemAsset> {
+pub(crate) fn ui_input(world: &World) -> Option<crate::ui::UiInputSystem> {
     let needs = world
         .query::<crate::components::HitRegion>()
         .next()
@@ -296,23 +277,23 @@ pub(crate) fn ui_input(world: &World) -> Option<SystemAsset> {
             .query::<crate::components::KeyBinding>()
             .next()
             .is_some();
-    needs.then(|| crate::ui::UiInputSystem::new().into())
+    needs.then(crate::ui::UiInputSystem::new)
 }
 
 // TextInputSystem: present whenever the world declares any `TextInput`. It
 // edits the focused field in place from the frame's typed character and
 // caret keys, so it runs after GraphicsSystem deposits `FrameInput`.
-pub(crate) fn text_input(world: &World) -> Option<SystemAsset> {
+pub(crate) fn text_input(world: &World) -> Option<crate::text_input_system::TextInputSystem> {
     world
         .query::<crate::components::TextInput>()
         .next()
-        .map(|_| crate::text_input_system::TextInputSystem::new().into())
+        .map(|_| crate::text_input_system::TextInputSystem::new())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::components::{Camera3D, CameraController, PhysicsConfig, RigidBody};
-    use crate::ecs::World;
+    use crate::ecs::{SYSTEMS, World};
 
     fn controlled_camera() -> Camera3D {
         Camera3D {
@@ -335,7 +316,7 @@ mod tests {
     fn physics_config_spawns_internal_system() {
         let mut world = World::new();
         world.add_component(PhysicsConfig::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["PhysicsSystem"]);
     }
@@ -345,7 +326,7 @@ mod tests {
     fn rigid_body_spawns_internal_system() {
         let mut world = World::new();
         world.add_component(RigidBody::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["PhysicsSystem"]);
     }
@@ -354,7 +335,7 @@ mod tests {
     #[test]
     fn no_physics_content_no_system() {
         let mut world = World::new();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         assert!(world.systems().is_empty());
     }
 
@@ -365,7 +346,7 @@ mod tests {
         let mut world = World::new();
         world.add_component(PhysicsConfig::default());
         world.add_component(controlled_camera());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["PhysicsSystem", "Camera3DSystem"]);
     }
@@ -376,7 +357,7 @@ mod tests {
     fn audio_emitter_spawns_internal_system() {
         let mut world = World::new();
         world.add_component(crate::components::AudioEmitter::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["AudioSystem"]);
@@ -386,7 +367,7 @@ mod tests {
     #[test]
     fn no_audio_emitter_means_no_system() {
         let mut world = World::new();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         assert!(world.systems().is_empty());
     }
 
@@ -396,7 +377,7 @@ mod tests {
     fn audio_cue_spawns_internal_system() {
         let mut world = World::new();
         world.add_component(crate::components::AudioCue::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert!(names.contains(&"AudioSystem"), "{names:?}");
@@ -428,16 +409,14 @@ mod tests {
             clip: Some(AudioClipHandle(0)),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.step();
 
         let matched = world
             .systems()
             .iter()
-            .find_map(|s| match s {
-                crate::ecs::SystemAsset::AudioSystem(a) => Some(a.cues_matched()),
-                _ => None,
-            })
+            .find_map(|s| s.downcast_ref::<crate::audio::AudioSystem>())
+            .map(|a| a.cues_matched())
             .expect("world has an AudioSystem");
         assert_eq!(matched, 1, "the initial screen's cue should have matched");
     }

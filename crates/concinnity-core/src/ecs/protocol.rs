@@ -111,8 +111,9 @@ pub enum TraceStep {
 /// A behavior node's address: the hops from the behavior's args down to it.
 pub type TracePath = alloc::vec::Vec<TraceStep>;
 
-/// A behavior-body value in its cross-boundary form (the runtime's value type
-/// is private to the behavior system). Entities travel as their id bits.
+/// A behavior-body value in its cross-boundary form: what
+/// [`Val`](crate::behavior::Val) publishes to an observer. Entities travel as
+/// their id bits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TraceVal {
     /// A boolean value.

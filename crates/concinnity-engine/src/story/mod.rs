@@ -218,7 +218,7 @@ enum Overlay {
     LoadMenu,
 }
 
-pub struct StorySystem {
+pub(crate) struct StorySystem {
     story: Story,
     ids: Option<StageIds>,
     // Current position in the graph.
@@ -282,7 +282,7 @@ impl std::fmt::Debug for StorySystem {
 }
 
 impl StorySystem {
-    pub fn new(story: Story) -> Self {
+    pub(crate) fn new(story: Story) -> Self {
         Self {
             story,
             ids: None,
@@ -291,7 +291,7 @@ impl StorySystem {
             started: false,
             in_choice: false,
             vars: HashMap::new(),
-            save_dir: concinnity_store::paths::saves_dir(),
+            save_dir: concinnity_host::store::paths::saves_dir(),
             menu: Vec::new(),
             typewriter: Typewriter::default(),
             last_step: None,
@@ -340,7 +340,7 @@ impl System for StorySystem {
             .resource::<crate::ecs::TransientSaves>()
             .is_some_and(|t| t.0)
         {
-            self.save_dir = concinnity_store::paths::preview_saves_dir();
+            self.save_dir = concinnity_host::store::paths::preview_saves_dir();
             if let Some(dir) = &self.save_dir {
                 let _ = std::fs::remove_dir_all(dir);
             }

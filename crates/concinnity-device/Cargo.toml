@@ -28,14 +28,13 @@ path = "src/lib.rs"
 vulkan = [
     "dep:ash",
     "dep:shaderc",
-    "concinnity-cpu/vulkan",
+    "concinnity-core/vulkan",
     "concinnity-render/vulkan",
 ]
 
 [dependencies]
 concinnity-core = { workspace = true }
-concinnity-cpu = { workspace = true }
-concinnity-store = { workspace = true }
+concinnity-host = { workspace = true }
 concinnity-render = { workspace = true }
 concinnity-slang = { workspace = true }
 

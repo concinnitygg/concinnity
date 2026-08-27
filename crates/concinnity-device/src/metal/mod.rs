@@ -54,11 +54,11 @@ mod world_shaders;
 
 // GPU-free host-side pieces live in the concinnity-render crate (compiled
 // unconditionally so their unit tests count toward coverage); re-exported here
-// so the backend keeps its `super::{math,uniforms}` / `crate::metal::shader_layout`
+// so the backend keeps its `super::uniforms` / `crate::metal::shader_layout`
 // paths. The `shader_layout` re-export is `pub` so the out-of-tree Swift app's
 // FFI crate can drive `validate_stage` against the engine layouts.
 pub use concinnity_render::metal::shader_layout;
-pub(crate) use concinnity_render::metal::{math, uniforms};
+pub(crate) use concinnity_render::metal::uniforms;
 
 // `set_preview_view` / `set_embedded_pump_events` are the play-in-view
 // embedding hooks the out-of-tree Swift app drives through its FFI crate; no

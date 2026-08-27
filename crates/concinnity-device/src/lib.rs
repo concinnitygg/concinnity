@@ -2,14 +2,14 @@
 //! (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
 //! Win32 window/input layer. Exactly one backend compiles per build (resolved by
 //! build.rs into a single backend_* cfg). Depends on concinnity-render (the
-//! RenderBackend/SceneControl trait seam + render-prep) and concinnity-cpu; owns
-//! no gameplay, ECS-runtime, audio, or physics. The client drives these through a
+//! RenderBackend/SceneControl trait seam + render-prep) and concinnity-core;
+//! owns no gameplay, ECS-runtime, audio, or physics. The client drives these through a
 //! `Box<dyn RenderBackend>` obtained from `init_backend`, never naming a concrete
 //! context type.
 
 // Bridge so the backends' historical `crate::gfx::<X>` paths resolve: the GPU
-// data layouts and render math (concinnity-core), the CPU kernels over them
-// (concinnity-cpu), and the render-prep modules (concinnity-render). Each
+// data layouts, render math, and CPU kernels (concinnity-core) plus the
+// render-prep modules (concinnity-render). Each
 // backend consumes a different subset and one backend compiles per build, so a
 // portion of these re-exports is unused on any given build - suppress it
 // crate-wide rather than gate every item per backend.
@@ -18,12 +18,9 @@
     reason = "one backend compiles per build, so each consumes only a subset of these re-exports"
 )]
 pub(crate) mod gfx {
-    pub(crate) use concinnity_core::gfx::lod_select as lod;
     pub(crate) use concinnity_core::gfx::{
-        frustum, profile, render_types, rt_reflections, ssao, ssgi, ssr,
-    };
-    pub(crate) use concinnity_cpu::gfx::{
-        auto_exposure, image_decode, mesh_payload, morph_targets,
+        auto_exposure, frustum, image_decode, lod, mesh_payload, morph_targets, profile,
+        render_types, rt_reflections, ssao, ssgi, ssr,
     };
     pub(crate) use concinnity_render::{
         backend, backend_init, bvh, csm, decal, display_mode, draw_slot, error, fullscreen,
@@ -34,11 +31,14 @@ pub(crate) mod gfx {
 }
 
 // Asset data types, the runtime build helpers, and the mesh/chunk geometry the
-// backends reach by their historical `crate::` paths; plus the shared rayon job
-// pool (now in concinnity-render).
+// backends reach by their historical `crate::` paths, plus the shared rayon job
+// pool.
 pub(crate) use concinnity_core::components;
-pub(crate) use concinnity_cpu::{build, geometry};
-pub(crate) use concinnity_render::jobs;
+pub(crate) use concinnity_core::{build, geometry};
+pub(crate) use concinnity_host::thread::jobs;
+
+// The job pool as a `RowScheduler`, for the probe bake.
+pub(crate) mod pool_rows;
 
 #[cfg(backend_dx)]
 pub(crate) mod directx;

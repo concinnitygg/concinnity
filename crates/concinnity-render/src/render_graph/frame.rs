@@ -42,6 +42,8 @@
 // candidacy and has no effect on pass order or barriers.
 
 use crate::render_types::NUM_SHADOW_CASCADES;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,

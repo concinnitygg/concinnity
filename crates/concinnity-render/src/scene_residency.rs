@@ -6,6 +6,8 @@
 //! reports residency transitions back here.
 
 use crate::ecs::asset_id::AssetId;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// A streamed item a scene exclusively owns: the driver's channel tag (which
 /// pool the item lives in) plus the pool's item id.

@@ -106,7 +106,7 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // {"type":"StatHud","name":"hud","args":{"fps_label":"fps_chip","vram_label":"vram_chip","ev_label":"ev_chip","edr_label":"edr_chip"}}
 // ```
 #[derive(Debug)]
-pub struct StatHudSystem {
+pub(crate) struct StatHudSystem {
     fps_label: Option<AssetId>,
     vram_label: Option<AssetId>,
     ram_label: Option<AssetId>,
@@ -132,7 +132,7 @@ pub struct StatHudSystem {
 
 impl StatHudSystem {
     // Build the HUD from a world's `StatHud` request component.
-    pub fn new(config: StatHud) -> Self {
+    pub(crate) fn new(config: StatHud) -> Self {
         Self {
             fps_label: config.fps_label,
             vram_label: config.vram_label,
@@ -222,6 +222,7 @@ impl System for StatHudSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::SYSTEMS;
 
     #[test]
     fn fps_text_averages_frames_over_window() {
@@ -327,7 +328,7 @@ mod tests {
 
         let mut world = World::new();
         world.add_component(StatHud::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["StatHud"]);
     }
@@ -337,7 +338,7 @@ mod tests {
         use crate::ecs::World;
 
         let mut world = World::new();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         assert!(world.systems().is_empty());
     }
 
@@ -365,7 +366,7 @@ mod tests {
     fn force_emit_due(world: &mut crate::ecs::World) {
         use std::time::Duration;
         for system in world.systems_mut() {
-            if let crate::ecs::SystemAsset::StatHud(s) = system {
+            if let Some(s) = system.downcast_mut::<StatHudSystem>() {
                 s.last_emit = Instant::now() - Duration::from_secs(1);
             }
         }
@@ -384,7 +385,7 @@ mod tests {
     #[test]
     fn emit_window_writes_fps_and_vram_chips() {
         let mut world = hud_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         force_emit_due(&mut world);
         world.step();
         assert!(chip(&world, 1).starts_with("FPS "), "{}", chip(&world, 1));
@@ -399,7 +400,7 @@ mod tests {
         use crate::app::budget::MemoryBudget;
 
         let mut world = hud_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         // The budget defaults to a fraction of total RAM, so derive the expected
         // MiB from the same value rather than assuming it equals total RAM.
         let budget = MemoryBudget::compute(Some(16 * 1024 * 1024 * 1024), 0);
@@ -429,7 +430,7 @@ mod tests {
         use crate::ecs::HudPrefs;
 
         let mut world = hud_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.insert_resource(HudPrefs {
             show_fps: false,
             show_vram: false,

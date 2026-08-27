@@ -12,8 +12,13 @@
 //! same matrices are valid on all three backends.
 
 use crate::components::{SpotLight, SpotLightGeometry};
-use crate::mat::{add3, look_at, mat4_mul, perspective_rh, scale3, up_for};
+use crate::mat::{look_at, up_for};
 use crate::render_types::{MAX_SHADOWED_SPOTS, SpotShadowData};
+use alloc::vec;
+use alloc::vec::Vec;
+use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::math::vec3::{add, scale};
 
 // Near plane for a spot's shadow frustum. Fixed and small: the depth range is
 // [SHADOW_NEAR, range], and pulling the near plane in costs precision while
@@ -91,7 +96,7 @@ fn spot_shadow_data(light: &SpotLight) -> SpotShadowData {
     let far = light.range.max(MIN_SHADOW_RANGE);
     let view = look_at(
         light.position,
-        add3(light.position, scale3(dir, far)),
+        add(light.position, scale(dir, far)),
         up_for(dir),
     );
     let fov = (2.0 * light.outer_angle).to_radians();

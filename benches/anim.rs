@@ -9,10 +9,12 @@
 //! Run with `cargo bench -p concinnity-bench --bench anim`.
 
 use concinnity_bench::{Bench, Rng};
-use concinnity_cpu::gfx::ik::{TwoBoneChain, apply_two_bone_ik};
-use concinnity_cpu::gfx::skinning::{
-    AnimationClip, Joint, JointPose, JointTrack, Keyframe, Mat4, PoseBlend, Skeleton,
+use concinnity_core::gfx::ik::{TwoBoneChain, apply_two_bone_ik};
+use concinnity_core::gfx::pose_blend::PoseBlend;
+use concinnity_core::gfx::skeleton::{
+    AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton,
 };
+use concinnity_core::gfx::transform::Mat4;
 
 const JOINTS: usize = 64;
 const BAKED_KEYS: usize = 61;

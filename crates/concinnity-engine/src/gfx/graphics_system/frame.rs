@@ -610,8 +610,7 @@ impl GraphicsSystem {
     // still queryable here. Every element listed in any row maps to its panel's
     // content band.
     pub(super) fn init_clip_rects(&mut self, ctx: &mut PipelineContext) {
-        let mut clips: std::collections::HashMap<AssetId, [f32; 4]> =
-            std::collections::HashMap::new();
+        let mut clips = crate::gfx::overlay_maps::ClipRects::new();
         for panel in ctx.query::<crate::components::ScrollPanel>() {
             let band = [panel.x, panel.y, panel.width, panel.height];
             for row in &panel.rows {
@@ -804,7 +803,7 @@ mod tests {
         SkeletonPose {
             mesh_id: SkinnedMeshHandle(0),
             skinned_index,
-            skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
+            skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
             joint_matrices: vec![translated(1.0); joints],
             morph_weights: Vec::new(),
             morph_base: Vec::new(),

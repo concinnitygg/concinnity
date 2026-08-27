@@ -92,9 +92,13 @@ pub(crate) struct RtState {
     // when RT reflections are on and the scene has resident geometry; updated
     // per frame when `dynamic_mode` is dynamic. Resolution-independent.
     pub accel: Option<RtAccelData>,
-    // How the acceleration structure is kept current as props move (read once
-    // from `CN_RT_DYNAMIC` at init; `Auto` by default).
+    // How the acceleration structure is kept current as props move (the
+    // launch's `--rt-dynamic` request; `Auto` by default).
     pub dynamic_mode: RtDynamicMode,
+    // Whether skinned meshes join the BVH (the launch's
+    // `--rt-skinned-geometry` request; in by default). Clear it and the BVH
+    // covers static + instanced geometry only, isolating the skinned trace path.
+    pub skinned_geometry: bool,
     // Whether the per-frame BVH update is currently in a failure streak. A
     // transient rebuild failure is non-fatal (keep last frame's BVH) and
     // logged once per streak rather than every frame.

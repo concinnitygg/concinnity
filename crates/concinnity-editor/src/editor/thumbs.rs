@@ -65,7 +65,7 @@ fn cache() -> &'static Mutex<Cache> {
 
 // The freshest loaded set, reloading when the index file changed on disk.
 fn current() -> Arc<ThumbSet> {
-    let Some(dir) = concinnity_store::paths::thumbnails_dir() else {
+    let Some(dir) = concinnity_host::store::paths::thumbnails_dir() else {
         return Arc::new(ThumbSet::default());
     };
     let stamp = std::fs::metadata(dir.join("index.json"))

@@ -11,6 +11,7 @@
 // are reflected and tracked by the temporal history just like the rest of
 // the scene. Mirrors src/metal/decal.rs.
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -491,7 +492,7 @@ impl DxContext {
         }
 
         // Upload this frame's view UBO.
-        let inv_vp = super::math::mat4_inverse(vp);
+        let inv_vp = mat4_inverse(vp);
         let viewport = [
             self.extent.render_width as f32,
             self.extent.render_height as f32,

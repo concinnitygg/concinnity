@@ -1096,7 +1096,7 @@ impl DrawObject {
     /// than the first alternate's threshold; otherwise returns the
     /// highest-indexed alternate whose `switch_distance` ≤ `distance`.
     pub fn active_lod(&self, distance: f32) -> (usize, usize) {
-        crate::gfx::lod_select::pick_lod_slice(
+        crate::gfx::lod::pick_lod_slice(
             (self.index_offset, self.index_count),
             &self.lod_alternates,
             distance,
@@ -1106,7 +1106,7 @@ impl DrawObject {
     /// Returns true when the AABB encodes valid finite bounds suitable for
     /// frustum/distance culling. A degenerate box (NaN min) disables culling.
     pub fn cullable(&self) -> bool {
-        crate::gfx::lod_select::bounds_finite(self.bb_min, self.bb_max)
+        crate::gfx::lod::bounds_finite(self.bb_min, self.bb_max)
     }
 }
 
@@ -1518,7 +1518,7 @@ impl InstancedCluster {
     /// True when the cluster AABB encodes valid finite bounds suitable for
     /// frustum / distance culling.
     pub fn cullable(&self) -> bool {
-        crate::gfx::lod_select::bounds_finite(self.cluster_bb_min, self.cluster_bb_max)
+        crate::gfx::lod::bounds_finite(self.cluster_bb_min, self.cluster_bb_max)
     }
 
     /// Partition the cluster's instances into LOD buckets keyed by camera
@@ -1565,7 +1565,7 @@ impl InstancedCluster {
             let dy = m[3][1] - cam_pos[1];
             let dz = m[3][2] - cam_pos[2];
             let d = sqrt(dx * dx + dy * dy + dz * dz);
-            let pick = crate::gfx::lod_select::pick_lod_level(&self.lod_alternates, d);
+            let pick = crate::gfx::lod::pick_lod_level(&self.lod_alternates, d);
             buckets[pick].instances.push(*m);
         }
 
@@ -1676,7 +1676,7 @@ impl SkinnedDrawObject {
     /// LOD0 pair when no alternates are present or the distance is below
     /// the first threshold.
     pub fn active_lod(&self, distance: f32) -> (usize, usize) {
-        crate::gfx::lod_select::pick_lod_slice(
+        crate::gfx::lod::pick_lod_slice(
             (self.index_offset, self.index_count),
             &self.lod_alternates,
             distance,

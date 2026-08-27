@@ -6,12 +6,12 @@
 // keep the matrices fresh from the gameplay-side pose update.
 
 use ash::vk;
+use concinnity_core::gfx::transform::IDENTITY;
 
 use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::*;
 
 use super::super::context::*;
-use super::super::math::*;
 use super::super::pipeline::{
     MeshPipelineTargets, compile_skinned_shaders, create_skinned_pipeline,
     create_skinned_shadow_pipeline,
@@ -189,7 +189,7 @@ impl VkContext {
         // Per-(frame, object) joint storage buffers seeded with identity
         // matrices so any not-yet-overwritten slot reads as identity.
         let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
-        let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY4; MAX_JOINTS];
+        let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY; MAX_JOINTS];
         let mut joint_buffers: Vec<Vec<super::super::allocator::PooledBuffer>> =
             Vec::with_capacity(frames);
         let mut joint_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
@@ -229,7 +229,7 @@ impl VkContext {
 
         self.skinned.joint_matrices = draw_objects
             .iter()
-            .map(|o| vec![IDENTITY4; o.joint_count.max(1)])
+            .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
 
         // A skinned pipeline just came live, so let the next wireframe frame
@@ -393,7 +393,7 @@ impl VkContext {
         obj.joint_count = capped;
         let size = capped.max(1);
         if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
-            slot.resize(size, IDENTITY4);
+            slot.resize(size, IDENTITY);
         }
         Ok(())
     }
@@ -404,7 +404,7 @@ impl VkContext {
             slot.clear();
             slot.extend_from_slice(matrices);
             if slot.is_empty() {
-                slot.push(IDENTITY4);
+                slot.push(IDENTITY);
             }
         }
     }
@@ -423,7 +423,7 @@ impl VkContext {
         obj.model = model;
         obj.visible = true;
         if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
-            palette.iter_mut().for_each(|m| *m = IDENTITY4);
+            palette.iter_mut().for_each(|m| *m = IDENTITY);
         }
     }
 

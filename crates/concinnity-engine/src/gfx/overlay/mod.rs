@@ -42,10 +42,10 @@ const DROPDOWN_LAYER: i32 = i32::MAX - 1;
 #[derive(Default)]
 pub(crate) struct OverlayAssets {
     pub fonts: text::FontSet,
-    pub(crate) sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
+    pub(crate) sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots,
     pub(crate) debug_hud_chips: Vec<AssetId>,
     pub(crate) stat_hud_chips: Vec<AssetId>,
-    pub(crate) clip_rects: std::collections::HashMap<AssetId, [f32; 4]>,
+    pub(crate) clip_rects: crate::gfx::overlay_maps::ClipRects,
     // The backend's logical size at init, the viewport used until the first
     // input poll publishes a live one (`FrameInput.viewport`).
     pub(crate) initial_viewport: (f32, f32),
@@ -71,11 +71,11 @@ pub(crate) struct OverlayFrame {
 pub(crate) struct OverlayRecycle(pub Vec<crate::gfx::render_types::TextDrawCall>);
 
 #[derive(Debug, Default)]
-pub struct OverlaySystem {
+pub(crate) struct OverlaySystem {
     // Base for the caret-blink clock, set on the first step.
     start_time: Option<Instant>,
     // Scratch for the per-element draw-layer merge, reused across frames.
-    layers: std::collections::HashMap<AssetId, i32>,
+    layers: crate::gfx::overlay_maps::OverlayLayers,
     // Scratch for the LayoutContainer label reflow, reused across frames.
     hud_scratch: hud_layout::LabelLayoutScratch,
     // Buffers the synthesised dropdown / text-input elements are built into,
@@ -87,7 +87,7 @@ pub struct OverlaySystem {
 }
 
 impl OverlaySystem {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 }
@@ -207,7 +207,7 @@ impl OverlaySystem {
         // An id absent from the map is layer 0. When the map ends up empty (no
         // active screen, no editor), the sort below is skipped and draw order is
         // pure insertion order, as before.
-        let empty_layers = std::collections::HashMap::new();
+        let empty_layers = crate::gfx::overlay_maps::OverlayLayers::new();
         let screen_layers = ctx.resource::<crate::ecs::ScreenStack>().map(|s| &s.layers);
         self.layers.clear();
         if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
@@ -261,7 +261,7 @@ impl OverlaySystem {
             .resource::<crate::ecs::OpenDropdown>()
             .and_then(|d| d.0.as_ref())
         {
-            let no_clips = std::collections::HashMap::new();
+            let no_clips = crate::gfx::overlay_maps::ClipRects::new();
             widgets::build_dropdown_overlay(view, &assets.fonts, &mut self.widget_scratch);
             let dd_start = self.buffer.calls.len();
             gfx_sprite::build_sprite_calls_into(
@@ -413,8 +413,8 @@ mod tests {
     const REF_W: f32 = 1280.0;
     const REF_H: f32 = 720.0;
 
-    fn make_glyph(advance_px: f32) -> crate::build::font::GlyphMetrics {
-        crate::build::font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> crate::gfx::font::GlyphMetrics {
+        crate::gfx::font::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,
@@ -429,7 +429,7 @@ mod tests {
     // A fixed-width synthetic font (every glyph 10px in a 16px em) so the built
     // geometry is exact.
     fn loaded_fonts() -> text::FontSet {
-        let metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics> = ('a'..='z')
+        let metrics: crate::gfx::text::FontMetrics = ('a'..='z')
             .chain('A'..='Z')
             .map(|c| (c as u32, make_glyph(10.0)))
             .collect();
@@ -453,10 +453,10 @@ mod tests {
     fn assets() -> OverlayAssets {
         OverlayAssets {
             fonts: loaded_fonts(),
-            sprite_texture_slots: std::collections::HashMap::new(),
+            sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
-            clip_rects: std::collections::HashMap::new(),
+            clip_rects: crate::gfx::overlay_maps::ClipRects::new(),
             initial_viewport: (REF_W, REF_H),
         }
     }

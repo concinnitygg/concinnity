@@ -1157,9 +1157,14 @@ pub(crate) struct VkContext {
     // (RT takes precedence over SSR, which stays the non-RT-GPU fallback).
     pub(super) rt_reflections: Option<RtReflectionsResources>,
     pub(super) rt_accel: Option<crate::vulkan::raytrace::RtAccelData>,
-    // How the TLAS is kept current when props move (`CN_RT_DYNAMIC`); read by the
-    // per-frame `rt_dynamic_update`. Inert when `rt_accel` is `None`.
+    // How the TLAS is kept current when props move (the launch's `--rt-dynamic`
+    // request); read by the per-frame `rt_dynamic_update`. Inert when `rt_accel`
+    // is `None`.
     pub(super) rt_dynamic_mode: crate::vulkan::raytrace::RtDynamicMode,
+    // Whether skinned meshes join the TLAS (the launch's `--rt-skinned-geometry`
+    // request; in by default). Clear it and the BVH covers static + instanced
+    // geometry only, isolating the skinned trace path.
+    pub(super) rt_skinned_geometry: bool,
     // Set when a runtime change altered the RT-relevant draw set (a cloned prop, a
     // streamed chunk added/removed) since the last update. Consumed once per frame
     // by `rt_dynamic_update`, which folds the change into the BLAS head

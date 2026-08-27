@@ -33,7 +33,7 @@ use std::sync::mpsc::{Receiver, Sender};
 // the process fails the same way a serial panic does. `screenshot` captures
 // the last presented frame on the way out (skipped after a device loss).
 pub(crate) fn run_pipelined(mut app: App, screenshot: Option<&str>) {
-    let Some(mut backend) = app.world_mut().take_render_backend() else {
+    let Some(mut backend) = crate::ecs::take_render_backend(app.world_mut()) else {
         crate::app::runloop::run_loop(&mut app, false, |_| {});
         return;
     };

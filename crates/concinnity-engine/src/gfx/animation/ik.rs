@@ -15,7 +15,9 @@ use crate::components::{
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::ik::TwoBoneChain;
-use crate::gfx::skinning::{Mat4, PoseScratch, Skeleton, mat4_affine_inverse};
+use crate::gfx::pose_scratch::PoseScratch;
+use crate::gfx::skeleton::Skeleton;
+use crate::gfx::transform::{Mat4, mat4_affine_inverse};
 
 // Probe ray extents around the animated foot: the ray starts `PROBE_UP`
 // above it and reaches `PROBE_DOWN` below.
@@ -286,7 +288,7 @@ fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
     use crate::components::AnimationParam;
-    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     // A valid hip -> knee -> foot chain (each the direct child of the last),
     // plus an extra unrelated root joint the broken-parentage case names.

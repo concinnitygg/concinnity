@@ -409,11 +409,11 @@ fn drain_pending_skeleton_updates_clears_the_queue() {
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
         skinned_index: 0,
-        new_skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
+        new_skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
     });
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
         skinned_index: 3,
-        new_skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
+        new_skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
     });
     let drained = state.drain_pending_skeleton_updates();
     assert_eq!(drained.len(), 2);
@@ -737,7 +737,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn update_texture_slot(
             &mut self,
             _: usize,
-            _: &concinnity_cpu::build::texture::TextureImage,
+            _: &concinnity_core::build::texture::TextureImage,
         ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
@@ -889,7 +889,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &concinnity_cpu::build::texture::TextureImage,
+        image: &concinnity_core::build::texture::TextureImage,
     ) -> crate::gfx::error::RenderResult<()> {
         self.texture_updates
             .push((slot, image.width(), image.height()));
@@ -2502,7 +2502,7 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
 #[test]
 fn apply_effects_splices_the_matching_skeleton_pose_only() {
     use crate::components::SkeletonPose;
-    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     let mut world = crate::ecs::World::new();
     world.add_component(SkeletonPose::new(

@@ -10,7 +10,7 @@ use crate::ecs::{PipelineContext, StepResult, System};
 use std::time::Instant;
 
 #[derive(Debug)]
-pub struct FpsCounterSystem {
+pub(crate) struct FpsCounterSystem {
     last_time: Instant,
     frame_count: u32,
     label: Option<AssetId>,
@@ -18,7 +18,7 @@ pub struct FpsCounterSystem {
 
 impl FpsCounterSystem {
     // Build the counter from a world's `FpsCounter` request component.
-    pub fn new(config: FpsCounter) -> Self {
+    pub(crate) fn new(config: FpsCounter) -> Self {
         Self {
             last_time: Instant::now(),
             frame_count: 0,
@@ -56,7 +56,9 @@ impl System for FpsCounterSystem {
 
 #[cfg(test)]
 mod tests {
+    use super::FpsCounterSystem;
     use crate::components::FpsCounter;
+    use crate::ecs::SYSTEMS;
     use crate::ecs::World;
 
     // An FpsCounter component spawns the internal counter system.
@@ -64,7 +66,7 @@ mod tests {
     fn fps_counter_component_spawns_internal_system() {
         let mut world = World::new();
         world.add_component(FpsCounter::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["FpsCounter"]);
     }
@@ -72,7 +74,7 @@ mod tests {
     #[test]
     fn no_fps_counter_no_system() {
         let mut world = World::new();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         assert!(world.systems().is_empty());
     }
 
@@ -93,11 +95,11 @@ mod tests {
             asset_id: AssetId(1),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Backdate the window start so the next step crosses the 1s threshold.
         for system in world.systems_mut() {
-            if let crate::ecs::SystemAsset::FpsCounter(s) = system {
+            if let Some(s) = system.downcast_mut::<FpsCounterSystem>() {
                 s.last_time = Instant::now() - Duration::from_millis(1100);
             }
         }

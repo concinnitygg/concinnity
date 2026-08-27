@@ -6,13 +6,16 @@
 //! camera reflected across its plane; the reflective surface then samples that
 //! render projectively. This module produces the matrices that pass needs.
 //!
-//! Conventions match metal/math.rs: column-major storage `m[col][row]`, a
-//! right-handed view looking down -z, and a perspective projection mapping depth
-//! to [0, 1] (Metal / D3D clip space). A plane is `[nx, ny, nz, d]` with `n`
-//! unit-length, satisfying `n . p + d = 0` for points on it; `n . p + d > 0` is
-//! the side the normal points toward.
+//! Conventions match [`concinnity_core::gfx::projection`]: column-major storage
+//! `m[col][row]`, a right-handed view looking down -z, and a perspective
+//! projection mapping depth to [0, 1] (Metal / D3D clip space). A plane is
+//! `[nx, ny, nz, d]` with `n` unit-length, satisfying `n . p + d = 0` for points
+//! on it; `n . p + d > 0` is the side the normal points toward.
 
-type Mat4 = [[f32; 4]; 4];
+use alloc::vec::Vec;
+use concinnity_core::gfx::transform::{Mat4, mat4_inverse, mat4_mul};
+use concinnity_core::math::sqrt;
+
 type Vec4 = [f32; 4];
 
 /// The engine-wide capacity ceiling for distinct reflection planes: water
@@ -25,18 +28,6 @@ type Vec4 = [f32; 4];
 /// `assign_planar_slots` can be lower (scaled down under a quality preset / GPU
 /// tier) but never higher.
 pub const MAX_PLANAR_PLANES: usize = 4;
-
-fn mul(a: Mat4, b: Mat4) -> Mat4 {
-    let mut out = [[0.0f32; 4]; 4];
-    for col in 0..4 {
-        for row in 0..4 {
-            for k in 0..4 {
-                out[col][row] += a[k][row] * b[col][k];
-            }
-        }
-    }
-    out
-}
 
 fn mat_vec(m: Mat4, v: Vec4) -> Vec4 {
     let mut out = [0.0f32; 4];
@@ -62,81 +53,10 @@ fn dot4(a: Vec4, b: Vec4) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 }
 
-// General 4x4 inverse via cofactor expansion (column-major in/out). Returns the
-// identity for a singular input. Mirrors metal/math.rs `mat4_inverse` so the
-// reflected-view plane transform stays backend-agnostic.
-fn inverse(m: Mat4) -> Mat4 {
-    let a00 = m[0][0];
-    let a01 = m[1][0];
-    let a02 = m[2][0];
-    let a03 = m[3][0];
-    let a10 = m[0][1];
-    let a11 = m[1][1];
-    let a12 = m[2][1];
-    let a13 = m[3][1];
-    let a20 = m[0][2];
-    let a21 = m[1][2];
-    let a22 = m[2][2];
-    let a23 = m[3][2];
-    let a30 = m[0][3];
-    let a31 = m[1][3];
-    let a32 = m[2][3];
-    let a33 = m[3][3];
-
-    let b00 = a00 * a11 - a01 * a10;
-    let b01 = a00 * a12 - a02 * a10;
-    let b02 = a00 * a13 - a03 * a10;
-    let b03 = a01 * a12 - a02 * a11;
-    let b04 = a01 * a13 - a03 * a11;
-    let b05 = a02 * a13 - a03 * a12;
-    let b06 = a20 * a31 - a21 * a30;
-    let b07 = a20 * a32 - a22 * a30;
-    let b08 = a20 * a33 - a23 * a30;
-    let b09 = a21 * a32 - a22 * a31;
-    let b10 = a21 * a33 - a23 * a31;
-    let b11 = a22 * a33 - a23 * a32;
-
-    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
-    if det.abs() < 1e-20 {
-        return [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-    }
-    let inv_det = 1.0 / det;
-
-    // Row-major inverse entries, re-emitted column-major (out[col][row]).
-    let i00 = (a11 * b11 - a12 * b10 + a13 * b09) * inv_det;
-    let i01 = (-a01 * b11 + a02 * b10 - a03 * b09) * inv_det;
-    let i02 = (a31 * b05 - a32 * b04 + a33 * b03) * inv_det;
-    let i03 = (-a21 * b05 + a22 * b04 - a23 * b03) * inv_det;
-    let i10 = (-a10 * b11 + a12 * b08 - a13 * b07) * inv_det;
-    let i11 = (a00 * b11 - a02 * b08 + a03 * b07) * inv_det;
-    let i12 = (-a30 * b05 + a32 * b02 - a33 * b01) * inv_det;
-    let i13 = (a20 * b05 - a22 * b02 + a23 * b01) * inv_det;
-    let i20 = (a10 * b10 - a11 * b08 + a13 * b06) * inv_det;
-    let i21 = (-a00 * b10 + a01 * b08 - a03 * b06) * inv_det;
-    let i22 = (a30 * b04 - a31 * b02 + a33 * b00) * inv_det;
-    let i23 = (-a20 * b04 + a21 * b02 - a23 * b00) * inv_det;
-    let i30 = (-a10 * b09 + a11 * b07 - a12 * b06) * inv_det;
-    let i31 = (a00 * b09 - a01 * b07 + a02 * b06) * inv_det;
-    let i32 = (-a30 * b03 + a31 * b01 - a32 * b00) * inv_det;
-    let i33 = (a20 * b03 - a21 * b01 + a22 * b00) * inv_det;
-
-    [
-        [i00, i10, i20, i30],
-        [i01, i11, i21, i31],
-        [i02, i12, i22, i32],
-        [i03, i13, i23, i33],
-    ]
-}
-
 // Normalise a plane so its normal is unit length (scaling d to match). A zero
 // normal is returned unchanged (degenerate, callers guard separately).
 pub(crate) fn normalize_plane(plane: Vec4) -> Vec4 {
-    let len = (plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]).sqrt();
+    let len = sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
     if len < 1e-12 {
         return plane;
     }
@@ -174,13 +94,13 @@ pub(crate) fn reflect_point(p: [f32; 3], plane: Vec4) -> [f32; 3] {
 // The reflected view matrix: reflect a world point across the plane, then apply
 // the camera view. Equivalent to rendering the scene from the mirrored camera.
 pub(crate) fn reflected_view(view: Mat4, plane: Vec4) -> Mat4 {
-    mul(view, reflection_matrix(plane))
+    mat4_mul(view, reflection_matrix(plane))
 }
 
 // Transform a world-space plane into a view space. Planes transform by the
 // inverse-transpose of the world->view matrix: plane_view = (V^-1)^T . plane.
 pub(crate) fn plane_in_view(plane_world: Vec4, view: Mat4) -> Vec4 {
-    mat_vec(transpose(inverse(view)), plane_world)
+    mat_vec(transpose(mat4_inverse(view)), plane_world)
 }
 
 // Oblique near-plane clipping (Lengyel) for a [0, 1]-depth perspective matrix.
@@ -280,7 +200,7 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
     let mut slots: Vec<Option<usize>> = Vec::with_capacity(planes.len());
     for &raw in planes {
         let p = normalize_plane(raw);
-        let nlen = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+        let nlen = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
         if nlen < 1e-6 {
             // Degenerate normal: no usable plane, fall back to the probe cube.
             slots.push(None);
@@ -369,7 +289,7 @@ pub fn planar_matrices(
     let r_proj = oblique_projection(proj, clip_view);
     PlanarMatrices {
         view: r_view,
-        view_proj: mul(r_proj, r_view),
+        view_proj: mat4_mul(r_proj, r_view),
         eye: reflect_point(cam_pos, plane),
     }
 }
@@ -398,19 +318,9 @@ pub fn reflected_visible_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::gfx::projection::perspective_rh;
 
-    fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
-        let ys = 1.0 / (fov_y / 2.0).tan();
-        let xs = ys / aspect;
-        let zs = far / (near - far);
-        [
-            [xs, 0.0, 0.0, 0.0],
-            [0.0, ys, 0.0, 0.0],
-            [0.0, 0.0, zs, -1.0],
-            [0.0, 0.0, zs * near, 0.0],
-        ]
-    }
-
+    use alloc::vec;
     // Apply a column-major transform to a homogeneous point.
     fn xform(m: Mat4, p: [f32; 4]) -> [f32; 4] {
         mat_vec(m, p)
@@ -457,8 +367,8 @@ mod tests {
 
     #[test]
     fn inverse_round_trips() {
-        let m = perspective(1.1, 1.7, 0.2, 80.0);
-        let id = mul(m, inverse(m));
+        let m = perspective_rh(1.1, 1.7, 0.2, 80.0);
+        let id = mat4_mul(m, mat4_inverse(m));
         for (c, col) in id.iter().enumerate() {
             for (r, &val) in col.iter().enumerate() {
                 let expect = if c == r { 1.0 } else { 0.0 };
@@ -473,7 +383,7 @@ mod tests {
         // z < -5). After oblique clipping the projection, a point ON the plane
         // maps to ndc.z ~= 0, a point in front (far side) to ndc.z in (0, 1), and
         // a point behind the plane to ndc.z < 0 (clipped).
-        let proj = perspective(1.2, 1.0, 0.1, 100.0);
+        let proj = perspective_rh(1.2, 1.0, 0.1, 100.0);
         // Plane z = -5: n.p + d = 0 with kept side n.p + d > 0 toward -z (far).
         // Choose C so the far/kept side is positive: C = (0,0,-1,-5) -> for
         // p=(0,0,-50): -(-50)-5 = 45 > 0 (kept); p=(0,0,-2): 2-5 = -3 < 0 (clip).
@@ -493,7 +403,7 @@ mod tests {
     #[test]
     fn oblique_clip_preserves_x_and_y_projection() {
         // Only the depth row changes; x/y of a projected point are untouched.
-        let proj = perspective(1.0, 1.5, 0.1, 50.0);
+        let proj = perspective_rh(1.0, 1.5, 0.1, 50.0);
         let c = [0.0, 0.0, -1.0, -8.0];
         let pobl = oblique_projection(proj, c);
         let p = [2.0, 1.5, -20.0, 1.0];
@@ -519,7 +429,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, -3.0, -6.0, 1.0],
         ];
-        let proj = perspective(1.2, 1.6, 0.1, 100.0);
+        let proj = perspective_rh(1.2, 1.6, 0.1, 100.0);
         let m = planar_matrices(view, proj, [0.0, 3.0, 6.0], plane, 0.0);
 
         let ndc_z = |p: [f32; 3]| {
@@ -612,7 +522,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let proj = perspective(1.2, 1.6, 0.1, 100.0);
+        let proj = perspective_rh(1.2, 1.6, 0.1, 100.0);
         let cam_pos = [0.0, 0.0, 0.0];
         let m = planar_matrices(view, proj, cam_pos, plane, 0.0);
 

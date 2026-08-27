@@ -53,7 +53,7 @@ pub(crate) fn write_report_named(
 // Write `report` under the crashes dir and prune. The common path for report
 // kinds that carry no minidump.
 pub(crate) fn emit(report: &CrashReport) -> Option<PathBuf> {
-    let dir = concinnity_store::paths::crashes_dir()?;
+    let dir = concinnity_host::store::paths::crashes_dir()?;
     let stem = unique_stem(&dir, &report.file_stem());
     let path = write_report_named(&dir, &stem, report).ok()?;
     prune(&dir, RETAINED_REPORTS);

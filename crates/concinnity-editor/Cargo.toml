@@ -27,7 +27,7 @@ vulkan = [
     "concinnity-engine/vulkan",
     "concinnity-device/vulkan",
     "concinnity-shader/vulkan",
-    "concinnity-cpu/vulkan",
+    "concinnity-core/vulkan",
 ]
 
 [dependencies]
@@ -38,8 +38,7 @@ concinnity-world = { workspace = true }
 concinnity-shader = { workspace = true }
 concinnity-asset = { workspace = true }
 concinnity-core = { workspace = true }
-concinnity-cpu = { workspace = true }
-concinnity-store = { workspace = true }
+concinnity-host = { workspace = true }
 concinnity-memory = { workspace = true }
 
 argon2 = "0.5"

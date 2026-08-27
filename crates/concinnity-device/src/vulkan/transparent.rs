@@ -26,6 +26,7 @@
 // as the DirectX and Metal hosts.
 
 use ash::vk;
+use concinnity_core::gfx::transform::mat4_inverse;
 
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
@@ -1880,7 +1881,7 @@ impl VkContext {
     ) -> TransparentView {
         TransparentView {
             vp,
-            inv_vp: super::math::mat4_inverse(vp),
+            inv_vp: mat4_inverse(vp),
             camera_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
             viewport: [
                 self.render_extent.width as f32,

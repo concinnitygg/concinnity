@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::components::Camera3D;
-use concinnity_cpu::gfx::lines::Line;
+use concinnity_core::gfx::lines::Line;
 
 impl EditorHook {
     // Append this frame's axis lines to the shared line buffer. Nothing while

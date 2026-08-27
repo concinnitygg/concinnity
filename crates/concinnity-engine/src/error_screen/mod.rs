@@ -14,7 +14,6 @@ use crate::ecs::FontHandle;
 use crate::gfx::backend::{FrameParams, RenderBackend};
 use crate::gfx::backend_init::BackendInit;
 use crate::gfx::text::{FontSet, build_text_calls};
-use std::collections::HashMap;
 
 // The single atlas slot the embedded face occupies: this screen uploads it
 // alone, with no world fonts beside it.
@@ -84,8 +83,8 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
             fonts,
             win_w,
             win_h,
-            &HashMap::new(),
-            &HashMap::new(),
+            &crate::gfx::overlay_maps::ClipRects::new(),
+            &crate::gfx::overlay_maps::OverlayLayers::new(),
         );
 
         backend.update_view(IDENTITY_VIEW);

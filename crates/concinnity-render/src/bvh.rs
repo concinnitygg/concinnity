@@ -15,6 +15,7 @@
 //! visible objects".
 
 use crate::render_types::DrawObject;
+use alloc::vec::Vec;
 
 use crate::frustum::{Frustum, aabb_distance_sq};
 
@@ -234,7 +235,7 @@ impl Bvh {
         items.sort_by(|a, b| {
             let ca = item_aabb(a).centroid()[axis];
             let cb = item_aabb(b).centroid()[axis];
-            ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+            ca.partial_cmp(&cb).unwrap_or(core::cmp::Ordering::Equal)
         });
 
         let mid = items.len() / 2;
@@ -297,6 +298,7 @@ pub fn partition_draw_objects(draw_objects: &[DrawObject]) -> (Bvh, Vec<u32>) {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     fn ident_vp() -> [[f32; 4]; 4] {
         [
             [1.0, 0.0, 0.0, 0.0],
@@ -491,6 +493,8 @@ mod tests {
 mod bench {
     use super::{Bvh, BvhItem};
     use crate::frustum::Frustum;
+    use alloc::vec::Vec;
+    use std::println;
     use std::time::Instant;
 
     const OBJECTS: usize = 10_000;
@@ -502,7 +506,7 @@ mod bench {
         loop {
             let start = Instant::now();
             for _ in 0..iters {
-                std::hint::black_box(body());
+                core::hint::black_box(body());
             }
             if start.elapsed().as_nanos() >= TARGET_NS || iters >= MAX_ITERS {
                 break;
@@ -512,7 +516,7 @@ mod bench {
 
         let start = Instant::now();
         for _ in 0..iters {
-            std::hint::black_box(body());
+            core::hint::black_box(body());
         }
         let per_item_ns = start.elapsed().as_secs_f64() * 1e9 / (iters * items.max(1)) as f64;
         println!("  {name:<40} {per_item_ns:>10.2} ns/item");

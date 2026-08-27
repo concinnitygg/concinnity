@@ -2,6 +2,7 @@
 //
 // VkContext construction: platform window creation and the one-time GPU
 // resource setup performed by VkContext::new.
+use concinnity_core::gfx::transform::IDENTITY;
 use std::ffi::{CStr, CString, c_char};
 
 use ash::vk;
@@ -16,7 +17,6 @@ use crate::gfx::render_types::*;
 use super::context::*;
 use super::device::*;
 use super::draw::*;
-use super::math::*;
 use super::pipeline::*;
 use super::post::bloom::{
     BloomDeviceContext, MAX_BLOOM_MIPS, alloc_bloom_input_sets, compile_bloom_shaders,
@@ -114,6 +114,8 @@ impl VkContext {
                     ssr: ssr_settings,
                     ssgi: ssgi_settings,
                     rt_reflections: rt_settings,
+                    rt_dynamic: rt_dynamic_mode,
+                    rt_skinned_geometry,
                     reflection_blur_scale,
                     auto_exposure: auto_exposure_settings,
                     auto_exposure_bias_ev,
@@ -2497,9 +2499,6 @@ impl VkContext {
         // The SSR *resolve* owns the post-stack scene image only when SSR is
         // authored and RT did not take the slot.
         let ssr_resolve_on = ssr_authored && !rt_active;
-        // How the TLAS tracks moving props (`CN_RT_DYNAMIC`); inert when RT off.
-        let rt_dynamic_mode = crate::vulkan::raytrace::RtDynamicMode::from_env();
-
         // Reflection composite: built whenever a reflection path owns the post-stack
         // scene image (the SSR resolve is active OR RT reflections are active, which
         // are mutually exclusive). Both resolves write radiance+weight into their
@@ -3937,7 +3936,7 @@ impl VkContext {
                 main_render_pass_phase2,
                 hiz,
                 hiz_valid: false,
-                hiz_prev_view_proj: IDENTITY4,
+                hiz_prev_view_proj: IDENTITY,
                 shadow_cull_pipeline,
                 shadow_cull_pipeline_layout,
                 _shadow_cull_set_layout: shadow_cull_set_layout,
@@ -4008,6 +4007,7 @@ impl VkContext {
             rt_reflections: rt_opt,
             rt_accel: rt_accel_opt,
             rt_dynamic_mode,
+            rt_skinned_geometry,
             rt_topology_dirty: false,
             rt_capable,
             update_after_bind,
@@ -4161,7 +4161,7 @@ impl VkContext {
                 mode: Default::default(),
                 show: Default::default(),
                 far: 1.0,
-                matrix: IDENTITY4,
+                matrix: IDENTITY,
             },
             wireframe: Default::default(),
             prefilter_mip_count: env_map.prefilter_mip_count,

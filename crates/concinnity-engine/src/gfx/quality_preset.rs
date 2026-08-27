@@ -17,18 +17,24 @@ use crate::components::{
 };
 use crate::gfx::backend::{GpuProfile, GpuTier};
 
-// Persisted master graphics-quality choice. `Auto` resolves from the detected
-// GPU tier each launch; a named tier (Low..Ultra) is a fixed ceiling; `Custom`
-// imposes no ceiling (the user's per-row overrides drive). In GraphicsSettings
-// a `None` (never persisted) means "never configured": the first launch seeds
-// `Auto` and saves once.
+/// Persisted master graphics-quality choice. `Auto` resolves from the detected
+/// GPU tier each launch; a named tier (Low..Ultra) is a fixed ceiling; `Custom`
+/// imposes no ceiling (the user's per-row overrides drive). In GraphicsSettings
+/// a `None` (never persisted) means "never configured": the first launch seeds
+/// `Auto` and saves once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum QualityPreset {
+pub enum QualityPreset {
+    /// Resolve the ceiling from the GPU tier detected at launch.
     Auto,
+    /// Fixed low-tier ceiling.
     Low,
+    /// Fixed mid-tier ceiling.
     Medium,
+    /// Fixed high-tier ceiling.
     High,
+    /// Fixed top-tier ceiling; the only one that permits ray-traced reflections.
     Ultra,
+    /// No ceiling: the world's authored look and the per-row overrides stand.
     Custom,
 }
 
@@ -313,10 +319,10 @@ pub(crate) fn more_aggressive_upscale(a: UpscaleQuality, b: UpscaleQuality) -> U
 }
 
 impl QualityPreset {
-    // The presets in menu-cycle order. The settings-menu master row cycles
-    // through these; `GRAPHICS_QUALITY_OPTIONS` in `gfx::settings` holds the
-    // matching display labels in the same order (locked by a test there).
-    pub(crate) const ALL: [QualityPreset; 6] = [
+    /// The presets in menu-cycle order. The settings-menu master row cycles
+    /// through these; `GRAPHICS_QUALITY_OPTIONS` in `gfx::settings` holds the
+    /// matching display labels in the same order (locked by a test there).
+    pub const ALL: [QualityPreset; 6] = [
         Self::Auto,
         Self::Low,
         Self::Medium,
@@ -335,21 +341,6 @@ impl QualityPreset {
             Self::High => "High",
             Self::Ultra => "Ultra",
             Self::Custom => "Custom",
-        }
-    }
-
-    // Parse a preset from a string (case-insensitive), for the `CN_QUALITY_PRESET`
-    // env override that lets a test / CI run force a preset (e.g. `custom` for no
-    // clamp) without writing to settings.bin. `None` for an unrecognized value.
-    pub(crate) fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "auto" => Some(Self::Auto),
-            "low" => Some(Self::Low),
-            "medium" => Some(Self::Medium),
-            "high" => Some(Self::High),
-            "ultra" => Some(Self::Ultra),
-            "custom" => Some(Self::Custom),
-            _ => None,
         }
     }
 }
@@ -663,15 +654,6 @@ mod tests {
         assert_eq!(ultra.aa_mode, AaMode::Taa);
         let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
         assert_eq!(low.aa_mode, AaMode::Fxaa);
-    }
-
-    #[test]
-    fn parse_is_case_insensitive_and_rejects_garbage() {
-        assert_eq!(QualityPreset::parse("custom"), Some(QualityPreset::Custom));
-        assert_eq!(QualityPreset::parse("  Ultra "), Some(QualityPreset::Ultra));
-        assert_eq!(QualityPreset::parse("AUTO"), Some(QualityPreset::Auto));
-        assert_eq!(QualityPreset::parse("nonsense"), None);
-        assert_eq!(QualityPreset::parse(""), None);
     }
 
     #[test]

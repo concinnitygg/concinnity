@@ -4,6 +4,8 @@
 //! policy on the class, never on prose. `Other` carries legacy string errors so
 //! interior call sites can migrate incrementally.
 
+use alloc::string::String;
+use alloc::string::ToString;
 use thiserror::Error;
 
 /// Why the GPU device stopped servicing work, as reported by the backend API.

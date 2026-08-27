@@ -15,6 +15,7 @@ use crate::render_types::{
     PointLightData, SpotShadowData,
 };
 use crate::spot_shadow;
+use alloc::vec::Vec;
 
 /// The per-scene GPU light data: the storage buffer the clustered forward pass
 /// iterates, plus the side tables it indexes into. Kept together because
@@ -199,6 +200,7 @@ pub fn build_light_uniforms(
 mod tests {
     use super::*;
 
+    use alloc::vec;
     fn dir(direction: [f32; 3], color: [f32; 3], intensity: f32) -> DirectionalLight {
         DirectionalLight {
             direction,

@@ -1,7 +1,7 @@
 //! The `App` value: a world plus the loop state that drives it.
 
 use crate::blob;
-use crate::ecs::{StepResult, World};
+use crate::ecs::{SYSTEMS, StepResult, World};
 use crate::result::CnResult;
 use crate::shutdown::ShutdownToken;
 
@@ -59,10 +59,10 @@ impl App {
     /// read rather than under the directory it was launched from. The world's
     /// own `AppConfig.home` overrides that at `start`.
     pub fn from_blob(path: &std::path::Path) -> Result<Self, CnResult> {
-        if concinnity_store::paths::state_dir().is_none()
+        if concinnity_host::store::paths::state_dir().is_none()
             && let Some(state) = state_dir_for_blob(path)
         {
-            concinnity_store::paths::set_state_dir(state);
+            concinnity_host::store::paths::set_state_dir(state);
         }
         let mut app = Self::new();
         app.install(blob::load_at(path)?);
@@ -99,7 +99,7 @@ impl App {
             loaded.blob,
         );
 
-        let mut world = World::from_blob(blob_data);
+        let mut world = blob::world_from(blob_data);
         // The manifest's per-type counts size each column once up front, so
         // the bulk load below never reallocates mid-push.
         world.reserve_components(&manifest.component_counts);
@@ -153,14 +153,18 @@ impl App {
         }
         self.install_home();
         self.install_budgets();
-        self.world.start()?;
+        // The world times each system against this; without it the profile's
+        // per-system micros read zero.
+        self.world
+            .insert_resource(crate::ecs::Clock(crate::app::clock::monotonic_micros));
+        self.world.start(SYSTEMS)?;
         self.status = AppStatus::Started;
         Ok(())
     }
 
     // Point the runtime-writable state (`settings`, `saves/`, `crashes/`, the
     // shader caches) at the world's `AppConfig.home`. Runs before
-    // `world.start()`, which is where the systems that capture a save directory
+    // `world.start(SYSTEMS)`, which is where the systems that capture a save directory
     // are built, and before anything reads the settings file. An empty `home`
     // leaves whatever the host installed, which is what keeps the writability
     // redirect a shipped player performs for itself in force.
@@ -174,7 +178,8 @@ impl App {
         else {
             return;
         };
-        let Some(dir) = resolve_home(&home, concinnity_store::paths::state_dir().as_deref()) else {
+        let Some(dir) = resolve_home(&home, concinnity_host::store::paths::state_dir().as_deref())
+        else {
             tracing::warn!(
                 "AppConfig home '{home}' is relative but no state root is installed; \
                  leaving writable state where it is"
@@ -182,13 +187,13 @@ impl App {
             return;
         };
         tracing::info!("Writable state: {}", dir.display());
-        concinnity_store::paths::set_writable_state_dir(dir);
+        concinnity_host::store::paths::set_writable_state_dir(dir);
     }
 
     // Compute the process thread + memory budgets from the host machine and the
     // world's `AppConfig` overrides, size the shared job pool, and publish both
     // as world resources (read by the debug server and, later, the streaming
-    // budget enforcement). Runs before `world.start()` so the pool is sized
+    // budget enforcement). Runs before `world.start(SYSTEMS)` so the pool is sized
     // before the first system uses it. Idempotent: a second start (the editor's
     // live rebuild) recomputes the same values and the pool sizing no-ops.
     fn install_budgets(&mut self) {
@@ -313,16 +318,10 @@ mod tests {
         });
         app.start().unwrap();
 
-        let threads = app
-            .world()
-            .thread_budget()
-            .expect("thread budget published");
+        let threads = crate::ecs::thread_budget(app.world()).expect("thread budget published");
         assert_eq!(threads.job_threads, 2.min(threads.total_cores));
 
-        let memory = app
-            .world()
-            .memory_budget()
-            .expect("memory budget published");
+        let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
         assert!(memory.overridden, "the AppConfig override is recorded");
         // 512 MiB is well under 85% of any test machine's RAM, so it passes through.
         assert_eq!(memory.budget_bytes, 512 * 1024 * 1024);
@@ -335,18 +334,12 @@ mod tests {
         let mut app = App::new();
         app.start().unwrap();
 
-        let threads = app
-            .world()
-            .thread_budget()
-            .expect("thread budget published");
+        let threads = crate::ecs::thread_budget(app.world()).expect("thread budget published");
         assert_eq!(
             threads.job_threads,
             threads.total_cores.saturating_sub(1).max(1)
         );
-        let memory = app
-            .world()
-            .memory_budget()
-            .expect("memory budget published");
+        let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
         assert!(!memory.overridden);
         assert!(memory.budget_bytes > 0);
     }
@@ -383,10 +376,7 @@ mod tests {
         );
         assert_eq!(app.start(), Ok(()), "the reset status permits a restart");
         // The restart budgeted against the new world's limits, not the old one's.
-        let memory = app
-            .world()
-            .memory_budget()
-            .expect("memory budget published");
+        let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
         assert_eq!(memory.budget_bytes, 256 * 1024 * 1024);
     }
 

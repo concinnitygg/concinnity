@@ -13,26 +13,12 @@
 // covers, in [0, 1]: 1 means the polygon fills the hemisphere. Multiply by a
 // light's radiance to get outgoing radiance.
 
+use concinnity_core::math::vec3::{cross, dot, length, sub};
+
 type Vec3 = [f32; 3];
 
-fn dot(a: Vec3, b: Vec3) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: Vec3, b: Vec3) -> Vec3 {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn sub(a: Vec3, b: Vec3) -> Vec3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
 fn normalize(v: Vec3) -> Vec3 {
-    let len = dot(v, v).sqrt();
+    let len = length(v);
     if len < 1.0e-9 {
         [0.0, 0.0, 1.0]
     } else {
@@ -110,7 +96,7 @@ pub(crate) fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32
 
     // The edge sum is twice the irradiance, and dividing by pi normalises the
     // clamped cosine, so the covered fraction is sum / (2 * pi).
-    let form_factor = sum / (2.0 * std::f32::consts::PI);
+    let form_factor = sum / (2.0 * core::f32::consts::PI);
     if two_sided {
         form_factor.abs()
     } else {
@@ -170,7 +156,7 @@ mod tests {
                 let u2 = (j as f32 + 0.5) / samples as f32;
                 // Cosine-weighted direction about +z.
                 let r = u1.sqrt();
-                let phi = 2.0 * std::f32::consts::PI * u2;
+                let phi = 2.0 * core::f32::consts::PI * u2;
                 let dir = [r * phi.cos(), r * phi.sin(), (1.0 - u1).max(0.0).sqrt()];
                 if ray_hits_quad(dir, quad) {
                     hits += 1.0;

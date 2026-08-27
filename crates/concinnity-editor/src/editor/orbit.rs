@@ -56,10 +56,7 @@ pub(crate) fn apply_deltas(yaw: f32, pitch: f32, dx: f32, dy: f32) -> (f32, f32)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-    }
+    use concinnity_core::math::vec3::sub;
 
     #[test]
     fn spherical_round_trips() {

@@ -1275,7 +1275,7 @@ impl EditorHook {
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.sim.playing())));
 
-        let Some(backend) = app.world_mut().take_render_backend() else {
+        let Some(backend) = concinnity_engine::ecs::take_render_backend(app.world_mut()) else {
             return;
         };
         staged.world_mut().insert_resource(PendingBackend(backend));

@@ -1,8 +1,9 @@
 // The blob decode half: turn blob bytes back into metadata. Reading those bytes
 // off disk is the caller's job, so the payload residency store lives in
-// concinnity-core and the state root's `data/` layout in concinnity-store.
+// concinnity-core and the state root's `data/` layout in `concinnity_host::store`.
 
 use crate::blob::error::BlobError;
+use crate::blob::frame::{FrameError, decode_exact};
 use crate::blob::schema::BlobMeta;
 use crate::blob::{BLOB_MAGIC, HEADER_SIZE};
 
@@ -25,7 +26,10 @@ pub fn parse_cnb(schema_hash: u32, data: &[u8]) -> Result<(BlobMeta, usize), Blo
     let meta_bytes = data
         .get(HEADER_SIZE..meta_end)
         .ok_or(BlobError::TruncatedMeta)?;
-    let meta = postcard::from_bytes(meta_bytes).map_err(|_| BlobError::Decode)?;
+    let meta = decode_exact(meta_bytes).map_err(|e| match e {
+        FrameError::Decode(_) => BlobError::Decode,
+        FrameError::Trailing(n) => BlobError::TrailingMeta(n),
+    })?;
     Ok((meta, meta_end))
 }
 
@@ -181,6 +185,24 @@ mod tests {
         assert_eq!(
             parse_cnb(TEST_SCHEMA_HASH, &mismatched),
             Err(BlobError::SchemaMismatch(stored))
+        );
+    }
+
+    // A meta block written by a schema carrying more than this build reads back
+    // decodes cleanly under plain postcard, leaving the tail unread. Widening
+    // the block without changing its content is that shape.
+    #[test]
+    fn parse_rejects_a_meta_section_with_unread_bytes() {
+        let image = encode_cnb(TEST_SCHEMA_HASH, &meta(), &[]).unwrap();
+        let meta_len = u64::from_le_bytes(image[8..16].try_into().unwrap());
+
+        let mut widened = image.clone();
+        widened[8..16].copy_from_slice(&(meta_len + 2).to_le_bytes());
+        widened.extend_from_slice(&[0, 0]);
+
+        assert_eq!(
+            parse_cnb(TEST_SCHEMA_HASH, &widened),
+            Err(BlobError::TrailingMeta(2))
         );
     }
 

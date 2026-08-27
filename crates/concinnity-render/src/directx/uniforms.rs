@@ -95,7 +95,7 @@ pub struct RaymarchVolumeUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
+    use core::mem::{offset_of, size_of};
 
     // CullParams must match the `CullParams` cbuffer (b0) in cull.hlsl: six
     // frustum planes, cam_pos sharing its row with object_count, the previous

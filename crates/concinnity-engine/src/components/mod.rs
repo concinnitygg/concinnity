@@ -3,6 +3,6 @@
 //! components are pure data now: every system became an internal client system
 //! living in its own domain module (`gfx::graphics_system`,
 //! `gfx::camera_controller`, `gfx::animation`, `ui`, `hud`, `physics`) or
-//! subsystem crate (`concinnity_audio`), constructed by `World::start` from the
+//! audio module (`crate::audio`), constructed by `World::start` from the
 //! components a world declares.
 pub use concinnity_core::components::*;

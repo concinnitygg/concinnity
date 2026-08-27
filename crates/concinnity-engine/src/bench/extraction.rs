@@ -60,7 +60,7 @@ fn pose_world(count: usize) -> BenchWorld {
             SkeletonPose {
                 mesh_id: SkinnedMeshHandle(i as u32),
                 skinned_index: i,
-                skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
+                skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
                 joint_matrices: vec![model_at(i); JOINTS],
                 morph_weights: Vec::new(),
                 morph_base: Vec::new(),

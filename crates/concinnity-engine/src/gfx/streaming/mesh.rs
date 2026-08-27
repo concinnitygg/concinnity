@@ -24,7 +24,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use super::{StreamPlanner, StreamState};
 use crate::gfx::mesh_payload::Vertex;
-use concinnity_cpu::decode::ByteReader;
+use concinnity_core::decode::ByteReader;
 
 // A mesh payload decoded to GPU-ready vertex and index data.
 //

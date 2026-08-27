@@ -603,7 +603,7 @@ pub fn build_compiled_with_progress(
     // The blob carries components (emitted in declaration order) plus the
     // resource stream. (System run order is no longer a build concern: every
     // system is internal client code ordered by the client's
-    // `World::build_internal_systems` schedule.)
+    // `World::start` schedule.)
     let (names, defs): (Vec<String>, Vec<BlobAssetDef>) = named.into_iter().unzip();
 
     Ok(PipelineResult {
@@ -1501,7 +1501,7 @@ struct CompiledOutput {
 // static mesh (VoxelChunk voxel data, a malformed payload); absence means the
 // runtime decodes that payload eagerly.
 fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
-    let (verts, idxs, _) = concinnity_cpu::gfx::mesh_payload::deserialise_with_lods(bytes).ok()?;
+    let (verts, idxs, _) = concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes).ok()?;
     let first = verts.first()?;
     let mut min = first.pos;
     let mut max = first.pos;
@@ -2116,7 +2116,7 @@ mod tests {
             .resource_payload(ResourceKind::SkinnedMesh, "prism")
             .expect("named payload");
         let payload =
-            concinnity_cpu::gfx::mesh_payload::deserialise_skinned_with_lods(bytes).unwrap();
+            concinnity_core::gfx::mesh_payload::deserialise_skinned_with_lods(bytes).unwrap();
         assert_eq!(payload.vertices.len(), 3);
         assert_eq!(payload.joints[0].name, "root");
         // The wrong name or the wrong kind finds nothing.

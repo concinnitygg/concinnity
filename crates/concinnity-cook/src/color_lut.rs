@@ -25,9 +25,9 @@
 //! `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
 // The no-dependency `.cube` parse, the classifier, the (de)serialisers, and the
-// size validator stay in concinnity-cpu; the `.png` slice-strip decode below
+// size validator stay in concinnity-core; the `.png` slice-strip decode below
 // lives here in the build crate alongside the `png` crate.
-use concinnity_cpu::build::color_lut::{
+use concinnity_core::build::color_lut::{
     LutFormat, classify_source, parse_cube, serialise, validate_size,
 };
 use std::path::Path;
@@ -54,7 +54,7 @@ pub(crate) fn compile_color_lut_payload(
     assets_dir: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
     let source = color_lut_source(args)?;
-    let (size, data) = decode(&concinnity_store::source::resolve_source_path(
+    let (size, data) = decode(&concinnity_host::store::source::resolve_source_path(
         source, assets_dir,
     ))?;
     Ok(serialise(size, &data))
@@ -64,7 +64,7 @@ pub(crate) fn compile_color_lut_payload(
 /// does at build time. Dispatches between `.cube` text parse and PNG-strip parse
 /// based on the file extension. Exposed for the runtime asset hot-reload path
 /// (`cn debug` only); production reads the compiled payload via
-/// `concinnity_cpu::build::color_lut::deserialise` instead. `path` is read as
+/// `concinnity_core::build::color_lut::deserialise` instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
 pub fn decode_source(path: &str) -> Result<(u32, Vec<u8>), String> {
     decode(path)

@@ -154,7 +154,7 @@ pub struct RaymarchVolumeUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
+    use core::mem::{offset_of, size_of};
 
     // MainPush must match the `PushBlock` push constant in the main-pass shaders
     // (std430): the model matrix, roughness/metallic with two pads, then tint and

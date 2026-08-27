@@ -95,31 +95,32 @@ player.
 | `concinnity-cli`       | bin       |          | The `concinnity` developer executable.                    |
 | `concinnity-runtime`   | bin       |          | Standalone player for a cooked world.                     |
 | `concinnity-editor`    | lib       |          | In-engine world editor, live preview, hot reload.         |
-| `concinnity-cook`      | lib       |          | Asset compile pipeline: authored world to blob.           |
+| `concinnity-cook`      | lib       |          | Asset compile pipeline: authored world to blob, and docs. |
 | `concinnity-world`     | lib       |          | Authored world model, schema, validation, spec builders.  |
-| `concinnity-engine`    | lib       |          | Runtime engine: schedule, systems, app loop, allocator.   |
+| `concinnity-engine`    | lib       |          | Runtime engine: schedule, systems, audio, app loop.       |
 | `concinnity-device`    | lib       |          | GPU backends behind a device facade.                      |
 | `concinnity-shader`    | lib       |          | Cook-time shader compilers for the target backend.        |
-| `concinnity-font`      | lib       |          | Cook-time glyph atlas rasteriser.                         |
 | `concinnity-render`    | lib       |          | GPU-free render preparation and the backend trait.        |
-| `concinnity-physics`   | lib       |          | Simulation driver: world content to bodies and back.      |
-| `concinnity-audio`     | lib       |          | Audio mixing and spatialisation facade.                   |
-| `concinnity-store`     | lib       |          | On-disk state tree: paths, source lookup, blob reads.     |
-| `concinnity-cpu`       | lib       |          | CPU compute: payload codecs, geometry, kernels, job pool. |
-| `concinnity-core`      | lib       |   yes    | Runtime vocabulary: GPU layouts, ECS storage and components, world data, blob format. |
+| `concinnity-host`      | lib       |          | Host services: on-disk state tree, worker pool, interner. |
+| `concinnity-core`      | lib       |   yes    | Runtime vocabulary and the CPU compute over it: GPU layouts, ECS storage and components, the world with its schedule and headless driver, the simulation drivers over that world, blob format, payload codecs, geometry, kernels. |
 | `concinnity-asset`     | lib       |   yes    | User-facing asset schema (data only).                     |
 | `concinnity-memory`    | lib       |   yes    | Tracking allocator, tagged budgets, arenas, pools.        |
-| `concinnity-dynamics`  | lib       |   yes    | Rigid-body simulation: bodies, contacts, solver, queries. |
-| `concinnity-docs`      | lib       |   yes    | Asset reference, extracted at compile time.               |
+| `concinnity-physics`   | lib       |   yes    | Rigid-body simulation: bodies, contacts, solver, queries. |
 | `concinnity-toolchain` | build-dep |          | Build-script support: cfgs, SDKs, source hashing, docs.   |
 
 - `concinnity-asset` holds **data only**. No behaviour, one dependency (serde).
 - `concinnity-core` may not name a path, a file, or an I/O type.
-- The `World` is split across that line: `concinnity-core` owns its data half
-  (components, resources, events, payload store, profile, frame scratch) and
-  `concinnity-engine` wraps that in the half that runs (the constructed systems,
-  their schedule, `start` and `step`). Building world content therefore needs no
-  operating system, which is what the facade's `--no-default-features` tier is.
+- The `World` is `concinnity-core`'s, data half and running half both: the
+  components, resources, events, payload store, profile and frame scratch, plus
+  the systems built over them, their schedule, `start` and `step`. What stays in
+  `concinnity-engine` is the system table itself, whose gates name the engine's
+  own system types, and it is passed to `start`. Building and running world
+  content therefore needs no operating system, which is what the facade's
+  `--no-default-features` tier is.
+- `concinnity_core::App` is the headless driver over that world: a loop on
+  virtual fixed-timestep time, with no window, no pacing, and no wall clock.
+  A host that has those drives the world itself, which is what
+  `concinnity-engine`'s own `App` does.
 - `concinnity_core::blob` performs no I/O and holds no residency policy.
 - `concinnity-cook` never appears in the runtime's dependency closure.
 - The cook itself carries no backend cfgs, so it runs on hosts with no GPU.
@@ -475,7 +476,7 @@ The container is `concinnity_core::blob`. The module owns the format contract
 and nothing else: the record schema, the header constants, and the pure
 bytes-to-metadata transforms. It performs no I/O and holds no residency policy,
 which is what keeps it inside a `no_std` crate. Callers own both sides:
-`concinnity-store` reads the on-disk layout, `concinnity-cook` writes what the
+`concinnity-host` reads the on-disk layout, `concinnity-cook` writes what the
 encoder returns.
 
 ### 6.1 Image layout
@@ -1695,7 +1696,7 @@ Two failure modes matter and neither is caught by ordinary slicing:
    check that follows it, and decodes from the wrong offsets. Checked-product
    and checked-sum helpers cover this.
 
-The crates that parse external bytes (`blob`, `cpu`, `cook`) warn on unchecked
+The crates that parse external bytes (`core`, `cook`) warn on unchecked
 unwrapping crate-wide. Invariants that genuinely cannot fail use an explicit
 expectation with the invariant named.
 

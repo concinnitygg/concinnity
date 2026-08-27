@@ -5,9 +5,12 @@
 //! it needs no new pipeline and renders on every backend. The arrow's diagonal
 //! edges are real geometry, not a stair-stepped stack of quads.
 
+// `build_cursor_calls` below is test-only, and it is the only Vec here.
 use crate::components::Sprite;
 use crate::ecs::CursorShape;
 use crate::render_types::{TextDrawCall, TextVertex};
+#[cfg(test)]
+use alloc::vec::Vec;
 use concinnity_core::gfx::overlay::OverlayTransform;
 
 // Arrow silhouette in a normalised space: tip (the hotspot) at the origin,
@@ -165,7 +168,7 @@ struct Silhouette {
 // resize cursor is the shared horizontal double-arrow rotated onto its axis
 // (hotspot at its centre).
 fn cursor_geometry(shape: CursorShape) -> Silhouette {
-    const DIAG: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    const DIAG: f32 = core::f32::consts::FRAC_1_SQRT_2;
     let arrow = || Silhouette {
         verts: &ARROW[..],
         tris: &ARROW_TRIS[..],
@@ -255,7 +258,7 @@ mod tests {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         assert!(
             build_cursor_calls(
-                std::slice::from_ref(&c),
+                core::slice::from_ref(&c),
                 (10.0, 10.0),
                 CursorShape::Default,
                 None,
@@ -269,7 +272,7 @@ mod tests {
     fn builds_outline_then_fill_mesh() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         let calls = build_cursor_calls(
-            std::slice::from_ref(&c),
+            core::slice::from_ref(&c),
             (100.0, 50.0),
             CursorShape::Default,
             Some(0),
@@ -299,7 +302,7 @@ mod tests {
         hidden.visible = false;
         assert!(
             build_cursor_calls(
-                std::slice::from_ref(&hidden),
+                core::slice::from_ref(&hidden),
                 (0.0, 0.0),
                 CursorShape::Default,
                 Some(0),
@@ -310,7 +313,7 @@ mod tests {
         let clear = cursor([1.0, 1.0, 1.0, 0.0], 22.0);
         assert!(
             build_cursor_calls(
-                std::slice::from_ref(&clear),
+                core::slice::from_ref(&clear),
                 (0.0, 0.0),
                 CursorShape::Default,
                 Some(0),
@@ -331,7 +334,7 @@ mod tests {
     fn unset_height_falls_back_to_default_size() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 0.0);
         let calls = build_cursor_calls(
-            std::slice::from_ref(&c),
+            core::slice::from_ref(&c),
             (0.0, 0.0),
             CursorShape::Default,
             Some(0),
@@ -353,7 +356,7 @@ mod tests {
         // arrow (the last stamp) so the outline ring's extra width is excluded.
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         let calls = build_cursor_calls(
-            std::slice::from_ref(&c),
+            core::slice::from_ref(&c),
             (0.0, 0.0),
             CursorShape::Default,
             Some(0),
@@ -371,7 +374,7 @@ mod tests {
     fn resize_shape_draws_a_centered_double_arrow() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 20.0);
         let calls = build_cursor_calls(
-            std::slice::from_ref(&c),
+            core::slice::from_ref(&c),
             (100.0, 100.0),
             CursorShape::ResizeEW,
             Some(0),
@@ -402,7 +405,7 @@ mod tests {
     fn resize_ns_rotates_onto_the_vertical_axis() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 20.0);
         let calls = build_cursor_calls(
-            std::slice::from_ref(&c),
+            core::slice::from_ref(&c),
             (100.0, 100.0),
             CursorShape::ResizeNS,
             Some(0),

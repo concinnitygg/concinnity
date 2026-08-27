@@ -15,15 +15,13 @@
 //! from thrashing. When `far_radius == near_radius` (the default) the far band
 //! is empty, so the window behaves exactly as the original single-detail one.
 //!
-//! Like `crate::streaming` and `crate::chunk_coord` this is written against
-//! `core` + `alloc` only -- no threads, no I/O, no `std` collections (a
-//! `BTreeMap`, not a `HashMap`) -- so it can move into a future `no_std`
-//! runtime unchanged. The `std`-side driver (background generation thread,
-//! GPU upload) lives in concinnity-engine's `app::chunk_stream`.
+//! The `std`-side driver (background generation thread, GPU upload) lives in
+//! concinnity-engine's `app::chunk_stream`.
 
-// `BTreeMap` is an `alloc` collection (re-exported here through `std`); a
-// `HashMap` would pull in `std`-only hashing. `Vec` comes from the prelude.
-use std::collections::BTreeMap;
+// `BTreeMap` rather than a hash map: `plan` hands back its eviction lists in
+// this map's iteration order, which a hash map would leave unpinned.
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::chunk_coord::ChunkCoord;
 
@@ -389,6 +387,7 @@ impl ChunkWindow {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     fn cc(x: i32, z: i32) -> ChunkCoord {
         ChunkCoord::new(x, z)
     }

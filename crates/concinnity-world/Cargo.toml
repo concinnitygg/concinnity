@@ -29,9 +29,7 @@ path = "src/lib.rs"
 [dependencies]
 concinnity-asset = { workspace = true }
 concinnity-core = { workspace = true }
-# Only for the build-time name interner (`ecs::asset_id`), which is std-bound.
-concinnity-cpu = { workspace = true }
-concinnity-store = { workspace = true }
+concinnity-host = { workspace = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

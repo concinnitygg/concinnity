@@ -35,11 +35,12 @@
 use serde::Deserialize;
 
 use crate::hdr::{HdrImage, equirect_to_cube};
-use concinnity_core::components::EnvironmentMap;
-use concinnity_cpu::build::environment_map::{
-    DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, compute_irradiance,
-    compute_prefilter, max_mip_count, serialise_payload,
+use concinnity_core::build::environment_map::{
+    CubeBake, DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, RowScheduler,
+    max_mip_count, prefilter_mip0, prefilter_roughness, serialise_payload,
 };
+use concinnity_core::components::EnvironmentMap;
+use concinnity_host::thread::jobs;
 use std::path::Path;
 
 // Validation + entry point
@@ -131,7 +132,8 @@ pub(crate) fn compile_environment_map_payload(
         // asset-search the build pipeline uses for shader sources: search the
         // asset root recursively, falling back to the raw path so an absolute
         // or relative path also works.
-        let resolved = concinnity_store::source::resolve_source_path(&params.source, assets_dir);
+        let resolved =
+            concinnity_host::store::source::resolve_source_path(&params.source, assets_dir);
         load_equirect_source(&resolved)?
     } else {
         match params.generator.as_str() {
@@ -160,22 +162,35 @@ fn bake_payload(
 ) -> Vec<u8> {
     let source_cube = equirect_to_cube(hdr, prefilter_face);
     let prefilter_mips = max_mip_count(prefilter_face);
-    let irradiance = compute_irradiance(
+    let irradiance = CubeBake::irradiance(
         &source_cube,
         prefilter_face,
         irradiance_face,
         DEFAULT_IRRADIANCE_PHI_SAMPLES,
         DEFAULT_IRRADIANCE_THETA_SAMPLES,
-    );
-    let prefilter = compute_prefilter(
+    )
+    .bake(&PoolRows);
+    // Imported environment map: mip 0 IS the on-screen skybox, keep it unclamped.
+    let mut prefilter = Vec::with_capacity(prefilter_mips as usize);
+    prefilter.push(prefilter_mip0(
         &source_cube,
         prefilter_face,
-        prefilter_mips,
-        prefilter_samples,
         prefilter_clamp,
-        // Imported environment map: mip 0 IS the on-screen skybox, keep it unclamped.
         false,
-    );
+    ));
+    for mip in 1..prefilter_mips {
+        prefilter.push(
+            CubeBake::ggx(
+                &source_cube,
+                prefilter_face,
+                prefilter_face >> mip,
+                prefilter_roughness(mip, prefilter_mips),
+                prefilter_samples,
+                prefilter_clamp,
+            )
+            .bake(&PoolRows),
+        );
+    }
     serialise_payload(
         irradiance_face,
         prefilter_face,
@@ -183,6 +198,17 @@ fn bake_payload(
         &irradiance,
         &prefilter,
     )
+}
+
+// Spreads a convolution's independent output rows across the job pool. Each row
+// reads only the source and writes only its own texels, so the fan-out buys wall
+// clock without changing a byte.
+struct PoolRows;
+
+impl RowScheduler for PoolRows {
+    fn run<T: Send>(&self, items: &mut [T], compute: &(dyn Fn(&mut T) + Send + Sync)) {
+        jobs::pool().parallel_for(items, compute);
+    }
 }
 
 /// Decode the EnvironmentMap source at `path` the same way
@@ -280,7 +306,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_cpu::build::environment_map::deserialise;
+    use concinnity_core::build::environment_map::deserialise;
 
     #[test]
     fn validate_environment_map_args_requires_source_or_generator() {

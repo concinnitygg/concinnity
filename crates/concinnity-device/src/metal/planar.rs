@@ -28,12 +28,14 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use concinnity_core::gfx::transform::mat4_mul;
 
 // Clip the reflection a hair toward the kept (camera) side of the plane so
 // geometry exactly on the surface is not lost to near-plane precision.
@@ -170,7 +172,7 @@ impl MtlContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj = super::math::mat4_mul(params.vp, super::math::mat4_inverse(self.view.matrix));
+        let proj = mat4_mul(params.vp, mat4_inverse(self.view.matrix));
         // Reused across planes for the non-bindless CPU reflected-frustum cull:
         // `reflected_visible_set` clears it each plane, so one allocation serves
         // the whole frame. Unused on the bindless path (the GPU mirror cull drives

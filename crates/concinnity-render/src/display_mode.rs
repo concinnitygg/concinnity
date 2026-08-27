@@ -11,6 +11,10 @@
 //! the mode itself (resolution + refresh rate); borderless always covers the
 //! display's current mode, so the row is inert there.
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 /// One display mode the hardware supports: pixel dimensions plus refresh rate.
 /// `refresh_hz` of 0 means unknown (some built-in panels report none); the label
 /// then omits the rate and a fullscreen apply keeps the display's current rate.
@@ -119,6 +123,7 @@ pub fn fallback_modes() -> Vec<DisplayMode> {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     fn mode(width: u32, height: u32, refresh_hz: u32) -> DisplayMode {
         DisplayMode {
             width,

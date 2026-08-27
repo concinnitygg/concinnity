@@ -4,6 +4,7 @@
 //! geometry allocations.
 
 use crate::render_types::{TextDrawCall, TextVertex};
+use alloc::vec::Vec;
 
 #[derive(Default)]
 /// An overlay draw list under assembly, with its recycled geometry pool.
@@ -47,7 +48,7 @@ impl TextCallBuffer {
 
     /// Hand the assembled list to its consumer, leaving this buffer empty.
     pub fn take(&mut self) -> Vec<TextDrawCall> {
-        std::mem::take(&mut self.calls)
+        core::mem::take(&mut self.calls)
     }
 
     /// Reorder the assembled calls by ascending draw layer, keeping same-layer
@@ -84,8 +85,8 @@ impl TextCallBuffer {
 }
 
 // TextDrawCall carries no Debug; systems holding a buffer still derive it.
-impl std::fmt::Debug for TextCallBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for TextCallBuffer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("TextCallBuffer")
             .field("calls", &self.calls.len())
             .field("spare", &self.spare.len())
@@ -97,6 +98,7 @@ impl std::fmt::Debug for TextCallBuffer {
 mod tests {
     use super::*;
 
+    use alloc::vec;
     fn call(quads: usize) -> TextDrawCall {
         TextDrawCall {
             vertices: Vec::with_capacity(4 * quads),

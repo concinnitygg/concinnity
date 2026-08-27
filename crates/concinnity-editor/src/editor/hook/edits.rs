@@ -232,7 +232,7 @@ impl EditorHook {
         let jsonl = crate::world::write_world_jsonl(&self.entries)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         match crate::build_world_from_str(&jsonl) {
-            Ok(world) if world.renders() => Ok(world),
+            Ok(world) if concinnity_engine::ecs::renders(&world) => Ok(world),
             _ => crate::build_world_from_str(&super::seeded_content(&jsonl)),
         }
     }

@@ -17,8 +17,11 @@
 // barriers per-backend. This module only produces the data the backend
 // executor consumes.
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use alloc::collections::BinaryHeap;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::cmp::Reverse;
+use hashbrown::HashMap;
 
 use super::builder::{GraphBuilder, ResourceVersion};
 use super::passes::PassId;
@@ -52,8 +55,8 @@ pub enum GraphError {
     Cycle,
 }
 
-impl std::fmt::Display for GraphError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for GraphError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             GraphError::MissingPresenter => {
                 write!(
@@ -78,7 +81,7 @@ impl std::fmt::Display for GraphError {
     }
 }
 
-impl std::error::Error for GraphError {}
+impl core::error::Error for GraphError {}
 
 /// One pass in execution order. Carries the declared reads / writes, the
 /// barriers the executor must emit before running this pass, and the

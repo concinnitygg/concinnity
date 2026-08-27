@@ -19,7 +19,7 @@
 //! the header consts, the version, and the pure bytes <-> metadata transforms.
 //! It performs no I/O and holds no residency policy, so it never learns where
 //! blob files live or which of them are resident. Callers own both:
-//! concinnity-store reads the state root's `data/` layout into `BlobData`,
+//! `concinnity_host::store` reads the state root's `data/` layout into `BlobData`,
 //! concinnity-cook writes what `encode_cnb` returns. Being I/O-free is what
 //! lets a no_std client runtime decode blobs with its own byte source.
 //!
@@ -27,11 +27,13 @@
 
 mod encode;
 mod error;
+mod frame;
 mod parse;
 mod schema;
 
 pub use encode::encode_cnb;
 pub use error::BlobError;
+pub use frame::{FrameError, decode_exact};
 pub use parse::{parse_cnb, parse_payload_section_start, payload_section};
 pub use schema::{
     AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind,

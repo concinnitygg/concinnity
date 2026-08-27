@@ -178,7 +178,7 @@ pub struct VsMorphParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{offset_of, size_of};
+    use core::mem::{offset_of, size_of};
 
     #[test]
     fn cull_uniforms_layout_matches_msl() {

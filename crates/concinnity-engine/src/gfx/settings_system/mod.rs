@@ -124,10 +124,10 @@ pub(crate) struct SettingsState {
 }
 
 #[derive(Debug, Default)]
-pub struct SettingsSystem;
+pub(crate) struct SettingsSystem;
 
 impl SettingsSystem {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 

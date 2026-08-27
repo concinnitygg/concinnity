@@ -8,7 +8,9 @@
 // live in `super::super::commands`.
 
 use crate::debug_hook::DebugHook;
-use crate::ecs::{SystemAsset, World};
+use crate::ecs::World;
+use crate::gfx::animation::AnimationSystem;
+use crate::gfx::graphics_system::GraphicsSystem;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
@@ -82,44 +84,40 @@ impl DebugServer {
         let mut deferred_ecs_cmds: Vec<runtime_spawn::RuntimeCommand> = Vec::new();
         // The backend lives in the world's parked slot (disjoint from the
         // system list), so both are borrowed at once for the apply passes.
-        let (systems, mut backend) = world.systems_and_render_backend();
+        let (systems, mut backend) = concinnity_engine::ecs::systems_and_render_backend(world);
         for system in systems {
-            match system {
-                SystemAsset::GraphicsSystem(gs) => {
-                    if let Some(backend) = backend.take() {
-                        let apply = gs.hot_reload_apply_parts(backend);
-                        // Runtime decal / emitter spawn: independent of the
-                        // hot-reload state, available in any `cn debug` world.
-                        // CameraSet is deferred; everything else hits the
-                        // backend now.
-                        for cmd in runtime_spawn::drain() {
-                            if matches!(
+            if let Some(gs) = system.downcast_mut::<GraphicsSystem>() {
+                if let Some(backend) = backend.take() {
+                    let apply = gs.hot_reload_apply_parts(backend);
+                    // Runtime decal / emitter spawn: independent of the
+                    // hot-reload state, available in any `cn debug` world.
+                    // CameraSet is deferred; everything else hits the
+                    // backend now.
+                    for cmd in runtime_spawn::drain() {
+                        if matches!(
+                            cmd,
+                            runtime_spawn::RuntimeCommand::CameraSet { .. }
+                                | runtime_spawn::RuntimeCommand::CameraMove { .. }
+                                | runtime_spawn::RuntimeCommand::CameraStop { .. }
+                                | runtime_spawn::RuntimeCommand::QualitySet { .. }
+                                | runtime_spawn::RuntimeCommand::Rebind { .. }
+                                | runtime_spawn::RuntimeCommand::Despawn { .. }
+                                | runtime_spawn::RuntimeCommand::Reparent { .. }
+                                | runtime_spawn::RuntimeCommand::Spawn { .. }
+                                | runtime_spawn::RuntimeCommand::Story { .. }
+                        ) {
+                            deferred_ecs_cmds.push(cmd);
+                        } else {
+                            runtime_spawn::dispatch_runtime_spawn(
                                 cmd,
-                                runtime_spawn::RuntimeCommand::CameraSet { .. }
-                                    | runtime_spawn::RuntimeCommand::CameraMove { .. }
-                                    | runtime_spawn::RuntimeCommand::CameraStop { .. }
-                                    | runtime_spawn::RuntimeCommand::QualitySet { .. }
-                                    | runtime_spawn::RuntimeCommand::Rebind { .. }
-                                    | runtime_spawn::RuntimeCommand::Despawn { .. }
-                                    | runtime_spawn::RuntimeCommand::Reparent { .. }
-                                    | runtime_spawn::RuntimeCommand::Spawn { .. }
-                                    | runtime_spawn::RuntimeCommand::Story { .. }
-                            ) {
-                                deferred_ecs_cmds.push(cmd);
-                            } else {
-                                runtime_spawn::dispatch_runtime_spawn(
-                                    cmd,
-                                    apply.world_reload.as_ref(),
-                                    apply.backend,
-                                );
-                            }
+                                apply.world_reload.as_ref(),
+                                apply.backend,
+                            );
                         }
                     }
                 }
-                SystemAsset::AnimationSystem(anim) => {
-                    anim.apply_runtime_commands();
-                }
-                _ => {}
+            } else if let Some(anim) = system.downcast_mut::<AnimationSystem>() {
+                anim.apply_runtime_commands();
             }
         }
 
@@ -209,21 +207,23 @@ impl DebugHook for DebugServer {
         // Streaming counts change every frame in the early load-in, so refresh
         // them every tick -- `streaming_stats` is just a few small count loops
         // over the parked StreamingState (StreamingSystem owns the pools).
-        state.streaming = world.streaming_stats().unwrap_or_default();
+        state.streaming = concinnity_engine::ecs::streaming_stats(world).unwrap_or_default();
         state.scratch = world.scratch_stats();
         // Live RAM back-off pressure, refreshed alongside the streaming counts.
-        state.streaming_pressure =
-            world
-                .streaming_pressure()
-                .map(|p| crate::debug::state::PressureSnapshot {
-                    rss_bytes: p.rss_bytes,
-                    budget_bytes: p.budget_bytes,
-                    under_pressure: p.under_pressure,
-                });
+        state.streaming_pressure = concinnity_engine::ecs::streaming_pressure(world).map(|p| {
+            crate::debug::state::PressureSnapshot {
+                rss_bytes: p.rss_bytes,
+                budget_bytes: p.budget_bytes,
+                under_pressure: p.under_pressure,
+            }
+        });
 
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
-        if let (Some(threads), Some(memory)) = (world.thread_budget(), world.memory_budget()) {
+        if let (Some(threads), Some(memory)) = (
+            concinnity_engine::ecs::thread_budget(world),
+            concinnity_engine::ecs::memory_budget(world),
+        ) {
             state.budget = Some(crate::debug::state::BudgetSnapshot {
                 total_cores: threads.total_cores,
                 job_threads: threads.job_threads,

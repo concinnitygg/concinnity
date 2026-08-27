@@ -40,7 +40,7 @@ fn report_fault(ctx: &CrashContext) {
     // formatting the message, snapshotting the notes and the log ring, querying
     // process memory -- runs after the artifact with the compromised-context
     // writer is already on disk.
-    let Some(dir) = concinnity_store::paths::crashes_dir() else {
+    let Some(dir) = concinnity_host::store::paths::crashes_dir() else {
         return;
     };
     let time = UtcTime::now();

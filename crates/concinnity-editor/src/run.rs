@@ -22,6 +22,24 @@ pub fn run_debug(json_path: Option<&str>, port: u16) -> std::io::Result<()> {
     run_interpreted(json_path, Some(debug_hook))
 }
 
+// The world an interpreted run should load: the `-f` path when the caller gave
+// one, otherwise whatever discovery finds.
+//
+// A `-f` that does not exist is an error rather than a fall back to discovery.
+// Falling back runs a different world under the name the caller asked for, and
+// says nothing: the loop starts, frames advance, and every trust check passes
+// against a scene nobody asked for.
+fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
+    match json_path {
+        Some(p) if std::path::Path::new(p).exists() => Ok(p.to_string()),
+        Some(p) => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("world file not found: {p}"),
+        )),
+        None => find_world_jsonl(None),
+    }
+}
+
 // Interpreted entry point (`cn debug`). Compiles world.jsonl fully in memory
 // -- shaders, meshes, textures, and all -- then runs the app without reading
 // or writing any binary blob files. Always paired with the localhost debug
@@ -32,14 +50,8 @@ pub(crate) fn run_interpreted(
 ) -> std::io::Result<()> {
     concinnity_engine::app::run::init_logging();
 
-    let resolved;
-    let json_path = match json_path {
-        Some(p) if std::path::Path::new(p).exists() => p,
-        _ => {
-            resolved = find_world_jsonl(None)?;
-            resolved.as_str()
-        }
-    };
+    let resolved = resolve_world_path(json_path)?;
+    let json_path = resolved.as_str();
 
     // Hand the resolved world path to the engine so its hot-reload watcher can
     // subscribe to world.jsonl. The engine no longer discovers it (that lookup
@@ -78,7 +90,7 @@ pub(crate) fn start_app(
     // so the render-loop choice doesn't depend on the config component, which
     // `start()` drains. Only the macOS path branches on it.
     #[cfg(target_os = "macos")]
-    let renders = app.world().renders();
+    let renders = concinnity_engine::ecs::renders(app.world());
 
     // On macOS, NSApplication is a per-process singleton. Activate it once
     // before the first NSWindow is created.
@@ -110,4 +122,30 @@ pub(crate) fn start_app(
     runloop::run_loop(&mut app, false, on_tick);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_world_path;
+
+    #[test]
+    fn an_existing_path_is_taken_as_given() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let world = dir.path().join("scene.jsonl");
+        std::fs::write(&world, "").expect("write");
+        let given = world.to_string_lossy().into_owned();
+        assert_eq!(resolve_world_path(Some(&given)).expect("resolves"), given);
+    }
+
+    // The whole point of the arm: a named world that is not there fails loudly
+    // instead of silently becoming whatever discovery turns up.
+    #[test]
+    fn a_missing_path_errors_rather_than_falling_back() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("absent.jsonl");
+        let given = missing.to_string_lossy().into_owned();
+        let err = resolve_world_path(Some(&given)).expect_err("missing world is an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("absent.jsonl"), "{err}");
+    }
 }

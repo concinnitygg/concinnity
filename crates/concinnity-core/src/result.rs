@@ -28,16 +28,24 @@ pub enum CnResult {
 
     #[error("No state directory installed")]
     /// Project state was read before any host anchored the state tree. See
-    /// `concinnity_store::paths::set_state_dir`.
+    /// `concinnity_host::store::paths::set_state_dir`.
     NoStateRoot,
 }
 
-// Baked blob records are postcard; a decode failure means the record and the
-// component schema disagree (a stale blob survives the version check instead
-// of reaching here).
+// Baking a component into its blob record serializes it with postcard.
 impl From<postcard::Error> for CnResult {
     fn from(e: postcard::Error) -> Self {
-        tracing::error!("postcard deserialization error: {}", e);
+        tracing::error!("postcard error: {}", e);
+        CnResult::InvalidArgument
+    }
+}
+
+// Reading one back reads a length-delimited frame; a failure means the record
+// and the component schema disagree (a stale blob survives the version check
+// instead of reaching here).
+impl From<crate::blob::FrameError> for CnResult {
+    fn from(e: crate::blob::FrameError) -> Self {
+        tracing::error!("baked record did not decode: {}", e);
         CnResult::InvalidArgument
     }
 }
@@ -61,8 +69,11 @@ mod tests {
     }
 
     #[test]
-    fn postcard_errors_map_to_invalid_argument() {
-        let e = postcard::from_bytes::<String>(&[0xff]).unwrap_err();
-        assert_eq!(CnResult::from(e), CnResult::InvalidArgument);
+    fn frame_errors_map_to_invalid_argument() {
+        let bad = crate::blob::decode_exact::<String>(&[0xff]).unwrap_err();
+        assert_eq!(CnResult::from(bad), CnResult::InvalidArgument);
+
+        let trailing = crate::blob::decode_exact::<u8>(&[1, 2]).unwrap_err();
+        assert_eq!(CnResult::from(trailing), CnResult::InvalidArgument);
     }
 }

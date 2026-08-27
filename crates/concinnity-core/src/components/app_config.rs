@@ -43,6 +43,6 @@ impl Component for AppConfig {
     const NAME: &'static str = "AppConfig";
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
-        Ok(postcard::from_bytes(bytes)?)
+        Ok(crate::blob::decode_exact(bytes)?)
     }
 }

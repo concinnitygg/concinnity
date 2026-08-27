@@ -45,7 +45,7 @@ pub struct TextureSourceEntry {
 /// Singleton `ColorLut` reload entry. The 3D grading LUT has no slot (the
 /// composite pass binds `self.color_lut` directly), so we only need the
 /// resolved source path (the raw asset source string is resolved once at init
-/// via `concinnity_store::source::resolve_source_path` so the watcher knows
+/// via `concinnity_host::store::source::resolve_source_path` so the watcher knows
 /// where to subscribe and the per-frame reload knows what to re-read).
 #[derive(Debug, Clone)]
 pub struct ColorLutSource {
@@ -167,9 +167,9 @@ impl ProceduralMeshSourceMap {
 // project's `assets/` the way the build pipeline searches the root it was
 // given. Fills a [`ShaderStageSourceEntry`]'s `resolved_path`.
 pub(crate) fn resolve_runtime_source_path(raw: &str) -> String {
-    concinnity_store::source::resolve_source_path(
+    concinnity_host::store::source::resolve_source_path(
         raw,
-        concinnity_store::paths::assets_dir().as_deref(),
+        concinnity_host::store::paths::assets_dir().as_deref(),
     )
 }
 
@@ -390,7 +390,7 @@ mod tests {
         // A path that already contains a directory is returned verbatim; the
         // bare-filename branch consults the installed state root and is left to
         // integration coverage. The resolution itself is covered in
-        // concinnity-store, and the build-side variant in concinnity-cook.
+        // `concinnity_host::store`, and the build-side variant in concinnity-cook.
         assert_eq!(
             resolve_runtime_source_path("shaders/x.metal"),
             "shaders/x.metal"

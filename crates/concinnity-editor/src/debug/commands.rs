@@ -1769,7 +1769,7 @@ mod tests {
         world.add_component(anim_clip("idle_clip", 1.0));
         world.add_component(anim_clip("run_clip", 0.8));
         world.add_component(hero_graph());
-        world.start().unwrap();
+        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
         world
     }
 
@@ -1777,7 +1777,7 @@ mod tests {
         let mut world = crate::ecs::World::new();
         world.add_component(anim_clip("wave_clip", 1.0));
         world.add_component(anim_clip("bow_clip", 0.5));
-        world.start().unwrap();
+        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
         world
     }
 
@@ -1786,7 +1786,7 @@ mod tests {
         f: impl FnOnce(&mut crate::gfx::animation::AnimationSystem) -> R,
     ) -> R {
         for system in world.systems_mut() {
-            if let crate::ecs::SystemAsset::AnimationSystem(anim) = system {
+            if let Some(anim) = system.downcast_mut::<crate::gfx::animation::AnimationSystem>() {
                 return f(anim);
             }
         }

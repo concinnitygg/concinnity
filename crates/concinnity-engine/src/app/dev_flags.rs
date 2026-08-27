@@ -1,7 +1,7 @@
 //! Process-wide flags shared between the engine loop (library) and the
-//! binary-only `cn debug` subsystem. Only the two flags the library itself
-//! names live here; the world.jsonl / shader-stage "changed" flags and the
-//! decal / emitter spawn queue moved fully into the binary-only debug tree
+//! binary-only `cn debug` subsystem. Only the flags the library itself names
+//! live here; the world.jsonl / shader-stage "changed" flags and the decal /
+//! emitter spawn queue moved fully into the binary-only debug tree
 //! (`crate::debug`), since nothing in the library references them.
 //!
 //!   ENABLED              "are we running under a dev-loop entry point?" Set
@@ -28,6 +28,23 @@
 //!                        validation layer cannot be toggled from a running
 //!                        process, so the CLI re-execs with the env var instead;
 //!                        this flag does not drive Metal.
+//!   QUALITY_PRESET       "did the launch force a master quality preset?" Set by
+//!                        the CLI `--quality-preset` flag. Outranks the persisted
+//!                        settings-menu choice at `GraphicsSystem::init` and is
+//!                        never written back, so a probe / CI run can force a
+//!                        preset (e.g. `ultra`, the only tier whose ceiling
+//!                        permits ray-traced reflections) without touching
+//!                        settings.bin. Unset leaves the persisted choice.
+//!   RT_DYNAMIC           "how should the ray-tracing acceleration structure
+//!                        track moving props?" Set by the CLI `--rt-dynamic`
+//!                        flag; travels to the backends through
+//!                        `PostSettings::rt_dynamic`. Unset resolves to `Auto`,
+//!                        the shipping dirty-gated rebuild.
+//!   RT_SKINNED_GEOMETRY  "may skinned meshes join the ray-tracing acceleration
+//!                        structure?" Set by the CLI `--rt-skinned-geometry`
+//!                        flag; travels to the backends through
+//!                        `PostSettings::rt_skinned_geometry`. Unset leaves them
+//!                        in, so clearing it isolates the skinned trace path.
 //!   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by the
 //!                        editor's `cn debug` / `cn editor` entry once the world
 //!                        path is resolved; read by `GraphicsSystem::init` (only
@@ -46,6 +63,11 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+pub use crate::gfx::quality_preset::QualityPreset;
+pub use concinnity_render::rt_geom::RtDynamicMode;
+
+use crate::gfx::quality_preset::{preset_at, preset_index};
+
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static PENDING_ANIMATIONS: AtomicBool = AtomicBool::new(false);
 // "keep the presented frame blit-readable for an exit screenshot." Set by
@@ -56,6 +78,25 @@ static CAPTURE: AtomicBool = AtomicBool::new(false);
 // Tri-state validation request: 0 = unset (use the build-profile default),
 // 1 = explicitly off, 2 = explicitly on.
 static VALIDATION: AtomicU8 = AtomicU8::new(0);
+
+// Launch-forced master quality preset: 0 = unset, otherwise the preset's cycle
+// index plus one.
+static QUALITY_PRESET: AtomicU8 = AtomicU8::new(0);
+
+// Launch-forced ray-tracing update mode: 0 = unset, otherwise `RT_DYNAMIC_ORDER`
+// index plus one.
+static RT_DYNAMIC: AtomicU8 = AtomicU8::new(0);
+
+// The modes `RT_DYNAMIC` encodes, in encoding order.
+const RT_DYNAMIC_ORDER: [RtDynamicMode; 4] = [
+    RtDynamicMode::Off,
+    RtDynamicMode::Auto,
+    RtDynamicMode::Rebuild,
+    RtDynamicMode::Tlas,
+];
+
+// Tri-state skinned-RT-geometry request: 0 = unset, 1 = excluded, 2 = included.
+static RT_SKINNED_GEOMETRY: AtomicU8 = AtomicU8::new(0);
 
 // Path to the world.jsonl the dev host is running, or None outside a dev host.
 static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
@@ -132,6 +173,80 @@ pub(crate) fn resolve_validation() -> bool {
     validation().unwrap_or(cfg!(debug_assertions))
 }
 
+/// Record the CLI `--quality-preset` request. `None` leaves the persisted
+/// settings-menu choice in effect. The library only reads it.
+pub fn set_quality_preset(preset: Option<QualityPreset>) {
+    let encoded = preset.map_or(0, |p| preset_index(p) as u8 + 1);
+    QUALITY_PRESET.store(encoded, Ordering::SeqCst);
+}
+
+// The CLI quality-preset request, or `None` when the launch did not force one.
+pub(crate) fn quality_preset() -> Option<QualityPreset> {
+    match QUALITY_PRESET.load(Ordering::SeqCst) {
+        0 => None,
+        n => Some(preset_at(n as usize - 1)),
+    }
+}
+
+// Settle the master quality preset: the CLI `--quality-preset` flag if the
+// launch passed one, otherwise the persisted settings-menu choice. `None` means
+// neither exists, which is a first launch the caller seeds.
+pub(crate) fn resolve_quality_preset(persisted: Option<QualityPreset>) -> Option<QualityPreset> {
+    quality_preset().or(persisted)
+}
+
+/// Record the CLI `--rt-dynamic` request. `None` leaves the default `Auto`
+/// update mode in effect. The library only reads it.
+pub fn set_rt_dynamic(mode: Option<RtDynamicMode>) {
+    let encoded = mode.map_or(0, |m| {
+        RT_DYNAMIC_ORDER
+            .iter()
+            .position(|&candidate| candidate == m)
+            .expect("RT_DYNAMIC_ORDER covers every mode") as u8
+            + 1
+    });
+    RT_DYNAMIC.store(encoded, Ordering::SeqCst);
+}
+
+// The CLI ray-tracing update-mode request, or `None` when the launch passed one.
+pub(crate) fn rt_dynamic() -> Option<RtDynamicMode> {
+    RT_DYNAMIC_ORDER
+        .get(RT_DYNAMIC.load(Ordering::SeqCst).wrapping_sub(1) as usize)
+        .copied()
+}
+
+// Settle how the acceleration structure tracks moving props: the CLI
+// `--rt-dynamic` flag if the launch passed one, otherwise `Auto`.
+pub(crate) fn resolve_rt_dynamic() -> RtDynamicMode {
+    rt_dynamic().unwrap_or_default()
+}
+
+/// Record the CLI `--rt-skinned-geometry` request. `None` leaves skinned meshes
+/// in the acceleration structure. The library only reads it.
+pub fn set_rt_skinned_geometry(v: Option<bool>) {
+    let encoded = match v {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    RT_SKINNED_GEOMETRY.store(encoded, Ordering::SeqCst);
+}
+
+// The CLI skinned-RT-geometry request, or `None` when the launch did not pass one.
+pub(crate) fn rt_skinned_geometry() -> Option<bool> {
+    match RT_SKINNED_GEOMETRY.load(Ordering::SeqCst) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
+// Settle whether skinned meshes join the acceleration structure: the CLI
+// `--rt-skinned-geometry` flag if the launch passed one, otherwise in.
+pub(crate) fn resolve_rt_skinned_geometry() -> bool {
+    rt_skinned_geometry().unwrap_or(true)
+}
+
 /// Record the world.jsonl path the dev host resolved, so the hot-reload watcher
 /// can subscribe to it. Called by the editor's `cn debug` / `cn editor` entry
 /// before world build; the library only reads it.
@@ -162,6 +277,9 @@ pub(crate) struct WriteAccess {
     _guard: std::sync::RwLockWriteGuard<'static, ()>,
     enabled: bool,
     validation: Option<bool>,
+    quality_preset: Option<QualityPreset>,
+    rt_dynamic: Option<RtDynamicMode>,
+    rt_skinned_geometry: Option<bool>,
     world_jsonl_path: Option<String>,
 }
 
@@ -171,6 +289,9 @@ pub(crate) fn write_access() -> WriteAccess {
         _guard: FLAG_ACCESS.write().unwrap_or_else(|e| e.into_inner()),
         enabled: enabled(),
         validation: validation(),
+        quality_preset: quality_preset(),
+        rt_dynamic: rt_dynamic(),
+        rt_skinned_geometry: rt_skinned_geometry(),
         world_jsonl_path: world_jsonl_path(),
     }
 }
@@ -180,6 +301,9 @@ impl Drop for WriteAccess {
     fn drop(&mut self) {
         set_enabled(self.enabled);
         set_validation(self.validation);
+        set_quality_preset(self.quality_preset);
+        set_rt_dynamic(self.rt_dynamic);
+        set_rt_skinned_geometry(self.rt_skinned_geometry);
         set_world_jsonl_path(self.world_jsonl_path.take());
     }
 }
@@ -206,6 +330,63 @@ mod tests {
         assert_eq!(validation(), Some(true));
         set_validation(Some(false));
         assert_eq!(validation(), Some(false));
+    }
+
+    #[test]
+    fn every_quality_preset_round_trips_through_the_flag() {
+        let _flags = write_access();
+        set_quality_preset(None);
+        assert_eq!(quality_preset(), None);
+        for preset in QualityPreset::ALL {
+            set_quality_preset(Some(preset));
+            assert_eq!(quality_preset(), Some(preset));
+        }
+    }
+
+    #[test]
+    fn the_quality_flag_outranks_the_persisted_choice() {
+        let _flags = write_access();
+
+        // No flag: the persisted settings-menu choice decides, unchanged.
+        set_quality_preset(None);
+        assert_eq!(resolve_quality_preset(None), None);
+        assert_eq!(
+            resolve_quality_preset(Some(QualityPreset::Auto)),
+            Some(QualityPreset::Auto)
+        );
+
+        // The flag wins over any persisted value, and over none.
+        set_quality_preset(Some(QualityPreset::Ultra));
+        assert_eq!(
+            resolve_quality_preset(Some(QualityPreset::Auto)),
+            Some(QualityPreset::Ultra)
+        );
+        assert_eq!(resolve_quality_preset(None), Some(QualityPreset::Ultra));
+    }
+
+    #[test]
+    fn every_rt_dynamic_mode_round_trips_and_unset_is_auto() {
+        let _flags = write_access();
+        set_rt_dynamic(None);
+        assert_eq!(rt_dynamic(), None);
+        assert_eq!(resolve_rt_dynamic(), RtDynamicMode::Auto);
+        for mode in RT_DYNAMIC_ORDER {
+            set_rt_dynamic(Some(mode));
+            assert_eq!(rt_dynamic(), Some(mode));
+            assert_eq!(resolve_rt_dynamic(), mode);
+        }
+    }
+
+    #[test]
+    fn skinned_rt_geometry_is_in_unless_the_flag_clears_it() {
+        let _flags = write_access();
+        set_rt_skinned_geometry(None);
+        assert_eq!(rt_skinned_geometry(), None);
+        assert!(resolve_rt_skinned_geometry());
+        set_rt_skinned_geometry(Some(true));
+        assert!(resolve_rt_skinned_geometry());
+        set_rt_skinned_geometry(Some(false));
+        assert!(!resolve_rt_skinned_geometry());
     }
 
     #[test]

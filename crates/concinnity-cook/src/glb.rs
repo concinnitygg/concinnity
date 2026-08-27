@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::components::{SkeletonJoint, SkinnedVertexData, VertexData};
-use crate::gfx::skinning::{JointPose, euler_yxz_from_quat};
+use crate::gfx::skeleton::JointPose;
+use crate::gfx::transform::euler_yxz_from_quat;
 use crate::gltf_source::GltfDoc;
 
 use crate::import::NEUTRAL_COLOR;

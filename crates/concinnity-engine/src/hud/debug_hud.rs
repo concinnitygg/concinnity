@@ -132,7 +132,7 @@ fn sys_text(
 /// not components of `gpu_frame_us`**: the Apple GPU overlaps fragment work
 /// across encoders, so summing them exceeds the whole-frame timer.
 #[derive(Debug)]
-pub struct DebugHudSystem {
+pub(crate) struct DebugHudSystem {
     passes_label: Option<AssetId>,
     mouse_label: Option<AssetId>,
     camera_label: Option<AssetId>,
@@ -155,7 +155,7 @@ pub struct DebugHudSystem {
 
 impl DebugHudSystem {
     // Build the debug HUD from a world's `DebugHud` request component.
-    pub fn new(config: DebugHud) -> Self {
+    pub(crate) fn new(config: DebugHud) -> Self {
         Self {
             passes_label: config.passes_label,
             mouse_label: config.mouse_label,
@@ -267,6 +267,7 @@ impl System for DebugHudSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::SYSTEMS;
 
     #[test]
     fn passes_text_blanks_on_all_zero_slots() {
@@ -417,7 +418,7 @@ mod tests {
 
         let mut world = World::new();
         world.add_component(DebugHud::default());
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["DebugHud"]);
     }
@@ -468,7 +469,7 @@ mod tests {
     #[test]
     fn hidden_hud_blanks_all_chips() {
         let mut world = hud_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.step();
         assert_eq!(chip(&world, 1), "");
         assert_eq!(chip(&world, 2), "");
@@ -481,7 +482,7 @@ mod tests {
     #[test]
     fn toggle_reveals_mouse_and_camera_chips() {
         let mut world = hud_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.insert_resource(FrameInput {
             hud_toggle: true,
             mouse_x: 640.4,
@@ -503,7 +504,7 @@ mod tests {
         use crate::app::budget::{MemoryBudget, ThreadBudget};
 
         let mut world = hud_world();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.insert_resource(ThreadBudget {
             total_cores: 12,
             job_threads: 11,

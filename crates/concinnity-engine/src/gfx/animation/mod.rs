@@ -27,7 +27,8 @@ use std::time::Instant;
 use crate::components::{Animation, SkeletonPose};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle, StepResult, System};
-use crate::gfx::skinning::{self, AnimationClip};
+use crate::gfx::pose_blend::PoseBlend;
+use crate::gfx::skeleton::AnimationClip;
 use crate::jobs;
 
 use flat::{ClipEntry, FlatState, Transition};
@@ -439,7 +440,7 @@ impl System for AnimationSystem {
                         // the accumulator (regardless of weight, so an
                         // all-zero bucket falls back to it), later clips at
                         // weight 0 are skipped without sampling.
-                        let mut fold = skinning::PoseBlend::new(&mut scratch.locals);
+                        let mut fold = PoseBlend::new(&mut scratch.locals);
                         for (i, entry) in many.iter().enumerate() {
                             let w = flat.current_weights.get(i).copied().unwrap_or(1.0);
                             if fold.seeded() && w <= 0.0 {

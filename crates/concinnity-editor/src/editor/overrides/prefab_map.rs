@@ -4,6 +4,7 @@
 // entry that produced them, including the inverse of the instance-transform
 // composition the expansion applies. Pure: the hook owns the entry mutations.
 
+use concinnity_core::math::vec3::add;
 use serde_json::Value;
 
 // Where a generated asset's template lives: an entry inside an authored Prefab
@@ -115,7 +116,7 @@ fn walk(
             }
             let child = Frame {
                 pos: compose_position(f32_arr3(entry, "position", [0.0; 3]), parent),
-                rot: add3(parent.rot, f32_arr3(entry, "rotation_deg", [0.0; 3])),
+                rot: add(parent.rot, f32_arr3(entry, "rotation_deg", [0.0; 3])),
                 scale: mul3(parent.scale, f32_arr3(entry, "scale", [1.0; 3])),
             };
             walk(entries, nested, rest, child, matches)?;
@@ -283,9 +284,6 @@ fn rotation_matrix(rotation_deg: [f32; 3]) -> [[f32; 3]; 3] {
     ]
 }
 
-fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
 fn mul3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }

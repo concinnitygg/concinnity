@@ -2,8 +2,8 @@
 //! stateless -- callers own position, yaw, and pitch directly (e.g. on
 //! Camera3D) and pass them in as needed.
 
-use crate::math::vec3::cross;
-use crate::math::{sin_cos, sqrt, tan};
+use crate::math::vec3::{cross, length};
+use crate::math::{sin_cos, tan};
 
 // Floor applied to a viewport aspect ratio before it reaches a shader, so a
 // zero-height viewport cannot divide by zero in the ray reconstruction.
@@ -55,7 +55,7 @@ pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
 }
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let len = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    let len = length(v);
     if len < 1e-7 {
         [0.0, 0.0, 1.0]
     } else {
@@ -66,10 +66,7 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-    }
+    use crate::math::vec3::dot;
 
     #[test]
     fn view_matrix_at_origin_with_zero_angles_is_identity() {

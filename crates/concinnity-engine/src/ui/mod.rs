@@ -232,7 +232,7 @@ struct Capture {
 // `Screen`, or `KeyBinding`; never a world-declared asset, so it carries no
 // config.
 #[derive(Debug)]
-pub struct UiInputSystem {
+pub(crate) struct UiInputSystem {
     regions: Vec<RegionEntry>,
     bindings: Vec<KeyBinding>,
     screens: ScreenRegistry,
@@ -286,7 +286,7 @@ pub struct UiInputSystem {
 impl UiInputSystem {
     // Empty dispatch state. The world's `HitRegion` / `Screen` / `KeyBinding`
     // components are drained into it in [`System::init`].
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             regions: Vec::new(),
             bindings: Vec::new(),
@@ -1905,10 +1905,11 @@ fn fire_action(
 #[cfg(test)]
 mod tests {
     // UiInputSystem is internal: each test seeds the gating components
-    // (HitRegion / Screen / KeyBinding) before `world.start()`, which constructs
+    // (HitRegion / Screen / KeyBinding) before `world.start(SYSTEMS)`, which constructs
     // the system from them via the build schedule.
     use super::*;
     use crate::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
+    use crate::ecs::SYSTEMS;
     use crate::ecs::World;
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
@@ -2008,7 +2009,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Hover over the region.
         world.add_component(make_frame_input(50.0, 30.0, false));
@@ -2089,7 +2090,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Hover + click the Settings button (identity overlay at viewport [0,0]):
         // the label takes the hover color and the click sends Show(settings).
@@ -2164,7 +2165,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         (world, screen)
     }
 
@@ -2254,7 +2255,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.insert_resource(crate::ecs::DisplayModes(modes));
         world
     }
@@ -2500,7 +2501,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(make_frame_input(50.0, 30.0, false));
         world.step();
@@ -2533,7 +2534,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
@@ -2563,7 +2564,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(make_frame_input(50.0, 50.0, true));
         let result = world.step();
@@ -2598,7 +2599,7 @@ mod tests {
             border_width: 0.0,
             border_color: [0.0, 0.0, 0.0, 1.0],
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // init() hides screen elements.
         let visible_after_init = world
@@ -2677,7 +2678,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world
     }
 
@@ -2734,7 +2735,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Show the screen, then click where the scene-region is.
         world
@@ -2771,7 +2772,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
         assert!(matches!(
@@ -2796,7 +2797,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
         let cmd = produced_screen_command(&world);
@@ -2819,7 +2820,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
         let cmd = produced_screen_command(&world);
@@ -2847,7 +2848,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
         let cmd = produced_setting_commands(&world)
@@ -2865,7 +2866,7 @@ mod tests {
             action: "setting:vsync:prev".to_string(),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 20.0, true));
         world.step();
         let cmd = produced_setting_commands(&world)
@@ -2895,7 +2896,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
@@ -2927,7 +2928,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Master off: the show_fps row is in the runtime-disabled set, so a click
         // over it fires nothing.
@@ -2961,7 +2962,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Press at x=150 (25% across the [100, 300) track) with the button held:
         // a live, non-persisting fraction.
@@ -3083,7 +3084,7 @@ mod tests {
             track_w: 0.0,
             track_h: 0.0,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Expanded after init: body shown, header reads "- Adv".
         assert!(label_field(&world, body, |l| l.visible));
@@ -3153,7 +3154,7 @@ mod tests {
             track_w: 0.0,
             track_h: 0.0,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         assert_eq!(label_field(&world, e0, |l| l.y), 0.0);
 
         // Wheel down with the cursor inside the band: scroll = 10 * speed (2.0)
@@ -3244,7 +3245,7 @@ mod tests {
             track_w: 8.0,
             track_h: 60.0,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         (world, e0)
     }
 
@@ -3362,7 +3363,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         (world, value)
     }
 
@@ -3461,7 +3462,7 @@ mod tests {
                 ..Default::default()
             });
         }
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let mut cursor = crate::ecs::EventCursor::default();
         assert_eq!(shown_views(&world, &mut cursor), vec![first]);
 
@@ -3495,7 +3496,7 @@ mod tests {
             action: "screen:toggle:50".to_string(),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Press Escape.
         world.add_component(FrameInput {
@@ -3528,7 +3529,7 @@ mod tests {
                 action: "story:advance".to_string(),
                 ..Default::default()
             });
-            world.start().unwrap();
+            world.start(SYSTEMS).unwrap();
 
             world.add_component(FrameInput {
                 captured_key: Some(key),
@@ -3554,7 +3555,7 @@ mod tests {
             action: "story:advance".to_string(),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(FrameInput {
             captured_key: Some(InputKey::Down),
@@ -3610,7 +3611,7 @@ mod tests {
             action: "screen:toggle:60".to_string(),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         let shown = |w: &World, id: u32| {
             w.query::<Sprite>()
@@ -3676,7 +3677,7 @@ mod tests {
             screen: Some(AssetId(80)),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let shown = |w: &World| {
             w.query::<Sprite>()
                 .find(|s| s.asset_id == AssetId(81))
@@ -3718,7 +3719,7 @@ mod tests {
             screen: Some(AssetId(90)),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let focused = |w: &World| {
             w.query::<crate::components::TextInput>()
                 .find(|t| t.asset_id == AssetId(91))
@@ -3763,7 +3764,7 @@ mod tests {
         };
         field.focused = true;
         world.add_component(field);
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(FrameInput {
             captured_key: Some(InputKey::T),
@@ -3807,7 +3808,7 @@ mod tests {
             action: "screen:show:111".to_string(),
             screen: Some(AssetId(110)),
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // No screen on top: the scoped binding stays quiet.
         world.add_component(FrameInput {
@@ -3859,7 +3860,7 @@ mod tests {
                 ..Default::default()
             });
         }
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         let shown = |w: &World, id: u32| {
             w.query::<Sprite>()
                 .find(|s| s.asset_id == AssetId(id))
@@ -3909,7 +3910,7 @@ mod tests {
             fade_in_secs: 0.0,
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["UiInputSystem"]);
@@ -3919,7 +3920,7 @@ mod tests {
     #[test]
     fn no_ui_components_means_no_system() {
         let mut world = World::new();
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         assert!(world.systems().is_empty());
     }
 
@@ -4012,7 +4013,7 @@ mod tests {
                 fit: crate::components::SpriteFit::Fit,
             });
         }
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
         world
     }
 
@@ -4150,7 +4151,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Focus the stepper row (its two regions read as one target).
         world.add_component(FrameInput {
@@ -4221,7 +4222,7 @@ mod tests {
             toggle_key: "Escape".to_string(),
             ..Default::default()
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Back with no screen active: nothing opens.
         world.add_component(FrameInput {
@@ -4289,7 +4290,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         world.add_component(FrameInput {
             confirm: true,
@@ -4328,7 +4329,7 @@ mod tests {
             follow_label: false,
             fit: crate::components::SpriteFit::Fit,
         });
-        world.start().unwrap();
+        world.start(SYSTEMS).unwrap();
 
         // Click the row: capture begins.
         world.add_component(make_frame_input(50.0, 20.0, true));

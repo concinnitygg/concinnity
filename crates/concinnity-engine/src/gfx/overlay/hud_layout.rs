@@ -161,8 +161,8 @@ mod tests {
     // label is unmistakable.
     const SENTINEL: f32 = -999.0;
 
-    fn make_glyph(advance_px: f32) -> crate::build::font::GlyphMetrics {
-        crate::build::font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> crate::gfx::font::GlyphMetrics {
+        crate::gfx::font::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,
@@ -178,7 +178,7 @@ mod tests {
     // tall) makes the measured boxes exact: a 1-line unpadded chip measures
     // 10px per char wide, 12px tall, with a -2px top inset.
     fn loaded_fonts() -> text::FontSet {
-        let metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics> = ('a'..='z')
+        let metrics: crate::gfx::text::FontMetrics = ('a'..='z')
             .chain('A'..='Z')
             .map(|c| (c as u32, make_glyph(10.0)))
             .collect();

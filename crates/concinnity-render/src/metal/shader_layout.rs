@@ -13,8 +13,12 @@
 //! that produces the reflected layout lives in `shader_reflect.rs`; keeping the
 //! comparison separate makes it unit-testable without a GPU device.
 
-use std::collections::HashMap;
-use std::mem::{offset_of, size_of};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::mem::{offset_of, size_of};
+use hashbrown::HashMap;
 
 use crate::render_types::{
     ClusterParams, GpuLight, GpuObjectData, LightUniforms, MaterialUniforms, ShadowPassPush,
@@ -310,14 +314,15 @@ pub(crate) fn compare_binding(
     Ok(())
 }
 
+/// One stage's reflected engine buffer structs, keyed by binding index. What a
+/// backend hands [`validate_stage`] after querying its shader reflection.
+pub type ReflectedStructs = HashMap<u32, ReflectedStruct>;
+
 /// Validate every engine-owned binding a shader stage uses against the engine's
 /// contract. `reflected` maps buffer index → the layout reflected at that index;
 /// indices the shader does not bind are simply absent and skipped. Returns the
 /// first mismatch, or `Ok(())` if every engine binding the shader uses matches.
-pub fn validate_stage(
-    stage: EngineStage,
-    reflected: &HashMap<u32, ReflectedStruct>,
-) -> Result<(), String> {
+pub fn validate_stage(stage: EngineStage, reflected: &ReflectedStructs) -> Result<(), String> {
     for (index, expected) in engine_buffers(stage) {
         if let Some(found) = reflected.get(&index) {
             compare_binding(index, &expected, found)?;
@@ -330,6 +335,7 @@ pub fn validate_stage(
 mod tests {
     use super::*;
 
+    use alloc::string::ToString;
     // Turn an ExpectedStruct into a faithful ReflectedStruct (what reflection
     // would report for a correct user shader copying the engine struct).
     fn faithful(expected: &ExpectedStruct) -> ReflectedStruct {
@@ -364,7 +370,7 @@ mod tests {
             EngineStage::Fragment,
             EngineStage::Shadow,
         ] {
-            let reflected: HashMap<u32, ReflectedStruct> = engine_buffers(stage)
+            let reflected: ReflectedStructs = engine_buffers(stage)
                 .iter()
                 .map(|(i, e)| (*i, faithful(e)))
                 .collect();

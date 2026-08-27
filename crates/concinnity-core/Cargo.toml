@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Runtime vocabulary for the Concinnity engine: GPU layouts, ECS components, registry"
+description = "Runtime vocabulary for the Concinnity engine: GPU layouts, ECS components, registry, CPU kernels"
 keywords = ["gamedev", "graphics", "ecs", "concinnity"]
 categories = ["game-engines", "no-std"]
 include = [
@@ -23,15 +23,18 @@ path = "src/lib.rs"
 # Selects backend_vk on Windows (via build.rs reading CARGO_FEATURE_VULKAN) so
 # the backend-conditional gfx data layouts and Platform::current() compile for
 # the same backend the client picks. Activates no extra dependency. Inert on
-# Linux (always vk) and macOS (always metal). concinnity-cpu forwards its own
-# `vulkan` feature here so the two resolve the same backend.
+# Linux (always vk) and macOS (always metal).
 vulkan = []
 
 [dependencies]
 concinnity-asset = { workspace = true }
 concinnity-memory = { workspace = true }
+concinnity-physics = { workspace = true }
 
 bytemuck = { version = "1", default-features = false, features = ["derive"] }
+# `hashbrown` is what makes fontdue no_std: without it the crate falls back to
+# std's HashMap. `simd` is its default fast raster path.
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
 libm = "0.2"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }

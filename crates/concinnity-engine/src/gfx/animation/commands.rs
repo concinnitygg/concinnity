@@ -174,8 +174,8 @@ mod tests {
     use crate::components::AnimationGraph;
     use crate::ecs::asset_id::AssetId;
     use crate::gfx::anim_graph::GraphCursor;
+    use crate::gfx::skeleton::AnimationClip;
     use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;
-    use crate::gfx::skinning::AnimationClip;
 
     const TARGET: SkinnedMeshHandle = SkinnedMeshHandle(1);
     const MISSING: SkinnedMeshHandle = SkinnedMeshHandle(9);

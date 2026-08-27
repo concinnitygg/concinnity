@@ -1176,9 +1176,13 @@ pub(crate) struct DxContext {
     // rt_reflections_enabled` is gated on both being `Some`.
     pub(super) rt_reflections: Option<super::post::rt_reflections::RtReflectionsResources>,
     pub(super) rt_accel: Option<super::raytrace::RtAccelData>,
-    // How the acceleration structure is kept current as props move (read once
-    // from `CN_RT_DYNAMIC` at init; `Auto` by default).
+    // How the acceleration structure is kept current as props move (the
+    // launch's `--rt-dynamic` request; `Auto` by default).
     pub(super) rt_dynamic_mode: super::raytrace::RtDynamicMode,
+    // Whether skinned meshes join the BVH (the launch's `--rt-skinned-geometry`
+    // request; in by default). Clear it and the BVH covers static + instanced
+    // geometry only, isolating the skinned trace path.
+    pub(super) rt_skinned_geometry: bool,
     // Set when a runtime change altered the RT-relevant draw set (a cloned prop,
     // a streamed chunk added/removed) since the last update. Consumed once per
     // frame by `rt_dynamic_update`, which folds the change into the BLAS head

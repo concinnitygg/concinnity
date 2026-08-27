@@ -6,7 +6,7 @@
 // both feed the per-frame `RootMotionEvent` events consumed by the rig drive in
 // PhysicsSystem.
 
-use crate::gfx::root_motion::{add3, scale3};
+use concinnity_core::math::vec3::{add, scale};
 
 use super::flat::ClipEntry;
 
@@ -35,7 +35,7 @@ pub(super) fn flat_root_delta(clips: &[ClipEntry], weights: &[f32], t0: f32, t1:
                 }
                 if let Some(root) = &entry.clip.root {
                     let d = root.delta(t0, t1, entry.clip.duration, entry.clip.looping);
-                    out = add3(out, scale3(d, w / total));
+                    out = add(out, scale(d, w / total));
                 }
             }
             out
@@ -47,7 +47,7 @@ pub(super) fn flat_root_delta(clips: &[ClipEntry], weights: &[f32], t0: f32, t1:
 mod tests {
     use super::*;
     use crate::gfx::root_motion::{RootKey, RootTrack};
-    use crate::gfx::skinning::AnimationClip;
+    use crate::gfx::skeleton::AnimationClip;
 
     // A clip whose root travels `per` along +X over its whole duration, linear.
     fn moving_clip(duration: f32, looping: bool, per: f32) -> ClipEntry {

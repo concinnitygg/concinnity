@@ -9,14 +9,14 @@ use crate::geometry::{
     SkinnedLods, compile_mesh_payload, compile_skinned_mesh_payload_with_lods,
     payload_joints_to_defs,
 };
-use concinnity_cpu::gfx::mesh_payload::{deserialise_skinned, deserialise_with_lods};
+use concinnity_core::gfx::mesh_payload::{deserialise_skinned, deserialise_with_lods};
 
 // LOD alternates: (switch_distance, index buffer) pairs.
 type LodAlternates = Vec<(f32, Vec<u16>)>;
 
 // Imported skinned mesh: runtime vertices, indices, and the bind-pose skeleton.
 type SkinnedImport = (
-    Vec<concinnity_cpu::gfx::mesh_payload::SkinnedVertex>,
+    Vec<concinnity_core::gfx::mesh_payload::SkinnedVertex>,
     Vec<u16>,
     Vec<concinnity_core::components::SkeletonJoint>,
 );
@@ -45,7 +45,7 @@ pub fn decode_mesh_from_parsed_glb(
     lod_distances: &[f32],
 ) -> Result<
     (
-        Vec<concinnity_cpu::gfx::mesh_payload::Vertex>,
+        Vec<concinnity_core::gfx::mesh_payload::Vertex>,
         Vec<u16>,
         LodAlternates,
     ),

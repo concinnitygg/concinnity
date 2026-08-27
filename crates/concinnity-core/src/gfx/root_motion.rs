@@ -6,6 +6,7 @@
 
 use alloc::vec::Vec;
 
+use crate::math::vec3::{lerp, sub};
 use crate::math::{floor, rem_euclid};
 
 /// One key of a root-motion curve: the root joint's stripped translation at
@@ -47,7 +48,7 @@ impl RootTrack {
                     if t >= a.time && t <= b.time {
                         let span = (b.time - a.time).max(1e-6);
                         let f = (t - a.time) / span;
-                        return lerp3(a.translation, b.translation, f);
+                        return lerp(a.translation, b.translation, f);
                     }
                 }
                 last.translation
@@ -62,11 +63,11 @@ impl RootTrack {
     /// clamps both ends.
     pub fn delta(&self, t0: f32, t1: f32, duration: f32, looping: bool) -> [f32; 3] {
         if !looping || duration <= 1e-6 {
-            return sub3(self.sample(t1), self.sample(t0));
+            return sub(self.sample(t1), self.sample(t0));
         }
         let cycles = floor(t1 / duration) - floor(t0 / duration);
-        let per_cycle = sub3(self.sample(duration), self.sample(0.0));
-        let within = sub3(
+        let per_cycle = sub(self.sample(duration), self.sample(0.0));
+        let within = sub(
             self.sample(rem_euclid(t1, duration)),
             self.sample(rem_euclid(t0, duration)),
         );
@@ -76,30 +77,6 @@ impl RootTrack {
             within[2] + cycles * per_cycle[2],
         ]
     }
-}
-
-/// Component-wise linear interpolation from `a` to `b`.
-pub fn lerp3(a: [f32; 3], b: [f32; 3], f: f32) -> [f32; 3] {
-    [
-        a[0] + (b[0] - a[0]) * f,
-        a[1] + (b[1] - a[1]) * f,
-        a[2] + (b[2] - a[2]) * f,
-    ]
-}
-
-/// Component-wise difference, `a - b`.
-pub fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-/// Component-wise sum, `a + b`.
-pub fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-/// Every component scaled by `s`.
-pub fn scale3(a: [f32; 3], s: f32) -> [f32; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
 }
 
 #[cfg(test)]

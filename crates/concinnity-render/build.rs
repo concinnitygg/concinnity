@@ -9,6 +9,11 @@
 //! array of 24k float literals takes rustc tens of seconds to compile, while
 //! `include_bytes!` of the same data is free.
 
+// The fitter is written for the `no_std` lib that also compiles it, so it names
+// `alloc` for its collections.
+extern crate alloc;
+
+include!("src/ltc/size.rs");
 include!("src/ltc/fit.rs");
 
 fn write_f32s(path: std::path::PathBuf, values: impl Iterator<Item = f32>) {
@@ -21,6 +26,7 @@ fn write_f32s(path: std::path::PathBuf, values: impl Iterator<Item = f32>) {
 
 fn main() {
     println!("cargo::rerun-if-changed=src/ltc/fit.rs");
+    println!("cargo::rerun-if-changed=src/ltc/size.rs");
 
     let (matrix, magnitude) = fit_table(LTC_LUT_SIZE);
     let dir = std::path::PathBuf::from(

@@ -2081,15 +2081,18 @@ impl super::context::DxContext {
         }
 
         // Build the skinned inputs while `self` is still fully borrowable. `None`
-        // when there is no skinned geometry resident (the static path runs). Only
-        // the two shared GVAs are read up-front; the per-object joint palettes are
-        // borrowed straight out of this frame's slot below (a disjoint field
-        // borrow), so the skin dispatch costs no per-frame list of its own.
+        // when there is no skinned geometry resident or the launch excluded it
+        // (the static path runs). Only the two shared GVAs are read up-front; the
+        // per-object joint palettes are borrowed straight out of this frame's slot
+        // below (a disjoint field borrow), so the skin dispatch costs no per-frame
+        // list of its own.
         let skinned_inputs = match (
             self.skinned.vertex_buffer.as_ref(),
             self.skinned.index_buffer.as_ref(),
         ) {
-            (Some(vb), Some(ib)) if !self.skinned.draw_objects.is_empty() => {
+            (Some(vb), Some(ib))
+                if self.rt_skinned_geometry && !self.skinned.draw_objects.is_empty() =>
+            {
                 let vertex_gva = com::gpu_va(vb);
                 let index_gva = com::gpu_va(ib);
                 Some((vertex_gva, index_gva))

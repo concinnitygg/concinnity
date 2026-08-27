@@ -178,7 +178,7 @@ fn boot_world(
     entries: &[serde_json::Value],
 ) -> std::io::Result<()> {
     let blobs_present =
-        || concinnity_store::paths::data_dir().is_some_and(|d| d.join("0").exists());
+        || concinnity_host::store::paths::data_dir().is_some_and(|d| d.join("0").exists());
 
     // Build if the world has content the compiled blobs do not reflect yet.
     if world_exists && !blobs_present() {
@@ -217,7 +217,7 @@ fn boot_world(
 
     // Fall back to an in-memory seed when nothing renderable was loaded, so a
     // window still opens over a black scene.
-    if !app.world().renders() {
+    if !concinnity_engine::ecs::renders(app.world()) {
         let base = if world_exists {
             std::fs::read_to_string(world_path)?
         } else {

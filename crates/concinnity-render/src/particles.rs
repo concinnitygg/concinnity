@@ -6,6 +6,8 @@
 
 use crate::components::ParticleEmitter;
 use crate::render_types::ParticleParams;
+use alloc::vec::Vec;
+use concinnity_core::math::{cos, floor, sqrt};
 
 /// Upper bound on the per-emitter pool the backend will allocate. Each slot
 /// is 32 bytes on the GPU (matching `Particle` in `shaders/particle_types.slang`),
@@ -79,12 +81,12 @@ impl ParticleEmitterRecord {
         let gx = self.gravity[0];
         let gy = self.gravity[1];
         let gz = self.gravity[2];
-        let g_mag = (gx * gx + gy * gy + gz * gz).sqrt();
+        let g_mag = sqrt(gx * gx + gy * gy + gz * gz);
         let g_drift = 0.5 * g_mag * self.lifetime_max * self.lifetime_max;
         let max_size = self.size_start.max(self.size_end);
         // The billboard quad is a square of side `size`, viewed any way; the
         // bounding sphere of a unit square has radius sqrt(2)/2.
-        let billboard_radius = 0.5 * max_size * std::f32::consts::SQRT_2;
+        let billboard_radius = 0.5 * max_size * core::f32::consts::SQRT_2;
         let r = speed_reach + g_drift + billboard_radius;
         let c = self.position;
         (
@@ -156,7 +158,7 @@ pub fn build_particle_records(
             }
         };
         let direction = normalise_direction(e.direction);
-        let spread_cos = (e.spread_deg.clamp(0.0, 180.0).to_radians()).cos();
+        let spread_cos = cos(e.spread_deg.clamp(0.0, 180.0).to_radians());
         let lifetime_min = e.lifetime_min.max(MIN_LIFETIME);
         let lifetime_max = e.lifetime_max.max(lifetime_min);
         let speed_min = e.speed_min.max(0.0);
@@ -183,7 +185,7 @@ pub fn build_particle_records(
 }
 
 fn normalise_direction(d: [f32; 3]) -> [f32; 3] {
-    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let len = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
     if !len.is_finite() || len < 1e-6 {
         // A zero / non-finite direction falls back to world-up so the cone
         // still has a well-defined axis. The asset-side default is `[0, 1, 0]`,
@@ -230,7 +232,7 @@ impl ParticleSpawnState {
         if self.accumulator > max_per_frame {
             self.accumulator = max_per_frame;
         }
-        let whole = self.accumulator.floor() as u32;
+        let whole = floor(self.accumulator) as u32;
         self.accumulator -= whole as f32;
         whole
     }
@@ -443,7 +445,7 @@ mod tests {
         r.size_end = 1.0;
         let (mn, mx) = r.aabb();
         let radius = 0.5 * (mx[0] - mn[0]);
-        let expected = 0.5 * 1.0 * std::f32::consts::SQRT_2;
+        let expected = 0.5 * 1.0 * core::f32::consts::SQRT_2;
         assert!((radius - expected).abs() < 1e-5);
     }
 }

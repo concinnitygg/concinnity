@@ -24,6 +24,7 @@
 // skinned tail is not drawn into a mirror (static + instance + chunk only).
 
 use ash::vk;
+use concinnity_core::gfx::transform::mat4_inverse;
 
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPass, VkDevice};
 
@@ -32,6 +33,7 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::draw::ViewUniforms;
 use super::resources::alloc_descriptor_sets;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
+use concinnity_core::gfx::transform::mat4_mul;
 
 // The engine capacity ceiling for distinct reflection planes: the count the
 // reserved planar targets are sized to. Single-sourced from `gfx::planar_reflection`
@@ -882,7 +884,7 @@ impl VkContext {
         // Recover the (jittered) projection from this frame's view-projection so the
         // mirror render shares the main camera's projection + jitter, keeping the
         // reflection aligned with the reflective fragment's screen-space sample.
-        let proj = super::math::mat4_mul(vp_mat, super::math::mat4_inverse(self.view.matrix));
+        let proj = mat4_mul(vp_mat, mat4_inverse(self.view.matrix));
         let prefilter_mip_count = self.prefilter_mip_count as f32;
         let extent = vk::Extent2D {
             width: set.width,

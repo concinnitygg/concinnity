@@ -16,10 +16,10 @@
 //! [`concinnity_asset::cook`], and the registry half of it in
 //! `concinnity_world::registry::build_only`.
 //!
-//! Systems are not components: every system is internal client code (see the
-//! client's `World::build_internal_systems`), driven by the presence of the
-//! components defined here. The client re-exports this module under the
-//! historical `crate::components::*` paths.
+//! Systems are not components: every system is internal code (see
+//! `World::start`), driven by the presence of the components defined here. The
+//! client re-exports this module under the historical `crate::components::*`
+//! paths.
 
 // Component data types.
 mod animation;
@@ -253,7 +253,7 @@ mod tests {
 
     // Round-trip an asset's defaults through its baked form and the Component
     // hooks. One call executes the type's Default, serialization, `from_baked`,
-    // `inject_name`, and `inject_locator`.
+    // `inject_name`, `inject_locator`, and the frame-exactness check.
     fn exercise<C: Component + Default + serde::Serialize>() {
         let bytes = postcard::to_allocvec(&C::default()).expect("default serializes");
         let mut comp = C::from_baked(&bytes).expect("baked bytes deserialize");
@@ -263,6 +263,17 @@ mod tests {
             offset: 0,
             len: 0,
         });
+
+        // A record written by a schema carrying a field this build no longer
+        // reads leaves the tail of its frame unread. `from_baked` takes the
+        // whole frame or fails.
+        let mut widened = bytes.clone();
+        widened.push(0);
+        assert!(
+            C::from_baked(&widened).is_err(),
+            "{} accepted a record with an unread trailing byte",
+            core::any::type_name::<C>()
+        );
     }
 
     #[test]

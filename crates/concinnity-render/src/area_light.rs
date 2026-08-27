@@ -15,6 +15,8 @@
 use crate::components::RectAreaLight;
 use crate::geometry::glass_quad::plane_basis;
 use crate::render_types::{AreaLightData, MAX_AREA_LIGHTS};
+use alloc::vec;
+use alloc::vec::Vec;
 
 // Per-rect table index: `indices[i]` is the `AreaLightData` slot rect `i` owns,
 // or -1 once the table is full. The value is what `GpuLight.data_index` carries.
@@ -68,6 +70,7 @@ fn area_light_data(light: &RectAreaLight) -> AreaLightData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::vec3::{dot, length};
 
     fn rect(normal: [f32; 3], half_size: [f32; 2]) -> RectAreaLight {
         RectAreaLight {
@@ -75,14 +78,6 @@ mod tests {
             half_size,
             ..RectAreaLight::default()
         }
-    }
-
-    fn len3(v: [f32; 3]) -> f32 {
-        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
-    }
-
-    fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
-        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
     }
 
     #[test]
@@ -104,8 +99,8 @@ mod tests {
     #[test]
     fn edge_vectors_are_scaled_by_the_half_extents() {
         let d = area_light_data(&rect([0.0, 0.0, 1.0], [3.0, 0.5]));
-        assert!((len3(d.right) - 3.0).abs() < 1e-5);
-        assert!((len3(d.up) - 0.5).abs() < 1e-5);
+        assert!((length(d.right) - 3.0).abs() < 1e-5);
+        assert!((length(d.up) - 0.5).abs() < 1e-5);
     }
 
     // The two edges and the normal must stay mutually perpendicular, or the
@@ -119,15 +114,15 @@ mod tests {
             [0.577, 0.577, 0.577],
             [-0.3, 0.9, 0.31],
         ] {
-            let len = len3(n);
+            let len = length(n);
             let unit = [n[0] / len, n[1] / len, n[2] / len];
             let d = area_light_data(&rect(unit, [2.0, 2.0]));
             assert!(
-                dot3(d.right, d.up).abs() < 1e-4,
+                dot(d.right, d.up).abs() < 1e-4,
                 "edges perpendicular: {n:?}"
             );
-            assert!(dot3(d.right, unit).abs() < 1e-4, "right in plane: {n:?}");
-            assert!(dot3(d.up, unit).abs() < 1e-4, "up in plane: {n:?}");
+            assert!(dot(d.right, unit).abs() < 1e-4, "right in plane: {n:?}");
+            assert!(dot(d.up, unit).abs() < 1e-4, "up in plane: {n:?}");
             assert!(d.right.iter().chain(&d.up).all(|v| v.is_finite()));
         }
     }
@@ -149,7 +144,7 @@ mod tests {
         let slots = assign_area_light_slots(&lights);
         let data = build_area_light_data(&lights, &slots);
         assert_eq!(data.len(), 2);
-        assert!((len3(data[0].right) - 5.0).abs() < 1e-5);
-        assert!((len3(data[1].up) - 7.0).abs() < 1e-5);
+        assert!((length(data[0].right) - 5.0).abs() < 1e-5);
+        assert!((length(data[1].up) - 7.0).abs() < 1e-5);
     }
 }

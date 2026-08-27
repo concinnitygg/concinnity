@@ -1,8 +1,8 @@
 //! The engine's transform convention, in one place: the column-major 4x4 layout
-//! every renderer uniform is written in, the `T * R(YXZ) * S` composition joints
-//! and props both build their matrix through, and the quaternion conversions
-//! that let a rotation be interpolated along the shorter arc rather than
-//! component-wise through its Euler angles.
+//! every renderer uniform is written in, the multiply and the two inverses over
+//! it, the `T * R(YXZ) * S` composition joints and props both build their matrix
+//! through, and the quaternion conversions that let a rotation be interpolated
+//! along the shorter arc rather than component-wise through its Euler angles.
 
 use crate::math::{acos, atan2, sin, sin_cos, sqrt};
 
@@ -63,6 +63,76 @@ pub fn mat4_affine_inverse(m: Mat4) -> Mat4 {
     inv[3][2] = -(inv[0][2] * t[0] + inv[1][2] * t[1] + inv[2][2] * t[2]);
     inv[3][3] = 1.0;
     inv
+}
+
+/// Inverse of a general 4x4 matrix, by cofactor expansion. Returns
+/// [`IDENTITY`] when the determinant is singular or non-finite, so a degenerate
+/// input yields a usable matrix instead of spreading NaNs through the pass that
+/// asked. Unlike [`mat4_affine_inverse`] this handles a projection's bottom row,
+/// which is what the screen-space passes need to invert a view-projection and
+/// rebuild world position from depth.
+pub fn mat4_inverse(m: Mat4) -> Mat4 {
+    // Named row-major (aRC = row R, column C) for the standard cofactor layout,
+    // read out of the column-major input and re-emitted column-major below.
+    let a00 = m[0][0];
+    let a01 = m[1][0];
+    let a02 = m[2][0];
+    let a03 = m[3][0];
+    let a10 = m[0][1];
+    let a11 = m[1][1];
+    let a12 = m[2][1];
+    let a13 = m[3][1];
+    let a20 = m[0][2];
+    let a21 = m[1][2];
+    let a22 = m[2][2];
+    let a23 = m[3][2];
+    let a30 = m[0][3];
+    let a31 = m[1][3];
+    let a32 = m[2][3];
+    let a33 = m[3][3];
+
+    let b00 = a00 * a11 - a01 * a10;
+    let b01 = a00 * a12 - a02 * a10;
+    let b02 = a00 * a13 - a03 * a10;
+    let b03 = a01 * a12 - a02 * a11;
+    let b04 = a01 * a13 - a03 * a11;
+    let b05 = a02 * a13 - a03 * a12;
+    let b06 = a20 * a31 - a21 * a30;
+    let b07 = a20 * a32 - a22 * a30;
+    let b08 = a20 * a33 - a23 * a30;
+    let b09 = a21 * a32 - a22 * a31;
+    let b10 = a21 * a33 - a23 * a31;
+    let b11 = a22 * a33 - a23 * a32;
+
+    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    if det.abs() < 1e-20 || !det.is_finite() {
+        return IDENTITY;
+    }
+    let inv_det = 1.0 / det;
+
+    let i00 = (a11 * b11 - a12 * b10 + a13 * b09) * inv_det;
+    let i01 = (-a01 * b11 + a02 * b10 - a03 * b09) * inv_det;
+    let i02 = (a31 * b05 - a32 * b04 + a33 * b03) * inv_det;
+    let i03 = (-a21 * b05 + a22 * b04 - a23 * b03) * inv_det;
+    let i10 = (-a10 * b11 + a12 * b08 - a13 * b07) * inv_det;
+    let i11 = (a00 * b11 - a02 * b08 + a03 * b07) * inv_det;
+    let i12 = (-a30 * b05 + a32 * b02 - a33 * b01) * inv_det;
+    let i13 = (a20 * b05 - a22 * b02 + a23 * b01) * inv_det;
+    let i20 = (a10 * b10 - a11 * b08 + a13 * b06) * inv_det;
+    let i21 = (-a00 * b10 + a01 * b08 - a03 * b06) * inv_det;
+    let i22 = (a30 * b04 - a31 * b02 + a33 * b00) * inv_det;
+    let i23 = (-a20 * b04 + a21 * b02 - a23 * b00) * inv_det;
+    let i30 = (-a10 * b09 + a11 * b07 - a12 * b06) * inv_det;
+    let i31 = (a00 * b09 - a01 * b07 + a02 * b06) * inv_det;
+    let i32 = (-a30 * b03 + a31 * b01 - a32 * b00) * inv_det;
+    let i33 = (a20 * b03 - a21 * b01 + a22 * b00) * inv_det;
+
+    [
+        [i00, i10, i20, i30],
+        [i01, i11, i21, i31],
+        [i02, i12, i22, i32],
+        [i03, i13, i23, i33],
+    ]
 }
 
 /// Column-major 3x3 rotation matrix, `m[col][row]`.
@@ -300,6 +370,52 @@ mod tests {
         // NaNs out of the joint matrices rather than propagating them.
         let m = trs_matrix([1.0, 2.0, 3.0], [10.0, 20.0, 30.0], [1.0, 0.0, 1.0]);
         assert_eq!(mat4_affine_inverse(m), IDENTITY);
+    }
+
+    #[test]
+    fn general_inverse_round_trips_a_projection_and_a_view() {
+        // The screen-space passes invert a view-projection, whose bottom row is
+        // not [0, 0, 0, 1], so mat4_affine_inverse cannot serve them.
+        let proj = crate::gfx::projection::perspective_rh(75.0f32.to_radians(), 1.6, 0.1, 500.0);
+        let view: Mat4 = [
+            [0.92388, 0.0, -0.38268, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.38268, 0.0, 0.92388, 0.0],
+            [-1.5, -0.7, 4.0, 1.0],
+        ];
+        for m in [proj, view, mat4_mul(proj, view)] {
+            for id in [mat4_mul(m, mat4_inverse(m)), mat4_mul(mat4_inverse(m), m)] {
+                for col in 0..4 {
+                    for row in 0..4 {
+                        assert!(
+                            (id[col][row] - IDENTITY[col][row]).abs() < 1e-3,
+                            "[{col}][{row}]: {}",
+                            id[col][row]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // The one place the four copies this replaced disagreed: the planar-reflection
+    // copy guarded on determinant magnitude alone, which a NaN slips straight
+    // through. Everything else about them was character-identical.
+    #[test]
+    fn general_inverse_falls_back_on_a_singular_or_non_finite_matrix() {
+        // A zero column is singular; the fallback keeps the inverted VP usable
+        // rather than filling a screen-space pass's uniforms with NaNs.
+        let mut singular = IDENTITY;
+        singular[1] = [0.0; 4];
+        assert_eq!(mat4_inverse(singular), IDENTITY);
+        // A non-finite entry makes the determinant NaN, which no magnitude test
+        // catches on its own: `NaN.abs() < 1e-20` is false.
+        let mut nan = IDENTITY;
+        nan[0][0] = f32::NAN;
+        assert_eq!(mat4_inverse(nan), IDENTITY);
+        let mut inf = IDENTITY;
+        inf[2][2] = f32::INFINITY;
+        assert_eq!(mat4_inverse(inf), IDENTITY);
     }
 
     #[test]

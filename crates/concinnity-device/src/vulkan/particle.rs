@@ -1043,7 +1043,7 @@ impl VkContext {
             .framebuffer(resources.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         // Negative-height viewport flips clip-space Y to match the main +
-        // shadow + decal passes (the engine's `perspective()` produces +Y-up
+        // shadow + decal passes (the engine's `perspective_rh()` produces +Y-up
         // clip coords, OpenGL-style; the Vulkan framebuffer has +Y down, so
         // the flip happens in the viewport). The fog pass dodges this with
         // a positive-height viewport because it emits NDC-space verts

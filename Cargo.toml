@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.18.60"
+version = "0.18.62"
 description = "Asset-driven application world framework"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -13,23 +13,19 @@ categories = ["game-engines", "graphics", "rendering::engine"]
 
 [workspace.dependencies]
 concinnity-asset = { path = "crates/concinnity-asset", version = "0.18" }
-concinnity-audio = { path = "crates/concinnity-audio", version = "0.18" }
 concinnity-cli = { path = "crates/concinnity-cli", version = "0.18" }
 concinnity-cook = { path = "crates/concinnity-cook", version = "0.18" }
 concinnity-core = { path = "crates/concinnity-core", version = "0.18" }
-concinnity-cpu = { path = "crates/concinnity-cpu", version = "0.18" }
 concinnity-device = { path = "crates/concinnity-device", version = "0.18" }
-concinnity-docs = { path = "crates/concinnity-docs", version = "0.18" }
 concinnity-editor = { path = "crates/concinnity-editor", version = "0.18" }
 concinnity-engine = { path = "crates/concinnity-engine", version = "0.18" }
-concinnity-font = { path = "crates/concinnity-font", version = "0.18" }
+concinnity-host = { path = "crates/concinnity-host", version = "0.18" }
 concinnity-memory = { path = "crates/concinnity-memory", version = "0.18" }
 concinnity-physics = { path = "crates/concinnity-physics", version = "0.18" }
 concinnity-render = { path = "crates/concinnity-render", version = "0.18" }
 concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.18" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.18" }
 concinnity-slang = { path = "crates/concinnity-slang", version = "0.18" }
-concinnity-store = { path = "crates/concinnity-store", version = "0.18" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.18" }
 concinnity-world = { path = "crates/concinnity-world", version = "0.18" }
 
@@ -70,7 +66,6 @@ members = [
 
 default-members = [
     ".",
-    "crates/*",
 ]
 
 [package.metadata.docs.rs]
@@ -103,11 +98,6 @@ concinnity-toolchain = { workspace = true }
 [[example]]
 name = "cube"
 path = "examples/cube.rs"
-required-features = ["cook"]
-
-[[example]]
-name = "customize_character"
-path = "examples/customize_character/main.rs"
 required-features = ["cook"]
 
 [lints]

@@ -8,7 +8,16 @@
 // costs nothing -- no catch-up burst by construction.
 
 use crate::ecs::SimTiming;
+use std::sync::OnceLock;
 use std::time::Instant;
+
+// Monotonic micros since the first call, for the `Clock` resource the world's
+// step loop times each system with. The epoch is process-wide because the
+// resource carries a plain function pointer, and only differences are read.
+pub(crate) fn monotonic_micros() -> u64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64
+}
 
 // Most fixed ticks one frame may run. Accumulated time past this is dropped,
 // so a long hitch degrades to slow motion instead of a tick spiral where each
@@ -64,6 +73,14 @@ mod tests {
     use super::*;
 
     const DT: f32 = SimTiming::TICK_DT;
+
+    // The process clock only ever moves forward, which is the whole contract
+    // the step loop's per-system deltas rest on.
+    #[test]
+    fn monotonic_micros_never_goes_backwards() {
+        let first = monotonic_micros();
+        assert!(monotonic_micros() >= first);
+    }
 
     #[test]
     fn accumulates_whole_ticks_and_keeps_the_remainder() {

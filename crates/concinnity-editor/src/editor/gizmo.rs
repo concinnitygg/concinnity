@@ -11,7 +11,7 @@ use super::registry::ID_BASE;
 use crate::components::Sprite;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-use concinnity_cpu::gfx::pick::PickRay;
+use concinnity_core::gfx::pick::PickRay;
 
 // Reserved id family: the next free block after the highlight's 0xC00.
 const GIZMO_BASE: u32 = ID_BASE + 0xD00;

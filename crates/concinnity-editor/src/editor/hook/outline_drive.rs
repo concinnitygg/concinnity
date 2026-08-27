@@ -13,7 +13,7 @@ use crate::components::{
     Collider, PointLight, RectAreaLight, RectAreaLightGeometry, ReflectionProbe,
     SPOT_MAX_ANGLE_DEG, SpotLight, SpotLightGeometry, Transform, TriggerVolume,
 };
-use concinnity_cpu::gfx::lines::Line;
+use concinnity_core::gfx::lines::Line;
 use outlines::shapes::{self, Stroke};
 
 // What one entity's shape generator reads: its live entity, its authored

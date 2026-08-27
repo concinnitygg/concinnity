@@ -26,6 +26,7 @@
 // instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
 // (the bindless face render omits the skinned tail), exactly like the probe capture.
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -39,6 +40,7 @@ use super::texture::{
     HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
     create_uav_buffer, transition_barrier, write_hdr_srv,
 };
+use concinnity_core::gfx::transform::mat4_mul;
 
 // The engine capacity ceiling for distinct reflection planes: the count the
 // reserved planar targets + resolve SRVs are sized to. Single-sourced from
@@ -411,8 +413,7 @@ impl DxContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj =
-            super::math::mat4_mul(params.vp_mat, super::math::mat4_inverse(self.view.matrix));
+        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.view.matrix));
         let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
         let (w, h) = (self.extent.render_width, self.extent.render_height);
 

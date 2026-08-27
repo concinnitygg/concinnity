@@ -9,6 +9,7 @@
 use crate::cli;
 use concinnity_editor::{WatchTarget, debug_client};
 use concinnity_engine::app::dev_flags;
+use concinnity_engine::app::dev_flags::{QualityPreset, RtDynamicMode};
 
 use clap::{Parser, Subcommand};
 
@@ -114,6 +115,87 @@ struct Cli {
     command: Commands,
 }
 
+// The argv face of the launch-time render knobs the engine reads through
+// `dev_flags`. Each is a diagnostic: omitting it leaves the shipping behaviour,
+// and none is persisted, so a probe run can force one without writing settings.
+// Flattened into every command that launches a world (`run` / `debug` /
+// `editor`); `arm` is what hands them to the engine before the world is built.
+#[derive(Debug, Default, clap::Args)]
+pub(crate) struct RenderArgs {
+    /// Force the master graphics-quality preset for this launch, unpersisted
+    // Outranks the settings-menu choice in .concinnity/settings.bin. Only the
+    // `ultra` ceiling permits ray-traced reflections, so an RT probe that omits
+    // this measures a frame with RT clamped off and no log line saying so.
+    #[arg(long, value_enum)]
+    pub(crate) quality_preset: Option<QualityPresetArg>,
+
+    /// How the ray-tracing acceleration structure tracks moving props
+    // Omitted = `auto`, the dirty-gated TLAS rebuild a shipped run uses.
+    #[arg(long, value_enum)]
+    pub(crate) rt_dynamic: Option<RtDynamicArg>,
+
+    /// Whether skinned meshes join the ray-tracing acceleration structure
+    // Omitted = in. `--rt-skinned-geometry false` leaves the BVH over static +
+    // instanced geometry only, which isolates the skinned trace path.
+    #[arg(long)]
+    pub(crate) rt_skinned_geometry: Option<bool>,
+}
+
+impl RenderArgs {
+    // Hand the requests to the engine. Called before the world is built, since
+    // graphics init reads them once while resolving the render settings.
+    fn arm(&self) {
+        dev_flags::set_quality_preset(self.quality_preset.map(Into::into));
+        dev_flags::set_rt_dynamic(self.rt_dynamic.map(Into::into));
+        dev_flags::set_rt_skinned_geometry(self.rt_skinned_geometry);
+    }
+}
+
+// The argv face of the engine's `QualityPreset`: the value-enum derive lives
+// here so concinnity-engine carries no clap dependency.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub(crate) enum QualityPresetArg {
+    Auto,
+    Low,
+    Medium,
+    High,
+    Ultra,
+    Custom,
+}
+
+impl From<QualityPresetArg> for QualityPreset {
+    fn from(p: QualityPresetArg) -> Self {
+        match p {
+            QualityPresetArg::Auto => QualityPreset::Auto,
+            QualityPresetArg::Low => QualityPreset::Low,
+            QualityPresetArg::Medium => QualityPreset::Medium,
+            QualityPresetArg::High => QualityPreset::High,
+            QualityPresetArg::Ultra => QualityPreset::Ultra,
+            QualityPresetArg::Custom => QualityPreset::Custom,
+        }
+    }
+}
+
+// The argv face of the render layer's `RtDynamicMode`, for the same reason.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub(crate) enum RtDynamicArg {
+    Off,
+    Auto,
+    Rebuild,
+    Tlas,
+}
+
+impl From<RtDynamicArg> for RtDynamicMode {
+    fn from(m: RtDynamicArg) -> Self {
+        match m {
+            RtDynamicArg::Off => RtDynamicMode::Off,
+            RtDynamicArg::Auto => RtDynamicMode::Auto,
+            RtDynamicArg::Rebuild => RtDynamicMode::Rebuild,
+            RtDynamicArg::Tlas => RtDynamicMode::Tlas,
+        }
+    }
+}
+
 #[derive(Debug, clap::Args)]
 pub(crate) struct DebugArgs {
     /// Query or drive a running `cn debug` server instead of starting one
@@ -145,6 +227,9 @@ pub(crate) struct DebugArgs {
     // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
     pub(crate) validation: Option<bool>,
+
+    #[command(flatten)]
+    pub(crate) render: RenderArgs,
 }
 
 // Client-side `cn debug` subcommands. Each connects to a running server's
@@ -258,6 +343,9 @@ pub(crate) struct EditorArgs {
     // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
     pub(crate) validation: Option<bool>,
+
+    #[command(flatten)]
+    pub(crate) render: RenderArgs,
 }
 
 #[derive(Debug, clap::Args)]
@@ -290,6 +378,9 @@ pub(crate) struct RunArgs {
     // Stop after this many frames (overrides GraphicsConfig.max_frames)
     #[arg(long)]
     pub(crate) frames: Option<u64>,
+
+    #[command(flatten)]
+    pub(crate) render: RenderArgs,
 }
 
 #[derive(Debug, clap::Args)]
@@ -473,6 +564,7 @@ pub(crate) fn run() -> std::io::Result<()> {
         Commands::Build(args) => cli::build(args.file.as_deref()),
         Commands::Run(args) => {
             dev_flags::set_validation(args.validation);
+            args.render.arm();
             concinnity_engine::app::run(concinnity_engine::app::run::RunOptions {
                 mode: if args.serial {
                     concinnity_engine::app::run::PipelineMode::Serial
@@ -500,12 +592,14 @@ pub(crate) fn run() -> std::io::Result<()> {
             None => {
                 dev_flags::set_enabled(true);
                 dev_flags::set_validation(args.validation);
+                args.render.arm();
                 let port = args.debug_port.unwrap_or(8777);
                 concinnity_editor::run_debug(args.file.as_deref(), port)
             }
         },
         Commands::Editor(args) => {
             dev_flags::set_validation(args.validation);
+            args.render.arm();
             // The editor is a dev session: arm the same dev flags the
             // `cn debug` host sets (above) so init captures hot-reload
             // sources and the backend takes its disk-first shader path.
@@ -552,6 +646,87 @@ mod tests {
     #[test]
     fn cli_config_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    // Every world-launching command carries the render flags, and each one
+    // defaults to absent (which the engine resolves to today's behaviour).
+    #[test]
+    fn the_render_flags_default_to_absent_on_every_launch_command() {
+        for argv in [
+            vec!["concinnity", "run"],
+            vec!["concinnity", "debug"],
+            vec!["concinnity", "editor"],
+        ] {
+            let cli = Cli::try_parse_from(&argv).unwrap();
+            let render = match &cli.command {
+                Commands::Run(a) => &a.render,
+                Commands::Debug(a) => &a.render,
+                Commands::Editor(a) => &a.render,
+                _ => panic!("expected a launch command for {argv:?}"),
+            };
+            assert!(render.quality_preset.is_none(), "{argv:?}");
+            assert!(render.rt_dynamic.is_none(), "{argv:?}");
+            assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn the_render_flags_parse_on_every_launch_command() {
+        for command in ["run", "debug", "editor"] {
+            let cli = Cli::try_parse_from([
+                "concinnity",
+                command,
+                "--quality-preset",
+                "ultra",
+                "--rt-dynamic",
+                "rebuild",
+                "--rt-skinned-geometry",
+                "false",
+            ])
+            .unwrap();
+            let render = match &cli.command {
+                Commands::Run(a) => &a.render,
+                Commands::Debug(a) => &a.render,
+                Commands::Editor(a) => &a.render,
+                _ => panic!("expected a launch command for {command}"),
+            };
+            assert!(
+                matches!(render.quality_preset, Some(QualityPresetArg::Ultra)),
+                "{command}"
+            );
+            assert!(
+                matches!(render.rt_dynamic, Some(RtDynamicArg::Rebuild)),
+                "{command}"
+            );
+            assert_eq!(render.rt_skinned_geometry, Some(false), "{command}");
+        }
+    }
+
+    // The value enums are the argv face of the engine types, so a variant added
+    // to one and not the other has to fail here rather than at a launch.
+    #[test]
+    fn the_render_value_enums_map_onto_the_engine_types() {
+        use clap::ValueEnum;
+
+        let presets: Vec<QualityPreset> = QualityPresetArg::value_variants()
+            .iter()
+            .map(|&a| a.into())
+            .collect();
+        assert_eq!(presets, QualityPreset::ALL.to_vec());
+
+        let modes: Vec<RtDynamicMode> = RtDynamicArg::value_variants()
+            .iter()
+            .map(|&a| a.into())
+            .collect();
+        assert_eq!(
+            modes,
+            vec![
+                RtDynamicMode::Off,
+                RtDynamicMode::Auto,
+                RtDynamicMode::Rebuild,
+                RtDynamicMode::Tlas,
+            ]
+        );
     }
 
     #[test]

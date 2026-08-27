@@ -22,10 +22,11 @@
 //! all use RH view matrices with [0, 1] depth in their orthographic
 //! projections, so the same VPs are valid for every backend's shadow sampling.
 
-use crate::mat::{
-    IDENTITY4, add3, cross3, dot3, look_at, mat4_mul, normalize3, ortho_rh, scale3, sub3,
-};
+use crate::mat::{IDENTITY4, look_at, normalize3, ortho_rh};
 use crate::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::math::vec3::{add, cross, dot, scale, sub};
+use concinnity_core::math::{powf, round, sqrt, tan};
 
 const SPLIT_LAMBDA: f32 = 0.5;
 
@@ -91,7 +92,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
     let mut splits = [-1.0_f32; NUM_SHADOW_CASCADES];
     for (i, split) in splits.iter_mut().take(active).enumerate() {
         let p = (i + 1) as f32 / cascade_count;
-        let log = near * (shadow_far / near).powf(p);
+        let log = near * powf(shadow_far / near, p);
         let lin = near + (shadow_far - near) * p;
         *split = SPLIT_LAMBDA * log + (1.0 - SPLIT_LAMBDA) * lin;
     }
@@ -104,7 +105,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
     let up = [view[0][1], view[1][1], view[2][1]];
     let forward = [-view[0][2], -view[1][2], -view[2][2]];
 
-    let tan_half_v = (fov_y_rad * 0.5).tan();
+    let tan_half_v = tan(fov_y_rad * 0.5);
     let tan_half_h = tan_half_v * aspect;
 
     let mut light_vps = [IDENTITY4; NUM_SHADOW_CASCADES];
@@ -119,17 +120,17 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         let w_near = near_d * tan_half_h;
         let h_far = far_d * tan_half_v;
         let w_far = far_d * tan_half_h;
-        let cn = add3(cam_pos, scale3(forward, near_d));
-        let cf = add3(cam_pos, scale3(forward, far_d));
+        let cn = add(cam_pos, scale(forward, near_d));
+        let cf = add(cam_pos, scale(forward, far_d));
         let corners: [[f32; 3]; 8] = [
-            add3(add3(cn, scale3(right, -w_near)), scale3(up, -h_near)),
-            add3(add3(cn, scale3(right, w_near)), scale3(up, -h_near)),
-            add3(add3(cn, scale3(right, w_near)), scale3(up, h_near)),
-            add3(add3(cn, scale3(right, -w_near)), scale3(up, h_near)),
-            add3(add3(cf, scale3(right, -w_far)), scale3(up, -h_far)),
-            add3(add3(cf, scale3(right, w_far)), scale3(up, -h_far)),
-            add3(add3(cf, scale3(right, w_far)), scale3(up, h_far)),
-            add3(add3(cf, scale3(right, -w_far)), scale3(up, h_far)),
+            add(add(cn, scale(right, -w_near)), scale(up, -h_near)),
+            add(add(cn, scale(right, w_near)), scale(up, -h_near)),
+            add(add(cn, scale(right, w_near)), scale(up, h_near)),
+            add(add(cn, scale(right, -w_near)), scale(up, h_near)),
+            add(add(cf, scale(right, -w_far)), scale(up, -h_far)),
+            add(add(cf, scale(right, w_far)), scale(up, -h_far)),
+            add(add(cf, scale(right, w_far)), scale(up, h_far)),
+            add(add(cf, scale(right, -w_far)), scale(up, h_far)),
         ];
 
         // Bounding sphere of the corners.
@@ -139,16 +140,16 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
             centre[1] += c[1];
             centre[2] += c[2];
         }
-        centre = scale3(centre, 1.0 / 8.0);
+        centre = scale(centre, 1.0 / 8.0);
         let mut r2 = 0.0_f32;
         for c in &corners {
-            let d = sub3(*c, centre);
+            let d = sub(*c, centre);
             let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
             if dd > r2 {
                 r2 = dd;
             }
         }
-        let radius = r2.sqrt().max(1e-3);
+        let radius = sqrt(r2).max(1e-3);
 
         // Stable up axis: avoid parallel to light direction.
         let up_l = if l_to[1].abs() > 0.95 {
@@ -159,9 +160,9 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
 
         // Light-space basis matching `look_at` below: f points from the light
         // toward the scene, r and u span the shadow texel grid.
-        let f = scale3(l_to, -1.0);
-        let r = normalize3(cross3(f, up_l));
-        let u = cross3(r, f);
+        let f = scale(l_to, -1.0);
+        let r = normalize3(cross(f, up_l));
+        let u = cross(r, f);
 
         // Texel-grid snap. Quantise the cascade centre along the light's right
         // and up axes to whole shadow texels so the texel grid stays anchored in
@@ -171,11 +172,11 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         // is a no-op, because look_at always maps the centre onto the optical
         // axis (its light-space xy is identically zero).
         let texel_size = 2.0 * radius / shadow_map_size.max(1) as f32;
-        let cx = dot3(r, centre);
-        let cy = dot3(u, centre);
-        let snap_dx = (cx / texel_size).round() * texel_size - cx;
-        let snap_dy = (cy / texel_size).round() * texel_size - cy;
-        let centre = add3(add3(centre, scale3(r, snap_dx)), scale3(u, snap_dy));
+        let cx = dot(r, centre);
+        let cy = dot(u, centre);
+        let snap_dx = round(cx / texel_size) * texel_size - cx;
+        let snap_dy = round(cy / texel_size) * texel_size - cy;
+        let centre = add(add(centre, scale(r, snap_dx)), scale(u, snap_dy));
 
         // Build the light view from the snapped centre and an ortho projection
         // enclosing the sphere. The eye sits at +radius along the light
@@ -191,7 +192,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         // camera. The extension grows only the depth range, not the XY
         // footprint, so shadow-map resolution is unchanged.
         let caster_extent = shadow_far;
-        let light_eye = add3(centre, scale3(l_to, radius));
+        let light_eye = add(centre, scale(l_to, radius));
         let light_view = look_at(light_eye, centre, up_l);
         let proj = ortho_rh(
             -radius,
@@ -236,7 +237,7 @@ mod tests {
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
             cam_pos: [0.0, 0.0, 0.0],
-            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            fov_y_rad: core::f32::consts::FRAC_PI_2,
             aspect: 1.0,
             near: 0.1,
             shadow_distance: 80.0,
@@ -263,7 +264,7 @@ mod tests {
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
             cam_pos: [0.0, 0.0, 0.0],
-            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            fov_y_rad: core::f32::consts::FRAC_PI_2,
             aspect: 1.0,
             near: 0.1,
             shadow_distance: 80.0,
@@ -284,7 +285,7 @@ mod tests {
         let one = compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
             cam_pos: [0.0, 0.0, 0.0],
-            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            fov_y_rad: core::f32::consts::FRAC_PI_2,
             aspect: 1.0,
             near: 0.1,
             shadow_distance: 80.0,
@@ -303,7 +304,7 @@ mod tests {
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
             cam_pos: [0.0, 0.0, 0.0],
-            fov_y_rad: std::f32::consts::FRAC_PI_2,
+            fov_y_rad: core::f32::consts::FRAC_PI_2,
             aspect: 1.0,
             near: 5.0,
             shadow_distance: 1.0,
@@ -321,7 +322,7 @@ mod tests {
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
             cam_pos: [10.0, 5.0, -3.0],
-            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            fov_y_rad: core::f32::consts::FRAC_PI_4,
             aspect: 16.0 / 9.0,
             near: 0.1,
             shadow_distance: 80.0,
@@ -345,7 +346,7 @@ mod tests {
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
             cam_pos: [0.0, 0.0, 0.0],
-            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            fov_y_rad: core::f32::consts::FRAC_PI_4,
             aspect: 16.0 / 9.0,
             near: 0.1,
             shadow_distance: 80.0,
@@ -378,7 +379,7 @@ mod tests {
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view,
             cam_pos: cam,
-            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            fov_y_rad: core::f32::consts::FRAC_PI_4,
             aspect: 16.0 / 9.0,
             near: 0.1,
             shadow_distance: 80.0,
@@ -437,7 +438,7 @@ mod tests {
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view,
             cam_pos: cam,
-            fov_y_rad: std::f32::consts::FRAC_PI_4,
+            fov_y_rad: core::f32::consts::FRAC_PI_4,
             aspect: 16.0 / 9.0,
             near: 0.1,
             shadow_distance: 80.0,

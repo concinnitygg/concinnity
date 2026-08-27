@@ -23,13 +23,11 @@
 //   matrix entry = the 4 non-trivial entries of Minv, normalised so Minv[1][1] = 1
 //   magnitude entry = (directional albedo, Fresnel weight) for the Schlick split
 
-/// Edge of the square lookup table. 64 matches the resolution the parameterisation
-/// was chosen for: finer buys little once `sqrt(1 - cos)` has spread the grazing
-/// angles out, and the fit cost grows with the square.
-pub const LTC_LUT_SIZE: usize = 64;
-
 // Number of stratified samples per axis when estimating the fit error. The error
 // estimator draws this many squared samples from each of two distributions.
+use alloc::vec;
+use alloc::vec::Vec;
+
 const ERROR_SAMPLES: usize = 16;
 // Stratified samples per axis for the magnitude / average-direction estimate.
 const AVG_SAMPLES: usize = 32;
@@ -119,7 +117,7 @@ fn ggx_eval(v: Vec3, l: Vec3, alpha: f32) -> (f32, f32) {
     // GGX NDF written through the slope form, which stays stable as h[2] -> 0.
     let mut d = 1.0 / (1.0 + (slope_x * slope_x + slope_y * slope_y) / (alpha * alpha));
     d = d * d;
-    d /= std::f32::consts::PI * alpha * alpha * h[2].powi(4);
+    d /= core::f32::consts::PI * alpha * alpha * h[2].powi(4);
 
     let vh = dot(v, h);
     if vh <= 0.0 {
@@ -133,7 +131,7 @@ fn ggx_eval(v: Vec3, l: Vec3, alpha: f32) -> (f32, f32) {
 
 // Sample the GGX NDF and reflect the view vector about the sampled normal.
 fn ggx_sample(v: Vec3, alpha: f32, u1: f32, u2: f32) -> Vec3 {
-    let phi = 2.0 * std::f32::consts::PI * u1;
+    let phi = 2.0 * core::f32::consts::PI * u1;
     let r = alpha * (u2 / (1.0 - u2).max(1.0e-9)).sqrt();
     let h = normalize([r * phi.cos(), r * phi.sin(), 1.0]);
     let vh = dot(h, v);
@@ -226,14 +224,14 @@ impl Ltc {
         let len = dot(back, back).sqrt();
         // Jacobian of the transform at this direction.
         let jacobian = self.det / (len * len * len);
-        let d = original[2] / std::f32::consts::PI;
+        let d = original[2] / core::f32::consts::PI;
         self.magnitude * d / jacobian
     }
 
     // Draw a direction from the transformed distribution.
     fn sample(&self, u1: f32, u2: f32) -> Vec3 {
         let theta = u1.sqrt().acos();
-        let phi = 2.0 * std::f32::consts::PI * u2;
+        let phi = 2.0 * core::f32::consts::PI * u2;
         normalize(self.matrix.mul_vec([
             theta.sin() * phi.cos(),
             theta.sin() * phi.sin(),
@@ -551,8 +549,8 @@ mod tests {
             let mut total = 0.0_f64;
             for j in 0..n {
                 for i in 0..n {
-                    let theta = (i as f32 + 0.5) / n as f32 * std::f32::consts::FRAC_PI_2;
-                    let phi = (j as f32 + 0.5) / n as f32 * 2.0 * std::f32::consts::PI;
+                    let theta = (i as f32 + 0.5) / n as f32 * core::f32::consts::FRAC_PI_2;
+                    let phi = (j as f32 + 0.5) / n as f32 * 2.0 * core::f32::consts::PI;
                     let h = [
                         theta.sin() * phi.cos(),
                         theta.sin() * phi.sin(),
@@ -563,9 +561,9 @@ mod tests {
                     let mut d =
                         1.0 / (1.0 + (slope_x * slope_x + slope_y * slope_y) / (alpha * alpha));
                     d = d * d;
-                    d /= std::f32::consts::PI * alpha * alpha * h[2].powi(4);
-                    let d_omega = (std::f32::consts::FRAC_PI_2 / n as f32)
-                        * (2.0 * std::f32::consts::PI / n as f32)
+                    d /= core::f32::consts::PI * alpha * alpha * h[2].powi(4);
+                    let d_omega = (core::f32::consts::FRAC_PI_2 / n as f32)
+                        * (2.0 * core::f32::consts::PI / n as f32)
                         * theta.sin();
                     total += (d * h[2] * d_omega) as f64;
                 }

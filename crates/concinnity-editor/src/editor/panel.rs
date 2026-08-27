@@ -1195,7 +1195,7 @@ mod tests {
         ONCE.call_once(|| {
             let dir = std::env::temp_dir().join(format!("cn-editor-tests-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&dir);
-            concinnity_store::paths::set_state_dir(dir);
+            concinnity_host::store::paths::set_state_dir(dir);
         });
     }
 

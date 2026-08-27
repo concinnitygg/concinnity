@@ -21,6 +21,7 @@ pub(in crate::metal) mod main;
 mod shadow;
 mod spot_shadow;
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _};
@@ -31,8 +32,9 @@ use crate::gfx::rt_reflections::RtParamsInputs;
 
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
-use super::math::{mat4_mul, perspective};
 use super::uniforms::*;
+use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::transform::mat4_mul;
 use concinnity_render::uniforms::*;
 
 // One term of the Halton low-discrepancy sequence. Used to drive the
@@ -49,13 +51,6 @@ fn halton(mut index: u32, base: u32) -> f32 {
     r
 }
 
-// Diagnostic toggle (`CN_RT_NOSKIN=1`): keep skinned geometry out of the RT
-// reflection BVH entirely (static + instanced clusters only). Read once. Lets us
-// confirm whether the skinned trace path is what page-faults the reflection pass.
-fn rt_no_skin() -> bool {
-    static NO_SKIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *NO_SKIN.get_or_init(|| std::env::var("CN_RT_NOSKIN").is_ok())
-}
 impl MtlContext {
     // Pump the NSEvent queue and encode one frame to the GPU.
     //
@@ -321,7 +316,7 @@ impl MtlContext {
         // render encoder, because the cull compute pass needs the frustum
         // before the render pass begins.
         let aspect = cascade_aspect;
-        let proj = perspective(fov_y_radians, aspect, near, far);
+        let proj = perspective_rh(fov_y_radians, aspect, near, far);
         // This frame's un-jittered VP, captured before the graph runs so the
         // two-pass phase-2 cull (`encode_cull_phase2`, dispatched inside
         // `execute_graph`) can project AABBs through it against the pyramid the
@@ -360,7 +355,7 @@ impl MtlContext {
         // threaded through `GraphFrameParams` to every pass that reconstructs a
         // world-space position from depth (fog, decals, raymarch, transparent),
         // instead of each pass re-inverting `vp` independently.
-        let inv_vp = super::math::mat4_inverse(vp);
+        let inv_vp = mat4_inverse(vp);
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
 
         // Resolve the visible set for the legacy CPU draw path, the TAA
@@ -555,7 +550,7 @@ impl MtlContext {
             // the jitter-free history, so the fog flickers (a moving moire). The
             // un-jittered inv_vp keeps the volume stable frame to frame; its offset
             // versus the jittered depth buffer is far below the coarse froxel grid.
-            let fog_inv_vp = super::math::mat4_inverse(mat4_mul(proj, self.view.matrix));
+            let fog_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
             fog.params(fog_inv_vp, cam_pos, sun.direction, sun_color, viewport)
         });
         // FogFroxel volume extras: view matrix + volume dimensions + near/far
@@ -585,7 +580,7 @@ impl MtlContext {
         // and the LightCull graph node is omitted. Stored on self so the shared
         // main-pass bind can push it; a local copy feeds the LightCull arm.
         let clustered = self.light_cull.pipeline.is_some();
-        let cluster_inv_vp = super::math::mat4_inverse(mat4_mul(proj, self.view.matrix));
+        let cluster_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
         self.cluster_params = crate::gfx::render_types::ClusterParams {
             inv_view_proj: cluster_inv_vp,
             cam_pos,
@@ -1126,7 +1121,7 @@ impl MtlContext {
         // static BLAS; a full `rebuild_rt_accel` is used only to seed the BVH the
         // first frame after `upload_skinned` (the init build is static-only) or
         // when the `Rebuild` diagnostic forces a from-scratch build every frame.
-        let has_skinned = !rt_no_skin()
+        let has_skinned = self.rt.skinned_geometry
             && !self.skinned.draw_objects.is_empty()
             && self.rt.skin_pipeline.is_some();
         if has_skinned {
@@ -1255,7 +1250,7 @@ impl MtlContext {
             &self.rt.skin_pipeline,
         ) {
             (Some(svb), Some(sib), Some(pipe))
-                if !self.skinned.draw_objects.is_empty() && !rt_no_skin() =>
+                if !self.skinned.draw_objects.is_empty() && self.rt.skinned_geometry =>
             {
                 Some(SkinnedRtInputs {
                     objects: &self.skinned.draw_objects,

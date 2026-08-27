@@ -11,6 +11,7 @@ use super::passes::PassId;
 use super::types::{
     BufferDesc, BufferHandle, PassKind, ResourceId, ResourceOrigin, TextureDesc, TextureHandle,
 };
+use alloc::vec::Vec;
 
 // One entry in the builder's resource arena. Texture and buffer kinds
 // live in the same Vec so a `ResourceId` is unique across both, which

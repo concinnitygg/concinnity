@@ -11,9 +11,9 @@
 
 use crate::pipeline::PipelineResult;
 use concinnity_core::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
-use concinnity_cpu::build::texture as texture_payload;
-use concinnity_cpu::build::texture::{TextureFormat, downscale_rgba};
-use concinnity_cpu::gfx::raster;
+use concinnity_core::build::texture as texture_payload;
+use concinnity_core::build::texture::{TextureFormat, downscale_rgba};
+use concinnity_core::gfx::raster;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
@@ -41,7 +41,7 @@ pub(crate) struct ThumbReport {
 
 // Bake into the project's thumbnails directory.
 pub(crate) fn bake_thumbnails(result: &PipelineResult) -> std::io::Result<ThumbReport> {
-    let dir = concinnity_store::paths::thumbnails_dir().ok_or_else(|| {
+    let dir = concinnity_host::store::paths::thumbnails_dir().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no project state directory to bake thumbnails into",
@@ -110,7 +110,7 @@ pub(crate) fn bake_thumbnails_in(
             continue;
         };
         let Ok((verts, indices, _)) =
-            concinnity_cpu::gfx::mesh_payload::deserialise_with_lods(bytes)
+            concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes)
         else {
             report.skipped += 1;
             continue;
@@ -193,7 +193,7 @@ fn bake_models(
                 continue;
             };
             let Ok((verts, indices, _)) =
-                concinnity_cpu::gfx::mesh_payload::deserialise_with_lods(bytes)
+                concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes)
             else {
                 continue;
             };
@@ -279,7 +279,7 @@ fn texture_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 // A tonemapped face of an environment map's prefilter chain: the mip whose
 // face size is nearest the thumbnail budget.
 fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let view = concinnity_cpu::build::environment_map::deserialise(payload).ok()?;
+    let view = concinnity_core::build::environment_map::deserialise(payload).ok()?;
     let (mip_index, face) = view
         .prefilter_mip_bytes
         .iter()
@@ -434,14 +434,15 @@ mod tests {
     // A tiny RGBA8 texture payload, a box mesh payload, and their records.
     fn textured_meshed_result() -> PipelineResult {
         let mut result = empty_result();
-        let tex = texture_payload::serialise(&concinnity_cpu::build::texture::TextureImage::rgba8(
-            2,
-            2,
-            vec![
-                255, 0, 0, 255, 255, 0, 0, 255, //
-                255, 0, 0, 255, 255, 0, 0, 255,
-            ],
-        ));
+        let tex =
+            texture_payload::serialise(&concinnity_core::build::texture::TextureImage::rgba8(
+                2,
+                2,
+                vec![
+                    255, 0, 0, 255, 255, 0, 0, 255, //
+                    255, 0, 0, 255, 255, 0, 0, 255,
+                ],
+            ));
         let mesh =
             crate::geometry::compile_mesh_payload(&serde_json::json!({ "generator": "box" }))
                 .unwrap();

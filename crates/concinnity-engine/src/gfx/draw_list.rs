@@ -15,7 +15,7 @@ use crate::gfx::render_types::{
     DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT,
 };
 
-pub(crate) use crate::gfx::skinning::{IDENTITY as IDENTITY4, mat4_mul};
+pub(crate) use crate::gfx::transform::IDENTITY as IDENTITY4;
 
 // One decoded material as build_draw_list consumes it: resolved texture pool
 // slots, the GPU uniforms, and the shader bucket its draws render under.

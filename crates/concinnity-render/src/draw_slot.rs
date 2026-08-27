@@ -8,6 +8,8 @@
 //! three backends (Metal, DirectX, Vulkan) route their draw-slot allocation
 //! through this.
 
+use alloc::vec::Vec;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Where a newly allocated draw record lands.
 pub enum SlotAlloc {

@@ -11,7 +11,7 @@
 use super::*;
 use crate::components::Transform;
 use crate::ecs::PickIndex;
-use concinnity_cpu::gfx::pick::{PickRay, ray_aabb};
+use concinnity_core::gfx::pick::{PickRay, ray_aabb};
 use gizmo::GizmoMode;
 
 // A member already resting within this distance of the floor is left alone

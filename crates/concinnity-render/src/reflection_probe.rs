@@ -12,7 +12,14 @@
 //! built so that direction projects to NDC (u, -v) (screen-down is +v), which
 //! the orientation test pins exactly.
 
-use std::f32::consts::FRAC_PI_2;
+use crate::build::environment_map as em;
+use alloc::vec;
+use alloc::vec::Vec;
+use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::math::vec3::dot;
+use concinnity_core::math::{ceil, floor, powi, round, sqrt};
+use core::f32::consts::FRAC_PI_2;
 
 // Per-face camera basis (right, up, forward) in world space, derived so that a
 // 90-degree view down -forward reproduces `cube_texel_dir`. forward = the face
@@ -27,34 +34,9 @@ const FACE_BASIS: [[[f32; 3]; 3]; 6] = [
     [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]], // 5 -Z
 ];
 
-fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-// Column-major multiply (out[col][row]), matching the engine's matrix storage.
-fn mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0.0f32; 4]; 4];
-    for col in 0..4 {
-        for row in 0..4 {
-            for k in 0..4 {
-                out[col][row] += a[k][row] * b[col][k];
-            }
-        }
-    }
-    out
-}
-
-// Right-handed perspective with depth in [0,1], matching metal/math.rs
-// `perspective`. 90-degree vertical FOV, square aspect (one cube face).
+// One cube face: a 90-degree vertical field of view at a square aspect.
 fn perspective_90(near: f32, far: f32) -> [[f32; 4]; 4] {
-    let s = 1.0 / (FRAC_PI_2 / 2.0).tan(); // = 1.0 at 90 degrees
-    let zs = far / (near - far);
-    [
-        [s, 0.0, 0.0, 0.0],
-        [0.0, s, 0.0, 0.0],
-        [0.0, 0.0, zs, -1.0],
-        [0.0, 0.0, zs * near, 0.0],
-    ]
+    perspective_rh(FRAC_PI_2, 1.0, near, far)
 }
 
 // World->view matrix for a face's (right, up, forward) basis at `eye`, looking
@@ -64,7 +46,7 @@ fn face_view(eye: [f32; 3], r: [f32; 3], u: [f32; 3], f: [f32; 3]) -> [[f32; 4];
         [r[0], u[0], -f[0], 0.0],
         [r[1], u[1], -f[1], 0.0],
         [r[2], u[2], -f[2], 0.0],
-        [-dot3(r, eye), -dot3(u, eye), dot3(f, eye), 1.0],
+        [-dot(r, eye), -dot(u, eye), dot(f, eye), 1.0],
     ]
 }
 
@@ -72,7 +54,7 @@ fn face_view(eye: [f32; 3], r: [f32; 3], u: [f32; 3], f: [f32; 3]) -> [[f32; 4];
 pub fn face_view_projection(eye: [f32; 3], face: usize, near: f32, far: f32) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
     let view = face_view(eye, b[0], b[1], b[2]);
-    mul(perspective_90(near, far), view)
+    mat4_mul(perspective_90(near, far), view)
 }
 
 /// The world->view matrix alone for cube face `face`, captured from `eye`. The
@@ -285,9 +267,9 @@ const INTERIOR_MIN_ROOM_SPAN: f32 = 2.0;
 fn fit_grid(nx: usize, nz: usize, budget: usize) -> (usize, usize) {
     let (mut nx, mut nz) = (nx.max(1), nz.max(1));
     if nx * nz > budget {
-        let scale = (budget as f32 / (nx * nz) as f32).sqrt();
-        nx = ((nx as f32 * scale).round() as usize).max(1);
-        nz = ((nz as f32 * scale).round() as usize).max(1);
+        let scale = sqrt(budget as f32 / (nx * nz) as f32);
+        nx = (round(nx as f32 * scale) as usize).max(1);
+        nz = (round(nz as f32 * scale) as usize).max(1);
         while nx * nz > budget {
             if nx >= nz {
                 nx -= 1;
@@ -357,7 +339,7 @@ fn interior_voxel_grid(
         return None;
     }
     let vs = (long / INTERIOR_VOXELS_LONG_AXIS as f32).max(0.25);
-    let dim = |e: f32| ((e / vs).ceil() as usize).clamp(1, INTERIOR_MAX_DIM);
+    let dim = |e: f32| (ceil(e / vs) as usize).clamp(1, INTERIOR_MAX_DIM);
     Some((vs, dim(extent[0]), dim(extent[1]), dim(extent[2])))
 }
 
@@ -375,7 +357,7 @@ fn solid_from_aabbs(
     let idx = |x: usize, y: usize, z: usize| (z * ny + y) * nx + x;
     let mut solid = vec![false; nx * ny * nz];
     let to_vx =
-        |v: f32, origin: f32, hi: usize| (((v - origin) / vs).floor().max(0.0) as usize).min(hi);
+        |v: f32, origin: f32, hi: usize| (floor((v - origin) / vs).max(0.0) as usize).min(hi);
     for (mn, mx) in occupancy {
         let x0 = to_vx(mn[0], aabb_min[0], nx - 1);
         let x1 = to_vx(mx[0], aabb_min[0], nx - 1);
@@ -461,7 +443,7 @@ fn solid_from_triangles(
     // reaches an interior cell.
     let half = [vs * 0.5 + vs * 1e-3; 3];
     let to_vx =
-        |v: f32, origin: f32, hi: usize| (((v - origin) / vs).floor().max(0.0) as usize).min(hi);
+        |v: f32, origin: f32, hi: usize| (floor((v - origin) / vs).max(0.0) as usize).min(hi);
     for tri in triangles {
         let mut tmn = tri[0];
         let mut tmx = tri[0];
@@ -657,7 +639,7 @@ fn interior_probes_from_solid(
         c.len() >= INTERIOR_MIN_CLUSTER
             && cluster_span(c).iter().all(|d| *d >= INTERIOR_MIN_ROOM_SPAN)
     });
-    clusters.sort_by_key(|c| std::cmp::Reverse(c.len()));
+    clusters.sort_by_key(|c| core::cmp::Reverse(c.len()));
     clusters.truncate(budget);
     clusters
         .iter()
@@ -673,9 +655,9 @@ fn interior_probes_from_solid(
                 }
             }
             let dist2 = |c: [f32; 3]| {
-                (c[0] - centroid[0]).powi(2)
-                    + (c[1] - centroid[1]).powi(2)
-                    + (c[2] - centroid[2]).powi(2)
+                powi(c[0] - centroid[0], 2)
+                    + powi(c[1] - centroid[1], 2)
+                    + powi(c[2] - centroid[2], 2)
             };
             let position = members
                 .iter()
@@ -840,8 +822,8 @@ fn seed_grid_probes(
     }
     let dx = aabb_max[0] - aabb_min[0];
     let dz = aabb_max[2] - aabb_min[2];
-    let nx_raw = (dx / AUTO_SEED_CELL_TARGET).ceil().max(1.0) as usize;
-    let nz_raw = (dz / AUTO_SEED_CELL_TARGET).ceil().max(1.0) as usize;
+    let nx_raw = ceil(dx / AUTO_SEED_CELL_TARGET).max(1.0) as usize;
+    let nz_raw = ceil(dz / AUTO_SEED_CELL_TARGET).max(1.0) as usize;
     let (nx, nz) = fit_grid(nx_raw, nz_raw, budget);
 
     let y_eye = probe_eye_point(aabb_min, aabb_max)[1];
@@ -894,33 +876,43 @@ pub fn fold_world_bounds(
 /// prefilter mip chain. Reuses the exact build-time convolutions (including the
 /// firefly clamp), so a scene-captured probe and an imported HDR produce
 /// byte-compatible payloads that flow through the same `upload_environment_map`.
-pub fn build_probe_payload(
+/// `scheduler` runs each convolution's independent output rows; the engine hands
+/// in its job pool.
+pub fn build_probe_payload<S: em::RowScheduler>(
+    scheduler: &S,
     faces: &[Vec<f32>; 6],
     face_size: u32,
     irradiance_face: u32,
     prefilter_samples: u32,
     prefilter_clamp: f32,
 ) -> Vec<u8> {
-    use crate::build::environment_map as em;
     let mips = em::max_mip_count(face_size);
-    let irradiance = em::compute_irradiance(
+    let irradiance = em::CubeBake::irradiance(
         faces,
         face_size,
         irradiance_face,
         em::DEFAULT_IRRADIANCE_PHI_SAMPLES,
         em::DEFAULT_IRRADIANCE_THETA_SAMPLES,
-    );
+    )
+    .bake(scheduler);
     // A probe cube is sampled only by the specular term (never drawn as a skybox), so
     // clamp mip 0 too: it suppresses a lone blown highlight aliasing into a bright
     // square on a near-mirror surface that falls back to the probe (SSR/RT miss).
-    let prefilter = em::compute_prefilter(
-        faces,
-        face_size,
-        mips,
-        prefilter_samples,
-        prefilter_clamp,
-        true,
-    );
+    let mut prefilter = Vec::with_capacity(mips as usize);
+    prefilter.push(em::prefilter_mip0(faces, face_size, prefilter_clamp, true));
+    for mip in 1..mips {
+        prefilter.push(
+            em::CubeBake::ggx(
+                faces,
+                face_size,
+                face_size >> mip,
+                em::prefilter_roughness(mip, mips),
+                prefilter_samples,
+                prefilter_clamp,
+            )
+            .bake(scheduler),
+        );
+    }
     em::serialise_payload(irradiance_face, face_size, mips, &irradiance, &prefilter)
 }
 
@@ -1010,7 +1002,7 @@ mod tests {
         // Six small solid faces convolve into a valid ENVM payload that
         // deserialises with the requested sizes.
         let face = 8usize;
-        let faces: [Vec<f32>; 6] = std::array::from_fn(|f| {
+        let faces: [Vec<f32>; 6] = core::array::from_fn(|f| {
             let mut v = vec![0.0f32; face * face * 4];
             for px in v.chunks_exact_mut(4) {
                 px[0] = f as f32 * 0.1;
@@ -1020,7 +1012,7 @@ mod tests {
             }
             v
         });
-        let bytes = build_probe_payload(&faces, face as u32, 8, 16, 12.0);
+        let bytes = build_probe_payload(&em::Serial, &faces, face as u32, 8, 16, 12.0);
         let view = crate::build::environment_map::deserialise(&bytes).expect("deserialise");
         assert_eq!(view.prefilter_face, 8);
         assert_eq!(view.irradiance_face, 8);
@@ -1056,7 +1048,7 @@ mod tests {
         let eye = [1.0, 2.0, -3.0];
         for face in 0..6 {
             let vp = face_view_projection(eye, face, 0.1, 50.0);
-            let comp = mul(perspective_90(0.1, 50.0), face_view_matrix(eye, face));
+            let comp = mat4_mul(perspective_90(0.1, 50.0), face_view_matrix(eye, face));
             for c in 0..4 {
                 for r in 0..4 {
                     assert!(
@@ -1079,10 +1071,10 @@ mod tests {
     // Union of every probe's influence box.
     fn probe_union(probes: &[ProbePlacement]) -> ([f32; 3], [f32; 3]) {
         let mn = probes.iter().fold([f32::MAX; 3], |a, p| {
-            std::array::from_fn(|i| a[i].min(p.box_min[i]))
+            core::array::from_fn(|i| a[i].min(p.box_min[i]))
         });
         let mx = probes.iter().fold([f32::MIN; 3], |a, p| {
-            std::array::from_fn(|i| a[i].max(p.box_max[i]))
+            core::array::from_fn(|i| a[i].max(p.box_max[i]))
         });
         (mn, mx)
     }
@@ -1371,7 +1363,7 @@ mod tests {
         let (mn, mx) = fold_world_bounds(boxes).expect("non-empty");
         assert_eq!(mn, [-3.0, 0.0, -1.0]);
         assert_eq!(mx, [1.0, 4.0, 2.0]);
-        assert!(fold_world_bounds(std::iter::empty()).is_none());
+        assert!(fold_world_bounds(core::iter::empty()).is_none());
     }
 
     #[test]

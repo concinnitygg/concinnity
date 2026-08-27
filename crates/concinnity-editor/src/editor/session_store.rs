@@ -27,7 +27,7 @@ pub(crate) struct WorldSession {
 // The per-project store file, beside `saves/` and `settings`. `None` when no
 // state root is installed, which leaves bookmarks in memory for the session.
 pub(crate) fn default_path() -> Option<PathBuf> {
-    concinnity_store::paths::writable_state_dir().map(|d| d.join("editor"))
+    concinnity_host::store::paths::writable_state_dir().map(|d| d.join("editor"))
 }
 
 // The store key for a world file: its stem, so `world.jsonl` and a sibling

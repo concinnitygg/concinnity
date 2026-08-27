@@ -6,8 +6,9 @@
 // renderer's line pass; oriented shapes take a column-major model matrix
 // (`Transform::model_matrix` convention, `m[col][row]`).
 
-use concinnity_cpu::geometry::glass_quad::plane_basis;
-use concinnity_cpu::gfx::lines::Line;
+use concinnity_core::geometry::glass_quad::plane_basis;
+use concinnity_core::gfx::lines::Line;
+use concinnity_core::math::vec3::{add, scale};
 
 // Full-circle resolution. High enough that a large range sphere still reads
 // as a curve, cheap enough to ignore (a circle is 32 segments).
@@ -43,14 +44,6 @@ pub(crate) const EDGES: [(usize, usize); BOX_EDGES] = [
     (2, 6),
     (3, 7),
 ];
-
-fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn scale(v: [f32; 3], s: f32) -> [f32; 3] {
-    [v[0] * s, v[1] * s, v[2] * s]
-}
 
 fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
     [

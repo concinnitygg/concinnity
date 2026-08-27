@@ -16,11 +16,15 @@ use crate::render_types::{
     AreaLightData, DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessParams,
     SpotShadowData,
 };
+use crate::rt_geom::RtDynamicMode;
 use crate::rt_reflections::RtReflectionSettings;
 use crate::ssao::SsaoSettings;
 use crate::ssgi::SsgiSettings;
 use crate::ssr::SsrSettings;
 use crate::volumetric_fog::FogSettings;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// Static scene geometry and the draw lists built over it.
 pub struct SceneData<'a> {
@@ -102,8 +106,9 @@ pub struct ShadowParams {
 }
 
 /// Post-process and display settings resolved from PostProcessConfig (plus
-/// the user's persisted overrides and the quality-preset ceiling). Every
-/// Option here is an init-time gate: None allocates nothing.
+/// the user's persisted overrides, the quality-preset ceiling, and the
+/// launch's render requests). Every Option here is an init-time gate: None
+/// allocates nothing.
 pub struct PostSettings {
     /// Composite tunables pushed to the post pass.
     pub post_process: PostProcessParams,
@@ -117,6 +122,13 @@ pub struct PostSettings {
     pub ssgi: Option<SsgiSettings>,
     /// Requires an RT-capable GPU; backends fall back to SSR without one.
     pub rt_reflections: Option<RtReflectionSettings>,
+    /// How the ray-tracing acceleration structure tracks moving props. Inert
+    /// when `rt_reflections` is None.
+    pub rt_dynamic: RtDynamicMode,
+    /// Whether skinned meshes join the ray-tracing acceleration structure.
+    /// False leaves the BVH over static + instanced geometry only, so nothing
+    /// animated appears in a ray-traced reflection.
+    pub rt_skinned_geometry: bool,
     /// Per-axis divisor for the roughness-aware reflection blur target.
     pub reflection_blur_scale: u32,
     /// Auto-exposure, or `None` when off.
@@ -328,6 +340,8 @@ impl<'a> BackendInit<'a> {
                 ssr: None,
                 ssgi: None,
                 rt_reflections: None,
+                rt_dynamic: RtDynamicMode::Auto,
+                rt_skinned_geometry: true,
                 reflection_blur_scale: 1,
                 auto_exposure: None,
                 auto_exposure_bias_ev: 0.0,
@@ -444,6 +458,8 @@ mod tests {
             ssr: None,
             ssgi: None,
             rt_reflections: None,
+            rt_dynamic: RtDynamicMode::Auto,
+            rt_skinned_geometry: true,
             reflection_blur_scale: 2,
             auto_exposure: None,
             auto_exposure_bias_ev: 0.0,

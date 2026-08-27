@@ -19,6 +19,7 @@
 //
 // Mirrors src/directx/fog.rs and src/metal/fog.rs.
 
+use concinnity_core::gfx::transform::mat4_inverse;
 use std::ffi::CString;
 
 use ash::vk;
@@ -949,7 +950,7 @@ impl VkContext {
 
         // Per-frame FogParams (drives the volume integration + the fragment's
         // viewport / reconstruction). Uploaded here so `encode_fog` only reads.
-        let inv_vp = super::math::mat4_inverse(vp);
+        let inv_vp = mat4_inverse(vp);
         let viewport_pix = [
             self.render_extent.width as f32,
             self.render_extent.height as f32,

@@ -1,87 +1,66 @@
-// Persistence for behavior state: the world variables plus which `once`
-// behaviors have fired, written by the `save` node and restored at world start.
-// Variables are keyed by their authored names, stable across world edits and
-// across a re-cook that reassigns slots. Fired flags are keyed by (asset id,
-// content hash) so a save from an edited world degrades safely: a behavior
-// whose id or content changed just loses its flag (and may fire once more),
-// never inherits another's.
-//
-// Per-entity locals are never saved: a spawned entity has no identity that
-// survives a re-cook, so there is nothing stable to key them by.
+// Persisted behavior state, kept in a `state` file under the host's save
+// directory. The state's shape and its keying are the system's (see
+// `concinnity_core::behavior::BehaviorState`); what this owns is the file.
 
-use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use crate::components::{Behavior, BehaviorLiteral};
+use concinnity_core::behavior::{BehaviorState, BehaviorStore};
 
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-pub(super) struct BehaviorSave {
-    #[serde(default)]
-    pub(super) vars: BTreeMap<String, BehaviorLiteral>,
-    #[serde(default)]
-    pub(super) fired: Vec<(u32, u64)>,
+#[derive(Debug)]
+pub(crate) struct FileStore {
+    dir: PathBuf,
 }
 
-pub(super) fn state_file(dir: &Path) -> PathBuf {
+impl FileStore {
+    // `None` when no host installed a state root: behaviors run, saving does
+    // not.
+    pub(crate) fn new() -> Option<FileStore> {
+        concinnity_host::store::paths::saves_dir().map(|dir| FileStore { dir })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn at(dir: &Path) -> FileStore {
+        FileStore {
+            dir: dir.to_path_buf(),
+        }
+    }
+}
+
+impl BehaviorStore for FileStore {
+    fn read(&self) -> Option<BehaviorState> {
+        crate::cbor_file::read(&state_file(&self.dir), "BehaviorSystem: saved state")
+    }
+
+    fn write(&self, state: &BehaviorState) {
+        if let Err(e) = crate::cbor_file::write(&state_file(&self.dir), state) {
+            tracing::warn!("BehaviorSystem: state save failed: {e}");
+        }
+    }
+}
+
+pub(crate) fn state_file(dir: &Path) -> PathBuf {
     dir.join("state")
-}
-
-// Content hash of a behavior definition (asset identity excluded via its serde
-// skip), so a loaded fired flag applies only to the behavior it was saved for.
-pub(super) fn def_hash(def: &Behavior) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    postcard::to_allocvec(def)
-        .unwrap_or_default()
-        .hash(&mut hasher);
-    hasher.finish()
-}
-
-pub(super) fn read_save(path: &Path) -> Option<BehaviorSave> {
-    crate::cbor_file::read(path, "BehaviorSystem: saved state")
-}
-
-pub(super) fn write_save(path: &Path, save: &BehaviorSave) -> std::io::Result<()> {
-    crate::cbor_file::write(path, save)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::BehaviorLiteral;
 
     #[test]
-    fn def_hash_tracks_content_not_identity() {
-        use crate::components::BehaviorSource;
-        use crate::ecs::asset_id::AssetId;
-
-        let a = Behavior {
-            asset_id: AssetId(1),
-            on: BehaviorSource::Tick,
-            ..Default::default()
-        };
-        let same_content = Behavior {
-            asset_id: AssetId(9),
-            ..a.clone()
-        };
-        assert_eq!(def_hash(&a), def_hash(&same_content));
-
-        let edited = Behavior {
-            on: BehaviorSource::Variable("v".into()),
-            ..a.clone()
-        };
-        assert_ne!(def_hash(&a), def_hash(&edited));
-    }
-
-    #[test]
-    fn save_round_trips_through_cbor() {
+    fn state_round_trips_through_the_file() {
         let dir = std::env::temp_dir().join(format!("cn-behavior-save-{}", std::process::id()));
-        let path = state_file(&dir);
-        let mut save = BehaviorSave::default();
-        save.vars.insert("score".into(), BehaviorLiteral::Int(12));
-        save.fired.push((3, 0xfeed));
-        write_save(&path, &save).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FileStore::at(&dir);
+        assert!(store.read().is_none(), "nothing written yet");
 
-        let back = read_save(&path).expect("state readable");
+        let mut state = BehaviorState::default();
+        state.vars.insert("score".into(), BehaviorLiteral::Int(12));
+        state.fired.push((3, 0xfeed));
+        store.write(&state);
+        assert!(state_file(&dir).exists());
+
+        let back = store.read().expect("state readable");
         assert_eq!(back.vars.get("score"), Some(&BehaviorLiteral::Int(12)));
         assert_eq!(back.fired, vec![(3, 0xfeed)]);
         std::fs::remove_dir_all(&dir).ok();

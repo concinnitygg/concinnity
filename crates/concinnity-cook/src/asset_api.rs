@@ -76,7 +76,7 @@ pub(crate) fn list_addable_types() -> Vec<AssetTypeEntry> {
     let mut entries: Vec<AssetTypeEntry> = RegisteredType::addable_types()
         .map(|(ct, reg)| AssetTypeEntry {
             asset_type: ct.as_str().to_string(),
-            summary: concinnity_docs::summary(ct.as_str())
+            summary: crate::docs::summary(ct.as_str())
                 .unwrap_or_default()
                 .to_string(),
             registration: reg,

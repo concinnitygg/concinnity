@@ -3,7 +3,7 @@
 //! concinnity-render and the hardware backends (Metal/DirectX/Vulkan/Win32) in
 //! concinnity-device; this crate drives them through a `Box<dyn RenderBackend>`
 //! from `concinnity_device::init_backend` and never names a concrete backend.
-//! Depends on concinnity-core/cpu/render/device (no concinnity-cook, no image
+//! Depends on concinnity-core/render/device (no concinnity-cook, no image
 //! decoders). The editor crate (concinnity-editor) drives this crate's App /
 //! renderer through the public API widened here; the modules the editor reaches
 //! into are `pub` so it can name their paths, but individual internals stay
@@ -17,12 +17,11 @@ mod heap;
 mod bench;
 
 // Renderer-free foundation shared with the build/validate pipeline: the result
-// vocabulary from concinnity-core, the payload decoders and runtime geometry
-// generators from concinnity-cpu. Re-exported under the historical crate::*
-// paths so the rest of the client keeps resolving. world.jsonl I/O moved to
-// concinnity-cook (authoring), which the runtime does not link.
-pub(crate) use concinnity_core::result;
-pub(crate) use concinnity_cpu::{build, geometry};
+// vocabulary, the payload decoders, and the runtime geometry generators, all
+// from concinnity-core. Re-exported under the historical crate::* paths so the
+// rest of the client keeps resolving. world.jsonl I/O lives in concinnity-cook
+// (authoring), which the runtime does not link.
+pub(crate) use concinnity_core::{build, geometry, result};
 
 // The access-declaration mask builders, reached crate-wide as
 // `crate::component_mask!` / `crate::resource_mask!`.
@@ -41,8 +40,8 @@ pub use app::state::App;
 // Redirect runtime-writable state (`saves/` + `settings`) before `run_from`
 // when the content dir is read-only. Exported beside `run_from` so the runtime
 // bin's entire entry API lives on this crate.
-pub use concinnity_store::paths;
-pub use concinnity_store::paths::set_writable_state_dir;
+pub use concinnity_host::store::paths;
+pub use concinnity_host::store::paths::set_writable_state_dir;
 
 // Export-time compilation of the built-in shaders into a bundle's
 // shader-cache/, for backends that compile them at renderer init. Re-exported
@@ -58,6 +57,9 @@ pub(crate) mod config;
 /// recent-log ring layer into its tracing subscriber.
 pub mod crash;
 pub mod shutdown;
+// 3D positional sound and screen-triggered cues, and the one module that names
+// kira.
+pub(crate) mod audio;
 // The standalone startup-error window, shown when a fatal startup failure
 // happens before any world exists.
 pub(crate) mod error_screen;
@@ -70,11 +72,10 @@ pub(crate) mod physics;
 // Declarative logic (Behavior components + the shared world variables
 // store), scheduled before SpawnSystem so its requests apply the same tick.
 pub(crate) mod behavior;
-// The rayon job pool now lives in concinnity-render (the lowest layer the device
-// backends and the client's animation fan-out share); re-export it under the
-// historical crate::jobs path. `pub` so the editor's hot-reload decoder keeps
-// reaching it through `concinnity_engine::jobs`.
-pub use concinnity_render::jobs;
+// The rayon job pool, re-exported under the historical crate::jobs path. `pub`
+// so the editor's hot-reload decoder keeps reaching it through
+// `concinnity_engine::jobs`.
+pub use concinnity_host::thread::jobs;
 /// Runtime resource tables (per-kind, handle-indexed views of the blob's resource
 /// stream). `pub` so the editor's in-memory build path can construct the tables it
 /// inserts into the world, mirroring the shipped-runtime loader.

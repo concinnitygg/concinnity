@@ -1,8 +1,18 @@
 //! The application: a world plus the loop that runs it.
 
+#[cfg(feature = "std")]
 use std::path::Path;
 
 use crate::World;
+
+// The engine's driver where there is an operating system to drive, the
+// headless one where there is not. Both run the world they are handed; what
+// the std one adds is the window, the frame pacing, and the wall clock the
+// simulation follows.
+#[cfg(feature = "std")]
+pub(crate) type Inner = concinnity_engine::App;
+#[cfg(not(feature = "std"))]
+pub(crate) type Inner = concinnity_core::App;
 
 /// A runnable application.
 ///
@@ -14,11 +24,11 @@ use crate::World;
 /// App::from_world(World::new()).run().expect("the app runs");
 /// ```
 pub struct App {
-    inner: concinnity_engine::App,
+    inner: Inner,
 }
 
-impl std::fmt::Debug for App {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for App {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("App").finish_non_exhaustive()
     }
 }
@@ -27,7 +37,7 @@ impl App {
     /// An app that runs `world`.
     pub fn from_world(world: World) -> Self {
         Self {
-            inner: concinnity_engine::App::from_world(world.into_inner()),
+            inner: Inner::from_world(world.into_inner()),
         }
     }
 
@@ -49,6 +59,7 @@ impl App {
     ///     .run()
     ///     .expect("the app runs");
     /// ```
+    #[cfg(feature = "std")]
     pub fn from_blob(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let path = path.as_ref();
         concinnity_engine::App::from_blob(path)
@@ -58,12 +69,23 @@ impl App {
 
     /// Run the app until its window closes, a system stops the world, or the
     /// process is interrupted.
+    #[cfg(feature = "std")]
     pub fn run(self) -> std::io::Result<()> {
         self.inner.run()
     }
 
+    /// Run the app until a system stops the world or its last system finishes.
+    ///
+    /// The `no_std` build has no window to close and no clock to follow: the
+    /// world steps on a fixed virtual timestep, as fast as the host can step
+    /// it.
+    #[cfg(not(feature = "std"))]
+    pub fn run(mut self) -> Result<(), concinnity_core::result::CnResult> {
+        self.inner.run().map(|_| ())
+    }
+
     #[cfg(test)]
-    pub(crate) fn inner_mut(&mut self) -> &mut concinnity_engine::App {
+    pub(crate) fn inner_mut(&mut self) -> &mut Inner {
         &mut self.inner
     }
 }

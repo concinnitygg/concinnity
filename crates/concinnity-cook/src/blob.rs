@@ -17,11 +17,11 @@ use concinnity_core::blob::{
 };
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
-// Re-export the read side from concinnity-store so `crate::blob::{BlobData,
+// Re-export the read side from `concinnity_host::store` so `crate::blob::{BlobData,
 // load_raw, ...}` resolves for build-crate consumers that read blobs back.
 // `blob_path` is shared: the build names blob 0 through it, and readers
 // resolve the same layout.
-pub use concinnity_store::blob::{
+pub use concinnity_host::store::blob::{
     BlobData, blob_path, load_defs, load_raw, payload_section_start, read_cnb,
 };
 
@@ -408,7 +408,7 @@ pub(crate) mod test_output {
     impl StateDir {
         pub(crate) fn new() -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
-            concinnity_store::paths::set_state_dir(dir.path());
+            concinnity_host::store::paths::set_state_dir(dir.path());
             Self(dir)
         }
 
@@ -419,7 +419,7 @@ pub(crate) mod test_output {
 
     impl Drop for StateDir {
         fn drop(&mut self) {
-            concinnity_store::paths::clear_state_dir();
+            concinnity_host::store::paths::clear_state_dir();
         }
     }
 
