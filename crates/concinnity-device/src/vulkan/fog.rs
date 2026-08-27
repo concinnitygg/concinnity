@@ -1101,6 +1101,9 @@ mod tests {
 
     #[test]
     fn fog_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         // Compile the rewritten froxel-sampling fragment shader (both MSAA
         // modes) + the froxel compute kernel so a GLSL regression fails the
         // test suite without needing a GPU. Mirrors the cull-shader compile

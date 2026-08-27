@@ -94,6 +94,16 @@ pub struct MeshSource {
 #[derive(Debug, Clone, Default)]
 pub struct MeshSources(pub Vec<MeshSource>);
 
+/// Dev-only catalogue of material identities, in `MaterialHandle` order: the
+/// interned asset name of each compiled `Material`. A material record carries
+/// its kind and handle, not its name, so this is what lets an editor resolve
+/// the material a Prop edit names to the handle the running world loaded it at.
+/// Inserted by the in-memory (`cn debug` / editor) build, and by the editor's
+/// blob boot from world-lock.json, so a session has it either way it started.
+/// Absent in the shipped disk runtime, which addresses every material by handle.
+#[derive(Debug, Clone, Default)]
+pub struct MaterialNames(pub Vec<u32>);
+
 /// Install every per-kind resource table from a compiled blob's resource stream
 /// into `world`. This is the single place the table set is enumerated: the
 /// shipped runtime (`App::load_blob`), the editor's in-memory build, and the

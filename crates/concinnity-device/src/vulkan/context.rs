@@ -676,10 +676,10 @@ pub(super) struct VkUniforms {
     // original `local_lights` slice.
     pub(super) local_light_size: u64,
     // CPU-side copy of the values in `light_ubo`, kept so a live Ambient-slider
-    // change can mutate `ambient_intensity` and re-upload. The light UBO is a
-    // single (not per-frame) buffer, so `set_ambient_intensity` `wait_idle`s
-    // before the rewrite to avoid racing an in-flight read; ambient changes only
-    // on a slider drag, so the stall is rare.
+    // or directional-light change can mutate it and re-upload. The light UBO is
+    // a single (not per-frame) buffer, so the setters `wait_idle` before the
+    // rewrite to avoid racing an in-flight read; both change only on an
+    // authoring edit, so the stall is rare.
     pub(super) light_uniforms: crate::gfx::render_types::LightUniforms,
 }
 
@@ -709,8 +709,9 @@ pub(super) struct DecalState {
 // `VolumetricFog` asset; with none it and `settings` both stay `None` and the
 // fog pass is skipped entirely. The settings are cached so the per-frame
 // encoder can build its `FogParams` without re-resolving the asset. `sun_dir` /
-// `sun_color` mirror the first directional light captured at init: the Vulkan
-// backend uploads `LightUniforms` once, so the sun is fixed.
+// `sun_color` mirror the first directional light: the Vulkan backend uploads
+// `LightUniforms` rather than pushing it each frame, so both are cached here
+// and re-derived by `update_directional_lights`.
 pub(super) struct FogState {
     pub resources: Option<crate::vulkan::fog::FogResources>,
     pub settings: Option<crate::gfx::volumetric_fog::FogSettings>,
@@ -2009,13 +2010,14 @@ impl VkContext {
         self.window_mut().set_display_mode(mode);
     }
 
-    // Replace the live post-process parameters, pushed to the bloom + composite
-    // shaders each frame.
+    // Replace the live post-process tunables, pushed to the bloom + composite
+    // shaders each frame. The composite's display-output flags are not part of
+    // the payload, so the EDR path negotiated at init survives every push.
     pub(crate) fn update_post_process(
         &mut self,
-        params: crate::gfx::render_types::PostProcessParams,
+        tunables: crate::gfx::render_types::PostProcessTunables,
     ) {
-        self.post_process = params;
+        self.post_process.set_tunables(tunables);
     }
 
     // Set the live ambient (IBL) light scale (the Ambient slider). It lives in
@@ -2031,6 +2033,29 @@ impl VkContext {
             return;
         }
         self.uniforms.light_uniforms.ambient_intensity = value;
+        self.wait_idle();
+        super::draw::upload_light_uniforms(&self.uniforms.light_ubo, &self.uniforms.light_uniforms);
+    }
+
+    // Replace the live directional lights. `LightUniforms` is uploaded to a
+    // single shared UBO rather than pushed per frame, so the rewrite re-uploads
+    // it behind a drain, like `set_ambient_intensity`. The cascade shadow
+    // direction and the fog sun were derived from the first light at init, so
+    // both are re-derived here. Edge-triggered: an unchanged set never stalls.
+    pub(crate) fn update_directional_lights(
+        &mut self,
+        lights: &[crate::components::DirectionalLight],
+    ) {
+        let (directional, num_directional) = crate::gfx::lights::directional_light_data(lights);
+        let uniforms = &mut self.uniforms.light_uniforms;
+        if uniforms.directional == directional && uniforms.num_directional == num_directional {
+            return;
+        }
+        uniforms.directional = directional;
+        uniforms.num_directional = num_directional;
+        self.shadow.light_dir = crate::gfx::lights::sun_direction(&self.uniforms.light_uniforms);
+        self.fog.sun_dir = self.shadow.light_dir;
+        self.fog.sun_color = crate::gfx::lights::sun_color(&self.uniforms.light_uniforms);
         self.wait_idle();
         super::draw::upload_light_uniforms(&self.uniforms.light_ubo, &self.uniforms.light_uniforms);
     }
@@ -2131,6 +2156,9 @@ impl VkContext {
             // cannot refit; only the runtime-append region recycles (tracked
             // as the RT incremental topology parity item).
             reuses_build_slots: false,
+            // Per-object material state is baked at build time here, so
+            // `set_draw_material` has no implementation yet.
+            rewrites_draws: false,
         }
     }
 

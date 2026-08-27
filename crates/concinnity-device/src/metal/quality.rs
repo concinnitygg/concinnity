@@ -36,17 +36,18 @@ impl MtlContext {
         super::init::set_display_sync(&self.window.view, on);
     }
 
-    // Replace the live post-process parameters. They are pushed to the bloom
+    // Replace the live post-process tunables. They are pushed to the bloom
     // prefilter + composite shaders every frame (see draw/composite.rs), so a
     // change takes effect on the next draw with no allocation or pipeline
-    // rebuild. Auto-exposure, when on, overwrites `exposure` each frame from
-    // the adapted EV, so a static exposure change is only visible with
-    // auto-exposure off.
+    // rebuild. The composite's display-output flags are not part of the payload,
+    // so the EDR path negotiated at init survives every push. Auto-exposure,
+    // when on, overwrites `exposure` each frame from the adapted EV, so a static
+    // exposure change is only visible with auto-exposure off.
     pub(crate) fn update_post_process(
         &mut self,
-        params: crate::gfx::render_types::PostProcessParams,
+        tunables: crate::gfx::render_types::PostProcessTunables,
     ) {
-        self.post_process = params;
+        self.post_process.set_tunables(tunables);
     }
 
     // Set the live ambient (IBL) light scale. `ambient_intensity` lives in

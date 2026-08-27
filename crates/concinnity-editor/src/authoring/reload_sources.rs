@@ -1,22 +1,25 @@
 // src/authoring/reload_sources.rs
 //
-// Hot-reload source catalogues for a blob boot. The in-memory build installs
-// dev-only source catalogues (texture / mesh / ColorLut / EnvironmentMap ->
-// file path) as world resources so `GraphicsSystem::init` can seed the
-// hot-reload watcher; a process that only LOADS prebuilt blobs would start
-// without them, leaving file-backed assets invisible to the watcher. The
-// world-lock records each Texture / Mesh resource's source info directly, so
-// those catalogues read straight off the lock, SceneImport products included.
-// The ColorLut / EnvironmentMap singletons are components, not lock resources,
-// so their sources still come from the authored entries.
+// Dev-only resource catalogues for a blob boot. The in-memory build installs
+// them as world resources while it compiles -- the source paths
+// `GraphicsSystem::init` seeds the hot-reload watcher from, and the material
+// identities the live draw seam resolves an edit's reference through -- and a
+// process that only LOADS prebuilt blobs would start without them, leaving
+// file-backed assets invisible to the watcher and every material edit
+// rebuilding. The world-lock records each resource's handle, name, and (for
+// Texture / Mesh) source info, so those catalogues read straight off the lock,
+// SceneImport products included. The ColorLut / EnvironmentMap singletons are
+// components, not lock resources, so their sources still come from the
+// authored entries.
 
 use concinnity_cook::blob::BlobLock;
 
 use crate::ecs::World;
 use crate::resource::{
-    ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MeshSource, MeshSources,
-    TextureSource, TextureSources,
+    ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
+    MeshSources, TextureSource, TextureSources,
 };
+use concinnity_world::registry::RegisteredType;
 
 // Reconstruct the source catalogues from the working directory's
 // world-lock.json plus the parsed authored entries, and install them as world
@@ -36,20 +39,21 @@ pub(crate) fn install_from_lock(
 fn install(world: &mut World, entries: &[serde_json::Value], lock: &BlobLock) -> usize {
     let mut textures: Vec<TextureSource> = Vec::new();
     let mut meshes: Vec<MeshSource> = Vec::new();
+    let mut materials: Vec<u32> = Vec::new();
     let mut installed = 0usize;
     for res in &lock.resources {
+        if res.kind == RegisteredType::Material.as_str() {
+            place(&mut materials, res.handle as usize, name_id(res));
+        }
         if let Some(tex) = &res.texture_source {
             if !tex.source.is_empty() {
                 installed += 1;
             }
-            let name_id = res
-                .id
-                .unwrap_or_else(|| crate::ecs::asset_id::intern(&res.name).0);
             place(
                 &mut textures,
                 res.handle as usize,
                 TextureSource {
-                    name_id,
+                    name_id: name_id(res),
                     source: tex.source.clone(),
                     image_index: tex.image_index,
                 },
@@ -74,11 +78,19 @@ fn install(world: &mut World, entries: &[serde_json::Value], lock: &BlobLock) ->
 
     world.insert_resource(TextureSources(textures));
     world.insert_resource(MeshSources(meshes));
+    world.insert_resource(MaterialNames(materials));
     // The ColorLut / EnvironmentMap singletons are components, not lock
     // resources; their sources come straight from the authored entries.
     world.insert_resource(ColorLutSources(scan_color_lut(entries)));
     world.insert_resource(EnvironmentMapSources(scan_environment_map(entries)));
     installed
+}
+
+// The interned id the build assigned this resource's name, re-interning it
+// where an old-format lock recorded none.
+fn name_id(res: &concinnity_cook::blob::LockedResource) -> u32 {
+    res.id
+        .unwrap_or_else(|| crate::ecs::asset_id::intern(&res.name).0)
 }
 
 // Grow `vec` with defaults so `slot` is addressable, then write the entry.
@@ -249,6 +261,28 @@ mod tests {
         assert_eq!(meshes.0[0].primitive_index, 2);
         assert_eq!(meshes.0[0].lod_levels, 3);
         assert_eq!(meshes.0[0].lod_distances, vec![10.0, 30.0]);
+    }
+
+    // A material's identity is what the live draw seam resolves an edit's
+    // reference through; it rides the lock as a name + handle, in whatever
+    // order the resources were recorded.
+    #[test]
+    fn material_names_reconstruct_by_handle() {
+        let material = |name: &str, handle: u32| LockedResource {
+            name: name.to_string(),
+            id: Some(handle + 100),
+            kind: "Material".to_string(),
+            handle,
+            ..Default::default()
+        };
+        let lock = lock_with(vec![
+            material("glass", 1),
+            tex_resource("tex_a", 0, "a.png", 0),
+            material("steel", 0),
+        ]);
+        let mut world = World::new();
+        install(&mut world, &[], &lock);
+        assert_eq!(world.resource::<MaterialNames>().unwrap().0, vec![100, 101]);
     }
 
     #[test]

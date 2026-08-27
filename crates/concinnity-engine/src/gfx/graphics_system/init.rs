@@ -9,11 +9,9 @@ use crate::components::{
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::gfx::material_entry::MaterialEntry;
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::{
-    draw_list::{self, MaterialEntry},
-    lights, skeleton, text, transform_propagation,
-};
+use crate::gfx::{draw_list, lights, skeleton, text, transform_propagation};
 use std::time::Instant;
 
 use super::helpers::*;
@@ -261,6 +259,7 @@ impl GraphicsSystem {
         // Persisted settings-menu choices override the world's authored defaults
         // below (each field is None when the user never changed that setting).
         let user_graphics = self.persisted_settings().graphics;
+        self.persisted_graphics = user_graphics.clone();
 
         // Detect the GPU before the backend is built so the auto-config quality
         // ceiling can influence the render targets / effect pipelines sized at
@@ -397,40 +396,29 @@ impl GraphicsSystem {
         // resolution is restart-required -- the shadow map array is sized from
         // `self.shadow_map_size` at backend init below -- while the cadence is read
         // by the cascade scheduler each frame.
+        use crate::gfx::render_config as resolve;
         self.authored_shadow_map_size = self.shadow_map_size;
         self.authored_shadow_update = self.shadow_update;
-        self.shadow_map_size = user_graphics
-            .shadow_map_size
-            .unwrap_or(self.shadow_map_size.min(quality_ceiling.shadow_map_size));
-        match user_graphics.shadow_update {
-            Some(v) => self.shadow_update = v,
-            None => {
-                self.shadow_update = crate::gfx::quality_preset::clamp_shadow_update(
-                    self.shadow_update,
-                    &quality_ceiling,
-                )
-            }
-        }
+        self.shadow_map_size =
+            resolve::shadow_map_size(self.shadow_map_size, &user_graphics, &quality_ceiling);
+        self.shadow_update =
+            resolve::shadow_update(self.shadow_update, &user_graphics, &quality_ceiling);
         // Shadow distance (GraphicsConfig-sourced, live -- the per-frame cascade
         // split reads it). Same baseline / override / ceiling-clamp shape as the
         // shadow knobs above.
         self.authored_shadow_distance = self.shadow_distance;
-        self.shadow_distance = user_graphics
-            .shadow_distance
-            .unwrap_or(self.shadow_distance.min(quality_ceiling.shadow_distance));
+        self.shadow_distance =
+            resolve::shadow_distance(self.shadow_distance, &user_graphics, &quality_ceiling);
         // Shadow cascade count (GraphicsConfig-sourced, live -- the per-frame split
         // + schedule read it). Same baseline / override / ceiling-clamp shape.
         self.authored_shadow_cascades = self.shadow_cascades;
-        self.shadow_cascades = user_graphics
-            .shadow_cascades
-            .unwrap_or(self.shadow_cascades.min(quality_ceiling.shadow_cascades));
+        self.shadow_cascades =
+            resolve::shadow_cascades(self.shadow_cascades, &user_graphics, &quality_ceiling);
         // Anisotropy (GraphicsConfig-sourced, restart-required -- the scene sampler
         // is built from `self.anisotropy` at backend init below). Same baseline /
         // override / ceiling-clamp shape as the shadow knobs above.
         self.authored_anisotropy = self.anisotropy;
-        self.anisotropy = user_graphics
-            .anisotropy
-            .unwrap_or(self.anisotropy.min(quality_ceiling.anisotropy));
+        self.anisotropy = resolve::anisotropy(self.anisotropy, &user_graphics, &quality_ceiling);
         // Frames-in-flight (ring-buffer depth): a persisted override clamped to the
         // 1..3 the backends support, applied unconditionally like vsync. Restart-
         // required (the ring buffers are sized at backend init below), independent
@@ -445,38 +433,11 @@ impl GraphicsSystem {
         // the composite `fxaa` flag inside `post_process` (refreshed below once
         // the override + ceiling clamp have settled the final mode).
         let post_config = ctx.drain::<PostProcessConfig>().into_iter().next();
-        let mut post_process = post_config
-            .as_ref()
-            .map(|c| c.resolve())
-            .unwrap_or(crate::gfx::render_types::PostProcessParams::DEFAULT);
-        // A persisted exposure choice (the Exposure slider) overrides the
-        // world's `exposure_ev`. Stored as EV (stops); convert to the linear
-        // multiplier the shaders use, clamped like `PostProcessConfig::resolve`.
-        // Applied live at runtime and re-applied here each launch so a persisted
-        // value survives a restart.
         // Persisted slider choices override the world's values, re-applied here
         // each launch so they survive a restart. The transform / clamp is shared
         // with the live drag-apply via `settings::slider_apply_value`, so the
         // value re-applied at launch matches the value applied at drag time.
-        use crate::gfx::settings::slider_apply_value;
-        if let Some(ev) = user_graphics.exposure_ev {
-            post_process.exposure = slider_apply_value("exposure", ev);
-        }
-        if let Some(v) = user_graphics.bloom_intensity {
-            post_process.bloom_intensity = slider_apply_value("bloom_intensity", v);
-        }
-        if let Some(v) = user_graphics.bloom_threshold {
-            post_process.bloom_threshold = slider_apply_value("bloom_threshold", v);
-        }
-        if let Some(v) = user_graphics.vignette {
-            post_process.vignette = slider_apply_value("vignette", v);
-        }
-        if let Some(v) = user_graphics.lut_strength {
-            post_process.lut_strength = slider_apply_value("lut_strength", v);
-        }
-        if let Some(v) = user_graphics.bloom_knee {
-            post_process.bloom_knee = slider_apply_value("bloom_knee", v);
-        }
+        let mut post_process = resolve::post_process_params(post_config.as_ref(), &user_graphics);
         // Keep a copy as the live source of truth for the slider settings to
         // read at init and mutate at runtime (PostProcessParams is Copy, so the
         // value is still passed into the backend below).
@@ -487,14 +448,13 @@ impl GraphicsSystem {
         // after it is built (the world value is already seeded at backend init,
         // so this only matters for a persisted override). Clamped like
         // `PostProcessConfig::ambient_intensity`.
+        // The raw world value (no override) is what the static LightUniforms are
+        // built with; the override rides `set_ambient_intensity` after init.
         let world_ambient = post_config
             .as_ref()
             .map(|c| c.ambient_intensity())
             .unwrap_or(1.0);
-        self.ambient_intensity = slider_apply_value(
-            "ambient_intensity",
-            user_graphics.ambient_intensity.unwrap_or(world_ambient),
-        );
+        self.ambient_intensity = resolve::ambient_intensity(post_config.as_ref(), &user_graphics);
         // Quality-feature toggles: the world's config overlaid with the user's
         // persisted choices, stored as the source of truth for the Quality-group
         // rows. A runtime toggle flips a field here, re-derives the per-feature
@@ -544,37 +504,8 @@ impl GraphicsSystem {
                 self.post_config.reflection_blur_resolution = v;
             }
             // Per-feature sub-quality slider overrides (look-tuning, applied live
-            // via update_quality_params). Clamped through the shared
-            // `slider_apply_value` so the value re-applied at launch matches the
-            // value applied at drag time. Not preset-governed, so no ceiling clamp.
-            use crate::gfx::settings::slider_apply_value as sav;
-            if let Some(v) = user_graphics.ssao_radius {
-                self.post_config.ssao_radius = sav("ssao_radius", v);
-            }
-            if let Some(v) = user_graphics.ssao_intensity {
-                self.post_config.ssao_intensity = sav("ssao_intensity", v);
-            }
-            if let Some(v) = user_graphics.ssr_intensity {
-                self.post_config.ssr_intensity = sav("ssr_intensity", v);
-            }
-            if let Some(v) = user_graphics.ssr_max_distance {
-                self.post_config.ssr_max_distance = sav("ssr_max_distance", v);
-            }
-            if let Some(v) = user_graphics.ssgi_intensity {
-                self.post_config.ssgi_intensity = sav("ssgi_intensity", v);
-            }
-            if let Some(v) = user_graphics.ssgi_max_distance {
-                self.post_config.ssgi_max_distance = sav("ssgi_max_distance", v);
-            }
-            if let Some(v) = user_graphics.auto_exposure_min_ev {
-                self.post_config.auto_exposure_min_ev = sav("auto_exposure_min_ev", v);
-            }
-            if let Some(v) = user_graphics.auto_exposure_max_ev {
-                self.post_config.auto_exposure_max_ev = sav("auto_exposure_max_ev", v);
-            }
-            if let Some(v) = user_graphics.auto_exposure_speed {
-                self.post_config.auto_exposure_speed = sav("auto_exposure_speed", v);
-            }
+            // via update_quality_params).
+            resolve::overlay_quality_scalars(&mut self.post_config, &user_graphics);
         }
         // Apply the active quality preset as a performance ceiling over the
         // world's authored toggles: where the ceiling disallows a feature, force
@@ -1063,7 +994,7 @@ impl GraphicsSystem {
             lod_alternates: lod_alts,
         } in skinned_geometry
         {
-            let mat_entry = match crate::gfx::draw_list::resolve_material_slots(
+            let mat_entry = match crate::gfx::material_entry::resolve_material_slots(
                 sm.material,
                 sm.texture,
                 material_map,
@@ -1280,43 +1211,13 @@ impl GraphicsSystem {
 
     // Decode the MaterialTable (dense by `MaterialHandle`) into the per-object GPU
     // uniforms + resolved texture slots the draw list indexes. Materials have no
-    // payload; all data lives in the baked `data_bytes`. Every texture reference
-    // (albedo / normal / secondary / emissive / packed ORM) is a `TextureHandle`
-    // indexing the shared pool directly, so a handle past `texture_count` is a
-    // corrupt-build resolution error. Returns None (self.failed set) on any decode
-    // or resolution failure.
+    // payload; all data lives in the baked `data_bytes`. Returns None
+    // (self.failed set) on any decode or resolution failure.
     fn build_material_map(
         &mut self,
         ctx: &mut PipelineContext,
         texture_count: usize,
     ) -> Option<std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>> {
-        // Every material texture reference carries a cook-assigned
-        // `TextureHandle` whose value is the texture's declaration-order slot in
-        // the shared pool, so the handle indexes the pool directly. An unset
-        // reference resolves to `unset` (a per-field fallback slot); a handle
-        // past the pool is a resolution error (cook validated the reference
-        // exists) and resolves to `None` with the field named in the log.
-        let slot_of = |material_handle: usize,
-                       field: &str,
-                       handle: Option<crate::ecs::TextureHandle>,
-                       unset: usize|
-         -> Option<usize> {
-            let Some(handle) = handle else {
-                return Some(unset);
-            };
-            let slot = handle.index();
-            if slot >= texture_count {
-                tracing::error!(
-                    "GraphicsSystem: Material {} references out-of-range {} texture handle {} (only {} textures)",
-                    material_handle,
-                    field,
-                    slot,
-                    texture_count
-                );
-                return None;
-            }
-            Some(slot)
-        };
         let material_table = ctx
             .resource::<crate::resource::MaterialTable>()
             .cloned()
@@ -1336,70 +1237,21 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            // Unset fallbacks differ per field. Albedo and the primary normal
-            // map select a reserved fallback entry through a sentinel no real
-            // handle can collide with; `normal_secondary` names the flat-normal
-            // entry (`texture_count`) directly. Slot 0 stays the sentinel the
-            // shader gates on for the emissive and ORM maps, which keeps their
-            // scalar value, and for `albedo_secondary`, whose terrain-blend
-            // consumer no shader implements yet.
-            let slots = [
-                (
-                    "albedo",
-                    mat.albedo,
-                    crate::gfx::render_types::NO_ALBEDO_SLOT,
-                ),
-                (
-                    "normal_map",
-                    mat.normal_map,
-                    crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-                ),
-                ("albedo_secondary", mat.albedo_secondary, 0),
-                ("normal_secondary", mat.normal_secondary, texture_count),
-                ("emissive_map", mat.emissive_map, 0),
-                ("orm_map", mat.orm_map, 0),
-            ]
-            .map(|(field, handle, unset)| slot_of(material_handle, field, handle, unset));
-            let [
-                Some(albedo_slot),
-                Some(normal_map_slot),
-                Some(albedo_secondary_slot),
-                Some(normal_secondary_slot),
-                Some(emissive_map_slot),
-                Some(orm_map_slot),
-            ] = slots
-            else {
-                self.failed = true;
-                return None;
-            };
-
-            let uniforms = crate::gfx::render_types::MaterialUniforms {
-                roughness: mat.roughness,
-                metallic: mat.metallic,
-                macro_variation: mat.macro_variation,
-                terrain_blend: mat.terrain_blend,
-                tint: mat.tint,
-                _pad2: 0.0,
-                emissive: mat.emissive_factor,
-                secondary_blend_sharpness: mat.secondary_blend_sharpness,
-                albedo_secondary_index: albedo_secondary_slot as u32,
-                normal_secondary_index: normal_secondary_slot as u32,
-                emissive_map_index: emissive_map_slot as u32,
-                orm_map_index: orm_map_slot as u32,
-                alpha_cutoff: mat.alpha_cutoff,
-                opacity: mat.opacity,
-                transparent: u32::from(mat.transparent),
-                see_through: u32::from(mat.see_through),
-            };
-            material_map.insert(
-                crate::ecs::MaterialHandle(material_handle as u32),
-                MaterialEntry {
-                    albedo_slot,
-                    normal_map_slot,
-                    uniforms,
-                    shader_bucket: mat.shader.map_or(0, |h| h.0),
-                },
-            );
+            match crate::gfx::material_entry::of(&mat, texture_count) {
+                Ok(entry) => {
+                    material_map.insert(crate::ecs::MaterialHandle(material_handle as u32), entry);
+                }
+                Err(field) => {
+                    tracing::error!(
+                        "GraphicsSystem: Material {} references an out-of-range {} texture handle (only {} textures)",
+                        material_handle,
+                        field,
+                        texture_count
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            }
         }
         Some(material_map)
     }
@@ -1645,7 +1497,7 @@ impl GraphicsSystem {
             // Push the effective ambient scale (world value or persisted
             // override). The backend already seeds the world value at its own
             // init, so this is the path that applies a persisted Ambient-slider
-            // choice; idempotent when there is no override. No-op on DX/VK.
+            // choice; idempotent when there is no override.
             backend.set_ambient_intensity(self.ambient_intensity);
             // Push the movement key map (the persisted rebinds, or the default).
             // The backend decodes physical keys through it; idempotent with its
@@ -1656,6 +1508,10 @@ impl GraphicsSystem {
             }
         }
         self.caps = device_caps;
+        // Publish the flags for the systems that cannot reach the backend
+        // themselves (the editor's live draw seam asks whether a rewritten draw
+        // slot would land).
+        ctx.insert_resource(crate::ecs::ActiveDeviceCaps(device_caps));
         // Gray out + disable settings rows whose feature the device cannot
         // provide (e.g. ray-traced reflections on a GPU without hardware ray
         // tracing). Runs while the menu HitRegions / TextLabels / ScrollPanels
@@ -1713,6 +1569,8 @@ impl GraphicsSystem {
                 occlusion_two_pass: self.occlusion_two_pass,
                 texture_cap: self.texture_cap,
                 texture_budget: self.texture_budget,
+                persisted_graphics: self.persisted_graphics.clone(),
+                fog_built: self.fog_built,
                 settings_cache: None,
                 settings_writer: None,
                 scene_cmd_cursor: crate::ecs::EventCursor::default(),
@@ -2662,6 +2520,7 @@ impl GraphicsSystem {
             })
         };
         let fog_enabled = fog_settings.is_some();
+        self.fog_built = fog_enabled;
         // Seed the hot-reload dedupe state. Subsequent reload_volumetric_fog
         // calls compare resolved JSONL settings against this and only push
         // (and log) on a real change.

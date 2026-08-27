@@ -24,6 +24,7 @@ mod hot_reload;
 mod init;
 mod instanced;
 mod light_cull;
+mod lights;
 mod line;
 mod metallib;
 mod msl_cache;

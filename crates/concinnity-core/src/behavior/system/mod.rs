@@ -4,6 +4,7 @@
 //! ```text
 //! mod.rs       the system, its per-tick drive, and instance bookkeeping
 //! instance.rs  one behavior's firing state and its clocks
+//! resolve.rs   compiling the source columns, at start and after an edit
 //! eval.rs      the read phase: the tick's view, its buffers, its schedule
 //! apply.rs     the write phase: effects landing on the world
 //! state.rs     persisted variables and `once` flags, behind a host's store
@@ -21,6 +22,7 @@
 mod apply;
 mod eval;
 mod instance;
+mod resolve;
 mod state;
 mod trace;
 
@@ -36,11 +38,12 @@ use alloc::vec::Vec;
 
 use eval::{EvalCtx, PARALLEL_EVAL_MIN_JOBS, Snapshot, eval_one};
 use instance::Instance;
+use resolve::{Resolved, SourceTicks};
 
 pub use eval::{EvalBucket, EvalScheduler};
 pub use state::{BehaviorState, BehaviorStore, def_hash};
 
-use crate::behavior::{Effect, Program, Val, VarTable, compile};
+use crate::behavior::{Effect, Program, Val, VarTable};
 use crate::components::{Behavior, BehaviorSource, InteractEvent, Variables, VolumeEvent};
 use crate::ecs::{
     Entity, EntityByName, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
@@ -77,6 +80,10 @@ pub struct BehaviorSystem {
     // state is neither read nor written, so a preview session starts fresh and
     // leaves the user's saves untouched.
     transient_saves: bool,
+    // The source columns as of the resolution the programs came from. A write
+    // to either moves one, and the next step recompiles rather than running a
+    // body the world no longer holds.
+    sources: SourceTicks,
     // Execution tracing (see `trace.rs`): the published tick counter, and
     // whether the node-path table has been published this world.
     trace_frame: u64,
@@ -127,27 +134,11 @@ impl BehaviorSystem {
 
 impl System for BehaviorSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        // The world's declared variables get their slots first, so each carries
-        // its authored type and starting value; anything a behavior mentions
-        // without a declaration follows as an integer starting at zero.
-        let mut var_table = VarTable::default();
-        for declared in ctx.query::<Variables>() {
-            for decl in &declared.vars {
-                var_table.declare(&decl.name, Val::from_literal(&decl.value));
-            }
-        }
-        let defs: Vec<Behavior> = ctx.query::<Behavior>().cloned().collect();
-        self.programs = defs
-            .into_iter()
-            .map(|def| compile(def, &mut var_table))
-            .collect();
-        self.instances = self.programs.iter().map(|_| Vec::new()).collect();
-        self.vars = var_table.initial();
-        self.var_table = var_table;
+        // A world starting is the resolution with nothing to carry over.
+        self.reseed(ctx);
 
         self.transient_saves = ctx.resource::<TransientSaves>().is_some_and(|t| t.0);
         self.trace_frame = 0;
-        self.trace_paths_published = false;
         self.sim_ticks = 0;
 
         let restored = self.restore_state();
@@ -160,6 +151,11 @@ impl System for BehaviorSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+        // Before the freeze gate below: an edit made while the world is paused
+        // is picked up when it lands, not when the world is next allowed to
+        // run.
+        self.reseed_if_edited(ctx);
+
         if self.programs.is_empty() {
             return StepResult::Continue;
         }
@@ -193,6 +189,55 @@ impl System for BehaviorSystem {
 }
 
 impl BehaviorSystem {
+    // Compile what the source columns now say and adopt it, keeping the run's
+    // state where the edit left it meaningful. Persisted state is not re-read:
+    // restoring a save belongs to a world starting, which `init` does around
+    // this.
+    fn reseed(&mut self, ctx: &PipelineContext) {
+        let resolved = resolve::resolve(
+            ctx.query::<Variables>().as_slice(),
+            ctx.query::<Behavior>().as_slice(),
+        );
+        self.sources = SourceTicks::of(ctx);
+        self.adopt(resolved);
+    }
+
+    // Recompile when a write has moved either source column since the programs
+    // were compiled from it. This is what lets an editing tool rewrite one of
+    // those components in place instead of reloading the world to apply it.
+    fn reseed_if_edited(&mut self, ctx: &PipelineContext) {
+        if SourceTicks::of(ctx) != self.sources {
+            self.reseed(ctx);
+        }
+    }
+
+    fn adopt(&mut self, resolved: Resolved) {
+        let programs = core::mem::take(&mut self.programs);
+        let instances = core::mem::take(&mut self.instances);
+        let carried = resolve::carry_instances(&programs, instances, &resolved.programs);
+
+        // A delay is a run of the body it was scheduled against, so one whose
+        // program was edited away is dropped rather than aimed at the new one.
+        let moved = carried.moved;
+        self.pending.retain_mut(
+            |(program, _, _)| match moved.get(*program).copied().flatten() {
+                Some(next) => {
+                    *program = next;
+                    true
+                }
+                None => false,
+            },
+        );
+
+        self.vars = resolve::carry_vars(&self.var_table, &self.vars, &resolved.var_table);
+        self.instances = carried.instances;
+        self.programs = resolved.programs;
+        self.var_table = resolved.var_table;
+        // The node-path table an observer resolves trace events through is a
+        // compile product of the programs just replaced.
+        self.trace_paths_published = false;
+    }
+
     // Restore persisted state, but only in a world that saves: any other world
     // starts fresh and never reads the store. Returns how many variables the
     // restore applied.

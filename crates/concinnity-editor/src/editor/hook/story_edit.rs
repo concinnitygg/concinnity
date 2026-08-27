@@ -224,7 +224,9 @@ impl EditorHook {
         }
         self.notifier.success(&format!("Applied story {path}"));
         self.story_touched = false;
-        self.rebuild_preview = true;
+        // The cook reads the story from disk, so nothing in the entry list
+        // describes what changed: only a rebuild picks the new source up.
+        self.require_rebuild();
     }
 
     // Write the starter story to a fresh file and add its StoryImport entry,

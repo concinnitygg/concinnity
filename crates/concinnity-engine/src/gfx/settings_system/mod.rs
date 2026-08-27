@@ -51,7 +51,7 @@ pub(crate) struct SettingsState {
     pub(crate) cycle_value_labels: std::collections::HashMap<String, AssetId>,
     // Live post-process parameters (bloom / exposure / vignette / LUT blend),
     // the source of truth for slider settings.
-    pub(crate) post_process: crate::gfx::render_types::PostProcessParams,
+    pub(crate) post_process: crate::gfx::render_types::PostProcessTunables,
     // The world's resolved PostProcessConfig with the user's persisted
     // quality-toggle overrides applied: the source of truth for the
     // Quality-group toggles and cycle knobs.
@@ -106,6 +106,12 @@ pub(crate) struct SettingsState {
     pub(crate) occlusion_two_pass: bool,
     pub(crate) texture_cap: u32,
     pub(crate) texture_budget: u32,
+    // The persisted graphics overrides as they stood at init, the fallback for
+    // `persisted_graphics` until a settings change loads `settings_cache`.
+    pub(crate) persisted_graphics: crate::config::GraphicsSettings,
+    // Whether the backend built the fog pass at init. A world that started with
+    // fog off cannot be handed fog live; that edit rebuilds instead.
+    pub(crate) fog_built: bool,
     // In-memory copy of the persisted settings store, loaded once on the first
     // settings change and mutated in place from then on, so a queued (not yet
     // flushed) background write is never re-read stale from disk.
@@ -180,6 +186,80 @@ impl System for SettingsSystem {
 }
 
 impl SettingsState {
+    // A neutral live state for tests: no persisted overrides, no preset ceiling
+    // (`Custom`), the engine defaults everywhere else. Tests set the few fields
+    // they exercise.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        use crate::components::PostProcessConfig;
+        Self {
+            keymap: crate::gfx::keymap::KeyMap::default(),
+            rebind_rows: Vec::new(),
+            gamepad_map: crate::components::GamepadMap::default(),
+            pad_rebind_rows: Vec::new(),
+            sliders: Vec::new(),
+            cycle_value_labels: std::collections::HashMap::new(),
+            post_process: crate::gfx::render_types::PostProcessTunables::DEFAULT,
+            post_config: PostProcessConfig::default(),
+            authored_post_config: PostProcessConfig::default(),
+            ambient_intensity: 1.0,
+            quality_preset: crate::gfx::quality_preset::QualityPreset::Custom,
+            gpu_profile: crate::gfx::backend::GpuProfile::UNKNOWN,
+            render_scale: Default::default(),
+            upscale_backend: Default::default(),
+            temporal_upscaling: false,
+            hdr_display: false,
+            hdr_pq: false,
+            shadow_map_size: 2048,
+            shadow_update: Default::default(),
+            shadow_distance: 200,
+            shadow_cascades: 4,
+            anisotropy: 8,
+            authored_shadow_map_size: 2048,
+            authored_shadow_update: Default::default(),
+            authored_shadow_distance: 200,
+            authored_shadow_cascades: 4,
+            authored_anisotropy: 8,
+            vsync: true,
+            fps_cap: 0,
+            perf_stats: true,
+            show_fps: true,
+            show_vram: true,
+            perf_sub_row_labels: Vec::new(),
+            window_args: crate::components::Window::default(),
+            display_modes: Vec::new(),
+            resolution: None,
+            current_mode: None,
+            resolution_row_labels: Vec::new(),
+            frames_in_flight: 2,
+            occlusion_two_pass: false,
+            texture_cap: 0,
+            texture_budget: 0,
+            persisted_graphics: Default::default(),
+            fog_built: true,
+            settings_cache: None,
+            settings_writer: None,
+            scene_cmd_cursor: Default::default(),
+            setting_cmd_cursor: Default::default(),
+            published_hud_prefs: None,
+            published_disabled_inputs: None,
+        }
+    }
+
+    // The persisted graphics overrides in force: the in-memory store once a
+    // settings change has loaded it, otherwise the snapshot init took from disk.
+    pub(crate) fn persisted_graphics(&self) -> &crate::config::GraphicsSettings {
+        match &self.settings_cache {
+            Some(cache) => &cache.graphics,
+            None => &self.persisted_graphics,
+        }
+    }
+
+    // The active quality preset's performance ceiling on this GPU.
+    pub(crate) fn ceiling(&self) -> crate::gfx::quality_preset::QualityCeiling {
+        crate::gfx::quality_preset::resolve_ceiling(self.quality_preset, &self.gpu_profile)
+    }
+
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
     // out of the event queue so the borrow is released before the jump runs.
     // The flow lives in the shared `ActiveSceneFlow` resource (GraphicsSystem

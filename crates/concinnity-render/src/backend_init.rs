@@ -13,7 +13,7 @@ use crate::decal::DecalRecord;
 use crate::mesh_payload::Vertex;
 use crate::particles::ParticleEmitterRecord;
 use crate::render_types::{
-    AreaLightData, DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessParams,
+    AreaLightData, DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessTunables,
     SpotShadowData,
 };
 use crate::rt_geom::RtDynamicMode;
@@ -110,8 +110,10 @@ pub struct ShadowParams {
 /// launch's render requests). Every Option here is an init-time gate: None
 /// allocates nothing.
 pub struct PostSettings {
-    /// Composite tunables pushed to the post pass.
-    pub post_process: PostProcessParams,
+    /// Composite tunables pushed to the post pass. The backend pairs them with
+    /// the display-output flags it negotiates below (`hdr_display` / `hdr_pq`)
+    /// to build the uniform the shaders read.
+    pub post_process: PostProcessTunables,
     /// Whether the temporal anti-aliasing pass runs.
     pub taa_enabled: bool,
     /// Screen-space ambient occlusion, or `None` when off.
@@ -334,7 +336,7 @@ impl<'a> BackendInit<'a> {
             anisotropy: 1,
             planar_planes: 0,
             post: PostSettings {
-                post_process: PostProcessParams::DEFAULT,
+                post_process: PostProcessTunables::DEFAULT,
                 taa_enabled: false,
                 ssao: None,
                 ssr: None,
@@ -452,7 +454,7 @@ mod tests {
 
     fn full_post() -> PostSettings {
         PostSettings {
-            post_process: PostProcessParams::DEFAULT,
+            post_process: PostProcessTunables::DEFAULT,
             taa_enabled: true,
             ssao: Some(SsaoSettings::resolve(0.5, 1.0)),
             ssr: None,

@@ -54,7 +54,7 @@
 //! }
 //! ```
 //!
-//! # Choosing between the two
+//! # Composing vs Cooking
 //!
 //! Add components directly when a world is small, or when it is decided at
 //! runtime and there is nothing to prepare in advance. Reach for the `cook`

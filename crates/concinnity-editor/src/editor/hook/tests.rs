@@ -263,15 +263,64 @@ fn build_preview_world_renders_from_in_memory_entries() {
         serde_json::json!({"name":"room","type":"Room","args":{}}),
     ]);
     assert!(
-        concinnity_engine::ecs::renders(&h.build_preview_world().expect("authored entries build")),
+        concinnity_engine::ecs::renders(
+            &h.build_preview_world().expect("authored entries build").0
+        ),
         "authored renderable entries render without disk"
     );
     // Empty entries: the seed keeps the preview window from going blank.
     let h = hook(Vec::new());
     assert!(
-        concinnity_engine::ecs::renders(&h.build_preview_world().expect("empty world seeds")),
+        concinnity_engine::ecs::renders(&h.build_preview_world().expect("empty world seeds").0),
         "an empty world is seeded so it still renders"
     );
+}
+
+// End to end over a really cooked world: an edit to a live type is written into
+// the world the build produced -- through the real expansion, name interner and
+// entity index -- and no rebuild is asked for. This is the whole point of the
+// live path, so it is proved against a real world rather than a stubbed one.
+#[test]
+fn a_live_edit_reaches_a_really_cooked_world() {
+    isolate_state_dir();
+    let mut h = hook(vec![
+        serde_json::json!({"name":"cam","type":"Camera3D","args":{}}),
+        serde_json::json!({"name":"room","type":"Room","args":{}}),
+        serde_json::json!({"name":"hint","type":"TextLabel","args":{"content":"before"}}),
+    ]);
+    let (mut world, shadows) = h.build_preview_world().expect("the world builds");
+    h.world_shadows = Some(shadows);
+    assert_eq!(
+        world
+            .query::<crate::components::TextLabel>()
+            .next()
+            .expect("the label is in the world")
+            .content,
+        "before"
+    );
+
+    h.entries[2]["args"]["content"] = serde_json::json!("after");
+    h.mark_changed();
+    assert!(
+        !h.refresh_preview(&mut world),
+        "a TextLabel field is written into the running world"
+    );
+    assert_eq!(
+        world
+            .query::<crate::components::TextLabel>()
+            .next()
+            .unwrap()
+            .content,
+        "after",
+        "and the running component carries the edit"
+    );
+
+    // Adding a line changes what the expansion produces, so it still rebuilds.
+    h.entries.push(serde_json::json!({
+        "name":"hint2","type":"TextLabel","args":{"content":"new"}
+    }));
+    h.mark_changed();
+    assert!(h.refresh_preview(&mut world), "a new line rebuilds");
 }
 
 // The tree lists the world's own lines under `World` and each expansion's
@@ -7309,15 +7358,185 @@ fn transport_chips_drive_the_transport() {
 }
 
 #[test]
-fn a_committed_edit_stops_the_simulation() {
+fn an_edit_that_rebuilds_stops_the_simulation() {
     let mut h = playing_hook(vec![entry("box", "Prop")]);
+    let mut world = World::new();
     h.entries.push(entry("box2", "Prop"));
     h.mark_changed();
+    assert!(
+        h.refresh_preview(&mut world),
+        "a new line needs the world rebuilt"
+    );
     assert_eq!(
         h.sim.state,
         sim::SimState::Stopped,
         "the rebuild discards the run, so the transport says so"
     );
+}
+
+// An edit written straight into the running world discards nothing, so the
+// transport keeps running rather than reporting a stop that did not happen.
+#[test]
+fn an_edit_applied_live_leaves_the_simulation_running() {
+    let mut h = playing_hook(vec![entry_with_args(
+        "badge",
+        "Sprite",
+        serde_json::json!({ "width": 4.0 }),
+    )]);
+    h.world_shadows = Some(Default::default());
+    let mut world = World::new();
+    let e = world.push(crate::components::Sprite::default());
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(crate::ecs::asset_id::intern("badge"), e);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+
+    h.entries[0]["args"]["width"] = serde_json::json!(16.0);
+    h.mark_changed();
+    assert!(
+        !h.refresh_preview(&mut world),
+        "a Sprite field is written into the running world"
+    );
+    assert!(!h.rebuild_preview, "and the preview is current again");
+    assert_eq!(h.sim.state, sim::SimState::Playing);
+    assert_eq!(
+        world
+            .query::<crate::components::Sprite>()
+            .next()
+            .unwrap()
+            .width,
+        16.0
+    );
+}
+
+// The Behavior and Variables panels commit as each change is made. Both types
+// are live, so the running world takes the edit and the run it is being edited
+// against survives.
+
+// A world holding one component of each edited type, indexed by the names the
+// entries use.
+fn named_world(assets: Vec<(&str, crate::ecs::ComponentAsset)>) -> World {
+    let mut world = World::new();
+    let mut by_name = std::collections::BTreeMap::new();
+    for (name, asset) in assets {
+        let entity = world.add(asset);
+        by_name.insert(crate::ecs::asset_id::intern(name), entity);
+    }
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    world
+}
+
+fn behavior_args(nodes: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "on": "tick", "do": nodes })
+}
+
+fn set_node(var: &str) -> serde_json::Value {
+    serde_json::json!({ "set": { "var": var, "value": { "int": 1 } } })
+}
+
+#[test]
+fn a_behavior_body_edit_is_written_into_the_running_world() {
+    let mut h = playing_hook(vec![entry_with_args(
+        "counter",
+        "Behavior",
+        behavior_args(serde_json::json!([set_node("n")])),
+    )]);
+    h.world_shadows = Some(Default::default());
+    let mut world = named_world(vec![(
+        "counter",
+        crate::ecs::ComponentAsset::Behavior(crate::components::Behavior::default()),
+    )]);
+
+    h.entries[0]["args"] = behavior_args(serde_json::json!([set_node("n"), set_node("m")]));
+    h.mark_changed();
+    assert!(
+        !h.refresh_preview(&mut world),
+        "an edited body is written into the running world"
+    );
+    assert!(!h.rebuild_preview);
+    assert_eq!(h.sim.state, sim::SimState::Playing);
+    assert_eq!(
+        world
+            .query::<crate::components::Behavior>()
+            .next()
+            .unwrap()
+            .body
+            .len(),
+        2,
+        "the column holds the edited body"
+    );
+}
+
+// The names a body reaches other assets by are the build's to resolve, so
+// moving one rebuilds even though the type is live.
+#[test]
+fn a_behavior_edit_that_moves_a_reference_rebuilds() {
+    let spawning = |template: &str| {
+        behavior_args(serde_json::json!([
+            { "spawn": { "template": template } },
+        ]))
+    };
+    let mut h = playing_hook(vec![entry_with_args(
+        "spawner",
+        "Behavior",
+        spawning("crate"),
+    )]);
+    h.world_shadows = Some(Default::default());
+    let mut world = named_world(vec![(
+        "spawner",
+        crate::ecs::ComponentAsset::Behavior(crate::components::Behavior::default()),
+    )]);
+
+    h.entries[0]["args"] = spawning("barrel");
+    h.mark_changed();
+    assert!(
+        h.refresh_preview(&mut world),
+        "a retargeted spawn needs the world rebuilt"
+    );
+}
+
+#[test]
+fn a_variables_edit_is_written_into_the_running_world() {
+    let table = |value: i64| serde_json::json!({ "vars": [{ "name": "score", "value": { "int": value } }] });
+    let mut h = playing_hook(vec![entry_with_args("world_vars", "Variables", table(0))]);
+    h.world_shadows = Some(Default::default());
+    let mut world = named_world(vec![(
+        "world_vars",
+        crate::ecs::ComponentAsset::Variables(crate::components::Variables::default()),
+    )]);
+
+    h.entries[0]["args"] = table(7);
+    h.mark_changed();
+    assert!(
+        !h.refresh_preview(&mut world),
+        "a declaration is written into the running world"
+    );
+    assert!(!h.rebuild_preview);
+    assert_eq!(h.sim.state, sim::SimState::Playing);
+    let declared = world
+        .query::<crate::components::Variables>()
+        .next()
+        .unwrap();
+    assert_eq!(declared.vars.len(), 1);
+    assert_eq!(
+        declared.vars[0].value,
+        crate::components::BehaviorLiteral::Int(7)
+    );
+}
+
+// Stop restores the authored state, which means undoing whatever the run did:
+// no entry diff describes that, so it must rebuild even though the entries are
+// untouched.
+#[test]
+fn stop_rebuilds_even_though_nothing_was_authored() {
+    let mut h = playing_hook(vec![entry_with_args(
+        "badge",
+        "Sprite",
+        serde_json::json!({ "width": 4.0 }),
+    )]);
+    h.world_shadows = Some(Default::default());
+    let mut world = World::new();
+    h.sim_stop();
+    assert!(h.refresh_preview(&mut world), "Stop always rebuilds");
 }
 
 #[test]

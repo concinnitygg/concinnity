@@ -115,6 +115,9 @@ pub(crate) enum Call {
     SetWindowSize(u32, u32),
     SetDisplayMode(crate::gfx::display_mode::DisplayMode),
     SetAmbientIntensity(f32),
+    // The directional lights pushed, as (direction, colour, intensity) per light.
+    UpdateDirectionalLights(Vec<([f32; 3], [f32; 3], f32)>),
+    UpdateFogSettings(Option<crate::gfx::volumetric_fog::FogSettings>),
     SetKeymap,
     SetShadowUpdate,
     SetShadowDistance(u32),
@@ -130,6 +133,14 @@ pub(crate) enum Call {
         draw_idx: usize,
         visible: bool,
     },
+    // A draw slot's material rewritten in place. The uniforms are not compared
+    // (they carry no PartialEq); the pool slots identify which material landed.
+    SetDrawMaterial {
+        draw_idx: usize,
+        texture_slot: usize,
+        normal_map_slot: usize,
+    },
+    SetDrawCullDistance(usize, f32),
     SetFade(f32),
 }
 
@@ -545,6 +556,19 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetAmbientIntensity(value));
     }
 
+    fn update_directional_lights(&mut self, lights: &[crate::components::DirectionalLight]) {
+        self.record(Call::UpdateDirectionalLights(
+            lights
+                .iter()
+                .map(|l| (l.direction, l.color, l.intensity))
+                .collect(),
+        ));
+    }
+
+    fn update_fog_settings(&mut self, settings: Option<crate::gfx::volumetric_fog::FogSettings>) {
+        self.record(Call::UpdateFogSettings(settings));
+    }
+
     fn set_keymap(&mut self, _keymap: &crate::gfx::keymap::KeyMap) {
         self.record(Call::SetKeymap);
     }
@@ -561,7 +585,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetShadowCascades(count));
     }
 
-    fn update_post_process(&mut self, _params: crate::gfx::render_types::PostProcessParams) {
+    fn update_post_process(&mut self, _tunables: crate::gfx::render_types::PostProcessTunables) {
         self.record(Call::UpdatePostProcess);
     }
 
@@ -592,10 +616,19 @@ impl RenderBackend for MockBackend {
 
     fn set_draw_material(
         &mut self,
-        _draw_idx: usize,
+        draw_idx: usize,
         _material: MaterialUniforms,
-        _texture_slot: usize,
-        _normal_map_slot: usize,
+        texture_slot: usize,
+        normal_map_slot: usize,
     ) {
+        self.record(Call::SetDrawMaterial {
+            draw_idx,
+            texture_slot,
+            normal_map_slot,
+        });
+    }
+
+    fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
+        self.record(Call::SetDrawCullDistance(draw_idx, cull_distance));
     }
 }

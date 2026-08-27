@@ -1319,6 +1319,9 @@ mod tests {
     // valid SPIR-V from the embedded source.
     #[test]
     fn shadow_bindless_vs_compiles() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
         assert!(is_spirv(&vs), "shadow bindless VS is valid SPIR-V");
     }
@@ -1326,11 +1329,10 @@ mod tests {
     // The bindless main shaders compile to valid SPIR-V from the embedded
     // single-source program, across the probe-array lengths a device may bind
     // (the array length is a runtime value on a sampler-starved driver, so the
-    // shortest and the ceiling forms both have to survive). Skipped when the
-    // host has no slangc; the build warns about that separately.
+    // shortest and the ceiling forms both have to survive).
     #[test]
     fn bindless_shaders_compile() {
-        if concinnity_slang::slangc_path().is_none() {
+        if !crate::slangc_gate::slangc_available() {
             return;
         }
         for probes in [1, 7, concinnity_render::uniforms::MAX_PROBES as u32] {
@@ -1359,6 +1361,9 @@ mod tests {
     // Vulkan-on-Windows runtime cannot unit-test end to end.
     #[test]
     fn world_shader_resolution_passes_spirv_and_falls_back_to_glsl() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         // Build real SPIR-V from the bundled GLSL, then confirm
         // `resolve_main_shaders` returns it unchanged (the hot-swap's main
         // pipeline reuses these bytes directly).

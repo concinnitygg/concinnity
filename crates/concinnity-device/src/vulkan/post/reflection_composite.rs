@@ -621,6 +621,9 @@ mod tests {
     // CPU<->GPU layout to assert.
     #[test]
     fn reflection_composite_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         let shaders = super::compile_reflection_composite_shaders(false)
             .expect("reflection composite shaders compile");
         assert!(super::is_spirv(&shaders.vs));

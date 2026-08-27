@@ -108,7 +108,7 @@ impl VkContext {
             planar_planes,
             post:
                 PostSettings {
-                    mut post_process,
+                    post_process: post_tunables,
                     taa_enabled,
                     ssao: ssao_settings,
                     ssr: ssr_settings,
@@ -621,11 +621,11 @@ impl VkContext {
             }
         };
 
-        // Drive the composite shader's `hdr_output > 0.5` branch and its
-        // in-branch `pq_output` encode flag from the resolved HDR mode (freshly
-        // negotiated or inherited on a reload). Mirrors `DxContext::new`.
-        post_process.hdr_output = hdr_mode.shader_flag();
-        post_process.pq_output = hdr_mode.pq_flag();
+        // Pair the authored tunables with the resolved HDR mode (freshly
+        // negotiated or inherited on a reload), which drives the composite
+        // shader's `hdr_output > 0.5` branch and its in-branch `pq_output`
+        // encode flag. Mirrors `DxContext::new`.
+        let post_process = hdr_mode.post_process_params(post_tunables);
 
         //  Command pool
         let command_pool = {
@@ -1057,27 +1057,12 @@ impl VkContext {
         // Per-frame CSM updates use the first directional light's direction;
         // we cache it here at init so subsequent frames don't have to look it
         // up. Matches the Metal/DirectX pattern.
-        let shadow_light_dir = if light_uniforms.num_directional > 0 {
-            light_uniforms.directional[0].direction
-        } else {
-            // Match LightUniforms::DEFAULT.
-            [-0.3, 0.85, 0.4]
-        };
+        let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
         // Sun direction + intensity-weighted colour for the volumetric-fog
-        // encoder. The Vulkan backend uploads LightUniforms once at init
-        // (no runtime light mutation), so the sun colour fed into the fog
-        // ray-march is fixed. Mirrors `directx/init`.
+        // encoder, cached because the light UBO is uploaded rather than pushed
+        // each frame. `update_directional_lights` re-derives both.
         let fog_sun_dir = shadow_light_dir;
-        let fog_sun_color = if light_uniforms.num_directional > 0 {
-            let l = &light_uniforms.directional[0];
-            [
-                l.color[0] * l.intensity,
-                l.color[1] * l.intensity,
-                l.color[2] * l.intensity,
-            ]
-        } else {
-            [1.0, 1.0, 1.0]
-        };
+        let fog_sun_color = crate::gfx::lights::sun_color(&light_uniforms);
         let shadow_uniforms = crate::gfx::csm::empty_shadow_uniforms();
         for ubo in &shadow_ubos {
             upload_shadow_uniforms(ubo, &shadow_uniforms);

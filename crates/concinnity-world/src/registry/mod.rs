@@ -177,7 +177,12 @@ macro_rules! __meta_renders {
     (renders $($r:tt)*) => { true };
     ($t:tt $($r:tt)*) => { crate::registry::__meta_renders!($($r)*) };
 }
-pub(crate) use {__meta_renders, __meta_singleton, __meta_useful_blank};
+macro_rules! __meta_live {
+    () => { false };
+    (live $($r:tt)*) => { true };
+    ($t:tt $($r:tt)*) => { crate::registry::__meta_live!($($r)*) };
+}
+pub(crate) use {__meta_live, __meta_renders, __meta_singleton, __meta_useful_blank};
 
 // The `consumed` flag: whether a load-time pass drains this column during
 // `World::start`, and the runtime type that survives in its place when one
@@ -511,6 +516,27 @@ macro_rules! define_registered_type {
             pub fn renders(self) -> bool {
                 match self {
                     $( Self::$variant => __meta_renders!($($meta)*) ),+
+                }
+            }
+            /// Whether the running world re-reads this type's column every
+            /// frame. An editing tool holding a live world can overwrite such
+            /// a component in place and see the change on the next draw,
+            /// instead of reloading the world to apply it.
+            ///
+            /// Flagging a type asserts two things: its column still holds
+            /// entities at tick time and some system reads them afresh, AND no
+            /// build-time expansion reads its args -- an in-place write never
+            /// runs the expansion, so a type another asset is generated from
+            /// would leave that generated asset standing on the old values.
+            ///
+            /// An expansion is not the only thing that reads args at build
+            /// time; the reference graph that decides how payloads pack and the
+            /// cross-asset validator do too. A type carrying one of those can
+            /// still be flagged, so long as the writer declines the edits that
+            /// would move it.
+            pub fn live(self) -> bool {
+                match self {
+                    $( Self::$variant => __meta_live!($($meta)*) ),+
                 }
             }
             /// Whether a world may declare this type directly.

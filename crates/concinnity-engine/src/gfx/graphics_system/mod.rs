@@ -199,6 +199,15 @@ pub struct GraphicsSystem {
     // resolve an authored Texture name to its live pool slot. `Some` only under
     // `cn debug`; read-only after init.
     world_reload: Option<WorldReloadState>,
+    // The persisted settings-menu graphics overrides as they stood at init
+    // (each field `None` when the user never changed that row). Held so the
+    // live-lighting seam can re-derive a knob exactly as init did: an authoring
+    // edit to a row the user has overridden moves the authored baseline only,
+    // matching what a relaunch of the edited world would show.
+    persisted_graphics: crate::config::GraphicsSettings,
+    // Whether the world declared enabled fog at init, so the backend built the
+    // fog pass. A backend that never built it cannot be handed fog live.
+    fog_built: bool,
     // Last `VolumetricFog` settings pushed to the backend, used by the
     // world.jsonl reload pass to dedupe: if the resolved value matches what's
     // already live, the reload skips the trait call and the log entry. Tracks
@@ -210,7 +219,7 @@ pub struct GraphicsSystem {
     // resolved PostProcessConfig (with any persisted overrides applied); a
     // slider drag mutates a field here and pushes the whole struct to the
     // backend via `update_post_process`.
-    post_process: crate::gfx::render_types::PostProcessParams,
+    post_process: crate::gfx::render_types::PostProcessTunables,
     // Live ambient (IBL) light scale, the source of truth for the Ambient
     // slider. Lives in the backend's `LightUniforms` (not `PostProcessParams`),
     // so it is held + pushed separately via `set_ambient_intensity`. Seeded at
@@ -456,8 +465,10 @@ impl GraphicsSystem {
             deferred_shader_scenes: Vec::new(),
             pending_hot_reload_sources: None,
             world_reload: None,
+            persisted_graphics: crate::config::GraphicsSettings::default(),
+            fog_built: false,
             last_fog_settings: None,
-            post_process: crate::gfx::render_types::PostProcessParams::DEFAULT,
+            post_process: crate::gfx::render_types::PostProcessTunables::DEFAULT,
             // Matches PostProcessConfig's ambient_intensity default; overwritten
             // at init from the world / persisted store.
             ambient_intensity: 1.0,

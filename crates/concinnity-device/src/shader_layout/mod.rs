@@ -45,8 +45,6 @@ mod mirrors;
 mod programs;
 mod reflect;
 
-use concinnity_slang as slang;
-
 use mirror::Case;
 use programs::{Program, Target};
 
@@ -62,7 +60,7 @@ const _: () = assert!(concinnity_render::uniforms::MAX_PROBES == 8);
 // out of a target it cannot build on, which is otherwise indistinguishable from
 // a layout failure.
 fn check(program: &Program, cases: &[Case]) {
-    if slang::slangc_path().is_none() {
+    if !crate::slangc_gate::slangc_available() {
         return;
     }
     let mut drift = Vec::new();

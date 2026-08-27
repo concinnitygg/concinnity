@@ -50,9 +50,18 @@ pub mod animation;
 /// crate can zero the controller's velocity behind an externally driven pose.
 pub mod camera_controller;
 pub(crate) mod draw_list;
+/// Live reassignment of a running world's draw slots (their material and cull
+/// distance), for an editor previewing a Prop edit without a rebuild.
+pub mod draw_preview;
 /// The renderer driver. An internal system (not a declarable asset), constructed
 /// by `World::start` when the world declares a `GraphicsConfig`.
 pub mod graphics_system;
+/// Live application of the world's lighting assets to a running world, for an
+/// editor previewing sun / fog / shadow / post-process edits without a rebuild.
+pub mod lighting_preview;
+/// The renderer's reading of one compiled `Material`: GPU uniforms plus the
+/// texture-pool slots its references resolve to.
+pub(crate) mod material_entry;
 /// Live re-resolution of a `CharacterShape` against a running world's poses,
 /// for an editor previewing slider edits without a rebuild.
 pub mod shape_preview;
@@ -86,6 +95,9 @@ pub(crate) mod look_controls;
 #[cfg(test)]
 pub(crate) mod mock_backend;
 pub(crate) mod quality_preset;
+// How the world's authored render settings resolve against the user's persisted
+// settings-menu choices and the active quality preset's ceiling.
+pub(crate) mod render_config;
 pub(crate) mod setting_action;
 pub(crate) mod settings;
 // Handle -> asset id bridge for SkinnedMesh correlation references, published by

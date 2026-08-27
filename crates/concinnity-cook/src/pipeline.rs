@@ -217,6 +217,25 @@ pub struct PipelineResult {
 }
 
 impl PipelineResult {
+    /// The interned asset name of every compiled resource of `kind`, dense by
+    /// its per-kind handle: the identity a runtime that addresses resources by
+    /// handle has no other way to recover (a resource record carries its kind
+    /// and handle, not its name). 0 where the build recorded no id.
+    pub fn resource_names(&self, kind: ResourceKind) -> Vec<u32> {
+        let mut names = Vec::new();
+        for (record, lock) in self.resources.iter().zip(self.resource_locks.iter()) {
+            if record.resource_kind != kind as u8 {
+                continue;
+            }
+            let slot = record.handle as usize;
+            if names.len() <= slot {
+                names.resize(slot + 1, 0);
+            }
+            names[slot] = lock.id.unwrap_or_default();
+        }
+        names
+    }
+
     /// The compiled payload bytes of the resource of `kind` declared under
     /// `name`, sliced out of the in-memory blob sections. `None` when no such
     /// resource was compiled or it carries no payload. The editor's glTF

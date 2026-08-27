@@ -1156,6 +1156,9 @@ impl MtlContext {
             // The per-frame RT topology refresh re-admits recycled build-time
             // slots, so every retired slot may be reused.
             reuses_build_slots: true,
+            // The per-object buffer is rebuilt from `draw.objects` every frame,
+            // so a slot's rewritten material draws on the next one.
+            rewrites_draws: true,
         }
     }
 
@@ -1326,8 +1329,8 @@ impl MtlContext {
     }
 
     // Rewrite a draw slot's material parameters + texture/normal-map pool
-    // indices in place. Driven by `world.jsonl` hot-reload (`cn debug` only).
-    // Has no effect if the index is out of range.
+    // indices in place. Driven by the editor's live draw seam when a Prop edits
+    // its `material` arg. Has no effect if the index is out of range.
     pub(crate) fn set_draw_material(
         &mut self,
         draw_idx: usize,
@@ -1347,9 +1350,9 @@ impl MtlContext {
         }
     }
 
-    // Rewrite a draw slot's `cull_distance` in place. Driven by
-    // `world.jsonl` hot-reload (`cn debug` only). Has no effect if the index
-    // is out of range.
+    // Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
+    // live draw seam when a Prop edits its `cull_distance` arg. Has no effect
+    // if the index is out of range.
     pub(crate) fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
         if let Some(obj) = self.draw.objects.get_mut(draw_idx) {
             obj.cull_distance = cull_distance.max(0.0);

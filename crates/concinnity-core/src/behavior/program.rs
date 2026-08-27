@@ -247,4 +247,11 @@ impl VarTable {
     pub fn initial(&self) -> Vec<Val> {
         self.inits.clone()
     }
+
+    /// The starting value a name was declared with, if it has a slot.
+    pub fn init_of(&self, name: &str) -> Option<Val> {
+        self.slot_of(name)
+            .and_then(|slot| self.inits.get(slot as usize))
+            .copied()
+    }
 }

@@ -320,15 +320,12 @@ mod tests {
     // skips rather than failing.
     #[test]
     fn glass_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         for msaa in [1u32, 4] {
-            match super::compile_glass_shaders(msaa, false) {
-                Ok(_) => {}
-                Err(e) if slangc_unavailable(&e) => {
-                    eprintln!("skipping glass compile test (msaa={msaa}): {e}");
-                    return;
-                }
-                Err(e) => panic!("glass shaders (msaa={msaa}) must compile: {e}"),
-            }
+            super::compile_glass_shaders(msaa, false)
+                .unwrap_or_else(|e| panic!("glass shaders (msaa={msaa}) must compile: {e}"));
         }
     }
 
@@ -338,15 +335,12 @@ mod tests {
     // `compile_glass_rt_shaders`.
     #[test]
     fn glass_rt_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         for msaa in [1u32, 4] {
-            match super::compile_glass_rt_shaders(msaa, false) {
-                Ok(_) => {}
-                Err(e) if slangc_unavailable(&e) => {
-                    eprintln!("skipping glass_rt compile test (msaa={msaa}): {e}");
-                    return;
-                }
-                Err(e) => panic!("glass_rt shaders (msaa={msaa}) must compile: {e}"),
-            }
+            super::compile_glass_rt_shaders(msaa, false)
+                .unwrap_or_else(|e| panic!("glass_rt shaders (msaa={msaa}) must compile: {e}"));
         }
     }
 
@@ -354,20 +348,13 @@ mod tests {
     // applies the model matrix) and whose fragments carry the same SM 6.5 trace.
     #[test]
     fn glass_mesh_shaders_compile() {
-        for msaa in [1u32, 4] {
-            match super::compile_glass_mesh_shaders(msaa, false) {
-                Ok(_) => {}
-                Err(e) if slangc_unavailable(&e) => {
-                    eprintln!("skipping glass_mesh compile test (msaa={msaa}): {e}");
-                    return;
-                }
-                Err(e) => panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"),
-            }
+        if !crate::slangc_gate::slangc_available() {
+            return;
         }
-    }
-
-    fn slangc_unavailable(err: &str) -> bool {
-        err.contains("slangc")
+        for msaa in [1u32, 4] {
+            super::compile_glass_mesh_shaders(msaa, false)
+                .unwrap_or_else(|e| panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"));
+        }
     }
 
     #[test]

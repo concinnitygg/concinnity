@@ -746,6 +746,9 @@ mod tests {
     // gfx::render_types.
     #[test]
     fn ssr_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         // Both the ceiling and a device-shortened probe cube array must compile.
         for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
             let shaders = super::compile_ssr_shaders(false, probes).expect("ssr shaders compile");

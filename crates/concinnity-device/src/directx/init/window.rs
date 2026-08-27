@@ -283,8 +283,8 @@ pub(super) fn setup(
     //     nits per BT.2408.
     //
     // PQ-not-supported worlds gracefully fall back to scRGB linear (the
-    // shader's `pq_output` flag is cleared in [`super::DxContext::new`] when
-    // that fallback fires so the shader doesn't double-encode). If neither
+    // rewritten encoding is what [`super::DxContext::new`] composes
+    // `pq_output` from, so the shader doesn't double-encode). If neither
     // signal is advertised by the swapchain, leave at the platform default
     // and warn; the resolver path has already gated us on the panel
     // reporting HDR headroom, so the format itself works; only the precise
@@ -324,7 +324,7 @@ pub(super) fn setup(
         if !applied && want_pq {
             // PQ requested but unsupported: fall back to scRGB linear so
             // the renderer still drives the panel's HDR headroom (the
-            // shader's `pq_output` flag is cleared below).
+            // encoding is rewritten below, so `pq_output` never lights up).
             let fallback_support =
                 // SAFETY: a query on a live COM object; the descriptor it reads and the out-
                 // parameters it fills are live locals that outlive the call.

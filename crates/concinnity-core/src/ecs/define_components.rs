@@ -173,6 +173,24 @@ macro_rules! define_components {
                 }
             }
 
+            /// Overwrite the component the asset's variant addresses on
+            /// `entity`, keeping the entity and its other components, and
+            /// stamping the change tick so the frame's readers see it.
+            /// `false` when the entity holds no component of that type.
+            pub fn replace(&mut self, entity: $crate::ecs::Entity, asset: ComponentAsset) -> bool {
+                match asset {
+                    $(
+                        ComponentAsset::$variant(c) => match self.get_mut::<$ty>(entity) {
+                            Some(slot) => {
+                                *slot = c;
+                                true
+                            }
+                            None => false,
+                        },
+                    )+
+                }
+            }
+
             /// Every entity carrying the component with this tag, in column
             /// order. Serves the declared-query resolution in BehaviorSystem,
             /// which selects components by authored name rather than by type.

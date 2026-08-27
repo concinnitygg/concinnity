@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.18.63"
+version = "0.18.64"
 description = "Asset-driven application world framework"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -85,11 +85,6 @@ default-members = [
     ".",
 ]
 
-# Documented from a target whose backend needs no native build. Every other
-# target build-depends on shaderc, whose build script panics without `python3`,
-# which the docs.rs build image does not carry -- verified by reproducing its
-# package set in a container. Nothing in this crate's API is platform-gated, so
-# the pages are the same either way.
 [package.metadata.docs.rs]
 features = ["cook"]
 default-target = "x86_64-apple-darwin"

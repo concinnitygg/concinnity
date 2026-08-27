@@ -780,6 +780,9 @@ mod tests {
     // `ssgi_params_layout_matches_shaders` in gfx::render_types.
     #[test]
     fn ssgi_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         super::compile_ssgi_shaders(false).expect("ssgi shaders compile");
     }
 }

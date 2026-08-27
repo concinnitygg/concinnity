@@ -1835,9 +1835,12 @@ mod tests {
     // The bindless main pair compiles from `src/shaders/main_bindless.slang` at
     // runtime (slangc, DXIL sm 6.0). This compiles it offline so a syntax or
     // register error fails a test instead of only surfacing as an init failure
-    // on a GPU host. Needs slangc; the compile reports its own absence.
+    // on a GPU host.
     #[test]
     fn bindless_main_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         super::compile_main_bindless_shaders(false).expect("bindless main shaders must compile");
     }
 }

@@ -605,8 +605,9 @@ pub(super) struct AreaLightState {
 // `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
 // settings are cached so the per-frame encoder can build its `FogParams`
 // without re-resolving the asset. `sun_dir` / `sun_color` mirror the first
-// directional light captured at init (LightUniforms is uploaded once on
-// DirectX, so the sun is fixed).
+// directional light: LightUniforms is uploaded rather than pushed each frame on
+// DirectX, so both are cached here and re-derived by
+// `update_directional_lights`.
 pub(super) struct FogState {
     pub resources: Option<FogResources>,
     pub settings: Option<crate::gfx::volumetric_fog::FogSettings>,
@@ -2302,13 +2303,14 @@ impl DxContext {
         self.fullscreen_display.set_desired(mode);
     }
 
-    // Replace the live post-process parameters, pushed to the bloom + composite
-    // shaders each frame.
+    // Replace the live post-process tunables, pushed to the bloom + composite
+    // shaders each frame. The composite's display-output flags are not part of
+    // the payload, so the EDR path negotiated at init survives every push.
     pub(crate) fn update_post_process(
         &mut self,
-        params: crate::gfx::render_types::PostProcessParams,
+        tunables: crate::gfx::render_types::PostProcessTunables,
     ) {
-        self.post_process = params;
+        self.post_process.set_tunables(tunables);
     }
 
     // Set the live ambient (IBL) light scale (the Ambient slider). It lives in
@@ -2331,6 +2333,35 @@ impl DxContext {
             &self.uniforms.light_uniforms,
         ) {
             tracing::warn!("set_ambient_intensity: re-upload light uniforms failed: {e}");
+        }
+    }
+
+    // Replace the live directional lights. `LightUniforms` lives in a single
+    // shared constant buffer rather than root constants, so the rewrite
+    // re-uploads it behind a drain, like `set_ambient_intensity`. The cascade
+    // shadow direction and the fog sun were derived from the first light at
+    // init, so both are re-derived here. Edge-triggered: an unchanged set never
+    // stalls.
+    pub(crate) fn update_directional_lights(
+        &mut self,
+        lights: &[crate::components::DirectionalLight],
+    ) {
+        let (directional, num_directional) = crate::gfx::lights::directional_light_data(lights);
+        let uniforms = &mut self.uniforms.light_uniforms;
+        if uniforms.directional == directional && uniforms.num_directional == num_directional {
+            return;
+        }
+        uniforms.directional = directional;
+        uniforms.num_directional = num_directional;
+        self.shadow.light_dir = crate::gfx::lights::sun_direction(&self.uniforms.light_uniforms);
+        self.fog.sun_dir = self.shadow.light_dir;
+        self.fog.sun_color = crate::gfx::lights::sun_color(&self.uniforms.light_uniforms);
+        self.wait_idle();
+        if let Err(e) = super::draw::upload_light_uniforms(
+            &self.uniforms.light_ubo,
+            &self.uniforms.light_uniforms,
+        ) {
+            tracing::warn!("update_directional_lights: re-upload light uniforms failed: {e}");
         }
     }
 
@@ -2418,6 +2449,9 @@ impl DxContext {
             // cannot refit; only the runtime-append region recycles (tracked
             // as the RT incremental topology parity item).
             reuses_build_slots: false,
+            // Per-object material state is baked at build time here, so
+            // `set_draw_material` has no implementation yet.
+            rewrites_draws: false,
         }
     }
 

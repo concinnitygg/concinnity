@@ -44,7 +44,7 @@ impl EditorHook {
     // and physics are all discarded for what edit mode showed before Play.
     pub(super) fn sim_stop(&mut self) {
         if self.sim.stop() {
-            self.rebuild_preview = true;
+            self.require_rebuild();
         }
     }
 

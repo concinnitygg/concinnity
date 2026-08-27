@@ -129,9 +129,7 @@ impl MtlContext {
             planar_planes,
             post:
                 PostSettings {
-                    // The backend overwrites `hdr_output` after EDR negotiation,
-                    // so this is rebound mutably below.
-                    mut post_process,
+                    post_process: post_tunables,
                     taa_enabled,
                     ssao: ssao_settings,
                     ssr: ssr_settings,
@@ -590,14 +588,8 @@ impl MtlContext {
             };
 
         // Cache the first directional light's direction; per-frame CSM updates
-        // use it (the light direction is treated as static at init -- if you
-        // want a moving sun, re-cache on light change).
-        let shadow_light_dir = if light_uniforms.num_directional > 0 {
-            light_uniforms.directional[0].direction
-        } else {
-            // Match LightUniforms::DEFAULT.
-            [-0.3, 0.85, 0.4]
-        };
+        // use it. `update_directional_lights` re-caches it when the sun changes.
+        let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
 
         // Window + MTKView + initial drawable sizing. A geometry-less world
         // is clamped to 1x1 HDR/bloom/effect targets so the composite pass
@@ -648,13 +640,12 @@ impl MtlContext {
             crate::gfx::hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
             crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
         };
-        // Surface the resolved mode to the composite shader via the post
-        // uniform. On the SDR path both flags stay 0.0 and the shader runs
-        // the full ACES + gamma + FXAA + LUT chain unchanged. On the HDR
-        // path `hdr_output` lights up; `pq_output` further picks PQ-encode
-        // vs scRGB-linear passthrough inside that branch.
-        post_process.hdr_output = hdr_mode.shader_flag();
-        post_process.pq_output = hdr_mode.pq_flag();
+        // Pair the authored tunables with the resolved mode's output flags. On
+        // the SDR path both flags stay 0.0 and the shader runs the full ACES +
+        // gamma + FXAA + LUT chain unchanged. On the HDR path `hdr_output`
+        // lights up; `pq_output` further picks PQ-encode vs scRGB-linear
+        // passthrough inside that branch.
+        let post_process = hdr_mode.post_process_params(post_tunables);
 
         // text rendering resources
         let (text_pipeline_state, gpu_text_atlases) = if text_atlases.is_empty() {

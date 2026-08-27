@@ -171,7 +171,7 @@ impl MaterialUniforms {
 /// Layout (32 bytes) must match DirectionalLightData in every .metal shader.
 /// MSL shaders must declare float3 fields as packed_float3 in constant buffer
 /// structs; plain float3 has size=16 in MSL which shifts subsequent fields.
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct DirectionalLightData {
     /// Unit vector pointing TOWARD the light source (same as L in Blinn-Phong).
@@ -550,10 +550,51 @@ pub struct TextUniforms {
     pub _pad: [f32; 2],
 }
 
+/// The authored half of [`PostProcessParams`]: everything a `PostProcessConfig`
+/// (or a settings slider) resolves to. Carries no display-output flag, so a
+/// live push can never disturb the EDR path the backend negotiated at init.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PostProcessTunables {
+    /// Additive bloom strength. 0 disables the bloom passes entirely.
+    pub bloom_intensity: f32,
+    /// Luminance threshold for the bloom prefilter.
+    pub bloom_threshold: f32,
+    /// Quadratic soft-knee width below the threshold.
+    pub bloom_knee: f32,
+    /// Linear exposure multiplier applied to HDR radiance before the bloom
+    /// prefilter and the composite tonemap. Resolved from `exposure_ev` as
+    /// `2^ev`, so 1.0 is neutral.
+    pub exposure: f32,
+    /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
+    pub vignette: f32,
+    /// Colour-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
+    /// composite pass. Has no effect when no `ColorLut` is declared: the
+    /// renderer then binds an identity LUT, so the grade is a no-op.
+    pub lut_strength: f32,
+    /// FXAA edge-filter flag on the SDR path. `1.0` runs the composite's FXAA
+    /// pass; `0.0` skips it (the `Off` anti-aliasing mode). Resolved from
+    /// `PostProcessConfig.aa_mode`: on for `Fxaa` and `Taa`, off for `Off`.
+    pub fxaa: f32,
+}
+
+impl PostProcessTunables {
+    /// Matches `PostProcessConfig::default()`: used when no asset is declared.
+    pub const DEFAULT: Self = Self {
+        bloom_intensity: 0.6,
+        bloom_threshold: 1.0,
+        bloom_knee: 0.5,
+        exposure: 1.0,
+        vignette: 0.0,
+        lut_strength: 1.0,
+        fxaa: 1.0,
+    };
+}
+
 /// Post-process tunables resolved from the `PostProcessConfig` asset (or its
-/// defaults) and threaded into each backend at init. Pushed verbatim to the
-/// bloom prefilter and composite fragment shaders, so the layout must stay in
-/// sync with the `PostUniforms` struct in those shaders. 36 bytes.
+/// defaults), plus the two display-output flags the backend resolves from the
+/// display's EDR capability at init. Pushed verbatim to the bloom prefilter and
+/// composite fragment shaders, so the layout must stay in sync with the
+/// `PostUniforms` struct in those shaders. 36 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct PostProcessParams {
@@ -596,18 +637,28 @@ pub struct PostProcessParams {
 }
 
 impl PostProcessParams {
-    /// Matches `PostProcessConfig::default()`: used when no asset is declared.
-    pub const DEFAULT: Self = Self {
-        bloom_intensity: 0.6,
-        bloom_threshold: 1.0,
-        bloom_knee: 0.5,
-        exposure: 1.0,
-        vignette: 0.0,
-        lut_strength: 1.0,
-        hdr_output: 0.0,
-        pq_output: 0.0,
-        fxaa: 1.0,
-    };
+    /// Overwrite the authored tunables, keeping `hdr_output` / `pq_output`.
+    /// Those two are a property of the display the backend negotiated with, not
+    /// an authored value, so a live push from the settings menu leaves them
+    /// alone.
+    pub fn set_tunables(&mut self, tunables: PostProcessTunables) {
+        let PostProcessTunables {
+            bloom_intensity,
+            bloom_threshold,
+            bloom_knee,
+            exposure,
+            vignette,
+            lut_strength,
+            fxaa,
+        } = tunables;
+        self.bloom_intensity = bloom_intensity;
+        self.bloom_threshold = bloom_threshold;
+        self.bloom_knee = bloom_knee;
+        self.exposure = exposure;
+        self.vignette = vignette;
+        self.lut_strength = lut_strength;
+        self.fxaa = fxaa;
+    }
 }
 
 /// Fragment constants for the composite pass: the authored post-process

@@ -39,6 +39,7 @@ mod inject;
 mod lighting;
 mod lighting_panel;
 mod list_panel;
+mod live;
 mod marquee;
 pub(crate) mod notify;
 mod orbit;

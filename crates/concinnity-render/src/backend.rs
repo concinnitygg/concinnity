@@ -25,7 +25,7 @@ use crate::keymap::KeyMap;
 use crate::mesh_payload::{SkinnedVertex, Vertex};
 use crate::profile::RenderStats;
 use crate::render_types::{
-    LineVertex, MaterialUniforms, PostProcessParams, SkinnedDrawObject, TextDrawCall,
+    LineVertex, MaterialUniforms, PostProcessTunables, SkinnedDrawObject, TextDrawCall,
 };
 use crate::rt_reflections::RtReflectionSettings;
 use crate::scene_flow::SceneControl;
@@ -159,7 +159,7 @@ pub struct QualitySettings {
     /// Temporal anti-aliasing on/off (the `Taa` anti-aliasing mode). The backend
     /// additionally suppresses TAA while temporal upscaling is active (the scaler
     /// does its own accumulation). The other anti-aliasing modes are the composite
-    /// FXAA edge filter, which rides `PostProcessParams.fxaa` (pushed via
+    /// FXAA edge filter, which rides `PostProcessTunables.fxaa` (pushed via
     /// `update_post_process`), not this pass-rebuild payload.
     pub taa: bool,
     /// Screen-space ambient occlusion, or `None` when off.
@@ -205,6 +205,14 @@ pub struct DeviceCapabilities {
     /// fixed build-time indices and cannot refit, so only the runtime-append
     /// region recycles there. Read by the engine's draw-slot allocator.
     pub reuses_build_slots: bool,
+    /// Whether a built draw slot's material and cull distance may be rewritten
+    /// in place ([`RenderBackend::set_draw_material`] /
+    /// [`RenderBackend::set_draw_cull_distance`]). Metal rebuilds its per-object
+    /// buffer from the draw list every frame, so a rewritten slot draws with the
+    /// new material next frame; DirectX / Vulkan bake per-object material state
+    /// at build time and would keep drawing the old one. Read by the editor's
+    /// live draw seam, which sends the edit to a world rebuild instead.
+    pub rewrites_draws: bool,
 }
 
 impl DeviceCapabilities {
@@ -215,6 +223,7 @@ impl DeviceCapabilities {
         ray_tracing: true,
         selectable_upscaler: true,
         reuses_build_slots: true,
+        rewrites_draws: true,
     };
 }
 
@@ -654,13 +663,15 @@ pub trait RenderBackend: SceneControl + Send {
         let _ = mode;
     }
 
-    /// Replace the live post-process parameters (bloom / exposure / vignette /
-    /// LUT blend). These are pushed to the bloom + composite shaders each frame,
-    /// so a change takes effect on the next draw with no allocation or pipeline
-    /// rebuild. Default no-op: a backend that only reads the params at init
-    /// ignores runtime changes (DirectX / Vulkan today).
-    fn update_post_process(&mut self, params: PostProcessParams) {
-        let _ = params;
+    /// Replace the live post-process tunables (bloom / exposure / vignette /
+    /// LUT blend / FXAA). These are pushed to the bloom + composite shaders each
+    /// frame, so a change takes effect on the next draw with no allocation or
+    /// pipeline rebuild. Only the authored half travels here: the composite's
+    /// display-output flags belong to the display the backend negotiated with
+    /// at init, so a push cannot disturb them. Default no-op: a backend that
+    /// only reads the tunables at init ignores runtime changes.
+    fn update_post_process(&mut self, tunables: PostProcessTunables) {
+        let _ = tunables;
     }
 
     /// Set the live ambient (IBL) light scale. Unlike the post-process params
@@ -670,6 +681,17 @@ pub trait RenderBackend: SceneControl + Send {
     /// today; DirectX / Vulkan keep the init-time value (they read it at init).
     fn set_ambient_intensity(&mut self, value: f32) {
         let _ = value;
+    }
+
+    /// Replace the live directional-light set (the sun). Unlike the local
+    /// lights, which ride a per-scene storage buffer sized once at init, the
+    /// directional slots are a fixed-size array in the shared `LightUniforms`,
+    /// so a new set is written in place: the backend re-packs the array and
+    /// re-caches whatever it derived from the first light at init (the cascade
+    /// shadow direction, the fog sun). Default no-op: a backend that only reads
+    /// the lights at init keeps the init-time sun.
+    fn update_directional_lights(&mut self, lights: &[crate::components::DirectionalLight]) {
+        let _ = lights;
     }
 
     /// Push the gameplay movement key map. The backend resolves each canonical
@@ -959,9 +981,10 @@ pub trait RenderBackend: SceneControl + Send {
     }
 
     /// Rewrite a draw slot's material parameters + texture/normal-map pool
-    /// indices in place. Driven by `world.jsonl` hot-reload (`cn debug` only)
-    /// when a Prop edits its `material` / `texture` arg. Default no-op: the
-    /// caller logs the change as skipped on backends without an implementation.
+    /// indices in place. Driven by the editor's live draw seam when a Prop edits
+    /// its `material` arg. Default no-op; a backend that implements it reports
+    /// [`DeviceCapabilities::rewrites_draws`], which is what the caller gates on
+    /// rather than pushing an edit that would not land.
     fn set_draw_material(
         &mut self,
         draw_idx: usize,
@@ -972,9 +995,9 @@ pub trait RenderBackend: SceneControl + Send {
         let _ = (draw_idx, material, texture_slot, normal_map_slot);
     }
 
-    /// Rewrite a draw slot's `cull_distance` in place. Driven by `world.jsonl`
-    /// hot-reload (`cn debug` only) when a Prop edits its `cull_distance` arg.
-    /// Default no-op.
+    /// Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
+    /// live draw seam when a Prop edits its `cull_distance` arg. Default no-op,
+    /// gated by the same [`DeviceCapabilities::rewrites_draws`] flag.
     fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
         let _ = (draw_idx, cull_distance);
     }
@@ -1435,7 +1458,7 @@ mod tests {
         });
 
         // Live look + input tunable no-ops.
-        backend.update_post_process(PostProcessParams::DEFAULT);
+        backend.update_post_process(PostProcessTunables::DEFAULT);
         backend.set_ambient_intensity(1.0);
         backend.set_keymap(&KeyMap::default());
         backend.apply_quality_settings(stub_quality());
@@ -1444,6 +1467,7 @@ mod tests {
         backend.set_shadow_distance(200);
         backend.set_shadow_cascades(3);
         backend.update_fog_settings(None);
+        backend.update_directional_lights(&[]);
         backend.set_draw_material(0, MaterialUniforms::DEFAULT, 0, 0);
         backend.set_draw_cull_distance(0, 50.0);
 
@@ -1523,7 +1547,7 @@ mod tests {
             anisotropy: 1,
             planar_planes: 0,
             post: PostSettings {
-                post_process: PostProcessParams::DEFAULT,
+                post_process: PostProcessTunables::DEFAULT,
                 taa_enabled: false,
                 ssao: None,
                 ssr: None,

@@ -432,7 +432,7 @@ mod tests {
     // slangc, matching `concinnity_slang`'s own round-trip tests.
     #[test]
     fn reflection_composite_shaders_compile() {
-        if concinnity_slang::slangc_path().is_none() {
+        if !crate::slangc_gate::slangc_available() {
             return;
         }
         super::compile_refl_composite_shaders(false)

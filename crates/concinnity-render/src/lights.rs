@@ -121,6 +121,72 @@ pub fn build_light_data(
     }
 }
 
+const ZERO_DIR: DirectionalLightData = DirectionalLightData {
+    direction: [0.0; 3],
+    intensity: 0.0,
+    color: [0.0; 3],
+    _pad: 0.0,
+};
+const ZERO_PT: PointLightData = PointLightData {
+    position: [0.0; 3],
+    range: 0.0,
+    color: [0.0; 3],
+    intensity: 0.0,
+};
+
+/// The `LightUniforms` directional slots and their count for `lights`, padded
+/// with zeroed entries. Shared by the init-time build below and the live
+/// [`crate::backend::RenderBackend::update_directional_lights`] seam, so a sun
+/// edited at runtime packs exactly as a relaunch would pack it.
+pub fn directional_light_data(
+    lights: &[DirectionalLight],
+) -> ([DirectionalLightData; MAX_DIRECTIONAL_LIGHTS], i32) {
+    if lights.len() > MAX_DIRECTIONAL_LIGHTS {
+        tracing::warn!(
+            "GraphicsSystem: {} directional lights declared; only {} are supported -- extras ignored",
+            lights.len(),
+            MAX_DIRECTIONAL_LIGHTS
+        );
+    }
+    let mut directional = [ZERO_DIR; MAX_DIRECTIONAL_LIGHTS];
+    for (slot, l) in directional.iter_mut().zip(lights) {
+        *slot = DirectionalLightData {
+            direction: l.direction,
+            intensity: l.intensity,
+            color: l.color,
+            _pad: 0.0,
+        };
+    }
+    (directional, lights.len().min(MAX_DIRECTIONAL_LIGHTS) as i32)
+}
+
+/// The direction the cascade shadow projection and the fog ray-march follow:
+/// the first declared directional light, or the neutral sun a world with none
+/// falls back to. Backends cache this at init and re-derive it when the light
+/// set changes.
+pub fn sun_direction(uniforms: &LightUniforms) -> [f32; 3] {
+    if uniforms.num_directional > 0 {
+        uniforms.directional[0].direction
+    } else {
+        LightUniforms::DEFAULT.directional[0].direction
+    }
+}
+
+/// The intensity-weighted colour of the sun `sun_direction` names, white when
+/// the world declares no directional light.
+pub fn sun_color(uniforms: &LightUniforms) -> [f32; 3] {
+    if uniforms.num_directional > 0 {
+        let l = &uniforms.directional[0];
+        [
+            l.color[0] * l.intensity,
+            l.color[1] * l.intensity,
+            l.color[2] * l.intensity,
+        ]
+    } else {
+        [1.0, 1.0, 1.0]
+    }
+}
+
 /// `local_lights` is the buffer `build_light_data` produced; its length is the
 /// authoritative `num_local_lights` the forward pass iterates.
 pub fn build_light_uniforms(
@@ -136,47 +202,12 @@ pub fn build_light_uniforms(
         };
     }
 
-    const ZERO_DIR: DirectionalLightData = DirectionalLightData {
-        direction: [0.0; 3],
-        intensity: 0.0,
-        color: [0.0; 3],
-        _pad: 0.0,
-    };
-    const ZERO_PT: PointLightData = PointLightData {
-        position: [0.0; 3],
-        range: 0.0,
-        color: [0.0; 3],
-        intensity: 0.0,
-    };
-
-    let mut directional = [ZERO_DIR; MAX_DIRECTIONAL_LIGHTS];
+    let (directional, num_directional) = directional_light_data(&dir_lights);
     // The `point` array is the legacy subset the raymarch / fog / probe paths
     // read; the forward pass reads every light from the GpuLight buffer instead
     // (see build_light_data), so exceeding MAX_POINT_LIGHTS is not an error.
     let mut point = [ZERO_PT; MAX_POINT_LIGHTS];
-    let num_directional = dir_lights.len().min(MAX_DIRECTIONAL_LIGHTS);
     let num_point = pt_lights.len().min(MAX_POINT_LIGHTS);
-
-    if dir_lights.len() > MAX_DIRECTIONAL_LIGHTS {
-        tracing::warn!(
-            "GraphicsSystem: {} directional lights declared; only {} are supported -- extras ignored",
-            dir_lights.len(),
-            MAX_DIRECTIONAL_LIGHTS
-        );
-    }
-
-    for (i, l) in dir_lights
-        .into_iter()
-        .take(MAX_DIRECTIONAL_LIGHTS)
-        .enumerate()
-    {
-        directional[i] = DirectionalLightData {
-            direction: l.direction,
-            intensity: l.intensity,
-            color: l.color,
-            _pad: 0.0,
-        };
-    }
     for (i, l) in pt_lights.into_iter().take(MAX_POINT_LIGHTS).enumerate() {
         point[i] = PointLightData {
             position: l.position,
@@ -189,7 +220,7 @@ pub fn build_light_uniforms(
     LightUniforms {
         directional,
         point,
-        num_directional: num_directional as i32,
+        num_directional,
         num_point: num_point as i32,
         ambient_intensity,
         num_local_lights: local_lights.len() as i32,
@@ -232,6 +263,43 @@ mod tests {
     fn uniforms(dir_lights: Vec<DirectionalLight>, pt_lights: Vec<PointLight>) -> LightUniforms {
         let local = build_light_data(&pt_lights, &[], &[]).lights;
         build_light_uniforms(dir_lights, pt_lights, &local, 1.0)
+    }
+
+    // The live seam packs a sun exactly as the init-time build does, so a
+    // runtime light edit and a relaunch produce the same uniform.
+    #[test]
+    fn directional_packing_matches_the_init_build() {
+        let lights = vec![
+            dir([-0.3, 0.85, 0.4], [1.0, 0.95, 0.8], 1.5),
+            dir([0.1, -1.0, 0.0], [0.2, 0.3, 0.4], 0.5),
+        ];
+        let (packed, count) = directional_light_data(&lights);
+        let built = uniforms(lights, vec![]);
+        assert_eq!(count, built.num_directional);
+        assert_eq!(packed, built.directional);
+    }
+
+    // Slots past the declared lights are zeroed, so a shorter set never leaves
+    // a stale sun behind it.
+    #[test]
+    fn directional_packing_zeroes_the_unused_slots() {
+        let (packed, count) = directional_light_data(&[dir([0.0, 1.0, 0.0], [1.0; 3], 2.0)]);
+        assert_eq!(count, 1);
+        assert!(packed[1..].iter().all(|d| *d == ZERO_DIR));
+        let (empty, none) = directional_light_data(&[]);
+        assert_eq!(none, 0);
+        assert!(empty.iter().all(|d| *d == ZERO_DIR));
+    }
+
+    // Extras past the fixed array are dropped rather than overflowing it.
+    #[test]
+    fn directional_packing_clamps_to_the_array_capacity() {
+        let many: Vec<DirectionalLight> = (0..MAX_DIRECTIONAL_LIGHTS + 2)
+            .map(|i| dir([0.0, 1.0, 0.0], [1.0; 3], i as f32))
+            .collect();
+        let (packed, count) = directional_light_data(&many);
+        assert_eq!(count, MAX_DIRECTIONAL_LIGHTS as i32);
+        assert_eq!(packed.len(), MAX_DIRECTIONAL_LIGHTS);
     }
 
     #[test]

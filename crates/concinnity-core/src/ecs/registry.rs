@@ -68,7 +68,7 @@ macro_rules! for_each_component {
                 Window            => $crate::components::Window { gen, external, singleton, consumed },
                 GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
                 Shader            => $crate::components::Shader { manual, external, compiled, consumed },
-                Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, args: Camera3D },
+                Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
                 Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("texture", "Texture"), ("scene", "Scene"), ("parent", "Prop")], consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
@@ -81,7 +81,7 @@ macro_rules! for_each_component {
                 ProceduralMesh    => $crate::components::ProceduralMesh { gen, external, compiled, id },
                 Model             => $crate::components::Model { gen, external, id, consumed },
                 Scene             => $crate::components::Scene { gen, external, id, refs: [("camera_shot", "Camera3D")], consumed },
-                TextLabel         => $crate::components::TextLabel { gen, external, id, useful_blank, renders, refs: [("font", "Font"), ("screen", "Screen")] },
+                TextLabel         => $crate::components::TextLabel { gen, external, id, useful_blank, renders, live, refs: [("font", "Font"), ("screen", "Screen")] },
                 HitRegion         => $crate::components::HitRegion { gen, external, useful_blank, refs: [("label", "TextLabel"), ("screen", "Screen")], consumed },
                 File              => $crate::components::File { manual, external, compiled, args: File, consumed },
                 BlockType         => $crate::components::BlockType { gen, external, id, useful_blank, consumed },
@@ -93,7 +93,7 @@ macro_rules! for_each_component {
                 StreamingConfig   => $crate::components::StreamingConfig { gen, external, singleton, consumed },
                 VoxelWorld        => $crate::components::VoxelWorld { gen, external, renders, refs: [("material", "Material")], consumed },
                 AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank, refs: [("clip", "AudioClip"), ("prop", "Prop")] },
-                Sprite            => $crate::components::Sprite { gen, external, id, useful_blank, renders, refs: [("texture", "Texture"), ("screen", "Screen")] },
+                Sprite            => $crate::components::Sprite { gen, external, id, useful_blank, renders, live, refs: [("texture", "Texture"), ("screen", "Screen")] },
                 KeyBinding        => $crate::components::KeyBinding { gen, external, useful_blank, refs: [("screen", "Screen")], consumed },
                 Screen            => $crate::components::Screen { gen, external, id, useful_blank, refs: [("focus", "TextInput")], consumed },
                 Decal             => $crate::components::Decal { gen, external, id, useful_blank, validate: decal, refs: [("texture", "Texture")], consumed },
@@ -103,7 +103,7 @@ macro_rules! for_each_component {
                 WaterSurface      => $crate::components::WaterSurface { gen, external, id, useful_blank, renders, validate: water_surface, consumed },
                 SdfVolume         => $crate::components::SdfVolume { manual, external, compiled, renders, validate: sdf_volume, consumed },
                 GlassPanel        => $crate::components::GlassPanel { gen, external, id, useful_blank, validate: glass_panel, consumed },
-                LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders },
+                LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
                 FpsCounter        => $crate::components::FpsCounter { gen, external, useful_blank, refs: [("label", "TextLabel")] },
                 StatHud           => $crate::components::StatHud { gen, external, renders, refs: [("fps_label", "TextLabel"), ("vram_label", "TextLabel"), ("ram_label", "TextLabel"), ("ev_label", "TextLabel"), ("edr_label", "TextLabel")] },
@@ -134,9 +134,9 @@ macro_rules! for_each_component {
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
                 GroundProbes      => $crate::components::GroundProbes { runtime },
                 CameraProbe       => $crate::components::CameraProbe { runtime },
-                TextInput         => $crate::components::TextInput { gen, external, id, useful_blank, renders, refs: [("font", "Font"), ("screen", "Screen")] },
-                Behavior          => $crate::components::Behavior { gen, external, id, useful_blank },
-                Variables         => $crate::components::Variables { gen, external, singleton },
+                TextInput         => $crate::components::TextInput { gen, external, id, useful_blank, renders, live, refs: [("font", "Font"), ("screen", "Screen")] },
+                Behavior          => $crate::components::Behavior { gen, external, id, useful_blank, live },
+                Variables         => $crate::components::Variables { gen, external, singleton, live },
                 TriggerVolume     => $crate::components::TriggerVolume { gen, external, id, useful_blank },
                 Hidden            => $crate::components::Hidden { runtime },
                 LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders, refs: [("screen", "Screen"), ("backdrop", "Sprite"), ("track", "Sprite"), ("fill", "Sprite"), ("label", "TextLabel")] },
@@ -195,6 +195,13 @@ crate::for_each_component!(define_components);
 //     renders                   -- presence implies the world renders; drives
 //                                  the GraphicsConfig companion injection at
 //                                  build time (world-side only)
+//     live                      -- the running world re-reads this column
+//                                  every frame, so overwriting a component in
+//                                  place takes effect without reloading the
+//                                  world. Carries a second obligation: no
+//                                  build-time expansion may read the type's
+//                                  args, because an in-place write skips the
+//                                  expansion entirely (world-side only)
 //     consumed [: <Type>]       -- a load-time pass drains this column during
 //                                  `World::start`, so it holds nothing from
 //                                  the first tick; `: <Type>` names the

@@ -90,10 +90,11 @@ impl EditorHook {
         }
     }
 
-    // Record an authored-entry change: the live preview needs a rebuild this frame
-    // (`apply_world_swap` reloads the running world from the in-memory entries), and
-    // the change is not yet on disk (SAVE clears `dirty`). The pre-edit list still
-    // sits in `baseline` (only committed edits move it), so it becomes the undo
+    // Record an authored-entry change: the live preview is out of date this
+    // frame (`apply_world_swap` writes the change into the running world, or
+    // reloads it when the change cannot be expressed there), and the change is
+    // not yet on disk (SAVE clears `dirty`). The pre-edit list still sits in
+    // `baseline` (only committed edits move it), so it becomes the undo
     // snapshot; a call that changed nothing records no step.
     pub(super) fn mark_changed(&mut self) {
         if self.baseline != self.entries {
@@ -102,15 +103,20 @@ impl EditorHook {
         }
         self.dirty = true;
         self.rebuild_preview = true;
-        // The rebuild discards a running simulation's state, so the transport
-        // honestly drops to Stopped.
-        self.sim.on_edit();
         // The expansion follows the entries, so the Assets tree is now out of
         // date. Recomputed by the frame drive while the panel shows, so a burst
         // of edits costs one expansion rather than one per edit.
         self.tree_stale = true;
         // Template baselines follow the entries too; rebuilt on demand.
         self.template_index = None;
+    }
+
+    // Ask for a full preview rebuild: the running world holds state no authored
+    // diff describes (a simulation that ran, a story source re-read from disk),
+    // so writing the entry diff into it would leave that state standing.
+    pub(super) fn require_rebuild(&mut self) {
+        self.rebuild_preview = true;
+        self.rebuild_required = true;
     }
 
     // Step the entry list back / forward through the history stacks. No-ops at
@@ -144,7 +150,6 @@ impl EditorHook {
         self.baseline = self.entries.clone();
         self.dirty = self.entries != self.saved;
         self.rebuild_preview = true;
-        self.sim.on_edit();
         self.tree_stale = true;
         self.template_index = None;
         self.close_form();
@@ -169,7 +174,7 @@ impl EditorHook {
     // compiled blobs are a derived cache (boot rebuilds them when missing), so
     // their recompile runs on the cook worker with a progress card instead of
     // stalling the frame loop; a blob failure toasts but the world stays
-    // saved. The live preview is already up to date (every edit swaps it in),
+    // saved. The live preview is already up to date (every edit refreshed it),
     // so nothing is rebuilt or swapped here. On a write failure the world
     // stays dirty and the next SAVE retries.
     pub(super) fn save(&mut self) {
@@ -227,14 +232,22 @@ impl EditorHook {
 
     // Build a ready-to-run world from the in-memory entries, without touching disk
     // (SAVE owns persistence). A GraphicsConfig is seeded when the authored entries
-    // alone would not render, so the preview window never goes blank.
-    pub(super) fn build_preview_world(&self) -> std::io::Result<World> {
+    // alone would not render, so the preview window never goes blank. The template
+    // baselines the expansion merged authored patches over come back with it, so a
+    // later edit can re-derive one asset's effective args without cooking again.
+    pub(super) fn build_preview_world(&self) -> std::io::Result<(World, live::ShadowBaselines)> {
         let jsonl = crate::world::write_world_jsonl(&self.entries)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        match crate::build_world_from_str(&jsonl) {
-            Ok(world) if concinnity_engine::ecs::renders(&world) => Ok(world),
-            _ => crate::build_world_from_str(&super::seeded_content(&jsonl)),
-        }
+        let built = match crate::authoring::build_world_and_shadows(&jsonl) {
+            Ok(built) if concinnity_engine::ecs::renders(&built.0) => built,
+            _ => crate::authoring::build_world_and_shadows(&super::seeded_content(&jsonl))?,
+        };
+        let (world, shadowed) = built;
+        let baselines = shadowed
+            .into_iter()
+            .map(|s| (s.name, s.args))
+            .collect::<live::ShadowBaselines>();
+        Ok((world, baselines))
     }
 
     // Snapshot the editor's text-field contents (the combo filter + the form's name

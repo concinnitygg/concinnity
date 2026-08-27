@@ -316,19 +316,15 @@ mod tests {
 
     // The see-through mesh family compiles from the shared single source at
     // runtime, so a syntax or binding error would otherwise surface only as an
-    // init failure on a GPU host. slangc resolves from PATH and may be absent, in
-    // which case this skips rather than failing.
+    // init failure on a GPU host.
     #[test]
     fn glass_mesh_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         for msaa in [false, true] {
-            match super::compile_glass_mesh_shaders(false, msaa, 16, 8) {
-                Ok(_) => {}
-                Err(e) if e.contains("slangc") => {
-                    eprintln!("skipping glass_mesh compile test (msaa={msaa}): {e}");
-                    return;
-                }
-                Err(e) => panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"),
-            }
+            super::compile_glass_mesh_shaders(false, msaa, 16, 8)
+                .unwrap_or_else(|e| panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"));
         }
     }
 
@@ -360,6 +356,9 @@ mod tests {
     // guards.
     #[test]
     fn glass_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         // Both the ceiling and a device-shortened probe cube array must compile.
         for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
             super::compile_glass_shaders(false, true, probes).expect("glass compiles (msaa)");
@@ -376,6 +375,9 @@ mod tests {
     // in gfx::render_types.
     #[test]
     fn glass_rt_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         for &msaa in &[true, false] {
             let shaders = super::compile_glass_rt_shaders(false, msaa, 4, 4)
                 .expect("glass rt shaders compile");

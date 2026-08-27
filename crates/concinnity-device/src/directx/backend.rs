@@ -64,8 +64,12 @@ impl RenderBackend for DxContext {
         fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode>;
         fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode);
-        fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams);
+        fn update_post_process(
+            &mut self,
+            tunables: crate::gfx::render_types::PostProcessTunables,
+        );
         fn set_ambient_intensity(&mut self, value: f32);
+        fn update_directional_lights(&mut self, lights: &[crate::components::DirectionalLight]);
         fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap);
         fn apply_quality_settings(&mut self, settings: crate::gfx::backend::QualitySettings);
         fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate);

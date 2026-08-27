@@ -127,7 +127,7 @@ impl DxContext {
             planar_planes,
             post:
                 PostSettings {
-                    post_process,
+                    post_process: post_tunables,
                     taa_enabled,
                     ssao: ssao_settings,
                     ssr: ssr_settings,
@@ -236,18 +236,15 @@ impl DxContext {
         // off without tearing -> sync interval 0, no flag (flip-model refresh
         // pacing, the best available fallback).
         let present_sync_interval: u32 = if vsync { 1 } else { 0 };
-        // Surface the resolved mode to the composite shader via the post
-        // uniform. On the SDR path both flags stay 0.0 and the shader runs
-        // the full ACES + gamma + FXAA + LUT chain unchanged. Inside the
-        // HDR branch, `pq_output` picks scRGB-linear passthrough (0.0) vs
-        // SMPTE ST 2084 in-shader encode (1.0). Mirrors the Metal hop in
-        // `metal/init/mod.rs`. `setup` may have already downgraded the
-        // encoding when `CheckColorSpaceSupport(HDR10 PQ)` came back
-        // negative, so reading `hdr_mode.pq_flag()` after `setup` returns
-        // is the source of truth.
-        let mut post_process = post_process;
-        post_process.hdr_output = hdr_mode.shader_flag();
-        post_process.pq_output = hdr_mode.pq_flag();
+        // Pair the authored tunables with the resolved mode's output flags. On
+        // the SDR path both stay 0.0 and the shader runs the full ACES + gamma
+        // + FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output`
+        // picks scRGB-linear passthrough (0.0) vs SMPTE ST 2084 in-shader
+        // encode (1.0). Mirrors the Metal hop in `metal/init/mod.rs`. `setup`
+        // may have already downgraded the encoding when
+        // `CheckColorSpaceSupport(HDR10 PQ)` came back negative, so composing
+        // after `setup` returns is what makes `hdr_mode` the source of truth.
+        let post_process = hdr_mode.post_process_params(post_tunables);
 
         // Hardware ray-tracing capability. RT reflection resources + the
         // acceleration structure are built only when the world authored
@@ -891,29 +888,13 @@ impl DxContext {
         };
 
         // Cache the first directional light's direction for per-frame CSM updates.
-        let shadow_light_dir = if light_uniforms.num_directional > 0 {
-            light_uniforms.directional[0].direction
-        } else {
-            // Match LightUniforms::DEFAULT.
-            [-0.3, 0.85, 0.4]
-        };
+        let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
 
         // Cache the first directional light's colour * intensity for the
-        // volumetric-fog encoder. The DirectX backend uploads LightUniforms
-        // once at init (no runtime light mutation), so the sun colour fed
-        // into the fog ray-march is fixed.
+        // volumetric-fog encoder, since `LightUniforms` is uploaded rather than
+        // pushed each frame. `update_directional_lights` re-derives both.
         let fog_sun_dir = shadow_light_dir;
-        let fog_sun_color = if light_uniforms.num_directional > 0 {
-            let l = &light_uniforms.directional[0];
-            [
-                l.color[0] * l.intensity,
-                l.color[1] * l.intensity,
-                l.color[2] * l.intensity,
-            ]
-        } else {
-            // Match LightUniforms::DEFAULT (colour [1, 1, 1] at intensity 1.0).
-            [1.0, 1.0, 1.0]
-        };
+        let fog_sun_color = crate::gfx::lights::sun_color(&light_uniforms);
 
         // Albedo texture pool
         // One ID3D12Resource per input texture; SRVs are written below at

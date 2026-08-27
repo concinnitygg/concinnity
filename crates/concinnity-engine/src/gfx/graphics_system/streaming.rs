@@ -3,7 +3,7 @@
 
 use crate::components::{BlockType, StreamingConfig, VoxelWorld};
 use crate::ecs::asset_id::AssetId;
-use crate::gfx::draw_list::MaterialEntry;
+use crate::gfx::material_entry::MaterialEntry;
 use crate::gfx::mesh_payload::Vertex;
 
 use super::helpers::*;
@@ -1197,7 +1197,7 @@ mod tests {
         ]);
         let material_map = std::collections::HashMap::from([(
             handle,
-            crate::gfx::draw_list::MaterialEntry {
+            crate::gfx::material_entry::MaterialEntry {
                 albedo_slot: 5,
                 normal_map_slot: 6,
                 uniforms: material,

@@ -10,24 +10,13 @@ use crate::components::{
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{MaterialHandle, MeshHandle, TextureHandle};
+use crate::gfx::material_entry::{MaterialEntry, resolve_material_slots};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
-    DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT,
+    DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
 
 pub(crate) use crate::gfx::transform::IDENTITY as IDENTITY4;
-
-// One decoded material as build_draw_list consumes it: resolved texture pool
-// slots, the GPU uniforms, and the shader bucket its draws render under.
-#[derive(Clone, Copy)]
-pub(crate) struct MaterialEntry {
-    pub(crate) albedo_slot: usize,
-    pub(crate) normal_map_slot: usize,
-    pub(crate) uniforms: MaterialUniforms,
-    // Dense ShaderHandle value of the material's `shader` reference; 0 (the
-    // world default) when the material names none.
-    pub(crate) shader_bucket: u32,
-}
 
 // Geometry decoded for one Room: the asset, its vertices, LOD0 indices, and
 // LOD alternates (switch_distance, indices).
@@ -560,33 +549,6 @@ pub(crate) struct DrawListInputs<'a> {
     pub always_resident_meshes: &'a std::collections::HashSet<usize>,
 }
 
-// Resolve the (albedo_slot, normal_map_slot, material) a draw object binds. A
-// material handle wins and must resolve in `material_map`; an unresolved one
-// comes back as `Err(handle)` so the caller can log its own context. With no
-// material, a texture handle contributes its albedo slot (falling back to the
-// white entry when past `texture_count`) over the default material; with
-// neither, the white entry and the default material.
-pub(crate) fn resolve_material_slots(
-    material: Option<MaterialHandle>,
-    texture: Option<TextureHandle>,
-    material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
-    texture_count: usize,
-) -> Result<MaterialEntry, MaterialHandle> {
-    if let Some(mat_id) = material {
-        return material_map.get(&mat_id).copied().ok_or(mat_id);
-    }
-    let albedo_slot = match texture {
-        Some(tex_id) if tex_id.index() < texture_count => tex_id.index(),
-        _ => NO_ALBEDO_SLOT,
-    };
-    Ok(MaterialEntry {
-        albedo_slot,
-        normal_map_slot: NO_NORMAL_MAP_SLOT,
-        uniforms: MaterialUniforms::DEFAULT,
-        shader_bucket: 0,
-    })
-}
-
 pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     let DrawListInputs {
         items,
@@ -1064,75 +1026,7 @@ mod tests {
     use super::*;
     use crate::components::Prop;
     use crate::ecs::TextureHandle;
-
-    fn material_map_with(
-        handle: MaterialHandle,
-        entry: MaterialEntry,
-    ) -> std::collections::HashMap<MaterialHandle, MaterialEntry> {
-        let mut m = std::collections::HashMap::new();
-        m.insert(handle, entry);
-        m
-    }
-
-    #[test]
-    fn resolve_material_slots_prefers_a_resolved_material() {
-        let entry = MaterialEntry {
-            albedo_slot: 7,
-            normal_map_slot: 3,
-            uniforms: MaterialUniforms::DEFAULT,
-            shader_bucket: 2,
-        };
-        let map = material_map_with(MaterialHandle(2), entry);
-        // A material handle wins even when a texture is also present; its albedo
-        // and normal-map slots (and shader bucket) come straight from the map entry.
-        let got = resolve_material_slots(Some(MaterialHandle(2)), Some(TextureHandle(9)), &map, 16)
-            .expect("material resolves");
-        assert_eq!((got.albedo_slot, got.normal_map_slot), (7, 3));
-        assert_eq!(got.shader_bucket, 2);
-    }
-
-    #[test]
-    fn resolve_material_slots_reports_a_missing_material_by_handle() {
-        let map = std::collections::HashMap::new();
-        let got = resolve_material_slots(Some(MaterialHandle(5)), None, &map, 16);
-        assert_eq!(got.err(), Some(MaterialHandle(5)));
-    }
-
-    #[test]
-    fn resolve_material_slots_falls_back_to_the_texture_slot() {
-        let map = std::collections::HashMap::new();
-        let got = resolve_material_slots(None, Some(TextureHandle(4)), &map, 16).expect("ok");
-        assert_eq!(
-            (got.albedo_slot, got.normal_map_slot),
-            (4, NO_NORMAL_MAP_SLOT)
-        );
-        assert_eq!(
-            got.shader_bucket, 0,
-            "texture fallback is the default bucket"
-        );
-    }
-
-    #[test]
-    fn resolve_material_slots_sends_an_out_of_range_texture_to_the_white_fallback() {
-        let map = std::collections::HashMap::new();
-        // Handle 20 is past the pool of 16. Slot 0 would be a real texture, so
-        // an unusable handle takes the white fallback instead.
-        let got = resolve_material_slots(None, Some(TextureHandle(20)), &map, 16).expect("ok");
-        assert_eq!(
-            (got.albedo_slot, got.normal_map_slot),
-            (NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT)
-        );
-    }
-
-    #[test]
-    fn resolve_material_slots_defaults_with_no_material_or_texture() {
-        let map = std::collections::HashMap::new();
-        let got = resolve_material_slots(None, None, &map, 16).expect("ok");
-        assert_eq!(
-            (got.albedo_slot, got.normal_map_slot),
-            (NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT)
-        );
-    }
+    use crate::gfx::render_types::NO_ALBEDO_SLOT;
 
     fn make_prop(position: [f32; 3]) -> Prop {
         Prop {

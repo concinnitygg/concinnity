@@ -118,6 +118,13 @@ pub(crate) struct RenderQueues {
     pub slots: crate::gfx::render_slots::RenderSlots,
 }
 
+// The active backend's capability flags, published by graphics init. The
+// backend itself is parked (and on a pipelined frame, owned by the render
+// thread), so a system that only needs to know what it supports reads this
+// instead of reaching for it. Absent in a world with no graphics.
+#[derive(Clone, Copy)]
+pub(crate) struct ActiveDeviceCaps(pub concinnity_render::backend::DeviceCapabilities);
+
 // The world's parked `RenderQueues` slot. `None` only while a step has it
 // taken.
 pub(crate) struct ActiveRenderQueues(pub Option<RenderQueues>);

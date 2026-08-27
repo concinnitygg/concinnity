@@ -1454,3 +1454,243 @@ fn parallel_eval_matches_serial_state() {
     // 150 movers over 5 ticks; the mover really fired every tick.
     assert_eq!(serial.0[0], 750);
 }
+
+// Picking up an edited source column without a world reload.
+
+// One frame's step, which is where the reseed check lives (`tick` is the
+// per-tick drive below it and never looks at the columns).
+fn step(sys: &mut BehaviorSystem, world: &mut TestWorld) {
+    sys.step(&mut world.ctx());
+}
+
+fn counter(id: u32, var: &str, value: i32) -> Behavior {
+    Behavior {
+        asset_id: AssetId(id),
+        on: BehaviorSource::Tick,
+        body: vec![set_var(var, value, false)],
+        ..Default::default()
+    }
+}
+
+// Writing the column is what an editing tool does; the whole point is that the
+// running system notices.
+fn edit_behavior(world: &mut TestWorld, at: usize, def: Behavior) {
+    world.components.values_mut::<Behavior>()[at] = def;
+}
+
+#[test]
+fn an_edited_body_runs_without_a_reload() {
+    let mut world = world_with(vec![counter(1, "n", 1)]);
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "n"), 1);
+
+    edit_behavior(&mut world, 0, counter(1, "n", 9));
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "n"), 9, "the edited body is what ran");
+}
+
+#[test]
+fn an_untouched_column_never_recompiles() {
+    let mut world = world_with(vec![counter(1, "n", 1)]);
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    let before = sys.sources;
+    step(&mut sys, &mut world);
+    assert_eq!(sys.sources, before, "nothing wrote either column");
+}
+
+// An edit to one behavior leaves every other one's firing history alone, so a
+// world being edited while it runs does not silently refire what it already
+// ran.
+#[test]
+fn an_edit_leaves_another_behaviors_clocks_alone() {
+    let once = Behavior {
+        asset_id: AssetId(1),
+        on: BehaviorSource::Tick,
+        once: true,
+        body: vec![set_var("fired", 1, true)],
+        ..Default::default()
+    };
+    let mut world = world_with(vec![once, counter(2, "n", 1)]);
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "fired"), 1, "`once` fired exactly once");
+
+    edit_behavior(&mut world, 1, counter(2, "n", 2));
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "fired"), 1, "and did not fire again");
+    assert_eq!(var(&sys, "n"), 2, "while the edited one took effect");
+}
+
+// The edited behavior's own state is what the edit replaced, so it starts
+// fresh: a `once` whose body changed is a different body, and has not run.
+#[test]
+fn the_edited_behavior_starts_fresh() {
+    let body = |value| Behavior {
+        asset_id: AssetId(1),
+        on: BehaviorSource::Tick,
+        once: true,
+        body: vec![set_var("n", value, true)],
+        ..Default::default()
+    };
+    let mut world = world_with(vec![body(1)]);
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "n"), 1);
+
+    edit_behavior(&mut world, 0, body(10));
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "n"), 11, "the new body ran once");
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "n"), 11, "and `once` still holds");
+}
+
+#[test]
+fn an_edited_declaration_reaches_a_running_world() {
+    let mut world = world_with_vars(
+        vec![Behavior {
+            asset_id: AssetId(1),
+            on: BehaviorSource::Tick,
+            body: vec![set_var("other", 1, false)],
+            ..Default::default()
+        }],
+        vec![("score", BehaviorLiteral::Int(0))],
+    );
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "score"), 0);
+
+    world.components.values_mut::<Variables>()[0] = Variables {
+        vars: vec![VariableDecl {
+            name: "score".to_string(),
+            value: BehaviorLiteral::Int(12),
+        }],
+        ..Default::default()
+    };
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "score"), 12);
+}
+
+// A declaration the edit did not touch keeps what the run put in it, so
+// editing one variable does not reset the rest of the table.
+#[test]
+fn an_untouched_declaration_keeps_its_running_value() {
+    let mut world = world_with_vars(
+        vec![Behavior {
+            asset_id: AssetId(1),
+            on: BehaviorSource::Tick,
+            body: vec![set_var("score", 1, true)],
+            ..Default::default()
+        }],
+        vec![
+            ("score", BehaviorLiteral::Int(0)),
+            ("lives", BehaviorLiteral::Int(3)),
+        ],
+    );
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "score"), 2);
+
+    world.components.values_mut::<Variables>()[0] = Variables {
+        vars: vec![
+            VariableDecl {
+                name: "score".to_string(),
+                value: BehaviorLiteral::Int(0),
+            },
+            VariableDecl {
+                name: "lives".to_string(),
+                value: BehaviorLiteral::Int(5),
+            },
+        ],
+        ..Default::default()
+    };
+    step(&mut sys, &mut world);
+    assert_eq!(
+        var(&sys, "score"),
+        3,
+        "the run's count carried and advanced"
+    );
+    assert_eq!(var(&sys, "lives"), 5, "the edited declaration took effect");
+}
+
+// The path table an observer resolves trace events through is a compile
+// product, so an edit that recompiles republishes it. Without that the panel
+// would light rows from a body the world no longer runs.
+#[test]
+fn the_trace_path_table_is_republished_after_an_edit() {
+    let one = Behavior {
+        asset_id: AssetId(1),
+        on: BehaviorSource::Tick,
+        body: vec![set_var("n", 1, false)],
+        ..Default::default()
+    };
+    let two = Behavior {
+        body: vec![set_var("n", 1, false), set_var("m", 1, false)],
+        ..one.clone()
+    };
+    let mut world = world_with(vec![one]);
+    world.resources.insert(TraceRequest::default());
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    assert_eq!(world.resources.get::<TracePaths>().unwrap().0[0].1.len(), 1);
+
+    edit_behavior(&mut world, 0, two);
+    step(&mut sys, &mut world);
+    assert_eq!(
+        world.resources.get::<TracePaths>().unwrap().0[0].1.len(),
+        2,
+        "the new body's nodes are addressable"
+    );
+}
+
+// A delayed run is a run of the body it was scheduled against, so the edit that
+// replaced that body takes its pending run with it, while a neighbour's run
+// follows its program to wherever the new list holds it.
+#[test]
+fn a_pending_run_follows_its_program_or_goes_with_it() {
+    let delayed = |id, var| Behavior {
+        asset_id: AssetId(id),
+        on: BehaviorSource::Tick,
+        once: true,
+        delay: 1.0,
+        body: vec![set_var(var, 1, true)],
+        ..Default::default()
+    };
+    let mut world = world_with(vec![delayed(1, "gone"), delayed(2, "kept")]);
+    let mut sys = system(&mut world);
+    step(&mut sys, &mut world);
+    assert_eq!(
+        sys.pending.len(),
+        2,
+        "both firings are waiting out their delay"
+    );
+
+    edit_behavior(&mut world, 0, delayed(1, "edited"));
+    step(&mut sys, &mut world);
+    assert_eq!(
+        sys.pending.iter().map(|p| p.0).collect::<Vec<_>>(),
+        vec![1, 0],
+        "the survivor keeps its place; the edited body scheduled a fresh run"
+    );
+}
+
+// A frozen world still adopts the edit: the reseed runs ahead of the freeze
+// gate, so Play resumes on the edited bodies rather than the ones the world
+// was built with.
+#[test]
+fn a_frozen_world_adopts_an_edit_before_it_resumes() {
+    let mut world = world_with(vec![counter(1, "n", 1)]);
+    let mut sys = system(&mut world);
+    world.resources.insert(MenuActive(true));
+    edit_behavior(&mut world, 0, counter(1, "n", 9));
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "n"), 0, "a frozen world still fires nothing");
+
+    world.resources.insert(MenuActive(false));
+    step(&mut sys, &mut world);
+    assert_eq!(var(&sys, "n"), 9);
+}

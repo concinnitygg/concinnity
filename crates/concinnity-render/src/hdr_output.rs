@@ -8,6 +8,12 @@
 //!   2. whether `PostProcessParams.hdr_output` ships to the shader as `1.0`
 //!      so the composite pass skips ACES + gamma + FXAA + ColorLut and emits
 //!      linear extended-range values directly.
+//!
+//! Those two flags only ever enter `PostProcessParams` through
+//! [`HdrOutputMode::post_process_params`], so nothing upstream of the display
+//! negotiation can set (or clear) them.
+
+use crate::render_types::{PostProcessParams, PostProcessTunables};
 
 // Threshold above which the OS-reported max-EDR multiplier is considered an
 // HDR display. macOS reports `1.0` on every panel including SDR ones; values
@@ -111,6 +117,24 @@ impl HdrOutputMode {
     pub fn is_hdr(&self) -> bool {
         matches!(self, Self::Hdr { .. })
     }
+
+    /// Compose the GPU-facing composite uniform from the authored tunables and
+    /// this negotiated mode. The backends call it once at init; afterwards a
+    /// live tunable push goes through `PostProcessParams::set_tunables`, which
+    /// leaves the two flags stamped here alone.
+    pub fn post_process_params(&self, tunables: PostProcessTunables) -> PostProcessParams {
+        PostProcessParams {
+            bloom_intensity: tunables.bloom_intensity,
+            bloom_threshold: tunables.bloom_threshold,
+            bloom_knee: tunables.bloom_knee,
+            exposure: tunables.exposure,
+            vignette: tunables.vignette,
+            lut_strength: tunables.lut_strength,
+            hdr_output: self.shader_flag(),
+            pq_output: self.pq_flag(),
+            fxaa: tunables.fxaa,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -206,5 +230,57 @@ mod tests {
             .pq_flag(),
             1.0
         );
+    }
+
+    // The one place the output flags enter the composite uniform: the tunables
+    // come through untouched, the two flags come from the negotiated mode.
+    #[test]
+    fn composed_params_carry_the_tunables_and_the_modes_flags() {
+        let tunables = PostProcessTunables {
+            exposure: 4.0,
+            vignette: 0.25,
+            ..PostProcessTunables::DEFAULT
+        };
+
+        let sdr = HdrOutputMode::Sdr.post_process_params(tunables);
+        assert_eq!(sdr.exposure, 4.0);
+        assert_eq!(sdr.vignette, 0.25);
+        assert_eq!(sdr.hdr_output, 0.0);
+        assert_eq!(sdr.pq_output, 0.0);
+
+        let hdr = HdrOutputMode::Hdr {
+            max_edr: 8.0,
+            encoding: HdrEncoding::Pq,
+        }
+        .post_process_params(tunables);
+        assert_eq!(hdr.exposure, 4.0);
+        assert_eq!(hdr.hdr_output, 1.0);
+        assert_eq!(hdr.pq_output, 1.0);
+    }
+
+    // The live-push path a settings slider drives: it may move any tunable, but
+    // it cannot drop the EDR path the display negotiation stamped in.
+    #[test]
+    fn a_tunable_push_leaves_the_negotiated_output_flags_standing() {
+        let mode = HdrOutputMode::Hdr {
+            max_edr: 8.0,
+            encoding: HdrEncoding::Pq,
+        };
+        let mut params = mode.post_process_params(PostProcessTunables::DEFAULT);
+
+        // What the engine resolves and pushes on a slider drag: no output flags
+        // to speak of, so the SDR fallback is not reachable from here.
+        params.set_tunables(PostProcessTunables {
+            exposure: 0.5,
+            bloom_intensity: 0.0,
+            fxaa: 0.0,
+            ..PostProcessTunables::DEFAULT
+        });
+
+        assert_eq!(params.exposure, 0.5);
+        assert_eq!(params.bloom_intensity, 0.0);
+        assert_eq!(params.fxaa, 0.0);
+        assert_eq!(params.hdr_output, 1.0);
+        assert_eq!(params.pq_output, 1.0);
     }
 }

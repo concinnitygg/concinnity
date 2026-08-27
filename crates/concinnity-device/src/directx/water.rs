@@ -283,20 +283,15 @@ mod tests {
 
     // The water shaders compile at runtime from the shared single source, so a
     // syntax or register error in either MSAA variant would otherwise surface
-    // only as an init failure on a GPU host. slangc resolves from PATH and may be
-    // absent, in which case the runtime path reports its own error and this skips
-    // rather than failing.
+    // only as an init failure on a GPU host.
     #[test]
     fn water_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         for msaa in [1u32, 4] {
-            match super::compile_water_shaders(msaa, false) {
-                Ok(_) => {}
-                Err(e) if slangc_unavailable(&e) => {
-                    eprintln!("skipping water compile test (msaa={msaa}): {e}");
-                    return;
-                }
-                Err(e) => panic!("water shaders (msaa={msaa}) must compile: {e}"),
-            }
+            super::compile_water_shaders(msaa, false)
+                .unwrap_or_else(|e| panic!("water shaders (msaa={msaa}) must compile: {e}"));
         }
     }
 
@@ -304,20 +299,13 @@ mod tests {
     // traversal fragment and the shader model 6.5 the ray query needs.
     #[test]
     fn water_rt_shaders_compile() {
-        for msaa in [1u32, 4] {
-            match super::compile_water_rt_shaders(msaa, false) {
-                Ok(_) => {}
-                Err(e) if slangc_unavailable(&e) => {
-                    eprintln!("skipping water_rt compile test (msaa={msaa}): {e}");
-                    return;
-                }
-                Err(e) => panic!("water_rt shaders (msaa={msaa}) must compile: {e}"),
-            }
+        if !crate::slangc_gate::slangc_available() {
+            return;
         }
-    }
-
-    fn slangc_unavailable(err: &str) -> bool {
-        err.contains("slangc")
+        for msaa in [1u32, 4] {
+            super::compile_water_rt_shaders(msaa, false)
+                .unwrap_or_else(|e| panic!("water_rt shaders (msaa={msaa}) must compile: {e}"));
+        }
     }
 
     #[test]

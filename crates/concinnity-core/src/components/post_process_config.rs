@@ -7,7 +7,7 @@
 
 use crate::components::{IndirectLighting, PostProcessConfig};
 use crate::ecs::Component;
-use crate::gfx::render_types::PostProcessParams;
+use crate::gfx::render_types::PostProcessTunables;
 use crate::math::exp2;
 
 // `exposure_ev` is clamped to this range before resolving to a multiplier so a
@@ -18,12 +18,12 @@ const EXPOSURE_EV_LIMIT: f32 = 16.0;
 /// GPU-facing settings the renderer consumes. Kept in core (not concinnity-asset)
 /// because every return type is a `crate::gfx` settings struct.
 pub trait PostProcessResolve {
-    /// Resolve the authored fields into the GPU-facing `PostProcessParams`:
+    /// Resolve the authored fields into the GPU-facing `PostProcessTunables`:
     /// clamps each tunable and converts `exposure_ev` (stops) into the linear
-    /// multiplier the shaders expect. `hdr_output` is left at 0.0 (SDR path);
-    /// the backend overwrites it to 1.0 only after confirming EDR support, so the
-    /// asset-side resolve stays pure.
-    fn resolve(&self) -> PostProcessParams;
+    /// multiplier the shaders expect. The composite's display-output flags are
+    /// not authored, so they are absent here: the backend adds them to the full
+    /// `PostProcessParams` once it has negotiated EDR support with the display.
+    fn resolve(&self) -> PostProcessTunables;
 
     /// Clamp the authored `ambient_intensity` to a safe `[0, 16]` multiplier the
     /// backend folds into `LightUniforms` to scale the indirect (ambient / IBL)
@@ -58,19 +58,17 @@ pub trait PostProcessResolve {
 }
 
 impl PostProcessResolve for PostProcessConfig {
-    fn resolve(&self) -> PostProcessParams {
+    fn resolve(&self) -> PostProcessTunables {
         let ev = self
             .exposure_ev
             .clamp(-EXPOSURE_EV_LIMIT, EXPOSURE_EV_LIMIT);
-        PostProcessParams {
+        PostProcessTunables {
             bloom_intensity: self.bloom_intensity.max(0.0),
             bloom_threshold: self.bloom_threshold.max(0.0),
             bloom_knee: self.bloom_knee.max(0.0),
             exposure: exp2(ev),
             vignette: self.vignette_strength.clamp(0.0, 1.0),
             lut_strength: self.lut_strength.clamp(0.0, 1.0),
-            hdr_output: 0.0,
-            pq_output: 0.0,
             fxaa: self.aa_mode.fxaa_flag(),
         }
     }
@@ -160,6 +158,8 @@ mod tests {
         assert_eq!(p.vignette, 0.0);
         // Full LUT blend by default: a no-op until a ColorLut is declared.
         assert_eq!(p.lut_strength, 1.0);
+        // The renderer's no-asset fallback has to resolve to the same thing.
+        assert_eq!(p, PostProcessTunables::DEFAULT);
     }
 
     #[test]
@@ -537,12 +537,8 @@ mod tests {
     }
 
     #[test]
-    fn hdr_display_defaults_off_and_resolve_leaves_flag_zero() {
-        let cfg = PostProcessConfig::default();
-        assert!(!cfg.hdr_display);
-        // The asset-side resolve always emits the SDR path; the backend is the
-        // one that promotes hdr_output to 1.0 after confirming EDR.
-        assert_eq!(cfg.resolve().hdr_output, 0.0);
+    fn hdr_display_defaults_off() {
+        assert!(!PostProcessConfig::default().hdr_display);
     }
 
     #[test]

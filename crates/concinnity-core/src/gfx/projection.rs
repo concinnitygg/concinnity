@@ -63,15 +63,17 @@ mod tests {
     }
 
     // The backends and the shadow builders each reached this matrix their own
-    // way before it moved here: through std's tangent rather than the libm shim,
-    // and (in the shadow builders) through a different arrangement of the same
-    // algebra. Reassociating a float product is not free and the two tangents
-    // need not agree to the last bit, so pin the gap: every element must land
-    // within one ulp of the other ordering.
+    // way before it moved here, through a different arrangement of the same
+    // algebra. Reassociating a float product is not free, so pin the gap: fed
+    // the same tangent, every element must land within one ulp of the other
+    // ordering. Both sides take the shim's tangent rather than std's: std's is
+    // the host's libm, which would make the bound a property of the machine
+    // running the test rather than of the arrangement. `math::scalar` is where
+    // the shim is held to std.
     #[test]
     fn the_reassociated_form_agrees_to_within_one_ulp() {
         fn other(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
-            let t = f32::tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
+            let t = tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
             let fmn = far - near;
             [
                 [1.0 / (aspect * t), 0.0, 0.0, 0.0],

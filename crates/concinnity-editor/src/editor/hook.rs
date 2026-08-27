@@ -27,11 +27,13 @@
 // state through the same preview rebuild every committed edit takes. F1 hides /
 // shows the whole HUD.
 //
-// SAVE re-serializes the authored entry list to world.jsonl and recompiles the
-// blobs through the validated cook tail (`build_world_to_disk`). A successful
-// SAVE then applies the edit to the running world without recreating the window:
-// the live render backend is transplanted out of the world and `apply_world_swap`
-// rebuilds the recompiled world onto it (carried in as a `PendingBackend`).
+// An edit shows in the preview the frame after it is committed, and SAVE only
+// persists: `apply_world_swap` writes the change into the running world where
+// the running world can express it (`editor/live/`), and otherwise recompiles
+// and swaps a fresh world under the live render backend, which is transplanted
+// across as a `PendingBackend` so the OS window is never recreated. SAVE
+// re-serializes the entry list to world.jsonl and recompiles the blobs through
+// the validated cook tail (`build_world_to_disk`).
 
 use super::asset_tree::{self, TreeGroup, TreeRow};
 use super::axes;
@@ -49,6 +51,7 @@ use super::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportVie
 use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
+use super::live;
 use super::overrides;
 use super::palette;
 use super::palette_panel::{self, PaletteHit, PaletteView};
@@ -130,9 +133,21 @@ pub(crate) struct EditorHook {
     // Starts on: the axes are the viewport's orientation reference.
     axes_visible: bool,
     // Set whenever the authored entries change (add / edit / delete / template);
-    // consumed by `apply_world_swap` to rebuild the live preview world from the
-    // in-memory entries. SAVE does not set this -- the preview is already current.
+    // consumed by `apply_world_swap` to bring the live preview world back in
+    // line with them. SAVE does not set this -- the preview is already current.
     rebuild_preview: bool,
+    // Set alongside it when only a full rebuild will do: the running world
+    // holds state no authored diff describes (a simulation that ran, a story
+    // source re-read from disk), so the live-apply path must not claim it.
+    rebuild_required: bool,
+    // The entry list the live preview world was built from, and the template
+    // baselines that build's expansion merged authored patches over. An edit is
+    // applied to the running world by diffing against these; a rebuild re-seeds
+    // both. The baselines are unknown until the first rebuild of the session
+    // (boot loads the world from the compiled blobs, which do not carry them),
+    // and until they are, an edit cannot be applied live.
+    world_entries: Vec<serde_json::Value>,
+    world_shadows: Option<live::ShadowBaselines>,
     // Whether the Templates panel is shown (toggled from the View panel).
     templates_open: bool,
     // The template whose detail panel is open (index into the templates
@@ -640,12 +655,15 @@ impl EditorHook {
             history: History::default(),
             baseline: entries.clone(),
             saved: entries.clone(),
+            world_entries: entries.clone(),
             entries,
             dirty: false,
             sim: sim::SimControl::default(),
             hud_visible: true,
             axes_visible: true,
             rebuild_preview: false,
+            rebuild_required: false,
+            world_shadows: None,
             templates_open: false,
             open_template: None,
             template_list_scroll: 0,
@@ -1208,18 +1226,24 @@ impl DebugHook for EditorHook {
         self.drive_toasts(world, vp, shown, mouse);
     }
 
-    // Rebuild the live preview world from the in-memory entries and swap it under
-    // the running render backend, so any authored change (add / edit / delete /
-    // template apply) shows immediately without recreating the OS window or
-    // touching disk (SAVE owns persistence). Run once per frame by the run loop
-    // right after `tick`, whenever an edit flagged `rebuild_preview`.
+    // Bring the live preview world back in line with the in-memory entries, so
+    // any authored change (add / edit / delete / template apply) shows
+    // immediately without touching disk (SAVE owns persistence). Run once per
+    // frame by the run loop right after `tick`, whenever an edit flagged
+    // `rebuild_preview`.
+    //
+    // An edit that only changed component data is written straight into the
+    // running world (`try_live_apply`), which is what most editing is: the
+    // renderer draws that data every frame, so it is already the shortest path
+    // from the edit to the picture. Everything else recompiles and swaps a
+    // fresh world under the running backend, below.
     //
     // The recompiled world is built FIRST, in a throwaway App; only once that
     // succeeds is the backend transplanted out of the live world. So a rebuild
     // failure leaves the live world -- and its window -- fully intact; the next
     // edit retries. The backend is never dropped on an error path.
     fn apply_world_swap(&mut self, app: &mut App) {
-        if !self.rebuild_preview {
+        if !self.refresh_preview(app.world_mut()) {
             return;
         }
         // A rebuild that measured slow last time announces itself first: its
@@ -1237,6 +1261,7 @@ impl DebugHook for EditorHook {
             }
         }
         self.rebuild_preview = false;
+        self.rebuild_required = false;
         let started = std::time::Instant::now();
         self.swap_preview_world(app);
         self.last_rebuild_secs = started.elapsed().as_secs_f32();
@@ -1250,11 +1275,80 @@ impl DebugHook for EditorHook {
 const SLOW_REBUILD_SECS: f32 = 0.15;
 
 impl EditorHook {
+    // Bring the live preview back in line with the entries, writing the edit
+    // into the running world where that expresses it. `true` when a rebuild is
+    // still owed, which is what `apply_world_swap` goes on to do.
+    fn refresh_preview(&mut self, world: &mut World) -> bool {
+        if !self.rebuild_preview {
+            return false;
+        }
+        if self.try_live_apply(world) {
+            self.rebuild_preview = false;
+            return false;
+        }
+        // The rebuild discards a running simulation's state, so the transport
+        // honestly drops to Stopped. An edit written into the running world
+        // leaves the simulation alone, which is why this belongs here rather
+        // than with the edit that recorded it.
+        self.sim.on_edit();
+        true
+    }
+
+    // Write an edit that only changed component data into the running world,
+    // instead of rebuilding it. `true` when the whole edit landed; `false`
+    // leaves the world untouched for the rebuild to handle.
+    //
+    // The diff is taken against the entries the running world was built from,
+    // not the pre-edit list, so a burst of edits that each declined still
+    // applies as one once one of them can.
+    fn try_live_apply(&mut self, world: &mut World) -> bool {
+        if self.rebuild_required {
+            return false;
+        }
+        if !live::same_assets(&self.world_entries, &self.entries) || !self.seed_world_shadows() {
+            return false;
+        }
+        let shadows = self.world_shadows.as_ref().expect("seeded above");
+        let Some(changes) = live::args_changes(&self.world_entries, &self.entries, shadows) else {
+            return false;
+        };
+        let Some(plan) = live::plan(world, &self.entries, &changes) else {
+            return false;
+        };
+        tracing::debug!("editor: {} edit(s) applied live, no rebuild", plan.len());
+        live::commit(world, plan);
+        self.world_entries = self.entries.clone();
+        true
+    }
+
+    // The template baselines for the running world, expanding its entry list
+    // once to find them if the session has not needed them yet (boot loads the
+    // world from the compiled blobs, which do not record them). Every edit that
+    // could move a baseline rebuilds, and a rebuild re-seeds these, so the one
+    // expansion holds for the rest of the session. `false` when the list does
+    // not expand, which sends the edit to the rebuild that will report why.
+    fn seed_world_shadows(&mut self) -> bool {
+        if self.world_shadows.is_some() {
+            return true;
+        }
+        let Ok(loaded) = Self::cook_entries(&self.world_entries) else {
+            return false;
+        };
+        self.world_shadows = Some(
+            loaded
+                .shadowed
+                .into_iter()
+                .map(|s| (s.name, s.args))
+                .collect(),
+        );
+        true
+    }
+
     // The rebuild + backend transplant itself (see `apply_world_swap` for the
     // timing shell around it).
     fn swap_preview_world(&mut self, app: &mut App) {
-        let world = match self.build_preview_world() {
-            Ok(w) => w,
+        let (world, shadows) = match self.build_preview_world() {
+            Ok(built) => built,
             Err(e) => {
                 tracing::error!("editor: live preview rebuild failed, keeping current world: {e}");
                 self.notifier.error_with(
@@ -1264,6 +1358,8 @@ impl EditorHook {
                 return;
             }
         };
+        self.world_entries = self.entries.clone();
+        self.world_shadows = Some(shadows);
         let mut staged = App::new();
         staged.load_world(world);
         // Carry the editor's typed text (an open form's name + fields, the combo

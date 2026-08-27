@@ -658,6 +658,9 @@ mod tests {
     // longer owns a velocity pre-pass.
     #[test]
     fn taa_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         super::compile_taa_shaders(false).expect("taa shaders compile");
     }
 }

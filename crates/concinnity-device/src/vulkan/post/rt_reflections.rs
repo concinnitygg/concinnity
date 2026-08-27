@@ -1177,6 +1177,9 @@ mod tests {
     // `rt_params_layout_*` / `rt_geom_entry_*` tests in gfx::render_types.
     #[test]
     fn rt_reflections_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         // Both the ceiling and a device-shortened probe cube array must compile.
         for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
             let shaders = super::compile_rt_shaders(false, 4, probes).expect("rt shaders compile");

@@ -101,6 +101,11 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         None,
     )?;
 
+    // The material name catalogue, read before the result is taken apart below.
+    let material_names = crate::resource::MaterialNames(
+        result.resource_names(concinnity_cook::resource_handles::ResourceKind::Material),
+    );
+
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world =
         concinnity_engine::blob::world_from(crate::blob::BlobData::new(payload_sections));
@@ -151,6 +156,9 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
             })
             .collect(),
     ));
+    // Dev-only: the material name catalogue, so the editor's live draw seam can
+    // resolve a material an edit names to the handle it was compiled at.
+    world.insert_resource(material_names);
     // Dev-only: the mesh source catalogue, so the renderer's hot-reload capture
     // can map a mesh handle back to the `.glb`/`.fbx` that backs it.
     world.insert_resource(crate::resource::MeshSources(
@@ -173,8 +181,19 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 /// this to boot an empty (or otherwise non-renderable) world from a seeded
 /// GraphicsConfig so a window still opens.
 pub fn build_world_from_str(content: &str) -> std::io::Result<World> {
+    Ok(build_world_and_shadows(content)?.0)
+}
+
+/// `build_world_from_str`, plus the pre-merge args of every generated asset the
+/// world patches. An authored line over a generated asset is a sparse patch, so
+/// a tool that re-derives one asset's effective args from its line alone needs
+/// the baseline the patch merges over.
+pub(crate) fn build_world_and_shadows(
+    content: &str,
+) -> std::io::Result<(World, Vec<concinnity_cook::world::ShadowedAsset>)> {
     let loaded = prepare(content)?;
-    world_from_loaded(loaded)
+    let shadowed = loaded.shadowed.clone();
+    Ok((world_from_loaded(loaded)?, shadowed))
 }
 
 /// Read a world.jsonl file from disk and run the full in-memory pipeline on it,
@@ -421,6 +440,31 @@ mod tests {
         fn drop(&mut self) {
             concinnity_host::store::paths::clear_state_dir();
         }
+    }
+
+    // The in-memory build records each compiled Material's identity, dense by
+    // the handle cook assigned it, so the live draw seam can resolve a
+    // material an edit names against the running world.
+    #[test]
+    fn an_in_memory_build_records_its_material_identities() {
+        let _guard = crate::test_support::lock();
+        crate::test_support::isolate_state_dir();
+        let world = build_world_from_str(concat!(
+            "{\"name\":\"steel\",\"type\":\"Material\",\"args\":{\"roughness\":0.4}}\n",
+            "{\"name\":\"glass\",\"type\":\"Material\",\"args\":{\"transparent\":true}}\n",
+        ))
+        .expect("a material-only world compiles");
+        let names = world
+            .resource::<crate::resource::MaterialNames>()
+            .expect("the catalogue is installed");
+        assert_eq!(
+            names.0,
+            vec![
+                crate::ecs::asset_id::intern("steel").0,
+                crate::ecs::asset_id::intern("glass").0,
+            ],
+            "declaration order is handle order"
+        );
     }
 
     // build_world_to_disk compiles a world.jsonl and writes the blobs + lock to

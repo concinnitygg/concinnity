@@ -10,7 +10,7 @@ use crate::gfx::error::{RenderError, RenderResult};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::profile::RenderStats;
-use crate::gfx::render_types::{MaterialUniforms, PostProcessParams, SkinnedDrawObject};
+use crate::gfx::render_types::{MaterialUniforms, PostProcessTunables, SkinnedDrawObject};
 
 use super::context::{MtlContext, debug_assert_main_thread};
 
@@ -102,8 +102,9 @@ impl RenderBackend for MtlContext {
     forward! {
         fn set_reflection_probes(&mut self, probes: &[crate::gfx::reflection_probe::ProbePlacement]);
         fn set_vsync(&mut self, on: bool);
-        fn update_post_process(&mut self, params: PostProcessParams);
+        fn update_post_process(&mut self, tunables: PostProcessTunables);
         fn set_ambient_intensity(&mut self, value: f32);
+        fn update_directional_lights(&mut self, lights: &[crate::components::DirectionalLight]);
         fn apply_quality_settings(&mut self, settings: QualitySettings);
         fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);

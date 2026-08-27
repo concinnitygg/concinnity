@@ -1897,6 +1897,9 @@ mod tests {
     // prev_clip the fragment consumes for the motion vector.
     #[test]
     fn gbuffer_shaders_compile() {
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         compile_gbuffer_shaders(false).expect("gbuffer shaders compile");
     }
 }

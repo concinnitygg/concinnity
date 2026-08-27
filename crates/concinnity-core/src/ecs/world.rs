@@ -204,6 +204,15 @@ impl World {
         self.components.insert_typed(entity, c);
     }
 
+    /// Overwrite an existing component with a rebuilt one, keeping the entity
+    /// and its other components. `false` when the entity holds no component of
+    /// that type. An editing tool that rebuilds one component from changed
+    /// authoring data writes it back through here rather than reloading the
+    /// world around it.
+    pub fn replace_component(&mut self, entity: Entity, asset: ComponentAsset) -> bool {
+        self.components.replace(entity, asset)
+    }
+
     /// Whether an entity is still live. Mirror of `PipelineContext::is_alive`;
     /// guards name-index resolves against entities despawned by the start-time
     /// drains (Window, GraphicsConfig, Scene, ...).
