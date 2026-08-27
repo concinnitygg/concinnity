@@ -179,7 +179,7 @@ pub struct PackResult {
 // Encode one blob image and write it out. The format crate performs no I/O, so
 // the write lives here alongside the rest of the build's file output.
 fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
-    let image = encode_cnb(concinnity_core::SCHEMA_HASH, meta, payload)
+    let image = encode_cnb(concinnity_core::SCHEMA_VERSION, meta, payload)
         .map_err(|e| std::io::Error::other(format!("encoding {}: {:?}", path, e)))?;
     fs::write(path, image)
 }

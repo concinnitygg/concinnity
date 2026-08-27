@@ -91,8 +91,8 @@
 // `names` returns the build interner's `AssetId` -> name table (index = id),
 // so a client can remap any runtime `AssetId` back to its world.jsonl name.
 // `shutdown` cancels the app shutdown token, so the engine exits cleanly on
-// its next loop iteration: `cn debug smoke --shutdown` uses it to stop the
-// client after a headless smoke test instead of leaving the window open.
+// its next loop iteration, which is how a script closes a headless session
+// instead of leaving the window open.
 
 // Submodules (all binary-only):
 //   wire      WS transport (server accept loop + client); coverage-excluded

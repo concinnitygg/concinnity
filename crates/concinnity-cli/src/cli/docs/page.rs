@@ -1,17 +1,13 @@
-// Markdown page assembly from the embedded reference.
-//
-// The bodies are rendered at build time; this turns one into a whole page, and
-// the entry list into the index. Kept in the library rather than the build
-// script so `cn docs` writes the pages from the embedded table, with no asset
-// source tree in sight.
+// Markdown page assembly. `reference` renders the bodies; this turns one into a
+// whole page, and the entry list into the index.
 
 /// Leading marker on every generated page. A docs viewer strips it before
 /// rendering; it warns a human (or an AI) editing the file by hand.
-pub const AUTOGEN_MARKER: &str = "<!-- Auto-generated - do not edit. -->";
+pub(crate) const AUTOGEN_MARKER: &str = "<!-- Auto-generated - do not edit. -->";
 
 // An entry in the index table of contents: a type's name (and route) plus its
 // one-line summary.
-pub(crate) struct IndexEntry {
+pub(super) struct IndexEntry {
     pub name: String,
     pub summary: String,
 }
@@ -25,7 +21,7 @@ fn doc_link(name: &str) -> String {
 
 // Assemble a full page: the auto-generated marker, the `# Name` heading, then
 // the body (description plus the generated Parameters/Values section).
-pub(crate) fn render_page(name: &str, body: &str) -> String {
+pub(super) fn render_page(name: &str, body: &str) -> String {
     let mut out = String::new();
     out.push_str(AUTOGEN_MARKER);
     out.push_str("\n\n# ");
@@ -41,7 +37,7 @@ pub(crate) fn render_page(name: &str, body: &str) -> String {
 
 // Render the index page: an alphabetical list of every asset, then a list of
 // the referenced value types and enums, each linking to its own page.
-pub(crate) fn render_index(assets: &[IndexEntry], ref_types: &[IndexEntry]) -> String {
+pub(super) fn render_index(assets: &[IndexEntry], ref_types: &[IndexEntry]) -> String {
     let mut out = String::new();
     out.push_str(AUTOGEN_MARKER);
     out.push_str("\n\n# Assets\n\n");

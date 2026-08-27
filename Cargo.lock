@@ -569,9 +569,10 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "concinnity-asset",
+ "concinnity-cli",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-engine",
@@ -579,13 +580,13 @@ dependencies = [
  "concinnity-shader",
  "concinnity-toolchain",
  "concinnity-world",
+ "tempfile",
 ]
 
 [[package]]
 name = "concinnity-asset"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
- "concinnity-toolchain",
  "postcard",
  "serde",
  "serde_json",
@@ -593,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-bench"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "concinnity-asset",
  "concinnity-cook",
@@ -606,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cli"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "ash",
  "clap",
@@ -620,6 +621,7 @@ dependencies = [
  "glfw",
  "serde_json",
  "shaderc",
+ "syn",
  "tempfile",
  "tracing",
  "windows 0.61.3",
@@ -628,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -659,13 +661,12 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "bytemuck",
  "concinnity-asset",
  "concinnity-memory",
  "concinnity-physics",
- "concinnity-toolchain",
  "fontdue",
  "libm",
  "postcard",
@@ -678,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "ash",
  "block2",
@@ -712,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-editor"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "argon2",
  "async-stream",
@@ -757,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -788,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "concinnity-asset",
  "concinnity-core",
@@ -802,11 +803,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-memory"
-version = "0.18.62"
+version = "0.18.63"
 
 [[package]]
 name = "concinnity-physics"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "concinnity-memory",
  "libm",
@@ -814,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-render"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -828,18 +829,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "concinnity-runtime"
-version = "0.18.62"
-dependencies = [
- "concinnity-engine",
- "concinnity-memory",
- "concinnity-toolchain",
- "tempfile",
-]
-
-[[package]]
 name = "concinnity-shader"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -852,22 +843,19 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.18.62"
+version = "0.18.63"
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "concinnity-slang",
- "syn",
  "tempfile",
- "ureq",
- "zip",
 ]
 
 [[package]]
 name = "concinnity-world"
-version = "0.18.62"
+version = "0.18.63"
 dependencies = [
  "concinnity-asset",
  "concinnity-core",

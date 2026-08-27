@@ -275,7 +275,7 @@ impl GraphicsSystem {
             &format!("{:?} {:?}", self.gpu_profile.vendor, self.gpu_profile.tier),
         );
         // Resolve the master quality preset. The launch's `--quality-preset` flag
-        // wins first and is never persisted, so a test / CI / GPU smoke can force
+        // wins first and is never persisted, so a test / CI / GPU probe can force
         // a preset (e.g. `custom` for no clamp) without touching settings.bin.
         // Otherwise the persisted choice; `None` there = never configured (a first
         // launch, or a settings file written before the preset existed): seed

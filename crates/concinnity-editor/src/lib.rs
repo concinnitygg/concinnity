@@ -29,7 +29,7 @@ mod test_support;
 
 // Dev-session entry points, consumed by the concinnity-cli binary: the debug
 // server + interpreted run (`cn debug`), the in-engine editor (`cn editor`),
-// and the debug-server WebSocket client (`cn debug send/smoke/...`).
+// and the debug-server WebSocket client (`cn debug send/screenshot/...`).
 pub use debug::{WatchTarget, client as debug_client};
 pub use editor::run_editor;
 pub use run::run_debug;

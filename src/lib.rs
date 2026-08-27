@@ -68,20 +68,23 @@
 //! The default build is the runtime alone: the world loop, the renderer, and
 //! the [`components`] vocabulary, which is all the examples above need.
 //!
-//! `std` is that runtime, and it is on by default. Turning it off leaves
-//! [`components`], a [`World`] to build with them, and an [`App`] that steps it
-//! headless: no window, no renderer, no `cook`, and no
-//! [`from_blob`](App::from_blob) to read one from disk. That loop keeps virtual
-//! time -- one fixed simulation step per tick, unpaced -- so it runs
-//! deterministically where there is no clock to follow.
-//!
-//! `cook` adds the `cook` module described above. It carries the authoring half
+//! `--features cook` adds the `cook` module described above. It carries the authoring half
 //! of the vocabulary (textures, meshes, prefabs, menus) and pulls in the
 //! importers that read them (glTF, FBX, images, fonts), so an application that
 //! only plays an already-compiled world should leave it off.
 //!
-//! `vulkan` selects the Vulkan backend where the platform default is Metal or
-//! DirectX.
+//! `--features vulkan` selects the Vulkan backend where the platform default is
+//! Metal or DirectX.
+//!
+//! `--features player` builds `concinnity-run`, the standalone binary that plays
+//! a compiled world, and `--features dev` builds both it and the `concinnity`
+//! command-line tool. Both are for working on an application rather than for
+//! linking one: nothing in the library's own API depends on either, and with
+//! neither enabled this crate builds no build dependency at all.
+//!
+//! `--no-default-features` leaves the core `no_std` runtime: the component
+//! vocabulary, a [`World`] to hold it, and a headless [`App`] that steps it,
+//! with no operating system underneath.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

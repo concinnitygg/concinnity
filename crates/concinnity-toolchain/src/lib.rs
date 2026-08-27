@@ -27,11 +27,6 @@
 //! directives. The probe/copy/directive logic itself lives in the `sdks`
 //! module, which never touches the environment or stdout.
 
-#[cfg(feature = "doc-extract")]
-pub mod doc_extract;
-#[cfg(feature = "fetch")]
-pub mod fetch;
-
 use std::path::{Path, PathBuf};
 
 mod metal_shaders;
@@ -142,7 +137,13 @@ pub fn emit_backend_cfg() -> Backend {
 
 /// Set up the optional graphics SDKs for the given backend. On a non-Windows
 /// target (or the Metal backend) this is a no-op: none of these SDKs apply.
-pub fn setup_graphics_sdks(backend: Backend, targets: BinaryTargets) {
+///
+/// `targets` is every kind of final binary the calling package builds, since a
+/// package can build both (this workspace's root builds the two bins and the
+/// examples). Each kind takes its own linker-argument key and its own directory
+/// for the bundled DLLs, so the setup runs once per kind; a directive both kinds
+/// produce -- every cfg, every warning -- is emitted once.
+pub fn setup_graphics_sdks(backend: Backend, targets: &[BinaryTargets]) {
     let env = sdk_env_from_cargo();
     for line in sdks::graphics_sdk_directives(backend, targets, &env) {
         println!("{line}");
@@ -305,9 +306,10 @@ mod tests {
         // Windows target OS (CARGO_CFG_TARGET_OS is unset outside build
         // scripts), so neither requires any SDK to be present.
         for targets in [
-            BinaryTargets::None,
-            BinaryTargets::Bins,
-            BinaryTargets::Examples,
+            &[BinaryTargets::None][..],
+            &[BinaryTargets::Bins],
+            &[BinaryTargets::Examples],
+            &[BinaryTargets::Bins, BinaryTargets::Examples],
         ] {
             setup_graphics_sdks(Backend::Metal, targets);
             setup_graphics_sdks(Backend::Vk, targets);

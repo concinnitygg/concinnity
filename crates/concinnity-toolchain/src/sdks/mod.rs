@@ -56,13 +56,30 @@ pub(crate) fn backend_cfg_directive(backend: Backend) -> String {
     rustc_cfg(backend.cfg_name())
 }
 
-// The full SDK setup for one backend. On a non-Windows target (or the Metal
-// backend) this returns nothing: none of these SDKs apply.
+// The full SDK setup for one backend across every kind of final binary the
+// calling package builds. Each kind takes its own linker-argument key and its
+// own directory for the bundled DLLs, so the setup runs once per kind; the
+// directives both kinds produce -- every cfg, every warning, the unscoped NGX
+// link -- are emitted once.
 pub(crate) fn graphics_sdk_directives(
     backend: Backend,
-    targets: BinaryTargets,
+    targets: &[BinaryTargets],
     env: &SdkEnv,
 ) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for &target in targets {
+        for line in directives_for_kind(backend, target, env) {
+            if !out.contains(&line) {
+                out.push(line);
+            }
+        }
+    }
+    out
+}
+
+// On a non-Windows target (or the Metal backend) this returns nothing: none of
+// these SDKs apply.
+fn directives_for_kind(backend: Backend, targets: BinaryTargets, env: &SdkEnv) -> Vec<String> {
     let mut out = Vec::new();
     match backend {
         Backend::Dx => {

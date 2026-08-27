@@ -11,15 +11,20 @@ use crate::blob::{BLOB_MAGIC, HEADER_SIZE};
 /// Encode a blob image: the 16-byte header, the postcard-serialized metadata
 /// block, then the raw payload section.
 ///
-/// `schema_hash` is stamped into the header and checked on load. The container
-/// does not own the asset types travelling inside it, so the caller supplies
-/// the hash; runtime callers pass `concinnity_core::SCHEMA_HASH`.
-pub fn encode_cnb(schema_hash: u32, meta: &BlobMeta, payload: &[u8]) -> Result<Vec<u8>, BlobError> {
+/// `schema_version` is stamped into the header and checked on load. The
+/// container does not own the asset types travelling inside it, so the caller
+/// supplies the version; runtime callers pass
+/// `concinnity_core::SCHEMA_VERSION`.
+pub fn encode_cnb(
+    schema_version: u32,
+    meta: &BlobMeta,
+    payload: &[u8],
+) -> Result<Vec<u8>, BlobError> {
     let meta_bytes: Vec<u8> = postcard::to_allocvec(meta).map_err(|_| BlobError::Encode)?;
 
     let mut data = Vec::with_capacity(HEADER_SIZE + meta_bytes.len() + payload.len());
     data.extend_from_slice(&BLOB_MAGIC);
-    data.extend_from_slice(&schema_hash.to_le_bytes());
+    data.extend_from_slice(&schema_version.to_le_bytes());
     data.extend_from_slice(&(meta_bytes.len() as u64).to_le_bytes());
     data.extend_from_slice(&meta_bytes);
     data.extend_from_slice(payload);

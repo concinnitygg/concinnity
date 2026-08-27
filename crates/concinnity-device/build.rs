@@ -900,7 +900,7 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, BinaryTargets::None);
+    setup_graphics_sdks(backend, &[BinaryTargets::None]);
     if backend == Backend::Metal {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");

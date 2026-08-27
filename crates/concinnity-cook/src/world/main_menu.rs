@@ -1105,8 +1105,8 @@ fn opaque(rgb: [f32; 3]) -> [f32; 4] {
 mod tests {
     use super::*;
 
-    // Dump a probe world that opens one menu screen directly, for the real-GPU
-    // screenshot smoke (the headless probe cannot click through the menu). Picks
+    // Dump a probe world that opens one menu screen directly, for a real-GPU
+    // screenshot probe (the headless probe cannot click through the menu). Picks
     // the screen from `CN_PROBE_TAB` (`menu` for the button list, else a settings
     // tab: video | audio | controls, default controls) and the settings breadth
     // from `CN_PROBE_PROFILE` (full | minimal, default full). It expands a

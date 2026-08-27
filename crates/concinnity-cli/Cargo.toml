@@ -7,27 +7,22 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Command-line tool for the Concinnity engine: build, run, add, export, debug"
+description = "The `concinnity` command tree: build, run, add, export, debug"
 keywords = ["gamedev", "cli", "concinnity"]
-categories = ["game-engines", "command-line-utilities"]
+categories = ["game-engines", "development-tools"]
 include = [
     "/src",
     "/build.rs",
     "/assets",
-    "/tests",
 ]
 
-# The `concinnity` dev CLI binary: the clap command tree + dispatch and the
-# subcommand implementations, over the dev-session entry points concinnity-editor
-# exposes and the concinnity-cook compile pipeline. Also owns the Windows
-# Agility SDK export statics the final binary must carry (src/main.rs) and the
-# graphics-SDK DLL bundling its build script performs.
-[[bin]]
-name = "concinnity"
-path = "src/main.rs"
-# Shares its name with the framework facade's lib target, which collides in
-# `cargo doc --workspace`; a CLI binary has no rustdoc to publish anyway.
-doc = false
+# The `concinnity` dev CLI: the clap command tree + dispatch and the subcommand
+# implementations, over the dev-session entry points concinnity-editor exposes
+# and the concinnity-cook compile pipeline. The binary that links this is a
+# target of the workspace's root package.
+[lib]
+name = "concinnity_cli"
+path = "src/lib.rs"
 
 [features]
 # Target the Vulkan backend. Activates this crate's optional ash/shaderc so the
@@ -46,6 +41,9 @@ concinnity-shader = { workspace = true }
 concinnity-engine = { workspace = true, features = ["alloc-detail"] }
 concinnity-memory = { workspace = true }
 concinnity-world = { workspace = true }
+
+# `cn docs` reads the asset prose out of the engine's own sources.
+syn = { version = "2", features = ["full", "parsing"] }
 
 clap = { version = "4", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

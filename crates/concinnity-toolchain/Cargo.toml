@@ -24,19 +24,8 @@ include = [
 name = "concinnity_toolchain"
 path = "src/lib.rs"
 
-[features]
-# First-run asset fetching for the examples. Off by default so the ten crates
-# that build-depend on this one do not compile an HTTP and zip stack.
-fetch = ["dep:ureq", "dep:zip"]
-# Reads the authored schema out of a crate's own sources. Off for the same
-# reason: only the crates that emit a doc table compile a Rust parser.
-doc-extract = ["dep:syn"]
-
 [dependencies]
 concinnity-slang = { workspace = true }
-syn = { version = "2", features = ["full", "parsing"], optional = true }
-ureq = { version = "3.2.0", optional = true }
-zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.25.0"

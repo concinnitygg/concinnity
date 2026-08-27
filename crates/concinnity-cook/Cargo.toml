@@ -14,7 +14,6 @@ include = [
     "/src",
     "/assets",
     "/build.rs",
-    "/build",
 ]
 
 [lib]
@@ -49,11 +48,6 @@ time = { version = "0.3.47", features = ["formatting", "parsing"] }
 
 [build-dependencies]
 concinnity-toolchain = { workspace = true }
-# The asset reference joins the two extracted schemas over the authoring
-# registry, all three read at build time.
-concinnity-asset = { workspace = true }
-concinnity-core = { workspace = true }
-concinnity-world = { workspace = true }
 
 [dev-dependencies]
 # The binary FBX writer builds synthetic .fbx fixtures for the importer tests.

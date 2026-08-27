@@ -29,7 +29,7 @@ const BUILTIN_FONT_PX: u32 = 24;
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, BinaryTargets::None);
+    setup_graphics_sdks(backend, &[BinaryTargets::None]);
     bake_builtin_font();
 }
 

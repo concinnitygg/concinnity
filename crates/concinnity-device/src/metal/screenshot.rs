@@ -5,7 +5,7 @@
 // the most recently presented drawable's colour texture into a host-readable
 // texture and encode it to a PNG on disk. This is the on-GPU verification path
 // the renderer otherwise leaves to a human eyeballing the live window: a
-// headless smoke can now assert on actual pixels. Mirrors
+// headless probe can now assert on actual pixels. Mirrors
 // src/directx/screenshot.rs / src/vulkan/screenshot.rs.
 //
 // Metal has no persistent swapchain image array to read back the way D3D12 /

@@ -42,9 +42,6 @@ serde_bytes = { version = "0.11", default-features = false, features = ["alloc"]
 thiserror = { version = "2.0.18", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
 
-[build-dependencies]
-concinnity-toolchain = { workspace = true, features = ["doc-extract"] }
-
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 

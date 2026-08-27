@@ -58,7 +58,7 @@ enum Commands {
     // editor HUD (a SAVE button plus an add-asset button), and persists edits by
     // recompiling world.jsonl. No WebSocket command channel unless --debug-port
     // is given (which stands up the same debug server `cn debug` uses, so
-    // `cn debug smoke` / `screenshot` can drive an editor session).
+    // `cn debug send` / `screenshot` can drive an editor session).
     #[command(name = "editor")]
     Editor(EditorArgs),
 
@@ -241,10 +241,6 @@ pub(crate) enum DebugClientCommand {
     #[command(name = "send")]
     Send(DebugSendArgs),
 
-    /// Headless render-loop liveness check (pass/fail)
-    #[command(name = "smoke")]
-    Smoke(DebugSmokeArgs),
-
     /// Capture the last presented frame to a PNG
     #[command(name = "screenshot")]
     Screenshot(DebugScreenshotArgs),
@@ -259,22 +255,6 @@ pub(crate) struct DebugSendArgs {
     /// Raw JSON object including its own "cmd" field
     // e.g. '{"cmd":"state"}' or '{"cmd":"emitter-remove","id":0}'
     pub json: String,
-
-    /// Debug server port
-    #[arg(long, default_value_t = 8777)]
-    pub port: u16,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct DebugSmokeArgs {
-    /// Seconds to wait for the render loop to start
-    // The first build bakes a 4K HDRI and is slow, hence the generous default.
-    #[arg(long, default_value_t = 240)]
-    pub wait: u64,
-
-    // Stop the client after probing so no window is left running
-    #[arg(long)]
-    pub(crate) shutdown: bool,
 
     /// Debug server port
     #[arg(long, default_value_t = 8777)]
@@ -335,7 +315,7 @@ pub(crate) struct EditorArgs {
 
     // Start the localhost debug server on this port alongside the editor
     // Absent leaves the editor without a WebSocket channel; present makes an
-    // editor session inspectable/drivable (e.g. `cn debug smoke`, `screenshot`).
+    // editor session inspectable/drivable (e.g. `cn debug send`, `screenshot`).
     #[arg(long)]
     pub(crate) debug_port: Option<u16>,
 
@@ -584,7 +564,6 @@ pub(crate) fn run() -> std::io::Result<()> {
         // means start the server (the interpreted run below).
         Commands::Debug(args) => match &args.client {
             Some(DebugClientCommand::Send(a)) => debug_client::send(a.port, &a.json),
-            Some(DebugClientCommand::Smoke(a)) => debug_client::smoke(a.port, a.wait, a.shutdown),
             Some(DebugClientCommand::Screenshot(a)) => debug_client::screenshot(a.port, &a.path),
             Some(DebugClientCommand::Watch(a)) => {
                 debug_client::watch(a.port, a.target.into(), a.interval)
@@ -751,44 +730,6 @@ mod tests {
         };
         assert_eq!(s.json, r#"{"cmd":"state"}"#);
         assert_eq!(s.port, 8777);
-    }
-
-    #[test]
-    fn debug_smoke_defaults() {
-        let cli = Cli::try_parse_from(["concinnity", "debug", "smoke"]).unwrap();
-        let Commands::Debug(a) = cli.command else {
-            panic!("expected debug");
-        };
-        let Some(DebugClientCommand::Smoke(s)) = a.client else {
-            panic!("expected smoke");
-        };
-        assert_eq!(s.wait, 240);
-        assert!(!s.shutdown);
-        assert_eq!(s.port, 8777);
-    }
-
-    #[test]
-    fn debug_smoke_flags_override_defaults() {
-        let cli = Cli::try_parse_from([
-            "concinnity",
-            "debug",
-            "smoke",
-            "--wait",
-            "30",
-            "--shutdown",
-            "--port",
-            "8799",
-        ])
-        .unwrap();
-        let Commands::Debug(a) = cli.command else {
-            panic!("expected debug");
-        };
-        let Some(DebugClientCommand::Smoke(s)) = a.client else {
-            panic!("expected smoke");
-        };
-        assert_eq!(s.wait, 30);
-        assert!(s.shutdown);
-        assert_eq!(s.port, 8799);
     }
 
     #[test]
@@ -1118,7 +1059,7 @@ mod tests {
         // A `cn debug` client subcommand stands up no renderer, so it returns at
         // the match rather than reaching the request check.
         reexec_with_metal_validation(
-            &Cli::try_parse_from(["concinnity", "debug", "smoke"]).unwrap(),
+            &Cli::try_parse_from(["concinnity", "debug", "screenshot", "out.png"]).unwrap(),
         );
         reexec_with_metal_validation(&Cli::try_parse_from(["concinnity", "list"]).unwrap());
     }

@@ -139,9 +139,10 @@ fn a_behavior_world_settles_into_an_allocation_free_tick() {
     assert!(armed(), "the test binary installs the tracking allocator");
 }
 
-// The world the CI smoke runs: a behavior that fires every tick beside real
-// physics content -- four dynamic balls dropped just above the flat floor --
-// so a run exercises both simulation systems the headless table gates in.
+// The world the headless CI run covers: a behavior that fires every tick
+// beside real physics content -- four dynamic balls dropped just above the
+// flat floor -- so a run exercises both simulation systems the headless table
+// gates in.
 fn simulating_world() -> (World, Entity, Vec<Entity>) {
     let mut world = World::new();
     world.add_component(drifting_behavior());
@@ -178,7 +179,7 @@ fn height(app: &App, entity: Entity) -> f32 {
         .position[1]
 }
 
-// The CI smoke, and the whole claim the headless tier makes: a world of
+// The headless CI run, and the whole claim the headless tier makes: a world of
 // authored content with no host behind it runs its simulation, and once it has
 // settled a tick of it costs no allocation.
 //

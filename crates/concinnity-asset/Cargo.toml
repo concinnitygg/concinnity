@@ -12,7 +12,6 @@ keywords = ["gamedev", "assets", "schema", "concinnity"]
 categories = ["game-engines", "no-std"]
 include = [
     "/src",
-    "/build.rs",
     "/tests",
 ]
 
@@ -22,9 +21,6 @@ name = "concinnity_asset"
 [dependencies]
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
-
-[build-dependencies]
-concinnity-toolchain = { workspace = true, features = ["doc-extract"] }
 
 [dev-dependencies]
 serde_json = "1"

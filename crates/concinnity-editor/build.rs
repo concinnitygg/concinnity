@@ -6,12 +6,13 @@
 //! This crate is a library, not a final binary, so it does NOT bundle the
 //! graphics-SDK runtime DLLs next to an artifact or emit the Agility linker
 //! exports (`BinaryTargets::None`); those belong to whichever package owns the
-//! final executable (concinnity-cli, concinnity-runtime, the examples).
+//! final executable: the root package, which builds both bins and the
+//! examples.
 
 use concinnity_toolchain::{BinaryTargets, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
 
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, BinaryTargets::None);
+    setup_graphics_sdks(backend, &[BinaryTargets::None]);
 }

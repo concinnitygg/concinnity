@@ -90,10 +90,13 @@ can be consumed by a minimal client, and the cook-only crates
 (`cook`, `world`, `shader`, `font`, `docs`) are never linked into a shipped
 player.
 
+No crate below builds a binary. The root package is the `concinnity` facade over
+them and owns both binary targets; the CLI's sits behind a `dev` feature, so a
+consumer of the facade never pulls the command tree into its graph.
+
 | Crate                  | Kind      | `no_std` | Role                                                      |
 | ---------------------- | --------- | :------: | --------------------------------------------------------- |
-| `concinnity-cli`       | bin       |          | The `concinnity` developer executable.                    |
-| `concinnity-runtime`   | bin       |          | Standalone player for a cooked world.                     |
+| `concinnity-cli`       | lib       |          | The `concinnity` developer CLI's command tree.            |
 | `concinnity-editor`    | lib       |          | In-engine world editor, live preview, hot reload.         |
 | `concinnity-cook`      | lib       |          | Asset compile pipeline: authored world to blob, and docs. |
 | `concinnity-world`     | lib       |          | Authored world model, schema, validation, spec builders.  |
@@ -128,12 +131,15 @@ player.
 
 ### 2.2 Binaries
 
-| Binary               | Purpose                                                                                                                      |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `concinnity`         | Developer CLI: `init`, `new`, `build`, `run`, `debug`, `editor`, `add`, `rm`, `list`, `explain`, `test`, `export`, `docs`.   |
-| `concinnity-runtime` | Shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor. |
+Both binaries are targets of the root `concinnity` package, over the libraries
+under `crates/`.
 
-`concinnity run` and `concinnity-runtime` drive the same engine loop. The
+| Binary           | Purpose                                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `concinnity`     | Developer CLI: `init`, `new`, `build`, `run`, `debug`, `editor`, `add`, `rm`, `list`, `explain`, `test`, `export`, `docs`.   |
+| `concinnity-run` | Shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor. |
+
+`concinnity run` and `concinnity-run` drive the same engine loop. The
 difference is where the state root is anchored and how a missing world is
 reported. `concinnity debug` compiles a world in memory and stands up a
 localhost inspection channel; `concinnity editor` overlays the in-engine editor
@@ -147,7 +153,7 @@ flowchart LR
     B --> C["data/ blobs<br/>+ world-lock.json"]
     C -->|cn run| D["runtime"]
     C -->|cn export| E["distributable bundle"]
-    E --> F["concinnity-runtime"]
+    E --> F["concinnity-run"]
     D --> G["frames"]
     F --> G
 ```

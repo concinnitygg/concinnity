@@ -75,7 +75,6 @@ pub mod color_lut;
 pub mod cubemap;
 pub(crate) mod dds;
 /// The asset reference, extracted at build time and embedded.
-pub mod docs;
 pub mod environment_map;
 pub mod fbx;
 /// Referenced-file assets: paths and their compiled payloads.

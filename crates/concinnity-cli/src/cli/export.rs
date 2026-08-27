@@ -7,7 +7,7 @@
 // macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
 // elsewhere it is a folder. The result is archived to a `.zip` by default.
 //
-// The player is the prebuilt `concinnity-runtime` binary that ships beside the
+// The player is the prebuilt `concinnity-run` binary that ships beside the
 // `cn`/`concinnity` executable; export copies it rather than compiling, so a
 // user needs no build toolchain and no engine source. Because the runtime is a
 // single compiled binary, a bundle targets exactly the platform this `cn` was
@@ -143,7 +143,7 @@ fn export_portable(
 
 // A macOS `.app` bundle: Contents/MacOS/<exe>, Contents/Info.plist, and
 // Contents/Resources/{<icon>.icns, data/}. The runtime resolves its state root
-// to Contents/Resources (see concinnity-runtime's state_dir_for_exe). Optionally
+// to Contents/Resources (see concinnity-run's state_dir_for_exe). Optionally
 // zipped and/or wrapped in a `.dmg`.
 fn export_macos(
     meta: &AppMeta,
@@ -375,24 +375,24 @@ fn runtime_binary_path() -> io::Result<PathBuf> {
     let dir = cn
         .parent()
         .ok_or_else(|| io::Error::other("cannot locate the cn executable's directory"))?;
-    let path = dir.join(exe_file_name("concinnity-runtime"));
+    let path = dir.join(exe_file_name("concinnity-run"));
     if path.exists() {
         Ok(path)
     } else {
         Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
-                "runtime player not found at {} -- the `concinnity-runtime` binary must sit \
+                "runtime player not found at {} -- the `concinnity-run` binary must sit \
                  beside the `cn` executable (in a dev checkout, build it with \
-                 `cargo build -p concinnity-runtime`)",
+                 `cargo build --features player`)",
                 path.display()
             ),
         ))
     }
 }
 
-// The fixed prefix of the backend stamp baked into `concinnity-runtime` (see
-// its definition in that crate's main.rs); the shader-platform key follows it.
+// The fixed prefix of the backend stamp baked into `concinnity-run` (see its
+// definition in that binary's main.rs); the shader-platform key follows it.
 const RUNTIME_PLATFORM_MARKER: &[u8] = b"cn-runtime-platform:";
 
 // Read the runtime player's stamped shader platform (`hlsl` / `glsl` / `metal`)
@@ -404,7 +404,7 @@ fn read_runtime_platform(runtime: &Path) -> io::Result<Option<String>> {
     if found.is_none() {
         eprintln!(
             "warning: no backend stamp found in {}; skipping the runtime/cook \
-             backend check (rebuild `concinnity-runtime` to enable it)",
+             backend check (rebuild `concinnity-run` to enable it)",
             runtime.display()
         );
     }
@@ -412,7 +412,7 @@ fn read_runtime_platform(runtime: &Path) -> io::Result<Option<String>> {
 }
 
 // Reject a runtime player built for a different rendering backend than the one
-// this `cn` cooks blobs for. `cn` and `concinnity-runtime` compile
+// this `cn` cooks blobs for. `cn` and `concinnity-run` compile
 // independently, so a DX-built `cn` sitting beside a Vulkan-built runtime would
 // otherwise silently ship a SPIR-V player with DXBC blobs (or vice versa) that
 // fails to load every shader at launch. `found` is the player's stamped shader
@@ -429,8 +429,8 @@ fn verify_runtime_backend(found: Option<&str>) -> io::Result<()> {
             io::ErrorKind::InvalidData,
             format!(
                 "runtime/cook backend mismatch: this `cn` cooks {} blobs, but the \
-                 `concinnity-runtime` player beside it was built for {}. Rebuild the \
-                 runtime for the same backend (`cargo build -p concinnity-runtime{}`) \
+                 `concinnity-run` player beside it was built for {}. Rebuild the \
+                 runtime for the same backend (`cargo build --features player{}`) \
                  before exporting.",
                 backend_label(expected),
                 backend_label(found),
@@ -478,9 +478,11 @@ fn backend_label(platform_key: &str) -> &str {
 
 // The cargo feature flag that reproduces a given cook backend when rebuilding
 // the runtime: only the Vulkan (SPIR-V) backend is feature-gated.
+// Appended to the `--features player` the rebuild hint already names, so a
+// Vulkan player reads as one feature list rather than two flags.
 fn feature_hint(platform_key: &str) -> &str {
     match platform_key {
-        "glsl" => " --features vulkan",
+        "glsl" => ",vulkan",
         _ => "",
     }
 }
@@ -1088,7 +1090,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("src");
         fs::create_dir_all(src.join("D3D12")).unwrap();
-        fs::write(src.join("concinnity-runtime.exe"), b"exe").unwrap();
+        fs::write(src.join("concinnity-run.exe"), b"exe").unwrap();
         fs::write(src.join("amd_fidelityfx_dx12.dll"), b"x").unwrap();
         fs::write(src.join("libconcinnity_ffi.dll"), b"x").unwrap();
         fs::write(src.join("notes.txt"), b"x").unwrap();
@@ -1097,14 +1099,14 @@ mod tests {
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
         // A DX runtime pulls in its sibling DLLs and the Agility `D3D12/` dir.
-        copy_runtime_sidecars(&src.join("concinnity-runtime.exe"), Some("hlsl"), &dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-run.exe"), Some("hlsl"), &dest).unwrap();
 
         assert!(dest.join("amd_fidelityfx_dx12.dll").exists());
         assert!(dest.join("libconcinnity_ffi.dll").exists());
         assert!(dest.join("D3D12").join("D3D12Core.dll").exists());
         // Non-DLL siblings and the exe itself are not carried along.
         assert!(!dest.join("notes.txt").exists());
-        assert!(!dest.join("concinnity-runtime.exe").exists());
+        assert!(!dest.join("concinnity-run.exe").exists());
     }
 
     #[test]
@@ -1115,13 +1117,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("src");
         fs::create_dir_all(src.join("D3D12")).unwrap();
-        fs::write(src.join("concinnity-runtime.exe"), b"exe").unwrap();
+        fs::write(src.join("concinnity-run.exe"), b"exe").unwrap();
         fs::write(src.join("amd_fidelityfx_vk.dll"), b"x").unwrap();
         fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
 
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
-        copy_runtime_sidecars(&src.join("concinnity-runtime.exe"), Some("glsl"), &dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-run.exe"), Some("glsl"), &dest).unwrap();
 
         assert!(dest.join("amd_fidelityfx_vk.dll").exists());
         assert!(!dest.join("D3D12").exists());
@@ -1177,7 +1179,7 @@ mod tests {
         assert_eq!(backend_label("metal"), "Metal (metallib)");
         assert_eq!(backend_label("hlsl"), "DirectX (DXBC)");
         assert_eq!(backend_label("glsl"), "Vulkan (SPIR-V)");
-        assert_eq!(feature_hint("glsl"), " --features vulkan");
+        assert_eq!(feature_hint("glsl"), ",vulkan");
         assert_eq!(feature_hint("hlsl"), "");
         assert_eq!(feature_hint("metal"), "");
     }
@@ -1197,12 +1199,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("concinnity-runtime"), b"exe").unwrap();
+        fs::write(src.join("concinnity-run"), b"exe").unwrap();
         fs::write(src.join("libconcinnity_ffi.dylib"), b"x").unwrap();
 
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
-        copy_runtime_sidecars(&src.join("concinnity-runtime"), Some("metal"), &dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-run"), Some("metal"), &dest).unwrap();
         assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
     }
 
@@ -1480,7 +1482,7 @@ mod tests {
         fs::write(data.join("1"), b"blob1").unwrap();
         fs::write(data.join("scratch.air"), b"ignored").unwrap();
 
-        let runtime = tmp.path().join(exe_file_name("concinnity-runtime"));
+        let runtime = tmp.path().join(exe_file_name("concinnity-run"));
         fs::write(&runtime, b"runtime-bin").unwrap();
 
         let out = tmp.path().join("out");
@@ -1519,7 +1521,7 @@ mod tests {
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("0"), b"blob0").unwrap();
 
-        let runtime = tmp.path().join("concinnity-runtime");
+        let runtime = tmp.path().join("concinnity-run");
         fs::write(&runtime, b"runtime-bin").unwrap();
 
         let out = tmp.path().join("out");
@@ -1574,7 +1576,7 @@ mod tests {
     #[test]
     fn runtime_binary_path_errors_when_the_player_is_absent() {
         // The test harness binary lives in `target/<profile>/deps/`, and the
-        // `concinnity-runtime` player is built one level up in `target/<profile>/`,
+        // `concinnity-run` player is built one level up in `target/<profile>/`,
         // so it never sits beside the test executable: the lookup must report a
         // clear NotFound rather than pointing at a nonexistent path.
         let err = runtime_binary_path().unwrap_err();

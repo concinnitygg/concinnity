@@ -103,7 +103,7 @@ pub(in crate::vulkan) struct SsgiResources {
 // pass's hdr_resolve, the SSR pre-pass's G-buffer, the gather's gi) against this
 // pass's reads + writes; the `dep_out` makes this pass's colour write available
 // to the next pass's fragment sample. Same shape as the SSR resolve + decal
-// render-pass dependencies that already smoke clean under the validation layer.
+// render-pass dependencies that already run clean under the validation layer.
 fn ssgi_external_deps() -> [vk::SubpassDependency; 2] {
     let dep_in = vk::SubpassDependency::default()
         .src_subpass(vk::SUBPASS_EXTERNAL)

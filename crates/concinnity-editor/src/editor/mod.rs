@@ -4,7 +4,7 @@
 // in memory and stands up a WebSocket command channel), the editor reads the
 // already-compiled blobs on startup, overlays an injected editor HUD, and
 // persists edits by recompiling on SAVE. An optional debug port reuses the
-// existing debug server so `cn debug smoke` / `screenshot` can verify a session.
+// existing debug server so `cn debug send` / `screenshot` can inspect a session.
 
 mod asset_list;
 mod asset_tree;

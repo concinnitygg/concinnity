@@ -18,18 +18,6 @@ pub struct AssetRequest {
     pub args: Option<serde_json::Value>,
 }
 
-// Describes one addable asset type: its name, what it is, and the authoring
-// metadata a caller needs to construct one. The summary is the first line of the
-// type's reference documentation, so a picker can say what an asset does rather
-// than only naming it.
-#[cfg(test)]
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct AssetTypeEntry {
-    pub asset_type: String,
-    pub summary: String,
-    pub registration: Registration,
-}
-
 /// Validate an AssetRequest and produce a BlobAssetDef
 ///
 /// Returns Err if:
@@ -68,23 +56,6 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
 
     tracing::error!("asset_api: unknown asset type '{}'", req.asset_type);
     Err(CnResult::AssetInvalidType)
-}
-
-// List every externally-addable component type with its registration metadata.
-#[cfg(test)]
-pub(crate) fn list_addable_types() -> Vec<AssetTypeEntry> {
-    let mut entries: Vec<AssetTypeEntry> = RegisteredType::addable_types()
-        .map(|(ct, reg)| AssetTypeEntry {
-            asset_type: ct.as_str().to_string(),
-            summary: crate::docs::summary(ct.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            registration: reg,
-        })
-        .collect();
-
-    entries.sort_by(|a, b| a.asset_type.cmp(&b.asset_type));
-    entries
 }
 
 // Resolve the args to use for construction.
@@ -273,39 +244,17 @@ mod tests {
         );
     }
 
+    // Every addable type is authorable, and only the authorable ones are
+    // addable. Order is the registry's, which is the discriminant order, not
+    // alphabetical.
     #[test]
-    fn addable_type_listing_is_sorted_and_external_only() {
-        let entries = list_addable_types();
-        assert!(!entries.is_empty());
-        assert!(
-            entries
-                .windows(2)
-                .all(|w| w[0].asset_type <= w[1].asset_type)
-        );
-        assert!(
-            entries
-                .iter()
-                .all(|e| e.registration.origin == AssetOrigin::External)
-        );
-        assert!(entries.iter().any(|e| e.asset_type == "ProceduralMesh"));
-        assert!(entries.iter().all(|e| e.asset_type != "Transform"));
-    }
-
-    // Every addable type carries its reference summary, so a picker can describe
-    // what it offers. An addable type is authorable, so it always has a page.
-    #[test]
-    fn addable_type_listing_carries_summaries() {
-        for e in list_addable_types() {
-            assert!(
-                !e.summary.is_empty(),
-                "{} has no summary in the asset reference",
-                e.asset_type
-            );
-            assert!(
-                !e.summary.contains('\n'),
-                "{} summary is multi-line",
-                e.asset_type
-            );
-        }
+    fn addable_types_are_external_only() {
+        let names: Vec<&str> = RegisteredType::addable_types()
+            .inspect(|(_, reg)| assert_eq!(reg.origin, AssetOrigin::External))
+            .map(|(ct, _)| ct.as_str())
+            .collect();
+        assert!(!names.is_empty());
+        assert!(names.contains(&"ProceduralMesh"));
+        assert!(!names.contains(&"Transform"));
     }
 }

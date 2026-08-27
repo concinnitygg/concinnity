@@ -1,9 +1,11 @@
 # Crates
 
+The `concinnity` and `concinnity-run` binaries are targets of the root package,
+over these libraries.
+
 | Crate                  | Kind      |      no_std?       | Role                                                                                  |
 | ---------------------- | --------- | :----------------: | ------------------------------------------------------------------------------------- |
-| `concinnity-cli`       | bin       |                    | `concinnity` executable: build, run, add, export, debug.                              |
-| `concinnity-runtime`   | bin       |                    | Standalone runtime player for a cooked world.                                         |
+| `concinnity-cli`       | lib       |                    | The `concinnity` CLI's command tree: build, run, add, export, debug.                  |
 | `concinnity-editor`    | lib       |                    | In-engine world editor: live preview, draggable panels, hot-reload.                   |
 | `concinnity-cook`      | lib       |                    | Asset cook pipeline that bakes an authored world into a blob.                         |
 | `concinnity-world`     | lib       |                    | Authored world source, args schema, validation, and spec builders.                    |

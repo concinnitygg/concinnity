@@ -4,7 +4,7 @@
 // `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
 // the most recently presented swapchain image into a host-visible buffer and
 // encode it to a PNG on disk. This is the on-GPU verification path the renderer
-// otherwise leaves to a human eyeballing the live window: a headless smoke can
+// otherwise leaves to a human eyeballing the live window: a headless probe can
 // now assert on actual pixels.
 //
 // The swapchain images are created with `TRANSFER_SRC` usage (see

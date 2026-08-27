@@ -54,9 +54,8 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
     Some(hash)
 }
 
-// COMPILE_SOURCE_HASH: derived by build.rs from this crate's compile pipeline
-// and the payload format helpers it shares with the runtime, so a compile-path
-// change evicts the entries it would otherwise replay stale.
+// COMPILE_SOURCE_HASH: derived by build.rs from this crate's compile pipeline,
+// so a compile-path change evicts the entries it would otherwise replay stale.
 include!(concat!(env!("OUT_DIR"), "/compile_source_hash.rs"));
 
 // Compute the cache key for one compiled asset. The key folds in the two hashes
@@ -169,10 +168,10 @@ fn key_from_parts(
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(COMPILE_SOURCE_HASH.to_le_bytes());
-    hasher.update(concinnity_core::BUILD_SOURCE_HASH.to_le_bytes());
-    // The baked records inside a payload encode against the asset schema, and a
-    // schema field can change those bytes for args that hash identically.
-    hasher.update(concinnity_core::SCHEMA_HASH.to_le_bytes());
+    // Covers the runtime half of the pipeline this crate cannot hash: the
+    // payload serialisers in `concinnity_core::build`, and the asset schema the
+    // baked records inside a payload encode against.
+    hasher.update(concinnity_core::SCHEMA_VERSION.to_le_bytes());
     hasher.update([discriminant]);
 
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();

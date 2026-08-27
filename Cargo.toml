@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.18.62"
+version = "0.18.63"
 description = "Asset-driven application world framework"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -23,7 +23,6 @@ concinnity-host = { path = "crates/concinnity-host", version = "0.18" }
 concinnity-memory = { path = "crates/concinnity-memory", version = "0.18" }
 concinnity-physics = { path = "crates/concinnity-physics", version = "0.18" }
 concinnity-render = { path = "crates/concinnity-render", version = "0.18" }
-concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.18" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.18" }
 concinnity-slang = { path = "crates/concinnity-slang", version = "0.18" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.18" }
@@ -45,10 +44,11 @@ categories.workspace = true
 autobenches = false
 autotests = false
 autobins = false
+autoexamples = false
+default-run = "concinnity"
 include = [
     "/src",
     "/build.rs",
-    "/examples/**/*.rs",
     "/README.md",
     "/LICENSE",
 ]
@@ -56,6 +56,23 @@ include = [
 [lib]
 name = "concinnity"
 path = "src/lib.rs"
+
+[[bin]]
+name = "concinnity"
+path = "src/bin/concinnity.rs"
+required-features = ["dev"]
+doc = false
+
+[[bin]]
+name = "concinnity-run"
+path = "src/bin/concinnity-run/main.rs"
+required-features = ["player"]
+doc = false
+
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+required-features = ["dev"]
 
 [workspace]
 resolver = "2"
@@ -68,17 +85,23 @@ default-members = [
     ".",
 ]
 
+# Documented from a target whose backend needs no native build. Every other
+# target build-depends on shaderc, whose build script panics without `python3`,
+# which the docs.rs build image does not carry -- verified by reproducing its
+# package set in a container. Nothing in this crate's API is platform-gated, so
+# the pages are the same either way.
 [package.metadata.docs.rs]
 features = ["cook"]
-default-target = "x86_64-unknown-linux-gnu"
-targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
-rustdoc-args = ["--cfg", "docsrs"]
+default-target = "x86_64-apple-darwin"
+targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 [features]
 default = ["std"]
 std = ["dep:concinnity-engine", "dep:concinnity-memory"]
+player = ["std", "dep:concinnity-toolchain"]
+dev = ["player", "dep:concinnity-cli"]
 cook = ["std", "dep:concinnity-asset", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
-vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan"]
+vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan", "concinnity-cli?/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
@@ -88,12 +111,14 @@ concinnity-memory = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
 concinnity-world = { workspace = true, optional = true }
 concinnity-shader = { workspace = true, optional = true }
+concinnity-cli = { workspace = true, optional = true }
 
 [dev-dependencies]
-concinnity-toolchain = { workspace = true, features = ["fetch"] }
+# The player binary's own tests write throwaway blob layouts.
+tempfile = "3.25.0"
 
 [build-dependencies]
-concinnity-toolchain = { workspace = true }
+concinnity-toolchain = { workspace = true, optional = true }
 
 [[example]]
 name = "cube"

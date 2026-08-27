@@ -6,29 +6,14 @@
 //! comment edit invalidates the cache) is deliberate: it can only force a
 //! recompile, never a stale replay.
 //!
-//! Two further inputs a payload depends on are derived by the crates that own
-//! them and folded in by `cache.rs`: the payload format helpers shared with the
-//! runtime (`concinnity_core::BUILD_SOURCE_HASH`) and the postcard-visible asset
-//! schema (`concinnity_core::SCHEMA_HASH`). Each crate hashes its own sources
-//! so that a build from a registry checkout, which has no sibling directories
-//! to read, derives the same value.
-//!
-//! Also assembles the asset reference `src/docs` serves, in [`docs`].
-
-// Extracts the asset reference from the two schema crates and bakes it into
-// $OUT_DIR. Build-side only; page assembly from the finished bodies lives in
-// the library.
-#[path = "build/docs.rs"]
-mod docs;
-// Renders a type's doc body from the descriptors the index produces.
-#[path = "build/render.rs"]
-mod render;
+//! The other half of a payload's inputs lives in concinnity-core, which this
+//! script cannot hash: a registry checkout has no sibling directory to read.
+//! `cache.rs` folds in `concinnity_core::SCHEMA_VERSION` for it, which the
+//! runtime bumps when a payload format or the asset schema changes.
 
 use std::path::PathBuf;
 
 fn main() {
-    docs::generate();
-
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 

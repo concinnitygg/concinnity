@@ -9,7 +9,7 @@ pub enum BlobError {
     TooShort,
     /// leading bytes are not BLOB_MAGIC
     BadMagic,
-    /// built against a different SCHEMA_HASH; carries the hash found
+    /// built against a different SCHEMA_VERSION; carries the version found
     SchemaMismatch(u32),
     /// header promises more metadata than the image holds
     TruncatedMeta,

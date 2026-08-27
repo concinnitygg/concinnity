@@ -20,7 +20,7 @@
 //
 // The binaries that do report heap figures each pin their own declaration with
 // a unit test, which is what catches its removal -- see
-// `the_shipped_player_tracks_its_own_heap` in concinnity-runtime.
+// `the_shipped_player_tracks_its_own_heap` beside the player binary.
 
 // The engine's own test binary is a binary too, and unit tests and in-crate
 // benchmarks read allocation counts, so it installs the allocator here.

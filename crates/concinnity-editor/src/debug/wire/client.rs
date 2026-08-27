@@ -14,14 +14,13 @@
 //!   send `<json>`      send one raw JSON command (with its own "cmd" field)
 //!                      and print the reply; the escape hatch for any command
 //!                      the typed helpers below do not cover
-//!   smoke              headless render-loop liveness check (see `smoke`)
 //!   screenshot `<path>`  capture the last presented frame to a PNG
 //!   watch `<target>`     poll a read-only snapshot and print it until Ctrl-C
 
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::{self, Message};
@@ -179,92 +178,6 @@ pub fn screenshot(port: u16, path: &str) -> std::io::Result<()> {
     }
 }
 
-// Poll the `state` command until the render loop is live (`frame > 0`) or the
-// deadline passes. The debug listener binds before the world build starts, so
-// a plain connect succeeds while the build is still running and `frame` is
-// still 0; polling `frame > 0` is what actually means "rendering".
-fn wait_for_render_loop(port: u16, wait_secs: u64) -> Result<Value, String> {
-    let deadline = Instant::now() + Duration::from_secs(wait_secs);
-    let mut last_err = None;
-    while Instant::now() < deadline {
-        match request_cmd(port, "state") {
-            Ok(st) if st.get("frame").and_then(Value::as_u64).unwrap_or(0) > 0 => return Ok(st),
-            Ok(_) => {}
-            Err(e) => last_err = Some(e),
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    match last_err {
-        Some(e) => Err(format!("render loop unreachable within {wait_secs}s ({e})")),
-        None => Err(format!(
-            "render loop did not start within {wait_secs}s (frame stayed 0)"
-        )),
-    }
-}
-
-/// `concinnity debug smoke`: headless render-loop liveness check. Waits for the
-/// render loop to start, samples the frame counter twice, and asserts it
-/// advanced. Prints a structured PASS/FAIL line. Exit codes: 0 pass, 1 loop
-/// stalled, 2 loop never started, 3 transport failure. With `shutdown` it then
-/// stops the client so no window is left running.
-///
-/// This is the check to run when verifying a render change without watching the
-/// GUI window or scraping logs.
-pub fn smoke(port: u16, wait_secs: u64, shutdown: bool) -> std::io::Result<()> {
-    println!("[smoke] waiting for render loop on ws://127.0.0.1:{port} (up to {wait_secs}s)...");
-    let st0 = match wait_for_render_loop(port, wait_secs) {
-        Ok(st) => st,
-        Err(msg) => {
-            println!("[smoke] FAIL: {msg}");
-            std::process::exit(2);
-        }
-    };
-
-    let f0 = st0.get("frame").and_then(Value::as_u64).unwrap_or(0);
-    let systems = st0.get("system_count").and_then(Value::as_u64).unwrap_or(0);
-    let components = st0
-        .get("component_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    println!("[smoke] render loop live: frame={f0} systems={systems} components={components}");
-    println!("[smoke] sampling frame counter...");
-    std::thread::sleep(Duration::from_millis(1200));
-
-    let st1 = match request_cmd(port, "state") {
-        Ok(st) => st,
-        Err(msg) => {
-            println!("[smoke] FAIL: lost the server while sampling: {msg}");
-            std::process::exit(EXIT_TRANSPORT);
-        }
-    };
-    let f1 = st1.get("frame").and_then(Value::as_u64).unwrap_or(0);
-    println!("[smoke]   t0: frame={f0}");
-    println!(
-        "[smoke]   t1: frame={f1}  (+{} over ~1.2s)",
-        f1.saturating_sub(f0)
-    );
-
-    let advanced = f1 > f0;
-    if advanced {
-        println!("[smoke] PASS: render loop advancing");
-    } else {
-        println!("[smoke] FAIL: frame counter did not advance ({f0} -> {f1})");
-    }
-
-    if shutdown {
-        match request_cmd(port, "shutdown") {
-            Ok(_) => println!("[smoke] sent shutdown -- client will exit"),
-            Err(msg) => println!("[smoke] warning: shutdown request failed: {msg}"),
-        }
-    }
-
-    if advanced {
-        Ok(())
-    } else {
-        std::process::exit(1);
-    }
-}
-
 // Sleep for `total_ms`, but in short chunks so a Ctrl-C flag flip is noticed
 // promptly instead of after a full interval.
 fn sleep_interruptible(total_ms: u64, running: &AtomicBool) {
@@ -315,6 +228,8 @@ pub fn watch(port: u16, target: WatchTarget, interval_ms: u64) -> std::io::Resul
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
 
     // Candidate localhost ports for the "server is not running" tests. They sit

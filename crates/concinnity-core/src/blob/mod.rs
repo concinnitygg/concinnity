@@ -2,7 +2,7 @@
 //!
 //! Layout of a blob binary:
 //!
-//!   `[ 4 bytes magic ][ 4 bytes version ][ 8 bytes meta_len ][ meta_bytes ][ payload_bytes ... ]`
+//!   `[ 4 bytes magic ][ 4 bytes schema version ][ 8 bytes meta_len ][ meta_bytes ][ payload_bytes ... ]`
 //!
 //! The header is fixed at 16 bytes. `meta_len` is the byte length of the
 //! postcard-serialized `BlobMeta` that follows: the component defs stream and
@@ -46,9 +46,5 @@ pub use concinnity_asset::{AssetId, PayloadLocator};
 
 /// The four magic bytes every `.cnb` blob starts with.
 pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
-// RECORD_SCHEMA_HASH: derived by build.rs from this module's record shapes. It
-// is one part of the hash a header carries; `crate::blob::SCHEMA_HASH` mixes it with
-// the two schema halves alongside it and hands the result to `encode_cnb`.
-include!(concat!(env!("OUT_DIR"), "/schema_hash.rs"));
-/// Fixed blob header size: magic (4) + schema hash (4) + `meta_len` (8).
-pub const HEADER_SIZE: usize = 16; // magic(4) + schema hash(4) + meta_len(8)
+/// Fixed blob header size: magic (4) + schema version (4) + `meta_len` (8).
+pub const HEADER_SIZE: usize = 16; // magic(4) + schema version(4) + meta_len(8)

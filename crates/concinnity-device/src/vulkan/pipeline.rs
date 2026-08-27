@@ -1301,7 +1301,7 @@ mod tests {
     // The phase-1 cull kernel, its two-pass `CULL_PHASE2` variant, and the
     // GPU-driven shadow `SHADOW_CULL` variant all compile to valid SPIR-V from
     // the embedded source. Guards the `#ifdef` split in `cull.comp`, which the
-    // Vulkan-on-Windows runtime cannot currently smoke-test.
+    // Vulkan-on-Windows runtime cannot currently exercise.
     #[test]
     fn cull_shaders_compile_both_phases() {
         let phase1 = compile_cull_shader(false).expect("phase-1 cull compiles");

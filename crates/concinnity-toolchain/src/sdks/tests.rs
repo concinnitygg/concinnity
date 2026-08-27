@@ -749,9 +749,10 @@ fn metal_and_non_windows_vulkan_are_noops() {
         ..env_in(tmp.path())
     };
     for targets in [
-        BinaryTargets::None,
-        BinaryTargets::Bins,
-        BinaryTargets::Examples,
+        &[BinaryTargets::None][..],
+        &[BinaryTargets::Bins],
+        &[BinaryTargets::Examples],
+        &[BinaryTargets::Bins, BinaryTargets::Examples],
     ] {
         assert!(graphics_sdk_directives(Backend::Metal, targets, &env).is_empty());
         assert!(graphics_sdk_directives(Backend::Vk, targets, &env).is_empty());
@@ -767,7 +768,7 @@ fn windows_vulkan_sets_up_the_vulkan_sdks() {
     install_xess(tmp.path());
     let env = env_in(tmp.path());
 
-    let out = graphics_sdk_directives(Backend::Vk, BinaryTargets::Bins, &env);
+    let out = graphics_sdk_directives(Backend::Vk, &[BinaryTargets::Bins], &env);
 
     assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
     assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
@@ -788,7 +789,7 @@ fn directx_bundling_runs_every_sdk() {
     install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
     let env = env_in(tmp.path());
 
-    let out = graphics_sdk_directives(Backend::Dx, BinaryTargets::Bins, &env);
+    let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::Bins], &env);
 
     for cfg in [
         "agility_sdk_configured",
@@ -821,7 +822,7 @@ fn directx_without_bundling_skips_dxc() {
     install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
     let env = env_in(tmp.path());
 
-    let out = graphics_sdk_directives(Backend::Dx, BinaryTargets::None, &env);
+    let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::None], &env);
 
     assert!(!has(&out, "CN_ENABLE_DXC"));
     assert!(!has(&out, "dxc_bundled"));
@@ -844,7 +845,7 @@ fn examples_take_their_dlls_and_exports_to_the_examples_directory() {
     // script runs before Cargo lays it out, and the copies have to survive that.
     assert!(!examples(tmp.path()).exists());
 
-    let out = graphics_sdk_directives(Backend::Dx, BinaryTargets::Examples, &env);
+    let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::Examples], &env);
     assert!(warnings(&out).is_empty(), "{:?}", warnings(&out));
 
     // Every bundled file lands beside the example binaries, and `D3D12/` with
@@ -891,6 +892,64 @@ fn the_agility_exports_are_scoped_to_the_targets_that_define_them() {
             out.iter().filter(|l| l.contains("/EXPORT:")).count(),
             2,
             "{targets:?} emitted an export under another scope"
+        );
+    }
+}
+
+#[test]
+fn a_package_building_both_kinds_bundles_for_each_and_states_every_cfg_once() {
+    let tmp = TempDir::new().unwrap();
+    install_agility(tmp.path());
+    install_ngx_lib(tmp.path());
+    install_ngx_dll(tmp.path());
+    let env = env_in(tmp.path());
+
+    let out = graphics_sdk_directives(
+        Backend::Dx,
+        &[BinaryTargets::Bins, BinaryTargets::Examples],
+        &env,
+    );
+
+    // Each kind takes its own export scope, since Cargo has no key covering
+    // both.
+    for key in [
+        "cargo::rustc-link-arg-bins=",
+        "cargo::rustc-link-arg-examples=",
+    ] {
+        assert!(
+            out.contains(&format!("{key}/EXPORT:D3D12SDKVersion,DATA")),
+            "{key}"
+        );
+    }
+
+    // The DLLs land beside both sets of binaries.
+    for dir in [profile(tmp.path()), examples(tmp.path())] {
+        assert!(dir.join("D3D12/D3D12Core.dll").is_file(), "{dir:?}");
+        assert!(dir.join("nvngx_dlss.dll").is_file(), "{dir:?}");
+    }
+
+    // Everything a kind does not scope is stated once: a cfg repeated is noise,
+    // and a missing SDK warned about twice reads as two separate problems.
+    for once in [
+        "cargo::rustc-cfg=agility_sdk_configured",
+        "cargo::rustc-cfg=ngx_sdk_bundled",
+    ] {
+        assert_eq!(
+            out.iter().filter(|l| l.as_str() == once).count(),
+            1,
+            "{once}"
+        );
+    }
+    let warned = warnings(&out);
+    assert!(
+        !warned.is_empty(),
+        "this env installs only Agility and NGX, so the other SDKs must warn"
+    );
+    for warning in &warned {
+        assert_eq!(
+            warned.iter().filter(|w| w == &warning).count(),
+            1,
+            "warned twice: {warning}"
         );
     }
 }

@@ -15,7 +15,7 @@ use concinnity_core::result::CnResult;
 
 mod data;
 
-pub use concinnity_core::SCHEMA_HASH;
+pub use concinnity_core::SCHEMA_VERSION;
 pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
@@ -67,7 +67,7 @@ fn resolve_blob_path(
 /// records). Returns (meta, payload_start_offset).
 pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnResult> {
     let data = read_file(path)?;
-    parse_cnb(SCHEMA_HASH, &data).map_err(|e| report(path, e))
+    parse_cnb(SCHEMA_VERSION, &data).map_err(|e| report(path, e))
 }
 
 /// Byte offset within a blob file at which its payload section begins. Reads
@@ -269,7 +269,7 @@ mod tests {
     fn payload_section_start_skips_header_and_meta() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("0").to_string_lossy().into_owned();
-        let image = encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"payloadbytes").unwrap();
+        let image = encode_cnb(SCHEMA_VERSION, &BlobMeta::default(), b"payloadbytes").unwrap();
         std::fs::write(&path, &image).unwrap();
 
         let start = payload_section_start(&path).expect("section start");
@@ -322,12 +322,12 @@ mod tests {
         };
         std::fs::write(
             path_for(0).unwrap(),
-            encode_cnb(SCHEMA_HASH, &meta, b"primary").unwrap(),
+            encode_cnb(SCHEMA_VERSION, &meta, b"primary").unwrap(),
         )
         .unwrap();
         std::fs::write(
             path_for(1).unwrap(),
-            encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"overflow").unwrap(),
+            encode_cnb(SCHEMA_VERSION, &BlobMeta::default(), b"overflow").unwrap(),
         )
         .unwrap();
 

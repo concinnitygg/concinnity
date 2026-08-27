@@ -1,61 +1,52 @@
-//! The shape of an authored schema, as extracted from source.
-//!
-//! A crate whose sources define authorable types emits its own table of these
-//! at build time (`concinnity_asset::ASSET_DOCS`,
-//! `concinnity_core::RUNTIME_ASSET_DOCS`), which is what lets the asset
-//! reference be assembled from published crates rather than from a directory of
-//! sibling sources. Every field is a `&'static str`, so a consumer that never
-//! reads a table pays nothing for it.
-//!
-//! This is the vocabulary only. The extractor that fills it in lives in
-//! `concinnity_toolchain::doc_extract`, whose owned counterparts of these types
-//! must stay in step with them.
+// The shape of an authored schema, as read out of source. The vocabulary the
+// extractor fills in and the reference is assembled from.
 
 /// One type read out of a crate's schema sources.
-pub struct DocType {
+pub(crate) struct DocType {
     /// The type's Rust identifier.
-    pub name: &'static str,
+    pub name: String,
     /// The type's rustdoc, verbatim, one line per `///` line.
-    pub doc: &'static str,
+    pub doc: String,
     /// What the type contributes to the schema.
     pub shape: DocShape,
 }
 
 /// A documented type's contents.
-pub enum DocShape {
+pub(crate) enum DocShape {
     /// A struct's serialized fields, in declaration order.
-    Fields(&'static [DocField]),
+    Fields(Vec<DocField>),
     /// A string-valued enum's serialized values, in declaration order.
-    Values(&'static [DocValue]),
+    Values(Vec<DocValue>),
 }
 
 /// One serialized field of a struct.
-pub struct DocField {
+pub(crate) struct DocField {
     /// The key the field serializes under.
-    pub key: &'static str,
+    pub key: String,
     /// The field's rustdoc, collapsed to a single line.
-    pub doc: &'static str,
+    pub doc: String,
     /// The field's type.
     pub ty: DocFieldType,
     /// True when the field is declared `Option<T>`.
     pub optional: bool,
     /// The literal `impl Default` assigns to the field, when there is one.
-    pub default: Option<&'static str>,
+    pub default: Option<String>,
 }
 
 /// One serialized value of a string-valued enum.
-pub struct DocValue {
+pub(crate) struct DocValue {
     /// The string the variant serializes to.
-    pub value: &'static str,
+    pub value: String,
     /// The variant's rustdoc, collapsed to a single line.
-    pub doc: &'static str,
+    pub doc: String,
 }
 
 /// A field's JSON-shaped type, classified as far as one crate's sources allow.
 /// A type named in the sources stays a [`DocFieldType::Name`]: whether it is an
 /// enum, another asset, or a nested object is only decidable against the whole
 /// schema, which spans more than one crate.
-pub enum DocFieldType {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DocFieldType {
     /// A `bool`.
     Bool,
     /// An `f32` or `f64`.
@@ -69,10 +60,10 @@ pub enum DocFieldType {
     /// A `[T; n]` array or a `Vec<T>`.
     Array {
         /// The element type.
-        elem: &'static DocFieldType,
+        elem: Box<DocFieldType>,
         /// The fixed length of a Rust array, unset for a `Vec`.
         len: Option<usize>,
     },
     /// A type named in the sources, left for the consumer to resolve.
-    Name(&'static str),
+    Name(String),
 }

@@ -155,7 +155,7 @@ impl BlobSource<'_> {
 /// pinned to `state_dir` (the tree beside the executable or inside an app
 /// bundle, holding `saves/` and `settings`) and the world read from `blob`. A
 /// missing blob is a hard error rather than a silent no-op -- a packaged app
-/// without its data cannot do anything useful. The concinnity-runtime binary
+/// without its data cannot do anything useful. The concinnity-run binary
 /// calls this.
 pub fn run_from(state_dir: &Path, blob: BlobSource<'_>) -> std::io::Result<()> {
     init_logging();

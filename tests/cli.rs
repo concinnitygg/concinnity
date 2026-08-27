@@ -179,15 +179,6 @@ fn debug_send_dead_port_exits_transport() {
 }
 
 #[test]
-fn debug_smoke_dead_port_reports_loop_never_started() {
-    let Some(port) = find_dead_port() else {
-        return skip_no_dead_port("debug_smoke_dead_port_reports_loop_never_started");
-    };
-    let out = run(&["debug", "smoke", "--wait", "1", "--port", &port]);
-    assert_eq!(out.status.code(), Some(2));
-}
-
-#[test]
 fn debug_watch_dead_port_exits_transport_on_first_poll() {
     let Some(port) = find_dead_port() else {
         return skip_no_dead_port("debug_watch_dead_port_exits_transport_on_first_poll");
@@ -368,10 +359,20 @@ fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
     );
 }
 
-// `cn docs` needs no world: the reference is embedded in the binary.
+// `cn docs` reads the asset prose out of the engine's own sources, so it needs
+// no world but does need a checkout. The sources are copied into the temp root
+// rather than pointing `--root` at the repository, so the run cannot write to
+// the working tree.
 #[test]
 fn docs_writes_the_asset_reference_pages() {
     let project = Project::empty();
+    for tree in [
+        "crates/concinnity-asset/src",
+        "crates/concinnity-core/src/components",
+    ] {
+        copy_dir(&repo_root().join(tree), &project.path().join(tree));
+    }
+
     let root = project.path().to_string_lossy().into_owned();
     let out = project.cn(&["docs", "--root", &root]);
     expect_ok(&out, "cn docs");
@@ -380,6 +381,40 @@ fn docs_writes_the_asset_reference_pages() {
     let pages = project.path().join("docs").join("assets");
     assert!(pages.join("TextLabel.md").exists(), "no TextLabel page");
     assert!(pages.join("Window.md").exists(), "no Window page");
+}
+
+// Without those sources there is nothing to read, and saying so beats writing an
+// empty reference over the pages already on disk.
+#[test]
+fn docs_outside_an_engine_checkout_says_so() {
+    let project = Project::empty();
+    let root = project.path().to_string_lossy().into_owned();
+    let out = project.cn(&["docs", "--root", &root]);
+
+    assert!(!out.status.success(), "cn docs should fail with no sources");
+    assert!(
+        stderr(&out).contains("checkout of the engine"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+// The repository root, which is this package's own directory.
+fn repo_root() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create the destination tree");
+    for entry in std::fs::read_dir(from).expect("read the source tree") {
+        let path = entry.expect("directory entry").path();
+        let dest = to.join(path.file_name().expect("named entry"));
+        if path.is_dir() {
+            copy_dir(&path, &dest);
+        } else {
+            std::fs::copy(&path, &dest).expect("copy a source file");
+        }
+    }
 }
 
 // Export refuses a target that is not the host before it builds anything, so

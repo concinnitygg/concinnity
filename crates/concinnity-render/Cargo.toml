@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 description = "GPU-free render preparation for the Concinnity engine"
 keywords = ["gamedev", "graphics", "rendering", "concinnity"]
-categories = ["game-engines", "rendering"]
+categories = ["game-engines", "rendering", "no-std"]
 include = [
     "/src",
     "/build.rs",

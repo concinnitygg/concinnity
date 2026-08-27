@@ -11,7 +11,13 @@ describing what exists -- a camera, lights, geometry, UI -- and the engine runs
 it. Behaviour is declared as data rather than assembled from calls, so building
 an application is mostly a matter of saying what is in it.
 
-Use it as a Rust crate:
+It's available as a command-line tool:
+
+```sh
+cargo install concinnity --features dev
+```
+
+And as a Rust crate:
 
 ```rust
 use concinnity::components::{GraphicsConfig, TextLabel};
@@ -29,18 +35,6 @@ fn main() {
     App::from_world(world).run().expect("the app runs");
 }
 ```
-
-Or through the `concinnity` command line tool, which scaffolds a project,
-compiles its worlds, and runs them without any Rust of your own:
-
-```sh
-concinnity new hello     # scaffold a project
-concinnity build         # compile its worlds
-concinnity run           # play the result
-```
-
-`concinnity editor` opens a compiled world in-engine and saves changes back to
-it, and `concinnity debug` runs one straight from source while you edit.
 
 Check out the [Rust Documentation][docs-link] to explore the crate, and the
 [Asset Reference][asset-ref] for the components a world can hold.
