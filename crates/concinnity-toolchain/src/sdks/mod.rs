@@ -105,19 +105,21 @@ fn directives_for_kind(backend: Backend, targets: BinaryTargets, env: &SdkEnv) -
     out
 }
 
-// Microsoft's Agility SDK D3D12 runtime. The DLL copy and the binary's
-// `D3D12SDKVersion`/`D3D12SDKPath` exports are only emitted when bundling for a
-// final binary; the `agility_sdk_configured` cfg is always emitted when the SDK
-// is present so the runtime FSR3 gate matches what the binary actually carries.
+// Microsoft's Agility SDK D3D12 runtime, bundled only when the build asks for
+// it with `CN_ENABLE_AGILITY_SDK=1`. Unlike the four `LoadLibrary` SDKs around
+// it, bundling this one binds the executable to the `D3D12/` directory staged
+// beside it -- `d3d12.dll` reads the linked exports before any engine code runs
+// and fails device creation outright when the directory is absent -- so it is
+// off unless the artifact is being built to travel with that directory. Nothing
+// is warned about when it is off: that is the ordinary build, and the FSR3
+// upscaler reports its own loss when something actually asks for it.
+//
+// The DLL copy and the exports are only emitted when bundling for a final
+// binary; the `agility_sdk_configured` cfg is emitted whenever the opt-in found
+// the SDK, so the runtime FSR3 gate matches what the binary actually carries.
 fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_AGILITY_SDK"));
     if !env.agility_enabled {
-        if targets.bundles() {
-            out.push(warning(
-                "Agility SDK setup skipped (CN_ENABLE_AGILITY_SDK=0); \
-                 binary will use the OS-bundled D3D12 runtime",
-            ));
-        }
         return;
     }
     out.push(rerun_env("AGILITY_SDK_ROOT"));
@@ -133,10 +135,10 @@ fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String
     if !core_dll.exists() {
         if targets.bundles() {
             out.push(warning(&format!(
-                "Agility SDK not found at {} - set AGILITY_SDK_ROOT \
-                 or install the `microsoft.direct3d.d3d12` NuGet package. FidelityFX \
-                 FSR3 will be unavailable (the binary falls back to the OS-bundled \
-                 D3D12 runtime).",
+                "CN_ENABLE_AGILITY_SDK is set but the Agility SDK is not at {} - \
+                 set AGILITY_SDK_ROOT or install the `microsoft.direct3d.d3d12` \
+                 NuGet package. FidelityFX FSR3 will be unavailable (the binary \
+                 falls back to the OS-bundled D3D12 runtime).",
                 sdk_bin.display()
             )));
         }
@@ -175,8 +177,7 @@ fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String
         // Export the two symbols `d3d12.dll` reads at process start. `,DATA` is
         // critical: without it the linker inserts a code thunk that `d3d12.dll`
         // would dereference as a pointer. `/EXPORT` also demands the symbol
-        // resolve, so every target the key covers has to define the statics --
-        // which is what `install_agility_sdk_exports!` is for.
+        // resolve, so every target the key covers has to define the statics.
         if let Some(key) = targets.link_arg_key() {
             out.push(format!("{key}=/EXPORT:D3D12SDKVersion,DATA"));
             out.push(format!("{key}=/EXPORT:D3D12SDKPath,DATA"));

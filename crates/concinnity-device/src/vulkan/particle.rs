@@ -39,6 +39,7 @@ use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::spv_module;
 use super::texture::GpuUploadContext;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Cap on the number of simultaneously-live particle emitters. The
 // per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`

@@ -24,6 +24,7 @@ use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_rt_target, write_format_rtv, write_format_srv};
 
 // The blur pass runs at render-resolution / `blur_scale`. The blur is low-

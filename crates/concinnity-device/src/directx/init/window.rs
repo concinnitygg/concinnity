@@ -477,7 +477,35 @@ fn pick_adapter(factory: &IDXGIFactory4) -> Result<IDXGIAdapter1, String> {
         }
         i += 1;
     }
-    Err("no suitable D3D12 adapter found".to_string())
+    Err(no_adapter_message())
+}
+
+// Every adapter failed `D3D12CreateDevice`. On a binary that bundles the
+// Agility SDK that almost never means the GPU: `d3d12.dll` read the
+// `D3D12SDKPath` export at process start (see `directx::agility`), could not
+// load `D3D12Core.dll` from beside the executable, and left the D3D12 runtime
+// dead -- which surfaces here as every adapter looking unsupported. The
+// directory is staged next to the build tree's binaries and does not travel with
+// a copied executable, so say so rather than blaming the hardware.
+fn no_adapter_message() -> String {
+    let mut message = "no suitable D3D12 adapter found".to_string();
+    if cfg!(agility_sdk_configured) {
+        let dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.join("D3D12")));
+        message.push_str(&format!(
+            ". This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
+             Microsoft's Agility SDK and needs D3D12Core.dll in {}; without it \
+             D3D12 fails to start and every adapter reports unsupported. Copy \
+             that directory next to the executable, or rebuild without the \
+             opt-in to use the OS D3D12 runtime",
+            dir.map_or_else(
+                || "a `D3D12` directory beside the executable".to_string(),
+                |d| d.display().to_string()
+            )
+        ));
+    }
+    message
 }
 
 fn query_msaa_samples(device: &ID3D12Device) -> u32 {

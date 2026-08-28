@@ -19,6 +19,7 @@ use super::allocator::DeviceAllocator;
 use crate::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use crate::geometry::water_grid::build_water_grid;
 use crate::gfx::mesh_payload::Vertex;
+use crate::vulkan::slang_builtins::SlangCompile;
 use crate::vulkan::transparent::{
     ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord, TransparentVertexInput,
     create_transparent_pipeline,

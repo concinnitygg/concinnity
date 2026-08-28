@@ -422,14 +422,14 @@ impl FsrUpscaler {
         output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
         output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     ) -> Result<Option<Self>, String> {
-        // FFX FSR3 needs the Agility SDK configured at build time.
-        // Microsoft's `d3d12.dll` reads `D3D12SDKVersion` +
-        // `D3D12SDKPath` exports from the host EXE at process start and
-        // loads a recent `D3D12Core.dll` from `target/{profile}/D3D12/`;
-        // without this the OS-bundled (older) D3D12 runtime is used and
-        // `ffxCreateContext` throws (FFX needs SM 6.6+ and post-1.610
-        // Agility features). `build.rs` sets `cfg(agility_sdk_configured)`
-        // when it locates the SDK and emits the linker exports.
+        // FFX FSR3 needs the Agility SDK bundled at build time. Microsoft's
+        // `d3d12.dll` reads `D3D12SDKVersion` + `D3D12SDKPath` exports from
+        // the host EXE at process start and loads a recent `D3D12Core.dll`
+        // from the `D3D12/` beside it; without this the OS-bundled (older)
+        // D3D12 runtime is used and `ffxCreateContext` throws (FFX needs SM
+        // 6.6+ and post-1.610 Agility features). Bundling binds the binary to
+        // that directory, so it is opt-in: `build.rs` sets
+        // `cfg(agility_sdk_configured)` only under CN_ENABLE_AGILITY_SDK=1.
         //
         // Loading `amd_fidelityfx_dx12.dll` itself is gracefully optional:
         // `build.rs` bundles it next to the .exe when found (emitting
@@ -438,10 +438,12 @@ impl FsrUpscaler {
         // user-supplied DLL on PATH. Missing DLL → native-res fallback.
         if !cfg!(agility_sdk_configured) {
             tracing::warn!(
-                "FidelityFX FSR3: skipping FFX init: `build.rs` did not configure \
-                 Microsoft's Agility SDK at build time (set AGILITY_SDK_ROOT or \
-                 install the `microsoft.direct3d.d3d12` NuGet package, and ensure \
-                 CN_ENABLE_AGILITY_SDK is not 0). Rendering at native resolution."
+                "FidelityFX FSR3: skipping FFX init: this binary does not bundle \
+                 Microsoft's Agility SDK, which FFX needs. Rebuild with \
+                 CN_ENABLE_AGILITY_SDK=1 (and the `microsoft.direct3d.d3d12` NuGet \
+                 package installed, or AGILITY_SDK_ROOT pointing at it); the \
+                 resulting binary then only runs with its `D3D12/` directory \
+                 beside it. Rendering at native resolution."
             );
             return Ok(None);
         }

@@ -70,6 +70,7 @@ pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::pipeline::spv_module;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + colour + uv = 14 floats). The BLAS reads positions at this stride and the

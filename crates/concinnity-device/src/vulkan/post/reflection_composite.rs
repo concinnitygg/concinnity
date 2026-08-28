@@ -31,6 +31,7 @@ use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Reflection-composite resources, held by `VkContext` when the SSR resolve or RT
 // reflections are active (both feed this composite). All `vk::*` handles are owned

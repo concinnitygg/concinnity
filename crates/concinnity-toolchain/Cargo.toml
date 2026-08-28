@@ -25,6 +25,7 @@ name = "concinnity_toolchain"
 path = "src/lib.rs"
 
 [dependencies]
+concinnity-render = { workspace = true }
 concinnity-slang = { workspace = true }
 
 [dev-dependencies]

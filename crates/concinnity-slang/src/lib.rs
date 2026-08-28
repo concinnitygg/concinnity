@@ -1,11 +1,13 @@
 //! The `slangc` invocation, shared by build scripts and the renderer.
 //!
-//! The engine's single-source shaders (`crates/concinnity-device/src/shaders/
-//! *.slang`) compile through the `slangc` binary: at build time to Metal
-//! metallibs (the device build script), and at renderer init to SPIR-V for the
-//! Vulkan backend (plus Metal hot-reload rebuilds). Both call sites assemble the
-//! full source text first (defines injected as `#define` lines), so a compile is
-//! a pure function of that text, the entry list, and the target -- which is what
+//! The engine's single-source shaders (`crates/concinnity-render/src/shaders/
+//! *.slang`) compile through the `slangc` binary, mostly at build time: the
+//! device build script emits Metal metallibs, DXIL and SPIR-V for the backend it
+//! targets. The renderer compiles the rest, meaning whatever source no
+//! build-time artifact was built from -- a hot-reload edit, or a device sized
+//! differently from what the build baked. Every call site assembles the full
+//! source text first (defines injected as `#define` lines), so a compile is a
+//! pure function of that text, the entry list, and the target -- which is what
 //! lets the renderer's content-addressed shader cache key it.
 //!
 //! Being needed on both sides is why this is its own crate rather than a module
@@ -104,6 +106,24 @@ struct Slangc {
     version: String,
 }
 
+// Why a candidate was not accepted. The two are separate diagnoses: one says
+// the compiler is known to predate the floor, the other that its `-version`
+// carried no release number to compare at all. Distribution builds do the
+// latter -- the LunarG Ubuntu package answers `lunarg-ubuntu-noble-package` --
+// and reporting that as "older than 2026.1" names a version the string never
+// stated.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rejected {
+    Older,
+    Unreadable,
+}
+
+// A candidate that did not qualify, kept so the error can name it.
+struct Unusable {
+    found: Slangc,
+    why: Rejected,
+}
+
 // Resolved once per process. The error side carries the diagnostic, so a host
 // with only an unusable candidate reports why rather than "not found".
 fn resolved() -> &'static Result<Slangc, String> {
@@ -129,8 +149,8 @@ pub fn compiler_id() -> &'static str {
 }
 
 // Locate slangc: PATH first, then `$VULKAN_SDK/bin`, taking the first that
-// meets `MIN_SLANGC`. A candidate below the floor is kept only to name it in
-// the error, so an old slangc earlier on PATH does not shadow a newer SDK.
+// meets `MIN_SLANGC`. A candidate that does not qualify is kept only to name it
+// in the error, so an old slangc earlier on PATH does not shadow a newer SDK.
 fn probe_slangc() -> Result<Slangc, String> {
     let mut candidates = vec![PathBuf::from("slangc")];
     if let Ok(sdk) = std::env::var("VULKAN_SDK") {
@@ -141,19 +161,21 @@ fn probe_slangc() -> Result<Slangc, String> {
         };
         candidates.push(Path::new(&sdk).join("bin").join(exe));
     }
-    let mut too_old: Option<Slangc> = None;
+    let mut unusable: Option<Unusable> = None;
     for path in candidates {
         let Some(version) = query_version(&path) else {
             continue;
         };
         let found = Slangc { path, version };
-        if parse_version(&found.version).is_some_and(|v| v >= MIN_SLANGC) {
-            return Ok(found);
-        }
-        too_old.get_or_insert(found);
+        let why = match parse_version(&found.version) {
+            Some(v) if v >= MIN_SLANGC => return Ok(found),
+            Some(_) => Rejected::Older,
+            None => Rejected::Unreadable,
+        };
+        unusable.get_or_insert(Unusable { found, why });
     }
-    Err(match too_old {
-        Some(old) => too_old_message(&old),
+    Err(match unusable {
+        Some(u) => unusable_message(&u),
         None => missing_slangc_message(),
     })
 }
@@ -307,49 +329,70 @@ fn command_args(job: &SlangJob<'_>) -> Vec<String> {
     args
 }
 
-/// Prepend `#define` lines for each `(name, value)` pair. The defines become
-/// part of the source text on purpose: the renderer's shader cache keys on the
-/// assembled source, so two pool sizes can never share an artifact.
-pub fn inject_defines(source: &str, defines: &[(&str, &str)]) -> String {
-    if defines.is_empty() {
-        return source.to_string();
-    }
-    let mut out = String::with_capacity(source.len() + defines.len() * 32);
-    for (name, value) in defines {
-        out.push_str("#define ");
-        out.push_str(name);
-        out.push(' ');
-        out.push_str(value);
-        out.push('\n');
-    }
-    out.push_str(source);
-    out
+// Where to get a qualifying compiler. A Vulkan SDK bundles slangc, but only the
+// Windows SDK has tracked the releases the engine needs; the LunarG Linux
+// packages have shipped well behind them, so naming the SDK first there sends a
+// reader to an install that cannot satisfy the floor. The Slang release page
+// works on every platform, so it leads.
+fn where_to_get_slangc() -> String {
+    format!(
+        "Install a Slang release {}.{} or newer \
+         (https://github.com/shader-slang/slang/releases) and put its `slangc` \
+         first on PATH.{}",
+        MIN_SLANGC.0,
+        MIN_SLANGC.1,
+        if cfg!(windows) {
+            " The Vulkan SDK (https://vulkan.lunarg.com) bundles one under \
+             $VULKAN_SDK/bin that is also searched."
+        } else {
+            " A Vulkan SDK install is also searched under $VULKAN_SDK/bin, but \
+             its bundled slangc is often older than this floor on Linux -- check \
+             `slangc -version` before relying on it."
+        }
+    )
 }
 
 fn missing_slangc_message() -> String {
-    "slangc not found: the engine's single-source shaders need the Slang \
-     compiler. Install the Vulkan SDK (https://vulkan.lunarg.com) or a \
-     standalone Slang release (https://github.com/shader-slang/slang/releases) \
-     and make sure `slangc` is on PATH or under $VULKAN_SDK/bin."
-        .to_string()
+    format!(
+        "slangc not found: the engine's single-source shaders need the Slang \
+         compiler. {}",
+        where_to_get_slangc()
+    )
 }
 
-fn too_old_message(found: &Slangc) -> String {
-    // The PATH candidate is invoked by bare name, so there is no path to name.
-    let origin = if found.path == Path::new("slangc") {
+// The PATH candidate is invoked by bare name, so there is no resolved path to
+// name for it.
+fn origin_of(found: &Slangc) -> String {
+    if found.path == Path::new("slangc") {
         "on PATH".to_string()
     } else {
         format!("at {}", found.path.display())
-    };
-    format!(
-        "slangc {} ({origin}) is older than {}.{}, the oldest release the \
-         engine's shaders are validated against: earlier ones emit SPIR-V \
-         declaring capabilities the shaders never use. Install a newer Vulkan \
-         SDK (https://vulkan.lunarg.com) or Slang release \
-         (https://github.com/shader-slang/slang/releases), or put one already \
-         installed ahead of it on PATH.",
-        found.version, MIN_SLANGC.0, MIN_SLANGC.1,
-    )
+    }
+}
+
+fn unusable_message(u: &Unusable) -> String {
+    let origin = origin_of(&u.found);
+    match u.why {
+        Rejected::Older => format!(
+            "slangc {} ({origin}) is older than {}.{}, the oldest release the \
+             engine's shaders are validated against: earlier ones emit SPIR-V \
+             declaring capabilities the shaders never use. {}",
+            u.found.version,
+            MIN_SLANGC.0,
+            MIN_SLANGC.1,
+            where_to_get_slangc()
+        ),
+        Rejected::Unreadable => format!(
+            "slangc ({origin}) reports its release as {:?}, which carries no \
+             version number, so it cannot be checked against {}.{} -- the oldest \
+             release the engine's shaders are validated against. Distribution \
+             builds print their package tag here rather than the release. {}",
+            u.found.version,
+            MIN_SLANGC.0,
+            MIN_SLANGC.1,
+            where_to_get_slangc()
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -364,6 +407,73 @@ mod tests {
         assert_eq!(parse_version("2026"), Some((2026, 0)));
         assert_eq!(parse_version(""), None);
         assert_eq!(parse_version("unknown"), None);
+    }
+
+    // A release string with no number in it is not evidence of an old
+    // compiler, and saying "older than 2026.1" about one names a version it
+    // never stated. The LunarG Ubuntu package is the case in hand: `slangc
+    // -version` answers with its package tag and nothing else.
+    #[test]
+    fn an_unreadable_release_is_diagnosed_separately_from_an_old_one() {
+        let unreadable = Unusable {
+            found: Slangc {
+                path: PathBuf::from("slangc"),
+                version: "lunarg-ubuntu-noble-package".to_string(),
+            },
+            why: Rejected::Unreadable,
+        };
+        let message = unusable_message(&unreadable);
+        assert!(message.contains("carries no version number"), "{message}");
+        assert!(
+            !message.contains("is older than"),
+            "an unparsed release must not be reported as old: {message}"
+        );
+        assert!(message.contains("lunarg-ubuntu-noble-package"), "{message}");
+
+        let old = Unusable {
+            found: Slangc {
+                path: PathBuf::from("/opt/vk/bin/slangc"),
+                version: "2025.17.2".to_string(),
+            },
+            why: Rejected::Older,
+        };
+        let message = unusable_message(&old);
+        assert!(message.contains("is older than"), "{message}");
+        assert!(message.contains("/opt/vk/bin/slangc"), "{message}");
+    }
+
+    // Every diagnostic has to name a source that can actually satisfy the
+    // floor. The Vulkan SDK cannot on Linux, so the Slang release page is what
+    // each of them leads with.
+    #[test]
+    fn every_diagnostic_points_at_a_release_that_meets_the_floor() {
+        let unreadable = Unusable {
+            found: Slangc {
+                path: PathBuf::from("slangc"),
+                version: "package-tag".to_string(),
+            },
+            why: Rejected::Unreadable,
+        };
+        for message in [
+            missing_slangc_message(),
+            unusable_message(&unreadable),
+            unusable_message(&Unusable {
+                found: Slangc {
+                    path: PathBuf::from("slangc"),
+                    version: "2025.7.1".to_string(),
+                },
+                why: Rejected::Older,
+            }),
+        ] {
+            assert!(
+                message.contains("github.com/shader-slang/slang/releases"),
+                "{message}"
+            );
+            assert!(
+                message.contains(&format!("{}.{}", MIN_SLANGC.0, MIN_SLANGC.1)),
+                "{message}"
+            );
+        }
     }
 
     // The floor exists to reject the releases that miscompile the engine's
@@ -451,13 +561,6 @@ mod tests {
             })
             .contains(&"-profile".to_string())
         );
-    }
-
-    #[test]
-    fn defines_prepend_in_order_and_empty_is_identity() {
-        let out = inject_defines("body\n", &[("POOL_SIZE", "8"), ("METAL_ABI", "1")]);
-        assert_eq!(out, "#define POOL_SIZE 8\n#define METAL_ABI 1\nbody\n");
-        assert_eq!(inject_defines("body\n", &[]), "body\n");
     }
 
     // Round-trip through the real compiler when it is installed; skipped

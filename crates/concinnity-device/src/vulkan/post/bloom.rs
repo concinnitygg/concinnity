@@ -16,6 +16,7 @@ use super::super::context::*;
 use super::super::pipeline::spv_module;
 use super::super::resources::alloc_descriptor_sets;
 use super::super::texture::*;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Upper bound on `bloom_mip_count` (which clamps to 4..=6). The bloom
 // descriptor pool is sized for this many mips per frame so a resize that

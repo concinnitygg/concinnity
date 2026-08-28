@@ -18,6 +18,7 @@ use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, Cluster
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Byte size of the per-cluster light-index buffer: CLUSTER_COUNT blocks of
 // CLUSTER_LIGHT_LIST_STRIDE u32 (slot 0 = count, slots 1.. = light indices).
@@ -272,7 +273,7 @@ mod tests {
     // they must track the Rust values the CPU sizes the buffer with.
     #[test]
     fn kernel_cluster_constants_match_render_types() {
-        let src = crate::vulkan::slang_builtins::LIGHT_CULL.embedded;
+        let src = concinnity_render::shaders::LIGHT_CULL;
         assert!(src.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));

@@ -29,6 +29,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
 use super::texture::GpuImage;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Cap on the number of active decals: the descriptor pool reserves a
 // fixed block of `MAX_DECALS` per-decal albedo sets at init, so runtime

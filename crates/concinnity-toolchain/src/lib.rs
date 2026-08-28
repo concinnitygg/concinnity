@@ -32,11 +32,13 @@ use std::path::{Path, PathBuf};
 
 mod metal_shaders;
 mod sdks;
+mod slang_artifacts;
 mod source_hash;
 mod targets;
 
 pub use metal_shaders::{SlangLibSpec, SlangShaders, precompile_metal_shaders};
 use sdks::SdkEnv;
+pub use slang_artifacts::{SlangArtifact, precompile_slang_artifacts, watch_shader_dir};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// The graphics backend a build targets.
@@ -205,6 +207,19 @@ const DEFAULT_XESS_SDK_ROOT: &str = "C:\\XeSS_SDK_3.0.1";
 const DEFAULT_STREAMLINE_SDK_ROOT: &str = "C:\\streamline-sdk-v2.11.1";
 const DEFAULT_WINDOWS_SDK_BIN: &str = "C:\\Program Files (x86)\\Windows Kits\\10\\bin";
 
+// Whether an opt-in variable's value asks for the feature, for the one SDK that
+// is off by default. Bundling Agility links `D3D12SDKVersion` / `D3D12SDKPath`
+// into the binary, and `d3d12.dll` reads those before any engine code runs: a
+// binary carrying them starts only where the staged `D3D12/` directory sits
+// beside it, so an executable copied anywhere else -- every `cargo install` --
+// reaches no adapter at all. That makes bundling a decision about how the
+// artifact is distributed rather than about which SDKs the build machine
+// happens to have, so it has to be asked for. `0` keeps meaning off, as it
+// always has for these variables.
+fn opted_in(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true" | "TRUE"))
+}
+
 // Snapshot every environment input the SDK setup reads. This is the only place
 // the setup consults the process environment; everything downstream works on
 // the returned struct.
@@ -215,8 +230,11 @@ fn sdk_env_from_cargo() -> SdkEnv {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(default))
     };
-    // Each SDK probe defaults to ON and is opted out of with `<VAR>=0`.
+    // The `LoadLibrary`-at-runtime SDKs default to ON and are opted out of with
+    // `<VAR>=0`: an absent DLL costs the feature and nothing else.
     let enabled = |name: &str| var(name).as_deref() != Some("0");
+    // Agility is the exception and defaults to OFF; see `opted_in`.
+    let opted_in = |name: &str| self::opted_in(var(name).as_deref());
     SdkEnv {
         target_os: var("CARGO_CFG_TARGET_OS").unwrap_or_default(),
         out_dir: var("OUT_DIR").map(PathBuf::from),
@@ -227,7 +245,7 @@ fn sdk_env_from_cargo() -> SdkEnv {
         streamline_root: root("STREAMLINE_SDK_ROOT", DEFAULT_STREAMLINE_SDK_ROOT),
         dxc_root: var("DXC_SDK_ROOT").map(PathBuf::from),
         windows_sdk_bin: PathBuf::from(DEFAULT_WINDOWS_SDK_BIN),
-        agility_enabled: enabled("CN_ENABLE_AGILITY_SDK"),
+        agility_enabled: opted_in("CN_ENABLE_AGILITY_SDK"),
         ffx_enabled: enabled("CN_ENABLE_FFX_FSR3"),
         xess_enabled: enabled("CN_ENABLE_XESS"),
         dlss_enabled: enabled("CN_ENABLE_DLSS"),
@@ -300,13 +318,12 @@ mod tests {
     }
 
     #[test]
-    fn sdk_env_snapshot_defaults_probes_on() {
+    fn sdk_env_snapshot_defaults_the_loadlibrary_probes_on() {
         let env = sdk_env_from_cargo();
-        // Probes default ON when their opt-out variable is unset. Only assert
-        // for variables the surrounding environment leaves unset, so a local
-        // `<VAR>=0` opt-out does not fail the test.
+        // The `LoadLibrary` probes default ON when their opt-out variable is
+        // unset. Only assert for variables the surrounding environment leaves
+        // unset, so a local `<VAR>=0` opt-out does not fail the test.
         for (var, flag) in [
-            ("CN_ENABLE_AGILITY_SDK", env.agility_enabled),
             ("CN_ENABLE_FFX_FSR3", env.ffx_enabled),
             ("CN_ENABLE_XESS", env.xess_enabled),
             ("CN_ENABLE_DLSS", env.dlss_enabled),
@@ -320,6 +337,29 @@ mod tests {
         if std::env::var("XESS_SDK_ROOT").is_err() {
             assert_eq!(env.xess_root, PathBuf::from(DEFAULT_XESS_SDK_ROOT));
         }
+    }
+
+    // Agility is the one that binds the executable to a directory beside it, so
+    // an unset variable must leave it OFF: the default has to be the artifact
+    // that runs anywhere, not the one that runs only where it was built.
+    #[test]
+    fn sdk_env_snapshot_defaults_agility_off() {
+        if std::env::var("CN_ENABLE_AGILITY_SDK").is_err() {
+            assert!(!sdk_env_from_cargo().agility_enabled);
+        }
+    }
+
+    // Only an affirmative value opts in. `0` has always meant off and keeps
+    // meaning off, so an environment carrying the old opt-out is unaffected.
+    #[test]
+    fn only_an_affirmative_value_opts_into_agility() {
+        for on in ["1", "true", "TRUE"] {
+            assert!(opted_in(Some(on)), "{on}");
+        }
+        for off in ["0", "", "no", "yes", "2", "false"] {
+            assert!(!opted_in(Some(off)), "{off}");
+        }
+        assert!(!opted_in(None));
     }
 
     #[test]

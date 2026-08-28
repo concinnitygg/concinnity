@@ -30,6 +30,7 @@ use crate::directx::com;
 use crate::directx::context::dump_on_err;
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::uav_barrier;
 
 // DWORD count of the `HizParams` cbuffer (dst_w, dst_h, src_mip, sample_count).

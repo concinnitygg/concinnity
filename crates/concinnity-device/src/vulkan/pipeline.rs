@@ -8,6 +8,7 @@ use ash::vk;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
 
 use super::builtins;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 //  GLSL source strings
 
@@ -1264,9 +1265,10 @@ pub(super) fn create_composite_pipeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        builtins, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
-        compile_shadow_bindless_vs, compile_shadow_cull_shader, compile_skinned_shaders, is_spirv,
-        resolve_instanced_shader, resolve_main_shaders, spirv_words,
+        SlangCompile, builtins, compile_bindless_shaders, compile_cull_shader,
+        compile_cull_shader_phase2, compile_shadow_bindless_vs, compile_shadow_cull_shader,
+        compile_skinned_shaders, is_spirv, resolve_instanced_shader, resolve_main_shaders,
+        spirv_words,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation

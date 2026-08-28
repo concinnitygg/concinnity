@@ -37,6 +37,41 @@ rustup update
 rustc --version   # should report 1.85.0 or later
 ```
 
+### The Slang compiler
+
+Every backend's engine shaders are written once as `.slang` and compiled by the
+`slangc` binary. All three backends compile them at build time and embed the
+result, so `slangc` is a **build-time** requirement and a binary built with one
+present carries its shaders wherever it goes.
+
+Building without `slangc` still succeeds. The binary then compiles its shaders
+at renderer init instead, which needs `slangc` on every host that runs it — so
+install one before building anything you intend to ship.
+
+An embedded artifact is used only while the source still matches what it was
+built from, which leaves two cases that compile at startup even on a binary that
+has them. Hot-reload (`cn debug`, `cn editor`) prefers the checkout's copy of a
+shader, so on Metal those two commands recompile the engine's shaders and need
+`slangc`. And a Vulkan device that cannot seat the bindless texture pool at its
+fixed ceiling sizes the pool to the world instead, which changes the source of
+the two bindless main-pass programs; MoltenVK is such a device, so a macOS
+Vulkan build needs `slangc` at runtime for that pair.
+
+The engine requires a **2026.1 or newer** release. Earlier ones emit SPIR-V
+declaring capabilities the shaders never use, which Vulkan rejects.
+
+Install a release from
+[shader-slang/slang](https://github.com/shader-slang/slang/releases) and put its
+`slangc` first on `PATH`. `$VULKAN_SDK/bin` is searched too, but only the
+Windows Vulkan SDK has tracked releases new enough; the LunarG Linux packages
+have shipped well behind the floor (`slangc -version` on the Ubuntu package
+prints its package tag rather than a release number, and the engine refuses a
+compiler whose release it cannot read). Confirm what you have with:
+
+```sh
+slangc -version
+```
+
 The remaining prerequisites are platform specific. Pick the section for your OS
 below.
 
@@ -165,19 +200,63 @@ cargo build --release
 The DirectX backend can use vendor temporal upscalers (AMD FidelityFX FSR 3,
 Intel XeSS, NVIDIA DLSS) and Microsoft's DirectX 12 Agility SDK. These are all
 **optional**: if an SDK is not present the build script prints a warning, skips
-it, and the renderer falls back to native-resolution rendering. To enable one,
-install it and point the build at it with the matching environment variable
-(defaults shown):
+it, and the renderer falls back to native-resolution rendering. Install one and
+point the build at it with the matching environment variable (defaults shown):
 
-| SDK                | Environment variable  | Default install path                  |
-| ------------------ | --------------------- | ------------------------------------- |
-| D3D12 Agility SDK  | `AGILITY_SDK_ROOT`    | `C:\microsoft.direct3d.d3d12.1.619.3` |
-| FidelityFX (FSR 3) | `FIDELITYFX_SDK_ROOT` | `C:\FidelityFX-SDK-v1.1.4`            |
-| Intel XeSS         | `XESS_SDK_ROOT`       | `C:\XeSS_SDK_3.0.1`                   |
-| NVIDIA Streamline  | `STREAMLINE_SDK_ROOT` | `C:\streamline-sdk-v2.11.1`           |
+| SDK                | Environment variable  | Default install path                  | Default |
+| ------------------ | --------------------- | ------------------------------------- | ------- |
+| D3D12 Agility SDK  | `AGILITY_SDK_ROOT`    | `C:\microsoft.direct3d.d3d12.1.619.3` | **off** |
+| FidelityFX (FSR 3) | `FIDELITYFX_SDK_ROOT` | `C:\FidelityFX-SDK-v1.1.4`            | on      |
+| Intel XeSS         | `XESS_SDK_ROOT`       | `C:\XeSS_SDK_3.0.1`                   | on      |
+| NVIDIA Streamline  | `STREAMLINE_SDK_ROOT` | `C:\streamline-sdk-v2.11.1`           | on      |
 
-Each can be disabled explicitly with `CN_ENABLE_AGILITY_SDK=0`,
-`CN_ENABLE_FFX_FSR3=0`, `CN_ENABLE_XESS=0`, or `CN_ENABLE_DLSS=0`.
+The three upscaler DLLs are loaded with `LoadLibrary` at runtime and degrade to
+a fallback when absent, so they are picked up automatically wherever they are
+installed, and each is disabled explicitly with `CN_ENABLE_FFX_FSR3=0`,
+`CN_ENABLE_XESS=0`, or `CN_ENABLE_DLSS=0`.
+
+**The Agility SDK is the exception and is off by default**, because bundling it
+decides where the finished executable can run (see below). Ask for it with:
+
+```powershell
+$env:CN_ENABLE_AGILITY_SDK = "1"
+```
+
+FSR 3 needs it, so a build without the opt-in renders at native resolution and
+logs why when something requests FSR 3.
+
+#### Why the Agility SDK is opt-in
+
+Bundling it links `D3D12SDKVersion` / `D3D12SDKPath` into the executable, and
+Windows' `d3d12.dll` reads those exports *before any engine code runs*. If
+`D3D12Core.dll` is not in a `D3D12/` directory beside the executable, D3D12
+device creation fails outright — there is no fallback to the OS runtime, and
+every adapter then reports unsupported:
+
+```
+D3D12 init failed: no suitable D3D12 adapter found. This binary was built with
+CN_ENABLE_AGILITY_SDK=1, so it bundles Microsoft's Agility SDK and needs
+D3D12Core.dll in ...
+```
+
+So the opt-in decides *where the finished executable can run*, which is why an
+installed SDK is not enough to trigger it. `cargo build` leaves the binary in
+`target/<profile>/` with the staged directory beside it and everything works;
+`cargo install` copies only the executable, and the copy is dead. Turning the
+bundling on means committing to shipping that directory with the binary — a
+packaging step, not something `cargo install` can do.
+
+The runtime alternative, `ID3D12SDKConfiguration::SetSDKVersion`, cannot replace
+the exports: Microsoft documents it as usable "only in Windows Developer Mode"
+(it exists for tools such as PIX) and it returns `DXGI_ERROR_INVALID_CALL`
+elsewhere.
+
+So:
+
+- **Installing or redistributing a lone executable** — leave the opt-in off.
+  The binary runs anywhere on the OS D3D12 runtime, without FSR 3.
+- **Packaging a distribution that carries `D3D12/`, or a local build you run
+  out of `target/`** — set `CN_ENABLE_AGILITY_SDK=1` and get FSR 3.
 
 ## Windows (Vulkan)
 

@@ -60,6 +60,7 @@ const HIZ_TILE: u32 = 8;
 // std140 UBO) are GPU-free layout structs that live in concinnity-render;
 // re-export them so `crate::vulkan::hiz::{HizParams,CullHizParams}` are
 // unchanged for the passes that fill them.
+use crate::vulkan::slang_builtins::SlangCompile;
 pub(in crate::vulkan) use crate::vulkan::uniforms::CullHizParams;
 use concinnity_render::uniforms::HizParams;
 

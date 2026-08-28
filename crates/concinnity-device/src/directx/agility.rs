@@ -12,6 +12,17 @@
 // of the rlib. `,DATA` is critical -- without it the linker inserts a code thunk
 // that `d3d12.dll` would dereference as a pointer.
 //
+// This is the only mechanism a shipped binary can use. The runtime alternative,
+// `ID3D12SDKConfiguration::SetSDKVersion`, is documented as usable "only in
+// Windows Developer Mode" -- it exists for tools like PIX, not for applications
+// -- and returns DXGI_ERROR_INVALID_CALL everywhere else.
+//
+// The handshake has no fallback: if the directory is absent, D3D12 device
+// creation fails outright rather than reverting to the OS runtime, and the
+// renderer reports "no suitable D3D12 adapter found" (see `init::window`, which
+// says so). A binary carrying these exports is therefore only portable together
+// with the directory beside it.
+//
 // The version must match the Agility NuGet package the build script bundles:
 // the directory name is `microsoft.direct3d.d3d12.1.<VERSION>.<PATCH>`, so
 // `microsoft.direct3d.d3d12.1.619.3` is 619. `DEFAULT_AGILITY_SDK_ROOT` in

@@ -1,870 +1,28 @@
-// Single-source engine shader programs for the DirectX backend.
-//
-// Each program compiles a `.slang` file under `src/shaders/` (the
-// backend-neutral single-source directory) to a signed DXIL container at
-// renderer init by invoking slangc, cached in the content-addressed shader
-// cache exactly like the HLSL programs in `builtins`. slangc resolves dxil.dll
-// itself, so the containers it emits are already signed for D3D12.
-//
-// The bindless main pair compiles the source's `DXIL_ABI` block, whose
-// register() annotations reproduce the bindless main root signature in
-// `init/pipelines.rs` slot for slot: that layout is a contract, since a world
-// Shader asset builds its own PSO against the same root signature (see
-// world_shaders.rs). `assert_slang_dxil_abi` in build.rs locks it. The two
-// compute kernels need no ABI block: slangc assigns b0/t0/u0 from declaration
-// order, which is what their root signatures already bind.
-//
-// The G-buffer pre-pass and shadow families take the same `DXIL_ABI` block for
-// a weaker reason: nothing outside the engine binds them, but their root
-// signatures hand the same declarations entirely different slots than the Metal
-// and Vulkan hosts do, so the shared source cannot carry one set of registers
-// for all three. `assert_slang_dxil_abi` in build.rs locks every one of them,
-// which is what a macOS edit to the shared file runs into under
-// `dx_crosscheck.sh`.
-//
-// The fullscreen post passes need no ABI block either, and for a stronger
-// reason than the compute kernels: nothing outside the engine binds them at
-// all. slangc splits each top-level `Sampler2D` into a `Texture2D` + a
-// `SamplerState` and numbers both from declaration order, so a pass with N
-// sources lands on t0..tN-1 *and* s0..sN-1 -- where the hand HLSL declared one
-// sampler for all of them. The root signatures name the samplers they hand out
-// (a pass's static samplers are the same descriptor repeated).
-//
-// Declaration order is what the root signatures follow, and it is not always
-// the order the hand HLSL used: the SSR resolve's probe cube array lands at t4
-// (not the hand shader's t7) with its `ProbeSet` at b1 (not b4), and the
-// reflection composite reads scene / G-buffer / roughness at t1 / t2 / t3 where
-// the HLSL had roughness first.
-//
-// These are shader model 6.0 rather than the FXC path's 5.1: the bindless pool
-// index is non-uniform across a fragment wave, and `NonUniformResourceIndex`
-// is an SM 6.0 construct.
+// The DirectX half of the single-source shader compile: everything the
+// declarations in `concinnity_render::slang_programs::dx` need a compiler, a
+// content-addressed cache, or a filesystem for. The declarations themselves are
+// re-exported here, so every call site still names them through this module.
 
 use concinnity_slang as slang;
 
-pub(crate) struct SlangProgram {
-    // File name under `src/shaders/` for the hot-reload disk-first resolve;
-    // also the embedded fallback's origin and the name slangc diagnostics use.
-    pub file: &'static str,
-    pub embedded: &'static str,
-    pub entry: &'static str,
-    // Shader-model profile for the DXIL container (stage + feature floor).
-    pub profile: &'static str,
-    // Diagnostic label (compile errors + cache miss logs + export report).
-    pub label: &'static str,
-    // Variant defines injected as `#define` lines ahead of the source.
-    pub defines: &'static [(&'static str, &'static str)],
+pub(super) use concinnity_render::slang_programs::dx::*;
+
+// What a declaration can do once a compiler and a cache are in reach. A trait
+// rather than an inherent impl because `SlangProgram` is defined in
+// concinnity-render, which is `no_std` and knows nothing about either; bringing
+// this into scope is what keeps `PROGRAM.compile(..)` reading the same at every
+// call site it did before the declarations moved.
+pub(crate) trait SlangCompile {
+    fn source(&self, hot_reload: bool) -> String;
+    fn target(&self) -> slang::SlangTarget;
+    fn cache_key<'a>(&self, source: &'a str) -> crate::shader_cache::Key<'a>;
+    fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String>;
 }
 
-const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
-const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
-const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
-const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
-const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
-const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
-const RT_SKIN_SLANG: &str = include_str!("../shaders/rt_skin.slang");
-const GBUFFER_PREPASS_SLANG: &str = include_str!("../shaders/gbuffer_prepass.slang");
-const SHADOW_SLANG: &str = include_str!("../shaders/shadow.slang");
-const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
-const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
-const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
-const COMPOSITE_SLANG: &str = include_str!("../shaders/composite.slang");
-const SSAO_SLANG: &str = include_str!("../shaders/ssao.slang");
-const SSR_SLANG: &str = include_str!("../shaders/ssr.slang");
-const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
-const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
-const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
-const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
-const WATER_SLANG: &str = include_str!("../shaders/water.slang");
-const GLASS_MESH_SLANG: &str = include_str!("../shaders/glass_mesh.slang");
-const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
-const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
-const LINE_SLANG: &str = include_str!("../shaders/line.slang");
-const TEXT_SLANG: &str = include_str!("../shaders/text.slang");
-
-// The bindless main pair's variant defines. `MAX_PROBES` sizes the probe cube
-// array the root signature's descriptor table covers; `probe_cube_count_matches`
-// locks it to the host constant. `POOL_SIZE` is deliberately absent: the DXIL
-// pool is an unbounded array, so the shader never over-declares the per-frame
-// descriptor region the host actually wrote.
-const MAIN_DEFINES: &[(&str, &str)] = &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")];
-
-// The SSR resolve reads the probe array but none of the texture pool, so it
-// takes the probe count alone. Same lock as `MAIN_DEFINES`.
-// `SPLIT_PROBE_SAMPLER` declares that array as a texture array plus one
-// sampler: D3D12 binds a shader sampler *array* only through a descriptor
-// table, so the combined form Metal and Vulkan use cannot be covered by static
-// samplers here (see the declaration in `ssr.slang`).
-const SSR_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8"), ("SPLIT_PROBE_SAMPLER", "1")];
-
-pub(super) static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
-    file: "main_bindless.slang",
-    embedded: MAIN_BINDLESS_SLANG,
-    entry: "vertex_main_bindless",
-    profile: "vs_6_0",
-    label: "vert_bindless.slang",
-    defines: MAIN_DEFINES,
-};
-pub(super) static MAIN_BINDLESS_FRAG: SlangProgram = SlangProgram {
-    file: "main_bindless.slang",
-    embedded: MAIN_BINDLESS_SLANG,
-    entry: "fragment_main_bindless",
-    profile: "ps_6_0",
-    label: "frag_bindless.slang",
-    defines: MAIN_DEFINES,
-};
-pub(super) static LIGHT_CULL: SlangProgram = SlangProgram {
-    file: "light_cull.slang",
-    embedded: LIGHT_CULL_SLANG,
-    entry: "light_cull_kernel",
-    profile: "cs_6_0",
-    label: "light_cull.slang",
-    defines: &[],
-};
-pub(super) static HIZ_INIT_SINGLE: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    embedded: HIZ_BUILD_SLANG,
-    entry: "hiz_init_single",
-    profile: "cs_6_0",
-    label: "hiz_init_single.slang",
-    defines: &[("HIZ_INIT_SINGLE", "1")],
-};
-pub(super) static HIZ_INIT_MSAA: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    embedded: HIZ_BUILD_SLANG,
-    entry: "hiz_init_msaa",
-    profile: "cs_6_0",
-    label: "hiz_init_msaa.slang",
-    defines: &[("HIZ_INIT_MSAA", "1")],
-};
-pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    embedded: HIZ_BUILD_SLANG,
-    entry: "hiz_downsample",
-    profile: "cs_6_0",
-    label: "hiz_downsample.slang",
-    defines: &[("HIZ_DOWNSAMPLE", "1")],
-};
-
-// The G-buffer pre-pass and shadow families. Every entry is its own program so
-// each variant declares exactly the resources its root signature binds; the
-// `DXIL_ABI` gate pins those registers to the signatures in `post/gbuffer.rs`,
-// `init/pipelines.rs` and `resources.rs`.
-const GB_STATIC: &[(&str, &str)] = &[("GB_STATIC", "1"), ("DXIL_ABI", "1")];
-const GB_INSTANCED: &[(&str, &str)] = &[("GB_INSTANCED", "1"), ("DXIL_ABI", "1")];
-const GB_SKINNED: &[(&str, &str)] = &[("GB_SKINNED", "1"), ("DXIL_ABI", "1")];
-const GB_BINDLESS: &[(&str, &str)] = &[("GB_BINDLESS", "1"), ("DXIL_ABI", "1")];
-const GB_FRAGMENT: &[(&str, &str)] = &[("GB_FRAGMENT", "1"), ("DXIL_ABI", "1")];
-const GB_FRAGMENT_BINDLESS: &[(&str, &str)] = &[("GB_FRAGMENT_BINDLESS", "1"), ("DXIL_ABI", "1")];
-const SHADOW_STATIC: &[(&str, &str)] = &[("SHADOW_STATIC", "1"), ("DXIL_ABI", "1")];
-const SHADOW_SKINNED: &[(&str, &str)] = &[("SHADOW_SKINNED", "1"), ("DXIL_ABI", "1")];
-const SHADOW_BINDLESS: &[(&str, &str)] = &[("SHADOW_BINDLESS", "1"), ("DXIL_ABI", "1")];
-
-pub(super) static GBUFFER_PREPASS_VERT: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
-    entry: "gbuffer_prepass_vertex",
-    profile: "vs_6_0",
-    label: "gbuffer_prepass_vert.slang",
-    defines: GB_STATIC,
-};
-pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
-    entry: "gbuffer_prepass_vertex_instanced",
-    profile: "vs_6_0",
-    label: "gbuffer_prepass_vert_instanced.slang",
-    defines: GB_INSTANCED,
-};
-pub(super) static GBUFFER_PREPASS_VERT_SKINNED: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
-    entry: "gbuffer_prepass_vertex_skinned",
-    profile: "vs_6_0",
-    label: "gbuffer_prepass_vert_skinned.slang",
-    defines: GB_SKINNED,
-};
-pub(super) static GBUFFER_BINDLESS_VERT: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
-    entry: "gbuffer_prepass_vertex_bindless",
-    profile: "vs_6_0",
-    label: "gbuffer_prepass_vert_bindless.slang",
-    defines: GB_BINDLESS,
-};
-pub(super) static GBUFFER_PREPASS_FRAG: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
-    entry: "gbuffer_prepass_fragment",
-    profile: "ps_6_0",
-    label: "gbuffer_prepass_frag.slang",
-    defines: GB_FRAGMENT,
-};
-pub(super) static GBUFFER_BINDLESS_FRAG: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
-    entry: "gbuffer_prepass_fragment_bindless",
-    profile: "ps_6_0",
-    label: "gbuffer_prepass_frag_bindless.slang",
-    defines: GB_FRAGMENT_BINDLESS,
-};
-pub(super) static SHADOW_VERT: SlangProgram = SlangProgram {
-    file: "shadow.slang",
-    embedded: SHADOW_SLANG,
-    entry: "shadow_vertex_main",
-    profile: "vs_6_0",
-    label: "shadow_vert.slang",
-    defines: SHADOW_STATIC,
-};
-pub(super) static SKINNED_SHADOW_VERT: SlangProgram = SlangProgram {
-    file: "shadow.slang",
-    embedded: SHADOW_SLANG,
-    entry: "shadow_vertex_main_skinned",
-    profile: "vs_6_0",
-    label: "shadow_vert_skinned.slang",
-    defines: SHADOW_SKINNED,
-};
-pub(super) static SHADOW_BINDLESS_VERT: SlangProgram = SlangProgram {
-    file: "shadow.slang",
-    embedded: SHADOW_SLANG,
-    entry: "shadow_vertex_bindless",
-    profile: "vs_6_0",
-    label: "shadow_vert_bindless.slang",
-    defines: SHADOW_BINDLESS,
-};
-
-// The fog family, auto-exposure and the particle simulation kernel. None takes
-// an ABI block: slangc assigns b/t/u/s from declaration order here, which is
-// exactly what the root signatures in `fog.rs`, `auto_exposure.rs` and
-// `particle.rs` already bind. The fog fragment's vertex half is
-// `FULLSCREEN_VERT` below -- the last per-family fullscreen vertex to retire.
-//
-// Two DirectX-only gates ride these. `DXIL_SPLIT` declares the cascade array as
-// a texture plus a comparison sampler rather than the combined
-// `Sampler2DArray` the other two backends bind, because `SampleCmp` on a
-// combined type mis-lowers on DXIL -- the same split `main_bindless.slang`
-// carries for the same reason. `DXIL_STAGE_PACKING` makes the fog fragment
-// declare the fullscreen varying it never reads, because D3D links the two
-// stages by semantic *and* register and fog is the one post fragment that takes
-// no varying; see the declaration in `fog.slang`.
-const FOG_FROXEL_DEFINES: &[(&str, &str)] = &[("FOG_FROXEL", "1"), ("DXIL_SPLIT", "1")];
-
-pub(super) static FOG_FROXEL: SlangProgram = SlangProgram {
-    file: "fog.slang",
-    embedded: FOG_SLANG,
-    entry: "fog_froxel_kernel",
-    profile: "cs_6_0",
-    label: "fog_froxel.slang",
-    defines: FOG_FROXEL_DEFINES,
-};
-
-// The fog fragment declares its depth source by the main pass's sample count,
-// which is a host difference rather than a target one, so it takes two
-// programs the way the Hi-Z init pair does: the caller picks by MSAA state and
-// the export-time precompile leaves a bundle warm for either.
-pub(super) static FOG_FRAG: SlangProgram = SlangProgram {
-    file: "fog.slang",
-    embedded: FOG_SLANG,
-    entry: "fog_fragment",
-    profile: "ps_6_0",
-    label: "fog_frag.slang",
-    defines: &[("USE_MSAA", "0"), ("DXIL_STAGE_PACKING", "1")],
-};
-pub(super) static FOG_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "fog.slang",
-    embedded: FOG_SLANG,
-    entry: "fog_fragment",
-    profile: "ps_6_0",
-    label: "fog_frag_msaa.slang",
-    defines: &[("USE_MSAA", "1"), ("DXIL_STAGE_PACKING", "1")],
-};
-
-pub(super) static AUTO_EXPOSURE_BUILD: SlangProgram = SlangProgram {
-    file: "auto_exposure.slang",
-    embedded: AUTO_EXPOSURE_SLANG,
-    entry: "histogram_build",
-    profile: "cs_6_0",
-    label: "auto_exposure_build.slang",
-    defines: &[("AE_BUILD", "1")],
-};
-pub(super) static AUTO_EXPOSURE_AVERAGE: SlangProgram = SlangProgram {
-    file: "auto_exposure.slang",
-    embedded: AUTO_EXPOSURE_SLANG,
-    entry: "histogram_average",
-    profile: "cs_6_0",
-    label: "auto_exposure_average.slang",
-    defines: &[("AE_AVERAGE", "1")],
-};
-
-// The RT skinning kernel takes the same shader model as the RT reflection
-// resolve it feeds; its own body needs no SM 6.5 feature.
-pub(super) static RT_SKIN: SlangProgram = SlangProgram {
-    file: "rt_skin.slang",
-    embedded: RT_SKIN_SLANG,
-    entry: "rt_skin",
-    profile: "cs_6_5",
-    label: "rt_skin.slang",
-    defines: &[],
-};
-
-pub(super) static PARTICLE_SIMULATE: SlangProgram = SlangProgram {
-    file: "particle_simulate.slang",
-    embedded: PARTICLE_SIMULATE_SLANG,
-    entry: "particle_simulate",
-    profile: "cs_6_0",
-    label: "particle_simulate.slang",
-    defines: &[],
-};
-
-// The fullscreen-triangle vertex stage every post pass pairs with; one module
-// serves them all, retiring the four per-family `*_vert.hlsl` copies.
-pub(super) static FULLSCREEN_VERT: SlangProgram = SlangProgram {
-    file: "fullscreen.slang",
-    embedded: FULLSCREEN_SLANG,
-    entry: "fullscreen_vertex",
-    profile: "vs_6_0",
-    label: "fullscreen_vert.slang",
-    defines: &[],
-};
-pub(super) static TAA_FRAG: SlangProgram = SlangProgram {
-    file: "taa.slang",
-    embedded: TAA_SLANG,
-    entry: "taa_fragment_main",
-    profile: "ps_6_0",
-    label: "taa_frag.slang",
-    defines: &[],
-};
-pub(super) static BLOOM_PREFILTER: SlangProgram = SlangProgram {
-    file: "bloom.slang",
-    embedded: BLOOM_SLANG,
-    entry: "bloom_prefilter_fragment",
-    profile: "ps_6_0",
-    label: "bloom_prefilter.slang",
-    defines: &[("BLOOM_PREFILTER", "1")],
-};
-pub(super) static BLOOM_DOWNSAMPLE: SlangProgram = SlangProgram {
-    file: "bloom.slang",
-    embedded: BLOOM_SLANG,
-    entry: "bloom_downsample_fragment",
-    profile: "ps_6_0",
-    label: "bloom_downsample.slang",
-    defines: &[("BLOOM_DOWNSAMPLE", "1")],
-};
-pub(super) static BLOOM_UPSAMPLE: SlangProgram = SlangProgram {
-    file: "bloom.slang",
-    embedded: BLOOM_SLANG,
-    entry: "bloom_upsample_fragment",
-    profile: "ps_6_0",
-    label: "bloom_upsample.slang",
-    defines: &[("BLOOM_UPSAMPLE", "1")],
-};
-pub(super) static COMPOSITE_FRAG: SlangProgram = SlangProgram {
-    file: "composite.slang",
-    embedded: COMPOSITE_SLANG,
-    entry: "composite_fragment",
-    profile: "ps_6_0",
-    label: "composite_frag.slang",
-    defines: &[],
-};
-pub(super) static SSAO_KERNEL: SlangProgram = SlangProgram {
-    file: "ssao.slang",
-    embedded: SSAO_SLANG,
-    entry: "ssao_kernel_fragment",
-    profile: "ps_6_0",
-    label: "ssao_kernel.slang",
-    defines: &[("SSAO_KERNEL", "1")],
-};
-pub(super) static SSAO_BLUR: SlangProgram = SlangProgram {
-    file: "ssao.slang",
-    embedded: SSAO_SLANG,
-    entry: "ssao_blur_fragment",
-    profile: "ps_6_0",
-    label: "ssao_blur.slang",
-    defines: &[("SSAO_BLUR", "1")],
-};
-pub(super) static SSR_RESOLVE: SlangProgram = SlangProgram {
-    file: "ssr.slang",
-    embedded: SSR_SLANG,
-    entry: "ssr_resolve_fragment",
-    profile: "ps_6_0",
-    label: "ssr_resolve.slang",
-    defines: SSR_DEFINES,
-};
-pub(super) static SSGI_GATHER: SlangProgram = SlangProgram {
-    file: "ssgi.slang",
-    embedded: SSGI_SLANG,
-    entry: "ssgi_gather_fragment",
-    profile: "ps_6_0",
-    label: "ssgi_gather.slang",
-    defines: &[("SSGI_GATHER", "1")],
-};
-pub(super) static SSGI_COMPOSITE: SlangProgram = SlangProgram {
-    file: "ssgi.slang",
-    embedded: SSGI_SLANG,
-    entry: "ssgi_composite_fragment",
-    profile: "ps_6_0",
-    label: "ssgi_composite.slang",
-    defines: &[("SSGI_COMPOSITE", "1")],
-};
-pub(super) static REFLECTION_BLUR: SlangProgram = SlangProgram {
-    file: "reflection.slang",
-    embedded: REFLECTION_SLANG,
-    entry: "reflection_blur_fragment",
-    profile: "ps_6_0",
-    label: "reflection_blur.slang",
-    defines: &[("REFLECTION_BLUR", "1")],
-};
-pub(super) static REFLECTION_COMPOSITE: SlangProgram = SlangProgram {
-    file: "reflection.slang",
-    embedded: REFLECTION_SLANG,
-    entry: "reflection_composite_fragment",
-    profile: "ps_6_0",
-    label: "reflection_composite.slang",
-    defines: &[("REFLECTION_COMPOSITE", "1")],
-};
-
-// The ray-traced reflection resolve and the glass family. Both take the
-// `DXIL_ABI` block for the reason the pre-pass family does: their root
-// signatures in `post/rt_reflections.rs` and `glass.rs` hand the same
-// declarations entirely different slots than the Metal and Vulkan hosts do, and
-// `assert_slang_dxil_abi` in build.rs locks every one of them. No `POOL_SIZE`:
-// the DXIL pool is an unbounded array, as it is for the bindless main pass.
-//
-// The three ray-query entries are `*_6_5`, above the 6.0 floor the rest of the
-// single-source shaders compile at: `RayQuery` is an SM 6.5 construct. Nothing
-// else here needs it, so the glass vertex and the base fragment stay at 6.0.
-//
-// `USE_MSAA` is a host difference rather than a target one -- the glass fragment
-// declares its depth source by the main pass's sample count -- so each glass
-// fragment comes as a pair the way the fog fragment does, and the caller picks
-// by MSAA state. The vertex stage reads no depth and takes neither.
-pub(super) static RT_REFLECTIONS_FRAG: SlangProgram = SlangProgram {
-    file: "rt_reflections.slang",
-    embedded: RT_REFLECTIONS_SLANG,
-    entry: "rt_reflections_fragment",
-    profile: "ps_6_5",
-    label: "rt_reflections.slang",
-    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")],
-};
-pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: SlangProgram = SlangProgram {
-    file: "rt_reflections.slang",
-    embedded: RT_REFLECTIONS_SLANG,
-    entry: "rt_reflections_fragment",
-    profile: "ps_6_5",
-    label: "rt_reflections_textured.slang",
-    defines: &[("DXIL_ABI", "1"), ("RT_TEXTURED", "1"), ("MAX_PROBES", "8")],
-};
-
-// One vertex stage for both glass pipelines: the base pass and the ray-traced
-// one differ only in where the reflection comes from, and both root signatures
-// put the transparent view CBV at b0.
-pub(super) static GLASS_VERT: SlangProgram = SlangProgram {
-    file: "glass.slang",
-    embedded: GLASS_SLANG,
-    entry: "glass_vertex",
-    profile: "vs_6_0",
-    label: "glass_vert.slang",
-    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")],
-};
-pub(super) static GLASS_FRAG: SlangProgram = SlangProgram {
-    file: "glass.slang",
-    embedded: GLASS_SLANG,
-    entry: "glass_fragment",
-    profile: "ps_6_0",
-    label: "glass_frag.slang",
-    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "0")],
-};
-pub(super) static GLASS_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "glass.slang",
-    embedded: GLASS_SLANG,
-    entry: "glass_fragment",
-    profile: "ps_6_0",
-    label: "glass_frag_msaa.slang",
-    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "1")],
-};
-pub(super) static GLASS_RT_FRAG: SlangProgram = SlangProgram {
-    file: "glass.slang",
-    embedded: GLASS_SLANG,
-    entry: "glass_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_frag_rt.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("GLASS_RT", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "0"),
-    ],
-};
-pub(super) static GLASS_RT_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "glass.slang",
-    embedded: GLASS_SLANG,
-    entry: "glass_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_frag_rt_msaa.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("GLASS_RT", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "1"),
-    ],
-};
-pub(super) static GLASS_RT_FRAG_TEXTURED: SlangProgram = SlangProgram {
-    file: "glass.slang",
-    embedded: GLASS_SLANG,
-    entry: "glass_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_frag_rt_textured.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("GLASS_RT", "1"),
-        ("RT_TEXTURED", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "0"),
-    ],
-};
-pub(super) static GLASS_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
-    file: "glass.slang",
-    embedded: GLASS_SLANG,
-    entry: "glass_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_frag_rt_textured_msaa.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("GLASS_RT", "1"),
-        ("RT_TEXTURED", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "1"),
-    ],
-};
-
-const GLASS_MESH_DEFINES: &[(&str, &str)] =
-    &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "0")];
-const GLASS_MESH_MSAA_DEFINES: &[(&str, &str)] =
-    &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "1")];
-const GLASS_MESH_TEXTURED_DEFINES: &[(&str, &str)] = &[
-    ("DXIL_ABI", "1"),
-    ("RT_TEXTURED", "1"),
-    ("MAX_PROBES", "8"),
-    ("USE_MSAA", "0"),
-];
-const GLASS_MESH_TEXTURED_MSAA_DEFINES: &[(&str, &str)] = &[
-    ("DXIL_ABI", "1"),
-    ("RT_TEXTURED", "1"),
-    ("MAX_PROBES", "8"),
-    ("USE_MSAA", "1"),
-];
-
-// The see-through glass MESH family, the transparent pass's third producer.
-// Ray-traced only -- the per-pixel trace is what makes the mesh see-through
-// rather than the opaque reflective glass the main pass draws -- so there is no
-// base pair, only the MSAA x hit-shading matrix at SM 6.5. Its vertex stage is
-// its own (it applies the per-draw model matrix) but shares b0/b1 with the rest
-// of the pass.
-pub(super) static GLASS_MESH_VERT: SlangProgram = SlangProgram {
-    file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
-    entry: "glass_mesh_vertex",
-    profile: "vs_6_0",
-    label: "glass_mesh_vert.slang",
-    defines: GLASS_MESH_DEFINES,
-};
-
-pub(super) static GLASS_MESH_RT_FRAG: SlangProgram = SlangProgram {
-    file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
-    entry: "glass_mesh_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_mesh_frag_rt.slang",
-    defines: GLASS_MESH_DEFINES,
-};
-
-pub(super) static GLASS_MESH_RT_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
-    entry: "glass_mesh_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_mesh_frag_rt_msaa.slang",
-    defines: GLASS_MESH_MSAA_DEFINES,
-};
-
-pub(super) static GLASS_MESH_RT_FRAG_TEXTURED: SlangProgram = SlangProgram {
-    file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
-    entry: "glass_mesh_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_mesh_frag_rt_textured.slang",
-    defines: GLASS_MESH_TEXTURED_DEFINES,
-};
-
-pub(super) static GLASS_MESH_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
-    file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
-    entry: "glass_mesh_rt_fragment",
-    profile: "ps_6_5",
-    label: "glass_mesh_frag_rt_textured_msaa.slang",
-    defines: GLASS_MESH_TEXTURED_MSAA_DEFINES,
-};
-
-// The water surface family, the transparent pass's other producer. Same shape as
-// the glass table above -- one vertex stage for every pipeline, an MSAA pair of
-// base fragments, and the two ray-traced fragments at shader model 6.5 -- and
-// deliberately the same registers, so `transparent.rs` builds one root signature
-// per path and both producers draw under it.
-pub(super) static WATER_VERT: SlangProgram = SlangProgram {
-    file: "water.slang",
-    embedded: WATER_SLANG,
-    entry: "water_vertex",
-    profile: "vs_6_0",
-    label: "water_vert.slang",
-    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")],
-};
-pub(super) static WATER_FRAG: SlangProgram = SlangProgram {
-    file: "water.slang",
-    embedded: WATER_SLANG,
-    entry: "water_fragment",
-    profile: "ps_6_0",
-    label: "water_frag.slang",
-    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "0")],
-};
-pub(super) static WATER_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "water.slang",
-    embedded: WATER_SLANG,
-    entry: "water_fragment",
-    profile: "ps_6_0",
-    label: "water_frag_msaa.slang",
-    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "1")],
-};
-pub(super) static WATER_RT_FRAG: SlangProgram = SlangProgram {
-    file: "water.slang",
-    embedded: WATER_SLANG,
-    entry: "water_rt_fragment",
-    profile: "ps_6_5",
-    label: "water_frag_rt.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("WATER_RT", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "0"),
-    ],
-};
-pub(super) static WATER_RT_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "water.slang",
-    embedded: WATER_SLANG,
-    entry: "water_rt_fragment",
-    profile: "ps_6_5",
-    label: "water_frag_rt_msaa.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("WATER_RT", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "1"),
-    ],
-};
-pub(super) static WATER_RT_FRAG_TEXTURED: SlangProgram = SlangProgram {
-    file: "water.slang",
-    embedded: WATER_SLANG,
-    entry: "water_rt_fragment",
-    profile: "ps_6_5",
-    label: "water_frag_rt_textured.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("WATER_RT", "1"),
-        ("RT_TEXTURED", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "0"),
-    ],
-};
-pub(super) static WATER_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
-    file: "water.slang",
-    embedded: WATER_SLANG,
-    entry: "water_rt_fragment",
-    profile: "ps_6_5",
-    label: "water_frag_rt_textured_msaa.slang",
-    defines: &[
-        ("DXIL_ABI", "1"),
-        ("WATER_RT", "1"),
-        ("RT_TEXTURED", "1"),
-        ("MAX_PROBES", "8"),
-        ("USE_MSAA", "1"),
-    ],
-};
-
-// The remaining raster families: the particle billboard pair, the projected
-// decal, world-space lines and the text / sprite overlay. Each has real vertex
-// geometry, so unlike the post passes they keep their own vertex entry rather
-// than pairing with `fullscreen.slang`.
-//
-// Only the particle pair takes an ABI block, and only to swap two constant
-// buffers: its root signature in `particle.rs` binds the view at b0 and the
-// per-emitter params at b1, where the Metal buffer indices are 1 and 2. Decal,
-// line and text need none -- declaration order already lands each resource on
-// the register its root signature declares, which the rows in build.rs's
-// `SLANG_DXIL_ENTRY_ABI` pin so a slangc release cannot move one silently.
-//
-// The two depth-reading fragments come as MSAA pairs the way the fog and glass
-// fragments do: the sample count is a host difference, so the caller picks by
-// MSAA state and the export-time precompile leaves a bundle warm for either.
-// Their vertex stages never name the depth source and take neither.
-const PARTICLE_ABI: &[(&str, &str)] = &[("DXIL_ABI", "1")];
-
-pub(super) static PARTICLE_VERT: SlangProgram = SlangProgram {
-    file: "particle.slang",
-    embedded: PARTICLE_SLANG,
-    entry: "particle_vertex",
-    profile: "vs_6_0",
-    label: "particle_vert.slang",
-    defines: PARTICLE_ABI,
-};
-pub(super) static PARTICLE_FRAG: SlangProgram = SlangProgram {
-    file: "particle.slang",
-    embedded: PARTICLE_SLANG,
-    entry: "particle_fragment",
-    profile: "ps_6_0",
-    label: "particle_frag.slang",
-    defines: PARTICLE_ABI,
-};
-pub(super) static DECAL_VERT: SlangProgram = SlangProgram {
-    file: "decal.slang",
-    embedded: DECAL_SLANG,
-    entry: "decal_vertex",
-    profile: "vs_6_0",
-    label: "decal_vert.slang",
-    defines: &[],
-};
-pub(super) static DECAL_FRAG: SlangProgram = SlangProgram {
-    file: "decal.slang",
-    embedded: DECAL_SLANG,
-    entry: "decal_fragment",
-    profile: "ps_6_0",
-    label: "decal_frag.slang",
-    defines: &[("USE_MSAA", "0")],
-};
-pub(super) static DECAL_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "decal.slang",
-    embedded: DECAL_SLANG,
-    entry: "decal_fragment",
-    profile: "ps_6_0",
-    label: "decal_frag_msaa.slang",
-    defines: &[("USE_MSAA", "1")],
-};
-pub(super) static LINE_VERT: SlangProgram = SlangProgram {
-    file: "line.slang",
-    embedded: LINE_SLANG,
-    entry: "line_vertex",
-    profile: "vs_6_0",
-    label: "line_vert.slang",
-    defines: &[],
-};
-pub(super) static LINE_FRAG: SlangProgram = SlangProgram {
-    file: "line.slang",
-    embedded: LINE_SLANG,
-    entry: "line_fragment",
-    profile: "ps_6_0",
-    label: "line_frag.slang",
-    defines: &[("USE_MSAA", "0")],
-};
-pub(super) static LINE_FRAG_MSAA: SlangProgram = SlangProgram {
-    file: "line.slang",
-    embedded: LINE_SLANG,
-    entry: "line_fragment",
-    profile: "ps_6_0",
-    label: "line_frag_msaa.slang",
-    defines: &[("USE_MSAA", "1")],
-};
-pub(super) static TEXT_VERT: SlangProgram = SlangProgram {
-    file: "text.slang",
-    embedded: TEXT_SLANG,
-    entry: "text_vertex_main",
-    profile: "vs_6_0",
-    label: "text_vert.slang",
-    defines: &[],
-};
-pub(super) static TEXT_FRAG: SlangProgram = SlangProgram {
-    file: "text.slang",
-    embedded: TEXT_SLANG,
-    entry: "text_fragment_main",
-    profile: "ps_6_0",
-    label: "text_frag.slang",
-    defines: &[],
-};
-
-// Every declared program, iterated by the export-time precompile. Both Hi-Z
-// init variants are enumerated, and both MSAA halves of every fragment that has
-// them: which one a device runs depends on its MSAA mode, and a bundle should
-// be warm for either.
-pub(crate) static ALL: &[&SlangProgram] = &[
-    &MAIN_BINDLESS_VERT,
-    &MAIN_BINDLESS_FRAG,
-    &LIGHT_CULL,
-    &RT_SKIN,
-    &HIZ_INIT_SINGLE,
-    &HIZ_INIT_MSAA,
-    &HIZ_DOWNSAMPLE,
-    &GBUFFER_PREPASS_VERT,
-    &GBUFFER_PREPASS_VERT_INSTANCED,
-    &GBUFFER_PREPASS_VERT_SKINNED,
-    &GBUFFER_BINDLESS_VERT,
-    &GBUFFER_PREPASS_FRAG,
-    &GBUFFER_BINDLESS_FRAG,
-    &SHADOW_VERT,
-    &SKINNED_SHADOW_VERT,
-    &SHADOW_BINDLESS_VERT,
-    &FOG_FROXEL,
-    &FOG_FRAG,
-    &FOG_FRAG_MSAA,
-    &AUTO_EXPOSURE_BUILD,
-    &AUTO_EXPOSURE_AVERAGE,
-    &PARTICLE_SIMULATE,
-    &FULLSCREEN_VERT,
-    &TAA_FRAG,
-    &BLOOM_PREFILTER,
-    &BLOOM_DOWNSAMPLE,
-    &BLOOM_UPSAMPLE,
-    &COMPOSITE_FRAG,
-    &SSAO_KERNEL,
-    &SSAO_BLUR,
-    &SSR_RESOLVE,
-    &SSGI_GATHER,
-    &SSGI_COMPOSITE,
-    &REFLECTION_BLUR,
-    &REFLECTION_COMPOSITE,
-    &RT_REFLECTIONS_FRAG,
-    &RT_REFLECTIONS_FRAG_TEXTURED,
-    &GLASS_VERT,
-    &GLASS_FRAG,
-    &GLASS_FRAG_MSAA,
-    &GLASS_RT_FRAG,
-    &GLASS_RT_FRAG_MSAA,
-    &GLASS_RT_FRAG_TEXTURED,
-    &GLASS_RT_FRAG_TEXTURED_MSAA,
-    &GLASS_MESH_VERT,
-    &GLASS_MESH_RT_FRAG,
-    &GLASS_MESH_RT_FRAG_MSAA,
-    &GLASS_MESH_RT_FRAG_TEXTURED,
-    &GLASS_MESH_RT_FRAG_TEXTURED_MSAA,
-    &WATER_VERT,
-    &WATER_FRAG,
-    &WATER_FRAG_MSAA,
-    &WATER_RT_FRAG,
-    &WATER_RT_FRAG_MSAA,
-    &WATER_RT_FRAG_TEXTURED,
-    &WATER_RT_FRAG_TEXTURED_MSAA,
-    &PARTICLE_VERT,
-    &PARTICLE_FRAG,
-    &DECAL_VERT,
-    &DECAL_FRAG,
-    &DECAL_FRAG_MSAA,
-    &LINE_VERT,
-    &LINE_FRAG,
-    &LINE_FRAG_MSAA,
-    &TEXT_VERT,
-    &TEXT_FRAG,
-];
-
-impl SlangProgram {
+impl SlangCompile for SlangProgram {
     // Assemble the exact source text this program compiles.
-    pub(crate) fn source(&self, hot_reload: bool) -> String {
-        crate::slang_source::assemble(hot_reload, self.file, self.embedded, self.defines)
+    fn source(&self, hot_reload: bool) -> String {
+        crate::slang_source::assemble(hot_reload, self.file, self.defines)
     }
 
     fn target(&self) -> slang::SlangTarget {
@@ -873,7 +31,7 @@ impl SlangProgram {
 
     // The shader-cache key for `source`. Shared by the runtime compile path
     // and the export-time precompile so the two can never key differently.
-    pub(crate) fn cache_key<'a>(&self, source: &'a str) -> crate::shader_cache::Key<'a> {
+    fn cache_key<'a>(&self, source: &'a str) -> crate::shader_cache::Key<'a> {
         crate::shader_cache::Key {
             compiler: "slang",
             source,
@@ -883,14 +41,40 @@ impl SlangProgram {
         }
     }
 
-    // Compile to DXIL, reusing a cached artifact when this exact assembled
-    // source has been compiled before.
-    pub(crate) fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
+    // The DXIL for this program: the copy the build script embedded when it was
+    // built from this exact source, else a compile (reusing a cached artifact
+    // when this source has been compiled before).
+    //
+    // The match is on the source digest rather than on hot-reload being off,
+    // and that distinction is the whole point. `cn debug` and `cn editor` both
+    // run with hot-reload on, so a mode check would have left the two binaries a
+    // developer actually runs compiling every shader at startup -- and needing
+    // slangc installed to do it. Comparing digests instead means an unedited
+    // shader takes the embedded artifact in every build, and an edited one is
+    // recompiled in all of them.
+    fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
         let source = self.source(hot_reload);
+        if let Some((digest, bytes)) = embedded_dxil(self.label)
+            && digest == concinnity_render::slang_source::source_digest(&source)
+        {
+            return Ok(bytes.to_vec());
+        }
         let key = self.cache_key(&source);
         crate::shader_cache::cached(&key, self.label, || compile_uncached(self, &source))
     }
 }
+
+// The build script's precompiled DXIL, keyed by each program's `label`. Every
+// name misses on a host that had no slangc at build time, and the renderer
+// compiles instead -- which is the only path that then needs slangc at runtime.
+//
+// `label` is the key rather than the entry point because one entry compiles
+// into several programs: `fog_fragment` alone yields an MSAA and a non-MSAA
+// DXIL from the same file at the same profile, and the ray-traced glass entry
+// yields four. Keying on anything the variant defines do not reach would hand
+// one variant's bytes to another -- a wrong render, not a failed one.
+// `every_program_has_a_distinct_label` in concinnity-render locks it.
+include!(concat!(env!("OUT_DIR"), "/engine_dxil.rs"));
 
 pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<Vec<u8>, String> {
     let job = slang::SlangJob {
@@ -972,9 +156,14 @@ mod tests {
     // skinned entries are excluded: neither ever carries skybox geometry.
     #[test]
     fn the_prepass_pins_sky_to_the_far_plane() {
-        assert!(GBUFFER_PREPASS_SLANG.contains("color.b > 1.5"));
-        assert!(GBUFFER_PREPASS_SLANG.contains("position.z = position.w"));
-        assert_eq!(GBUFFER_PREPASS_SLANG.matches("gb_sky_pin(").count(), 3);
+        assert!(concinnity_render::shaders::GBUFFER_PREPASS.contains("color.b > 1.5"));
+        assert!(concinnity_render::shaders::GBUFFER_PREPASS.contains("position.z = position.w"));
+        assert_eq!(
+            concinnity_render::shaders::GBUFFER_PREPASS
+                .matches("gb_sky_pin(")
+                .count(),
+            3
+        );
     }
 
     // Two programs collide when they would compile identical source with the
@@ -1034,10 +223,16 @@ mod tests {
             crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
         );
         for (name, src) in [
-            ("main_bindless.slang", MAIN_BINDLESS_SLANG),
-            ("ssr.slang", SSR_SLANG),
-            ("reflection.slang", REFLECTION_SLANG),
-            ("rt_reflections.slang", RT_REFLECTIONS_SLANG),
+            (
+                "main_bindless.slang",
+                concinnity_render::shaders::MAIN_BINDLESS,
+            ),
+            ("ssr.slang", concinnity_render::shaders::SSR),
+            ("reflection.slang", concinnity_render::shaders::REFLECTION),
+            (
+                "rt_reflections.slang",
+                concinnity_render::shaders::RT_REFLECTIONS,
+            ),
         ] {
             assert!(
                 src.contains(&expected),
@@ -1052,12 +247,15 @@ mod tests {
     #[test]
     fn cluster_constants_match_render_types() {
         use crate::gfx::render_types::{CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER};
-        for src in [LIGHT_CULL_SLANG, MAIN_BINDLESS_SLANG] {
+        for src in [
+            concinnity_render::shaders::LIGHT_CULL,
+            concinnity_render::shaders::MAIN_BINDLESS,
+        ] {
             assert!(src.contains(&format!(
                 "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
             )));
         }
-        assert!(LIGHT_CULL_SLANG.contains(&format!(
+        assert!(concinnity_render::shaders::LIGHT_CULL.contains(&format!(
             "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
         )));
     }
@@ -1067,7 +265,7 @@ mod tests {
     // far plane or those corners clip and the clear colour shows through.
     #[test]
     fn the_bindless_vertex_path_pins_sky_to_the_far_plane() {
-        assert!(MAIN_BINDLESS_SLANG.contains("v.color.b > 1.5"));
-        assert!(MAIN_BINDLESS_SLANG.contains("o.position.z = o.position.w"));
+        assert!(concinnity_render::shaders::MAIN_BINDLESS.contains("v.color.b > 1.5"));
+        assert!(concinnity_render::shaders::MAIN_BINDLESS.contains("o.position.z = o.position.w"));
     }
 }

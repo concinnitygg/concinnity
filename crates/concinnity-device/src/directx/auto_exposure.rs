@@ -18,6 +18,7 @@ use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier, uav_barrier};
 
 // Compile the auto-exposure `build` + `average` compute kernels. Used at

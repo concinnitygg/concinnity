@@ -33,6 +33,7 @@ use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // SPIR-V blobs for the SSGI pipelines. Produced by [`compile_ssgi_shaders`];
 // consumed by `SsgiResources::new` at init and by `rebuild_ssgi_pipelines`

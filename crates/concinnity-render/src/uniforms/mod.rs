@@ -20,12 +20,14 @@
 // that binds it. The one exception is called out on `ViewUniforms`, whose Metal
 // slot and field names are a published contract for world-authored shaders.
 
+pub mod bindless;
 pub mod geometry;
 pub mod post;
 pub mod probe;
 pub mod transparent;
 pub mod view;
 
+pub use bindless::BINDLESS_POOL_SIZE;
 pub use geometry::{DecalParams, DecalView, GpuParticle, LineView, ParticleView, SkinParams};
 pub use post::{AutoExposureParams, HizParams, TaaParams};
 pub use probe::{MAX_PROBES, ProbeSet, ProbeUniforms};

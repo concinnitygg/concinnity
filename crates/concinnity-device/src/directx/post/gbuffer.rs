@@ -30,6 +30,7 @@ use crate::directx::pipeline::{
     main_input_layout, serialize_and_create_root_sig, skinned_input_layout,
 };
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
     create_buffer, create_main_depth_texture, write_format_rtv, write_format_srv,
 };

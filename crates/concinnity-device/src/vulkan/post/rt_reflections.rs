@@ -36,6 +36,7 @@ use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // SPIR-V blobs for the RT pipelines. Produced by [`compile_rt_shaders`];
 // consumed by `RtReflectionsResources::new` at init and by

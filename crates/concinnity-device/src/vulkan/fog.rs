@@ -38,6 +38,7 @@ use super::pipeline::spv_module;
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Threadgroup tile for the froxel kernel (8x8, one thread per (x, y) froxel),
 // matching the DirectX `[numthreads(8, 8, 1)]` and the Metal dispatch.

@@ -18,6 +18,7 @@ use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
 // Shader compilation

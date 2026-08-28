@@ -25,6 +25,7 @@ use concinnity_render::uniforms::AutoExposureParams;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Compile the auto-exposure build + average compute kernels. Used at init
 // and by shader hot-reload to rebuild the two compute pipelines.

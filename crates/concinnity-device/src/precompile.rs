@@ -44,20 +44,22 @@ impl Report {
 }
 
 /// Compile every enumerable built-in shader variant into `out_dir` (a bundle's
-/// `shader-cache/`). `texture_count` is the exported world's texture-table
-/// length, which sizes the Vulkan bindless texture pool baked into its
-/// pool-sized shaders; DirectX ignores it (its pools are unbounded arrays).
-pub fn precompile_builtin_shaders(out_dir: &Path, texture_count: usize) -> Report {
+/// `shader-cache/`).
+///
+/// Nothing about the exported world enters this: every variant a backend can
+/// take is a property of the device the bundle eventually runs on -- its MSAA
+/// mode, its probe cube-array length, whether it seats the bindless pool at its
+/// ceiling -- so each is baked at what a desktop driver affords, and a device
+/// that differs misses those entries and compiles at first launch.
+pub fn precompile_builtin_shaders(out_dir: &Path) -> Report {
     let mut report = Report::default();
-    #[cfg(not(backend_vk))]
-    let _ = texture_count;
     #[cfg(backend_dx)]
     {
         crate::directx::builtins::precompile(out_dir, &mut report);
         crate::directx::slang_builtins::precompile(out_dir, &mut report);
     }
     #[cfg(backend_vk)]
-    crate::vulkan::builtins::precompile(out_dir, texture_count, &mut report);
+    crate::vulkan::builtins::precompile(out_dir, &mut report);
     report
 }
 

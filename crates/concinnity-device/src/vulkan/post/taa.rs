@@ -20,6 +20,7 @@ use super::super::context::*;
 use super::super::pipeline::*;
 use super::super::resources::*;
 use super::super::texture::*;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 //  Temporal anti-aliasing
 

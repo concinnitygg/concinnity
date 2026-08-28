@@ -13,6 +13,7 @@ use super::com;
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_buffer, create_uav_buffer};
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
@@ -261,14 +262,11 @@ mod tests {
     // uint`s, so they must track the Rust values the CPU sizes the buffer with.
     #[test]
     fn kernel_cluster_constants_match_render_types() {
-        assert!(slang_builtins::LIGHT_CULL.embedded.contains(&format!(
+        let kernel = concinnity_render::shaders::LIGHT_CULL;
+        assert!(kernel.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));
         let max_per_cluster = crate::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
-        assert!(
-            slang_builtins::LIGHT_CULL
-                .embedded
-                .contains(&format!("MAX_LIGHTS_PER_CLUSTER = {max_per_cluster}u"))
-        );
+        assert!(kernel.contains(&format!("MAX_LIGHTS_PER_CLUSTER = {max_per_cluster}u")));
     }
 }

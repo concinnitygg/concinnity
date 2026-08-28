@@ -897,6 +897,102 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
     "src/vulkan/slang_builtins.rs",
 ];
 
+// Compile every declared Vulkan program to SPIR-V now, for the same reason the
+// DirectX leg does: so the binary carries its shaders rather than needing slangc
+// on the host that runs it.
+//
+// Two things vary per program and neither depends on the world, which is what
+// makes them enumerable here. `USE_MSAA` is the host's sample count, so a
+// program that reads the main pass's depth gets both variants. `POOL_SIZE` and
+// `MAX_PROBES` are baked at the ceilings a desktop driver affords; a device that
+// seats less falls back to sizing them itself, and that source then matches no
+// artifact and compiles -- see `vulkan::builtins::bindless_pool_size`.
+fn precompile_spirv(slang_dir: &std::path::Path) {
+    use concinnity_render::slang_programs::vk::{self, Sizes};
+    use concinnity_render::uniforms::{BINDLESS_POOL_SIZE, MAX_PROBES};
+
+    concinnity_toolchain::watch_shader_dir(slang_dir);
+    let pool = BINDLESS_POOL_SIZE.to_string();
+    let probes = MAX_PROBES.to_string();
+    let mut artifacts = Vec::new();
+    for program in vk::ALL {
+        for msaa in msaa_variants(program.msaa) {
+            let mut defines: Vec<(&str, &str)> = program.gates.iter().map(|g| (*g, "1")).collect();
+            if program.msaa {
+                defines.push(("USE_MSAA", if *msaa { "1" } else { "0" }));
+            }
+            if program.sizes == Sizes::PoolAndProbes {
+                defines.push(("POOL_SIZE", pool.as_str()));
+            }
+            if program.sizes != Sizes::None {
+                defines.push(("MAX_PROBES", probes.as_str()));
+            }
+            artifacts.push(concinnity_toolchain::SlangArtifact {
+                name: spirv_artifact_name(program.label, *msaa),
+                source: concinnity_render::slang_source::assemble(program.file, &defines),
+                entry: program.entry,
+                file_name: program.file,
+                target: slang::SlangTarget::Spirv,
+            });
+        }
+    }
+    concinnity_toolchain::precompile_slang_artifacts(
+        &artifacts,
+        "engine_spirv.rs",
+        "embedded_spirv",
+    );
+}
+
+fn msaa_variants(takes_msaa: bool) -> &'static [bool] {
+    if takes_msaa { &[false, true] } else { &[false] }
+}
+
+// The lookup key for one Vulkan program's artifact. A program that reads the
+// sample count yields two, so the label alone would collide between them.
+// Mirrored by `vulkan::slang_builtins::spirv_artifact_name`.
+fn spirv_artifact_name(label: &str, msaa: bool) -> String {
+    if msaa {
+        format!("{label}.msaa")
+    } else {
+        label.to_string()
+    }
+}
+
+// The single-source shaders live in concinnity-render, below every backend, so
+// this script and the renderer compile the same text. A path dependency puts
+// them beside this crate; nothing else in the build reaches outside it.
+// Compile every declared DirectX program to DXIL now, so the binary carries its
+// shaders instead of needing slangc on whatever host runs it. The declarations
+// and the assembly both come from concinnity-render, the same ones the renderer
+// uses, so the text compiled here is the text it would have compiled -- which is
+// what lets `directx::slang_builtins` serve these bytes without re-deriving the
+// cache key.
+fn precompile_dxil(slang_dir: &std::path::Path) {
+    use concinnity_render::slang_programs::dx;
+
+    concinnity_toolchain::watch_shader_dir(slang_dir);
+    let artifacts: Vec<_> = dx::ALL
+        .iter()
+        .map(|p| concinnity_toolchain::SlangArtifact {
+            name: p.label.to_string(),
+            source: concinnity_render::slang_source::assemble(p.file, p.defines),
+            entry: p.entry,
+            file_name: p.file,
+            target: slang::SlangTarget::Dxil(p.profile),
+        })
+        .collect();
+    concinnity_toolchain::precompile_slang_artifacts(&artifacts, "engine_dxil.rs", "embedded_dxil");
+}
+
+fn render_shader_dir(manifest: &std::path::Path) -> PathBuf {
+    manifest
+        .parent()
+        .expect("crates/ dir")
+        .join("concinnity-render")
+        .join("src")
+        .join("shaders")
+}
+
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
@@ -904,7 +1000,7 @@ fn main() {
     if backend == Backend::Metal {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");
-        let slang_dir = manifest.join("src/shaders");
+        let slang_dir = render_shader_dir(manifest);
         precompile_metal_shaders(
             &shaders_dir,
             SOURCE_ONLY_METAL_SHADERS,
@@ -920,7 +1016,12 @@ fn main() {
     }
     if backend == Backend::Dx {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert_slang_dxil_abi(&manifest.join("src/shaders"));
+        assert_slang_dxil_abi(&render_shader_dir(manifest));
+        precompile_dxil(&render_shader_dir(manifest));
+    }
+    if backend == Backend::Vk {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        precompile_spirv(&render_shader_dir(manifest));
     }
     emit_shader_compile_source_hash();
 }
@@ -939,7 +1040,7 @@ fn assert_slang_metal_abi(slang_dir: &std::path::Path) {
     }
     let source = slang_source(slang_dir, "main_bindless.slang");
     let job = slang::SlangJob {
-        source: &slang::inject_defines(&source, SLANG_MAIN_DEFINES),
+        source: &concinnity_render::slang_source::inject_defines(&source, SLANG_MAIN_DEFINES),
         file_name: "main_bindless_abi_check.slang",
         entries: &["fragment_main_bindless"],
         target: slang::SlangTarget::Metal,
@@ -988,7 +1089,7 @@ fn assert_slang_dxil_abi(slang_dir: &std::path::Path) {
     if slang::slangc_path().is_none() {
         return;
     }
-    let source = slang::inject_defines(
+    let source = concinnity_render::slang_source::inject_defines(
         &slang_source(slang_dir, "main_bindless.slang"),
         SLANG_DXIL_MAIN_DEFINES,
     );
@@ -1029,7 +1130,10 @@ fn assert_slang_dxil_entry_abi(slang_dir: &std::path::Path, out_dir: &std::path:
     for abi in SLANG_DXIL_ENTRY_ABI {
         let mut defines: Vec<(&str, &str)> = vec![("DXIL_ABI", "1")];
         defines.extend(abi.gates.iter().map(|gate| (*gate, "1")));
-        let source = slang::inject_defines(&slang_source(slang_dir, abi.file), &defines);
+        let source = concinnity_render::slang_source::inject_defines(
+            &slang_source(slang_dir, abi.file),
+            &defines,
+        );
         let emitted = emit_dxil_hlsl(out_dir, abi.file, &source, abi.entry, abi.profile);
         for (param, register) in abi.registers {
             assert_dxil_register(

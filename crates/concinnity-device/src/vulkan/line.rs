@@ -26,6 +26,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
 use crate::gfx::render_types::LineVertex;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // How much of a line still shows where scene geometry is in front of it. A
 // faint trace keeps the lines readable inside a dense scene without letting

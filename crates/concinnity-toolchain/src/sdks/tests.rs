@@ -189,7 +189,9 @@ fn agility_missing_warns_only_when_bundling() {
 
     let mut bundled = Vec::new();
     agility_directives(&env, BinaryTargets::Bins, &mut bundled);
-    assert!(has(&bundled, "Agility SDK not found at"));
+    // The build asked for the SDK and it is not installed, so say so -- unlike
+    // the no-opt-in case, which is silent.
+    assert!(has(&bundled, "CN_ENABLE_AGILITY_SDK is set but"));
     assert!(!has(&bundled, "agility_sdk_configured"));
 
     let mut quiet = Vec::new();
@@ -205,8 +207,12 @@ fn agility_missing_warns_only_when_bundling() {
     );
 }
 
+// Without the opt-in nothing happens, and nothing is said about it: this is the
+// ordinary build, producing an executable that runs wherever it is copied. An
+// installed SDK must not change that -- a build machine that has one is exactly
+// how the non-relocatable binary used to get made by accident.
 #[test]
-fn agility_opt_out_skips_the_probe() {
+fn agility_without_the_opt_in_is_silent_and_stages_nothing() {
     let tmp = TempDir::new().unwrap();
     install_agility(tmp.path());
     let env = SdkEnv {
@@ -214,19 +220,21 @@ fn agility_opt_out_skips_the_probe() {
         ..env_in(tmp.path())
     };
 
-    let mut bundled = Vec::new();
-    agility_directives(&env, BinaryTargets::Bins, &mut bundled);
-    assert!(has(&bundled, "CN_ENABLE_AGILITY_SDK=0"));
-    assert!(!has(&bundled, "agility_sdk_configured"));
-    assert!(!has(&bundled, "AGILITY_SDK_ROOT"));
+    for targets in [
+        BinaryTargets::None,
+        BinaryTargets::Bins,
+        BinaryTargets::Examples,
+    ] {
+        let mut out = Vec::new();
+        agility_directives(&env, targets, &mut out);
+        assert_eq!(
+            out,
+            vec!["cargo::rerun-if-env-changed=CN_ENABLE_AGILITY_SDK".to_string()],
+            "{targets:?}"
+        );
+    }
     assert!(!profile(tmp.path()).join("D3D12").exists());
-
-    let mut quiet = Vec::new();
-    agility_directives(&env, BinaryTargets::None, &mut quiet);
-    assert_eq!(
-        quiet,
-        vec!["cargo::rerun-if-env-changed=CN_ENABLE_AGILITY_SDK".to_string()]
-    );
+    assert!(!examples(tmp.path()).join("D3D12").exists());
 }
 
 #[test]
@@ -897,6 +905,18 @@ fn the_agility_exports_are_scoped_to_the_targets_that_define_them() {
 }
 
 #[test]
+fn a_package_without_binaries_emits_no_scoped_link_arg() {
+    let tmp = TempDir::new().unwrap();
+    install_agility(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    agility_directives(&env, BinaryTargets::None, &mut out);
+    assert!(!has(&out, "cargo::rustc-link-arg-"));
+    assert_eq!(BinaryTargets::None.link_arg_key(), None);
+}
+
+#[test]
 fn a_package_building_both_kinds_bundles_for_each_and_states_every_cfg_once() {
     let tmp = TempDir::new().unwrap();
     install_agility(tmp.path());
@@ -952,18 +972,6 @@ fn a_package_building_both_kinds_bundles_for_each_and_states_every_cfg_once() {
             "warned twice: {warning}"
         );
     }
-}
-
-#[test]
-fn a_package_without_binaries_emits_no_scoped_link_arg() {
-    let tmp = TempDir::new().unwrap();
-    install_agility(tmp.path());
-    let env = env_in(tmp.path());
-
-    let mut out = Vec::new();
-    agility_directives(&env, BinaryTargets::None, &mut out);
-    assert!(!has(&out, "cargo::rustc-link-arg-"));
-    assert_eq!(BinaryTargets::None.link_arg_key(), None);
 }
 
 #[test]

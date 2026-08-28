@@ -22,6 +22,7 @@ use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_buffer};
 use crate::directx::upload_ring::{UPLOAD_ALIGN, UploadRing, align_up};
 use crate::gfx::render_types::LineVertex;

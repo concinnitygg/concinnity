@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.18.66"
+version = "0.18.67"
 description = "Asset-driven application world framework"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"

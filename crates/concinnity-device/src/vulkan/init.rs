@@ -1765,11 +1765,38 @@ impl VkContext {
         // (`gpu_textures.len() + gpu_normal_maps.len()`); the helper derives the
         // same value from the texture table so the export-time precompile matches.
         let bindless_active = !is_spirv(vert_bytes) && !is_spirv(frag_bytes) && n_cull > 0;
+        // Whether this device can declare the pool at its fixed ceiling rather
+        // than sizing it to the world. Two things have to hold, and both are
+        // about never needing to clamp or truncate: the ceiling has to fit the
+        // plain per-stage sampler budget (six figures on every desktop driver,
+        // 16 on MoltenVK), and the world's own textures have to fit inside the
+        // ceiling. Where either fails the pool is sized to the world exactly as
+        // before, which is also what keeps every index in range by construction.
+        //
+        // The payoff is that `POOL_SIZE` stops depending on the world, so the
+        // build script can compile these shaders ahead of time; a device that
+        // falls back simply misses those artifacts and compiles.
+        let ceiling_fits = bindless_active
+            && !super::descriptor_layout::bindless_pool_needs_update_after_bind(
+                max_per_stage_samplers,
+                probe_cube_count,
+                concinnity_render::uniforms::BINDLESS_POOL_SIZE as u32,
+                global_update_after_bind,
+            )
+            && super::builtins::world_pool_size(textures.len())
+                <= concinnity_render::uniforms::BINDLESS_POOL_SIZE;
         let bindless_pool_size = if bindless_active {
-            super::builtins::bindless_pool_size(textures.len())
+            super::builtins::bindless_pool_size(textures.len(), ceiling_fits)
         } else {
             0
         };
+        if bindless_active && !ceiling_fits {
+            tracing::debug!(
+                "bindless texture pool: sized to the world ({bindless_pool_size}); this device \
+                 cannot seat the {} slot ceiling, so its shaders compile at init",
+                concinnity_render::uniforms::BINDLESS_POOL_SIZE
+            );
+        }
         // The texture pool's length is the world's texture table, so it cannot be
         // clamped to the device's per-stage sampler headroom the way the probe
         // cube array is. Where it does not fit, its set layout is declared
@@ -2263,7 +2290,13 @@ impl VkContext {
             // binding 1 = the shared pool ([albedo views..] ++ [normal..]).
             let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
             let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &set_layouts)?;
-            let pool_infos: Vec<vk::DescriptorImageInfo> = gpu_textures
+            // Every slot the layout declares has to be written, and at the
+            // ceiling there are more of them than the world fills: the world's
+            // textures, then the reserved fallbacks (flat-normal, white), then
+            // white again across the unused tail so a slot the shader can index
+            // still names a live view. Mirrors the Metal pool's fill. Sizing
+            // guarantees the world fits, so this only ever pads.
+            let mut pool_infos: Vec<vk::DescriptorImageInfo> = gpu_textures
                 .iter()
                 .chain(gpu_fallbacks.iter())
                 .map(|img| {
@@ -2273,6 +2306,9 @@ impl VkContext {
                         .sampler(linear_sampler.handle())
                 })
                 .collect();
+            if let Some(&tail) = pool_infos.last() {
+                pool_infos.resize(bindless_pool_size, tail);
+            }
             for (i, &set) in sets.iter().enumerate() {
                 let buf_info = vk::DescriptorBufferInfo::default()
                     .buffer(buffers[i].buffer())

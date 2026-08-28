@@ -23,6 +23,7 @@ use super::allocator::DeviceAllocator;
 use crate::components::GlassPanel;
 use crate::directx::context::dump_on_err;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::transparent::{
     GlassMeshProducer, RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
 };

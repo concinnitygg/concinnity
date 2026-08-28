@@ -29,6 +29,7 @@ use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_uav_buffer, transition_barrier, write_texture_srv,
 };

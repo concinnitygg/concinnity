@@ -4,9 +4,9 @@
 // once per shading language (vulkan/shaders/object_common.glsl,
 // directx/shaders/object_common.hlsl, metal/shaders/object_common.msl) and each
 // fragment is spliced into its backend's passes at an `{OBJECT_DATA}` marker.
-// `shaders/object_common.slang` is the fourth, spliced into every single-source
-// pass that strides the buffer on all three backends at once, so it is checked
-// alongside them.
+// concinnity-render's `shaders/object_common.slang` is the fourth, spliced into
+// every single-source pass that strides the buffer on all three backends at
+// once, so it is checked alongside them.
 //
 // Only one backend compiles per build, so the fragments are checked here as
 // plain text rather than through any backend module: a macOS build still catches
@@ -18,7 +18,6 @@ use core::mem::{offset_of, size_of};
 const VULKAN_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/vulkan/shaders");
 const DIRECTX_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/directx/shaders");
 const METAL_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/metal/shaders");
-const SLANG_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shaders");
 
 // What a declared member contributes to the record's byte layout.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -109,7 +108,7 @@ const FRAGMENTS: &[Fragment] = &[
     },
     Fragment {
         label: "object_common.slang",
-        source: include_str!("shaders/object_common.slang"),
+        source: concinnity_render::shaders::OBJECT_COMMON,
         mat4: "float4x4",
         vec3: "float3",
         vec4: Some("float4"),
@@ -408,12 +407,19 @@ fn no_shader_redeclares_the_record() {
         "object_common.slang",
     ];
     let mut declarations = 0usize;
-    for dir in [
-        VULKAN_SHADERS,
-        DIRECTX_SHADERS,
-        METAL_SHADERS,
-        SLANG_SHADERS,
-    ] {
+    let mut check = |name: &str, source: &str| {
+        if source.contains("struct GpuObjectData") {
+            assert!(
+                fragments.contains(&name),
+                "{name} declares its own GpuObjectData; splice the shared fragment instead"
+            );
+            declarations += 1;
+        }
+    };
+    // The per-backend shaders are read off disk; the single-source `.slang` set
+    // lives in concinnity-render and arrives embedded, so it needs no path into
+    // a sibling crate that a registry checkout would not have.
+    for dir in [VULKAN_SHADERS, DIRECTX_SHADERS, METAL_SHADERS] {
         for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir}: {e}")) {
             let path = entry.expect("dir entry").path();
             let name = path
@@ -423,15 +429,11 @@ fn no_shader_redeclares_the_record() {
                 .to_string();
             let source = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-            if !source.contains("struct GpuObjectData") {
-                continue;
-            }
-            assert!(
-                fragments.contains(&name.as_str()),
-                "{name} declares its own GpuObjectData; splice the shared fragment instead"
-            );
-            declarations += 1;
+            check(&name, &source);
         }
+    }
+    for (name, source) in concinnity_render::shaders::SOURCES {
+        check(name, source);
     }
     assert_eq!(declarations, fragments.len(), "a fragment went missing");
 }

@@ -20,6 +20,7 @@ use super::init::pipelines::{create_main_instanced_root_signature, create_main_p
 use super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
 use super::slang_builtins;
 use super::texture::*;
+use crate::directx::slang_builtins::SlangCompile;
 
 // Skinned pipeline builders
 //

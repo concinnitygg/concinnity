@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::com;
+use crate::directx::slang_builtins::SlangCompile;
 
 // Shared shader-compile + root-sig helpers
 

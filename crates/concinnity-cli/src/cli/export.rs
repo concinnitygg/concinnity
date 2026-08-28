@@ -223,20 +223,7 @@ fn precompile_shaders(state_dir: &Path) {
         return;
     }
     println!("Compiling built-in shaders...");
-    let texture_count = match concinnity_engine::blob::texture_resource_count() {
-        Ok(n) => n,
-        Err(e) => {
-            eprintln!(
-                "warning: could not read the world's texture count ({e:?}); \
-                 pool-sized shaders will compile on the bundle's first launch"
-            );
-            0
-        }
-    };
-    let report = concinnity_engine::precompile_builtin_shaders(
-        &state_dir.join("shader-cache"),
-        texture_count,
-    );
+    let report = concinnity_engine::precompile_builtin_shaders(&state_dir.join("shader-cache"));
     println!(
         "  cached {} shader binaries ({} compiled, {} reused)",
         report.cached(),

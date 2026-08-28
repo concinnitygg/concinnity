@@ -396,7 +396,9 @@ impl VkContext {
     // (binding 1). Called right before the face records, so the face samples
     // the pool as it stands this frame.
     fn write_probe_face_pool(&self, set: vk::DescriptorSet) {
-        let pool_infos: Vec<vk::DescriptorImageInfo> = self
+        // Every slot the layout declares, padded with the last reserved fallback
+        // across the unused tail exactly as init fills the frame's own sets.
+        let mut pool_infos: Vec<vk::DescriptorImageInfo> = self
             .textures
             .iter()
             .chain(self.fallback_textures.iter())
@@ -407,6 +409,9 @@ impl VkContext {
                     .sampler(self.linear_sampler.handle())
             })
             .collect();
+        if let Some(&tail) = pool_infos.last() {
+            pool_infos.resize(self.cull.bindless_pool_size, tail);
+        }
         let write = vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(1)
@@ -1197,7 +1202,10 @@ impl BakeResources {
 
         // One dedicated descriptor pool for the bake's cull + per-face bindless +
         // global + Hi-Z sets.
-        let tex_pool = (ctx.textures.len() + ctx.fallback_textures.len()) as u32;
+        // The pool binding's declared length, not the world's image count: the
+        // bake allocates the same bindless set layout the main pass does, so it
+        // has to budget for every slot that layout declares.
+        let tex_pool = ctx.cull.bindless_pool_size as u32;
         let has_hiz = ctx.cull.hiz.is_some();
         // Per face: view + light + shadow + ProbeSet + ClusterParams UBOs.
         let uniform_count = PROBE_FACE_COUNT as u32 * 5 + u32::from(has_hiz);

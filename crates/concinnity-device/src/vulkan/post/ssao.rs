@@ -26,6 +26,7 @@ use super::super::context::VkContext;
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::slang_builtins::SlangCompile;
 
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
 // multiplies the ambient term by this value.

@@ -32,6 +32,7 @@ use crate::directx::pipeline::{
     main_input_layout, serialize_and_create_root_sig,
 };
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_buffer, create_uav_buffer};
 
 // Shader compilation

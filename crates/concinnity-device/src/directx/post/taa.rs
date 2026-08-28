@@ -18,6 +18,7 @@ use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::{create_composite_pso, serialize_desc_and_create};
 use crate::directx::post::gbuffer::GbufferResources;
 use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_rt_target, write_format_rtv, write_hdr_srv};
 
 // Shader compilation

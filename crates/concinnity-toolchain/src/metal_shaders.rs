@@ -148,7 +148,7 @@ fn precompile_slang_libs(
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             let source = assemble(&source, fragments);
             let job = slang::SlangJob {
-                source: &slang::inject_defines(&source, spec.defines),
+                source: &concinnity_render::slang_source::inject_defines(&source, spec.defines),
                 file_name: spec.name,
                 entries: spec.entries,
                 target: slang::SlangTarget::Metallib,

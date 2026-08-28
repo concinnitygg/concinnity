@@ -11,6 +11,10 @@ describing what exists -- a camera, lights, geometry, UI -- and the engine runs
 it. Behaviour is declared as data rather than assembled from calls, so building
 an application is mostly a matter of saying what is in it.
 
+This project is in **early development** and may not build reliably depending
+on the platform requirements installed. See the [Build Guide][build-guide]
+for support options.
+
 It's available as a command-line tool:
 
 ```sh
@@ -36,12 +40,7 @@ fn main() {
 }
 ```
 
-Check out the [Rust Documentation][docs-link] to explore the crate, and the
-[Asset Reference][asset-ref] for the components a world can hold.
-
-This project is in **early development** and may not build reliably depending
-on the platform requirements installed. See the [Build Guide][build-guide]
-for all available support options.
+Check out the [Rust Documentation][docs-link] to explore the crate.
 
 [crates-img]: https://img.shields.io/crates/v/concinnity.svg?logo=rust
 [crates-link]: https://crates.io/crates/concinnity
@@ -53,5 +52,4 @@ for all available support options.
 [codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
 [license-img]: https://img.shields.io/github/license/concinnitygg/concinnity
 [license-link]: https://github.com/concinnitygg/concinnity/blob/main/LICENSE
-[asset-ref]: https://github.com/concinnitygg/concinnity/blob/main/docs/assets/index.md
 [build-guide]: https://github.com/concinnitygg/concinnity/blob/main/docs/development/building.md

@@ -50,6 +50,7 @@ pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 use super::com;
 use super::context::FRAMES;
 use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
+use crate::directx::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + colour + uv = 14 floats). The BLAS reads positions at this stride and the

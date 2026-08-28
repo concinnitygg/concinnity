@@ -35,7 +35,6 @@ mod build_defines {
 pub(super) struct SlangLib {
     pub name: &'static str,
     pub file: &'static str,
-    pub embedded: &'static str,
     pub entries: &'static [&'static str],
     pub defines: &'static [(&'static str, &'static str)],
 }
@@ -46,32 +45,6 @@ const MAIN_DEFINES: &[(&str, &str)] = &[
     ("MAX_PROBES", "8"),
 ];
 
-const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
-const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
-const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
-const GBUFFER_PREPASS_SLANG: &str = include_str!("../shaders/gbuffer_prepass.slang");
-const SHADOW_SLANG: &str = include_str!("../shaders/shadow.slang");
-const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
-const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
-const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
-const COMPOSITE_SLANG: &str = include_str!("../shaders/composite.slang");
-const SSAO_SLANG: &str = include_str!("../shaders/ssao.slang");
-const SSR_SLANG: &str = include_str!("../shaders/ssr.slang");
-const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
-const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
-const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
-const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
-const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
-const RT_SKIN_SLANG: &str = include_str!("../shaders/rt_skin.slang");
-const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
-const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
-const LINE_SLANG: &str = include_str!("../shaders/line.slang");
-const TEXT_SLANG: &str = include_str!("../shaders/text.slang");
-const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
-const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
-const GLASS_MESH_SLANG: &str = include_str!("../shaders/glass_mesh.slang");
-const WATER_SLANG: &str = include_str!("../shaders/water.slang");
-
 // The SSR resolve reads the reflection-probe array, so it bakes in the same
 // probe count the main pass does.
 const PROBE_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8")];
@@ -79,42 +52,36 @@ const PROBE_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8")];
 pub(super) static MAIN_BINDLESS_VERT: SlangLib = SlangLib {
     name: "main_bindless_vert.slang",
     file: "main_bindless.slang",
-    embedded: MAIN_BINDLESS_SLANG,
     entries: &["vertex_main_bindless"],
     defines: MAIN_DEFINES,
 };
 pub(super) static MAIN_BINDLESS_FRAG: SlangLib = SlangLib {
     name: "main_bindless_frag.slang",
     file: "main_bindless.slang",
-    embedded: MAIN_BINDLESS_SLANG,
     entries: &["fragment_main_bindless"],
     defines: MAIN_DEFINES,
 };
 pub(super) static LIGHT_CULL: SlangLib = SlangLib {
     name: "light_cull.slang",
     file: "light_cull.slang",
-    embedded: LIGHT_CULL_SLANG,
     entries: &["light_cull_kernel"],
     defines: &[],
 };
 pub(super) static RT_SKIN: SlangLib = SlangLib {
     name: "rt_skin.slang",
     file: "rt_skin.slang",
-    embedded: RT_SKIN_SLANG,
     entries: &["rt_skin"],
     defines: &[("METAL_BINDINGS", "1")],
 };
 pub(super) static HIZ_INIT_MSAA: SlangLib = SlangLib {
     name: "hiz_init_msaa.slang",
     file: "hiz_build.slang",
-    embedded: HIZ_BUILD_SLANG,
     entries: &["hiz_init_msaa"],
     defines: &[("HIZ_INIT_MSAA", "1")],
 };
 pub(super) static HIZ_DOWNSAMPLE: SlangLib = SlangLib {
     name: "hiz_downsample.slang",
     file: "hiz_build.slang",
-    embedded: HIZ_BUILD_SLANG,
     entries: &["hiz_downsample"],
     defines: &[("HIZ_DOWNSAMPLE", "1")],
 };
@@ -136,63 +103,54 @@ const SHADOW_BINDLESS: &[(&str, &str)] = &[("SHADOW_BINDLESS", "1"), ("METAL_BIN
 pub(super) static GBUFFER_PREPASS_VERT: SlangLib = SlangLib {
     name: "gbuffer_prepass_vert.slang",
     file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
     entries: &["gbuffer_prepass_vertex"],
     defines: GB_STATIC,
 };
 pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: SlangLib = SlangLib {
     name: "gbuffer_prepass_vert_instanced.slang",
     file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
     entries: &["gbuffer_prepass_vertex_instanced"],
     defines: GB_INSTANCED,
 };
 pub(super) static GBUFFER_PREPASS_VERT_SKINNED: SlangLib = SlangLib {
     name: "gbuffer_prepass_vert_skinned.slang",
     file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
     entries: &["gbuffer_prepass_vertex_skinned"],
     defines: GB_SKINNED,
 };
 pub(super) static GBUFFER_PREPASS_VERT_BINDLESS: SlangLib = SlangLib {
     name: "gbuffer_prepass_vert_bindless.slang",
     file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
     entries: &["gbuffer_prepass_vertex_bindless"],
     defines: GB_BINDLESS,
 };
 pub(super) static GBUFFER_PREPASS_FRAG: SlangLib = SlangLib {
     name: "gbuffer_prepass_frag.slang",
     file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
     entries: &["gbuffer_prepass_fragment"],
     defines: GB_FRAGMENT,
 };
 pub(super) static GBUFFER_PREPASS_FRAG_BINDLESS: SlangLib = SlangLib {
     name: "gbuffer_prepass_frag_bindless.slang",
     file: "gbuffer_prepass.slang",
-    embedded: GBUFFER_PREPASS_SLANG,
     entries: &["gbuffer_prepass_fragment_bindless"],
     defines: GB_FRAGMENT_BINDLESS,
 };
 pub(super) static SHADOW_VERT: SlangLib = SlangLib {
     name: "shadow_vert.slang",
     file: "shadow.slang",
-    embedded: SHADOW_SLANG,
     entries: &["shadow_vertex_main"],
     defines: SHADOW_STATIC,
 };
 pub(super) static SHADOW_VERT_SKINNED: SlangLib = SlangLib {
     name: "shadow_vert_skinned.slang",
     file: "shadow.slang",
-    embedded: SHADOW_SLANG,
     entries: &["shadow_vertex_main_skinned"],
     defines: SHADOW_SKINNED,
 };
 pub(super) static SHADOW_VERT_BINDLESS: SlangLib = SlangLib {
     name: "shadow_vert_bindless.slang",
     file: "shadow.slang",
-    embedded: SHADOW_SLANG,
     entries: &["shadow_vertex_bindless"],
     defines: SHADOW_BINDLESS,
 };
@@ -202,91 +160,78 @@ pub(super) static SHADOW_VERT_BINDLESS: SlangLib = SlangLib {
 pub(super) static FULLSCREEN_VERT: SlangLib = SlangLib {
     name: "fullscreen_vert.slang",
     file: "fullscreen.slang",
-    embedded: FULLSCREEN_SLANG,
     entries: &["fullscreen_vertex"],
     defines: &[],
 };
 pub(super) static TAA_FRAG: SlangLib = SlangLib {
     name: "taa_frag.slang",
     file: "taa.slang",
-    embedded: TAA_SLANG,
     entries: &["taa_fragment_main"],
     defines: &[],
 };
 pub(super) static BLOOM_PREFILTER: SlangLib = SlangLib {
     name: "bloom_prefilter.slang",
     file: "bloom.slang",
-    embedded: BLOOM_SLANG,
     entries: &["bloom_prefilter_fragment"],
     defines: &[("BLOOM_PREFILTER", "1")],
 };
 pub(super) static BLOOM_DOWNSAMPLE: SlangLib = SlangLib {
     name: "bloom_downsample.slang",
     file: "bloom.slang",
-    embedded: BLOOM_SLANG,
     entries: &["bloom_downsample_fragment"],
     defines: &[("BLOOM_DOWNSAMPLE", "1")],
 };
 pub(super) static BLOOM_UPSAMPLE: SlangLib = SlangLib {
     name: "bloom_upsample.slang",
     file: "bloom.slang",
-    embedded: BLOOM_SLANG,
     entries: &["bloom_upsample_fragment"],
     defines: &[("BLOOM_UPSAMPLE", "1")],
 };
 pub(super) static COMPOSITE_FRAG: SlangLib = SlangLib {
     name: "composite_frag.slang",
     file: "composite.slang",
-    embedded: COMPOSITE_SLANG,
     entries: &["composite_fragment"],
     defines: &[],
 };
 pub(super) static SSAO_KERNEL: SlangLib = SlangLib {
     name: "ssao_kernel.slang",
     file: "ssao.slang",
-    embedded: SSAO_SLANG,
     entries: &["ssao_kernel_fragment"],
     defines: &[("SSAO_KERNEL", "1")],
 };
 pub(super) static SSAO_BLUR: SlangLib = SlangLib {
     name: "ssao_blur.slang",
     file: "ssao.slang",
-    embedded: SSAO_SLANG,
     entries: &["ssao_blur_fragment"],
     defines: &[("SSAO_BLUR", "1")],
 };
 pub(super) static SSR_RESOLVE: SlangLib = SlangLib {
     name: "ssr_resolve.slang",
     file: "ssr.slang",
-    embedded: SSR_SLANG,
     entries: &["ssr_resolve_fragment"],
     defines: PROBE_DEFINES,
 };
 pub(super) static SSGI_GATHER: SlangLib = SlangLib {
     name: "ssgi_gather.slang",
     file: "ssgi.slang",
-    embedded: SSGI_SLANG,
     entries: &["ssgi_gather_fragment"],
     defines: &[("SSGI_GATHER", "1")],
 };
 pub(super) static SSGI_COMPOSITE: SlangLib = SlangLib {
     name: "ssgi_composite.slang",
     file: "ssgi.slang",
-    embedded: SSGI_SLANG,
     entries: &["ssgi_composite_fragment"],
     defines: &[("SSGI_COMPOSITE", "1")],
 };
 pub(super) static REFLECTION_BLUR: SlangLib = SlangLib {
     name: "reflection_blur.slang",
     file: "reflection.slang",
-    embedded: REFLECTION_SLANG,
     entries: &["reflection_blur_fragment"],
     defines: &[("REFLECTION_BLUR", "1")],
 };
 pub(super) static REFLECTION_COMPOSITE: SlangLib = SlangLib {
     name: "reflection_composite.slang",
     file: "reflection.slang",
-    embedded: REFLECTION_SLANG,
     entries: &["reflection_composite_fragment"],
     defines: &[("REFLECTION_COMPOSITE", "1")],
 };
@@ -298,35 +243,30 @@ pub(super) static REFLECTION_COMPOSITE: SlangLib = SlangLib {
 pub(super) static FOG_FROXEL: SlangLib = SlangLib {
     name: "fog_froxel.slang",
     file: "fog.slang",
-    embedded: FOG_SLANG,
     entries: &["fog_froxel_kernel"],
     defines: &[("FOG_FROXEL", "1")],
 };
 pub(super) static FOG_FRAG: SlangLib = SlangLib {
     name: "fog_frag.slang",
     file: "fog.slang",
-    embedded: FOG_SLANG,
     entries: &["fog_fragment"],
     defines: &[("USE_MSAA", "0")],
 };
 pub(super) static AUTO_EXPOSURE_BUILD: SlangLib = SlangLib {
     name: "auto_exposure_build.slang",
     file: "auto_exposure.slang",
-    embedded: AUTO_EXPOSURE_SLANG,
     entries: &["histogram_build"],
     defines: &[("AE_BUILD", "1"), ("METAL_BINDINGS", "1")],
 };
 pub(super) static AUTO_EXPOSURE_AVERAGE: SlangLib = SlangLib {
     name: "auto_exposure_average.slang",
     file: "auto_exposure.slang",
-    embedded: AUTO_EXPOSURE_SLANG,
     entries: &["histogram_average"],
     defines: &[("AE_AVERAGE", "1"), ("METAL_BINDINGS", "1")],
 };
 pub(super) static PARTICLE_SIMULATE: SlangLib = SlangLib {
     name: "particle_simulate.slang",
     file: "particle_simulate.slang",
-    embedded: PARTICLE_SIMULATE_SLANG,
     entries: &["particle_simulate"],
     defines: &[("METAL_BINDINGS", "1")],
 };
@@ -340,56 +280,48 @@ pub(super) static PARTICLE_SIMULATE: SlangLib = SlangLib {
 pub(super) static PARTICLE_VERT: SlangLib = SlangLib {
     name: "particle_vert.slang",
     file: "particle.slang",
-    embedded: PARTICLE_SLANG,
     entries: &["particle_vertex"],
     defines: &[("METAL_BINDINGS", "1")],
 };
 pub(super) static PARTICLE_FRAG: SlangLib = SlangLib {
     name: "particle_frag.slang",
     file: "particle.slang",
-    embedded: PARTICLE_SLANG,
     entries: &["particle_fragment"],
     defines: &[("METAL_BINDINGS", "1")],
 };
 pub(super) static DECAL_VERT: SlangLib = SlangLib {
     name: "decal_vert.slang",
     file: "decal.slang",
-    embedded: DECAL_SLANG,
     entries: &["decal_vertex"],
     defines: &[],
 };
 pub(super) static DECAL_FRAG: SlangLib = SlangLib {
     name: "decal_frag.slang",
     file: "decal.slang",
-    embedded: DECAL_SLANG,
     entries: &["decal_fragment"],
     defines: &[("USE_MSAA", "0")],
 };
 pub(super) static LINE_VERT: SlangLib = SlangLib {
     name: "line_vert.slang",
     file: "line.slang",
-    embedded: LINE_SLANG,
     entries: &["line_vertex"],
     defines: &[],
 };
 pub(super) static LINE_FRAG: SlangLib = SlangLib {
     name: "line_frag.slang",
     file: "line.slang",
-    embedded: LINE_SLANG,
     entries: &["line_fragment"],
     defines: &[("USE_MSAA", "0")],
 };
 pub(super) static TEXT_VERT: SlangLib = SlangLib {
     name: "text_vert.slang",
     file: "text.slang",
-    embedded: TEXT_SLANG,
     entries: &["text_vertex_main"],
     defines: &[("METAL_BINDINGS", "1")],
 };
 pub(super) static TEXT_FRAG: SlangLib = SlangLib {
     name: "text_frag.slang",
     file: "text.slang",
-    embedded: TEXT_SLANG,
     entries: &["text_fragment_main"],
     defines: &[("METAL_BINDINGS", "1")],
 };
@@ -440,42 +372,36 @@ const WATER_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
 pub(super) static RT_REFLECTIONS_FRAG: SlangLib = SlangLib {
     name: "rt_reflections_frag.slang",
     file: "rt_reflections.slang",
-    embedded: RT_REFLECTIONS_SLANG,
     entries: &["rt_reflections_fragment"],
     defines: RT_DEFINES,
 };
 pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: SlangLib = SlangLib {
     name: "rt_reflections_frag_textured.slang",
     file: "rt_reflections.slang",
-    embedded: RT_REFLECTIONS_SLANG,
     entries: &["rt_reflections_fragment"],
     defines: RT_TEXTURED_DEFINES,
 };
 pub(super) static GLASS_VERT: SlangLib = SlangLib {
     name: "glass_vert.slang",
     file: "glass.slang",
-    embedded: GLASS_SLANG,
     entries: &["glass_vertex"],
     defines: GLASS_DEFINES,
 };
 pub(super) static GLASS_FRAG: SlangLib = SlangLib {
     name: "glass_frag.slang",
     file: "glass.slang",
-    embedded: GLASS_SLANG,
     entries: &["glass_fragment"],
     defines: GLASS_DEFINES,
 };
 pub(super) static GLASS_FRAG_RT: SlangLib = SlangLib {
     name: "glass_frag_rt.slang",
     file: "glass.slang",
-    embedded: GLASS_SLANG,
     entries: &["glass_rt_fragment"],
     defines: GLASS_RT_DEFINES,
 };
 pub(super) static GLASS_FRAG_RT_TEXTURED: SlangLib = SlangLib {
     name: "glass_frag_rt_textured.slang",
     file: "glass.slang",
-    embedded: GLASS_SLANG,
     entries: &["glass_rt_fragment"],
     defines: GLASS_RT_TEXTURED_DEFINES,
 };
@@ -483,21 +409,18 @@ pub(super) static GLASS_FRAG_RT_TEXTURED: SlangLib = SlangLib {
 pub(super) static GLASS_MESH_VERT: SlangLib = SlangLib {
     name: "glass_mesh_vert.slang",
     file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
     entries: &["glass_mesh_vertex"],
     defines: GLASS_MESH_DEFINES,
 };
 pub(super) static GLASS_MESH_FRAG_RT: SlangLib = SlangLib {
     name: "glass_mesh_frag_rt.slang",
     file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
     entries: &["glass_mesh_rt_fragment"],
     defines: GLASS_MESH_DEFINES,
 };
 pub(super) static GLASS_MESH_FRAG_RT_TEXTURED: SlangLib = SlangLib {
     name: "glass_mesh_frag_rt_textured.slang",
     file: "glass_mesh.slang",
-    embedded: GLASS_MESH_SLANG,
     entries: &["glass_mesh_rt_fragment"],
     defines: GLASS_MESH_TEXTURED_DEFINES,
 };
@@ -505,28 +428,24 @@ pub(super) static GLASS_MESH_FRAG_RT_TEXTURED: SlangLib = SlangLib {
 pub(super) static WATER_VERT: SlangLib = SlangLib {
     name: "water_vert.slang",
     file: "water.slang",
-    embedded: WATER_SLANG,
     entries: &["water_vertex"],
     defines: WATER_DEFINES,
 };
 pub(super) static WATER_FRAG: SlangLib = SlangLib {
     name: "water_frag.slang",
     file: "water.slang",
-    embedded: WATER_SLANG,
     entries: &["water_fragment"],
     defines: WATER_DEFINES,
 };
 pub(super) static WATER_FRAG_RT: SlangLib = SlangLib {
     name: "water_frag_rt.slang",
     file: "water.slang",
-    embedded: WATER_SLANG,
     entries: &["water_rt_fragment"],
     defines: WATER_RT_DEFINES,
 };
 pub(super) static WATER_FRAG_RT_TEXTURED: SlangLib = SlangLib {
     name: "water_frag_rt_textured.slang",
     file: "water.slang",
-    embedded: WATER_SLANG,
     entries: &["water_rt_fragment"],
     defines: WATER_RT_TEXTURED_DEFINES,
 };
@@ -594,7 +513,7 @@ impl SlangLib {
     // The exact source text this variant compiles, assembled the way every
     // backend assembles it.
     fn source(&self, hot_reload: bool) -> String {
-        crate::slang_source::assemble(hot_reload, self.file, self.embedded, self.defines)
+        crate::slang_source::assemble(hot_reload, self.file, self.defines)
     }
 
     // Produce this variant's MTLLibrary. Fast path: the metallib the build
@@ -723,10 +642,16 @@ mod tests {
             crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
         );
         for (name, src) in [
-            ("main_bindless.slang", MAIN_BINDLESS_SLANG),
-            ("ssr.slang", SSR_SLANG),
-            ("reflection.slang", REFLECTION_SLANG),
-            ("rt_reflections.slang", RT_REFLECTIONS_SLANG),
+            (
+                "main_bindless.slang",
+                concinnity_render::shaders::MAIN_BINDLESS,
+            ),
+            ("ssr.slang", concinnity_render::shaders::SSR),
+            ("reflection.slang", concinnity_render::shaders::REFLECTION),
+            (
+                "rt_reflections.slang",
+                concinnity_render::shaders::RT_REFLECTIONS,
+            ),
         ] {
             assert!(
                 src.contains(&expected),
@@ -743,8 +668,10 @@ mod tests {
     fn entries_exist_in_their_sources() {
         for lib in ALL {
             for entry in lib.entries {
+                let src = concinnity_render::shaders::embedded(lib.file)
+                    .unwrap_or_else(|| panic!("{}: no embedded {}", lib.name, lib.file));
                 assert!(
-                    lib.embedded.contains(&format!(" {entry}(")),
+                    src.contains(&format!(" {entry}(")),
                     "{}: entry {entry} not found in {}",
                     lib.name,
                     lib.file

@@ -17,14 +17,33 @@ use super::pipeline::{
     OBJECT_COMMON_GLSL, compile_glsl, compile_glsl_rt, inject_define, shader_source,
 };
 
-// Size of the bindless texture pool for a world with `texture_count` entries
-// in its texture table: one image per table slot (a single fallback when the
-// table is empty) plus the reserved fallbacks, flat-normal and white. Baked
-// into the pool-sized shaders via `{POOL_SIZE}`; init and the export-time
-// precompile both derive the value here so a bundle's precompiled artifacts
-// match its first launch.
-pub(crate) fn bindless_pool_size(texture_count: usize) -> usize {
+// Slots a world with `texture_count` table entries needs: one image per slot (a
+// single fallback when the table is empty) plus the reserved fallbacks,
+// flat-normal and white. What the pool was always sized to, and what a device
+// that cannot seat the ceiling still falls back to.
+pub(crate) fn world_pool_size(texture_count: usize) -> usize {
     texture_count.max(1) + crate::gfx::render_types::FALLBACK_TEXTURE_COUNT
+}
+
+// The pool length a device declares, baked into the pool-sized shaders via
+// `{POOL_SIZE}`.
+//
+// The ceiling wherever it fits, which is every desktop driver, so the shader
+// text is a property of the build rather than of the world -- which is what
+// lets the build script compile these programs ahead of any world. Where it
+// does not fit the pool is sized to the world exactly as it always was, and the
+// differing `POOL_SIZE` makes that source miss the precompiled artifacts and
+// compile, through the same content check every other artifact goes through.
+//
+// `ceiling_fits` is the device's answer (see `vulkan::init`); the export-time
+// precompile has no device and bakes the ceiling, which is what a bundle's
+// eventual host will use unless it is one of the constrained ones.
+pub(crate) fn bindless_pool_size(texture_count: usize, ceiling_fits: bool) -> usize {
+    if ceiling_fits {
+        concinnity_render::uniforms::BINDLESS_POOL_SIZE
+    } else {
+        world_pool_size(texture_count)
+    }
 }
 
 // How a program's compile source is assembled from its shader file. Defines
@@ -114,18 +133,15 @@ impl GlslProgram {
 }
 
 // Compile every declared program (all enumerable variants) into `out_dir`,
-// reusing local cache artifacts where present. `texture_count` sizes the
-// `{POOL_SIZE}` substitution exactly as the exported world's first launch will.
-// The probe cube-array length is a property of the device the bundle eventually
-// runs on, so the probe programs are baked at the `MAX_PROBES` ceiling every
-// desktop driver affords; a device that reports less per-stage sampler headroom
-// (MoltenVK) simply misses these entries and compiles them at first launch.
-pub(crate) fn precompile(
-    out_dir: &std::path::Path,
-    texture_count: usize,
-    report: &mut crate::precompile::Report,
-) {
-    let pool_size = bindless_pool_size(texture_count);
+// reusing local cache artifacts where present.
+//
+// Both the pool length and the probe cube-array length are properties of the
+// device the bundle eventually runs on rather than of the world, so both are
+// baked at the ceiling every desktop driver affords. A device that reports less
+// headroom than that (MoltenVK) simply misses these entries and compiles them
+// at first launch.
+pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompile::Report) {
+    let pool_size = concinnity_render::uniforms::BINDLESS_POOL_SIZE;
     for program in ALL {
         let ctx = Ctx {
             hot_reload: false,
@@ -199,6 +215,7 @@ const fn glsl(
     }
 }
 
+use crate::vulkan::slang_builtins::SlangCompile;
 use shaderc::ShaderKind::{Compute, Fragment, Vertex};
 
 // Embedded sources shared by several programs.
@@ -301,25 +318,51 @@ mod tests {
     fn pool_size_counts_fallbacks() {
         // One slot per table entry (an empty table still pads to one) plus the
         // two reserved fallbacks, flat-normal then white.
-        assert_eq!(bindless_pool_size(0), 3);
-        assert_eq!(bindless_pool_size(1), 3);
-        assert_eq!(bindless_pool_size(7), 9);
+        assert_eq!(world_pool_size(0), 3);
+        assert_eq!(world_pool_size(1), 3);
+        assert_eq!(world_pool_size(7), 9);
     }
 
-    // The uploaded image vectors reproduce the pool length exactly: init pads an
-    // empty texture table to one image and always uploads the reserved fallbacks
-    // alongside it. A raw texture count is never a valid pool length, so a
-    // compile handed one silently drops the last slots.
+    // The uploaded image vectors reproduce the world-sized pool exactly: init
+    // pads an empty texture table to one image and always uploads the reserved
+    // fallbacks alongside it. A raw texture count is never a valid pool length,
+    // so a compile handed one silently drops the last slots.
     #[test]
-    fn pool_size_matches_the_uploaded_image_counts() {
+    fn world_pool_size_matches_the_uploaded_image_counts() {
         for texture_count in [0usize, 1, 7, 64] {
             let gpu_textures = texture_count.max(1);
             assert_eq!(
-                bindless_pool_size(texture_count),
+                world_pool_size(texture_count),
                 gpu_textures + crate::gfx::render_types::FALLBACK_TEXTURE_COUNT
             );
-            assert!(bindless_pool_size(texture_count) > texture_count);
+            assert!(world_pool_size(texture_count) > texture_count);
         }
+    }
+
+    // The ceiling is a constant, so a shader compiled against it is the same
+    // text for every world -- which is the whole reason the build script can
+    // compile these ahead of time. Without it the length tracks the world and
+    // the text does too.
+    #[test]
+    fn the_ceiling_makes_the_pool_length_independent_of_the_world() {
+        let ceiling = concinnity_render::uniforms::BINDLESS_POOL_SIZE;
+        for texture_count in [0usize, 1, 7, 64] {
+            assert_eq!(bindless_pool_size(texture_count, true), ceiling);
+            assert_eq!(
+                bindless_pool_size(texture_count, false),
+                world_pool_size(texture_count)
+            );
+        }
+    }
+
+    // Every slot the ceiling declares is written at init, and the world's own
+    // images have to fit inside it for that fill to be a pad rather than a
+    // truncation -- which is what `vulkan::init` checks before choosing it.
+    #[test]
+    fn a_world_that_fits_the_ceiling_leaves_room_to_pad() {
+        let ceiling = concinnity_render::uniforms::BINDLESS_POOL_SIZE;
+        assert!(world_pool_size(ceiling - 3) <= ceiling);
+        assert!(world_pool_size(ceiling) > ceiling);
     }
 
     // Every pool-sized program declares its texture array at the length the
