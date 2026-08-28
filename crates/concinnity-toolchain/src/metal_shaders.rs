@@ -1,11 +1,17 @@
 // Build-time precompilation of the engine's static Metal shaders.
 //
-// The device crate's build script hands this module the shader directory, the
-// names that must stay source-only (runtime-assembled templates), and the
-// shared fragments spliced into shaders at a marker. Every other `.metal` file
-// is assembled into OUT_DIR and compiled to a `.metallib` with the same
-// `xcrun metal` + `xcrun metallib` pair the cook's shader toolchain uses, and a
-// lookup function mapping shader name to embedded bytes is generated there too.
+// The device crate's build script hands this module its own `.metal` shader
+// directory, the names that must stay source-only (runtime-assembled
+// templates), and the shared fragments spliced into shaders at a marker. Every
+// other `.metal` file is assembled into OUT_DIR and compiled to a `.metallib`
+// with the same `xcrun metal` + `xcrun metallib` pair the cook's shader
+// toolchain uses, and a lookup function mapping shader name to embedded bytes
+// is generated there too.
+//
+// The single-source `.slang` half never touches a directory: its text comes
+// from `concinnity_render`, which embeds every shader, so this compiles the
+// same bytes whether the crate is built from the workspace or unpacked from a
+// registry tarball with no sibling checkout beside it.
 //
 // When the Metal compiler is not installed (Command Line Tools without a full
 // Xcode) the generated lookup returns `None` for every name and the renderer
@@ -18,14 +24,13 @@ use std::process::Command;
 use concinnity_slang as slang;
 
 /// One single-source shader library to precompile to a metallib: the `.slang`
-/// file under the slang shader directory, the entry points linked into the
-/// library, and the `#define`s that select its variant. `name` is the key the
-/// renderer's lookup uses (distinct from `file` when one source yields several
-/// variant libraries).
+/// file, the entry points linked into the library, and the `#define`s that
+/// select its variant. `name` is the key the renderer's lookup uses (distinct
+/// from `file` when one source yields several variant libraries).
 pub struct SlangLibSpec {
     /// Lookup key the renderer resolves this library by.
     pub name: &'static str,
-    /// The `.slang` file, relative to the shader directory.
+    /// The `.slang` file, by name, resolved from the embedded shader sources.
     pub file: &'static str,
     /// Entry points linked into the library.
     pub entries: &'static [&'static str],
@@ -33,23 +38,8 @@ pub struct SlangLibSpec {
     pub defines: &'static [(&'static str, &'static str)],
 }
 
-/// The single-source half of the precompile: where the `.slang` files live, the
-/// shared declarations spliced into the ones carrying a marker, and one spec per
-/// metallib variant. Grouped because they always travel together, and because
-/// the splice table has to match the renderer's `slang_source::assemble` exactly
-/// -- the two produce the same text or the content-addressed cache serves one
-/// path's bytes to the other.
-pub struct SlangShaders<'a> {
-    /// Directory holding the `.slang` sources.
-    pub dir: &'a Path,
-    /// Shared declarations spliced into sources carrying a marker.
-    pub fragments: &'a [(&'a str, &'a str)],
-    /// One spec per metallib variant.
-    pub specs: &'a [SlangLibSpec],
-}
-
 /// Precompile every eligible `.metal` under `shaders_dir`, plus every `.slang`
-/// spec in `slang`, into OUT_DIR and generate `engine_metallibs.rs` there.
+/// spec in `slang_libs`, into OUT_DIR and generate `engine_metallibs.rs` there.
 /// `fragments` pairs a source marker with the file under `shaders_dir` that
 /// replaces it, matching the substitution the renderer applies when it compiles
 /// the same shader from source. Panics if the Metal toolchain is present but a
@@ -59,10 +49,9 @@ pub fn precompile_metal_shaders(
     shaders_dir: &Path,
     source_only: &[&str],
     fragments: &[(&str, &str)],
-    slang: &SlangShaders,
+    slang_libs: &[SlangLibSpec],
 ) {
     println!("cargo:rerun-if-changed={}", shaders_dir.display());
-    println!("cargo:rerun-if-changed={}", slang.dir.display());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let generated = out_dir.join("engine_metallibs.rs");
 
@@ -77,11 +66,10 @@ pub fn precompile_metal_shaders(
     }
 
     let fragments = read_fragments(shaders_dir, fragments);
-    let slang_fragments = read_fragments(slang.dir, slang.fragments);
 
     let lib_dir = out_dir.join("engine_shaders");
     std::fs::create_dir_all(&lib_dir).expect("create engine_shaders dir");
-    let mut entries = Vec::with_capacity(shaders.len() + slang.specs.len());
+    let mut entries = Vec::with_capacity(shaders.len() + slang_libs.len());
     for path in &shaders {
         let name = path
             .file_name()
@@ -97,12 +85,7 @@ pub fn precompile_metal_shaders(
         compile_metallib(&assembled, &lib_path);
         entries.push((name, lib_path));
     }
-    entries.extend(precompile_slang_libs(
-        slang.dir,
-        slang.specs,
-        &slang_fragments,
-        &lib_dir,
-    ));
+    entries.extend(precompile_slang_libs(slang_libs, &lib_dir));
     std::fs::write(&generated, metallib_lookup_source(&entries))
         .expect("write engine_metallibs.rs");
 }
@@ -124,12 +107,7 @@ fn read_fragments<'a>(dir: &Path, fragments: &'a [(&'a str, &'a str)]) -> Vec<(&
 // the specs are skipped behind a cargo warning: their names miss the generated
 // lookup and the renderer compiles them at startup instead (which needs slangc
 // at runtime and errors clearly when it is missing there too).
-fn precompile_slang_libs(
-    slang_dir: &Path,
-    specs: &[SlangLibSpec],
-    fragments: &[(&str, String)],
-    lib_dir: &Path,
-) -> Vec<(String, PathBuf)> {
+fn precompile_slang_libs(specs: &[SlangLibSpec], lib_dir: &Path) -> Vec<(String, PathBuf)> {
     if specs.is_empty() {
         return Vec::new();
     }
@@ -143,12 +121,16 @@ fn precompile_slang_libs(
     specs
         .iter()
         .map(|spec| {
-            let path = slang_dir.join(spec.file);
-            let source = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-            let source = assemble(&source, fragments);
+            // Assembly answers an unknown name with empty text, which would
+            // reach slangc as a missing entry point rather than a typo.
+            assert!(
+                concinnity_render::shaders::embedded(spec.file).is_some(),
+                "no embedded shader named {}",
+                spec.file
+            );
+            let source = concinnity_render::slang_source::assemble(spec.file, spec.defines);
             let job = slang::SlangJob {
-                source: &concinnity_render::slang_source::inject_defines(&source, spec.defines),
+                source: &source,
                 file_name: spec.name,
                 entries: spec.entries,
                 target: slang::SlangTarget::Metallib,

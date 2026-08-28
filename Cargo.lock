@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "concinnity-asset",
  "concinnity-cli",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-asset"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "postcard",
  "serde",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-bench"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "concinnity-asset",
  "concinnity-cook",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cli"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "ash",
  "clap",
@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "bytemuck",
  "concinnity-asset",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "ash",
  "block2",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-editor"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "argon2",
  "async-stream",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "concinnity-asset",
  "concinnity-core",
@@ -802,11 +802,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-memory"
-version = "0.18.67"
+version = "0.18.68"
 
 [[package]]
 name = "concinnity-physics"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "concinnity-memory",
  "libm",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-render"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -841,11 +841,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.18.67"
+version = "0.18.68"
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "concinnity-render",
  "concinnity-slang",
@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-world"
-version = "0.18.67"
+version = "0.18.68"
 dependencies = [
  "concinnity-asset",
  "concinnity-core",

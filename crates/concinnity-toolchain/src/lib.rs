@@ -36,9 +36,9 @@ mod slang_artifacts;
 mod source_hash;
 mod targets;
 
-pub use metal_shaders::{SlangLibSpec, SlangShaders, precompile_metal_shaders};
+pub use metal_shaders::{SlangLibSpec, precompile_metal_shaders};
 use sdks::SdkEnv;
-pub use slang_artifacts::{SlangArtifact, precompile_slang_artifacts, watch_shader_dir};
+pub use slang_artifacts::{SlangArtifact, precompile_slang_artifacts};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// The graphics backend a build targets.

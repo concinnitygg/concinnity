@@ -14,7 +14,7 @@
 
 use concinnity_slang as slang;
 use concinnity_toolchain::{
-    Backend, SlangLibSpec, SlangShaders, emit_backend_cfg, emit_check_cfgs, hash_sources,
+    Backend, SlangLibSpec, emit_backend_cfg, emit_check_cfgs, hash_sources,
     precompile_metal_shaders, setup_graphics_sdks,
 };
 use std::path::PathBuf;
@@ -34,20 +34,6 @@ const SOURCE_ONLY_METAL_SHADERS: &[&str] = &[
 // compiles from source. The `.msl` extension keeps a fragment out of the
 // `.metal` precompile scan: it is not a standalone library.
 const METAL_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{OBJECT_DATA}", "object_common.msl")];
-
-// The same idea for the single-source shaders, matching what
-// `crate::slang_source::assemble` splices when the renderer compiles one at
-// runtime. The two tables must agree: a mismatch would have the build script
-// and the renderer key different text for the same program.
-const SLANG_SHADER_FRAGMENTS: &[(&str, &str)] = &[
-    ("{POST_COMMON}", "post_common.slang"),
-    ("{OBJECT_COMMON}", "object_common.slang"),
-    ("{PROBE_TYPES}", "probe_types.slang"),
-    ("{PROBE_COMMON}", "probe_common.slang"),
-    ("{RT_TYPES}", "rt_types.slang"),
-    ("{RT_TRACE}", "rt_trace.slang"),
-    ("{PARTICLE_TYPES}", "particle_types.slang"),
-];
 
 // The Metal bindless texture-pool capacity and reflection-probe array length,
 // baked into the single-source shaders at build time. Must match
@@ -907,11 +893,10 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
 // `MAX_PROBES` are baked at the ceilings a desktop driver affords; a device that
 // seats less falls back to sizing them itself, and that source then matches no
 // artifact and compiles -- see `vulkan::builtins::bindless_pool_size`.
-fn precompile_spirv(slang_dir: &std::path::Path) {
+fn precompile_spirv() {
     use concinnity_render::slang_programs::vk::{self, Sizes};
     use concinnity_render::uniforms::{BINDLESS_POOL_SIZE, MAX_PROBES};
 
-    concinnity_toolchain::watch_shader_dir(slang_dir);
     let pool = BINDLESS_POOL_SIZE.to_string();
     let probes = MAX_PROBES.to_string();
     let mut artifacts = Vec::new();
@@ -958,19 +943,15 @@ fn spirv_artifact_name(label: &str, msaa: bool) -> String {
     }
 }
 
-// The single-source shaders live in concinnity-render, below every backend, so
-// this script and the renderer compile the same text. A path dependency puts
-// them beside this crate; nothing else in the build reaches outside it.
 // Compile every declared DirectX program to DXIL now, so the binary carries its
 // shaders instead of needing slangc on whatever host runs it. The declarations
 // and the assembly both come from concinnity-render, the same ones the renderer
 // uses, so the text compiled here is the text it would have compiled -- which is
 // what lets `directx::slang_builtins` serve these bytes without re-deriving the
 // cache key.
-fn precompile_dxil(slang_dir: &std::path::Path) {
+fn precompile_dxil() {
     use concinnity_render::slang_programs::dx;
 
-    concinnity_toolchain::watch_shader_dir(slang_dir);
     let artifacts: Vec<_> = dx::ALL
         .iter()
         .map(|p| concinnity_toolchain::SlangArtifact {
@@ -984,15 +965,6 @@ fn precompile_dxil(slang_dir: &std::path::Path) {
     concinnity_toolchain::precompile_slang_artifacts(&artifacts, "engine_dxil.rs", "embedded_dxil");
 }
 
-fn render_shader_dir(manifest: &std::path::Path) -> PathBuf {
-    manifest
-        .parent()
-        .expect("crates/ dir")
-        .join("concinnity-render")
-        .join("src")
-        .join("shaders")
-}
-
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
@@ -1000,28 +972,21 @@ fn main() {
     if backend == Backend::Metal {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");
-        let slang_dir = render_shader_dir(manifest);
         precompile_metal_shaders(
             &shaders_dir,
             SOURCE_ONLY_METAL_SHADERS,
             METAL_SHADER_FRAGMENTS,
-            &SlangShaders {
-                dir: &slang_dir,
-                fragments: SLANG_SHADER_FRAGMENTS,
-                specs: SLANG_METAL_LIBS,
-            },
+            SLANG_METAL_LIBS,
         );
-        assert_slang_metal_abi(&slang_dir);
+        assert_slang_metal_abi();
         emit_slang_metal_defines();
     }
     if backend == Backend::Dx {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert_slang_dxil_abi(&render_shader_dir(manifest));
-        precompile_dxil(&render_shader_dir(manifest));
+        assert_slang_dxil_abi();
+        precompile_dxil();
     }
     if backend == Backend::Vk {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        precompile_spirv(&render_shader_dir(manifest));
+        precompile_spirv();
     }
     emit_shader_compile_source_hash();
 }
@@ -1034,13 +999,14 @@ fn main() {
 // MSL here so a slangc upgrade that moves a slot fails the build instead of
 // binding garbage at draw time. Skipped when slangc is absent (the runtime
 // compile path reports its own error then).
-fn assert_slang_metal_abi(slang_dir: &std::path::Path) {
+fn assert_slang_metal_abi() {
     if slang::slangc_path().is_none() {
         return;
     }
-    let source = slang_source(slang_dir, "main_bindless.slang");
+    let source =
+        concinnity_render::slang_source::assemble("main_bindless.slang", SLANG_MAIN_DEFINES);
     let job = slang::SlangJob {
-        source: &concinnity_render::slang_source::inject_defines(&source, SLANG_MAIN_DEFINES),
+        source: &source,
         file_name: "main_bindless_abi_check.slang",
         entries: &["fragment_main_bindless"],
         target: slang::SlangTarget::Metal,
@@ -1081,18 +1047,12 @@ fn assert_slang_metal_abi(slang_dir: &std::path::Path) {
 // bind garbage at draw time with no compile-time signal. Emit HLSL and assert
 // the annotations survive. Skipped when slangc is absent (the runtime compile
 // path reports its own error then).
-fn assert_slang_dxil_abi(slang_dir: &std::path::Path) {
-    // Re-run on any single-source edit: nothing else in this script reads the
-    // `.slang` files on a DirectX build, so without this the assert would go
-    // stale the moment a binding moved.
-    println!("cargo:rerun-if-changed={}", slang_dir.display());
+fn assert_slang_dxil_abi() {
     if slang::slangc_path().is_none() {
         return;
     }
-    let source = concinnity_render::slang_source::inject_defines(
-        &slang_source(slang_dir, "main_bindless.slang"),
-        SLANG_DXIL_MAIN_DEFINES,
-    );
+    let source =
+        concinnity_render::slang_source::assemble("main_bindless.slang", SLANG_DXIL_MAIN_DEFINES);
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // The two stages compile separately and each drops the resources it does
     // not read, so a register only has to hold in the stage that declares it.
@@ -1119,21 +1079,18 @@ fn assert_slang_dxil_abi(slang_dir: &std::path::Path) {
              signature in src/directx/init/pipelines.rs before shipping.",
         );
     }
-    assert_slang_dxil_entry_abi(slang_dir, &out_dir);
+    assert_slang_dxil_entry_abi(&out_dir);
 }
 
 // The same check over every other single-source family. Each variant compiles
 // alone, so a register only has to hold in the entry that declares it. A file
 // with no `DXIL_ABI` block is still worth a row: `DXIL_ABI` is simply inert
 // there and the check reads back slangc's declaration-order assignment.
-fn assert_slang_dxil_entry_abi(slang_dir: &std::path::Path, out_dir: &std::path::Path) {
+fn assert_slang_dxil_entry_abi(out_dir: &std::path::Path) {
     for abi in SLANG_DXIL_ENTRY_ABI {
         let mut defines: Vec<(&str, &str)> = vec![("DXIL_ABI", "1")];
         defines.extend(abi.gates.iter().map(|gate| (*gate, "1")));
-        let source = concinnity_render::slang_source::inject_defines(
-            &slang_source(slang_dir, abi.file),
-            &defines,
-        );
+        let source = concinnity_render::slang_source::assemble(abi.file, &defines);
         let emitted = emit_dxil_hlsl(out_dir, abi.file, &source, abi.entry, abi.profile);
         for (param, register) in abi.registers {
             assert_dxil_register(
@@ -1178,22 +1135,6 @@ fn assert_dxil_register(emitted: &str, param: &str, register: &str, remedy: &str
             ),
         "slang DXIL ABI drifted: expected `{param}` at register({register}). {remedy}"
     );
-}
-
-// One `.slang` file with its shared fragments spliced in, matching what
-// `crate::slang_source::assemble` produces at run time. The ABI checks compile
-// real source, so they need the same assembly the renderer gets.
-fn slang_source(slang_dir: &std::path::Path, file: &str) -> String {
-    let read = |name: &str| {
-        std::fs::read_to_string(slang_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"))
-    };
-    let mut source = read(file);
-    for (marker, fragment) in SLANG_SHADER_FRAGMENTS {
-        if source.contains(marker) {
-            source = source.replace(marker, &read(fragment));
-        }
-    }
-    source
 }
 
 // Expose the define values baked into the precompiled slang metallibs so a

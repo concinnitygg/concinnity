@@ -14,7 +14,7 @@
 //! before -- a build host without the compiler still produces a working binary,
 //! just one that needs slangc wherever it runs.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use concinnity_slang as slang;
 
@@ -107,12 +107,6 @@ fn stub_lookup_source(lookup: &str) -> String {
          \x20   None\n\
          }}\n"
     )
-}
-
-/// Emit a rerun directive per shader file, so an edit to any of them
-/// recompiles the artifacts rather than replaying stale bytes.
-pub fn watch_shader_dir(dir: &Path) {
-    println!("cargo:rerun-if-changed={}", dir.display());
 }
 
 #[cfg(test)]
