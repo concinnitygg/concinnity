@@ -1832,7 +1832,7 @@ impl DxContext {
                 end_cmd.ResolveQueryData(
                     heap,
                     D3D12_QUERY_TYPE_TIMESTAMP,
-                    super::pass_timing::frame_resolve_start(frame),
+                    super::pass_timing::frame_block_base(frame),
                     super::pass_timing::SLOTS_PER_FRAME as u32,
                     &**readback,
                     super::pass_timing::frame_readback_byte_offset(frame),

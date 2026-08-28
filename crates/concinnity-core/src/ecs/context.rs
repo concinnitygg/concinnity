@@ -15,8 +15,12 @@ use alloc::vec::Vec;
 
 use crate::ecs::{
     ColumnTicks, ComponentSlot, ComponentStorage, Entity, EventStore, Events, FrameContext,
-    PayloadLocator, PayloadStore, Resources, Tick, access_check,
+    PayloadLocator, PayloadStore, Resources, Tick,
 };
+// The module is itself `#![cfg(debug_assertions)]`, so importing it
+// unconditionally fails to resolve in a release build.
+#[cfg(debug_assertions)]
+use crate::ecs::access_check;
 use crate::gfx::profile::FrameProfile;
 use crate::result::CnResult;
 

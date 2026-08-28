@@ -15,7 +15,6 @@
 use super::compile::CompiledGraph;
 use super::passes::PassId;
 use super::types::{ReadStages, ResourceState};
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -153,42 +152,12 @@ mod tests {
     use crate::render_graph::types::{
         PassKind, PixelFormat, TextureDesc, TextureSize, TextureUsage,
     };
+    use alloc::string::ToString;
 
     // Every gated flag on `FrameGraphInputs`, so the sweep below can name the
     // combination that failed rather than reporting an opaque struct. Extend when a
     // gated pass is added; the sweep is only as wide as this table.
-    type FlagSetter = fn(&mut FrameGraphInputs);
-    const FLAGS: &[(&str, FlagSetter)] = &[
-        ("shadow", |i| i.shadow_enabled = true),
-        ("bindless_cull", |i| i.bindless_cull_enabled = true),
-        ("auto_exposure", |i| i.auto_exposure_enabled = true),
-        ("bloom", |i| i.bloom_enabled = true),
-        ("velocity", |i| i.velocity_enabled = true),
-        ("taa", |i| i.taa_enabled = true),
-        ("ssr", |i| i.ssr_enabled = true),
-        ("particles", |i| i.particles_enabled = true),
-        ("fog", |i| i.fog_enabled = true),
-        ("decals", |i| i.decals_enabled = true),
-        ("ssr_prepass", |i| i.ssr_prepass_enabled = true),
-        ("ssao", |i| i.ssao_enabled = true),
-        ("upscale", |i| i.upscale_enabled = true),
-        ("transparent", |i| i.transparent_enabled = true),
-        ("lines", |i| i.lines_enabled = true),
-        ("raymarch", |i| i.raymarch_enabled = true),
-        ("two_pass_occlusion", |i| {
-            i.two_pass_occlusion_enabled = true
-        }),
-        ("ssgi", |i| i.ssgi_enabled = true),
-        ("rt_reflections", |i| i.rt_reflections_enabled = true),
-        ("unified_gbuffer", |i| i.unified_gbuffer_prepass = true),
-        ("world_hidden", |i| i.world_hidden = true),
-        ("clustered_lighting", |i| {
-            i.clustered_lighting_enabled = true
-        }),
-        ("composite_reads_ao", |i| i.composite_reads_ao = true),
-        ("shadowed_spots", |i| i.shadowed_spot_count = 2),
-        ("hiz_build", |i| i.hiz_build_enabled = true),
-    ];
+    use super::super::frame::GATED_FLAGS as FLAGS;
 
     // Compile the graph for `combo` and assert it has no barrier gaps.
     fn assert_covered(combo: &[usize]) {

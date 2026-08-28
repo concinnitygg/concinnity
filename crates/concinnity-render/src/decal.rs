@@ -7,7 +7,8 @@
 
 use crate::components::Decal;
 use alloc::vec::Vec;
-use concinnity_core::math::{cos, sin, sqrt};
+use concinnity_core::gfx::transform::trs_matrix;
+use concinnity_core::math::sqrt;
 
 /// Per-decal data the renderer consumes each frame. Built once at
 /// `GraphicsSystem` init from the world's `Decal` components.
@@ -49,31 +50,7 @@ pub fn decal_model_matrix(
     rotation_deg: [f32; 3],
     size: [f32; 3],
 ) -> [[f32; 4]; 4] {
-    let [px, py, pz] = position;
-    let [pitch_deg, yaw_deg, roll_deg] = rotation_deg;
-    let [sx, sy, sz] = size;
-
-    let (sp, cp) = (sin(pitch_deg.to_radians()), cos(pitch_deg.to_radians()));
-    let (sy_, cy) = (sin(yaw_deg.to_radians()), cos(yaw_deg.to_radians()));
-    let (sr, cr) = (sin(roll_deg.to_radians()), cos(roll_deg.to_radians()));
-
-    // R = Ry * Rx * Rz, then scaled component-wise and translated.
-    [
-        [
-            sx * (cy * cr + sy_ * sp * sr),
-            sx * (cp * sr),
-            sx * (-sy_ * cr + cy * sp * sr),
-            0.0,
-        ],
-        [
-            sy * (-cy * sr + sy_ * sp * cr),
-            sy * (cp * cr),
-            sy * (sy_ * sr + cy * sp * cr),
-            0.0,
-        ],
-        [sz * (sy_ * cp), sz * (-sp), sz * (cy * cp), 0.0],
-        [px, py, pz, 1.0],
-    ]
+    trs_matrix(position, rotation_deg, size)
 }
 
 /// Invert an affine TRS matrix of the form built by [`decal_model_matrix`].

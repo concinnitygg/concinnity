@@ -9,6 +9,36 @@
 use concinnity_core::math::floor;
 use core::num::NonZeroU32;
 
+// The set operations every flag newtype in this module shares. `$noun` names
+// what a bit means so the generated rustdoc reads naturally per type.
+macro_rules! flag_set_ops {
+    ($ty:ident, $noun:literal) => {
+        impl $ty {
+            #[doc = concat!("The empty ", $noun, " set.")]
+            pub const fn empty() -> Self {
+                Self(0)
+            }
+
+            #[doc = concat!("Every ", $noun, " in either set.")]
+            pub const fn union(self, other: Self) -> Self {
+                Self(self.0 | other.0)
+            }
+
+            #[doc = concat!("Whether every ", $noun, " in `other` is set here.")]
+            pub const fn contains(self, other: Self) -> bool {
+                (self.0 & other.0) == other.0
+            }
+        }
+
+        impl core::ops::BitOr for $ty {
+            type Output = Self;
+            fn bitor(self, rhs: Self) -> Self {
+                self.union(rhs)
+            }
+        }
+    };
+}
+
 /// One side of a `PassBuilder::read_*` / `write_*` declaration. The
 /// resource is a small dense index into the graph's resource arena; the
 /// `version` increments on every write so a read-after-write chain
@@ -227,6 +257,8 @@ impl GraphResourceClass {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ReadStages(u32);
 
+flag_set_ops!(ReadStages, "stage");
+
 impl ReadStages {
     /// A render pass's sampled read (DirectX PIXEL_SHADER_RESOURCE / Vulkan
     /// FRAGMENT_SHADER stage).
@@ -234,21 +266,6 @@ impl ReadStages {
     /// A compute pass's read (DirectX NON_PIXEL_SHADER_RESOURCE / Vulkan
     /// COMPUTE_SHADER stage).
     pub const COMPUTE: Self = Self(1 << 1);
-
-    /// The empty stage set.
-    pub const fn empty() -> Self {
-        Self(0)
-    }
-
-    /// Every stage in either set.
-    pub const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    /// Whether every stage in `other` is set here.
-    pub const fn contains(self, other: Self) -> bool {
-        (self.0 & other.0) == other.0
-    }
 
     /// Whether no stage is set.
     pub const fn is_empty(self) -> bool {
@@ -266,13 +283,6 @@ impl ReadStages {
             PassKind::Render => Self::FRAGMENT,
             PassKind::Compute => Self::COMPUTE,
         }
-    }
-}
-
-impl core::ops::BitOr for ReadStages {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        self.union(rhs)
     }
 }
 
@@ -598,29 +608,9 @@ impl TextureUsage {
     pub const TRANSFER_SRC: Self = Self(1 << 4);
     /// Destination of a copy.
     pub const TRANSFER_DST: Self = Self(1 << 5);
-
-    /// The empty usage set.
-    pub const fn empty() -> Self {
-        Self(0)
-    }
-
-    /// Every usage in either set.
-    pub const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    /// Whether every usage in `other` is set here.
-    pub const fn contains(self, other: Self) -> bool {
-        (self.0 & other.0) == other.0
-    }
 }
 
-impl core::ops::BitOr for TextureUsage {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        self.union(rhs)
-    }
-}
+flag_set_ops!(TextureUsage, "usage");
 
 /// Buffer-side counterpart to [`TextureUsage`]. Same bitset shape.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -638,29 +628,9 @@ impl BufferUsage {
     /// The two-pass cull's `cull_status` is the case: both phases bind it the
     /// same way.
     pub(crate) const UNORDERED: Self = Self(1 << 7);
-
-    /// The empty usage set.
-    pub const fn empty() -> Self {
-        Self(0)
-    }
-
-    /// Every usage in either set.
-    pub const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    /// Whether every usage in `other` is set here.
-    pub const fn contains(self, other: Self) -> bool {
-        (self.0 & other.0) == other.0
-    }
 }
 
-impl core::ops::BitOr for BufferUsage {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        self.union(rhs)
-    }
-}
+flag_set_ops!(BufferUsage, "usage");
 
 #[cfg(test)]
 mod tests {

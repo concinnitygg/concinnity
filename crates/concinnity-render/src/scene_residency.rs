@@ -55,8 +55,9 @@ struct SceneSet {
 /// Per-scene residency pins, one refcount per resource and channel.
 pub struct SceneResidency {
     sets: Vec<SceneSet>,
-    // (member, set index), sorted by member for binary search.
-    owner: Vec<(Member, usize)>,
+    // (member, set index, index within that set's members), sorted by member
+    // for binary search.
+    owner: Vec<(Member, usize, usize)>,
 }
 
 impl SceneResidency {
@@ -65,10 +66,15 @@ impl SceneResidency {
     /// ([`all_members`](Self::all_members)) at setup, then the first
     /// `sync_pins` unblocks the pinned scenes' members.
     pub fn new(scenes: Vec<(AssetId, Vec<Member>)>) -> Self {
-        let mut owner: Vec<(Member, usize)> = scenes
+        let mut owner: Vec<(Member, usize, usize)> = scenes
             .iter()
             .enumerate()
-            .flat_map(|(set_idx, (_, members))| members.iter().map(move |&m| (m, set_idx)))
+            .flat_map(|(set_idx, (_, members))| {
+                members
+                    .iter()
+                    .enumerate()
+                    .map(move |(i, &m)| (m, set_idx, i))
+            })
             .collect();
         owner.sort_unstable();
         let sets = scenes
@@ -91,7 +97,7 @@ impl SceneResidency {
     /// Every scene-owned member, for the driver's setup pass: all owned members
     /// start blocked, matching every scene starting unpinned.
     pub fn all_members(&self) -> impl Iterator<Item = Member> + '_ {
-        self.owner.iter().map(|&(m, _)| m)
+        self.owner.iter().map(|&(m, ..)| m)
     }
 
     /// Establish the pin set: exactly the scenes in `pinned` are pinned after
@@ -118,13 +124,11 @@ impl SceneResidency {
     /// Record a member's residency transition (a completed upload or an applied
     /// eviction). Members owned by no scene are ignored.
     pub fn note_resident(&mut self, member: Member, resident: bool) {
-        let Ok(pos) = self.owner.binary_search_by_key(&member, |&(m, _)| m) else {
+        let Ok(pos) = self.owner.binary_search_by_key(&member, |&(m, ..)| m) else {
             return;
         };
-        let set = &mut self.sets[self.owner[pos].1];
-        if let Some(i) = set.members.iter().position(|&m| m == member) {
-            set.resident[i] = resident;
-        }
+        let (_, set_idx, member_idx) = self.owner[pos];
+        self.sets[set_idx].resident[member_idx] = resident;
     }
 
     /// The scene's derived load state, or `None` for an unknown scene.

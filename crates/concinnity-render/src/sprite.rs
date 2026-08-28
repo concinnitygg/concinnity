@@ -7,7 +7,7 @@
 //! rectangles need no pipeline of their own.
 
 use alloc::vec::Vec;
-use concinnity_core::math::{cos, sin};
+use concinnity_core::math::sin_cos;
 
 use crate::components::{Sprite, SpriteFit};
 use crate::overlay_maps::{ClipRects, OverlayLayers, TextureSlots};
@@ -276,21 +276,33 @@ fn rounded_rect_geometry(
     alpha: f32,
     mut v: impl FnMut(f32, f32, f32) -> TextVertex,
 ) {
-    use core::f32::consts::{FRAC_PI_2, PI};
+    use core::f32::consts::FRAC_PI_2;
     let [x0, y0, x1, y1] = rect;
-    // Corner arc centers in polygon order, each with its start angle; y grows
-    // downward so the arcs sweep clockwise around the boundary.
+    // Every corner sweeps the same quarter turn, so the unit offsets are
+    // evaluated once and each corner reuses them rotated into its quadrant.
+    let mut arc = [(0.0_f32, 0.0_f32); CORNER_SEGMENTS + 1];
+    for (i, slot) in arc.iter_mut().enumerate() {
+        let (s, c) = sin_cos((i as f32 / CORNER_SEGMENTS as f32) * FRAC_PI_2);
+        *slot = (c, s);
+    }
+    // Corner arc centers in polygon order, each with the quarter-turn count its
+    // arc starts at; y grows downward so the arcs sweep clockwise.
     let corners = [
-        (x0 + radius, y0 + radius, PI),
-        (x1 - radius, y0 + radius, 1.5 * PI),
-        (x1 - radius, y1 - radius, 0.0),
-        (x0 + radius, y1 - radius, FRAC_PI_2),
+        (x0 + radius, y0 + radius, 2),
+        (x1 - radius, y0 + radius, 3),
+        (x1 - radius, y1 - radius, 0),
+        (x0 + radius, y1 - radius, 1),
     ];
     let mut boundary = [(0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32); 4 * (CORNER_SEGMENTS + 1)];
-    for (c, &(cx, cy, start)) in corners.iter().enumerate() {
-        for i in 0..=CORNER_SEGMENTS {
-            let t = start + (i as f32 / CORNER_SEGMENTS as f32) * FRAC_PI_2;
-            boundary[c * (CORNER_SEGMENTS + 1) + i] = (cx, cy, cos(t), sin(t));
+    for (c, &(cx, cy, quadrant)) in corners.iter().enumerate() {
+        for (i, &(uc, us)) in arc.iter().enumerate() {
+            let (rc, rs) = match quadrant {
+                0 => (uc, us),
+                1 => (-us, uc),
+                2 => (-uc, -us),
+                _ => (us, -uc),
+            };
+            boundary[c * (CORNER_SEGMENTS + 1) + i] = (cx, cy, rc, rs);
         }
     }
     let m = boundary.len();

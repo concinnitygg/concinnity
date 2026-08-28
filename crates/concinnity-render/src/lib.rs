@@ -54,6 +54,7 @@ pub mod ops;
 pub mod overlay_maps;
 pub mod parallel_ctx;
 pub mod particles;
+pub mod pass_timing;
 pub mod planar_reflection;
 pub mod reflection_probe;
 pub mod render_graph;

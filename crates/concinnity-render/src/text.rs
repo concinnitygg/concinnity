@@ -111,16 +111,19 @@ pub fn derive_cap_px(metrics: &FontMetrics, size_px: f32) -> f32 {
     0.7 * size_px
 }
 
-// Sum the advance widths for a string given a font and scale. Used to centre
-// text. Newlines carry no advance and are skipped (a multi-line label is
-// measured as if the lines were concatenated).
-/// Advance width of `content` in scaled pixels for the given font, for placing a
-/// caret or sizing a field's text. Newlines carry no advance.
-pub fn text_advance_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
-    measure_text_width(content, font, scale)
+/// Width of the widest line of `content` in scaled pixels: what a label's
+/// background box and its centre / right alignment are both sized against.
+pub fn widest_line_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
+    content
+        .split('\n')
+        .map(|line| text_advance_width(line, font, scale))
+        .fold(0.0_f32, f32::max)
 }
 
-fn measure_text_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
+/// Advance width of `content` in scaled pixels for the given font, for placing a
+/// caret, sizing a field's text, or centring a line. Newlines carry no advance,
+/// so a multi-line string measures as if its lines were concatenated.
+pub fn text_advance_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
     content
         .chars()
         .filter(|&ch| ch != '\n')
@@ -270,18 +273,12 @@ fn with_ellipsis(line: &str, font: &LoadedFont, scale: f32, width: f32) -> Strin
     let mut out = String::with_capacity(line.len() + ELLIPSIS.len());
     let mut end = line.len();
     if width > 0.0 {
-        let fits = |prefix_w: f32| {
-            let mut w = prefix_w;
-            for ch in ELLIPSIS.chars() {
-                w += advance_px(ch, font, scale);
-            }
-            w <= width
-        };
+        let ellipsis_w: f32 = ELLIPSIS.chars().map(|ch| advance_px(ch, font, scale)).sum();
         end = 0;
         let mut prefix_w = 0.0_f32;
         for (i, ch) in line.char_indices() {
             let w = prefix_w + advance_px(ch, font, scale);
-            if !fits(w) {
+            if w + ellipsis_w > width {
                 break;
             }
             prefix_w = w;
@@ -341,10 +338,7 @@ pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<La
     let line_height = font.size_px * scale;
     let content = laid_out(label, font);
     let lines = content.split('\n').count().max(1) as f32;
-    let text_w = content
-        .split('\n')
-        .map(|line| measure_text_width(line, font, scale))
-        .fold(0.0_f32, f32::max);
+    let text_w = widest_line_width(&content, font, scale);
     let pad = label.padding;
     let (top_above, bot_below) = content_v_extent(&content, font, scale);
     let base_off = baseline_offset(font, scale);
@@ -418,8 +412,11 @@ pub fn build_text_calls_into(
         // For centered labels, auto-scale to fill ~85% of the viewport while
         // preserving the text's aspect ratio. The label's scale field is used
         // for non-centered labels only.
+        // Set when horizontal alignment measures it, so the background box
+        // below does not measure the same content a second time.
+        let mut widest_line: Option<f32> = None;
         let (x0, y0, scale) = if label.centered && win_w > 0.0 && win_h > 0.0 {
-            let w1 = measure_text_width(&content, font, 1.0);
+            let w1 = text_advance_width(&content, font, 1.0);
             let h1 = font.size_px;
             let scale = if w1 > 0.0 && h1 > 0.0 {
                 let sw = win_w * 0.85 / w1;
@@ -428,7 +425,7 @@ pub fn build_text_calls_into(
             } else {
                 label.scale
             };
-            let tw = measure_text_width(&content, font, scale);
+            let tw = text_advance_width(&content, font, scale);
             let th = h1 * scale;
             ((win_w - tw) / 2.0, (win_h - th) / 2.0, scale)
         } else {
@@ -451,10 +448,8 @@ pub fn build_text_calls_into(
             let x0 = match label.align {
                 TextAlign::Left => ax,
                 TextAlign::Center | TextAlign::Right => {
-                    let w = content
-                        .split('\n')
-                        .map(|line| measure_text_width(line, font, scale))
-                        .fold(0.0_f32, f32::max);
+                    let w = widest_line_width(&content, font, scale);
+                    widest_line = Some(w);
                     if label.align == TextAlign::Center {
                         ax - w / 2.0
                     } else {
@@ -484,10 +479,7 @@ pub fn build_text_calls_into(
         // fully disappears).
         if label.background[3] > 0.0 && !content.is_empty() {
             let lines = content.split('\n').count().max(1) as f32;
-            let text_w = content
-                .split('\n')
-                .map(|line| measure_text_width(line, font, scale))
-                .fold(0.0_f32, f32::max);
+            let text_w = widest_line.unwrap_or_else(|| widest_line_width(&content, font, scale));
             let pad = label.padding;
             let (top_above, bot_below) = content_v_extent(&content, font, scale);
             let last_baseline = baseline + (lines - 1.0) * line_height;
@@ -703,7 +695,7 @@ mod tests {
         // Every produced line is inside the width, which is the whole point.
         let font = even_font();
         for line in wrapped("aaaaaaaaaaaaaa bb", 50.0, 0) {
-            assert!(measure_text_width(&line, &font, 1.0) <= 50.0, "{line:?}");
+            assert!(text_advance_width(&line, &font, 1.0) <= 50.0, "{line:?}");
         }
     }
 
@@ -716,7 +708,7 @@ mod tests {
         assert!(lines[1].ends_with("..."), "{lines:?}");
         let font = even_font();
         for line in &lines {
-            assert!(measure_text_width(line, &font, 1.0) <= 50.0, "{line:?}");
+            assert!(text_advance_width(line, &font, 1.0) <= 50.0, "{line:?}");
         }
     }
 
@@ -1292,7 +1284,7 @@ mod tests {
 
     #[test]
     fn measure_uses_space_advance_for_missing_glyphs() {
-        // measure_text_width (via measure_label_box) also substitutes the space
+        // text_advance_width (via measure_label_box) also substitutes the space
         // advance for an unknown glyph, keeping layout width stable.
         let space = make_glyph(0, 0, 7.0);
         let g = make_glyph(10, 12, 11.0);

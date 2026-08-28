@@ -8,6 +8,7 @@
 //! convention `max(1, base >> level)`. That keeps the CPU chain in lockstep with
 //! the image's allocated mip levels on all three backends.
 
+use crate::render_graph::full_mip_levels;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -22,19 +23,12 @@ pub struct MipLevel {
     pub pixels: Vec<u8>,
 }
 
-// Number of mip levels for a `width` x `height` texture: the full chain down to
-// 1x1, i.e. floor(log2(max(w, h))) + 1.
-pub(crate) fn mip_level_count(width: u32, height: u32) -> u32 {
-    let max_dim = width.max(height).max(1);
-    32 - max_dim.leading_zeros()
-}
-
 /// Build the full mip chain for a `width` x `height` RGBA8 image. Level 0 is the
 /// input copied verbatim; each subsequent level halves both axes (floored, min 1)
 /// and box-filters the level above it. `rgba8` must hold at least
 /// `width * height * 4` bytes (the backend uploads validate this before calling).
 pub fn generate_mip_chain(width: u32, height: u32, rgba8: &[u8]) -> Vec<MipLevel> {
-    let count = mip_level_count(width, height);
+    let count = full_mip_levels(width, height);
     let base_len = width as usize * height as usize * 4;
     let mut levels: Vec<MipLevel> = Vec::with_capacity(count as usize);
     levels.push(MipLevel {
@@ -92,13 +86,13 @@ mod tests {
 
     #[test]
     fn level_count_matches_floor_log2_plus_one() {
-        assert_eq!(mip_level_count(1, 1), 1);
-        assert_eq!(mip_level_count(2, 2), 2);
-        assert_eq!(mip_level_count(256, 256), 9);
-        assert_eq!(mip_level_count(512, 512), 10);
+        assert_eq!(full_mip_levels(1, 1), 1);
+        assert_eq!(full_mip_levels(2, 2), 2);
+        assert_eq!(full_mip_levels(256, 256), 9);
+        assert_eq!(full_mip_levels(512, 512), 10);
         // Non-square / non-power-of-two key off the larger axis.
-        assert_eq!(mip_level_count(640, 384), 10); // 640 -> floor(log2)=9, +1
-        assert_eq!(mip_level_count(1, 8), 4); // 8 -> 3, +1
+        assert_eq!(full_mip_levels(640, 384), 10); // 640 -> floor(log2)=9, +1
+        assert_eq!(full_mip_levels(1, 8), 4); // 8 -> 3, +1
     }
 
     #[test]
@@ -107,7 +101,7 @@ mod tests {
         let chain = generate_mip_chain(4, 4, &px);
         let dims: Vec<(u32, u32)> = chain.iter().map(|m| (m.width, m.height)).collect();
         assert_eq!(dims, vec![(4, 4), (2, 2), (1, 1)]);
-        assert_eq!(chain.len() as u32, mip_level_count(4, 4));
+        assert_eq!(chain.len() as u32, full_mip_levels(4, 4));
     }
 
     #[test]

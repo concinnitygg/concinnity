@@ -3,107 +3,87 @@
 // Stable identity for every render-graph pass. Used by:
 //
 //   - The graph itself, as the dispatch key the executor matches on.
-//   - The per-pass GPU timer (the Metal backend's `pass_timing`), which keys
-//     its sample-buffer slots off the same integer. Adding a new pass = a
-//     new variant here + a new entry in [`PASS_NAMES`] + a bumped
-//     `PASS_COUNT`; nothing else needs to change for timing to flow. The
-//     `every_pass_id_round_trips_to_its_name` test forces all three edits
-//     at compile time (a missed registration would otherwise report zero
-//     GPU time for the pass), and `pass_timing::slot_pair` debug_asserts
-//     the index at runtime.
+//   - The per-pass GPU timer (`crate::pass_timing`), which keys its
+//     sample-buffer slots off the same integer.
 //
-// Variants are intentionally `#[repr(u32)]` so a `PassId` round-trips
-// through `as usize` into the [`PASS_NAMES`] / counter-sample-buffer
-// slot index. Adding a variant in the middle of the list will renumber
-// later variants and silently shift every timing slot; append-only.
+// The `pass_ids!` invocation below is the single registration point: one line
+// per pass names the variant and its stable timing name, and the macro derives
+// the enum, [`PASS_NAMES`], [`PASS_COUNT`], and [`PassId::ALL`] from it. A pass
+// therefore cannot exist without a timing name (which would otherwise report
+// zero GPU time), and the name table cannot drift out of index order.
+//
+// Variants are `#[repr(u32)]` so a `PassId` round-trips through `as usize` into
+// [`PASS_NAMES`] and any `[T; PASS_COUNT]` companion array. The list is
+// append-only: inserting in the middle renumbers later variants and silently
+// shifts every timing slot.
 
-/// Stable display name for each pass. Index = `PassId as usize`. Used by
-/// the WS `profile.passes` reply and the per-pass timing readback.
-pub const PASS_NAMES: [&str; PASS_COUNT] = [
-    "cull",
-    "shadow",
-    "ssr_prepass",
-    "ssao_prepass",
-    "ssao_kernel",
-    "ssao_blur",
-    "main",
-    "auto_exposure",
-    "decals",
-    "fog",
-    "particles_sim",
-    "particles_draw",
-    "ssr_resolve",
-    "velocity",
-    "taa_resolve",
-    "bloom",
-    "composite",
-    "fog_froxel",
-    "upscale",
-    "transparent",
-    "raymarch",
-    "hiz_build",
-    "cull2",
-    "main2",
-    "ssgi",
-    "rt_reflections",
-    "gbuffer_prepass",
-    "reflection_composite",
-    "light_cull",
-    "spot_shadow",
-    "lines",
-    "hiz_final",
-];
+/// Declare the pass vocabulary. Each entry is `Variant => "timing_name"`.
+macro_rules! pass_ids {
+    ($($(#[$doc:meta])* $variant:ident => $name:literal,)*) => {
+        /// One per-pass identity. Cast to `usize` to index [`PASS_NAMES`] or any
+        /// `[T; PASS_COUNT]` companion array.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[repr(u32)]
+        pub enum PassId {
+            $($(#[$doc])* $variant,)*
+        }
 
-/// Number of distinct passes the engine times. Sized to match
-/// [`PASS_NAMES`]; the per-pass timing array in
-/// [`crate::profile::RenderStats`] is sized to at least this many
-/// slots.
-pub const PASS_COUNT: usize = 32;
+        /// Stable display name for each pass. Index = `PassId as usize`. Used by
+        /// the WS `profile.passes` reply and the per-pass timing readback.
+        pub const PASS_NAMES: [&str; PASS_COUNT] = [$($name,)*];
 
-/// One per-pass identity. Cast to `usize` to index [`PASS_NAMES`] or any
-/// `[T; PASS_COUNT]` companion array.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u32)]
-pub enum PassId {
+        /// Number of distinct passes the engine times. The per-pass timing array
+        /// in [`crate::profile::RenderStats`] is sized to at least this many slots.
+        pub const PASS_COUNT: usize = [$(PassId::$variant,)*].len();
+
+        impl PassId {
+            /// Every variant, in declaration (index) order.
+            pub const ALL: [PassId; PASS_COUNT] = [$(PassId::$variant,)*];
+        }
+    };
+}
+
+pass_ids! {
     /// GPU visibility cull; produces the indirect draw arguments.
-    Cull = 0,
+    Cull => "cull",
     /// Directional shadow cascades and spot shadow slices.
-    Shadow = 1,
+    Shadow => "shadow",
     /// Depth / normal prepass feeding screen-space reflections.
-    SsrPrepass = 2,
+    SsrPrepass => "ssr_prepass",
     /// Depth / normal prepass feeding ambient occlusion.
-    SsaoPrepass = 3,
+    SsaoPrepass => "ssao_prepass",
     /// The ambient-occlusion gather.
-    SsaoKernel = 4,
+    SsaoKernel => "ssao_kernel",
     /// Bilateral blur over the occlusion buffer.
-    SsaoBlur = 5,
+    SsaoBlur => "ssao_blur",
     /// The lit forward pass.
-    Main = 6,
+    Main => "main",
     /// Luminance reduction driving auto-exposure.
-    AutoExposure = 7,
+    AutoExposure => "auto_exposure",
     /// Projected decals.
-    Decals = 8,
+    Decals => "decals",
     /// Volumetric fog composite.
-    Fog = 9,
+    Fog => "fog",
     /// Particle simulation compute.
-    ParticlesSim = 10,
+    ParticlesSim => "particles_sim",
     /// Particle draw.
-    ParticlesDraw = 11,
+    ParticlesDraw => "particles_draw",
     /// Reflection trace and composite.
-    SsrResolve = 12,
+    SsrResolve => "ssr_resolve",
     /// Screen-space velocity, for TAA and motion blur.
-    Velocity = 13,
+    Velocity => "velocity",
     /// Temporal anti-aliasing resolve.
-    TaaResolve = 14,
+    TaaResolve => "taa_resolve",
     /// Bloom down/upsample chain.
-    Bloom = 15,
+    Bloom => "bloom",
     /// Tonemap, grade, and present.
-    Composite = 16,
+    Composite => "composite",
     /// Volumetric-fog froxel-volume compute pass. Populates a 3D
     /// `(scattered, transmittance)` texture once per frame, sampled by the
-    /// fullscreen `Fog` render pass instead of an inline ray-march. Metal
-    /// only; DX/Vulkan keep the ray-march and never insert this pass.
-    FogFroxel = 17,
+    /// fullscreen `Fog` render pass instead of an inline ray-march. Every
+    /// backend implements the path; the `Fog` pass trilinear-samples the
+    /// volume by (screen_uv, view_z).
+    FogFroxel => "fog_froxel",
     /// Temporal upscaling pass. When the world's `PostProcessConfig`
     /// enables `temporal_upscaling`, the renderer draws the 3D scene at a
     /// fraction of drawable size and inserts this pass between the post-SSR
@@ -113,7 +93,7 @@ pub enum PassId {
     /// reconstruct a drawable-resolution image. Replaces `TaaResolve`:
     /// the upscaler does temporal accumulation itself, so adding both
     /// would double-temporal the scene.
-    Upscale = 18,
+    Upscale => "upscale",
     /// Transparent / translucent geometry pass. Runs after `SsrResolve`
     /// (so water + glass see opaque reflections) and before
     /// `TaaResolve` / `Upscale` (so translucents pick up temporal
@@ -124,7 +104,7 @@ pub enum PassId {
     /// a back-to-front sorted list at encode time. Gated on
     /// `FrameGraphInputs::transparent_enabled`; when no consumer is
     /// in the world, the slot is omitted entirely.
-    Transparent = 19,
+    Transparent => "transparent",
     /// Raymarched SDF volume pass. Rasterises the back faces of each
     /// `SdfVolume`'s world-space bounding box and runs the user-authored
     /// fragment shader, which sphere-traces a signed distance field
@@ -135,7 +115,7 @@ pub enum PassId {
     /// SSR-resolve, and TAA all consume the post-Raymarch depth and
     /// colour. Gated on `FrameGraphInputs::raymarch_enabled`; when no
     /// `SdfVolume` is in the world the slot is omitted entirely.
-    Raymarch = 20,
+    Raymarch => "raymarch",
     /// Mid-frame Hi-Z (depth-mip pyramid) rebuild for two-pass occlusion
     /// culling. Inserted only when `FrameGraphInputs::two_pass_occlusion_enabled`
     /// is on: after `Main` (phase 1) has written this frame's depth, this
@@ -145,14 +125,14 @@ pub enum PassId {
     /// cull and stays an inline action, not a graph node). Every backend
     /// implements the node; whether it appears is `two_pass_occlusion_enabled`,
     /// which each seeds from its own two-pass state.
-    HizBuild = 21,
+    HizBuild => "hiz_build",
     /// Phase-2 GPU cull for two-pass occlusion. Re-tests the objects `Cull`
     /// (phase 1) marked Hi-Z-occluded against the freshly rebuilt pyramid
     /// (`HizBuild`) and encodes a draw for any that turn out visible into a
     /// second indirect command buffer `Main2` consumes. Reads the per-object
     /// status buffer phase-1 cull wrote + the `draw_args2` buffer it writes.
     /// Gated on `FrameGraphInputs::two_pass_occlusion_enabled`.
-    Cull2 = 22,
+    Cull2 => "cull2",
     /// Phase-2 main pass for two-pass occlusion. Loads (does not clear) the
     /// HDR colour + depth `Main` wrote and re-runs only the bindless-static
     /// indirect draw through `Cull2`'s command buffer, depth-compositing the
@@ -161,7 +141,7 @@ pub enum PassId {
     /// Becomes the new head of the hdr_resolve post-decoration chain (so
     /// AutoExposure / Decals / Fog / SSR see the combined result). Gated on
     /// `FrameGraphInputs::two_pass_occlusion_enabled`.
-    Main2 = 23,
+    Main2 => "main2",
     /// Screen-space global illumination. A refinement of SSR: it reuses the
     /// SSR depth + normal pre-pass G-buffer and screen-space ray-march, but
     /// integrates bounced radiance over a cosine-weighted hemisphere instead
@@ -171,7 +151,7 @@ pub enum PassId {
     /// indirect term back into it, so the near-field colour bleed layers on top
     /// of the IBL ambient. Gated on `FrameGraphInputs::ssgi_enabled`; when
     /// `indirect_lighting` is IBL-only the slot is omitted entirely.
-    Ssgi = 24,
+    Ssgi => "ssgi",
     /// Hardware ray-traced reflections. Occupies the same scene-pre-taa slot as
     /// `SsrResolve` (reads the post-decoration `hdr_resolve`, writes
     /// `scene_pre_taa`) and takes precedence over it: when this pass is live the
@@ -183,14 +163,14 @@ pub enum PassId {
     /// structure built over the static scene geometry, so off-screen reflected
     /// geometry appears. Gated on `FrameGraphInputs::rt_reflections_enabled`,
     /// and so only on GPUs that report ray-tracing support.
-    RtReflections = 25,
+    RtReflections => "rt_reflections",
     /// Unified geometry G-buffer pre-pass. One jittered traversal of the visible
     /// set writes view-space normal + linear depth, perceptual roughness, and
     /// screen-space motion into a single MRT (plus a sampleable depth), replacing
     /// the separate `SsrPrepass` + `Velocity` (and the SSAO-owned prepass): every
     /// consumer (SSR, SSAO, SSGI, RT, TAA, upscaler) reads this one output. Gated
     /// on `FrameGraphInputs::unified_gbuffer_prepass`.
-    GBufferPrepass = 26,
+    GBufferPrepass => "gbuffer_prepass",
     /// Roughness-aware reflection composite. Not a standalone graph node: it is
     /// encoded inline at the tail of the `SsrResolve` / `RtReflections` pass
     /// (both write a reflection target, then blur it by roughness and composite
@@ -199,26 +179,26 @@ pub enum PassId {
     /// backend, so no backend's graph executor ever dispatches this id: each
     /// treats it as a programming error the way it treats the bundled SSAO
     /// sub-passes.
-    ReflectionComposite = 27,
+    ReflectionComposite => "reflection_composite",
     /// Clustered light-binning compute pass. Once per frame, before Main: bins the
     /// scene's local lights (the GpuLight buffer) into a per-cluster index list
     /// over a screen-tiled, exponential-depth froxel grid, which the forward pass
     /// reads to shade each fragment from only its cluster's lights instead of
     /// iterating every light. Runs when the world has local lights. Writes a
     /// storage buffer Main reads (RAW edge).
-    LightCull = 28,
+    LightCull => "light_cull",
     /// Depth-only render of each shadowed spot light's cone into one slice of the
     /// spot shadow map array. Local lights are static, so the projections are
     /// built once; only the depth contents refresh, one slice per frame under
     /// `ShadowUpdate::Hybrid`. Runs when the world has a shadow-casting spot.
-    SpotShadow = 29,
+    SpotShadow => "spot_shadow",
     /// World-space line geometry (trajectories, tethers, path previews, the
     /// editor's origin axes). Blend-writes the resolved scene colour after the
     /// world decorations, sampling the resolved scene depth so a line behind
     /// geometry is occluded by it. Gated on `FrameGraphInputs::lines_enabled`:
     /// a frame that submits no lines omits the node entirely, so a frame that
     /// draws none never pays for it.
-    Lines = 30,
+    Lines => "lines",
     /// Terminal Hi-Z (depth-mip pyramid) build. Reduces the frame's final main
     /// depth into the pyramid the *next* frame's phase-1 `Cull` tests against,
     /// so it is declared last and reads the depth every decoration pass has
@@ -226,7 +206,7 @@ pub enum PassId {
     /// mid-frame from phase-1 depth for `Cull2`; when two-pass occlusion is on
     /// both run and this one supersedes it for the next frame. Present whenever
     /// the GPU-cull path built a pyramid (`FrameGraphInputs::hiz_build_enabled`).
-    HizFinal = 31,
+    HizFinal => "hiz_final",
 }
 
 impl PassId {
@@ -241,104 +221,25 @@ impl PassId {
 mod tests {
     use super::*;
 
-    // Every `PassId` variant, in declaration (index) order. This is a sized
-    // `[PassId; PASS_COUNT]` array, so adding a variant forces three edits to
-    // keep this compiling: bump `PASS_COUNT`, add the `PASS_NAMES` entry, and
-    // list the variant here. Combined with `expected_name`'s wildcard-free
-    // match below, a new graph pass cannot ship without a timing name (which
-    // would otherwise read as zero GPU time).
-    const ALL: [PassId; PASS_COUNT] = [
-        PassId::Cull,
-        PassId::Shadow,
-        PassId::SsrPrepass,
-        PassId::SsaoPrepass,
-        PassId::SsaoKernel,
-        PassId::SsaoBlur,
-        PassId::Main,
-        PassId::AutoExposure,
-        PassId::Decals,
-        PassId::Fog,
-        PassId::ParticlesSim,
-        PassId::ParticlesDraw,
-        PassId::SsrResolve,
-        PassId::Velocity,
-        PassId::TaaResolve,
-        PassId::Bloom,
-        PassId::Composite,
-        PassId::FogFroxel,
-        PassId::Upscale,
-        PassId::Transparent,
-        PassId::Raymarch,
-        PassId::HizBuild,
-        PassId::Cull2,
-        PassId::Main2,
-        PassId::Ssgi,
-        PassId::RtReflections,
-        PassId::GBufferPrepass,
-        PassId::ReflectionComposite,
-        PassId::LightCull,
-        PassId::SpotShadow,
-        PassId::Lines,
-        PassId::HizFinal,
-    ];
-
-    // Expected timing name per variant. The match has no wildcard arm, so
-    // adding a `PassId` variant fails to compile here until it is named. This
-    // is the forcing function for the timing-name registration gotcha.
-    fn expected_name(pass: PassId) -> &'static str {
-        match pass {
-            PassId::Cull => "cull",
-            PassId::Shadow => "shadow",
-            PassId::SsrPrepass => "ssr_prepass",
-            PassId::SsaoPrepass => "ssao_prepass",
-            PassId::SsaoKernel => "ssao_kernel",
-            PassId::SsaoBlur => "ssao_blur",
-            PassId::Main => "main",
-            PassId::AutoExposure => "auto_exposure",
-            PassId::Decals => "decals",
-            PassId::Fog => "fog",
-            PassId::ParticlesSim => "particles_sim",
-            PassId::ParticlesDraw => "particles_draw",
-            PassId::SsrResolve => "ssr_resolve",
-            PassId::Velocity => "velocity",
-            PassId::TaaResolve => "taa_resolve",
-            PassId::Bloom => "bloom",
-            PassId::Composite => "composite",
-            PassId::FogFroxel => "fog_froxel",
-            PassId::Upscale => "upscale",
-            PassId::Transparent => "transparent",
-            PassId::Raymarch => "raymarch",
-            PassId::HizBuild => "hiz_build",
-            PassId::Cull2 => "cull2",
-            PassId::Main2 => "main2",
-            PassId::Ssgi => "ssgi",
-            PassId::RtReflections => "rt_reflections",
-            PassId::GBufferPrepass => "gbuffer_prepass",
-            PassId::ReflectionComposite => "reflection_composite",
-            PassId::LightCull => "light_cull",
-            PassId::SpotShadow => "spot_shadow",
-            PassId::Lines => "lines",
-            PassId::HizFinal => "hiz_final",
-        }
-    }
-
     #[test]
-    fn pass_names_match_pass_count() {
+    fn every_pass_id_indexes_its_own_name() {
+        // The macro pairs each variant with its name, so this asserts the
+        // derivation rather than a hand-maintained mirror: indices stay dense
+        // and in declaration order, and no pass ships nameless.
+        for (i, &pass) in PassId::ALL.iter().enumerate() {
+            assert_eq!(pass as usize, i, "{pass:?} index out of order");
+            assert_eq!(pass.name(), PASS_NAMES[i], "{pass:?} name table mismatch");
+            assert!(!pass.name().is_empty(), "{pass:?} has an empty name");
+        }
         assert_eq!(PASS_NAMES.len(), PASS_COUNT);
     }
 
     #[test]
-    fn every_pass_id_round_trips_to_its_name() {
-        // Each variant's integer value must equal its position in both `ALL`
-        // and `PASS_NAMES` so the per-pass timing arrays stay aligned, and
-        // every pass must carry a non-empty, expected name.
-        for (i, &pass) in ALL.iter().enumerate() {
-            assert_eq!(pass as usize, i, "{pass:?} index out of order");
-            assert_eq!(pass.name(), PASS_NAMES[i], "{pass:?} name table mismatch");
-            assert_eq!(pass.name(), expected_name(pass), "{pass:?} name drifted");
-            assert!(!pass.name().is_empty(), "{pass:?} has an empty name");
+    fn pass_names_are_unique() {
+        // A copy-pasted name would silently merge two passes in the profiler.
+        let mut seen = hashbrown::HashSet::new();
+        for &name in PASS_NAMES.iter() {
+            assert!(seen.insert(name), "duplicate pass name {name:?}");
         }
-        // The last listed variant pins the high end of the index range.
-        assert_eq!(ALL[PASS_COUNT - 1] as usize, PASS_COUNT - 1);
     }
 }

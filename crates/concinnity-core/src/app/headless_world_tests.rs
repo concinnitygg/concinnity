@@ -172,6 +172,9 @@ fn simulating_world() -> (World, Entity, Vec<Entity>) {
     (world, drifter, balls)
 }
 
+// Only the settling test reads a body's height, and that test is itself
+// debug-only.
+#[cfg(debug_assertions)]
 fn height(app: &App, entity: Entity) -> f32 {
     app.world()
         .get::<Transform>(entity)

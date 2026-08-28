@@ -29,21 +29,17 @@
 // MSAA -- and declaring the second name anyway would give one GPU object two
 // independent barrier timelines. The builder threads the upstream handle
 // through instead, so one texture is always one resource. `create_texture` =
-// transient: single-frame intermediates (hdr intermediates excepted for now)
+// transient: single-frame intermediates (hdr intermediates excepted)
 // the aliasing planner ([`super::alias`]) may pack into shared physical memory,
 // since their `[first, last]` lifetimes are disjoint. In practice only
 // `ao_output` and `bloom_top` are independently poolable today; the other
 // `create_texture` intermediates fold into the long-lived gbuffer MRT
 // (`velocity`, `ssr_gbuffer`) or are themselves long-lived (`gbuffer`), so a
-// backend pool leaves them backend-owned. The descs are no longer
-// documentation-only: the planner sizes each transient from its desc. Until a
-// backend realises the plan, every resource is still backend-owned and bound
-// from context fields exactly as before; the origin only marks aliasing
-// candidacy and has no effect on pass order or barriers.
+// backend pool leaves them backend-owned. The planner sizes each transient
+// from its desc; the origin marks aliasing candidacy and has no effect on pass
+// order or barriers.
 
 use crate::render_types::NUM_SHADOW_CASCADES;
-use alloc::vec;
-use alloc::vec::Vec;
 
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,
@@ -285,6 +281,45 @@ impl FrameGraphInputs {
         }
     }
 }
+
+// Every gated pass flag, paired with the setter that turns it on. The two
+// exhaustive sweeps ([`super::validate`] and [`super::transient`]) are only
+// as wide as this table, so a new gated pass belongs here as well as in
+// `all_off`.
+#[cfg(test)]
+pub(crate) type FlagSetter = fn(&mut FrameGraphInputs);
+#[cfg(test)]
+pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
+    ("shadow", |i| i.shadow_enabled = true),
+    ("bindless_cull", |i| i.bindless_cull_enabled = true),
+    ("auto_exposure", |i| i.auto_exposure_enabled = true),
+    ("bloom", |i| i.bloom_enabled = true),
+    ("velocity", |i| i.velocity_enabled = true),
+    ("taa", |i| i.taa_enabled = true),
+    ("ssr", |i| i.ssr_enabled = true),
+    ("particles", |i| i.particles_enabled = true),
+    ("fog", |i| i.fog_enabled = true),
+    ("decals", |i| i.decals_enabled = true),
+    ("ssr_prepass", |i| i.ssr_prepass_enabled = true),
+    ("ssao", |i| i.ssao_enabled = true),
+    ("upscale", |i| i.upscale_enabled = true),
+    ("transparent", |i| i.transparent_enabled = true),
+    ("lines", |i| i.lines_enabled = true),
+    ("raymarch", |i| i.raymarch_enabled = true),
+    ("two_pass_occlusion", |i| {
+        i.two_pass_occlusion_enabled = true
+    }),
+    ("ssgi", |i| i.ssgi_enabled = true),
+    ("rt_reflections", |i| i.rt_reflections_enabled = true),
+    ("unified_gbuffer", |i| i.unified_gbuffer_prepass = true),
+    ("world_hidden", |i| i.world_hidden = true),
+    ("clustered_lighting", |i| {
+        i.clustered_lighting_enabled = true
+    }),
+    ("composite_reads_ao", |i| i.composite_reads_ao = true),
+    ("shadowed_spots", |i| i.shadowed_spot_count = 2),
+    ("hiz_build", |i| i.hiz_build_enabled = true),
+];
 
 // Build the full per-frame render graph. Conditional passes are
 // included based on the `inputs` flags. The compile pass derives
@@ -1107,41 +1142,15 @@ fn scene_color_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
+    // The production defaults, with MSAA on so the resolve-chain tests have a
+    // multisampled hdr target to exercise.
     fn all_off() -> FrameGraphInputs {
         FrameGraphInputs {
-            shadow_enabled: false,
-            shadow_map_size: 2048,
-            hdr_width: 1280,
-            hdr_height: 720,
             hdr_sample_count: 4,
-            bindless_cull_enabled: false,
-            auto_exposure_enabled: false,
-            bloom_enabled: false,
-            velocity_enabled: false,
-            taa_enabled: false,
-            ssr_enabled: false,
-            particles_enabled: false,
-            fog_enabled: false,
-            decals_enabled: false,
-            ssr_prepass_enabled: false,
-            ssao_enabled: false,
-            upscale_enabled: false,
-            transparent_enabled: false,
-            lines_enabled: false,
-            raymarch_enabled: false,
-            two_pass_occlusion_enabled: false,
-            ssgi_enabled: false,
-            rt_reflections_enabled: false,
-            // Default off: the existing tests exercise the separate-node path
-            // (the DX / Vulkan backends). Unified-path tests set this true.
-            unified_gbuffer_prepass: false,
-            world_hidden: false,
-            clustered_lighting_enabled: false,
-            composite_reads_ao: false,
-            shadowed_spot_count: 0,
-            spot_shadow_slice_size: 512,
-            hiz_build_enabled: false,
+            ..FrameGraphInputs::all_off()
         }
     }
 

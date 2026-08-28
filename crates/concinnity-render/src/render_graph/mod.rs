@@ -11,11 +11,6 @@
 //!     pass order, transient resource lifetimes, and per-pass barriers,
 //!   * surface a `CompiledGraph` the per-backend executor consumes.
 
-#![expect(
-    unused_imports,
-    reason = "the submodules re-export a shared vocabulary that no single consumer names in full"
-)]
-
 mod alias;
 mod builder;
 mod compile;
@@ -26,8 +21,7 @@ mod types;
 mod validate;
 mod view_mask;
 
-pub(crate) use alias::{AliasPlan, AliasSlot, plan_aliasing_for};
-pub(crate) use builder::{GraphBuilder, PassBuilder, ResourceVersion};
+pub(crate) use builder::GraphBuilder;
 pub(crate) use compile::GraphError;
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource};
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
@@ -35,16 +29,10 @@ pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
 pub use transient::{
     PoolGates, TransientSlot, TransientTexture, assert_slot_aliasing_sound, plan_pool_slots, pooled,
 };
-pub(crate) use transient::{SlotConflict, plan_transient_slots, planning_inputs, slot_conflicts};
 pub use types::{
     BarrierOp, BufferUsage, ClearValue, GraphResourceClass, PassKind, PixelFormat, ReadStages,
     ResourceId, ResourceState, TextureDesc, TextureHandle, TextureUsage,
 };
-pub(crate) use types::{
-    BufferDesc, BufferHandle, PassRange, ResourceOrigin, TextureSize, full_mip_levels,
-};
-#[cfg(test)]
-pub(crate) use validate::barrier_coverage_gaps;
-pub(crate) use validate::{BarrierGap, GapKind};
+pub(crate) use types::{BufferDesc, TextureSize, full_mip_levels};
 pub use validate::{barrier_coverage_gaps_for_driven, final_states};
 pub use view_mask::apply_view;

@@ -35,10 +35,8 @@ use super::alias::plan_aliasing_for;
 use super::compile::CompiledGraph;
 use super::frame::FrameGraphInputs;
 use super::types::{ClearValue, PixelFormat, TextureUsage};
-use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
 
 /// One pooled transient, resolved against a concrete drawable extent. The
@@ -364,6 +362,8 @@ pub fn assert_slot_aliasing_sound(
 mod tests {
     use super::*;
     use crate::render_graph::frame::build_frame_graph;
+    use alloc::format;
+    use alloc::vec;
     use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 
     // The flags a build configuration carries, i.e. the ones a pool is rebuilt
@@ -705,38 +705,7 @@ mod tests {
 
     // Every gated flag, mirroring `validate::tests::FLAGS`: the sweep is only
     // as wide as this table, so extend it when a gated pass is added.
-    type FlagSetter = fn(&mut FrameGraphInputs);
-    const FLAGS: &[(&str, FlagSetter)] = &[
-        ("shadow", |i| i.shadow_enabled = true),
-        ("bindless_cull", |i| i.bindless_cull_enabled = true),
-        ("auto_exposure", |i| i.auto_exposure_enabled = true),
-        ("bloom", |i| i.bloom_enabled = true),
-        ("velocity", |i| i.velocity_enabled = true),
-        ("taa", |i| i.taa_enabled = true),
-        ("ssr", |i| i.ssr_enabled = true),
-        ("particles", |i| i.particles_enabled = true),
-        ("fog", |i| i.fog_enabled = true),
-        ("decals", |i| i.decals_enabled = true),
-        ("ssr_prepass", |i| i.ssr_prepass_enabled = true),
-        ("ssao", |i| i.ssao_enabled = true),
-        ("upscale", |i| i.upscale_enabled = true),
-        ("transparent", |i| i.transparent_enabled = true),
-        ("lines", |i| i.lines_enabled = true),
-        ("raymarch", |i| i.raymarch_enabled = true),
-        ("two_pass_occlusion", |i| {
-            i.two_pass_occlusion_enabled = true
-        }),
-        ("ssgi", |i| i.ssgi_enabled = true),
-        ("rt_reflections", |i| i.rt_reflections_enabled = true),
-        ("unified_gbuffer", |i| i.unified_gbuffer_prepass = true),
-        ("world_hidden", |i| i.world_hidden = true),
-        ("clustered_lighting", |i| {
-            i.clustered_lighting_enabled = true
-        }),
-        ("composite_reads_ao", |i| i.composite_reads_ao = true),
-        ("shadowed_spots", |i| i.shadowed_spot_count = 2),
-        ("hiz_build", |i| i.hiz_build_enabled = true),
-    ];
+    use super::super::frame::GATED_FLAGS as FLAGS;
 
     // Assert the slots a pool built for `build` would allocate are conflict-free
     // in the graph `inputs` compiles to.

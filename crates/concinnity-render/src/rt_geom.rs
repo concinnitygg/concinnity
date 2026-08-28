@@ -7,8 +7,8 @@
 //! / DXR `[f32; 12]`) is a real hardware type and stays in each backend.
 
 use crate::render_types::{
-    DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject, albedo_pool_index,
-    normal_pool_index,
+    DrawObject, InstancedCluster, MaterialUniforms, RtGeomEntry, SkinnedDrawObject,
+    albedo_pool_index, normal_pool_index,
 };
 
 // Marks a `RtGeomEntry.normal_index` as belonging to a skinned object: the
@@ -71,23 +71,43 @@ pub(crate) fn pool_indices(
     )
 }
 
+// The shared body of the three entry builders: everything but where the mesh
+// slice, the transform, and the skinned flag come from.
+fn entry(
+    index_offset: u32,
+    base_vertex: u32,
+    model: [[f32; 4]; 4],
+    albedo_index: u32,
+    normal_index: u32,
+    material: &MaterialUniforms,
+) -> RtGeomEntry {
+    RtGeomEntry {
+        index_offset,
+        base_vertex,
+        albedo_index,
+        normal_index,
+        tint: material.tint,
+        roughness: material.roughness,
+        metallic: material.metallic,
+        emissive: material.emissive,
+        model,
+        emissive_map_index: material.emissive_map_index,
+        _pad: [0; 3],
+    }
+}
+
 /// Build the geometry-table entry for one static draw object.
 pub fn geom_entry(obj: &DrawObject, texture_count: u32) -> RtGeomEntry {
     let (albedo_index, normal_index) =
         pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
-    RtGeomEntry {
-        index_offset: obj.index_offset as u32,
-        base_vertex: obj.base_vertex as u32,
+    entry(
+        obj.index_offset as u32,
+        obj.base_vertex as u32,
+        obj.model,
         albedo_index,
         normal_index,
-        tint: obj.material.tint,
-        roughness: obj.material.roughness,
-        metallic: obj.material.metallic,
-        emissive: obj.material.emissive,
-        model: obj.model,
-        emissive_map_index: obj.material.emissive_map_index,
-        _pad: [0; 3],
-    }
+        &obj.material,
+    )
 }
 
 /// Build the geometry-table entry for one instance of an instanced cluster: the
@@ -100,19 +120,14 @@ pub fn cluster_geom_entry(
 ) -> RtGeomEntry {
     let (albedo_index, normal_index) =
         pool_indices(cluster.texture_slot, cluster.normal_map_slot, texture_count);
-    RtGeomEntry {
-        index_offset: cluster.index_offset as u32,
-        base_vertex: 0,
+    entry(
+        cluster.index_offset as u32,
+        0,
+        model,
         albedo_index,
         normal_index,
-        tint: cluster.material.tint,
-        roughness: cluster.material.roughness,
-        metallic: cluster.material.metallic,
-        emissive: cluster.material.emissive,
-        model,
-        emissive_map_index: cluster.material.emissive_map_index,
-        _pad: [0; 3],
-    }
+        &cluster.material,
+    )
 }
 
 /// Build the geometry-table entry for one skinned object. The skinned BLAS is
@@ -125,19 +140,14 @@ pub fn cluster_geom_entry(
 pub fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: u32) -> RtGeomEntry {
     let (albedo_index, normal_index) =
         pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
-    RtGeomEntry {
-        index_offset: obj.index_offset as u32,
-        base_vertex: 0,
+    entry(
+        obj.index_offset as u32,
+        0,
+        obj.model,
         albedo_index,
-        normal_index: normal_index | RT_SKINNED_FLAG,
-        tint: obj.material.tint,
-        roughness: obj.material.roughness,
-        metallic: obj.material.metallic,
-        emissive: obj.material.emissive,
-        model: obj.model,
-        emissive_map_index: obj.material.emissive_map_index,
-        _pad: [0; 3],
-    }
+        normal_index | RT_SKINNED_FLAG,
+        &obj.material,
+    )
 }
 
 /// True when any participating object's current model matrix differs from the one

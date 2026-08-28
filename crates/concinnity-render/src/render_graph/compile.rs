@@ -9,13 +9,12 @@
 //      edges. Cycles are an error.
 //   4. Derives a `barriers_before` list per pass from the per-resource
 //      state machine (Undefined → Read → Write transitions).
-//   5. Computes a `[first, last]` pass-index lifetime per resource so a
-//      future aliaser can overlap non-overlapping lifetimes in
+//   5. Computes a `[first, last]` pass-index lifetime per resource, which
+//      [`super::alias`] uses to overlap non-overlapping lifetimes in
 //      physical memory.
 //
-// The graph does not yet allocate transient resources or interpret
-// barriers per-backend. This module only produces the data the backend
-// executor consumes.
+// The graph allocates no GPU resources and interprets no barriers per
+// backend. This module only produces the data the backend executor consumes.
 
 use alloc::collections::BinaryHeap;
 use alloc::vec;
@@ -176,7 +175,10 @@ impl GraphBuilder {
     // declare exactly one `presents()` pass: the terminal swapchain
     // write that ends the frame.
     pub(crate) fn compile(self) -> Result<CompiledGraph, GraphError> {
-        let GraphBuilder { resources, passes } = self;
+        let GraphBuilder {
+            resources,
+            mut passes,
+        } = self;
         let n_passes = passes.len();
         let n_resources = resources.len();
 
@@ -315,12 +317,14 @@ impl GraphBuilder {
         let mut compiled_passes: Vec<CompiledPass> = order
             .iter()
             .map(|&orig_idx| {
-                let decl = &passes[orig_idx];
+                // `order` is a permutation, so each pass is realised exactly
+                // once and nothing reads the declaration after this.
+                let decl = &mut passes[orig_idx];
                 CompiledPass {
                     id: decl.id,
                     kind: decl.kind,
-                    reads: decl.reads.clone(),
-                    writes: decl.writes.clone(),
+                    reads: core::mem::take(&mut decl.reads),
+                    writes: core::mem::take(&mut decl.writes),
                     presents: decl.presents,
                     barriers_before: Vec::new(),
                 }

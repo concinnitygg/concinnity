@@ -381,12 +381,10 @@ pub fn classify_tier(input: &GpuClassInput) -> GpuTier {
 /// Implementations are thin forwarders to the inherent methods on
 /// MtlContext / DxContext / VkContext.
 ///
-/// The asset / world.jsonl hot-reload mutators below (`update_color_lut`,
-/// `rebuild_*_geometry`, `clone_static_draw_object`, etc.) are provided no-op
-/// methods driven only by the `cn debug` binary's reload passes, so they have
-/// no call site under `cargo check --lib`. Allow dead code at the trait level
-/// rather than annotating each; the required interface methods are never
-/// subject to the lint, so this only covers the binary-driven provided methods.
+/// The asset hot-reload mutators below (`update_color_lut`,
+/// `rebuild_*_geometry`, `clone_static_draw_object`, etc.) are provided
+/// methods that default to a no-op, so a backend implements only the reload
+/// paths it actually supports.
 pub trait RenderBackend: SceneControl + Send {
     /// Window / input lifecycle.
     fn window_closed(&mut self) -> bool;
@@ -1502,79 +1500,7 @@ mod tests {
     // default `reload_world`. Empty slices are `'static`; the only real borrow
     // is the window args.
     fn empty_backend_init(window: &crate::components::Window) -> BackendInit<'_> {
-        use crate::backend_init::{
-            MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
-        };
-        BackendInit {
-            window,
-            validation: false,
-            frames_in_flight: 2,
-            vsync: false,
-            clear_color: [0.0; 4],
-            hot_reload: false,
-            capture: false,
-            scene: SceneData {
-                vertices: &[],
-                indices: &[],
-                draw_objects: Vec::new(),
-                instanced_clusters: Vec::new(),
-                n_skinned: 0,
-                n_chunk_max: 0,
-            },
-            shaders: vec![ShaderBytes {
-                vert: &[],
-                frag: &[],
-                shadow: &[],
-                vert_instanced: &[],
-                deferred: false,
-            }],
-            media: MediaPayloads {
-                textures: &[],
-                text_atlases: Vec::new(),
-                env_map_bytes: None,
-                color_lut_bytes: None,
-            },
-            light_uniforms: crate::render_types::LightUniforms::DEFAULT,
-            local_lights: Vec::new(),
-            spot_shadows: Vec::new(),
-            area_lights: Vec::new(),
-            shadows: ShadowParams {
-                map_size: 0,
-                update: crate::components::ShadowUpdate::default(),
-                distance: 0,
-                cascades: 1,
-            },
-            anisotropy: 1,
-            planar_planes: 0,
-            post: PostSettings {
-                post_process: PostProcessTunables::DEFAULT,
-                taa_enabled: false,
-                ssao: None,
-                ssr: None,
-                ssgi: None,
-                rt_reflections: None,
-                rt_dynamic: crate::rt_geom::RtDynamicMode::Auto,
-                rt_skinned_geometry: true,
-                reflection_blur_scale: 1,
-                auto_exposure: None,
-                auto_exposure_bias_ev: 0.0,
-                hdr_display: false,
-                hdr_pq: false,
-                temporal_upscaling: false,
-                upscale_scale: 1.0,
-                upscale_backend: crate::components::UpscalerBackend::Auto,
-                occlusion_two_pass: false,
-            },
-            fx: WorldFx {
-                decals: Vec::new(),
-                particles: Vec::new(),
-                fog: None,
-                water_surfaces: Vec::new(),
-                glass_panels: Vec::new(),
-                sdf_volumes: Vec::new(),
-            },
-            requirements: Default::default(),
-        }
+        BackendInit::minimal(window, alloc::vec::Vec::new())
     }
 
     #[test]

@@ -234,40 +234,15 @@ mod tests {
         plan_aliasing_for(graph, drawable_w, drawable_h, &|_| true)
     }
 
-    // Mirror of `frame::tests::all_off` (that helper is private to the frame
-    // test module). All gated passes off; used by the integration test below.
-    const ALL_OFF: FrameGraphInputs = FrameGraphInputs {
-        shadow_enabled: false,
-        shadow_map_size: 2048,
-        hdr_width: 1920,
-        hdr_height: 1080,
-        hdr_sample_count: 1,
-        bindless_cull_enabled: false,
-        auto_exposure_enabled: false,
-        bloom_enabled: false,
-        velocity_enabled: false,
-        taa_enabled: false,
-        ssr_enabled: false,
-        particles_enabled: false,
-        fog_enabled: false,
-        decals_enabled: false,
-        ssr_prepass_enabled: false,
-        ssao_enabled: false,
-        upscale_enabled: false,
-        transparent_enabled: false,
-        lines_enabled: false,
-        raymarch_enabled: false,
-        two_pass_occlusion_enabled: false,
-        ssgi_enabled: false,
-        rt_reflections_enabled: false,
-        unified_gbuffer_prepass: false,
-        world_hidden: false,
-        clustered_lighting_enabled: false,
-        composite_reads_ao: false,
-        shadowed_spot_count: 0,
-        spot_shadow_slice_size: 512,
-        hiz_build_enabled: false,
-    };
+    // The production defaults at a 1080p drawable, which the packing
+    // assertions below are sized against.
+    fn all_off() -> FrameGraphInputs {
+        FrameGraphInputs {
+            hdr_width: 1920,
+            hdr_height: 1080,
+            ..FrameGraphInputs::all_off()
+        }
+    }
 
     // A transient texture desc of the given format at full drawable size.
     fn tex(format: PixelFormat) -> TextureDesc {
@@ -517,7 +492,7 @@ mod tests {
         // transient with disjoint lifetimes, so the planner saves at least
         // `ao_output`'s footprint. Guards the import->create reclassification +
         // the end-to-end planner against a representative graph.
-        let mut inputs = ALL_OFF;
+        let mut inputs = all_off();
         inputs.ssao_enabled = true;
         inputs.bloom_enabled = true;
         let g = build_frame_graph(&inputs).expect("frame graph compiles");

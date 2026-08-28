@@ -2,7 +2,7 @@
 
 [![crates.io][crates-img]][crates-link]
 [![docs.rs][docs-img]][docs-link]
-[![License][license-img]][license-link]
+[![GitHub License][license-img]][license-link]
 [![Build Status][gh-img]][gh-checks]
 [![codecov.io][codecov-img]][codecov-link]
 
@@ -51,7 +51,7 @@ for all available support options.
 [gh-checks]: https://github.com/concinnitygg/concinnity/actions/workflows/ci.yml?query=branch%3Amain
 [codecov-img]: https://img.shields.io/codecov/c/github/concinnitygg/concinnity?logo=codecov
 [codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
-[license-img]: https://img.shields.io/crates/l/concinnity.svg
+[license-img]: https://img.shields.io/github/license/concinnitygg/concinnity
 [license-link]: https://github.com/concinnitygg/concinnity/blob/main/LICENSE
 [asset-ref]: https://github.com/concinnitygg/concinnity/blob/main/docs/assets/index.md
 [build-guide]: https://github.com/concinnitygg/concinnity/blob/main/docs/development/building.md
