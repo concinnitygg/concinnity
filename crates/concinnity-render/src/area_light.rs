@@ -21,13 +21,6 @@ use alloc::vec::Vec;
 // Per-rect table index: `indices[i]` is the `AreaLightData` slot rect `i` owns,
 // or -1 once the table is full. The value is what `GpuLight.data_index` carries.
 pub(crate) fn assign_area_light_slots(rect_lights: &[RectAreaLight]) -> Vec<i32> {
-    if rect_lights.len() > MAX_AREA_LIGHTS {
-        tracing::warn!(
-            "GraphicsSystem: {} area lights declared; only {} are supported -- extras ignored",
-            rect_lights.len(),
-            MAX_AREA_LIGHTS
-        );
-    }
     (0..rect_lights.len())
         .map(|i| if i < MAX_AREA_LIGHTS { i as i32 } else { -1 })
         .collect()

@@ -210,7 +210,6 @@ impl PhysicsSystem {
     fn resolve_budget(&self, ctx: &PipelineContext) -> PhysicsBudget {
         let scan = super::budget::scan_counts(ctx);
         let Some(record) = ctx.resource::<WorldPhysicsBudget>().map(|b| b.0) else {
-            tracing::debug!("PhysicsSystem: no shipped budget; reserving from the loaded world");
             return PhysicsBudget::derive(&scan, self.spawn_headroom);
         };
         let shipped = super::budget::budget_of(&record);
@@ -319,40 +318,26 @@ impl System for PhysicsSystem {
                 .query::<crate::components::ProceduralMesh>()
                 .find(|m| m.asset_id == mesh_id)
                 .cloned();
-            match mesh_snap {
-                Some(m) if m.generator == "heightfield" => {
-                    match build_heightfield_collider(
-                        &mut world,
-                        &m,
-                        self.terrain_offset_y,
-                        world_mask,
-                        ctx,
-                    ) {
-                        Ok(()) => floor_built = true,
-                        Err(e) => tracing::warn!(
-                            "physics: heightfield collider load failed ({}); falling back to flat slab",
-                            e
-                        ),
-                    }
-                }
-                Some(m) => {
-                    tracing::warn!(
-                        "physics: terrain_mesh '{}' has generator '{}', expected 'heightfield'; falling back",
-                        mesh_id,
-                        m.generator
-                    );
-                }
-                None => {
-                    tracing::warn!(
-                        "physics: terrain_mesh asset {} not found; falling back",
-                        mesh_id
-                    );
-                }
+            // Anything else (missing asset, wrong generator, a collider that
+            // fails to build) leaves `floor_built` false and falls through to
+            // the flat-slab fallback below.
+            if let Some(m) = mesh_snap
+                && m.generator == "heightfield"
+                && build_heightfield_collider(
+                    &mut world,
+                    &m,
+                    self.terrain_offset_y,
+                    world_mask,
+                    ctx,
+                )
+                .is_ok()
+            {
+                floor_built = true;
             }
         }
         if !floor_built {
-            let floor = if let Some(terrain) = self.terrain.clone() {
-                build_heightfield(&mut world, &terrain, world_mask)
+            if let Some(terrain) = self.terrain.clone() {
+                build_heightfield(&mut world, &terrain, world_mask);
             } else {
                 // A large thin slab whose top face sits at Y = 0.
                 world.add_fixed(
@@ -363,10 +348,7 @@ impl System for PhysicsSystem {
                     [0.0; 3],
                     STATIC_FRICTION,
                     world_mask,
-                )
-            };
-            if floor.is_none() {
-                tracing::error!("physics: the world's reservation had no room for its floor");
+                );
             }
         }
 
@@ -392,19 +374,11 @@ impl System for PhysicsSystem {
             self.sensor_filters
                 .insert(tag, (volume.asset_id, volume.detects));
         }
-        if !volumes.is_empty() {
-            tracing::debug!("PhysicsSystem: {} trigger volume(s)", volumes.len());
-        }
 
         // Prop name -> BodyHandle, populated alongside `self.prop_bodies`.
         // Joints resolve their `body_a`/`body_b` references through this map.
         let mut body_handles: BTreeMap<AssetId, BodyHandle> = BTreeMap::new();
         self.build_prop_bodies(ctx, &mut world, &mut body_handles);
-        tracing::debug!(
-            "PhysicsSystem: {} prop bodies ({} dynamic)",
-            self.props.len(),
-            self.props.dynamic_count(),
-        );
 
         // joints
         // Each PhysicsJoint references one or two Props by AssetId. Cross-reference
@@ -413,30 +387,17 @@ impl System for PhysicsSystem {
         // with body_b empty anchors body_a to a hidden static body created on
         // demand at the world-space `anchor_b`.
         let joints: Vec<PhysicsJoint> = ctx.drain::<PhysicsJoint>();
-        let mut wired = 0usize;
         for joint in joints {
             let Some(body_a_id) = joint.body_a else {
-                tracing::warn!(
-                    "PhysicsJoint '{}': body_a is required; skipping",
-                    joint.asset_id
-                );
                 continue;
             };
             let Some(handle_a) = body_handles.get(&body_a_id).copied() else {
-                tracing::warn!(
-                    "PhysicsJoint '{}': body_a Prop has no collider; skipping",
-                    joint.asset_id
-                );
                 continue;
             };
             let handle_b = if let Some(body_b_id) = joint.body_b {
                 match body_handles.get(&body_b_id).copied() {
                     Some(h) => h,
                     None => {
-                        tracing::warn!(
-                            "PhysicsJoint '{}': body_b Prop has no collider; skipping",
-                            joint.asset_id
-                        );
                         continue;
                     }
                 }
@@ -469,18 +430,9 @@ impl System for PhysicsSystem {
                 anchor_b,
                 joint_spec(&joint),
             ) {
-                tracing::warn!(
-                    "PhysicsJoint '{}': the simulation declined it; skipping",
-                    joint.asset_id
-                );
                 continue;
             }
-            wired += 1;
         }
-        if wired > 0 {
-            tracing::debug!("PhysicsSystem: wired {} joint(s)", wired);
-        }
-
         // player capsule for the Camera3D
         // Every first-person camera is collided as a capsule. A RigidBody
         // upgrades it from a free-flying spectator to a grounded,
@@ -532,12 +484,6 @@ impl System for PhysicsSystem {
                 center: PointInterp::new(center),
                 written_eye: None,
             });
-            tracing::debug!(
-                "PhysicsSystem: player capsule r={:.2} h={:.2} gravity={}",
-                radius,
-                half_height,
-                has_gravity,
-            );
         }
 
         // Kinematic capsules for the root-motion character rigs published by
@@ -548,19 +494,6 @@ impl System for PhysicsSystem {
             self.layers.mask(LAYER_CHARACTER),
             &mut self.rigs,
         );
-
-        // Everything the budget reserved has now been built. A shortfall means
-        // the counts the reservation came from disagree with what the world
-        // actually holds, which leaves bodies missing from the simulation
-        // rather than merely mis-sized.
-        let built = world.body_count() as u32;
-        if built != budget.body_total() {
-            tracing::error!(
-                "physics: the world built {} of the {} bodies its budget reserved",
-                built,
-                budget.body_total()
-            );
-        }
 
         // Published from the built world: the simulation's own storage is only
         // knowable once it is reserved.

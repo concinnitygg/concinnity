@@ -41,14 +41,6 @@ pub fn build_light_data(
     spot_lights: &[SpotLight],
     rect_lights: &[RectAreaLight],
 ) -> LightData {
-    let total = pt_lights.len() + spot_lights.len() + rect_lights.len();
-    if total > MAX_LOCAL_LIGHTS {
-        tracing::warn!(
-            "GraphicsSystem: {} local lights declared; only {} are supported -- extras ignored",
-            total,
-            MAX_LOCAL_LIGHTS
-        );
-    }
     let slices = spot_shadow::assign_spot_shadow_slices(spot_lights);
     let spot_shadows = spot_shadow::build_spot_shadow_data(spot_lights, &slices);
     let slots = area_light::assign_area_light_slots(rect_lights);
@@ -141,13 +133,6 @@ const ZERO_PT: PointLightData = PointLightData {
 pub fn directional_light_data(
     lights: &[DirectionalLight],
 ) -> ([DirectionalLightData; MAX_DIRECTIONAL_LIGHTS], i32) {
-    if lights.len() > MAX_DIRECTIONAL_LIGHTS {
-        tracing::warn!(
-            "GraphicsSystem: {} directional lights declared; only {} are supported -- extras ignored",
-            lights.len(),
-            MAX_DIRECTIONAL_LIGHTS
-        );
-    }
     let mut directional = [ZERO_DIR; MAX_DIRECTIONAL_LIGHTS];
     for (slot, l) in directional.iter_mut().zip(lights) {
         *slot = DirectionalLightData {

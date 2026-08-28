@@ -61,9 +61,6 @@ pub(crate) fn init_rigs(
             written_pos: Some(rig.position),
         })
     }));
-    if !rigs.is_empty() {
-        tracing::debug!("PhysicsSystem: {} character rig(s)", rigs.len());
-    }
 }
 
 // Read the root-motion displacements published since last frame (by

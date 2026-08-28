@@ -34,8 +34,7 @@ pub enum CnResult {
 
 // Baking a component into its blob record serializes it with postcard.
 impl From<postcard::Error> for CnResult {
-    fn from(e: postcard::Error) -> Self {
-        tracing::error!("postcard error: {}", e);
+    fn from(_: postcard::Error) -> Self {
         CnResult::InvalidArgument
     }
 }
@@ -44,8 +43,7 @@ impl From<postcard::Error> for CnResult {
 // and the component schema disagree (a stale blob survives the version check
 // instead of reaching here).
 impl From<crate::blob::FrameError> for CnResult {
-    fn from(e: crate::blob::FrameError) -> Self {
-        tracing::error!("baked record did not decode: {}", e);
+    fn from(_: crate::blob::FrameError) -> Self {
         CnResult::InvalidArgument
     }
 }

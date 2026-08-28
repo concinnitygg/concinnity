@@ -1,4 +1,4 @@
-//! concinnity: the dev CLI binary.
+//! concinnity: the dev CLI binary, built by the `editor` feature.
 //!
 //! The command tree, its dispatch, and every subcommand live in the
 //! concinnity-cli library. This target is the binary that links them, and the

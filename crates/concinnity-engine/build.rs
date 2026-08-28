@@ -11,14 +11,13 @@
 //!    link directive kept is the NGX import lib: the DLSS modules are
 //!    `#[cfg(ngx_sdk_bundled)]`, so when that cfg is on they compile into the lib
 //!    and must resolve their NGX symbols when this crate's test binaries link.
-//!    That is `BinaryTargets::None`.
 
 // 3. Bake the bundled face into an SDF atlas the crate embeds, so text can draw
 //    with no compiled world data behind it: the startup error screen, which runs
 //    when loading that data is what failed, and any TextLabel or TextInput naming
 //    no Font.
 
-use concinnity_toolchain::{BinaryTargets, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
+use concinnity_toolchain::{emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
 
 // Native size of the built-in face: what text naming no Font lays out at before
 // its own `scale`. The field is signed-distance and the atlas supersamples, so
@@ -28,8 +27,7 @@ const BUILTIN_FONT_PX: u32 = 24;
 
 fn main() {
     emit_check_cfgs();
-    let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, &[BinaryTargets::None]);
+    setup_graphics_sdks(emit_backend_cfg());
     bake_builtin_font();
 }
 

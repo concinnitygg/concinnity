@@ -208,14 +208,6 @@ pub(crate) fn publish_reservation(ledger: &Ledger, budget: &PhysicsBudget, world
     let driver = reserved_bytes(budget);
     let simulation = world.reserved_bytes();
     let bytes = driver.saturating_add(simulation);
-    tracing::debug!(
-        "PhysicsSystem: {} bodies reserved (+{} spawn headroom), {} host bytes ({} driver, {} simulation)",
-        budget.body_total(),
-        budget.spawn_headroom,
-        bytes,
-        driver,
-        simulation
-    );
     ledger.set(MemTag::Physics, Realm::Host, bytes);
     // Both sides are reserved from the budget at init, so the reservation is
     // both what is held and the ceiling it is held against.

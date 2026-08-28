@@ -40,11 +40,7 @@ pub trait PayloadStore {
 pub struct NoPayloads;
 
 impl PayloadStore for NoPayloads {
-    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
-        tracing::error!(
-            "NoPayloads: world has no compiled payloads, cannot read blob {}",
-            locator.blob_index
-        );
+    fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnResult> {
         Err(CnResult::FileIo)
     }
 

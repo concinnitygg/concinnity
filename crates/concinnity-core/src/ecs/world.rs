@@ -413,13 +413,7 @@ impl World {
         // blobs the GraphicsSystem init sweep held back for their later
         // consumers, and every blob in a world with no GraphicsSystem to run
         // that sweep at all.
-        let freed = self.release_payloads();
-        if freed >= 1024 * 1024 {
-            tracing::info!(
-                "World: freed {} MiB of resident blob payloads after init",
-                freed / (1024 * 1024)
-            );
-        }
+        self.release_payloads();
         // Access declarations are final once every system has inited, so this
         // is the earliest the edges can be validated and the waves derived.
         let schedule = waves::build(&self.systems, self.entries);
@@ -504,9 +498,8 @@ impl World {
             match result {
                 StepResult::Stop => return StepResult::Stop,
                 StepResult::Done => {
-                    let removed = systems.remove(i);
+                    systems.remove(i);
                     removed_any = true;
-                    tracing::debug!("System '{}' finished", removed.name());
                 }
                 StepResult::Continue => {
                     i += 1;
@@ -516,7 +509,7 @@ impl World {
         if removed_any && self.schedule.is_some() {
             self.schedule = Some(waves::build(&self.systems, self.entries));
         }
-        self.report_scratch_overflow();
+        self.take_scratch_overflows();
         #[cfg(debug_assertions)]
         if let (Some(start), Some(end)) = (frame_alloc_start, concinnity_memory::alloc_count()) {
             self.profile
@@ -529,29 +522,10 @@ impl World {
         }
     }
 
-    // A frame that outgrew the scratch reserve fell back to the heap and still
-    // rendered, so nothing breaks -- but a silent fallback reads as "the reserve
-    // is sized right" when it is not. Reported once per frame rather than per
-    // declined request, and only while the count is climbing, so a world that
-    // is permanently too small does not fill the log.
-    fn report_scratch_overflow(&mut self) {
-        let overflows = self.take_scratch_overflows();
-        if overflows == 0 {
-            return;
-        }
-        let stats = self.scratch_stats();
-        tracing::warn!(
-            "frame scratch overflowed {overflows} time(s): reserve {} KiB, peak {} KiB",
-            stats.capacity / 1024,
-            stats.peak / 1024,
-        );
-    }
-
     /// Fold the frame's declined scratch requests into the world's running
     /// total, returning what this frame declined. A frame that outgrew the
-    /// reserve fell back to the heap and still rendered, so nothing breaks --
-    /// but the caller reports it, since a silent fallback reads as "the reserve
-    /// is sized right" when it is not.
+    /// reserve fell back to the heap and still rendered, so nothing breaks; the
+    /// count is what a host surfaces to say the reserve is undersized.
     pub fn take_scratch_overflows(&mut self) -> u32 {
         let overflows = self.scratch.overflows();
         if overflows > 0 {

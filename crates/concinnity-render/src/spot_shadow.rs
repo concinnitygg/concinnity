@@ -57,13 +57,6 @@ pub(crate) fn assign_spot_shadow_slices(spot_lights: &[SpotLight]) -> Vec<i32> {
             }
         })
         .collect();
-    if wanted > MAX_SHADOWED_SPOTS {
-        tracing::warn!(
-            "GraphicsSystem: {} spot lights request shadows; only {} slices exist -- the rest light without casting",
-            wanted,
-            MAX_SHADOWED_SPOTS
-        );
-    }
     slices
 }
 

@@ -77,7 +77,7 @@
 //! Metal or DirectX.
 //!
 //! `--features player` builds `concinnity-run`, the standalone binary that plays
-//! a compiled world, and `--features dev` builds both it and the `concinnity`
+//! a compiled world, and `--features editor` builds both it and the `concinnity`
 //! command-line tool. Both are for working on an application rather than for
 //! linking one: nothing in the library's own API depends on either, and with
 //! neither enabled this crate builds no build dependency at all.

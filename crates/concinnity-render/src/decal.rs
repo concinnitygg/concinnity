@@ -124,12 +124,6 @@ pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<Decal
             Some(handle) => {
                 let slot = handle.index();
                 if slot >= texture_count {
-                    tracing::error!(
-                        "GraphicsSystem: Decal {} references out-of-range texture handle {} (only {} textures)",
-                        d.asset_id,
-                        handle.index(),
-                        texture_count
-                    );
                     continue;
                 }
                 slot

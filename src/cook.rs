@@ -8,9 +8,10 @@
 //! the step between: it checks the declarations, expands the ones that stand
 //! for several assets, prepares each asset's data, and then either assembles a
 //! [`World`] to run straight away or writes the result to a file for a later
-//! run to play. Assets read from disk are cached under `.concinnity/cache/`
-//! (relative to the current directory), so a second run with unchanged sources
-//! skips the expensive work.
+//! run to play. Prepared payloads are cached under the state root a host
+//! installs -- the dev CLI's is `.concinnity/` inside the project -- so a
+//! second compile with unchanged sources skips the expensive work. A process
+//! that installed none has nowhere to cache and prepares them every time.
 //!
 //! # The authoring vocabulary
 //!

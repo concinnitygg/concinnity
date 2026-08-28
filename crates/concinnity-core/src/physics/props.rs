@@ -143,14 +143,8 @@ impl PropBodies {
         body_cap: u32,
     ) {
         let full = world.body_count() as u32 >= body_cap;
-        if (full || self.add(layers, world, entity, snap).is_none()) && self.refused.insert(entity)
-        {
-            tracing::error!(
-                "physics: no body for spawned {:?}: the world's {} reserved bodies are all \
-                 live. Raise `spawn_headroom` on its PhysicsConfig.",
-                entity,
-                body_cap
-            );
+        if full || self.add(layers, world, entity, snap).is_none() {
+            self.refused.insert(entity);
         }
     }
 
@@ -209,10 +203,12 @@ impl PropBodies {
         self.refused.contains(&entity)
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.bodies.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn dynamic_count(&self) -> usize {
         self.bodies.iter().filter(|p| p.dynamic).count()
     }

@@ -15,7 +15,8 @@
 //!    binaries this also copies the runtime DLLs next to the .exe and links the
 //!    NGX import lib; for a package that produces only an rlib and its own test
 //!    binaries just the NGX link is needed. Which of the two, and where the
-//!    binaries land, is `BinaryTargets`.
+//!    binaries land, is read off the calling package by `targets` -- a build
+//!    script declares nothing about its own target list.
 //!
 //! The public entry points emit `cargo::` directives on stdout, which Cargo
 //! attributes to the build script of whichever package called in. That is what
@@ -32,6 +33,7 @@ use std::path::{Path, PathBuf};
 mod metal_shaders;
 mod sdks;
 mod source_hash;
+mod targets;
 
 pub use metal_shaders::{SlangLibSpec, SlangShaders, precompile_metal_shaders};
 use sdks::SdkEnv;
@@ -57,21 +59,21 @@ impl Backend {
     }
 }
 
-/// Which of the calling package's targets are the final binaries the graphics
-/// SDKs serve. Cargo scopes a linker argument by target kind and places each kind
-/// in its own directory, so this picks both the `cargo::rustc-link-arg-*` key the
-/// Agility exports go out under and the directory the runtime DLLs are copied
-/// into -- which has to be the one holding the .exe, since that is where Windows
-/// looks for them.
+// Which of the calling package's targets are the final binaries the graphics
+// SDKs serve. Cargo scopes a linker argument by target kind and places each kind
+// in its own directory, so this picks both the `cargo::rustc-link-arg-*` key the
+// Agility exports go out under and the directory the runtime DLLs are copied
+// into -- which has to be the one holding the .exe, since that is where Windows
+// looks for them. Discovered per package by `targets`, never named by a caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinaryTargets {
-    /// The package links no binary of its own. Its test and bench executables
-    /// still resolve the NGX symbols through the plain `rustc-link-arg`, but
-    /// nothing is placed beside them.
+pub(crate) enum BinaryTargets {
+    // The package links no binary of its own. Its test and bench executables
+    // still resolve the NGX symbols through the plain `rustc-link-arg`, but
+    // nothing is placed beside them.
     None,
-    /// `src/main.rs` and `src/bin/`, which land in `<target>/<profile>/`.
+    // `src/main.rs` and `src/bin/`, which land in `<target>/<profile>/`.
     Bins,
-    /// `examples/`, which land in `<target>/<profile>/examples/`.
+    // `examples/`, which land in `<target>/<profile>/examples/`.
     Examples,
 }
 
@@ -138,16 +140,36 @@ pub fn emit_backend_cfg() -> Backend {
 /// Set up the optional graphics SDKs for the given backend. On a non-Windows
 /// target (or the Metal backend) this is a no-op: none of these SDKs apply.
 ///
-/// `targets` is every kind of final binary the calling package builds, since a
-/// package can build both (this workspace's root builds the two bins and the
-/// examples). Each kind takes its own linker-argument key and its own directory
-/// for the bundled DLLs, so the setup runs once per kind; a directive both kinds
-/// produce -- every cfg, every warning -- is emitted once.
-pub fn setup_graphics_sdks(backend: Backend, targets: &[BinaryTargets]) {
+/// Which kinds of final binary the calling package builds is read from that
+/// package, not passed in: a package can build both bins and examples, and each
+/// kind takes its own linker-argument key and its own directory for the bundled
+/// DLLs, so the setup runs once per kind. A directive both kinds produce --
+/// every cfg, every warning -- is emitted once.
+pub fn setup_graphics_sdks(backend: Backend) {
     let env = sdk_env_from_cargo();
-    for line in sdks::graphics_sdk_directives(backend, targets, &env) {
+    if let Some(dir) = manifest_dir() {
+        for path in targets::watched_inputs(&dir) {
+            println!("cargo::rerun-if-changed={}", path.display());
+        }
+    }
+    for line in sdks::graphics_sdk_directives(backend, &binary_targets_from_cargo(), &env) {
         println!("{line}");
     }
+}
+
+// The calling package's binary kinds, from the manifest Cargo is building it
+// from. A package Cargo hands no manifest (nothing does outside a build script)
+// falls back to the kind that scopes nothing.
+fn binary_targets_from_cargo() -> Vec<BinaryTargets> {
+    let Some(dir) = manifest_dir() else {
+        return vec![BinaryTargets::None];
+    };
+    let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default();
+    targets::binary_targets(&manifest, &dir)
+}
+
+fn manifest_dir() -> Option<PathBuf> {
+    std::env::var("CARGO_MANIFEST_DIR").ok().map(PathBuf::from)
 }
 
 /// Hash the Rust sources under `roots`, and emit the rerun directives that
@@ -305,16 +327,27 @@ mod tests {
         // Metal never has SDKs to set up, and the Vulkan arm is gated on a
         // Windows target OS (CARGO_CFG_TARGET_OS is unset outside build
         // scripts), so neither requires any SDK to be present.
+        let env = sdk_env_from_cargo();
         for targets in [
             &[BinaryTargets::None][..],
             &[BinaryTargets::Bins],
             &[BinaryTargets::Examples],
             &[BinaryTargets::Bins, BinaryTargets::Examples],
         ] {
-            setup_graphics_sdks(Backend::Metal, targets);
-            setup_graphics_sdks(Backend::Vk, targets);
+            for backend in [Backend::Metal, Backend::Vk] {
+                assert!(sdks::graphics_sdk_directives(backend, targets, &env).is_empty());
+            }
         }
+        setup_graphics_sdks(Backend::Metal);
+        setup_graphics_sdks(Backend::Vk);
         // The check-cfg list is emitted unconditionally and must not panic.
         emit_check_cfgs();
+    }
+
+    #[test]
+    fn this_crate_builds_no_final_binary() {
+        // concinnity-toolchain is a lib with no bin and no example, so the
+        // discovery run from its own test binary has to say so.
+        assert_eq!(binary_targets_from_cargo(), vec![BinaryTargets::None]);
     }
 }

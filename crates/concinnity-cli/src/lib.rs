@@ -4,7 +4,7 @@
 //! implementations (cli/), driving the dev-session entry points the
 //! concinnity-editor library exposes and the concinnity-cook compile pipeline.
 //! The binary itself is a target of the workspace's root package, which links
-//! this library behind its `dev` feature.
+//! this library behind its `editor` feature.
 //!
 //! Also owns where a dev project keeps its state. The engine crates have no
 //! default: they read whatever root a host installs, so the `.concinnity/`

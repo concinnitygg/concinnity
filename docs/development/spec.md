@@ -91,7 +91,7 @@ can be consumed by a minimal client, and the cook-only crates
 player.
 
 No crate below builds a binary. The root package is the `concinnity` facade over
-them and owns both binary targets; the CLI's sits behind a `dev` feature, so a
+them and owns both binary targets; the CLI's sits behind an `editor` feature, so a
 consumer of the facade never pulls the command tree into its graph.
 
 | Crate                  | Kind      | `no_std` | Role                                                      |

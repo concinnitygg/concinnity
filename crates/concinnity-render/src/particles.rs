@@ -146,12 +146,6 @@ pub fn build_particle_records(
             Some(handle) => {
                 let slot = handle.index();
                 if slot >= texture_count {
-                    tracing::error!(
-                        "GraphicsSystem: ParticleEmitter {} references out-of-range texture handle {} (only {} textures)",
-                        e.asset_id,
-                        handle.index(),
-                        texture_count
-                    );
                     continue;
                 }
                 slot

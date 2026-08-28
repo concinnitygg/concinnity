@@ -396,9 +396,6 @@ impl<'a> BackendInit<'a> {
                 &mut self.fx,
                 &mut self.planar_planes,
             );
-            tracing::info!(
-                "render requirements: no 3D scene content; scene-scoped features disabled"
-            );
         }
         self.requirements = req;
     }

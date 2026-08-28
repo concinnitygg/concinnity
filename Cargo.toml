@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.18.65"
+version = "0.18.66"
 description = "Asset-driven application world framework"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -60,7 +60,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "concinnity"
 path = "src/bin/concinnity.rs"
-required-features = ["dev"]
+required-features = ["editor"]
 doc = false
 
 [[bin]]
@@ -72,7 +72,7 @@ doc = false
 [[test]]
 name = "cli"
 path = "tests/cli.rs"
-required-features = ["dev"]
+required-features = ["editor"]
 
 [workspace]
 resolver = "2"
@@ -94,7 +94,7 @@ targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 default = ["std"]
 std = ["dep:concinnity-engine", "dep:concinnity-memory"]
 player = ["std", "dep:concinnity-toolchain"]
-dev = ["player", "dep:concinnity-cli"]
+editor = ["player", "dep:concinnity-cli"]
 cook = ["std", "dep:concinnity-asset", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
 vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan", "concinnity-cli?/vulkan"]
 

@@ -141,13 +141,7 @@ impl System for BehaviorSystem {
         self.trace_frame = 0;
         self.sim_ticks = 0;
 
-        let restored = self.restore_state();
-        tracing::info!(
-            "BehaviorSystem: {} behavior(s), {} variable(s), restored {}",
-            self.programs.len(),
-            self.vars.len(),
-            restored,
-        );
+        self.restore_state();
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {

@@ -135,7 +135,6 @@ pub fn tick_transitions<B: SceneControl + ?Sized>(
                     started_at: elapsed,
                 };
                 set_scene_visibility(visibility, next, backend);
-                tracing::debug!("SceneFlow: switched to scene {}", next);
             }
         }
         FadePhase::FromBlack { started_at } => {
@@ -162,19 +161,11 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
     let flow = match flow_opt {
         Some(f) => f,
         None => {
-            tracing::warn!(
-                "SceneCommand: jump to {} ignored -- no Scene assets in world",
-                target_scene
-            );
             return;
         }
     };
 
     if !flow.scenes.contains(&target_scene) {
-        tracing::warn!(
-            "SceneCommand: jump to {} ignored -- no Scene with that name",
-            target_scene
-        );
         return;
     }
 
@@ -193,7 +184,6 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
             flow.current = target_scene;
             flow.fade = FadePhase::None;
             set_scene_visibility(visibility, target_scene, backend);
-            tracing::debug!("SceneCommand: cut to scene {}", target_scene);
         }
     }
 }

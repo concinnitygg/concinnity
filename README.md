@@ -14,7 +14,7 @@ an application is mostly a matter of saying what is in it.
 It's available as a command-line tool:
 
 ```sh
-cargo install concinnity --features dev
+cargo install concinnity --features editor
 ```
 
 And as a Rust crate:
