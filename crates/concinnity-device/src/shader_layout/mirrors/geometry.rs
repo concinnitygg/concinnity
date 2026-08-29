@@ -10,12 +10,12 @@
 // three.
 
 use concinnity_core::gfx::render_types::{ParticleParams, ShadowPassPush, TextUniforms};
-use concinnity_render::metal::uniforms::{ModelUniforms, SsrPrepassMat};
-use concinnity_render::uniforms::{
+use concinnity_core::render::metal::uniforms::{ModelUniforms, SsrPrepassMat};
+use concinnity_core::render::uniforms::{
     DecalParams, DecalView, GBufferModel, GBufferView, GpuParticle, LineView, ParticleView,
     SkinParams,
 };
-use concinnity_render::vulkan::uniforms::GbModelPush;
+use concinnity_core::render::vulkan::uniforms::GbModelPush;
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
 use crate::shader_layout::programs::Target;

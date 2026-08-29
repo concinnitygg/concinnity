@@ -188,7 +188,7 @@ pub(super) struct ProbeState {
     pub bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
     // Per-probe influence boxes + count, pushed to the fragment shader at
     // buffer(6). `EMPTY` until a bake.
-    pub set: concinnity_render::uniforms::ProbeSet,
+    pub set: concinnity_core::render::uniforms::ProbeSet,
     // The probe currently rendering its six cube faces on the GPU (one at a
     // time; owns the reserved-ring-slot buffers + capture targets). The render
     // thread never blocks: the faces are submitted without `waitUntilCompleted`

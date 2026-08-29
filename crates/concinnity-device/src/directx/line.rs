@@ -32,9 +32,9 @@ use crate::gfx::render_types::LineVertex;
 // them pretend to be unoccluded.
 const OCCLUDED_ALPHA: f32 = 0.12;
 
-// `LineView` is a GPU-free layout struct that lives in concinnity-render;
+// `LineView` is a GPU-free layout struct that lives in `core::render`;
 // re-export it so `crate::directx::line::LineView` is the local path.
-pub(in crate::directx) use concinnity_render::uniforms::LineView;
+pub(in crate::directx) use concinnity_core::render::uniforms::LineView;
 
 // Line-pass state on the context: the resources, built on the first frame that
 // submits lines so a world that never draws any pays nothing, plus the

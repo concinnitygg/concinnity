@@ -26,8 +26,8 @@ use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_shaders::{self, SlangLib};
 use crate::metal::uniforms::SsrPrepassMat;
-use concinnity_render::uniforms::GBufferModel;
-use concinnity_render::uniforms::GBufferView;
+use concinnity_core::render::uniforms::GBufferModel;
+use concinnity_core::render::uniforms::GBufferView;
 
 // All unified-G-buffer pre-pass state grouped into one unit: the shared
 // targets (normal+depth / roughness / velocity / sampleable depth) plus the

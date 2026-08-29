@@ -310,7 +310,7 @@ impl System for StreamingSystem {
         // Refresh each pool's device footprint under the shared tags, so a
         // readout can name what VRAM is holding.
         accounting::publish(
-            concinnity_memory::ledger(),
+            concinnity_core::memory::ledger(),
             state.pool_reports(transient_pool_bytes),
         );
         // Per-scene load status into the reused scratch; published below once
@@ -797,7 +797,7 @@ impl StreamingState {
     ) -> Option<crate::app::mem_drift::MemoryDrift> {
         use crate::app::mem_drift::DriftVerdict;
         let rss = rss?;
-        let heap_live = concinnity_memory::stats()?.live_bytes;
+        let heap_live = concinnity_core::memory::stats()?.live_bytes;
         let drift = self.drift.sample(rss, heap_live, budget)?;
 
         if self.last_drift_verdict != Some(drift.verdict) {
@@ -864,14 +864,14 @@ impl StreamingState {
         [
             self.mesh_streamer.as_ref().map(|s| {
                 (
-                    concinnity_memory::MemTag::Meshes,
+                    concinnity_core::memory::MemTag::Meshes,
                     s.resident_bytes(),
                     s.byte_budget(),
                 )
             }),
             self.chunk_stream.as_ref().map(|cs| {
                 (
-                    concinnity_memory::MemTag::Chunks,
+                    concinnity_core::memory::MemTag::Chunks,
                     cs.streamer.resident_bytes(),
                     cs.streamer.byte_budget(),
                 )

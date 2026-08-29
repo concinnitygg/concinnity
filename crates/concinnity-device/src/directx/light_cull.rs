@@ -262,7 +262,7 @@ mod tests {
     // uint`s, so they must track the Rust values the CPU sizes the buffer with.
     #[test]
     fn kernel_cluster_constants_match_render_types() {
-        let kernel = concinnity_render::shaders::LIGHT_CULL;
+        let kernel = concinnity_core::render::shaders::LIGHT_CULL;
         assert!(kernel.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));

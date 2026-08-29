@@ -883,7 +883,7 @@ pub(super) struct ProbeState {
     // Per-frame probe set (parallax boxes + live count) bound to the forward /
     // SSR / RT shaders. `EMPTY` until a bake installs a cube; distinct from
     // `env_map` so the skybox + diffuse irradiance keep the sky.
-    pub set: concinnity_render::uniforms::ProbeSet,
+    pub set: concinnity_core::render::uniforms::ProbeSet,
     // The probe whose six cube faces are currently rendering on the GPU (one at a
     // time, spread one face per frame). Owns the reserved-ring-slot capture
     // resources until its faces are read back.

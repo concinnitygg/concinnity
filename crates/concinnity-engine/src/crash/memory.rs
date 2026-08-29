@@ -10,7 +10,7 @@
 // allocation, and nothing that can block on a thread the fault suspended.
 // Rendering allocates and runs later, with the report's other sections.
 
-use concinnity_memory::MemStats;
+use concinnity_core::memory::MemStats;
 
 // The tracked heap and process RSS at crash time. Either half is `None` when
 // its source is unavailable: no binary installed the tracking allocator, or the
@@ -24,7 +24,7 @@ pub(crate) struct MemorySnapshot {
 impl MemorySnapshot {
     pub(crate) fn capture() -> Self {
         Self {
-            heap: concinnity_memory::stats(),
+            heap: concinnity_core::memory::stats(),
             rss_bytes: crate::app::sysmem::process_resident_bytes(),
         }
     }

@@ -367,7 +367,7 @@ fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
 fn docs_writes_the_asset_reference_pages() {
     let project = Project::empty();
     for tree in [
-        "crates/concinnity-asset/src",
+        "crates/concinnity-world/src/schema",
         "crates/concinnity-core/src/components",
     ] {
         copy_dir(&repo_root().join(tree), &project.path().join(tree));

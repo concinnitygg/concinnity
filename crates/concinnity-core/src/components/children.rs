@@ -1,6 +1,6 @@
 // src/components/children.rs
 
-use concinnity_memory::InlineVec;
+use crate::memory::InlineVec;
 
 use crate::ecs::Entity;
 

@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.18.68"
+version = "0.18.69"
 description = "Asset-driven application world framework"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -12,17 +12,12 @@ keywords = ["gamedev", "graphics", "engine", "rendering", "3d"]
 categories = ["game-engines", "graphics", "rendering::engine"]
 
 [workspace.dependencies]
-concinnity-asset = { path = "crates/concinnity-asset", version = "0.18" }
-concinnity-cli = { path = "crates/concinnity-cli", version = "0.18" }
 concinnity-cook = { path = "crates/concinnity-cook", version = "0.18" }
 concinnity-core = { path = "crates/concinnity-core", version = "0.18" }
+concinnity-dev = { path = "crates/concinnity-dev", version = "0.18" }
 concinnity-device = { path = "crates/concinnity-device", version = "0.18" }
-concinnity-editor = { path = "crates/concinnity-editor", version = "0.18" }
 concinnity-engine = { path = "crates/concinnity-engine", version = "0.18" }
 concinnity-host = { path = "crates/concinnity-host", version = "0.18" }
-concinnity-memory = { path = "crates/concinnity-memory", version = "0.18" }
-concinnity-physics = { path = "crates/concinnity-physics", version = "0.18" }
-concinnity-render = { path = "crates/concinnity-render", version = "0.18" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.18" }
 concinnity-slang = { path = "crates/concinnity-slang", version = "0.18" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.18" }
@@ -59,7 +54,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "concinnity"
-path = "src/bin/concinnity.rs"
+path = "src/bin/concinnity/main.rs"
 required-features = ["editor"]
 doc = false
 
@@ -92,24 +87,22 @@ targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 [features]
 default = ["std"]
-std = ["dep:concinnity-engine", "dep:concinnity-memory"]
+std = ["dep:concinnity-engine"]
 player = ["std", "dep:concinnity-toolchain"]
-editor = ["player", "dep:concinnity-cli"]
-cook = ["std", "dep:concinnity-asset", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
-vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan", "concinnity-cli?/vulkan"]
+editor = ["player", "cook", "dep:concinnity-dev", "dep:clap"]
+cook = ["std", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
+vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan", "concinnity-dev?/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
-concinnity-asset = { workspace = true, optional = true }
 concinnity-engine = { workspace = true, optional = true }
-concinnity-memory = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
 concinnity-world = { workspace = true, optional = true }
 concinnity-shader = { workspace = true, optional = true }
-concinnity-cli = { workspace = true, optional = true }
+concinnity-dev = { workspace = true, optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
 
 [dev-dependencies]
-# The player binary's own tests write throwaway blob layouts.
 tempfile = "3.25.0"
 
 [build-dependencies]

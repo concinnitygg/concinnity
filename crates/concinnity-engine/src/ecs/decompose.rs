@@ -123,7 +123,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 
     // Parent edges resolve once every entity exists; children accumulate so each
     // parent gets a single Children component.
-    let mut children: HashMap<Entity, concinnity_memory::InlineVec<Entity>> = HashMap::new();
+    let mut children: HashMap<Entity, concinnity_core::memory::InlineVec<Entity>> = HashMap::new();
     for (entity, prop) in &props {
         if let Some(parent_id) = prop.parent
             && let Some(&parent) = by_name.get(&parent_id)

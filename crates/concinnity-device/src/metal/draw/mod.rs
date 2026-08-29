@@ -35,7 +35,7 @@ use super::graph_exec::GraphFrameParams;
 use super::uniforms::*;
 use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::transform::mat4_mul;
-use concinnity_render::uniforms::*;
+use concinnity_core::render::uniforms::*;
 
 // One term of the Halton low-discrepancy sequence. Used to drive the
 // sub-pixel projection jitter so successive frames sample slightly different

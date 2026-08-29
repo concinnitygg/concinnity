@@ -19,9 +19,7 @@ name = "concinnity_host"
 path = "src/lib.rs"
 
 [dependencies]
-concinnity-asset = { workspace = true }
 concinnity-core = { workspace = true }
-concinnity-memory = { workspace = true }
 
 rayon = "1"
 tracing = "0.1.44"

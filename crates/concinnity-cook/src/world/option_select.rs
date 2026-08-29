@@ -15,7 +15,7 @@
 
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{font_sizes, label_value};
-use concinnity_asset::cook::OptionSelect;
+use concinnity_world::registry::build_only::OptionSelect;
 use concinnity_world::spec::{asset, spec_to_value};
 
 // Whether a setting row expands to a dropdown (more than two options, or a

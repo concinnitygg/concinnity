@@ -8,7 +8,7 @@ use concinnity_core::gfx::render_types::{
     AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuObjectData, LightUniforms,
     PointLightData, ShadowUniforms, SpotShadowData,
 };
-use concinnity_render::uniforms::ViewUniforms;
+use concinnity_core::render::uniforms::ViewUniforms;
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 

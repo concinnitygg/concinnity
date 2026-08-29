@@ -19,7 +19,7 @@
 //     counted in that gap are another thread's, and a window holding one is
 //     abandoned rather than reported.
 
-use concinnity_memory::alloc_count;
+use crate::memory::alloc_count;
 
 // Ticks a run is given to reach its steady state before the invariant applies.
 // The same warmup the engine's per-frame allocation pins use: every system has
@@ -123,7 +123,7 @@ mod tests {
     // only for its own test binary. This crate's tests read the counters the
     // guard is built on -- here, and in the driver's `run_tests` -- so the test
     // binary is the one build of this crate that installs the allocator.
-    concinnity_memory::install_global_allocator!();
+    crate::install_global_allocator!();
 
     // Drive the guard past its warmup without judging anything.
     fn warmed() -> AllocGuard {

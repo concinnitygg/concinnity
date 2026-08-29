@@ -29,7 +29,6 @@ path = "src/lib.rs"
 vulkan = [
     "concinnity-device/vulkan",
     "concinnity-core/vulkan",
-    "concinnity-render/vulkan",
 ]
 
 # Per-size-class allocation histograms on top of the counters every binary
@@ -37,15 +36,12 @@ vulkan = [
 # `src/heap.rs`); this is the tier a shipped build should not pay for, so a
 # development binary asks for it here rather than depending on the allocator
 # crate to reach the feature.
-alloc-detail = ["concinnity-memory/detail"]
+alloc-detail = ["concinnity-core/detail"]
 
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-render = { workspace = true }
 concinnity-device = { workspace = true }
-concinnity-physics = { workspace = true }
-concinnity-memory = { workspace = true }
 
 ciborium = "0.2"
 gilrs = "0.11.2"
@@ -86,7 +82,6 @@ windows = { version = "0.61", features = [
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3.25.0"
-concinnity-memory = { workspace = true }
 
 [build-dependencies]
 concinnity-toolchain = { workspace = true }

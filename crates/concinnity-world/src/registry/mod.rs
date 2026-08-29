@@ -126,14 +126,14 @@ macro_rules! __meta_payload {
 macro_rules! __meta_args_ty {
     ($default:path;) => { $default };
     ($default:path; runtime $($r:tt)*) => { NoArgs };
-    ($default:path; args: $a:ident $($r:tt)*) => { concinnity_asset::cook::$a };
+    ($default:path; args: $a:ident $($r:tt)*) => { concinnity_core::components::cook::$a };
     ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
 }
 
 // The args schema's NAME, for the docs pipeline (which renders the args
-// struct's fields, keyed by the struct's own name). concinnity-asset declares a
-// divergent asset's schema as `<Asset>Args` and exposes it under the asset's
-// name in `cook`, so the entry's `args: <Asset>` yields both.
+// struct's fields, keyed by the struct's own name). A divergent asset's schema
+// is declared as `<Asset>Args` and exposed under the asset's name in `cook`, so
+// the entry's `args: <Asset>` yields both.
 macro_rules! __meta_args_name {
     ($default:ident;) => { stringify!($default) };
     ($default:ident; args: $a:ident $($r:tt)*) => { concat!(stringify!($a), "Args") };
@@ -652,7 +652,10 @@ mod authored_tests {
     // pass-through component, and a resource asset.
     #[test]
     fn authored_types_report_their_registered_name() {
-        assert_eq!(<concinnity_asset::cook::Room as Authored>::TYPE, "Room");
+        assert_eq!(
+            <concinnity_core::components::cook::Room as Authored>::TYPE,
+            "Room"
+        );
         assert_eq!(
             <crate::components::DirectionalLight as Authored>::TYPE,
             "DirectionalLight"
@@ -669,8 +672,8 @@ mod authored_tests {
     #[test]
     fn the_reported_name_round_trips_through_the_registry() {
         for name in [
-            <concinnity_asset::cook::Room as Authored>::TYPE,
-            <concinnity_asset::cook::Camera3D as Authored>::TYPE,
+            <concinnity_core::components::cook::Room as Authored>::TYPE,
+            <concinnity_core::components::cook::Camera3D as Authored>::TYPE,
             <crate::components::DirectionalLight as Authored>::TYPE,
         ] {
             assert!(
@@ -711,18 +714,27 @@ pub fn bake_divergent(
         RegisteredType::Camera3D => {
             bake!(
                 crate::components::Camera3D,
-                concinnity_asset::cook::Camera3D
+                concinnity_core::components::cook::Camera3D
             )
         }
-        RegisteredType::Room => bake!(crate::components::Room, concinnity_asset::cook::Room),
-        RegisteredType::File => bake!(crate::components::File, concinnity_asset::cook::File),
+        RegisteredType::Room => bake!(
+            crate::components::Room,
+            concinnity_core::components::cook::Room
+        ),
+        RegisteredType::File => bake!(
+            crate::components::File,
+            concinnity_core::components::cook::File
+        ),
         RegisteredType::Spawner => {
-            bake!(crate::components::Spawner, concinnity_asset::cook::Spawner)
+            bake!(
+                crate::components::Spawner,
+                concinnity_core::components::cook::Spawner
+            )
         }
         RegisteredType::AppConfig => {
             bake!(
                 crate::components::AppConfig,
-                concinnity_asset::cook::AppConfig
+                concinnity_core::components::cook::AppConfig
             )
         }
         _ => Ok(None),
@@ -880,7 +892,7 @@ mod tests {
     // The docs pipeline renders an asset's parameters from the fields of the
     // struct this names, looked up by the struct's own name in the extracted
     // schema. A divergent asset's registry entry names the asset (`args: Room`)
-    // and concinnity-asset declares its schema as `RoomArgs`, so the two are
+    // and its schema is declared as `RoomArgs`, so the two are
     // bridged by that naming convention; a rename on either side that broke it
     // would silently render an empty parameter table.
     #[test]

@@ -25,11 +25,11 @@ const MAX_DISTANCE: f32 = 100.0;
 
 // Hemisphere rays cast per pixel, clamped to a sane range. More rays trade
 // performance for a smoother, less noisy gather. The default is the authored
-// `PostProcessConfig.ssgi_rays` default, owned by the schema crate and
+// `PostProcessConfig.ssgi_rays` default, owned by the schema and
 // re-exported here so the authored default and the runtime clamp path stay a
 // single source of truth.
 #[cfg(test)]
-pub(crate) const DEFAULT_RAYS: u32 = concinnity_asset::DEFAULT_SSGI_RAYS;
+pub(crate) const DEFAULT_RAYS: u32 = crate::components::DEFAULT_SSGI_RAYS;
 const MIN_RAYS: u32 = 1;
 const MAX_RAYS: u32 = 32;
 
@@ -38,7 +38,7 @@ const MAX_RAYS: u32 = 32;
 // is the authored `PostProcessConfig.ssgi_steps` default, owned by the schema
 // crate and re-exported here.
 #[cfg(test)]
-pub(crate) const DEFAULT_STEPS: u32 = concinnity_asset::DEFAULT_SSGI_STEPS;
+pub(crate) const DEFAULT_STEPS: u32 = crate::components::DEFAULT_SSGI_STEPS;
 const MIN_STEPS: u32 = 1;
 const MAX_STEPS: u32 = 64;
 

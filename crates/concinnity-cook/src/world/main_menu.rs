@@ -11,8 +11,9 @@ use std::collections::HashSet;
 
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{centered_label, font_sizes, label_value, sprite};
-use concinnity_asset::cook::{MainMenu, SettingsProfile};
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_world::registry::build_only::MainMenu;
+use concinnity_world::registry::build_only::SettingsProfile;
 use concinnity_world::spec::{asset, spec_to_value};
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate

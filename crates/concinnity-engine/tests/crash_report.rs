@@ -14,7 +14,7 @@ const PROBE_ROOT_ENV: &str = "CN_CRASH_PROBE_ROOT";
 // An integration test links the engine as an ordinary dependency, so it
 // inherits nothing from the engine's own `#[cfg(test)]` allocator, and without
 // one the report below would carry no heap figures to assert on.
-concinnity_memory::install_global_allocator!();
+concinnity_core::install_global_allocator!();
 
 #[test]
 #[ignore = "probe body: spawned by crash_report_lands_for_a_panicking_process"]

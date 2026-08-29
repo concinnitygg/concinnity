@@ -24,7 +24,7 @@ pub(super) fn set_subtree_visibility(
         }
         // Clone the slot list out so the immutable borrow ends before the
         // next entity's tag toggle.
-        let slots: concinnity_memory::InlineVec<u32> = ctx
+        let slots: concinnity_core::memory::InlineVec<u32> = ctx
             .get::<RenderHandle>(entity)
             .map(|h| h.draws.clone())
             .unwrap_or_default();

@@ -37,7 +37,7 @@ pub(in crate::directx) fn compile_auto_exposure_shaders(
 const AUTO_EXPOSURE_PARAMS_DWORDS: u32 = 4;
 
 // Inputs to the auto-exposure compute kernels (root constants at b0).
-// Mirrors `concinnity_render::uniforms::AutoExposureParams` and the `cbuffer` in the HLSL.
+// Mirrors `concinnity_core::render::uniforms::AutoExposureParams` and the `cbuffer` in the HLSL.
 // 16 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]

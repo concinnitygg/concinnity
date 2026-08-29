@@ -31,9 +31,9 @@ use crate::geometry::glass_quad::build_glass_quad;
 use crate::gfx::mesh_payload::Vertex;
 
 // `GlassParams` (the per-panel cbuffer) is a GPU-free layout struct that lives
-// in concinnity-render; re-export it so `crate::directx::glass::GlassParams` is
+// in `core::render`; re-export it so `crate::directx::glass::GlassParams` is
 // unchanged for the `glass_params_from` path.
-pub(in crate::directx) use concinnity_render::uniforms::GlassParams;
+pub(in crate::directx) use concinnity_core::render::uniforms::GlassParams;
 
 // Build the per-panel `GlassParams` from an authored panel. Pure; unit
 // tested. Mirrors `metal::glass::glass_params_from`.
@@ -311,7 +311,7 @@ mod tests {
     use super::*;
 
     // The `TransparentView` / `GlassParams` layout tests live with the structs
-    // in `concinnity_render::uniforms`, and are checked against the compiled
+    // in `concinnity_core::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
 
     // The glass shaders compile at runtime from the shared single source, so a

@@ -10,8 +10,8 @@
 
 use concinnity_core::ecs::ScheduleMode;
 use concinnity_core::physics::PhysicsFanout;
+use concinnity_core::physics::{Fanout, Simulation};
 use concinnity_host::thread::jobs::{self, JobPool};
-use concinnity_physics::{Fanout, Simulation};
 
 /// Lends the engine's job pool to a stepping simulation.
 #[derive(Debug)]

@@ -37,9 +37,9 @@ const OCCLUDED_ALPHA: f32 = 0.12;
 // a handful of segments; this covers a few thousand before the first growth.
 const MIN_VERTEX_CAPACITY: u64 = 64 * 1024;
 
-// `LineView` is a GPU-free layout struct that lives in concinnity-render;
+// `LineView` is a GPU-free layout struct that lives in `core::render`;
 // re-export it so `crate::vulkan::line::LineView` is the local path.
-pub(in crate::vulkan) use concinnity_render::uniforms::LineView;
+pub(in crate::vulkan) use concinnity_core::render::uniforms::LineView;
 
 // Line-pass state on the context: the resources, built on the first frame that
 // submits lines so a world that never draws any pays nothing, plus the

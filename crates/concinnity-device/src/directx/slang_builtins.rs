@@ -1,15 +1,15 @@
 // The DirectX half of the single-source shader compile: everything the
-// declarations in `concinnity_render::slang_programs::dx` need a compiler, a
+// declarations in `concinnity_core::render::slang_programs::dx` need a compiler, a
 // content-addressed cache, or a filesystem for. The declarations themselves are
 // re-exported here, so every call site still names them through this module.
 
 use concinnity_slang as slang;
 
-pub(super) use concinnity_render::slang_programs::dx::*;
+pub(super) use concinnity_core::render::slang_programs::dx::*;
 
 // What a declaration can do once a compiler and a cache are in reach. A trait
 // rather than an inherent impl because `SlangProgram` is defined in
-// concinnity-render, which is `no_std` and knows nothing about either; bringing
+// `core::render`, which is `no_std` and knows nothing about either; bringing
 // this into scope is what keeps `PROGRAM.compile(..)` reading the same at every
 // call site it did before the declarations moved.
 pub(crate) trait SlangCompile {
@@ -55,7 +55,7 @@ impl SlangCompile for SlangProgram {
     fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
         let source = self.source(hot_reload);
         if let Some((digest, bytes)) = embedded_dxil(self.label)
-            && digest == concinnity_render::slang_source::source_digest(&source)
+            && digest == concinnity_core::render::slang_source::source_digest(&source)
         {
             return Ok(bytes.to_vec());
         }
@@ -73,7 +73,7 @@ impl SlangCompile for SlangProgram {
 // DXIL from the same file at the same profile, and the ray-traced glass entry
 // yields four. Keying on anything the variant defines do not reach would hand
 // one variant's bytes to another -- a wrong render, not a failed one.
-// `every_program_has_a_distinct_label` in concinnity-render locks it.
+// `every_program_has_a_distinct_label` in `core::render` locks it.
 include!(concat!(env!("OUT_DIR"), "/engine_dxil.rs"));
 
 pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<Vec<u8>, String> {
@@ -156,10 +156,12 @@ mod tests {
     // skinned entries are excluded: neither ever carries skybox geometry.
     #[test]
     fn the_prepass_pins_sky_to_the_far_plane() {
-        assert!(concinnity_render::shaders::GBUFFER_PREPASS.contains("color.b > 1.5"));
-        assert!(concinnity_render::shaders::GBUFFER_PREPASS.contains("position.z = position.w"));
+        assert!(concinnity_core::render::shaders::GBUFFER_PREPASS.contains("color.b > 1.5"));
+        assert!(
+            concinnity_core::render::shaders::GBUFFER_PREPASS.contains("position.z = position.w")
+        );
         assert_eq!(
-            concinnity_render::shaders::GBUFFER_PREPASS
+            concinnity_core::render::shaders::GBUFFER_PREPASS
                 .matches("gb_sky_pin(")
                 .count(),
             3
@@ -198,7 +200,7 @@ mod tests {
     // count in cannot bake in the wrong one.
     #[test]
     fn probe_cube_count_matches_the_host_constant() {
-        let want = concinnity_render::uniforms::MAX_PROBES.to_string();
+        let want = concinnity_core::render::uniforms::MAX_PROBES.to_string();
         let mut sized = 0usize;
         for p in ALL {
             for (key, value) in p.defines {
@@ -225,13 +227,16 @@ mod tests {
         for (name, src) in [
             (
                 "main_bindless.slang",
-                concinnity_render::shaders::MAIN_BINDLESS,
+                concinnity_core::render::shaders::MAIN_BINDLESS,
             ),
-            ("ssr.slang", concinnity_render::shaders::SSR),
-            ("reflection.slang", concinnity_render::shaders::REFLECTION),
+            ("ssr.slang", concinnity_core::render::shaders::SSR),
+            (
+                "reflection.slang",
+                concinnity_core::render::shaders::REFLECTION,
+            ),
             (
                 "rt_reflections.slang",
-                concinnity_render::shaders::RT_REFLECTIONS,
+                concinnity_core::render::shaders::RT_REFLECTIONS,
             ),
         ] {
             assert!(
@@ -248,16 +253,18 @@ mod tests {
     fn cluster_constants_match_render_types() {
         use crate::gfx::render_types::{CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER};
         for src in [
-            concinnity_render::shaders::LIGHT_CULL,
-            concinnity_render::shaders::MAIN_BINDLESS,
+            concinnity_core::render::shaders::LIGHT_CULL,
+            concinnity_core::render::shaders::MAIN_BINDLESS,
         ] {
             assert!(src.contains(&format!(
                 "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
             )));
         }
-        assert!(concinnity_render::shaders::LIGHT_CULL.contains(&format!(
-            "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
-        )));
+        assert!(
+            concinnity_core::render::shaders::LIGHT_CULL.contains(&format!(
+                "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
+            ))
+        );
     }
 
     // The sky shell's half-extent tracks the camera far plane, so its corners
@@ -265,7 +272,9 @@ mod tests {
     // far plane or those corners clip and the clear colour shows through.
     #[test]
     fn the_bindless_vertex_path_pins_sky_to_the_far_plane() {
-        assert!(concinnity_render::shaders::MAIN_BINDLESS.contains("v.color.b > 1.5"));
-        assert!(concinnity_render::shaders::MAIN_BINDLESS.contains("o.position.z = o.position.w"));
+        assert!(concinnity_core::render::shaders::MAIN_BINDLESS.contains("v.color.b > 1.5"));
+        assert!(
+            concinnity_core::render::shaders::MAIN_BINDLESS.contains("o.position.z = o.position.w")
+        );
     }
 }

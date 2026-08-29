@@ -1,0 +1,82 @@
+[package]
+name = "concinnity-dev"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The Concinnity dev tooling library: world authoring, the in-engine editor, the debug server, docs and packaging"
+keywords = ["gamedev", "editor", "cli", "concinnity"]
+categories = ["game-engines", "development-tools"]
+include = [
+    "/src",
+    "/assets",
+    "/build.rs",
+]
+
+[lib]
+name = "concinnity_dev"
+path = "src/lib.rs"
+
+[features]
+# Mirror the runtime's Vulkan feature so an editor build can target the Vulkan
+# backend; forwards to the runtime, the device backends, the compile pipeline,
+# and core.
+vulkan = [
+    "concinnity-engine/vulkan",
+    "concinnity-device/vulkan",
+    "concinnity-shader/vulkan",
+    "concinnity-core/vulkan",
+]
+
+[dependencies]
+concinnity-engine = { workspace = true }
+concinnity-device = { workspace = true }
+concinnity-cook = { workspace = true }
+concinnity-world = { workspace = true }
+concinnity-shader = { workspace = true }
+concinnity-core = { workspace = true }
+concinnity-host = { workspace = true }
+
+argon2 = "0.5"
+async-stream = "0.3.6"
+ciborium = "0.2"
+bitflags = "2.0"
+chrono = "0.4.44"
+ctrlc = "3.5.2"
+directories = "6.0.0"
+gltf = { version = "1", default-features = false, features = ["utils", "names"] }
+hex = "0.4.3"
+hmac = "0.12.1"
+ignore = "0.4.25"
+jsonwebtoken = "9"
+libloading = "0.9.0"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+png = "0.18.1"
+rand = "0.8"
+rayon = "1"
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11.19"
+serde_json = { version = "1", features = ["preserve_order"] }
+slotmap = "1.1.1"
+# `cn docs` reads the asset prose out of the engine's own sources.
+syn = { version = "2", features = ["full", "parsing"] }
+thiserror = "2.0.18"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+ureq = { version = "3.2.0", features = ["json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.25.0"
+
+[build-dependencies]
+concinnity-toolchain = { workspace = true }
+
+[lints]
+workspace = true

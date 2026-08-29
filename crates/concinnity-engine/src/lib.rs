@@ -1,11 +1,12 @@
 //! The runtime crate. Holds the world loop, the ECS, the GraphicsSystem renderer
 //! driver, audio, and physics. The GPU-free render-prep lives in
-//! concinnity-render and the hardware backends (Metal/DirectX/Vulkan/Win32) in
-//! concinnity-device; this crate drives them through a `Box<dyn RenderBackend>`
-//! from `concinnity_device::init_backend` and never names a concrete backend.
-//! Depends on concinnity-core/render/device (no concinnity-cook, no image
-//! decoders). The editor crate (concinnity-editor) drives this crate's App /
-//! renderer through the public API widened here; the modules the editor reaches
+//! `concinnity_core::render` and the hardware backends (Metal/DirectX/Vulkan/
+//! Win32) in concinnity-device; this crate drives them through a
+//! `Box<dyn RenderBackend>` from `concinnity_device::init_backend` and never
+//! names a concrete backend. Depends on concinnity-core and concinnity-device
+//! (no concinnity-cook, no image decoders). The editor crate (concinnity-dev)
+//! drives this crate's App / renderer through the public API widened here; the
+//! modules the editor reaches
 //! into are `pub` so it can name their paths, but individual internals stay
 //! `pub(crate)` unless the editor specifically needs them.
 pub mod blob;
@@ -66,7 +67,7 @@ pub(crate) mod error_screen;
 pub mod gfx;
 pub(crate) mod hud;
 pub(crate) mod input;
-// The rigid-body simulation driver: builds a `concinnity_physics::Simulation`
+// The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
 // from the world's physics content and steps it on the fixed tick.
 pub(crate) mod physics;
 // Declarative logic (Behavior components + the shared world variables

@@ -49,10 +49,10 @@ use super::texture::{
 };
 
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
-// lives in concinnity-render; re-export it so the encode path and the graph's
+// lives in `core::render`; re-export it so the encode path and the graph's
 // view builder can keep naming it through this module.
-use concinnity_render::uniforms::GlassMeshParams;
-pub(in crate::vulkan) use concinnity_render::uniforms::TransparentView;
+use concinnity_core::render::uniforms::GlassMeshParams;
+pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 
 // The live acceleration-structure handles wired into the transparent RT
 // descriptor ring. Passed once at init (`None` when RT is not live at launch)

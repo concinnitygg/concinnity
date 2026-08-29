@@ -1,15 +1,161 @@
 // src/components/file.rs
 //
 // Runtime `File` component. Its authored args and `FileKind` live in the schema
-// crate (concinnity_asset::file).
+// crate (concinnity_core::components::file).
 
-use alloc::string::String;
-
-use concinnity_asset::cook;
-
-use crate::components::FileKind;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Component, PayloadLocator};
+use alloc::string::String;
+
+/// The category of file content, inferred from the extension when not supplied.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileKind {
+    /// Wavefront OBJ geometry.
+    Obj,
+    /// PNG image.
+    Png,
+    /// JPEG image, `.jpg`.
+    Jpg,
+    /// JPEG image, `.jpeg`.
+    Jpeg,
+    /// Windows bitmap image.
+    Bmp,
+    /// Truevision TGA image.
+    Tga,
+    /// GIF image.
+    Gif,
+    /// TrueType font.
+    Ttf,
+    /// OpenType font.
+    Otf,
+    /// Plain text.
+    Txt,
+    /// Markdown text, the medium the story importer reads.
+    Md,
+    /// Wavefront material library accompanying an OBJ.
+    Mtl,
+}
+
+impl FileKind {
+    /// The kind an extension names, case-insensitively. `None` for an
+    /// extension the engine does not read.
+    pub fn from_ext(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "obj" => Some(Self::Obj),
+            "png" => Some(Self::Png),
+            "jpg" => Some(Self::Jpg),
+            "jpeg" => Some(Self::Jpeg),
+            "bmp" => Some(Self::Bmp),
+            "tga" => Some(Self::Tga),
+            "gif" => Some(Self::Gif),
+            "ttf" => Some(Self::Ttf),
+            "otf" => Some(Self::Otf),
+            "txt" => Some(Self::Txt),
+            "md" => Some(Self::Md),
+            "mtl" => Some(Self::Mtl),
+            _ => None,
+        }
+    }
+
+    /// Returns true for kinds whose build output is a mesh blob compatible with the
+    /// mesh payload format (vertex + index data readable by GraphicsSystem).
+    pub fn is_mesh(&self) -> bool {
+        matches!(self, Self::Obj)
+    }
+}
+
+/// Authored fields of a `File`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct FileArgs {
+    /// Path to the source file, relative to the project root.
+    pub path: String,
+    /// File category. Inferred from the path extension when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<FileKind>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_kind_is_reachable_from_an_extension() {
+        // The inference table is the only way a kind is assigned when the args
+        // omit one, so a kind missing from it can never be produced.
+        let all = [
+            ("obj", FileKind::Obj),
+            ("png", FileKind::Png),
+            ("jpg", FileKind::Jpg),
+            ("jpeg", FileKind::Jpeg),
+            ("bmp", FileKind::Bmp),
+            ("tga", FileKind::Tga),
+            ("gif", FileKind::Gif),
+            ("ttf", FileKind::Ttf),
+            ("otf", FileKind::Otf),
+            ("txt", FileKind::Txt),
+            ("md", FileKind::Md),
+            ("mtl", FileKind::Mtl),
+        ];
+        for (ext, kind) in all {
+            assert_eq!(FileKind::from_ext(ext).as_ref(), Some(&kind), "{ext}");
+            // Extensions are matched case-insensitively.
+            assert_eq!(
+                FileKind::from_ext(&ext.to_uppercase()).as_ref(),
+                Some(&kind),
+                "{ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_extension_has_no_kind() {
+        assert_eq!(FileKind::from_ext("wav"), None);
+        assert_eq!(FileKind::from_ext(""), None);
+    }
+
+    #[test]
+    fn only_obj_builds_to_a_mesh_payload() {
+        assert!(FileKind::Obj.is_mesh());
+        for kind in [FileKind::Png, FileKind::Ttf, FileKind::Mtl, FileKind::Md] {
+            assert!(!kind.is_mesh(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn args_default_to_an_empty_path_and_inferred_kind() {
+        let args = FileArgs::default();
+        assert!(args.path.is_empty());
+        assert_eq!(args.kind, None);
+    }
+
+    #[test]
+    fn an_absent_kind_is_omitted_from_the_serialized_args() {
+        let args: FileArgs = serde_json::from_str(r#"{"path":"assets/board.obj"}"#).unwrap();
+        assert_eq!(args.path, "assets/board.obj");
+        assert_eq!(args.kind, None);
+        // `cn add` writes normalized args back, so an inferred kind stays absent
+        // rather than being frozen into the world file.
+        assert_eq!(
+            serde_json::to_string(&args).unwrap(),
+            r#"{"path":"assets/board.obj"}"#
+        );
+    }
+
+    #[test]
+    fn an_explicit_kind_round_trips_through_its_lowercase_name() {
+        let args: FileArgs = serde_json::from_str(r#"{"path":"font.dat","kind":"ttf"}"#).unwrap();
+        assert_eq!(args.kind, Some(FileKind::Ttf));
+        assert_eq!(
+            serde_json::to_string(&args).unwrap(),
+            r#"{"path":"font.dat","kind":"ttf"}"#
+        );
+        let bytes = postcard::to_allocvec(&args).unwrap();
+        let back: FileArgs = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.kind, Some(FileKind::Ttf));
+        assert_eq!(back.path, "font.dat");
+    }
+}
 
 /// References a source file by path.
 ///
@@ -31,7 +177,7 @@ impl File {
     /// Translate the authored args into the runtime file reference: derive
     /// `kind` from the path extension when unset. Run by cook at build time
     /// (the baked blob record carries the result).
-    pub fn bake(args: cook::File) -> Self {
+    pub fn bake(args: FileArgs) -> Self {
         let kind = args
             .kind
             .clone()
@@ -62,7 +208,7 @@ impl Component for File {
 }
 
 #[cfg(test)]
-mod tests {
+mod runtime_tests {
     use super::*;
 
     #[test]
@@ -92,20 +238,20 @@ mod tests {
     #[test]
     fn from_args_infers_kind_from_the_extension() {
         // No explicit kind -> inferred from the path.
-        let f = File::bake(cook::File {
+        let f = File::bake(FileArgs {
             path: "models/box.obj".into(),
             kind: None,
         });
         assert_eq!(f.kind, Some(FileKind::Obj));
         assert_eq!(f.path, "models/box.obj");
         // An explicit kind is kept even when it disagrees with the extension.
-        let g = File::bake(cook::File {
+        let g = File::bake(FileArgs {
             path: "data.obj".into(),
             kind: Some(FileKind::Txt),
         });
         assert_eq!(g.kind, Some(FileKind::Txt));
         // An unknown extension leaves the kind unset.
-        let h = File::bake(cook::File {
+        let h = File::bake(FileArgs {
             path: "notes.zzz".into(),
             kind: None,
         });
@@ -121,12 +267,12 @@ mod tests {
 
     #[test]
     fn file_args_and_kind_round_trip_through_json() {
-        let args = cook::File {
+        let args = FileArgs {
             path: "x.png".into(),
             kind: Some(FileKind::Png),
         };
         let value = serde_json::to_value(&args).unwrap();
-        let back: cook::File = serde_json::from_value(value).unwrap();
+        let back: FileArgs = serde_json::from_value(value).unwrap();
         assert_eq!(back.path, "x.png");
         assert_eq!(back.kind, Some(FileKind::Png));
         // FileKind serializes to its lowercase name.

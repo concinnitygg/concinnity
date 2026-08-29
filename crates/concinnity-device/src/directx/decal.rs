@@ -79,10 +79,10 @@ const CUBE_INDICES: [u16; 36] = [
 ];
 
 // `DecalView` (per-frame) and `DecalParams` (per-decal) are GPU-free layout
-// structs that live in concinnity-render; re-export them so
+// structs that live in `core::render`; re-export them so
 // `crate::directx::decal::{DecalView,DecalParams}` are unchanged.
-pub(in crate::directx) use concinnity_render::uniforms::DecalParams;
-pub(in crate::directx) use concinnity_render::uniforms::DecalView;
+pub(in crate::directx) use concinnity_core::render::uniforms::DecalParams;
+pub(in crate::directx) use concinnity_core::render::uniforms::DecalView;
 
 // Root-signature layout (binds 1:1 with the `decal.slang` declarations, whose
 // registers slangc assigns from declaration order; `SLANG_DXIL_ENTRY_ABI` in
@@ -644,7 +644,7 @@ impl DxContext {
 
 // Runtime-mutation surface driven only by the cn-debug command server
 // ([debug/runtime_spawn.rs]). This module tree is compiled into both the FFI
-// library crate (`concinnity_editor`) and the `concinnity` binary; the cn-debug
+// library crate (`concinnity_dev`) and the `concinnity` binary; the cn-debug
 // chain is reachable from the binary's `main` but not from the library crate's
 // (FFI) roots, so dead-code flags these in the lib build. Not backend-specific.
 // `allow` (not `expect`) because the same source is live in the binary, where

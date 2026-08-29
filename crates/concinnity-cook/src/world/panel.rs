@@ -6,7 +6,7 @@
 
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::label_value;
-use concinnity_asset::cook::Panel;
+use concinnity_world::registry::build_only::Panel;
 use concinnity_world::spec::{asset, spec_to_value};
 
 // Replace every Panel asset with the concrete UI assets it expands to.

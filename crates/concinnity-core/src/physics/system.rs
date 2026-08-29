@@ -7,7 +7,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use concinnity_physics::{
+use crate::physics::{
     BodyHandle, CharacterCapsule, CharacterMoveInput, ColliderShape, ContactHit, GRAVITY,
     PhysicsBudget, SensorCrossing, SimConfig, Simulation,
 };
@@ -497,7 +497,7 @@ impl System for PhysicsSystem {
 
         // Published from the built world: the simulation's own storage is only
         // knowable once it is reserved.
-        super::budget::publish_reservation(concinnity_memory::ledger(), &budget, &world);
+        super::budget::publish_reservation(crate::memory::ledger(), &budget, &world);
         self.world = Some(world);
     }
 

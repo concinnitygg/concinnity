@@ -22,7 +22,7 @@ use crate::metal::post::fullscreen::{
     set_fragment_sampler_range,
 };
 use crate::metal::slang_shaders::TAA_FRAG;
-use concinnity_render::uniforms::TaaParams;
+use concinnity_core::render::uniforms::TaaParams;
 
 // All temporal-anti-aliasing state grouped into one feature unit: the on/off
 // toggle, the resolve pipeline, the two ping-pong history buffers, and the

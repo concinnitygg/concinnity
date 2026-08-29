@@ -162,8 +162,8 @@ impl DxContext {
     // reflections without authoring. Resets the staggered bake; capped at
     // `MAX_PROBES`.
     pub(super) fn set_reflection_probes(&mut self, declared: &[reflection_probe::ProbePlacement]) {
-        use concinnity_render::uniforms::MAX_PROBES;
-        use concinnity_render::uniforms::ProbeSet;
+        use concinnity_core::render::uniforms::MAX_PROBES;
+        use concinnity_core::render::uniforms::ProbeSet;
         let mut placements: Vec<reflection_probe::ProbePlacement> = if declared.is_empty() {
             match self.scene_world_bounds() {
                 Some((mn, mx)) => {
@@ -851,7 +851,7 @@ impl DxContext {
 
         debug_assert_eq!(index, self.probe.maps.len());
         self.probe.maps.push(ProbeCube { prefilter });
-        self.probe.set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
+        self.probe.set.probes[index] = concinnity_core::render::uniforms::ProbeUniforms {
             box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
             box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],

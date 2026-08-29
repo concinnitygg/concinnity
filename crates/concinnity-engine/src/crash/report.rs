@@ -264,7 +264,7 @@ mod tests {
             notes: vec![("backend".to_string(), "metal".to_string())],
             recent_logs: vec!["+1.000s INFO app: started".to_string()],
             memory: MemorySnapshot {
-                heap: Some(concinnity_memory::MemStats {
+                heap: Some(concinnity_core::memory::MemStats {
                     live_bytes: 400 * 1024 * 1024,
                     peak_bytes: 512 * 1024 * 1024,
                     alloc_count: 900,

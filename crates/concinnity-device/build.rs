@@ -894,8 +894,8 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
 // seats less falls back to sizing them itself, and that source then matches no
 // artifact and compiles -- see `vulkan::builtins::bindless_pool_size`.
 fn precompile_spirv() {
-    use concinnity_render::slang_programs::vk::{self, Sizes};
-    use concinnity_render::uniforms::{BINDLESS_POOL_SIZE, MAX_PROBES};
+    use concinnity_core::render::slang_programs::vk::{self, Sizes};
+    use concinnity_core::render::uniforms::{BINDLESS_POOL_SIZE, MAX_PROBES};
 
     let pool = BINDLESS_POOL_SIZE.to_string();
     let probes = MAX_PROBES.to_string();
@@ -914,7 +914,7 @@ fn precompile_spirv() {
             }
             artifacts.push(concinnity_toolchain::SlangArtifact {
                 name: spirv_artifact_name(program.label, *msaa),
-                source: concinnity_render::slang_source::assemble(program.file, &defines),
+                source: concinnity_core::render::slang_source::assemble(program.file, &defines),
                 entry: program.entry,
                 file_name: program.file,
                 target: slang::SlangTarget::Spirv,
@@ -945,18 +945,18 @@ fn spirv_artifact_name(label: &str, msaa: bool) -> String {
 
 // Compile every declared DirectX program to DXIL now, so the binary carries its
 // shaders instead of needing slangc on whatever host runs it. The declarations
-// and the assembly both come from concinnity-render, the same ones the renderer
+// and the assembly both come from `core::render`, the same ones the renderer
 // uses, so the text compiled here is the text it would have compiled -- which is
 // what lets `directx::slang_builtins` serve these bytes without re-deriving the
 // cache key.
 fn precompile_dxil() {
-    use concinnity_render::slang_programs::dx;
+    use concinnity_core::render::slang_programs::dx;
 
     let artifacts: Vec<_> = dx::ALL
         .iter()
         .map(|p| concinnity_toolchain::SlangArtifact {
             name: p.label.to_string(),
-            source: concinnity_render::slang_source::assemble(p.file, p.defines),
+            source: concinnity_core::render::slang_source::assemble(p.file, p.defines),
             entry: p.entry,
             file_name: p.file,
             target: slang::SlangTarget::Dxil(p.profile),
@@ -1004,7 +1004,7 @@ fn assert_slang_metal_abi() {
         return;
     }
     let source =
-        concinnity_render::slang_source::assemble("main_bindless.slang", SLANG_MAIN_DEFINES);
+        concinnity_core::render::slang_source::assemble("main_bindless.slang", SLANG_MAIN_DEFINES);
     let job = slang::SlangJob {
         source: &source,
         file_name: "main_bindless_abi_check.slang",
@@ -1051,8 +1051,10 @@ fn assert_slang_dxil_abi() {
     if slang::slangc_path().is_none() {
         return;
     }
-    let source =
-        concinnity_render::slang_source::assemble("main_bindless.slang", SLANG_DXIL_MAIN_DEFINES);
+    let source = concinnity_core::render::slang_source::assemble(
+        "main_bindless.slang",
+        SLANG_DXIL_MAIN_DEFINES,
+    );
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // The two stages compile separately and each drops the resources it does
     // not read, so a register only has to hold in the stage that declares it.
@@ -1090,7 +1092,7 @@ fn assert_slang_dxil_entry_abi(out_dir: &std::path::Path) {
     for abi in SLANG_DXIL_ENTRY_ABI {
         let mut defines: Vec<(&str, &str)> = vec![("DXIL_ABI", "1")];
         defines.extend(abi.gates.iter().map(|gate| (*gate, "1")));
-        let source = concinnity_render::slang_source::assemble(abi.file, &defines);
+        let source = concinnity_core::render::slang_source::assemble(abi.file, &defines);
         let emitted = emit_dxil_hlsl(out_dir, abi.file, &source, abi.entry, abi.profile);
         for (param, register) in abi.registers {
             assert_dxil_register(

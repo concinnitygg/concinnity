@@ -20,7 +20,7 @@ use crate::vulkan::owned::{
 
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 use crate::vulkan::uniforms::AUTO_EXPOSURE_PUSH_BYTES;
-use concinnity_render::uniforms::AutoExposureParams;
+use concinnity_core::render::uniforms::AutoExposureParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;

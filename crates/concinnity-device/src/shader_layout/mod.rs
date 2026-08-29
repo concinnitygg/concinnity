@@ -50,7 +50,7 @@ use programs::{Program, Target};
 
 // The probe-array length the programs bake in, pinned to the constant the
 // mirrored `ProbeSet` array uses.
-const _: () = assert!(concinnity_render::uniforms::MAX_PROBES == 8);
+const _: () = assert!(concinnity_core::render::uniforms::MAX_PROBES == 8);
 
 // Reflect `program` on every target its mirrors name and compare each against
 // what that target's layout rules produced. Skipped when slangc is absent, the

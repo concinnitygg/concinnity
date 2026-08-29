@@ -47,7 +47,7 @@ use std::path::Path;
 //
 // The three tunables (prefilter/irradiance face size, prefilter sample count)
 // have a single source of truth: the `EnvironmentMap` `Default` impl in
-// concinnity-asset. Args are deserialised through that struct, so a field absent
+// concinnity-core. Args are deserialised through that struct, so a field absent
 // from the JSONL inherits that default instead of a constant duplicated here.
 
 fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {

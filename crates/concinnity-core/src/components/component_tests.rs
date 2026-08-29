@@ -7,7 +7,7 @@
 // modules are gone. One submodule per component.
 //
 // The authoring-only vocabulary is not covered here: those types are not
-// components, and their schema checks live beside them in concinnity-asset.
+// components, and their schema checks live beside them in their own modules.
 
 use alloc::string::ToString;
 use alloc::vec;
@@ -388,7 +388,7 @@ mod app_config {
     // time and never ship in the blob.
     #[test]
     fn bake_keeps_the_home_and_the_budgets() {
-        let args: concinnity_asset::cook::AppConfig = serde_json::from_str(
+        let args: crate::components::cook::AppConfig = serde_json::from_str(
             r#"{"name":"My Game","home":"state","max_memory_mb":512,"job_threads":2}"#,
         )
         .unwrap();

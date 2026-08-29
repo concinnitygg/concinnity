@@ -144,8 +144,8 @@ pub(in crate::directx) struct SrvHeapLayout {
 // slots [0, 3); the first per-world block starts here.
 const GLOBAL_SRV_COUNT: usize = 3;
 
-// Reflection-probe cube array length (must equal `concinnity_render::uniforms::MAX_PROBES`).
-const PROBE_CUBE_COUNT: usize = concinnity_render::uniforms::MAX_PROBES;
+// Reflection-probe cube array length (must equal `concinnity_core::render::uniforms::MAX_PROBES`).
+const PROBE_CUBE_COUNT: usize = concinnity_core::render::uniforms::MAX_PROBES;
 
 impl SrvHeapLayout {
     pub(in crate::directx) fn compute(p: &SrvHeapParams) -> Self {

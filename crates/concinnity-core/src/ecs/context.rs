@@ -366,14 +366,14 @@ mod tests {
         EmptyStore,
         FrameProfile,
         Resources,
-        concinnity_memory::Arena,
+        crate::memory::Arena,
     ) {
         (
             ComponentStorage::default(),
             EmptyStore,
             FrameProfile::default(),
             Resources::new(),
-            concinnity_memory::Arena::with_capacity(64 * 1024),
+            crate::memory::Arena::with_capacity(64 * 1024),
         )
     }
 

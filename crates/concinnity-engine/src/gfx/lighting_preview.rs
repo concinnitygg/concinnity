@@ -20,7 +20,7 @@ use crate::ecs::{ActiveRenderQueues, World};
 use crate::gfx::render_config as resolve;
 use crate::gfx::settings_system::{SettingsSlot, SettingsState};
 use crate::gfx::volumetric_fog::FogSettings;
-use concinnity_render::ops::RenderOps;
+use concinnity_core::render::ops::RenderOps;
 
 /// The `GraphicsConfig` fields this module can apply to a running world. The
 /// rest (shadow map resolution, frames in flight, the sampler's anisotropy)

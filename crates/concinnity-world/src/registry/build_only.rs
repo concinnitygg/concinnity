@@ -9,12 +9,24 @@
 //! authoring registry composes this group with core's two.
 //!
 //! Being in the group is the origin, which is why the entries carry no origin
-//! flag; the schemas themselves are [`concinnity_asset::cook`].
+//! flag; the schemas themselves are [`crate::schema`].
 
-pub use concinnity_asset::cook::{
-    CameraShot, CharacterModel, CharacterSchema, EngineDefaults, LightRig, MainMenu,
-    MaterialPalette, OptionSelect, Panel, Prefab, SceneImport, Slider, StoryImport,
+pub use crate::schema::camera_shot::CameraShot;
+pub use crate::schema::character_model::CharacterModel;
+pub use crate::schema::character_schema::{
+    CharacterSchema, KeyPolarity, PanelSection, ProportionGroup, SchemaJoint, SchemaKey,
+    SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
 };
+pub use crate::schema::engine_defaults::EngineDefaults;
+pub use crate::schema::light_rig::LightRig;
+pub use crate::schema::main_menu::{MainMenu, MainMenuItem, SettingsProfile};
+pub use crate::schema::material_palette::{MaterialPalette, PaletteEntry};
+pub use crate::schema::option_select::OptionSelect;
+pub use crate::schema::panel::Panel;
+pub use crate::schema::prefab::{Prefab, PrefabEntry, PrefabKind};
+pub use crate::schema::scene_import::SceneImport;
+pub use crate::schema::slider::Slider;
+pub use crate::schema::story_import::StoryImport;
 
 /// An asset the cook consumes and never hands to the runtime.
 ///

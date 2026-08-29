@@ -9,7 +9,7 @@
 // is generated there too.
 //
 // The single-source `.slang` half never touches a directory: its text comes
-// from `concinnity_render`, which embeds every shader, so this compiles the
+// from `concinnity_core::render`, which embeds every shader, so this compiles the
 // same bytes whether the crate is built from the workspace or unpacked from a
 // registry tarball with no sibling checkout beside it.
 //
@@ -124,11 +124,11 @@ fn precompile_slang_libs(specs: &[SlangLibSpec], lib_dir: &Path) -> Vec<(String,
             // Assembly answers an unknown name with empty text, which would
             // reach slangc as a missing entry point rather than a typo.
             assert!(
-                concinnity_render::shaders::embedded(spec.file).is_some(),
+                concinnity_core::render::shaders::embedded(spec.file).is_some(),
                 "no embedded shader named {}",
                 spec.file
             );
-            let source = concinnity_render::slang_source::assemble(spec.file, spec.defines);
+            let source = concinnity_core::render::slang_source::assemble(spec.file, spec.defines);
             let job = slang::SlangJob {
                 source: &source,
                 file_name: spec.name,

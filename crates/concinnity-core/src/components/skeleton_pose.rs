@@ -134,7 +134,7 @@ mod tests {
         let skeleton = two_joint_chain();
         let layer = ProportionLayer::resolve(
             &skeleton,
-            &[concinnity_asset::JointProportion {
+            &[crate::components::JointProportion {
                 joint: String::from("root"),
                 scale: 2.0,
                 length: 0.0,

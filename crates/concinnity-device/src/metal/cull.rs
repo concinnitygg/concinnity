@@ -1003,23 +1003,23 @@ impl MtlContext {
             // Local reflection probe cube array (specular only): one slice per
             // baked probe, the sky prefilter for unused slots. Occupies argument
             // ids `count + 4 ..= count + 4 + MAX_PROBES`.
-            for i in 0..concinnity_render::uniforms::MAX_PROBES {
+            for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
                 enc.setTexture_atIndex(Some(self.probe_cube_or_sky(i)), count + 4 + i);
             }
             // Spot shadow map array (1x1 fallback when nothing casts), just past
             // the probe cubes.
             enc.setTexture_atIndex(
                 Some(self.spot_shadow.map.as_ref()),
-                count + 4 + concinnity_render::uniforms::MAX_PROBES,
+                count + 4 + concinnity_core::render::uniforms::MAX_PROBES,
             );
             // The two area-light LTC tables follow the spot shadow array.
             enc.setTexture_atIndex(
                 Some(self.ltc_matrix_texture.as_ref()),
-                count + 5 + concinnity_render::uniforms::MAX_PROBES,
+                count + 5 + concinnity_core::render::uniforms::MAX_PROBES,
             );
             enc.setTexture_atIndex(
                 Some(self.ltc_magnitude_texture.as_ref()),
-                count + 6 + concinnity_render::uniforms::MAX_PROBES,
+                count + 6 + concinnity_core::render::uniforms::MAX_PROBES,
             );
         }
         Ok(Some(buf))
@@ -1062,7 +1062,7 @@ impl MtlContext {
         );
         // The reflection probe cube array (each slice, or its sky fallback) rides
         // the argument buffer, so every bound slice must be resident.
-        for i in 0..concinnity_render::uniforms::MAX_PROBES {
+        for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
             encoder.useResource_usage_stages(
                 ProtocolObject::from_ref(self.probe_cube_or_sky(i)),
                 MTLResourceUsage::Read,

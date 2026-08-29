@@ -374,7 +374,7 @@ impl PlanarReflectionSet {
         lighting: PlanarLightingBindings,
         cull: PlanarCullSources<'_>,
     ) -> Result<Self, String> {
-        use concinnity_render::uniforms::ProbeSet;
+        use concinnity_core::render::uniforms::ProbeSet;
 
         let PlanarGlobalSet {
             layout: global_set_layout,

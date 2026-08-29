@@ -1,19 +1,19 @@
 // Hot-reload's half of the single-source shader assembly.
 //
-// The assembly itself lives in `concinnity_render::slang_source`, below the
+// The assembly itself lives in `concinnity_core::render::slang_source`, below the
 // backends, so this crate's runtime compile and the build script's precompile
 // cannot key different text for the same program. What stays here is the one
 // part that needs a filesystem: under hot-reload a shader's checkout copy wins
 // over the embedded one, so an edit is picked up without a rebuild.
 
 /// The exact source text a program compiles. `file` names the `.slang` under
-/// concinnity-render's `src/shaders/`; under `hot_reload` its checkout copy is
+/// core's `src/render/shaders/`; under `hot_reload` its checkout copy is
 /// preferred, for the shader and for every fragment spliced into it.
 pub(crate) fn assemble(hot_reload: bool, file: &str, defines: &[(&str, &str)]) -> String {
     if !hot_reload {
-        return concinnity_render::slang_source::assemble(file, defines);
+        return concinnity_core::render::slang_source::assemble(file, defines);
     }
-    concinnity_render::slang_source::assemble_with(file, defines, from_checkout)
+    concinnity_core::render::slang_source::assemble_with(file, defines, from_checkout)
 }
 
 // The checkout's copy of `file`, leaked so it can join the embedded texts under
@@ -22,7 +22,7 @@ pub(crate) fn assemble(hot_reload: bool, file: &str, defines: &[(&str, &str)]) -
 // shader revisions one session touches.
 fn from_checkout(file: &str) -> Option<&'static str> {
     let path = format!(
-        "{}/../concinnity-render/src/shaders/{}",
+        "{}/../concinnity-core/src/render/shaders/{}",
         env!("CARGO_MANIFEST_DIR"),
         file
     );

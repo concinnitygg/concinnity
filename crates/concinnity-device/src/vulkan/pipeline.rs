@@ -1337,7 +1337,7 @@ mod tests {
         if !crate::slangc_gate::slangc_available() {
             return;
         }
-        for probes in [1, 7, concinnity_render::uniforms::MAX_PROBES as u32] {
+        for probes in [1, 7, concinnity_core::render::uniforms::MAX_PROBES as u32] {
             let (vs, fs) =
                 compile_bindless_shaders(false, 4, probes).expect("bindless shaders compile");
             assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");

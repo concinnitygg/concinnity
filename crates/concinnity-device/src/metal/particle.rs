@@ -37,10 +37,10 @@ use super::context::MtlContext;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-// GPU-free repr(C) structs; live in concinnity-render so their layout tests
+// GPU-free repr(C) structs; live in `core::render` so their layout tests
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
-use concinnity_render::uniforms::GpuParticle;
-use concinnity_render::uniforms::ParticleView;
+use concinnity_core::render::uniforms::GpuParticle;
+use concinnity_core::render::uniforms::ParticleView;
 
 // Byte stride between an emitter's per-frame spawn-counter slots. The counter
 // itself is one `u32`; the padding buys the 256-byte buffer-offset alignment

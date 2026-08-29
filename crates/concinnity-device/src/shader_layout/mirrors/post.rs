@@ -7,7 +7,7 @@
 use concinnity_core::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
-use concinnity_render::uniforms::{AutoExposureParams, HizParams, TaaParams};
+use concinnity_core::render::uniforms::{AutoExposureParams, HizParams, TaaParams};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 

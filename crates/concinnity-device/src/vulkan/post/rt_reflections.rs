@@ -1182,7 +1182,7 @@ mod tests {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
+        for probes in [1, concinnity_core::render::uniforms::MAX_PROBES as u32] {
             let shaders = super::compile_rt_shaders(false, 4, probes).expect("rt shaders compile");
             assert!(super::is_spirv(&shaders.vs));
             assert!(super::is_spirv(&shaders.flat_fs));

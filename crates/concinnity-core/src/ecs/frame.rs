@@ -6,7 +6,7 @@
 
 use alloc::vec::Vec;
 
-use concinnity_memory::{Arena, ArenaVec};
+use crate::memory::{Arena, ArenaVec};
 
 /// Frame-scoped facilities a system may use for the duration of its `step`.
 ///

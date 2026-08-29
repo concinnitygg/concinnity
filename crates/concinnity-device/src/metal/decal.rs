@@ -27,8 +27,8 @@ use super::encode::RenderEncode;
 
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::decal::DecalRecord;
-use concinnity_render::uniforms::DecalParams;
-use concinnity_render::uniforms::DecalView;
+use concinnity_core::render::uniforms::DecalParams;
+use concinnity_core::render::uniforms::DecalView;
 
 // All projected-decal state grouped into one feature unit: the decal records
 // (with their tombstone free-list), the pipeline, the shared unit-cube

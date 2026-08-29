@@ -39,9 +39,9 @@ use super::texture::{
 use crate::gfx::frustum::Frustum;
 use crate::gfx::image_decode::f16_to_f32;
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, ProbePlacement};
-use concinnity_render::uniforms::MAX_PROBES;
-use concinnity_render::uniforms::ProbeSet;
-use concinnity_render::uniforms::ProbeUniforms;
+use concinnity_core::render::uniforms::MAX_PROBES;
+use concinnity_core::render::uniforms::ProbeSet;
+use concinnity_core::render::uniforms::ProbeUniforms;
 
 // Captured cube-face resolution (mip 0 of the prefilter chain). Matches the
 // `EnvironmentMap` asset default + the DirectX / Metal `PROBE_FACE_SIZE`.
@@ -812,7 +812,7 @@ impl VkContext {
         let device = &self.device;
         let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
         // SAFETY: `CullParams` is `repr(C)` and matches the push-constant block
-        // cull.comp declares (pinned by the layout test in concinnity-render).
+        // cull.comp declares (pinned by the layout test in `core::render`).
         let push = unsafe {
             std::slice::from_raw_parts(
                 &params as *const CullParams as *const u8,

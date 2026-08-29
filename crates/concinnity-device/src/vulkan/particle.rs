@@ -32,8 +32,8 @@ use crate::vulkan::owned::{
 
 use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
-use concinnity_render::uniforms::GpuParticle;
-use concinnity_render::uniforms::ParticleView;
+use concinnity_core::render::uniforms::GpuParticle;
+use concinnity_core::render::uniforms::ParticleView;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
@@ -49,7 +49,7 @@ use crate::vulkan::slang_builtins::SlangCompile;
 pub(in crate::vulkan) const MAX_EMITTERS: usize = 256;
 
 // `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
-// view UBO) are GPU-free layout structs that live in concinnity-render
+// view UBO) are GPU-free layout structs that live in `core::render`
 // (imported above).
 
 // SPIR-V for the particle shader stages, in order: compute, vertex, fragment.
@@ -1361,7 +1361,7 @@ mod tests {
     use super::*;
 
     // The `GpuParticle` / `ParticleView` layout tests live with the structs in
-    // `concinnity_render::vulkan::uniforms`.
+    // `concinnity_core::render::vulkan::uniforms`.
 
     #[test]
     fn particle_params_push_size_matches_glsl() {

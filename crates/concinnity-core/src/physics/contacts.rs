@@ -8,7 +8,7 @@
 // reservation survives a drain, and the pairs come back in handle order rather
 // than whatever order a table happened to hold them in.
 
-use concinnity_physics::{BodyHandle, ContactHit};
+use crate::physics::{BodyHandle, ContactHit};
 
 use super::index::SortedMap;
 

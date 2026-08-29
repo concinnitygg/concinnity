@@ -20,7 +20,7 @@
 //   - An `EngineDefaults` asset turns individual defaults off entirely.
 
 use super::expand::{ExpandReport, asset_name, type_norm};
-use concinnity_asset::cook::EngineDefaults;
+use concinnity_world::registry::build_only::EngineDefaults;
 
 pub(crate) const HUD_FONT_NAME: &str = "hud_font";
 const HUD_FONT_SIZE_PX: u32 = 20;

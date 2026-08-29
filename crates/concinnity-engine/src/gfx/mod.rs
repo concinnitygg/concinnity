@@ -1,16 +1,14 @@
-//! The client's render layer. The backend-agnostic render-prep helpers (record
-//! builders, render graph, trait seam, CPU-side render math, plus the GPU-free
-//! cursor / sprite / text / lights / streaming layout helpers) now live in
-//! concinnity-render and are re-exported below under the historical
-//! `crate::gfx::<module>` paths so the rest of the client and the device backends
-//! keep resolving. What remains declared here are the game/runtime render systems
-//! (the renderer driver, animation, camera controllers, draw list) and the
-//! client-only settings/quality-preset resolution.
+//! The client's render layer. Everything below the client sits in
+//! concinnity-core and is re-exported here under the historical
+//! `crate::gfx::<module>` paths: the GPU data layouts and render math (camera,
+//! frustum, post-process settings) plus the CPU kernels over them from
+//! `concinnity_core::gfx`, and the backend-agnostic render-prep (record
+//! builders, render graph, trait seam, and the GPU-free cursor / sprite / text /
+//! lights / streaming layout helpers) from `concinnity_core::render`.
 //!
-//! The GPU data layouts and render math (camera, frustum, post-process settings)
-//! and the CPU kernels over them (mesh payloads, pose blending, IK, line
-//! expansion, the animation cursor) both live in concinnity-core, re-exported
-//! here so the `crate::gfx::<module>` paths keep resolving. `pub` so the editor
+//! What remains declared here are the runtime render systems (the renderer
+//! driver, animation, camera controllers, draw list) and the client-only
+//! settings/quality-preset resolution. The re-exports are `pub` so the editor
 //! crate can reach them through `concinnity_engine::gfx::*` (e.g. shader-layout
 //! reflection); `chunk_coord` is named only by the chunk-streaming drive, so it
 //! stays crate-private.
@@ -21,20 +19,20 @@ pub use concinnity_core::gfx::{
     rt_reflections, skeleton, ssao, ssgi, ssr, transform, transform_propagation, view_modes,
 };
 
-// Render-prep from concinnity-render that the client's own systems consume (the
+// Render-prep from `concinnity_core::render` that the client's own systems consume (the
 // device backends reach the rest through concinnity-device's own bridge, not
 // this crate). `pub` for the pieces the editor / app crates name, `pub(crate)`
 // for the rest.
-pub use concinnity_render::{
+pub use concinnity_core::render::{
     backend, backend_init, decal, error, feedback, input, ops, particles, scene_flow,
     scene_residency, snapshot, volumetric_fog,
 };
-pub(crate) use concinnity_render::{
+pub(crate) use concinnity_core::render::{
     call_buffer, chunk_window, cursor, display_mode, keymap, lights, overlay_maps, sprite, text,
 };
 // Seeded / driven by the client's GraphicsSystem.
-pub use concinnity_render::draw_slot;
-pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
+pub use concinnity_core::render::draw_slot;
+pub(crate) use concinnity_core::render::{planar_reflection, reflection_probe};
 
 // The bundled glyph atlas baked into the binary: the face the startup error
 // screen draws with, and the fallback for a world whose labels name no Font.
@@ -88,7 +86,7 @@ pub(crate) mod streaming;
 /// `StreamingState` resource, read via `World::streaming_stats`).
 pub mod streaming_system;
 // Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
-// compiled only into the unit-test binary. Implements concinnity-render's
+// compiled only into the unit-test binary. Implements `core::render`'s
 // RenderBackend seam on a client-local type and carries a `config::Settings`,
 // so it stays with the GraphicsSystem tests that consume it.
 pub(crate) mod look_controls;

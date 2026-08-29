@@ -3,16 +3,16 @@
 //! pool pressure, and draw-slot recycling. Everything here runs on the CPU
 //! side of the render / device split; no backend is involved.
 //!
-//! The BVH build and frustum query are benchmarked inside concinnity-render,
+//! The BVH build and frustum query are benchmarked inside `core::render`,
 //! where the item type they need lives.
 //!
 //! Run with `cargo bench -p concinnity-bench --bench render`.
 
-use concinnity_asset::{PointLight, RectAreaLight, SpotLight};
 use concinnity_bench::Bench;
-use concinnity_render::draw_slot::{DrawSlotAllocator, SlotAlloc};
-use concinnity_render::lights::build_light_data;
-use concinnity_render::streaming::StreamPlanner;
+use concinnity_core::components::{PointLight, RectAreaLight, SpotLight};
+use concinnity_core::render::draw_slot::{DrawSlotAllocator, SlotAlloc};
+use concinnity_core::render::lights::build_light_data;
+use concinnity_core::render::streaming::StreamPlanner;
 
 const OBJECTS: usize = 10_000;
 const STREAM_ITEMS: usize = 4_096;

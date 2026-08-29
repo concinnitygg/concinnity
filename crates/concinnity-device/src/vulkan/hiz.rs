@@ -57,12 +57,12 @@ const MAX_HIZ_MIPS: usize = 16;
 const HIZ_TILE: u32 = 8;
 
 // `HizParams` (Hi-Z build push constant) and `CullHizParams` (cull-side Hi-Z
-// std140 UBO) are GPU-free layout structs that live in concinnity-render;
+// std140 UBO) are GPU-free layout structs that live in `core::render`;
 // re-export them so `crate::vulkan::hiz::{HizParams,CullHizParams}` are
 // unchanged for the passes that fill them.
 use crate::vulkan::slang_builtins::SlangCompile;
 pub(in crate::vulkan) use crate::vulkan::uniforms::CullHizParams;
-use concinnity_render::uniforms::HizParams;
+use concinnity_core::render::uniforms::HizParams;
 
 // Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-of-
 // two sources end exactly at 1x1; non-power-of-two sources stop one mip short
@@ -884,7 +884,7 @@ mod tests {
     use super::hiz_mip_count;
 
     // The `HizParams` / `CullHizParams` layout tests live with the structs in
-    // `concinnity_render::vulkan::uniforms`.
+    // `concinnity_core::render::vulkan::uniforms`.
 
     #[test]
     fn mip_count_power_of_two() {

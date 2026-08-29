@@ -94,11 +94,11 @@ pub struct PendingBackend(pub Box<dyn crate::gfx::backend::RenderBackend>);
 // same tick. The pipelined driver deposits it from the render half's feedback
 // instead; a missed consume merges into the next deposit so no edge is lost.
 #[derive(Default)]
-pub(crate) struct InputMailbox(pub Option<concinnity_render::input::InputPacket>);
+pub(crate) struct InputMailbox(pub Option<concinnity_core::render::input::InputPacket>);
 
 impl InputMailbox {
     // Deposit a fresh packet, merging onto an unconsumed one.
-    pub(crate) fn deposit(&mut self, packet: concinnity_render::input::InputPacket) {
+    pub(crate) fn deposit(&mut self, packet: concinnity_core::render::input::InputPacket) {
         match &mut self.0 {
             Some(pending) => pending.merge_from(packet),
             None => self.0 = Some(packet),
@@ -114,7 +114,7 @@ impl InputMailbox {
 // authority ops name destinations from. Published by graphics init; absent in
 // a world with no graphics, so recording systems no-op.
 pub(crate) struct RenderQueues {
-    pub ops: concinnity_render::ops::RenderOps,
+    pub ops: concinnity_core::render::ops::RenderOps,
     pub slots: crate::gfx::render_slots::RenderSlots,
 }
 
@@ -123,7 +123,7 @@ pub(crate) struct RenderQueues {
 // thread), so a system that only needs to know what it supports reads this
 // instead of reaching for it. Absent in a world with no graphics.
 #[derive(Clone, Copy)]
-pub(crate) struct ActiveDeviceCaps(pub concinnity_render::backend::DeviceCapabilities);
+pub(crate) struct ActiveDeviceCaps(pub concinnity_core::render::backend::DeviceCapabilities);
 
 // The world's parked `RenderQueues` slot. `None` only while a step has it
 // taken.
@@ -151,7 +151,7 @@ impl ActiveRenderQueues {
 // Written by GraphicsSystem after submission; StreamingSystem drains it at the
 // top of its next step.
 #[derive(Default)]
-pub(crate) struct RenderOpFailures(pub Vec<concinnity_render::ops::OpFailure>);
+pub(crate) struct RenderOpFailures(pub Vec<concinnity_core::render::ops::OpFailure>);
 
 // The pipelined driver's channel pair, published (parked, so the per-step
 // take never re-boxes) before the world moves to the simulation thread.
@@ -163,8 +163,9 @@ pub(crate) struct PipelinedFrames(pub Option<PipelineChannels>);
 
 pub(crate) struct PipelineChannels {
     pub(crate) snapshot_tx:
-        std::sync::mpsc::SyncSender<concinnity_render::snapshot::RenderSnapshot>,
-    pub(crate) feedback_rx: std::sync::mpsc::Receiver<concinnity_render::feedback::FrameFeedback>,
+        std::sync::mpsc::SyncSender<concinnity_core::render::snapshot::RenderSnapshot>,
+    pub(crate) feedback_rx:
+        std::sync::mpsc::Receiver<concinnity_core::render::feedback::FrameFeedback>,
 }
 
 impl PipelinedFrames {

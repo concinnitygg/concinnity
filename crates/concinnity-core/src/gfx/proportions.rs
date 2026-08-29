@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use concinnity_asset::JointProportion;
+use crate::components::JointProportion;
 
 use crate::gfx::skeleton::Skeleton;
 use crate::gfx::transform::Mat4;

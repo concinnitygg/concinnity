@@ -22,7 +22,7 @@ use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
-use concinnity_render::uniforms::*;
+use concinnity_core::render::uniforms::*;
 
 // All auto-exposure (EV adaptation) state grouped into one feature unit: the
 // resolved tunables, the EMA-tracked adapted EV, the authored bias, the

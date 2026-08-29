@@ -21,7 +21,7 @@
 // Bridge: re-export the modules the moved code names under crate::* so its
 // `crate::<module>` import paths resolve unchanged. `components` is the runtime
 // half of the vocabulary; the authoring-only half is named from
-// `concinnity_asset::cook`, whose registry group this crate owns
+// `crate::schema`, whose registry group this crate owns
 // (`registry::build_only`).
 pub(crate) use concinnity_core::{components, platform, result};
 
@@ -39,6 +39,7 @@ pub mod check;
 pub mod refs;
 pub mod registry;
 pub mod resource_type;
+pub mod schema;
 pub mod source_args;
 pub mod spec;
 pub mod template;

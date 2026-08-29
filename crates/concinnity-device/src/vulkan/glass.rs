@@ -24,9 +24,9 @@ use crate::vulkan::transparent::{
 };
 
 // `GlassParams` (the per-panel UBO) is a GPU-free layout struct that lives in
-// concinnity-render; re-export it so `crate::vulkan::glass::GlassParams` is
+// `core::render`; re-export it so `crate::vulkan::glass::GlassParams` is
 // unchanged for the `glass_params_from` path.
-pub(in crate::vulkan) use concinnity_render::uniforms::GlassParams;
+pub(in crate::vulkan) use concinnity_core::render::uniforms::GlassParams;
 
 // Build the per-panel `GlassParams` from an authored panel. `planar` is 1.0 when
 // the pane has a planar reflection slot, else 0.0. Pure; unit tested. Mirrors
@@ -312,7 +312,7 @@ mod tests {
     use super::*;
 
     // The `TransparentView` / `GlassParams` layout tests live with the structs
-    // in `concinnity_render::uniforms`, and are checked against the compiled
+    // in `concinnity_core::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
 
     // The see-through mesh family compiles from the shared single source at
@@ -361,7 +361,7 @@ mod tests {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
+        for probes in [1, concinnity_core::render::uniforms::MAX_PROBES as u32] {
             super::compile_glass_shaders(false, true, probes).expect("glass compiles (msaa)");
             super::compile_glass_shaders(false, false, probes).expect("glass compiles (no msaa)");
         }

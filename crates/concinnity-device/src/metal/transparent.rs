@@ -34,7 +34,7 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
-use concinnity_render::uniforms::TransparentView;
+use concinnity_core::render::uniforms::TransparentView;
 
 // One translucent draw recorded for the transparent pass. Self-contained
 // except for the shared [`TransparentView`], which `encode_transparent` binds
@@ -176,7 +176,7 @@ impl MtlContext {
         // sky for unbaked slots, so binding all MAX_PROBES is always valid. The
         // per-draw bindings below never touch these slots, so the state persists.
         enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 2);
-        for i in 0..concinnity_render::uniforms::MAX_PROBES {
+        for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
             enc.set_fragment_texture(self.probe_cube_or_sky(i), 3 + i);
         }
         // The cube sampler covers the prefilter cube and every probe cube.
@@ -189,7 +189,7 @@ impl MtlContext {
             &enc,
             self.cube_sampler.as_ref(),
             1,
-            1 + concinnity_render::uniforms::MAX_PROBES,
+            1 + concinnity_core::render::uniforms::MAX_PROBES,
         );
         // The planar resolve at texture(11) takes the post sampler at the
         // slot after the probe run, and the bindless pool the RT variants

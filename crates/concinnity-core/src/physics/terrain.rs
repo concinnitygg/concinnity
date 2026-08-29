@@ -9,7 +9,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use concinnity_physics::{BodyHandle, LayerMask, Simulation};
+use crate::physics::{BodyHandle, LayerMask, Simulation};
 
 use crate::components::ProceduralMesh;
 use crate::ecs::PipelineContext;

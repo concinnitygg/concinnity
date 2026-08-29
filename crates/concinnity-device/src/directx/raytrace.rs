@@ -43,7 +43,7 @@ use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, Skinne
 use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
 use crate::gfx::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
 use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
-// The dynamic-update mode ladder lives in concinnity-render; re-exported so the
+// The dynamic-update mode ladder lives in `core::render`; re-exported so the
 // `super::raytrace::RtDynamicMode` path (init + context) keeps resolving.
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
@@ -60,7 +60,7 @@ const VERTEX_STRIDE: u64 = 56;
 
 // Shared with the Metal and Vulkan hosts: one `.slang` declares it now.
 // Re-exported so `crate::directx::raytrace::SkinParams` keeps resolving.
-pub(in crate::directx) use concinnity_render::uniforms::SkinParams;
+pub(in crate::directx) use concinnity_core::render::uniforms::SkinParams;
 
 // Whether the active GPU supports the DXR feature tier inline `RayQuery` needs.
 // Tier 1.1 is required because the reflection pass traces from a pixel shader
@@ -2274,7 +2274,7 @@ mod tests {
     }
 
     // The `SkinParams` layout test lives with the struct in
-    // `concinnity_render::directx::uniforms`. The root-constant DWORD-count
+    // `concinnity_core::render::directx::uniforms`. The root-constant DWORD-count
     // cross-check stays here, where `SKIN_PARAMS_DWORDS` is defined.
     #[test]
     fn skin_params_dwords_matches_size() {

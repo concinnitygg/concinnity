@@ -7,7 +7,7 @@
 //! that embeds its shaders needs no `slangc` on the host that runs it, which is
 //! otherwise a hard runtime dependency of the DirectX and Vulkan backends.
 //!
-//! The declarations come from `concinnity_render::slang_programs`, the same
+//! The declarations come from `concinnity_core::render::slang_programs`, the same
 //! table the renderer iterates, so the text compiled here is the text the
 //! renderer would have compiled. Where slangc is absent the generated lookup
 //! answers `None` for everything and the renderer compiles at init exactly as
@@ -74,7 +74,7 @@ pub fn precompile_slang_artifacts(artifacts: &[SlangArtifact<'_>], generated: &s
         std::fs::write(&path, bytes).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
         entries.push((
             artifact.name.clone(),
-            concinnity_render::slang_source::source_digest(&artifact.source),
+            concinnity_core::render::slang_source::source_digest(&artifact.source),
             path,
         ));
     }

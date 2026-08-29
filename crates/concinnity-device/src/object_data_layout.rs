@@ -4,7 +4,7 @@
 // once per shading language (vulkan/shaders/object_common.glsl,
 // directx/shaders/object_common.hlsl, metal/shaders/object_common.msl) and each
 // fragment is spliced into its backend's passes at an `{OBJECT_DATA}` marker.
-// concinnity-render's `shaders/object_common.slang` is the fourth, spliced into
+// `core::render`'s `shaders/object_common.slang` is the fourth, spliced into
 // every single-source pass that strides the buffer on all three backends at
 // once, so it is checked alongside them.
 //
@@ -108,7 +108,7 @@ const FRAGMENTS: &[Fragment] = &[
     },
     Fragment {
         label: "object_common.slang",
-        source: concinnity_render::shaders::OBJECT_COMMON,
+        source: concinnity_core::render::shaders::OBJECT_COMMON,
         mat4: "float4x4",
         vec3: "float3",
         vec4: Some("float4"),
@@ -417,7 +417,7 @@ fn no_shader_redeclares_the_record() {
         }
     };
     // The per-backend shaders are read off disk; the single-source `.slang` set
-    // lives in concinnity-render and arrives embedded, so it needs no path into
+    // lives in `core::render` and arrives embedded, so it needs no path into
     // a sibling crate that a registry checkout would not have.
     for dir in [VULKAN_SHADERS, DIRECTX_SHADERS, METAL_SHADERS] {
         for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir}: {e}")) {
@@ -432,7 +432,7 @@ fn no_shader_redeclares_the_record() {
             check(&name, &source);
         }
     }
-    for (name, source) in concinnity_render::shaders::SOURCES {
+    for (name, source) in concinnity_core::render::shaders::SOURCES {
         check(name, source);
     }
     assert_eq!(declarations, fragments.len(), "a fragment went missing");

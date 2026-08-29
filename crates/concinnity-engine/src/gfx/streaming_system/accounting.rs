@@ -8,7 +8,7 @@
 // stores a frame and is what lets one readout break device memory down by what
 // is holding it, beside the process RAM the tracking allocator counts.
 
-use concinnity_memory::{Ledger, MemTag, Realm};
+use concinnity_core::memory::{Ledger, MemTag, Realm};
 
 // One pool's device footprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

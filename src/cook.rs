@@ -111,7 +111,16 @@ pub use concinnity_world::registry::Authored;
 // crate's own partition: the build-only assets the cook expands, the resources
 // it compiles into the blob, and the five authored forms that diverge from the
 // component they bake into.
-pub use concinnity_asset::cook::*;
+// The authoring vocabulary, from the two crates that own its halves: the
+// compiled resources and the five diverging args schemas from the runtime
+// crate, the build-only assets from the authoring one.
+pub use concinnity_core::components::cook::*;
+pub use concinnity_world::registry::build_only::{
+    CameraShot, CharacterModel, CharacterSchema, EngineDefaults, KeyPolarity, LightRig, MainMenu,
+    MainMenuItem, MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection, Prefab,
+    PrefabEntry, PrefabKind, ProportionGroup, SceneImport, SchemaJoint, SchemaKey, SchemaRegion,
+    SettingsProfile, ShapePreset, Slider, StoryImport, SynthParams, SynthesizedTarget,
+};
 
 use crate::World;
 

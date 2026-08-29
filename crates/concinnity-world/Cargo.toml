@@ -27,7 +27,6 @@ name = "concinnity_world"
 path = "src/lib.rs"
 
 [dependencies]
-concinnity-asset = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 

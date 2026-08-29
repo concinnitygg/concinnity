@@ -2,7 +2,7 @@
 // vocabulary: the asset data types (PhysicsJoint, Prop, PropBody) turned into
 // the shapes, joint specs and body parameters the simulation is built from.
 
-use concinnity_physics::{ColliderShape, DynamicParams, JointMotor, JointSpec};
+use crate::physics::{ColliderShape, DynamicParams, JointMotor, JointSpec};
 
 use crate::components::{BodyDynamics, PhysicsJoint, PhysicsJointKind, PropCollider};
 

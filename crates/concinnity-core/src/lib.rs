@@ -11,9 +11,11 @@
 //! Above that vocabulary, the kernels that compute over it and belong to no
 //! single consumer: skinning and pose blending, IK, LOD decimation,
 //! rasterisation, IBL convolution, the procedural geometry generators, and the
-//! payload codecs (`build`, `decode`). The AUTHORED vocabulary (what a
-//! world.jsonl declares) is concinnity-asset, below. The asset COMPILE pipeline
-//! is concinnity-cook, which this crate has no edge into.
+//! payload codecs (`build`, `decode`). Each asset's AUTHORED schema (what a
+//! world.jsonl declares) sits in `components` beside the runtime half it bakes
+//! into; the build-only assets, which never reach a running world, live with
+//! their registry group in concinnity-world. The asset COMPILE pipeline is
+//! concinnity-cook, which this crate has no edge into.
 
 #![no_std]
 // The blob container and the payload codecs parse bytes the process did not
@@ -64,8 +66,10 @@ pub mod ecs;
 pub mod geometry;
 pub mod gfx;
 pub mod math;
+pub mod memory;
 pub mod physics;
 pub mod platform;
+pub mod render;
 pub mod resource;
 pub mod result;
 pub mod spawn;

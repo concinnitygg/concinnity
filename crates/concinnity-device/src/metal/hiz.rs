@@ -43,10 +43,10 @@ use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-// GPU-free repr(C) push struct; lives in concinnity-render so its layout test
+// GPU-free repr(C) push struct; lives in `core::render` so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
 // is unchanged.
-use concinnity_render::uniforms::HizParams;
+use concinnity_core::render::uniforms::HizParams;
 
 // Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
 // DirectX `[numthreads(8, 8, 1)]`).

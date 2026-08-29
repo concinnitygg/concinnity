@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 
-use concinnity_memory::InlineVec;
+use concinnity_core::memory::InlineVec;
 
 // Where one name's bytes sit in the blob. A default span is empty, which is
 // what an id no name was recorded for reads as.

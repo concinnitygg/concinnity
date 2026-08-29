@@ -17,9 +17,9 @@ use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::transform::mat4_mul;
 
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
-// struct that lives in concinnity-render; re-export it so
+// struct that lives in `core::render`; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::vulkan) use concinnity_render::uniforms::ViewUniforms;
+pub(in crate::vulkan) use concinnity_core::render::uniforms::ViewUniforms;
 
 // One term of the Halton low-discrepancy sequence, drives the sub-pixel
 // projection jitter so successive TAA frames sample slightly different

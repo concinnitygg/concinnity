@@ -10,10 +10,10 @@
 // that wants heap figures therefore installs the tracking allocator itself, at
 // its crate root:
 //
-//     concinnity_memory::install_global_allocator!();
+//     concinnity_core::install_global_allocator!();
 //
 // It is optional. A binary without it runs correctly on Rust's default
-// allocator, and every consumer of `concinnity_memory::stats()` already reads
+// allocator, and every consumer of `concinnity_core::memory::stats()` already reads
 // an `Option`: crash reports ship without heap figures, and drift detection
 // (`app::mem_drift`) reports nothing rather than guessing. A host embedding the
 // engine is entitled to that trade, so nothing complains about it at startup.
@@ -25,7 +25,7 @@
 // The engine's own test binary is a binary too, and unit tests and in-crate
 // benchmarks read allocation counts, so it installs the allocator here.
 #[cfg(test)]
-concinnity_memory::install_global_allocator!();
+concinnity_core::install_global_allocator!();
 
 #[cfg(test)]
 mod tests {
@@ -34,7 +34,8 @@ mod tests {
         const MIB: usize = 1 << 20;
         let held: Vec<u8> = std::hint::black_box(vec![0; MIB]);
 
-        let stats = concinnity_memory::stats().expect("the test binary installs the allocator");
+        let stats =
+            concinnity_core::memory::stats().expect("the test binary installs the allocator");
         assert!(stats.alloc_count > 0);
         assert!(
             stats.live_bytes >= MIB as u64,

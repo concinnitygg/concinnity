@@ -2,12 +2,302 @@
 //! declaration order, and the blob and the runtime carry only the integer, so
 //! every cross-reference lookup is an integer compare.
 //!
-//! The identity (`AssetId`) and typed reference (`AssetRef`) types themselves
-//! live in the dependency-light concinnity-asset schema crate and are re-exported
-//! here under the historical `crate::ecs::asset_id` paths. The interner those
-//! types resolve a name through keeps a per-thread table and so belongs to the
-//! std-linked crate above; concinnity-host owns it and installs it into the
-//! schema crate's resolver seam. At runtime references are already integers, so
-//! the seam is never consulted.
+//! The interner a name resolves through keeps a per-thread table and so belongs
+//! to the std-linked crate above; concinnity-host owns it and installs it into
+//! [`super::resolver`]. At runtime references are already integers, so the seam
+//! is never consulted.
 
-pub use concinnity_asset::{AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed};
+use core::fmt;
+
+use alloc::format;
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::ecs::resolver::resolve_name;
+
+/// A dense integer handle for one asset, assigned at build time in world
+/// declaration order. Equality and hashing are integer ops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct AssetId(pub u32);
+
+impl fmt::Display for AssetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
+impl Serialize for AssetId {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.0)
+    }
+}
+
+struct AssetIdVisitor;
+
+impl Visitor<'_> for AssetIdVisitor {
+    type Value = AssetId;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an asset id integer or a name string")
+    }
+
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<AssetId, E> {
+        Ok(AssetId(v as u32))
+    }
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<AssetId, E> {
+        Ok(AssetId(v as u32))
+    }
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<AssetId, E> {
+        resolve_name(v).map(AssetId).ok_or_else(|| {
+            E::custom(format!(
+                "no asset-name resolver installed to resolve reference {v:?}"
+            ))
+        })
+    }
+    fn visit_string<E: de::Error>(self, v: alloc::string::String) -> Result<AssetId, E> {
+        self.visit_str(&v)
+    }
+}
+
+impl<'de> Deserialize<'de> for AssetId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        if d.is_human_readable() {
+            d.deserialize_any(AssetIdVisitor)
+        } else {
+            Ok(AssetId(u32::deserialize(d)?))
+        }
+    }
+}
+
+/// `serde` `deserialize_with` helper for an optional cross-reference field.
+///
+/// Accepts a name string (resolved), an integer id, an empty string, or null;
+/// the latter two resolve to `None`. Apply with `#[serde(default,
+/// deserialize_with = "concinnity_core::ecs::asset_id::de_opt_asset_ref")]` so a missing field
+/// is also `None`.
+pub fn de_opt_asset_ref<'de, D>(d: D) -> Result<Option<AssetId>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // A non-self-describing format (postcard, the baked blob form) carries the
+    // already-resolved id; names only appear in human-readable input.
+    if !d.is_human_readable() {
+        return Option::<AssetId>::deserialize(d);
+    }
+
+    struct OptVisitor;
+
+    impl Visitor<'_> for OptVisitor {
+        type Value = Option<AssetId>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an asset reference name string, id integer, or null")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<AssetId>, E> {
+            Ok(None)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<AssetId>, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<AssetId>, E> {
+            Ok(Some(AssetId(v as u32)))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<AssetId>, E> {
+            Ok(Some(AssetId(v as u32)))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<AssetId>, E> {
+            if v.is_empty() {
+                Ok(None)
+            } else {
+                AssetIdVisitor.visit_str(v).map(Some)
+            }
+        }
+        fn visit_string<E: de::Error>(
+            self,
+            v: alloc::string::String,
+        ) -> Result<Option<AssetId>, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    d.deserialize_any(OptVisitor)
+}
+
+pub use super::asset_ref::{AssetRef, de_opt_asset_ref_typed};
+#[cfg(test)]
+mod tests {
+    use alloc::string::ToString;
+
+    use super::*;
+
+    #[test]
+    fn round_trips_through_json_as_a_bare_integer() {
+        let bytes = serde_json::to_vec(&AssetId(7)).unwrap();
+        assert_eq!(bytes, b"7");
+        let back: AssetId = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back, AssetId(7));
+    }
+
+    #[test]
+    fn deserializes_from_an_already_resolved_integer() {
+        // The compiled-args / runtime path: refs are ints, no resolver needed.
+        let id: AssetId = serde_json::from_str("5").unwrap();
+        assert_eq!(id, AssetId(5));
+    }
+
+    #[test]
+    fn round_trips_through_postcard() {
+        // postcard is the blob defs-table format (BlobAssetDef.name is an AssetId).
+        let bytes = postcard::to_allocvec(&AssetId(1234)).unwrap();
+        let back: AssetId = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back, AssetId(1234));
+    }
+
+    #[test]
+    fn a_truncated_baked_id_is_an_error_not_a_panic() {
+        // A blob whose defs table is cut short must surface as a decode error:
+        // the baked path reads the id straight through with no visitor to
+        // fall back on.
+        assert!(postcard::from_bytes::<AssetId>(&[]).is_err());
+    }
+
+    #[test]
+    fn opt_ref_treats_empty_null_and_missing_as_none() {
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            #[serde(default, deserialize_with = "de_opt_asset_ref")]
+            r: Option<AssetId>,
+        }
+        assert!(
+            serde_json::from_str::<Holder>("{\"r\":\"\"}")
+                .unwrap()
+                .r
+                .is_none()
+        );
+        assert!(
+            serde_json::from_str::<Holder>("{\"r\":null}")
+                .unwrap()
+                .r
+                .is_none()
+        );
+        assert!(serde_json::from_str::<Holder>("{}").unwrap().r.is_none());
+        assert_eq!(
+            serde_json::from_str::<Holder>("{\"r\":5}").unwrap().r,
+            Some(AssetId(5))
+        );
+    }
+
+    #[test]
+    fn opt_ref_round_trips_through_postcard() {
+        // The baked blob form: not self-describing, carries the resolved id.
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Holder {
+            #[serde(default, deserialize_with = "de_opt_asset_ref")]
+            r: Option<AssetId>,
+            #[serde(default, deserialize_with = "de_opt_asset_ref")]
+            none: Option<AssetId>,
+        }
+        let h = Holder {
+            r: Some(AssetId(7)),
+            none: None,
+        };
+        let bytes = postcard::to_allocvec(&h).unwrap();
+        let back: Holder = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.r, Some(AssetId(7)));
+        assert_eq!(back.none, None);
+    }
+
+    #[test]
+    fn display_formats_with_a_hash_prefix() {
+        assert_eq!(AssetId(42).to_string(), "#42");
+    }
+
+    #[test]
+    fn default_is_zero() {
+        assert_eq!(AssetId::default(), AssetId(0));
+    }
+
+    #[test]
+    fn deserializes_a_name_through_the_seam() {
+        crate::test_support::install_resolvers();
+        assert_eq!(
+            serde_json::from_str::<AssetId>("\"floor\"").unwrap(),
+            AssetId(5)
+        );
+        // An owned string, the form the serde_json::Value bridge hands over.
+        assert_eq!(
+            serde_json::from_value::<AssetId>(serde_json::json!("wall")).unwrap(),
+            AssetId(4)
+        );
+    }
+
+    #[test]
+    fn deserializes_a_signed_integer_narrowed_to_id_width() {
+        assert_eq!(
+            serde_json::from_str::<AssetId>("-1").unwrap(),
+            AssetId(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn a_wrong_typed_id_names_what_it_accepts() {
+        let err = serde_json::from_str::<AssetId>("true")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("an asset id integer or a name string"),
+            "{err}"
+        );
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Holder {
+        #[serde(default, deserialize_with = "de_opt_asset_ref")]
+        r: Option<AssetId>,
+    }
+
+    #[test]
+    fn opt_ref_accepts_names_signed_integers_and_a_reported_none() {
+        crate::test_support::install_resolvers();
+        assert_eq!(
+            serde_json::from_str::<Holder>("{\"r\":\"floor\"}")
+                .unwrap()
+                .r,
+            Some(AssetId(5))
+        );
+        assert_eq!(
+            serde_json::from_str::<Holder>("{\"r\":-1}").unwrap().r,
+            Some(AssetId(u32::MAX))
+        );
+        // An owned string, empty or not, through the serde_json::Value bridge.
+        assert_eq!(
+            serde_json::from_value::<Holder>(serde_json::json!({"r": "wall"}))
+                .unwrap()
+                .r,
+            Some(AssetId(4))
+        );
+        assert_eq!(
+            serde_json::from_value::<Holder>(serde_json::json!({"r": ""}))
+                .unwrap()
+                .r,
+            None
+        );
+        // A `None` reported by an option-aware format, rather than a null unit.
+        assert_eq!(
+            de_opt_asset_ref(crate::test_support::NoneDeserializer).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_wrong_typed_opt_ref_names_what_it_accepts() {
+        let err = serde_json::from_str::<Holder>("{\"r\":true}")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("an asset reference name string, id integer, or null"),
+            "{err}"
+        );
+    }
+}

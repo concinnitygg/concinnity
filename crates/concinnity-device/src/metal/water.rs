@@ -42,8 +42,8 @@ use super::context::MtlContext;
 use super::glass::build_transparent_pipeline_stages;
 use super::slang_shaders;
 use super::transparent::{TransparentDraw, bytes_of};
-use concinnity_render::uniforms::TransparentView;
-use concinnity_render::uniforms::{WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
+use concinnity_core::render::uniforms::TransparentView;
+use concinnity_core::render::uniforms::{WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
 
 // Per-surface GPU state: a static tessellated grid VB + IB.
 pub(in crate::metal) struct WaterSurfaceRecord {
@@ -318,7 +318,7 @@ mod tests {
     use super::*;
 
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_render::uniforms`, and are checked against the compiled shader
+    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
 
     #[test]

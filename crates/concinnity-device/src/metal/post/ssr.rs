@@ -209,7 +209,7 @@ impl MtlContext {
                 // specular term uses). `probe_cube_or_sky` returns the sky for
                 // unbaked slots, so binding all MAX_PROBES is always valid; the
                 // ProbeSet's `count` gates whether the shader samples them.
-                for i in 0..concinnity_render::uniforms::MAX_PROBES {
+                for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
                     enc.set_fragment_texture(self.probe_cube_or_sky(i), 4 + i);
                 }
                 // The screen sources take the post sampler at 0..2; the
@@ -221,7 +221,7 @@ impl MtlContext {
                     enc,
                     self.cube_sampler.as_ref(),
                     3,
-                    1 + concinnity_render::uniforms::MAX_PROBES,
+                    1 + concinnity_core::render::uniforms::MAX_PROBES,
                 );
                 enc.set_fragment_value(ssr_params, 0);
                 // Reflection-probe set (count + per-probe parallax boxes) at

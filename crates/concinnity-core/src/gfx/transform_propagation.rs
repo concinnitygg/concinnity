@@ -431,7 +431,7 @@ pub fn reparent(ctx: &mut PipelineContext, child: Entity, new_parent: Option<Ent
                     kids.0.push(child);
                 }
             }
-            None => ctx.insert(parent, Children(concinnity_memory::InlineVec::one(child))),
+            None => ctx.insert(parent, Children(crate::memory::InlineVec::one(child))),
         }
     }
 
@@ -820,7 +820,7 @@ mod tests {
         let mut world = TestWorld::new();
         let mut ctx = world.ctx();
         let bare = ctx.components.spawn();
-        ctx.insert(bare, Children(concinnity_memory::InlineVec::new()));
+        ctx.insert(bare, Children(crate::memory::InlineVec::new()));
         let child = spawn(&mut ctx, translate(4.0), Some(bare));
 
         propagate_transforms(&mut ctx);

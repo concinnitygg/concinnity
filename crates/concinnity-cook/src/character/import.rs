@@ -11,7 +11,8 @@ use super::synthesize::{MorphSet, synthesize};
 use super::validate;
 use crate::glb::{ImportedSkinnedMesh, import_skinned_from_doc};
 use crate::gltf_source::GltfDoc;
-use concinnity_asset::cook::{CharacterModel, CharacterSchema};
+use concinnity_world::registry::build_only::CharacterModel;
+use concinnity_world::registry::build_only::CharacterSchema;
 use concinnity_world::world::WorldJsonlAsset;
 
 // Import `model`'s source against `schema`.
@@ -93,7 +94,9 @@ impl CharacterModelArg {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_asset::cook::{KeyPolarity, SchemaJoint, SchemaKey};
+    use concinnity_world::registry::build_only::KeyPolarity;
+    use concinnity_world::registry::build_only::SchemaJoint;
+    use concinnity_world::registry::build_only::SchemaKey;
 
     // The customize_character example's body, the only real one in the tree.
     // Absent from a crate checkout outside the workspace, in which case the

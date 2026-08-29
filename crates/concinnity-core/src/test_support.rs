@@ -51,11 +51,11 @@ pub(crate) fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
     }
     let elapsed = start.elapsed();
 
-    let before = concinnity_memory::alloc_count();
+    let before = crate::memory::alloc_count();
     for _ in 0..iters {
         core::hint::black_box(body());
     }
-    let after = concinnity_memory::alloc_count();
+    let after = crate::memory::alloc_count();
 
     let units = (iters * items.max(1)) as f64;
     let per_item_ns = elapsed.as_secs_f64() * 1e9 / units;
@@ -88,11 +88,10 @@ fn resolve(name: &str) -> u32 {
     })
 }
 
-// Empty this thread's interner and install it behind the schema crate's
-// resolver seam. Call first in any test that interns or deserializes a named
+// Empty this thread's interner and install it behind the resolver seam. Call first in any test that interns or deserializes a named
 // reference.
 pub(crate) fn reset_interner() {
-    concinnity_asset::set_name_resolver(resolve);
+    crate::ecs::resolver::set_name_resolver(resolve);
     NAMES.with(|names| names.borrow_mut().clear());
 }
 
@@ -171,5 +170,55 @@ pub(crate) fn skinned_draw_object() -> SkinnedDrawObject {
         local_bb_min: [-1.0, -1.0, -1.0],
         local_bb_max: [1.0, 1.0, 1.0],
         lod_alternates: Vec::new(),
+    }
+}
+
+use serde::de::{self, Deserializer, Visitor};
+
+// A name resolves to its byte length: a deterministic stand-in for the build's
+// declaration-ordered resource tables. Names prefixed `unknown_` resolve to
+// nothing, standing in for a reference no resource of that kind declares.
+pub(crate) fn len_handle_resolver(name: &str) -> Option<u32> {
+    if name.starts_with("unknown_") {
+        None
+    } else {
+        Some(name.len() as u32)
+    }
+}
+
+// A name resolves to its byte length, standing in for the build-time interner
+// the handle resolvers fall back to.
+pub(crate) fn len_name_resolver(name: &str) -> u32 {
+    name.len() as u32
+}
+
+// Installs every seam with the stand-ins above.
+pub(crate) fn install_resolvers() {
+    crate::ecs::resolver::set_name_resolver(len_name_resolver);
+    crate::ecs::resolver::set_texture_handle_resolver(len_handle_resolver);
+    crate::ecs::resolver::set_audio_clip_handle_resolver(len_handle_resolver);
+    crate::ecs::resolver::set_font_handle_resolver(len_handle_resolver);
+    crate::ecs::resolver::set_mesh_handle_resolver(len_handle_resolver);
+    crate::ecs::resolver::set_material_handle_resolver(len_handle_resolver);
+    crate::ecs::resolver::set_skinned_mesh_handle_resolver(len_handle_resolver);
+    crate::ecs::resolver::set_shader_handle_resolver(len_handle_resolver);
+}
+
+// Reports `None` from `deserialize_any`, the way an option-aware self-describing
+// format does. serde_json only ever reports a `null` unit, so the optional
+// reference helpers' `visit_none` arm needs this stand-in.
+pub(crate) struct NoneDeserializer;
+
+impl<'de> Deserializer<'de> for NoneDeserializer {
+    type Error = de::value::Error;
+
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        visitor.visit_none()
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
     }
 }

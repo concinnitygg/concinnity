@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 
-use concinnity_physics::{BodyHandle, CharacterCapsule, CharacterMoveInput, LayerMask, Simulation};
+use crate::physics::{BodyHandle, CharacterCapsule, CharacterMoveInput, LayerMask, Simulation};
 
 use crate::components::{CharacterRig, RootMotionEvent};
 use crate::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};

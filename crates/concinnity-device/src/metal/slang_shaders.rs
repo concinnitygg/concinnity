@@ -582,7 +582,7 @@ mod tests {
         );
         assert_eq!(
             SLANG_METAL_MAX_PROBES,
-            concinnity_render::uniforms::MAX_PROBES
+            concinnity_core::render::uniforms::MAX_PROBES
         );
         let want_pool = SLANG_METAL_POOL_SIZE.to_string();
         let want_probes = SLANG_METAL_MAX_PROBES.to_string();
@@ -644,13 +644,16 @@ mod tests {
         for (name, src) in [
             (
                 "main_bindless.slang",
-                concinnity_render::shaders::MAIN_BINDLESS,
+                concinnity_core::render::shaders::MAIN_BINDLESS,
             ),
-            ("ssr.slang", concinnity_render::shaders::SSR),
-            ("reflection.slang", concinnity_render::shaders::REFLECTION),
+            ("ssr.slang", concinnity_core::render::shaders::SSR),
+            (
+                "reflection.slang",
+                concinnity_core::render::shaders::REFLECTION,
+            ),
             (
                 "rt_reflections.slang",
-                concinnity_render::shaders::RT_REFLECTIONS,
+                concinnity_core::render::shaders::RT_REFLECTIONS,
             ),
         ] {
             assert!(
@@ -668,7 +671,7 @@ mod tests {
     fn entries_exist_in_their_sources() {
         for lib in ALL {
             for entry in lib.entries {
-                let src = concinnity_render::shaders::embedded(lib.file)
+                let src = concinnity_core::render::shaders::embedded(lib.file)
                     .unwrap_or_else(|| panic!("{}: no embedded {}", lib.name, lib.file));
                 assert!(
                     src.contains(&format!(" {entry}(")),

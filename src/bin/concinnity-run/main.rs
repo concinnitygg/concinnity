@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 mod blob;
 mod state;
 
-concinnity_memory::install_global_allocator!();
+concinnity_core::install_global_allocator!();
 
 // Backend stamp read back by `cn export`.
 //
@@ -91,11 +91,11 @@ mod tests {
     fn the_shipped_player_tracks_its_own_heap() {
         const MIB: usize = 1 << 20;
 
-        let before = concinnity_memory::stats()
+        let before = concinnity_core::memory::stats()
             .expect("this binary declares the tracking allocator")
             .alloc_count;
         let held: Vec<u8> = core::hint::black_box(vec![0; MIB]);
-        let after = concinnity_memory::stats().expect("the allocator stays installed");
+        let after = concinnity_core::memory::stats().expect("the allocator stays installed");
 
         assert!(
             after.alloc_count > before,

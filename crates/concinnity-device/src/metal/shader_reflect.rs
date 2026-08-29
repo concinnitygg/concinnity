@@ -6,7 +6,7 @@
 // form and compares them against the engine's `#[repr(C)]` layouts.
 //
 // The cook build pipeline drives this through the thin `ShaderBuildValidator`
-// bridge in `concinnity-editor` (the one crate that depends on both cook and this
+// bridge in `concinnity-dev` (the one crate that depends on both cook and this
 // backend), so a layout mismatch fails `cn build` with a clear message instead
 // of faulting the GPU at run time.
 //

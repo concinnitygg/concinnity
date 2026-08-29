@@ -90,11 +90,11 @@ pub(crate) fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
     // A separate pass for allocations, so the counter reads sit outside the
     // timed window. The counters are process-global, so this figure is only
     // this benchmark's when nothing else is running (see the module doc).
-    let before = concinnity_memory::stats().expect("the test binary tracks its heap");
+    let before = concinnity_core::memory::stats().expect("the test binary tracks its heap");
     for _ in 0..iters {
         std::hint::black_box(body());
     }
-    let after = concinnity_memory::stats().expect("the allocator stays installed");
+    let after = concinnity_core::memory::stats().expect("the allocator stays installed");
 
     let units = (iters * items.max(1)) as f64;
     let per_item_ns = elapsed.as_secs_f64() * 1e9 / units;

@@ -931,7 +931,7 @@ pub(super) struct ProbeState {
     // The probe set (count + per-probe parallax boxes) bound to the forward /
     // SSR / RT shaders. `EMPTY` (count 0 = sky reflection) until the staggered
     // capture bakes cubes and installs them; each install bumps the count.
-    pub set: concinnity_render::uniforms::ProbeSet,
+    pub set: concinnity_core::render::uniforms::ProbeSet,
     // Baked prefilter cubes, one per installed probe, parallel to
     // `set.probes[..set.count]`. Distinct from `env_map`; sampled only by the
     // specular reflection term once the capture installs them. Grows as the

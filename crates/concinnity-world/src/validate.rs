@@ -11,7 +11,7 @@ use crate::components::{
     VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 
-// The wave ceiling lives with the schema in concinnity-asset and is shared with
+// The wave ceiling lives with the schema in concinnity-core and is shared with
 // the render backends; re-imported here for the clamp.
 use crate::components::MAX_WATER_WAVES;
 

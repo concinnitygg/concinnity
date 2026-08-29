@@ -7,7 +7,7 @@
 //! Bridge: the vocabulary and compute modules below are re-exported crate-wide
 //! so code moved here keeps resolving its `crate::{components,ecs,gfx,result}`
 //! paths. `crate::components` is the runtime half only; the authoring-only
-//! types this crate expands away are named from `concinnity_asset::cook` where
+//! types this crate expands away are named from `concinnity_world::registry::build_only` where
 //! they are used, so a use site says which half it works on. The payload
 //! *decoders* and shared payload types live in `concinnity_core::build`; this
 //! crate's modules call back into them.

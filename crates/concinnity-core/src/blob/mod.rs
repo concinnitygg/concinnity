@@ -41,8 +41,9 @@ pub use schema::{
 };
 
 // The identity and payload-address types the records carry, owned by the
-// schema crate.
-pub use concinnity_asset::{AssetId, PayloadLocator};
+// components module.
+pub use crate::ecs::PayloadLocator;
+pub use crate::ecs::asset_id::AssetId;
 
 /// The four magic bytes every `.cnb` blob starts with.
 pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";

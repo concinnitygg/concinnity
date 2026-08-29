@@ -1,7 +1,8 @@
 //! The `slangc` invocation, shared by build scripts and the renderer.
 //!
-//! The engine's single-source shaders (`crates/concinnity-render/src/shaders/
-//! *.slang`) compile through the `slangc` binary, mostly at build time: the
+//! The engine's single-source shaders
+//! (`crates/concinnity-core/src/render/shaders/*.slang`) compile through the
+//! `slangc` binary, mostly at build time: the
 //! device build script emits Metal metallibs, DXIL and SPIR-V for the backend it
 //! targets. The renderer compiles the rest, meaning whatever source no
 //! build-time artifact was built from -- a hot-reload edit, or a device sized

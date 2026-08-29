@@ -34,6 +34,10 @@
 
 pub mod access_check;
 pub mod asset_id;
+pub mod asset_ref;
+pub mod handle;
+pub mod locator;
+pub mod resolver;
 
 mod access;
 mod built_system;
@@ -93,7 +97,7 @@ pub use context::PipelineContext;
 // `Arena` comes with it so a crate that only builds a context (the physics and
 // audio subsystems, and every test world) can name the scratch type without
 // taking its own dependency on the allocation layer.
-pub use concinnity_memory::Arena;
+pub use crate::memory::Arena;
 pub use frame::{FrameContext, FrameVec};
 
 // Renderer-free resources the runtime systems publish and read to coordinate a
@@ -149,18 +153,20 @@ pub use clock::Clock;
 pub use registry::{ComponentAsset, ComponentSlot, ComponentStorage, ComponentTag};
 
 // Points to an asset's compiled binary payload within the data blob files.
-// Defined in the schema crate because blob-backed asset structs carry it as a
-// `#[serde(skip)]` field; re-exported here under its historical path.
-pub use concinnity_asset::PayloadLocator;
+// Blob-backed asset structs carry it as a `#[serde(skip)]` field.
+pub use locator::PayloadLocator;
 
 // Per-kind resource handles (dense per-kind indices into the runtime resource
-// tables), defined in the schema crate alongside `AssetId`. Cook assigns them;
+// tables), Cook assigns them;
 // components and the resource tables address resources by them.
-pub use concinnity_asset::{
+pub use handle::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
     MaterialHandle, MeshHandle, ShaderHandle, SkinnedMeshHandle, TextureHandle,
     de_audio_clip_handle_vec, de_opt_audio_clip_handle, de_opt_font_handle, de_opt_material_handle,
     de_opt_mesh_handle, de_opt_shader_handle, de_opt_skinned_mesh_handle, de_opt_texture_handle,
+    de_texture_handle,
+};
+pub use resolver::{
     set_audio_clip_handle_resolver, set_font_handle_resolver, set_material_handle_resolver,
     set_mesh_handle_resolver, set_shader_handle_resolver, set_skinned_mesh_handle_resolver,
     set_texture_handle_resolver,

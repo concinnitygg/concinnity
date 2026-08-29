@@ -1,5 +1,5 @@
 // The Vulkan half of the single-source shader compile: everything the
-// declarations in `concinnity_render::slang_programs::vk` need a compiler, a
+// declarations in `concinnity_core::render::slang_programs::vk` need a compiler, a
 // content-addressed cache, or a filesystem for. The declarations themselves are
 // re-exported here, so every call site still names them through this module.
 
@@ -7,11 +7,11 @@ use concinnity_slang as slang;
 
 use super::builtins::Ctx;
 
-pub(super) use concinnity_render::slang_programs::vk::*;
+pub(super) use concinnity_core::render::slang_programs::vk::*;
 
 // What a declaration can do once a compiler and a cache are in reach. A trait
 // rather than an inherent impl because `SlangProgram` is defined in
-// concinnity-render, which is `no_std` and knows nothing about either; bringing
+// `core::render`, which is `no_std` and knows nothing about either; bringing
 // this into scope keeps `PROGRAM.compile(&ctx)` reading as it did before the
 // declarations moved.
 pub(crate) trait SlangCompile {
@@ -76,7 +76,7 @@ impl SlangCompile for SlangProgram {
         // the rest on it would miss the single one they do have.
         let name = spirv_artifact_name(self.label, self.msaa && ctx.msaa);
         if let Some((digest, bytes)) = embedded_spirv(&name)
-            && digest == concinnity_render::slang_source::source_digest(&source)
+            && digest == concinnity_core::render::slang_source::source_digest(&source)
         {
             return Ok(bytes.to_vec());
         }
@@ -224,15 +224,17 @@ mod tests {
     fn cluster_constants_match_render_types() {
         use crate::gfx::render_types::{CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER};
         for src in [
-            concinnity_render::shaders::LIGHT_CULL,
-            concinnity_render::shaders::MAIN_BINDLESS,
+            concinnity_core::render::shaders::LIGHT_CULL,
+            concinnity_core::render::shaders::MAIN_BINDLESS,
         ] {
             assert!(src.contains(&format!(
                 "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
             )));
         }
-        assert!(concinnity_render::shaders::LIGHT_CULL.contains(&format!(
-            "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
-        )));
+        assert!(
+            concinnity_core::render::shaders::LIGHT_CULL.contains(&format!(
+                "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
+            ))
+        );
     }
 }

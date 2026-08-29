@@ -11,9 +11,9 @@
 //! per-system profile micros, and the debug-build access validator's hooks in
 //! [`access_check`](crate::ecs::access_check).
 
+use crate::memory::{Arena, MemTag};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use concinnity_memory::{Arena, MemTag};
 
 use crate::ecs::waves::{self, ExecSchedule};
 use crate::ecs::{
@@ -458,7 +458,7 @@ impl World {
         // (streaming workers, the pipelined render half), so per-system
         // attribution is approximate while the frame total is exact churn.
         #[cfg(debug_assertions)]
-        let frame_alloc_start = concinnity_memory::alloc_count();
+        let frame_alloc_start = crate::memory::alloc_count();
         // Rotate the profiler's system-timing buffers so the frame that just
         // finished becomes the readable snapshot for this frame's readers.
         self.profile.begin_frame();
@@ -478,7 +478,7 @@ impl World {
             let name = systems[i].name();
             let started = clock.map_or(0, |now| now());
             #[cfg(debug_assertions)]
-            let alloc_start = concinnity_memory::alloc_count();
+            let alloc_start = crate::memory::alloc_count();
             #[cfg(debug_assertions)]
             crate::ecs::access_check::set_active(Some((systems[i].access(), name)));
             let result = systems[i].step(&mut ctx);
@@ -489,7 +489,7 @@ impl World {
             });
             ctx.profile.record_system(name, micros);
             #[cfg(debug_assertions)]
-            if let (Some(start), Some(end)) = (alloc_start, concinnity_memory::alloc_count()) {
+            if let (Some(start), Some(end)) = (alloc_start, crate::memory::alloc_count()) {
                 ctx.profile.record_system_allocs(
                     name,
                     end.saturating_sub(start).min(u32::MAX as u64) as u32,
@@ -511,7 +511,7 @@ impl World {
         }
         self.take_scratch_overflows();
         #[cfg(debug_assertions)]
-        if let (Some(start), Some(end)) = (frame_alloc_start, concinnity_memory::alloc_count()) {
+        if let (Some(start), Some(end)) = (frame_alloc_start, crate::memory::alloc_count()) {
             self.profile
                 .set_frame_allocs(end.saturating_sub(start).min(u32::MAX as u64) as u32);
         }

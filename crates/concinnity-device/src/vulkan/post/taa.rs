@@ -14,7 +14,7 @@ use crate::vulkan::owned::{
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::vulkan::allocator::DeviceAllocator;
-use concinnity_render::uniforms::TaaParams;
+use concinnity_core::render::uniforms::TaaParams;
 
 use super::super::context::*;
 use super::super::pipeline::*;

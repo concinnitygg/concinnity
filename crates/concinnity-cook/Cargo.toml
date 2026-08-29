@@ -21,10 +21,8 @@ name = "concinnity_cook"
 path = "src/lib.rs"
 
 [dependencies]
-concinnity-asset = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-physics = { workspace = true }
 concinnity-world = { workspace = true }
 
 bytemuck = "1"

@@ -5,7 +5,7 @@ engine's own instruments. Each benchmark reports CPU time per unit of work next
 to the memory traffic one iteration causes:
 
 - time and p95 come from calibrated timing samples,
-- allocation counts and heap deltas come from `concinnity_memory::stats()`
+- allocation counts and heap deltas come from `concinnity_core::memory::stats()`
   (the same `TrackingAlloc` every engine binary runs on),
 - the vram column comes from the tagged ledger's device realm, so benchmarks
   over device-side accounting report through the same table.
@@ -38,10 +38,11 @@ cargo bench -p concinnity-bench -- --json out.json   # machine-readable report
   benchmarks use. World populate (with and without the manifest pre-size),
   column iteration, targeted lookups, and column drain. `World::despawn` is
   `#[cfg(test)]` and so is not reachable here.
-- `render`: the GPU-free render-prep layer. BVH build and frustum query
-  over a 10k-object scene, light packing for the clustered forward pass,
-  the streaming planner's per-frame re-rank under sustained pool pressure
-  (churn asserted), and draw-slot recycling. No backend is involved.
+- `render`: the GPU-free render-prep layer (`concinnity_core::render`). Light
+  packing for the clustered forward pass, the streaming planner's per-frame
+  re-rank under sustained pool pressure (churn asserted), and draw-slot
+  recycling. No backend is involved; the BVH build and frustum query are
+  in-crate, below.
 
 ## In-crate benchmarks
 
@@ -60,15 +61,15 @@ the same `Bench::run` instrument:
   cargo test -p concinnity-core --release -- --ignored --nocapture join_probe
   ```
 
-- the allocation layer (`concinnity-memory`). Frame arena against the heap
+- the allocation layer (`concinnity_core::memory`). Frame arena against the heap
   path it replaces, pool churn, the inline-vec single-element case, and ledger
   report cost.
 
   ```
-  cargo test -p concinnity-memory --release -- --ignored --nocapture --test-threads=1 bench_allocation_layer
+  cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 memory::bench
   ```
 
-- the rigid-body simulation (`concinnity-physics`). Stepping benches rebuild
+- the rigid-body simulation (`concinnity_core::physics`). Stepping benches rebuild
   an identical stacked world and step it a fixed count per iteration, so the
   measured work is bit-identical run to run (asserted, so a change that breaks
   determinism fails loudly): sustained-contact settling, contact-free fall, the
@@ -80,7 +81,15 @@ the same `Bench::run` instrument:
   which the determinism assertion checks.
 
   ```
-  cargo test -p concinnity-physics --release -- --ignored --nocapture --test-threads=1 bench
+  cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 physics::bench
+  ```
+
+- the render-prep BVH (`concinnity_core::render::bvh`). Build and frustum query
+  over a 10k-object scene, against the item type the builder is generic over,
+  which its consumers rather than this package supply.
+
+  ```
+  cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 bench_bvh
   ```
 
 ## Reading the report

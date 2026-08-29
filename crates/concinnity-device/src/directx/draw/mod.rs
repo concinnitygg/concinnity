@@ -31,9 +31,9 @@ mod shadow;
 mod spot_shadow;
 
 // `ViewUniforms` (the main-pass `ViewBlock` cbuffer) is a GPU-free layout struct
-// that lives in concinnity-render; re-export it so
+// that lives in `core::render`; re-export it so
 // `crate::directx::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::directx) use concinnity_render::uniforms::ViewUniforms;
+pub(in crate::directx) use concinnity_core::render::uniforms::ViewUniforms;
 
 // One term of the Halton low-discrepancy sequence; drives the sub-pixel
 // projection jitter so successive TAA frames sample slightly different
@@ -159,9 +159,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &self.probe.set as *const concinnity_render::uniforms::ProbeSet as *const u8,
+                &self.probe.set as *const concinnity_core::render::uniforms::ProbeSet as *const u8,
                 self.probe.set_cbv_ptrs[frame_idx],
-                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
+                std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>(),
             );
         }
 

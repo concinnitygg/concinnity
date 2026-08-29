@@ -43,11 +43,11 @@ use crate::gfx::render_types::ParticleParams;
 pub(in crate::directx) const MAX_EMITTERS: usize = 256;
 
 // `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
-// view cbuffer) are GPU-free layout structs that live in concinnity-render;
+// view cbuffer) are GPU-free layout structs that live in `core::render`;
 // re-export them so `crate::directx::particle::{GpuParticle,ParticleView}` are
 // unchanged.
-pub(in crate::directx) use concinnity_render::uniforms::GpuParticle;
-pub(in crate::directx) use concinnity_render::uniforms::ParticleView;
+pub(in crate::directx) use concinnity_core::render::uniforms::GpuParticle;
+pub(in crate::directx) use concinnity_core::render::uniforms::ParticleView;
 
 // Compile the particle compute + vertex + fragment shaders. Used by
 // [`ParticleResources::new`] at init and (in the future) by shader hot-reload.

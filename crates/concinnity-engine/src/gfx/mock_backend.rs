@@ -55,7 +55,7 @@ pub(crate) struct InitSnapshot {
     pub(crate) taa_enabled: bool,
     pub(crate) ssao_on: bool,
     pub(crate) rt_reflections_on: bool,
-    pub(crate) rt_dynamic: concinnity_render::rt_geom::RtDynamicMode,
+    pub(crate) rt_dynamic: concinnity_core::render::rt_geom::RtDynamicMode,
     pub(crate) rt_skinned_geometry: bool,
     // Per shader bucket, the compiled (vertex, fragment) byte counts. A bucket
     // of (0, 0) is a world that declared no Shader for it, which every backend

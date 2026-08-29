@@ -12,6 +12,7 @@ keywords = ["gamedev", "graphics", "ecs", "concinnity"]
 categories = ["game-engines", "no-std"]
 include = [
     "/src",
+    "/tests",
     "/build.rs",
 ]
 
@@ -20,6 +21,11 @@ name = "concinnity_core"
 path = "src/lib.rs"
 
 [features]
+# Per-size-class allocation histograms, for development binaries only. The
+# global counters and the tagged ledger ship unconditionally; this is the tier a
+# shipped build should not pay for on every allocation.
+detail = []
+
 # Selects backend_vk on Windows (via build.rs reading CARGO_FEATURE_VULKAN) so
 # the backend-conditional gfx data layouts and Platform::current() compile for
 # the same backend the client picks. Activates no extra dependency. Inert on
@@ -27,14 +33,10 @@ path = "src/lib.rs"
 vulkan = []
 
 [dependencies]
-concinnity-asset = { workspace = true }
-concinnity-memory = { workspace = true }
-concinnity-physics = { workspace = true }
 
 bytemuck = { version = "1", default-features = false, features = ["derive"] }
-# `hashbrown` is what makes fontdue no_std: without it the crate falls back to
-# std's HashMap. `simd` is its default fast raster path.
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
+hashbrown = "0.15"
 libm = "0.2"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
@@ -42,7 +44,12 @@ serde_bytes = { version = "0.11", default-features = false, features = ["alloc"]
 thiserror = { version = "2.0.18", default-features = false }
 
 [dev-dependencies]
+ciborium = "0.2"
+rayon = "1"
 serde_json = { version = "1", features = ["preserve_order"] }
+
+[build-dependencies]
+rayon = "1"
 
 [lints]
 workspace = true

@@ -76,8 +76,8 @@ use crate::gfx::render_types::{
 use super::context::MtlContext;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
 use super::uniforms::VelocityUniforms;
-use concinnity_render::uniforms::GBufferView;
-use concinnity_render::uniforms::TaaParams;
+use concinnity_core::render::uniforms::GBufferView;
+use concinnity_core::render::uniforms::TaaParams;
 
 // Per-frame params the executor threads into each pass's `encode_*`
 // method. The set is the union of what every currently-migrated pass
@@ -724,7 +724,7 @@ impl MtlContext {
                     "graph executor: Transparent pass requires scene_pre_taa but none was supplied",
                 )?;
                 let inv_vp = params.inv_vp;
-                let view = concinnity_render::uniforms::TransparentView {
+                let view = concinnity_core::render::uniforms::TransparentView {
                     vp: params.vp,
                     inv_vp,
                     camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],

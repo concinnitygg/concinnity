@@ -71,7 +71,7 @@ const RAYMARCH_VOLUMETRIC_TEMPLATE_HLSL: &str =
 
 // `RaymarchView` (per-frame view cbuffer) and `RaymarchVolumeUniforms`
 // (per-volume SDF cbuffer) are GPU-free layout structs that live in
-// concinnity-render; re-export them so
+// `core::render`; re-export them so
 // `crate::directx::raymarch::{RaymarchView,RaymarchVolumeUniforms}` are unchanged
 // for the encode + `volume_uniforms_from` paths.
 pub(in crate::directx) use crate::directx::uniforms::RaymarchView;
@@ -1576,4 +1576,4 @@ impl DxContext {
 const _LIGHT_LAYOUT_REF: usize = std::mem::size_of::<LightUniforms>();
 
 // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
-// structs in `concinnity_render::directx::uniforms`.
+// structs in `concinnity_core::render::directx::uniforms`.

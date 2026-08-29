@@ -8,7 +8,7 @@
 
 use super::expand::{asset_name, type_norm};
 use crate::character::import::CharacterModelArg;
-use concinnity_asset::cook::CharacterModel;
+use concinnity_world::registry::build_only::CharacterModel;
 use concinnity_world::world::WorldJsonlAsset;
 
 // The fields a CharacterModel shares with the SkinnedMesh it becomes.

@@ -10,7 +10,7 @@
 use concinnity_core::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
 };
-use concinnity_render::uniforms::{
+use concinnity_core::render::uniforms::{
     GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterParams,
     WaterWaveGpu,
 };

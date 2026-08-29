@@ -11,12 +11,12 @@
 
 use std::time::Instant;
 
-use concinnity_memory::Realm;
+use concinnity_core::memory::Realm;
 
 // One declaration for every bench target in this package: the per-iteration
 // allocation counts are only real because the harness runs on the tracking
 // allocator.
-concinnity_memory::install_global_allocator!();
+concinnity_core::install_global_allocator!();
 
 const MAX_ITERS: u64 = 1 << 22;
 const DEFAULT_SAMPLES: usize = 25;
@@ -166,13 +166,13 @@ impl Bench {
 
         // A separate pass for memory, so snapshot reads sit outside the timed
         // windows and the timing loop sits outside the counted window.
-        let ledger = concinnity_memory::ledger();
+        let ledger = concinnity_core::memory::ledger();
         let device_before = ledger.snapshot().realm_bytes(Realm::Device) as i64;
-        let heap_before = concinnity_memory::stats().unwrap_or_default();
+        let heap_before = concinnity_core::memory::stats().unwrap_or_default();
         for _ in 0..iters {
             core::hint::black_box(body());
         }
-        let heap_after = concinnity_memory::stats().unwrap_or_default();
+        let heap_after = concinnity_core::memory::stats().unwrap_or_default();
         let device_after = ledger.snapshot().realm_bytes(Realm::Device) as i64;
 
         let per_iter =

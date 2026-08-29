@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use concinnity_core::blob::PhysicsBudgetRecord;
-use concinnity_physics::{PhysicsBudget, PhysicsCounts};
+use concinnity_core::physics::{PhysicsBudget, PhysicsCounts};
 use concinnity_world::world::WorldJsonlAsset;
 
 use crate::spawn_population::SpawnPopulation;

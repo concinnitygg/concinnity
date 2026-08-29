@@ -17,7 +17,7 @@ use crate::components::MeshRenderer;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderQueues, Entity, MaterialHandle, World};
 use crate::gfx::material_entry::{self, MaterialEntry};
-use concinnity_render::ops::RenderOps;
+use concinnity_core::render::ops::RenderOps;
 
 /// One draw slot's material as the backend holds it: the GPU uniforms plus the
 /// texture-pool slots they sample, and the handle the entity records.

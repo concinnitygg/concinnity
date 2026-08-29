@@ -29,13 +29,11 @@ vulkan = [
     "dep:ash",
     "dep:shaderc",
     "concinnity-core/vulkan",
-    "concinnity-render/vulkan",
 ]
 
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-render = { workspace = true }
 concinnity-slang = { workspace = true }
 
 bytemuck = { version = "1", features = ["derive"] }
@@ -102,7 +100,7 @@ serde_json = "1"
 [build-dependencies]
 # The single-source shaders and the assembly over them, so this script compiles
 # byte-identical text to what the renderer does.
-concinnity-render = { workspace = true }
+concinnity-core = { workspace = true }
 concinnity-slang = { workspace = true }
 concinnity-toolchain = { workspace = true }
 

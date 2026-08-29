@@ -12,7 +12,8 @@ pub(crate) mod surface_offset;
 pub(crate) mod taper;
 
 use super::frame::BoneFrame;
-use concinnity_asset::cook::{KeyPolarity, SynthParams};
+use concinnity_world::registry::build_only::KeyPolarity;
+use concinnity_world::registry::build_only::SynthParams;
 
 use crate::components::{MorphDelta, SkinnedVertexData};
 use concinnity_core::math::vec3;

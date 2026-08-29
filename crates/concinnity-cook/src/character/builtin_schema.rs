@@ -2,7 +2,7 @@
 // reserved name `builtin:humanoid`, and schema lookup by name against a
 // world's CharacterSchema assets.
 
-use concinnity_asset::cook::CharacterSchema;
+use concinnity_world::registry::build_only::CharacterSchema;
 use concinnity_world::world::WorldJsonlAsset;
 use std::sync::OnceLock;
 

@@ -9,7 +9,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use concinnity_physics::{
+use crate::physics::{
     BodyHandle, ColliderShape, Simulation, euler_deg_from_quat, quat_from_euler_deg,
 };
 

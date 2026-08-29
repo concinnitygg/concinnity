@@ -67,7 +67,7 @@ const RAYMARCH_SHADOW_TEMPLATE_GLSL: &str = include_str!("shaders/raymarch_shado
 const CUBE_INDEX_COUNT: u32 = 36;
 
 // `RaymarchView` (per-frame view UBO) and `RaymarchVolumeUniforms` (per-volume
-// SDF UBO) are GPU-free layout structs that live in concinnity-render;
+// SDF UBO) are GPU-free layout structs that live in `core::render`;
 // re-export them so `crate::vulkan::raymarch::{RaymarchView,RaymarchVolumeUniforms}`
 // are unchanged for the encode + `volume_uniforms_from` paths.
 pub(in crate::vulkan) use crate::vulkan::uniforms::RaymarchView;
@@ -1790,7 +1790,7 @@ VolumeSample sampleVolume(vec3 p, SdfParams params, float time) {
 "#;
 
     // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
-    // structs in `concinnity_render::vulkan::uniforms`.
+    // structs in `concinnity_core::render::vulkan::uniforms`.
 
     // Compile the proxy vertex + the assembled fragment (helpers + the demo
     // chrome-blob user shader + template) so a GLSL regression fails the suite

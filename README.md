@@ -42,6 +42,21 @@ fn main() {
 
 Check out the [Rust Documentation][docs-link] to explore the crate.
 
+## Crates
+
+| Crate                  | Kind      |      no_std?       | Role                                                                                                                                                                              |
+| ---------------------- | --------- | :----------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `concinnity-dev`       | lib       |                    | Dev tooling: world authoring, the `cn` subcommands, the asset reference generator, bundle packaging, the in-engine editor, the debug server.                                      |
+| `concinnity-cook`      | lib       |                    | Asset cook pipeline that bakes an authored world into a blob.                                                                                                                     |
+| `concinnity-world`     | lib       |                    | Authored world source, build-only asset schemas, validation, and spec builders.                                                                                                   |
+| `concinnity-engine`    | lib       |                    | Runtime engine: ECS schedule, graphics/audio ([kira])/spawn, allocator.                                                                                                           |
+| `concinnity-device`    | lib       |                    | GPU backends (Metal/Vulkan/DX) behind a device facade.                                                                                                                            |
+| `concinnity-shader`    | lib       |                    | Build-time shader compilers for the backend being built.                                                                                                                          |
+| `concinnity-host`      | lib       |                    | Host services: the on-disk state tree, the worker pool, the build-time name interner.                                                                                             |
+| `concinnity-core`      | lib       | :white_check_mark: | Asset schemas beside their runtime components, the compute over them, the GPU-free render preparation, the rigid-body simulation, the allocation layer, the headless sim drivers. |
+| `concinnity-toolchain` | build-dep |                    | Build-script support: cfgs, SDKs, source hashing, doc extraction.                                                                                                                 |
+
+[kira]: https://docs.rs/kira/latest/kira
 [crates-img]: https://img.shields.io/crates/v/concinnity.svg?logo=rust
 [crates-link]: https://crates.io/crates/concinnity
 [docs-img]: https://img.shields.io/docsrs/concinnity?logo=docsdotrs

@@ -17,7 +17,7 @@
 //!     byte_len bytes of level data
 //!
 //! RGBA8 sources (PNG / JPEG / procedural generators) carry a single mip; the
-//! backend upload generates the minification chain (`concinnity_render::mipmap`).
+//! backend upload generates the minification chain (`crate::render::mipmap`).
 //! Block-compressed sources (KTX2 / DDS) carry the container's full mip chain and
 //! upload it verbatim, since no runtime BCn encoder exists.
 

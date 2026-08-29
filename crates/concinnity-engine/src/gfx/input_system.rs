@@ -19,7 +19,7 @@ use crate::components::{FrameInput, GamepadButton, GamepadMap, NavDirection};
 use crate::ecs::{InputMailbox, PipelineContext, StepResult, System};
 use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
 use crate::input::nav::NavRepeat;
-use concinnity_render::input::RenderInput;
+use concinnity_core::render::input::RenderInput;
 use std::time::Instant;
 
 // Frame dt ceiling for the nav auto-repeat, so a hitch or debugger pause never

@@ -83,7 +83,7 @@ impl MtlContext {
         if vertices.is_empty() {
             return Ok(0);
         }
-        let view = concinnity_render::uniforms::LineView {
+        let view = concinnity_core::render::uniforms::LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
             _pad: [0.0; 3],

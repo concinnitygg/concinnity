@@ -89,9 +89,9 @@ mod tests {
     use super::*;
     use crate::blob::encode::encode_cnb;
     use crate::blob::schema::{AssetKind, BlobAssetDef, ResourceKind, ResourceRecord};
+    use crate::ecs::PayloadLocator;
     use alloc::vec;
     use alloc::vec::Vec;
-    use concinnity_asset::PayloadLocator;
 
     // Any value both sides agree on exercises the header check; the real
     // one is `crate::SCHEMA_VERSION`.

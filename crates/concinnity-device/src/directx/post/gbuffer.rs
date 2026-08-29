@@ -58,11 +58,11 @@ pub(in crate::directx) const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0,
 const GBUFFER_VIEW_UBO_SIZE: u64 = 256;
 
 // `GBufferView` (the `GbView` cbuffer) and `GBufferModel` (the per-draw model
-// root constants) are GPU-free layout structs that live in concinnity-render;
+// root constants) are GPU-free layout structs that live in `core::render`;
 // re-export them so `crate::directx::post::gbuffer::{GBufferView,GBufferModel}`
 // are unchanged.
-pub(in crate::directx) use concinnity_render::uniforms::GBufferModel;
-pub(in crate::directx) use concinnity_render::uniforms::GBufferView;
+pub(in crate::directx) use concinnity_core::render::uniforms::GBufferModel;
+pub(in crate::directx) use concinnity_core::render::uniforms::GBufferView;
 
 // Shader compilation
 
@@ -1475,7 +1475,7 @@ mod tests {
     use super::*;
 
     // The `GBufferView` / `GBufferModel` layout tests live with the structs in
-    // `concinnity_render::directx::uniforms`. `GBufferView` fitting the
+    // `concinnity_core::render::directx::uniforms`. `GBufferView` fitting the
     // 256-aligned UBO allocation is checked here, where `align256` +
     // `GBUFFER_VIEW_UBO_SIZE` live.
     #[test]

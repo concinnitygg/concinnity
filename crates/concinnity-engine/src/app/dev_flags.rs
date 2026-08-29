@@ -64,7 +64,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 pub use crate::gfx::quality_preset::QualityPreset;
-pub use concinnity_render::rt_geom::RtDynamicMode;
+pub use concinnity_core::render::rt_geom::RtDynamicMode;
 
 use crate::gfx::quality_preset::{preset_at, preset_index};
 

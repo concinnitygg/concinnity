@@ -16,7 +16,7 @@
 
 use ash::vk;
 
-use concinnity_render::uniforms::MAX_PROBES;
+use concinnity_core::render::uniforms::MAX_PROBES;
 
 // One descriptor binding: (binding index, descriptor type, shader stages).
 pub(in crate::vulkan) type Binding = (u32, vk::DescriptorType, vk::ShaderStageFlags);

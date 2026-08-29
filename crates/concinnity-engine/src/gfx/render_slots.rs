@@ -7,8 +7,8 @@
 // because ops replay exactly once, in record order: an `Append` index always
 // matches the backend's draw-object count when its op applies.
 
-use concinnity_render::draw_slot::{DrawSlotAllocator, SlotAlloc};
-use concinnity_render::skinned_pool::SkinnedInstancePool;
+use concinnity_core::render::draw_slot::{DrawSlotAllocator, SlotAlloc};
+use concinnity_core::render::skinned_pool::SkinnedInstancePool;
 
 // World resource: the draw-slot free list plus the skinned instance pool.
 // Published by graphics init once the backend's build-time draw count and

@@ -346,7 +346,7 @@ thread_local! {
     static RESOURCE_HANDLES: RefCell<ResourceHandles> = RefCell::new(ResourceHandles::default());
 }
 
-// Install the schema crate's per-kind resource-handle resolver seams so a
+// Install the per-kind resource-handle resolver seams so a
 // reference name deserializes to its dense handle value. Each closure is
 // non-capturing (the map is a thread-local static), so it coerces to the plain
 // `fn` pointer the seam holds; it resolves a name to its `AssetId` through the

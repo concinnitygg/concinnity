@@ -2,7 +2,9 @@
 // present under the right parent and every bipolar key has both targets,
 // plus the model's own args. Every problem is reported, in one pass.
 
-use concinnity_asset::cook::{CharacterModel, CharacterSchema, KeyPolarity};
+use concinnity_world::registry::build_only::CharacterModel;
+use concinnity_world::registry::build_only::CharacterSchema;
+use concinnity_world::registry::build_only::KeyPolarity;
 
 use crate::components::SkeletonJoint;
 
@@ -91,7 +93,8 @@ pub(crate) fn model_errors(model: &CharacterModel) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_asset::cook::{SchemaJoint, SchemaKey};
+    use concinnity_world::registry::build_only::SchemaJoint;
+    use concinnity_world::registry::build_only::SchemaKey;
 
     fn joint(name: &str, parent: i32) -> SkeletonJoint {
         SkeletonJoint {

@@ -55,7 +55,7 @@ fn despawn_collected(
     let entities = collect_subtree(ctx, root);
     for &entity in &entities {
         // Clone the slot list out so the immutable borrow ends before despawn.
-        let slots: concinnity_memory::InlineVec<u32> = ctx
+        let slots: concinnity_core::memory::InlineVec<u32> = ctx
             .get::<RenderHandle>(entity)
             .map(|h| h.draws.clone())
             .unwrap_or_default();

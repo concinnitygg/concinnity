@@ -40,7 +40,7 @@ use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::ModelUniforms;
-use concinnity_render::uniforms::ViewUniforms;
+use concinnity_core::render::uniforms::ViewUniforms;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
 // `self.view_matrix` for the on-screen main pass (and its phase-2 sibling) but
@@ -655,7 +655,7 @@ impl MtlContext {
         // buffer instead, ICB-incompatible discrete binds being the reason).
         // probe_cube_or_sky returns the sky prefilter for unbaked slots, so all
         // MAX_PROBES are always valid. Skybox + diffuse keep texture 3/4.
-        for i in 0..concinnity_render::uniforms::MAX_PROBES {
+        for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
             enc.set_fragment_texture(self.probe_cube_or_sky(i), 6 + i);
         }
         // Reflection-probe set (count + per-probe parallax boxes) at fragment

@@ -7,7 +7,7 @@
 // `companion.rs` applies the resulting specs to the world.
 //
 // This is build-time-only authoring logic; the asset data structs live in
-// concinnity-asset and their runtime `Component` impls in concinnity-core.
+// concinnity-core alongside their runtime `Component` impls.
 
 // A companion asset implied by the presence of another asset in the world. The
 // injection pass adds one only if no asset of the companion's `asset_type` is

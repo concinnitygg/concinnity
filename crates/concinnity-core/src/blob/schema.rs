@@ -4,8 +4,9 @@
 // type, resource_kind -> table) belongs to the runtime registry, not here --
 // these are containers, not meaning.
 
+use crate::ecs::PayloadLocator;
+use crate::ecs::asset_id::AssetId;
 use alloc::vec::Vec;
-use concinnity_asset::{AssetId, PayloadLocator};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 /// One component record in the blob's def stream.

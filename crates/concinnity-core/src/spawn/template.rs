@@ -8,7 +8,7 @@
 //! carries, when a Spawner is due, when a Lifetime is up -- is the world's, so
 //! it lives with the world.
 
-use concinnity_memory::InlineVec;
+use crate::memory::InlineVec;
 
 use crate::components::{
     BodyDynamics, Collider, GlobalTransform, Lifetime, MeshRenderer, ModelRenderer, Pickup,

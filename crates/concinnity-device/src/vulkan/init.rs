@@ -1018,7 +1018,7 @@ impl VkContext {
         // reflection-probe count + per-probe parallax boxes. Persistently mapped;
         // `record_frame` writes `self.probe.set` here each frame.
         let probe_set_ubo_size =
-            std::mem::size_of::<concinnity_render::uniforms::ProbeSet>() as u64;
+            std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>() as u64;
         let mut probe_set_ubo_buffers = Vec::with_capacity(frames);
         for _ in 0..frames {
             probe_set_ubo_buffers.push(alloc.create_buffer(
@@ -1185,10 +1185,10 @@ impl VkContext {
             max_per_stage_samplers,
             global_update_after_bind,
         );
-        if (probe_cube_count as usize) < concinnity_render::uniforms::MAX_PROBES {
+        if (probe_cube_count as usize) < concinnity_core::render::uniforms::MAX_PROBES {
             tracing::info!(
                 "reflection probes: device sampler headroom binds {probe_cube_count} of {}",
-                concinnity_render::uniforms::MAX_PROBES
+                concinnity_core::render::uniforms::MAX_PROBES
             );
         }
         // Global set (set 0): view UBO, light UBO, shadow UBO, shadow array
@@ -1780,11 +1780,11 @@ impl VkContext {
             && !super::descriptor_layout::bindless_pool_needs_update_after_bind(
                 max_per_stage_samplers,
                 probe_cube_count,
-                concinnity_render::uniforms::BINDLESS_POOL_SIZE as u32,
+                concinnity_core::render::uniforms::BINDLESS_POOL_SIZE as u32,
                 global_update_after_bind,
             )
             && super::builtins::world_pool_size(textures.len())
-                <= concinnity_render::uniforms::BINDLESS_POOL_SIZE;
+                <= concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
         let bindless_pool_size = if bindless_active {
             super::builtins::bindless_pool_size(textures.len(), ceiling_fits)
         } else {
@@ -1794,7 +1794,7 @@ impl VkContext {
             tracing::debug!(
                 "bindless texture pool: sized to the world ({bindless_pool_size}); this device \
                  cannot seat the {} slot ceiling, so its shaders compile at init",
-                concinnity_render::uniforms::BINDLESS_POOL_SIZE
+                concinnity_core::render::uniforms::BINDLESS_POOL_SIZE
             );
         }
         // The texture pool's length is the world's texture table, so it cannot be
@@ -4190,7 +4190,7 @@ impl VkContext {
             env_map,
             probe: super::context::ProbeState {
                 placements: Vec::new(),
-                set: concinnity_render::uniforms::ProbeSet::EMPTY,
+                set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
                 maps: Vec::new(),
                 bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
                 rendering: None,

@@ -26,10 +26,10 @@ use crate::vulkan::transparent::{
 };
 
 // `WaterParams` / `WaterWaveGpu` (the per-surface UBO and its wave lanes) are
-// GPU-free layout structs that live in concinnity-render; re-export them so
+// GPU-free layout structs that live in `core::render`; re-export them so
 // `crate::vulkan::water::WaterParams` is unchanged for the `water_params_from`
 // path.
-pub(in crate::vulkan) use concinnity_render::uniforms::{
+pub(in crate::vulkan) use concinnity_core::render::uniforms::{
     WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
 };
 
@@ -282,7 +282,7 @@ mod tests {
     use super::*;
 
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_render::uniforms`, and are checked against the compiled shader
+    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
 
     #[test]
@@ -352,7 +352,7 @@ mod tests {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
+        for probes in [1, concinnity_core::render::uniforms::MAX_PROBES as u32] {
             super::compile_water_shaders(false, true, probes).expect("water compiles (msaa)");
             super::compile_water_shaders(false, false, probes).expect("water compiles (no msaa)");
         }

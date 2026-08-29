@@ -32,7 +32,7 @@ use crate::vulkan::owned::{
 
 use crate::vulkan::uniforms::GBUFFER_PREPASS_PUSH_BYTES;
 use crate::vulkan::uniforms::GbModelPush;
-use concinnity_render::uniforms::GBufferView;
+use concinnity_core::render::uniforms::GBufferView;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
@@ -60,7 +60,7 @@ pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize = 256;
 
 // `GBufferView` (the std140 `GbView` UBO) and `GbModelPush` (the pre-pass
 // push constant), plus its `GBUFFER_PREPASS_PUSH_BYTES` size, are GPU-free
-// layout structs that live in concinnity-render (imported above).
+// layout structs that live in `core::render` (imported above).
 
 // SPIR-V blobs for every G-buffer pre-pass pipeline. Produced by
 // [`compile_gbuffer_shaders`]; consumed by `GbufferResources::new` at init and
@@ -1884,7 +1884,7 @@ mod tests {
     use super::*;
 
     // The `GBufferView` / `GbModelPush` layout tests live with the structs in
-    // `concinnity_render::vulkan::uniforms`. `GBufferView` fitting the
+    // `concinnity_core::render::vulkan::uniforms`. `GBufferView` fitting the
     // `GBUFFER_VIEW_UBO_SIZE` allocation is checked here, where the size const
     // (typed `vk::DeviceSize`) lives.
     #[test]

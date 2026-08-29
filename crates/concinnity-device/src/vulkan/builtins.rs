@@ -40,7 +40,7 @@ pub(crate) fn world_pool_size(texture_count: usize) -> usize {
 // eventual host will use unless it is one of the constrained ones.
 pub(crate) fn bindless_pool_size(texture_count: usize, ceiling_fits: bool) -> usize {
     if ceiling_fits {
-        concinnity_render::uniforms::BINDLESS_POOL_SIZE
+        concinnity_core::render::uniforms::BINDLESS_POOL_SIZE
     } else {
         world_pool_size(texture_count)
     }
@@ -141,13 +141,13 @@ impl GlslProgram {
 // headroom than that (MoltenVK) simply misses these entries and compiles them
 // at first launch.
 pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompile::Report) {
-    let pool_size = concinnity_render::uniforms::BINDLESS_POOL_SIZE;
+    let pool_size = concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
     for program in ALL {
         let ctx = Ctx {
             hot_reload: false,
             msaa: false,
             pool_size,
-            probe_count: concinnity_render::uniforms::MAX_PROBES,
+            probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         };
         let source = program.source(&ctx);
         let key = if program.rt {
@@ -184,7 +184,7 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
                 hot_reload: false,
                 msaa,
                 pool_size,
-                probe_count: concinnity_render::uniforms::MAX_PROBES,
+                probe_count: concinnity_core::render::uniforms::MAX_PROBES,
             };
             let source = program.source(&ctx);
             let key = program.cache_key(&source);
@@ -345,7 +345,7 @@ mod tests {
     // the text does too.
     #[test]
     fn the_ceiling_makes_the_pool_length_independent_of_the_world() {
-        let ceiling = concinnity_render::uniforms::BINDLESS_POOL_SIZE;
+        let ceiling = concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
         for texture_count in [0usize, 1, 7, 64] {
             assert_eq!(bindless_pool_size(texture_count, true), ceiling);
             assert_eq!(
@@ -360,7 +360,7 @@ mod tests {
     // truncation -- which is what `vulkan::init` checks before choosing it.
     #[test]
     fn a_world_that_fits_the_ceiling_leaves_room_to_pad() {
-        let ceiling = concinnity_render::uniforms::BINDLESS_POOL_SIZE;
+        let ceiling = concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
         assert!(world_pool_size(ceiling - 3) <= ceiling);
         assert!(world_pool_size(ceiling) > ceiling);
     }

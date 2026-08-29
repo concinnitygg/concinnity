@@ -1,15 +1,16 @@
 //! The device backends. The proprietary, hardware-facing renderers - Metal
 //! (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
 //! Win32 window/input layer. Exactly one backend compiles per build (resolved by
-//! build.rs into a single backend_* cfg). Depends on concinnity-render (the
-//! RenderBackend/SceneControl trait seam + render-prep) and concinnity-core;
-//! owns no gameplay, ECS-runtime, audio, or physics. The client drives these through a
+//! build.rs into a single backend_* cfg). Depends on concinnity-core, whose
+//! `render` module holds the RenderBackend/SceneControl trait seam these
+//! implement plus the render-prep feeding it; owns no gameplay, ECS-runtime,
+//! audio, or physics. The client drives these through a
 //! `Box<dyn RenderBackend>` obtained from `init_backend`, never naming a concrete
 //! context type.
 
 // Bridge so the backends' historical `crate::gfx::<X>` paths resolve: the GPU
-// data layouts, render math, and CPU kernels (concinnity-core) plus the
-// render-prep modules (concinnity-render). Each
+// data layouts, render math, and CPU kernels (`concinnity_core::gfx`) plus the
+// render-prep modules (`concinnity_core::render`). Each
 // backend consumes a different subset and one backend compiles per build, so a
 // portion of these re-exports is unused on any given build - suppress it
 // crate-wide rather than gate every item per backend.
@@ -22,7 +23,7 @@ pub(crate) mod gfx {
         auto_exposure, frustum, image_decode, lod, mesh_payload, morph_targets, profile,
         render_types, rt_reflections, ssao, ssgi, ssr,
     };
-    pub(crate) use concinnity_render::{
+    pub(crate) use concinnity_core::render::{
         backend, backend_init, bvh, csm, decal, display_mode, draw_slot, error, fullscreen,
         hdr_output, input, keymap, lights, ltc, mipmap, parallel_ctx, particles, planar_reflection,
         reflection_probe, render_graph, rt_geom, rt_refit, rt_topology, scene_flow,

@@ -1,12 +1,17 @@
-//! The engine's one perspective projection, in the convention every backend
+//! The engine's view and projection matrices, in the convention every backend
 //! already agreed on: right-handed, looking down `-z`, with depth mapped to
 //! `[0, 1]` after the perspective divide. Metal, Vulkan, and DirectX all sample
-//! depth that way, so the same matrix is valid for all three; Vulkan and D3D12
+//! depth that way, so the same matrices are valid for all three; Vulkan and D3D12
 //! compensate for their Y-down NDC with a negative-height viewport rather than
 //! by flipping the projection.
+//!
+//! Both projections and both ways of building a view matrix sit together because
+//! they have to agree: a shadow cascade's ortho and a probe face's perspective
+//! are sampled by the same shaders as the main camera's.
 
 use crate::gfx::transform::Mat4;
-use crate::math::tan;
+use crate::math::vec3::{cross, dot, sub};
+use crate::math::{sqrt, tan};
 
 // Floor applied to the half-FOV tangent. A zero or near-zero vertical FOV would
 // otherwise divide by zero and fill the matrix with infinities.
@@ -24,6 +29,64 @@ pub fn perspective_rh(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> M
         [0.0, 0.0, zs, -1.0],
         [0.0, 0.0, zs * near, 0.0],
     ]
+}
+
+/// Right-handed orthographic projection with depth in `[0, 1]`.
+pub fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Mat4 {
+    let rml = right - left;
+    let tmb = top - bottom;
+    let fmn = far - near;
+    [
+        [2.0 / rml, 0.0, 0.0, 0.0],
+        [0.0, 2.0 / tmb, 0.0, 0.0],
+        [0.0, 0.0, -1.0 / fmn, 0.0],
+        [
+            -(right + left) / rml,
+            -(top + bottom) / tmb,
+            -near / fmn,
+            1.0,
+        ],
+    ]
+}
+
+/// World-to-view for an orthonormal camera basis at `eye`, looking down
+/// `-forward`. The basis is taken as given, for a caller that already has one
+/// (a cube face, a light frustum) rather than a point to aim at.
+pub fn view_from_basis(eye: [f32; 3], right: [f32; 3], up: [f32; 3], forward: [f32; 3]) -> Mat4 {
+    [
+        [right[0], up[0], -forward[0], 0.0],
+        [right[1], up[1], -forward[1], 0.0],
+        [right[2], up[2], -forward[2], 0.0],
+        [-dot(right, eye), -dot(up, eye), dot(forward, eye), 1.0],
+    ]
+}
+
+/// World-to-view for a camera at `eye` aimed at `centre`, with `up` resolving
+/// the roll.
+pub fn look_at(eye: [f32; 3], centre: [f32; 3], up: [f32; 3]) -> Mat4 {
+    let f = normalize3(sub(centre, eye));
+    let r = normalize3(cross(f, up));
+    view_from_basis(eye, r, cross(r, f), f)
+}
+
+/// Unit-length `v`, with the length floored so a degenerate input yields a huge
+/// but finite vector rather than NaNs in a view basis. Distinct from
+/// [`crate::math::vec3::vec3_normalise`], which substitutes a fallback axis
+/// instead: a basis wants the direction it was given, however short.
+pub fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len = sqrt(dot(v, v)).max(1e-6);
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
+/// An axis not parallel to `dir`, for building a [`look_at`] basis. Cone and
+/// cascade axes are commonly straight up or down, where the usual `+Y` up
+/// vector is degenerate.
+pub fn up_for(dir: [f32; 3]) -> [f32; 3] {
+    if dir[1].abs() > 0.99 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    }
 }
 
 #[cfg(test)]
@@ -107,5 +170,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn ortho_maps_the_box_onto_the_ndc_cube() {
+        let p = ortho_rh(-2.0, 2.0, -1.0, 1.0, 1.0, 11.0);
+        let near = transform(p, [0.0, 0.0, -1.0]);
+        let far = transform(p, [2.0, 1.0, -11.0]);
+        assert!(near[2].abs() < 1e-5, "near depth {}", near[2]);
+        assert!((far[2] - 1.0).abs() < 1e-5, "far depth {}", far[2]);
+        assert!((far[0] - 1.0).abs() < 1e-5 && (far[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn look_at_puts_the_eye_at_the_origin_looking_down_negative_z() {
+        let v = look_at([0.0, 5.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let eye = transform(v, [0.0, 5.0, 0.0]);
+        assert!(eye[0].abs() < 1e-5 && eye[1].abs() < 1e-5 && eye[2].abs() < 1e-5);
+        // The target sits 5 units ahead, i.e. at -5 on the view Z axis.
+        let target = transform(v, [0.0, 0.0, 0.0]);
+        assert!((target[2] + 5.0).abs() < 1e-5);
+    }
+
+    // `look_at` is `view_from_basis` with the basis derived from a target, so
+    // handing the derived basis straight over must give the same matrix.
+    #[test]
+    fn look_at_agrees_with_the_basis_it_derives() {
+        let eye = [3.0, -1.5, 2.0];
+        let centre = [0.4, 0.9, -2.0];
+        let up = [0.0, 1.0, 0.0];
+        let f = normalize3(sub(centre, eye));
+        let r = normalize3(cross(f, up));
+        assert_eq!(
+            look_at(eye, centre, up),
+            view_from_basis(eye, r, cross(r, f), f)
+        );
+    }
+
+    // A straight-up or straight-down axis must not pick a parallel up vector,
+    // or the look-at basis collapses.
+    #[test]
+    fn up_for_avoids_a_degenerate_basis() {
+        assert_eq!(up_for([0.0, -1.0, 0.0]), [0.0, 0.0, 1.0]);
+        assert_eq!(up_for([0.0, 1.0, 0.0]), [0.0, 0.0, 1.0]);
+        assert_eq!(up_for([1.0, 0.0, 0.0]), [0.0, 1.0, 0.0]);
+        // The chosen up is never parallel to the axis.
+        for dir in [[0.0, -1.0, 0.0], [0.3, -0.9, 0.2], [1.0, 0.0, 0.0]] {
+            let d = normalize3(dir);
+            assert!(dot(d, up_for(d)).abs() < 0.999);
+        }
+    }
+
+    #[test]
+    fn a_degenerate_direction_stays_finite() {
+        assert!(normalize3([0.0; 3]).iter().all(|v| v.is_finite()));
     }
 }

@@ -27,10 +27,10 @@ use crate::geometry::water_grid::build_water_grid;
 use crate::gfx::mesh_payload::Vertex;
 
 // `WaterParams` / `WaterWaveGpu` (the per-surface cbuffer and its wave lanes)
-// are GPU-free layout structs that live in concinnity-render; re-export them so
+// are GPU-free layout structs that live in `core::render`; re-export them so
 // `crate::directx::water::WaterParams` is unchanged for the
 // `water_params_from` path.
-pub(in crate::directx) use concinnity_render::uniforms::{
+pub(in crate::directx) use concinnity_core::render::uniforms::{
     WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
 };
 
@@ -279,7 +279,7 @@ mod tests {
     use super::*;
 
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_render::uniforms`, and are checked against the compiled shader
+    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
 
     // The water shaders compile at runtime from the shared single source, so a

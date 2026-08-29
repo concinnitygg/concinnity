@@ -48,9 +48,9 @@ fn quietest_frame(budget: u64, mut step: impl FnMut()) -> u64 {
     let deadline = std::time::Instant::now() + QUIET_FRAME_DEADLINE;
     let mut min = u64::MAX;
     loop {
-        let before = concinnity_memory::alloc_count().expect("test binary tracks its heap");
+        let before = concinnity_core::memory::alloc_count().expect("test binary tracks its heap");
         step();
-        let after = concinnity_memory::alloc_count().expect("allocator stays installed");
+        let after = concinnity_core::memory::alloc_count().expect("allocator stays installed");
         min = min.min(after - before);
         if min <= budget || std::time::Instant::now() >= deadline {
             return min;

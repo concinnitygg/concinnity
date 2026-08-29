@@ -45,7 +45,7 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-// GPU-free repr(C) structs; live in concinnity-render so their layout tests
+// GPU-free repr(C) structs; live in `core::render` so their layout tests
 // count toward coverage. Re-exported at `pub(in crate::metal)` (as before) so the
 // graph executor, shadow pass, and this file keep their existing paths.
 pub(in crate::metal) use crate::metal::uniforms::RaymarchShadowCascade;

@@ -65,11 +65,11 @@ use super::transient::RetirePool;
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
 use crate::gfx::rt_reflections::RtReflectionSettings;
-// The dynamic-update mode ladder lives in concinnity-render; re-exported so the
+// The dynamic-update mode ladder lives in `core::render`; re-exported so the
 // `super::raytrace::RtDynamicMode` path (init + draw) keeps resolving.
 pub(crate) use crate::gfx::rt_geom::RtDynamicMode;
 // Shared with the Vulkan and DirectX hosts: one `.slang` declares it now.
-use concinnity_render::uniforms::SkinParams;
+use concinnity_core::render::uniforms::SkinParams;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + colour + uv = 14 floats). The RT kernel reads positions at this stride; the
@@ -139,7 +139,7 @@ pub(crate) struct RtState {
 // bytes in place at unchanged offsets, which leaves every field above equal.
 // `generation` (the draw object's `geometry_generation`) moves on each such
 // rewrite so the stale BLAS is rebuilt instead of reused. Mirrors
-// `concinnity_render::rt_topology::GeomSig`.
+// `concinnity_core::render::rt_topology::GeomSig`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GeomSig {
     base_vertex: i32,

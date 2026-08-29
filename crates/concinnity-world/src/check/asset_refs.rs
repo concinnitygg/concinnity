@@ -12,7 +12,7 @@
 // re-check a registry-declared field, or the problem reports twice.
 //
 // This is build-time-only authoring logic; the asset data structs it operates
-// on live in concinnity-asset and their runtime `Component` impls in
+// on, and their runtime `Component` impls, live in
 // concinnity-core.
 
 use crate::components::{

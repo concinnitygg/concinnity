@@ -63,8 +63,8 @@ use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, Skinne
 use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
 use crate::gfx::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
 use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
-use concinnity_render::uniforms::SkinParams;
-// The dynamic-update mode ladder lives in concinnity-render; re-exported so the
+use concinnity_core::render::uniforms::SkinParams;
+// The dynamic-update mode ladder lives in `core::render`; re-exported so the
 // `crate::vulkan::raytrace::RtDynamicMode` path (init + context) keeps resolving.
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 

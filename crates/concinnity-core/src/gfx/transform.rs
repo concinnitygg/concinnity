@@ -4,7 +4,7 @@
 //! through, and the quaternion conversions that let a rotation be interpolated
 //! along the shorter arc rather than component-wise through its Euler angles.
 
-use crate::math::{acos, atan2, sin, sin_cos, sqrt};
+use crate::math::{acos, sin, sin_cos, sqrt};
 
 /// Column-major 4x4 matrix, `m[col][row]`: the layout shared by every renderer
 /// uniform in this codebase.
@@ -138,8 +138,7 @@ pub fn mat4_inverse(m: Mat4) -> Mat4 {
 /// Column-major 3x3 rotation matrix, `m[col][row]`.
 pub type Mat3 = [[f32; 3]; 3];
 
-// Unit quaternion `(x, y, z, w)` representing a rotation.
-pub(crate) type Quat = [f32; 4];
+pub(crate) use crate::math::Quat;
 
 // Column-major 3x3 rotation matrix from YXZ Euler degrees. Identical trig to
 // [`JointPose::to_matrix`](crate::gfx::skeleton::JointPose::to_matrix),
@@ -239,13 +238,6 @@ pub(crate) fn quat_to_mat3(q: Quat) -> Mat3 {
 
 // Scale a quaternion to unit length, falling back to identity when it is too
 // short to normalise.
-pub(crate) fn quat_normalize(q: Quat) -> Quat {
-    let len = sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    if len < 1e-12 {
-        return [0.0, 0.0, 0.0, 1.0];
-    }
-    [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
-}
 
 // Spherical linear interpolation between two unit quaternions. Negates `b`
 // when the pair points to opposite hemispheres so the interpolation always
@@ -260,7 +252,7 @@ pub(crate) fn quat_slerp(a: Quat, mut b: Quat, f: f32) -> Quat {
         dot = -dot;
     }
     if dot > 0.9995 {
-        return quat_normalize([
+        return crate::math::quat_normalize([
             a[0] + (b[0] - a[0]) * f,
             a[1] + (b[1] - a[1]) * f,
             a[2] + (b[2] - a[2]) * f,
@@ -297,7 +289,7 @@ pub fn decompose(m: Mat4) -> ([f32; 3], Quat, [f32; 3]) {
         }
     };
     let r: Mat3 = [norm(0), norm(1), norm(2)];
-    (t, quat_normalize(quat_from_mat3(r)), scale)
+    (t, crate::math::quat_normalize(quat_from_mat3(r)), scale)
 }
 
 /// Interpolate two affine matrices in TRS space by weight `f`, clamped to
@@ -330,19 +322,7 @@ pub fn blend_matrices(a: Mat4, b: Mat4, f: f32) -> Mat4 {
 /// gimbal lock (pitch ±90°) it folds the rotation onto the yaw axis with zero
 /// roll.
 pub fn euler_yxz_from_quat(q: Quat) -> [f32; 3] {
-    let m = quat_to_mat3(quat_normalize(q));
-    let sp = (-m[2][1]).clamp(-1.0, 1.0);
-    // cos(pitch) is taken straight from the matrix (the column-2 length in the
-    // XZ plane) rather than `sqrt(1 - sp*sp)`, which loses nearly all its
-    // precision to catastrophic cancellation as pitch approaches ±90°.
-    let cp = sqrt(m[2][0] * m[2][0] + m[2][2] * m[2][2]);
-    let pitch = atan2(sp, cp);
-    let (yaw, roll) = if cp > 1e-4 {
-        (atan2(m[2][0], m[2][2]), atan2(m[0][1], m[1][1]))
-    } else {
-        (atan2(sp * m[1][0], m[0][0]), 0.0)
-    };
-    [pitch.to_degrees(), yaw.to_degrees(), roll.to_degrees()]
+    crate::math::euler_yxz_deg_from_quat(q)
 }
 
 #[cfg(test)]
@@ -450,8 +430,8 @@ mod tests {
 
     #[test]
     fn quat_normalize_falls_back_for_a_zero_quaternion() {
-        assert_eq!(quat_normalize([0.0; 4]), [0.0, 0.0, 0.0, 1.0]);
-        let n = quat_normalize([0.0, 0.0, 0.0, 4.0]);
+        assert_eq!(crate::math::quat_normalize([0.0; 4]), [0.0, 0.0, 0.0, 1.0]);
+        let n = crate::math::quat_normalize([0.0, 0.0, 0.0, 4.0]);
         assert!(approx(n[3], 1.0));
     }
 

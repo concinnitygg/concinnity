@@ -37,7 +37,7 @@ pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
 
 // Root-constant block for the GPU-cull compute kernel (192 bytes = 48 DWORDs).
 // `CullParams` (the fused cull + Hi-Z cbuffer) is a GPU-free layout struct that
-// lives in concinnity-render; re-export it so `crate::directx::cull::CullParams`
+// lives in `core::render`; re-export it so `crate::directx::cull::CullParams`
 // is unchanged.
 pub(in crate::directx) use crate::directx::uniforms::CullParams;
 

@@ -164,7 +164,7 @@ struct AreaLightData
 };
 
 // Edge of the LTC lookup tables, and the scale / bias that map [0, 1] onto
-// texel centres. Must match LTC_LUT_SIZE in concinnity-render's ltc module.
+// texel centres. Must match LTC_LUT_SIZE in `core::render`'s ltc module.
 static const float LTC_LUT_SIZE  = 64.0;
 static const float LTC_LUT_SCALE = (LTC_LUT_SIZE - 1.0) / LTC_LUT_SIZE;
 static const float LTC_LUT_BIAS  = 0.5 / LTC_LUT_SIZE;
@@ -251,7 +251,7 @@ float3 decode_normal_map(float2 encoded)
 // Clip a quad against the horizon plane z = 0, keeping the part above it.
 // Sutherland-Hodgman rather than the usual hardcoded 16-case table: a quad cut
 // by one plane yields at most 5 vertices, and the loop form cannot be got wrong
-// case by case. Mirrors clip_quad_to_horizon in concinnity-render's
+// case by case. Mirrors clip_quad_to_horizon in `core::render`'s
 // ltc::polygon, which is unit-tested against brute-force integration.
 int clip_quad_to_horizon(float3 quad[4], out float3 clipped[5])
 {

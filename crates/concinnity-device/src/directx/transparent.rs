@@ -57,10 +57,10 @@ use crate::gfx::rt_reflections::RtParamsInputs;
 const RT_PARAMS_UBO_SIZE: u64 = 144;
 
 // `TransparentView` (the per-frame view cbuffer) is a GPU-free layout struct
-// that lives in concinnity-render; re-export it so the encode path and the
+// that lives in `core::render`; re-export it so the encode path and the
 // graph's view builder can keep naming it through this module.
-use concinnity_render::uniforms::GlassMeshParams;
-pub(in crate::directx) use concinnity_render::uniforms::TransparentView;
+use concinnity_core::render::uniforms::GlassMeshParams;
+pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
 
 // Which producer a record belongs to, and so which pipeline draws it. The
 // records themselves are identical in shape, so this is the only thing the
@@ -452,7 +452,7 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
     // when ProbeSet.count > 0.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: concinnity_render::uniforms::MAX_PROBES as u32,
+        NumDescriptors: concinnity_core::render::uniforms::MAX_PROBES as u32,
         BaseShaderRegister: 7, // t7..
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
@@ -643,7 +643,7 @@ fn create_transparent_rt_root_signature(
     let scene_range = table_range(0, 0, 1); // t0
     let depth_range = table_range(1, 0, 1); // t1
     let prefilter_range = table_range(2, 0, 1); // t2
-    let probe_cube_range = table_range(20, 0, concinnity_render::uniforms::MAX_PROBES as u32);
+    let probe_cube_range = table_range(20, 0, concinnity_core::render::uniforms::MAX_PROBES as u32);
     let planar_range = table_range(3, 0, 1); // t3
     let pool_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,

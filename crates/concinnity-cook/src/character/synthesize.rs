@@ -4,7 +4,8 @@
 
 use super::frame::{bone_frames, region_joints};
 use super::synth::{self, SynthInput};
-use concinnity_asset::cook::{CharacterSchema, KeyPolarity};
+use concinnity_world::registry::build_only::CharacterSchema;
+use concinnity_world::registry::build_only::KeyPolarity;
 
 use crate::components::{MorphDelta, SkeletonJoint, SkinnedVertexData};
 
@@ -155,7 +156,9 @@ pub(crate) fn synthesize(
 mod tests {
     use super::super::synth::test_support::cylinder;
     use super::*;
-    use concinnity_asset::cook::{SchemaRegion, SynthParams, SynthesizedTarget};
+    use concinnity_world::registry::build_only::SchemaRegion;
+    use concinnity_world::registry::build_only::SynthParams;
+    use concinnity_world::registry::build_only::SynthesizedTarget;
 
     fn target(
         name: &str,

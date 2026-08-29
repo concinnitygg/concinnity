@@ -4,7 +4,7 @@
 // writer (the probing systems run after physics), which is invisible at
 // frame rates.
 
-use concinnity_physics::{LayerMask, Simulation};
+use crate::physics::{LayerMask, Simulation};
 
 use crate::components::{AudioOcclusionProbe, CameraProbe, GroundProbes};
 use crate::ecs::PipelineContext;
@@ -75,9 +75,9 @@ pub(crate) fn step_probes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::ColliderShape;
     use alloc::vec;
     use alloc::vec::Vec;
-    use concinnity_physics::ColliderShape;
 
     use super::super::test_world::TestWorld;
 

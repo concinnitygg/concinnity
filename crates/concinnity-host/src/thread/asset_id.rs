@@ -2,8 +2,8 @@
 //! interned to an `AssetId` in declaration order; the blob and the runtime carry
 //! only the integer, so every cross-reference lookup is an integer compare.
 //!
-//! This module owns the interner and installs it into the schema crate's
-//! resolver seam (`concinnity_asset::set_name_resolver`) so a name-string
+//! This module owns the interner and installs it into the runtime crate's
+//! resolver seam (`concinnity_core::ecs::resolver::set_name_resolver`) so a name-string
 //! reference deserializes to a dense id during a build. At runtime references
 //! are already integers, so the seam is never consulted. The identity types the
 //! seam produces are re-exported from concinnity-core under the same path.
@@ -13,7 +13,7 @@ use std::sync::Once;
 
 use super::name_interner::NameInterner;
 
-// The asset identity + typed reference primitives, defined in the schema crate.
+// The asset identity + typed reference primitives, defined in concinnity-core.
 pub use concinnity_core::ecs::asset_id::{
     AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed,
 };
@@ -22,7 +22,7 @@ thread_local! {
     static INTERNER: RefCell<NameInterner> = RefCell::new(NameInterner::default());
 }
 
-/// Install the schema crate's resolver seam so a name-string reference
+/// Install the resolver seam so a name-string reference
 /// deserializes through this interner. The closure is non-capturing (the
 /// interner is a thread-local static), so it coerces to the plain `fn` pointer
 /// the seam holds; per-thread interner state stays isolated. Idempotent and cheap
@@ -30,7 +30,9 @@ thread_local! {
 pub fn ensure_name_resolver() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        concinnity_asset::set_name_resolver(|name| INTERNER.with(|i| i.borrow_mut().intern(name)));
+        concinnity_core::ecs::resolver::set_name_resolver(|name| {
+            INTERNER.with(|i| i.borrow_mut().intern(name))
+        });
     });
 }
 

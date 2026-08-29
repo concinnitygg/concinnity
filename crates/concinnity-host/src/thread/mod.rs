@@ -12,7 +12,7 @@
 //!
 //! It knows where nothing lives: it names no path and opens no file. The
 //! identity types the interner hands back are `concinnity-core`'s, and the
-//! resolver seam it installs is `concinnity-asset`'s.
+//! resolver seam it installs is `concinnity_core::ecs::resolver`'s.
 
 pub mod asset_id;
 pub mod jobs;

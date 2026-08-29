@@ -11,8 +11,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::blob::PhysicsBudgetRecord;
+use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
-use concinnity_asset::FontHandle;
 
 /// The world's physics reservation as cook counted it, published at blob load.
 /// Absent when the world declares no physics content, or when the world was

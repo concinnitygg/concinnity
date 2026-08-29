@@ -286,7 +286,7 @@ impl System for ThirdPersonSystem {
                 };
                 if input.jump && self.jump_height > 0.0 {
                     rig.jump_velocity =
-                        (2.0 * concinnity_physics::GRAVITY * self.jump_height).sqrt();
+                        (2.0 * concinnity_core::physics::GRAVITY * self.jump_height).sqrt();
                 }
                 self.pivot = [
                     rig.position[0],
@@ -557,7 +557,7 @@ mod tests {
             .unwrap();
         // v = sqrt(2 g h) with g = 20, h = 1.
         assert!(
-            (rig.jump_velocity - (2.0 * concinnity_physics::GRAVITY).sqrt()).abs() < 1e-4,
+            (rig.jump_velocity - (2.0 * concinnity_core::physics::GRAVITY).sqrt()).abs() < 1e-4,
             "{}",
             rig.jump_velocity
         );

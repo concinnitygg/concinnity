@@ -10,6 +10,7 @@ use crate::math::{cos, floor, sin, sin_cos, sqrt};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::gfx::cubemap;
 use crate::math::vec3::{cross as cross3, dot as dot3, length};
 
 /// Default azimuthal samples per irradiance texel.
@@ -72,22 +73,6 @@ fn sample_cube(faces: &[Vec<f32>; 6], face_size: u32, dir: [f32; 3]) -> [f32; 3]
         p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11,
         p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11,
     ]
-}
-
-// Map a (face, x, y) cube texel to its world-space direction (unit vector).
-fn cube_texel_dir(face: usize, x: u32, y: u32, face_size: u32) -> [f32; 3] {
-    let u = (x as f32 + 0.5) / face_size as f32 * 2.0 - 1.0;
-    let v = (y as f32 + 0.5) / face_size as f32 * 2.0 - 1.0;
-    let d = match face {
-        0 => [1.0, -v, -u],
-        1 => [-1.0, -v, u],
-        2 => [u, 1.0, v],
-        3 => [u, -1.0, -v],
-        4 => [u, -v, 1.0],
-        5 => [-u, -v, -1.0],
-        _ => unreachable!("invalid cube face index {}", face),
-    };
-    normalize3(d)
 }
 
 fn normalize3(v: [f32; 3]) -> [f32; 3] {
@@ -331,7 +316,7 @@ impl<'a> CubeBake<'a> {
 
     fn irradiance_row(&self, row: &mut FaceRow<'_>, k: &IrradianceKernel) {
         for x in 0..self.output_face_size {
-            let n = cube_texel_dir(row.face, x, row.y, self.output_face_size);
+            let n = cubemap::texel_dir(row.face, x, row.y, self.output_face_size);
             let (tan, bit) = make_tbn(n);
             let mut sum = [0.0f32; 3];
             for phi_i in 0..k.phi_samples {
@@ -368,7 +353,7 @@ impl<'a> CubeBake<'a> {
 
     fn ggx_row(&self, row: &mut FaceRow<'_>, k: &GgxKernel) {
         for x in 0..self.output_face_size {
-            let n = cube_texel_dir(row.face, x, row.y, self.output_face_size);
+            let n = cubemap::texel_dir(row.face, x, row.y, self.output_face_size);
             // The tangent basis depends only on N, so it is built once per
             // texel rather than once per sample.
             let basis = make_tbn(n);

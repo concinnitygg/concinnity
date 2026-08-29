@@ -569,75 +569,37 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
- "concinnity-asset",
- "concinnity-cli",
+ "clap",
  "concinnity-cook",
  "concinnity-core",
+ "concinnity-dev",
  "concinnity-engine",
- "concinnity-memory",
  "concinnity-shader",
  "concinnity-toolchain",
  "concinnity-world",
  "tempfile",
-]
-
-[[package]]
-name = "concinnity-asset"
-version = "0.18.68"
-dependencies = [
- "postcard",
- "serde",
- "serde_json",
 ]
 
 [[package]]
 name = "concinnity-bench"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
- "concinnity-asset",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-engine",
- "concinnity-memory",
- "concinnity-render",
  "concinnity-toolchain",
-]
-
-[[package]]
-name = "concinnity-cli"
-version = "0.18.68"
-dependencies = [
- "ash",
- "clap",
- "concinnity-cook",
- "concinnity-editor",
- "concinnity-engine",
- "concinnity-memory",
- "concinnity-shader",
- "concinnity-toolchain",
- "concinnity-world",
- "glfw",
- "serde_json",
- "shaderc",
- "syn",
- "tempfile",
- "tracing",
- "windows 0.61.3",
- "zip",
 ]
 
 [[package]]
 name = "concinnity-cook"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
  "basisu",
  "bytemuck",
- "concinnity-asset",
  "concinnity-core",
  "concinnity-host",
- "concinnity-physics",
  "concinnity-toolchain",
  "concinnity-world",
  "fbxcel",
@@ -661,15 +623,15 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
  "bytemuck",
- "concinnity-asset",
- "concinnity-memory",
- "concinnity-physics",
+ "ciborium",
  "fontdue",
+ "hashbrown 0.15.5",
  "libm",
  "postcard",
+ "rayon",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -677,15 +639,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-dev"
+version = "0.18.69"
+dependencies = [
+ "argon2",
+ "async-stream",
+ "bitflags 2.11.1",
+ "chrono",
+ "ciborium",
+ "concinnity-cook",
+ "concinnity-core",
+ "concinnity-device",
+ "concinnity-engine",
+ "concinnity-host",
+ "concinnity-shader",
+ "concinnity-toolchain",
+ "concinnity-world",
+ "ctrlc",
+ "directories",
+ "gltf",
+ "hex",
+ "hmac",
+ "ignore",
+ "jsonwebtoken",
+ "libloading 0.9.0",
+ "notify",
+ "png",
+ "rand 0.8.6",
+ "rayon",
+ "rfd",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "slotmap",
+ "syn",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+ "zip",
+]
+
+[[package]]
 name = "concinnity-device"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
  "ash",
  "block2",
  "bytemuck",
  "concinnity-core",
  "concinnity-host",
- "concinnity-render",
  "concinnity-slang",
  "concinnity-toolchain",
  "dispatch2",
@@ -711,61 +717,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "concinnity-editor"
-version = "0.18.68"
-dependencies = [
- "argon2",
- "async-stream",
- "bitflags 2.11.1",
- "chrono",
- "ciborium",
- "concinnity-asset",
- "concinnity-cook",
- "concinnity-core",
- "concinnity-device",
- "concinnity-engine",
- "concinnity-host",
- "concinnity-memory",
- "concinnity-shader",
- "concinnity-toolchain",
- "concinnity-world",
- "ctrlc",
- "directories",
- "gltf",
- "hex",
- "hmac",
- "ignore",
- "jsonwebtoken",
- "libloading 0.9.0",
- "notify",
- "png",
- "rand 0.8.6",
- "rayon",
- "rfd",
- "serde",
- "serde_bytes",
- "serde_json",
- "slotmap",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tracing-subscriber",
- "ureq",
-]
-
-[[package]]
 name = "concinnity-engine"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
  "ciborium",
  "concinnity-core",
  "concinnity-device",
  "concinnity-host",
- "concinnity-memory",
- "concinnity-physics",
- "concinnity-render",
  "concinnity-toolchain",
  "core-foundation",
  "crash-handler",
@@ -788,11 +746,9 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
- "concinnity-asset",
  "concinnity-core",
- "concinnity-memory",
  "rayon",
  "serde",
  "serde_json",
@@ -801,34 +757,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "concinnity-memory"
-version = "0.18.68"
-
-[[package]]
-name = "concinnity-physics"
-version = "0.18.68"
-dependencies = [
- "concinnity-memory",
- "libm",
-]
-
-[[package]]
-name = "concinnity-render"
-version = "0.18.68"
-dependencies = [
- "bytemuck",
- "ciborium",
- "concinnity-core",
- "concinnity-memory",
- "hashbrown 0.15.5",
- "rayon",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "concinnity-shader"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -841,22 +771,21 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.18.68"
+version = "0.18.69"
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
- "concinnity-render",
+ "concinnity-core",
  "concinnity-slang",
  "tempfile",
 ]
 
 [[package]]
 name = "concinnity-world"
-version = "0.18.68"
+version = "0.18.69"
 dependencies = [
- "concinnity-asset",
  "concinnity-core",
  "concinnity-host",
  "postcard",
