@@ -532,6 +532,40 @@ mod tests {
         assert_eq!(slot_conflicts(&graph, &split), vec![]);
     }
 
+    // A conflict prints the slot and both members, which is what the executors'
+    // per-frame assertion reports when it fires.
+    #[test]
+    fn a_conflict_names_the_slot_and_both_members() {
+        let conflict = SlotConflict {
+            slot: 2,
+            a: "ao_output",
+            b: "bloom_top",
+        };
+        assert_eq!(
+            conflict.to_string(),
+            "slot 2: ao_output and bloom_top are both live"
+        );
+    }
+
+    // The executors' per-frame gate: silent on a sound grouping, and a panic
+    // naming the backend and the overlap on an unsound one.
+    #[test]
+    fn the_aliasing_assertion_passes_a_sound_grouping() {
+        let graph = build_frame_graph(&FrameGraphInputs::all_off()).expect("compiles");
+        assert_slot_aliasing_sound(&graph, &[vec!["ao_output"], vec!["bloom_top"]], "test");
+    }
+
+    #[test]
+    #[should_panic(expected = "alias slot members are simultaneously live")]
+    fn the_aliasing_assertion_fires_on_an_overlapping_pair() {
+        let mut i = FrameGraphInputs::all_off();
+        i.ssao_enabled = true;
+        i.bloom_enabled = true;
+        i.composite_reads_ao = true;
+        let graph = build_frame_graph(&i).expect("compiles");
+        assert_slot_aliasing_sound(&graph, &[vec!["ao_output", "bloom_top"]], "test");
+    }
+
     #[test]
     fn a_label_absent_from_the_graph_is_not_a_conflict() {
         // A pool holds `ao_output` for as long as SSAO is built; a frame whose

@@ -7,10 +7,11 @@
 pub enum BlobError {
     /// fewer bytes than the fixed header
     TooShort,
-    /// leading bytes are not BLOB_MAGIC
+    /// leading bytes are not the kind's magic
     BadMagic,
-    /// built against a different SCHEMA_VERSION; carries the version found
-    SchemaMismatch(u32),
+    /// the header's validity token is not the one the kind requires; carries
+    /// the token found
+    ValidityMismatch(u32),
     /// header promises more metadata than the image holds
     TruncatedMeta,
     /// metadata block is not decodable postcard

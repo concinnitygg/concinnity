@@ -11,7 +11,7 @@ pub(crate) mod prefab_map;
 
 use std::collections::{BTreeMap, HashSet};
 
-use concinnity_cook::world::LoadedWorld;
+use concinnity_cook::build_only::LoadedWorld;
 use serde_json::Value;
 
 // How one form field relates to the asset's template.
@@ -442,8 +442,9 @@ mod tests {
 
     #[test]
     fn template_index_prefers_shadow_baselines_and_falls_back_per_kind() {
-        use concinnity_cook::world::{
-            GeneratedAsset, InjectedAsset, LoadedWorld, ShadowedAsset, WorldJsonlAsset,
+        use concinnity_cook::authoring::world::WorldJsonlAsset;
+        use concinnity_cook::build_only::{
+            GeneratedAsset, InjectedAsset, LoadedWorld, ShadowedAsset,
         };
         let loaded = LoadedWorld {
             assets: vec![WorldJsonlAsset {

@@ -208,7 +208,7 @@ impl EditorHook {
         };
         self.story_status = None;
         let content = story::join_lines(&self.story_lines);
-        if let Err(e) = concinnity_cook::world::validate_story_source(&content) {
+        if let Err(e) = concinnity_cook::build_only::validate_story_source(&content) {
             self.story_status = Some(short_status(&e));
             self.notifier
                 .error_with(&format!("Story rejected: {e}"), notify::Action::OpenConsole);

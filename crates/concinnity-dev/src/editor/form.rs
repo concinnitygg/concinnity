@@ -24,7 +24,7 @@
 // nulls) is left at its default and round-trips untouched. The assembled object is
 // validated by the caller via `RegisteredType::reserialize_args`.
 
-use concinnity_world::registry::RegisteredType;
+use concinnity_cook::authoring::registry::RegisteredType;
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the

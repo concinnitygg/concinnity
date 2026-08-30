@@ -83,6 +83,21 @@ impl JobPool {
     }
 }
 
+/// Spreads a bake's independent rows across the process-wide job pool.
+///
+/// The environment-map convolutions decompose into rows that share nothing --
+/// each reads only the immutable source and writes only its own texels -- so
+/// fanning them out buys wall clock without changing a byte. Handed to
+/// `concinnity_core::bake` wherever a build has a pool behind it; a caller
+/// without one uses `Serial` instead.
+pub struct PoolRows;
+
+impl concinnity_core::bake::environment_map::RowScheduler for PoolRows {
+    fn run<T: Send>(&self, items: &mut [T], compute: &(dyn Fn(&mut T) + Send + Sync)) {
+        pool().parallel_for(items, compute);
+    }
+}
+
 // Worker count set by `configure`, consulted by `JobPool::build` on first use.
 static CONFIGURED_THREADS: OnceLock<usize> = OnceLock::new();
 

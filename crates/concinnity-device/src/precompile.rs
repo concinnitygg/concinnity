@@ -1,15 +1,21 @@
 //! Export-time compilation of the engine's built-in shaders. The DirectX and
 //! Vulkan backends declare their compile set as static data (each backend's
 //! builtins.rs); this module iterates those declarations and makes sure every
-//! enumerable variant's artifact exists in a bundle's shader-cache/ directory.
-//! Compilation is pure CPU (FXC / DXC / shaderc need no GPU device), so this
-//! runs inside `cn export` with no window, no adapter, and no child process.
-//! Renderer init compiles through the same declarations and the same cache
-//! keys, so a shipped bundle's first launch reuses every artifact written here;
-//! anything not enumerable (a world-authored SdfVolume fragment, an unusual
-//! runtime parameter) still compiles at init exactly as before.
+//! enumerable variant's artifact is in the runtime cache segment a bundle
+//! ships. Compilation is pure CPU (FXC / DXC / shaderc need no GPU device), so
+//! this runs inside `cn export` with no window, no adapter, and no child
+//! process. Renderer init compiles through the same declarations and the same
+//! cache keys, so a shipped bundle's first launch reuses every artifact written
+//! here; anything not enumerable (a world-authored SdfVolume fragment, an
+//! unusual runtime parameter) still compiles at init exactly as before.
+//!
+//! The segment is built in memory and written once when the run finishes, so
+//! warming a hundred artifacts costs one file write rather than a hundred.
 
 use std::path::Path;
+
+use concinnity_host::store::cache::{CACHE_BUDGET_BYTES, Segment};
+use concinnity_host::store::paths;
 
 use crate::shader_cache::Ensured;
 
@@ -37,29 +43,39 @@ impl Report {
         }
     }
 
-    /// Total artifacts now present in the output directory.
+    /// Total artifacts now in the bundle's segment.
     pub fn cached(&self) -> usize {
         self.reused + self.compiled
     }
 }
 
-/// Compile every enumerable built-in shader variant into `out_dir` (a bundle's
-/// `shader-cache/`).
+/// Compile every enumerable built-in shader variant into the runtime cache
+/// segment under `state_dir`, which is a bundle's state root.
 ///
 /// Nothing about the exported world enters this: every variant a backend can
 /// take is a property of the device the bundle eventually runs on -- its MSAA
 /// mode, its probe cube-array length, whether it seats the bindless pool at its
 /// ceiling -- so each is baked at what a desktop driver affords, and a device
 /// that differs misses those entries and compiles at first launch.
-pub fn precompile_builtin_shaders(out_dir: &Path) -> Report {
+///
+/// The segment is left unstamped by the host toolchain that warmed it: a
+/// player's own slangc is whatever it is, and a shipped artifact is a function
+/// of its source rather than of what compiled it.
+pub fn precompile_builtin_shaders(state_dir: &Path) -> Report {
+    let path = paths::runtime_cache_in(state_dir);
+    let mut bundle = Segment::read_from(&path);
     let mut report = Report::default();
     #[cfg(backend_dx)]
     {
-        crate::directx::builtins::precompile(out_dir, &mut report);
-        crate::directx::slang_builtins::precompile(out_dir, &mut report);
+        crate::directx::builtins::precompile(&mut bundle, &mut report);
+        crate::directx::slang_builtins::precompile(&mut bundle, &mut report);
     }
     #[cfg(backend_vk)]
-    crate::vulkan::builtins::precompile(out_dir, &mut report);
+    crate::vulkan::builtins::precompile(&mut bundle, &mut report);
+    bundle.write_to(&path, CACHE_BUDGET_BYTES);
+    // `ensure_in` also keeps a copy in this machine's own cache segment, so
+    // repeated exports stay warm. That copy is memory until a checkpoint.
+    crate::runtime_cache::checkpoint();
     report
 }
 

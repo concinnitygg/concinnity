@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "clap",
  "concinnity-cook",
@@ -578,30 +578,17 @@ dependencies = [
  "concinnity-engine",
  "concinnity-shader",
  "concinnity-toolchain",
- "concinnity-world",
  "tempfile",
 ]
 
 [[package]]
-name = "concinnity-bench"
-version = "0.18.69"
-dependencies = [
- "concinnity-cook",
- "concinnity-core",
- "concinnity-engine",
- "concinnity-toolchain",
-]
-
-[[package]]
 name = "concinnity-cook"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "basisu",
  "bytemuck",
  "concinnity-core",
  "concinnity-host",
- "concinnity-toolchain",
- "concinnity-world",
  "fbxcel",
  "gltf",
  "jpeg-decoder",
@@ -623,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -640,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "argon2",
  "async-stream",
@@ -654,7 +641,6 @@ dependencies = [
  "concinnity-host",
  "concinnity-shader",
  "concinnity-toolchain",
- "concinnity-world",
  "ctrlc",
  "directories",
  "gltf",
@@ -685,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "ash",
  "block2",
@@ -718,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -746,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "concinnity-core",
  "rayon",
@@ -758,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -771,28 +757,15 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.18.69"
+version = "0.19.0"
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.18.69"
+version = "0.19.0"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",
  "tempfile",
-]
-
-[[package]]
-name = "concinnity-world"
-version = "0.18.69"
-dependencies = [
- "concinnity-core",
- "concinnity-host",
- "postcard",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
 ]
 
 [[package]]

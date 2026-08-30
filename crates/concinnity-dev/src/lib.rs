@@ -13,7 +13,7 @@
 // Bridge: re-export the runtime/core modules the authoring, editor, and debug
 // code names under crate::* so their `crate::<module>` import paths resolve.
 // world.jsonl I/O lives in the compiler (concinnity-cook), not core.
-pub(crate) use concinnity_cook::world;
+pub(crate) use concinnity_cook::authoring::world;
 pub(crate) use concinnity_engine::{app, blob, components, ecs, gfx, jobs, resource};
 
 // Authoring / in-memory build. Its exports below are the surface the
@@ -54,5 +54,5 @@ pub use authoring::{
     build_world_to_disk, check_at_path, check_from_str, rm_at_path, spec_args, spec_to_value,
     world_from_loaded, world_template_entries,
 };
-pub use concinnity_cook::world::{parse_world_jsonl, write_world_jsonl};
+pub use concinnity_cook::authoring::world::{parse_world_jsonl, write_world_jsonl};
 pub use concinnity_cook::{build_pipeline_from_str, validate_asset, validate_world_jsonl};

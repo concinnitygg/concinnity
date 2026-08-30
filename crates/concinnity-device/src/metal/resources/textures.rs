@@ -51,7 +51,7 @@ impl MtlContext {
     pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &concinnity_core::build::texture::TextureImage,
+        image: &concinnity_core::bake::texture::TextureImage,
     ) -> Result<(), String> {
         if slot >= self.textures.len() {
             return Err(format!(
@@ -99,7 +99,7 @@ impl MtlContext {
     // rebuild. The new payload may declare different mip / face sizes than
     // the original -- `EnvironmentMapTextures` is replaced wholesale.
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::build::environment_map::deserialise(payload)
+        let view = crate::bake::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {}", e))?;
         let new_env = crate::metal::texture::upload_environment_map(
             &self.allocator,
@@ -110,24 +110,5 @@ impl MtlContext {
         )?;
         self.env_map = new_env;
         Ok(())
-    }
-
-    // Upload a baked reflection-probe payload to GPU cube textures and return
-    // them. The caller installs the result into `probe.maps` (the specular
-    // reflection source, distinct from `env_map`); the skybox + diffuse irradiance
-    // keep sampling `env_map`, so the visible sky is never replaced by the capture.
-    pub(in crate::metal) fn build_probe_textures(
-        &self,
-        payload: &[u8],
-    ) -> Result<super::super::texture::EnvironmentMapTextures, String> {
-        let view = crate::build::environment_map::deserialise(payload)
-            .map_err(|e| format!("reflection probe payload malformed: {}", e))?;
-        crate::metal::texture::upload_environment_map(
-            &self.allocator,
-            view.irradiance_face,
-            view.irradiance_bytes,
-            view.prefilter_face,
-            &view.prefilter_mip_bytes,
-        )
     }
 }

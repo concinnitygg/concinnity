@@ -10,7 +10,7 @@
 
 use std::sync::Once;
 
-use concinnity_cook::shader::{ShaderBuildValidator, set_shader_build_validator};
+use concinnity_cook::compile::shader::{ShaderBuildValidator, set_shader_build_validator};
 use concinnity_device::metal::{
     ShaderLayoutIssue, metal_source_defines, validate_metal_shader_layout,
 };

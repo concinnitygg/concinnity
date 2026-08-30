@@ -390,4 +390,100 @@ mod tests {
         solve(&skeleton, &mut locals, &CHAIN, [0.0, 0.2, 0.0], 1.0);
         assert_close(joint_pos(&skeleton, &locals, 2), [0.0, 0.2, 0.0], 1e-3);
     }
+
+    // The shortest-arc rotation has three degenerate inputs, and each has to
+    // resolve to something usable rather than a NaN basis: a zero-length
+    // direction, two that already align, and two that oppose.
+    #[test]
+    fn the_shortest_arc_handles_every_degenerate_pair() {
+        let x: Vec3 = [1.0, 0.0, 0.0];
+
+        assert_eq!(from_to([0.0; 3], x), MAT3_IDENTITY, "no direction to turn");
+        assert_eq!(from_to(x, [0.0; 3]), MAT3_IDENTITY, "nowhere to turn to");
+        assert_eq!(
+            from_to(x, [2.0, 0.0, 0.0]),
+            MAT3_IDENTITY,
+            "already aligned"
+        );
+
+        // Opposed: a half-turn about some perpendicular, which lands `x` on
+        // its own negation whichever axis was picked.
+        let flipped = mat3_apply(from_to(x, [-1.0, 0.0, 0.0]), x);
+        assert_close(flipped, [-1.0, 0.0, 0.0], 1e-5);
+    }
+
+    // The perpendicular is picked against whichever world axis the input is
+    // least aligned with, so both arms have to produce a unit vector at right
+    // angles to it.
+    #[test]
+    fn the_perpendicular_is_perpendicular_on_either_arm() {
+        for v in [
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+        ] {
+            let p = any_perpendicular(v);
+            assert!(
+                dot(v, p).abs() < 1e-5,
+                "{v:?} vs {p:?} are not perpendicular"
+            );
+            assert!((length(p) - 1.0).abs() < 1e-5, "{p:?} is not unit length");
+        }
+    }
+
+    // A chain with no length, or one whose target sits on its own root, has no
+    // aim direction to solve for and is left alone rather than snapping.
+    #[test]
+    fn a_degenerate_chain_or_target_does_not_solve() {
+        let origin = [0.0, 0.0, 0.0];
+        let pole = [0.0, 0.0, 1.0];
+        assert!(
+            solve_two_bone(origin, origin, [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], pole).is_none(),
+            "the upper bone has no length"
+        );
+        assert!(
+            solve_two_bone(
+                origin,
+                [0.0, -1.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                pole
+            )
+            .is_none(),
+            "the lower bone has no length"
+        );
+        assert!(
+            solve_two_bone(origin, [0.0, -1.0, 0.0], [0.0, -2.0, 0.0], origin, pole).is_none(),
+            "the target sits on the root"
+        );
+    }
+
+    // A pole on the chain's own aim axis names no bend plane, so the solve
+    // keeps the aim and applies no twist rather than rotating about nothing.
+    #[test]
+    fn a_pole_on_the_aim_axis_leaves_the_twist_alone() {
+        let solved = solve_two_bone(
+            [0.0, 2.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.5, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        assert!(
+            solved.is_some(),
+            "the chain still solves without a bend plane"
+        );
+    }
+
+    // The caller may hand in a locals buffer shorter than the skeleton (an
+    // empty one on the first frame); the missing entries are filled from the
+    // bind pose rather than indexed past the end.
+    #[test]
+    fn a_short_locals_buffer_is_filled_from_the_bind_pose() {
+        let skeleton = leg();
+        let mut locals: Vec<Mat4> = Vec::new();
+        solve(&skeleton, &mut locals, &CHAIN, [0.5, 0.5, 0.0], 1.0);
+        assert_eq!(locals.len(), skeleton.joints().len());
+    }
 }

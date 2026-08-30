@@ -559,4 +559,27 @@ mod tests {
         sorted.sort_unstable();
         assert!(sorted.windows(2).all(|w| w[0] != w[1]), "{keep:?}");
     }
+
+    // A segment can collapse to a point -- a zero-height capsule, or two
+    // coincident endpoints -- and the closest-point solve has to answer for
+    // each combination rather than dividing by a zero length.
+    #[test]
+    fn closest_points_handle_a_segment_that_is_really_a_point() {
+        let a = vec3(0.0, 0.0, 0.0);
+        let b = vec3(4.0, 0.0, 0.0);
+        let p = vec3(1.0, 3.0, 0.0);
+
+        // Both degenerate: each answer is its own point.
+        assert_eq!(closest_points_between_segments(a, a, p, p), (a, p));
+
+        // Only the first: the point against the second segment.
+        let (c1, c2) = closest_points_between_segments(p, p, a, b);
+        assert!(close(c1, p), "{c1:?}");
+        assert!(close(c2, vec3(1.0, 0.0, 0.0)), "{c2:?}");
+
+        // Only the second: the mirror of the case above.
+        let (c1, c2) = closest_points_between_segments(a, b, p, p);
+        assert!(close(c1, vec3(1.0, 0.0, 0.0)), "{c1:?}");
+        assert!(close(c2, p), "{c2:?}");
+    }
 }

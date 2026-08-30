@@ -120,6 +120,31 @@ pub static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     defines: &[("HIZ_DOWNSAMPLE", "1")],
 };
 
+/// `probe_mip0` from `probe_prefilter.slang`.
+pub static PROBE_MIP0: SlangProgram = SlangProgram {
+    file: "probe_prefilter.slang",
+    entry: "probe_mip0",
+    profile: "cs_6_0",
+    label: "probe_mip0.slang",
+    defines: &[("PROBE_MIP0", "1")],
+};
+/// `probe_downsample` from `probe_prefilter.slang`.
+pub static PROBE_DOWNSAMPLE: SlangProgram = SlangProgram {
+    file: "probe_prefilter.slang",
+    entry: "probe_downsample",
+    profile: "cs_6_0",
+    label: "probe_downsample.slang",
+    defines: &[("PROBE_DOWNSAMPLE", "1")],
+};
+/// `probe_ggx` from `probe_prefilter.slang`.
+pub static PROBE_GGX: SlangProgram = SlangProgram {
+    file: "probe_prefilter.slang",
+    entry: "probe_ggx",
+    profile: "cs_6_0",
+    label: "probe_ggx.slang",
+    defines: &[("PROBE_GGX", "1")],
+};
+
 // The G-buffer pre-pass and shadow families. Every entry is its own program so
 // each variant declares exactly the resources its root signature binds; the
 // `DXIL_ABI` gate pins those registers to the signatures in `post/gbuffer.rs`,
@@ -776,6 +801,9 @@ pub static ALL: &[&SlangProgram] = &[
     &HIZ_INIT_SINGLE,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,
+    &PROBE_MIP0,
+    &PROBE_DOWNSAMPLE,
+    &PROBE_GGX,
     &GBUFFER_PREPASS_VERT,
     &GBUFFER_PREPASS_VERT_INSTANCED,
     &GBUFFER_PREPASS_VERT_SKINNED,

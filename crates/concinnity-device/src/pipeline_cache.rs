@@ -1,20 +1,28 @@
 // Disk persistence for driver pipeline blobs: a serialized VkPipelineCache or
-// a D3D12 pipeline library, one file per adapter under `pipeline-cache/`.
+// a D3D12 pipeline library, one entry per adapter in the runtime cache segment.
 //
 // These blobs are machine code tied to one GPU and driver, so unlike the
-// shader cache there is no bundled tier and no cross-machine reuse; the driver
-// (or the backend's own header check) rejects a stale blob and the launch
-// falls back to building pipelines cold. Every operation here is best-effort:
-// an unreadable, oversized, or rejected file is deleted and treated as absent,
-// never surfaced as an init failure.
+// shader cache there is no bundled tier and no cross-machine reuse; the entry
+// key is the adapter the blob was built on, and the driver (or the backend's
+// own header check) rejects a stale blob so the launch falls back to building
+// pipelines cold. Every operation here is best-effort: an unreadable,
+// oversized, or rejected entry is dropped and treated as absent, never
+// surfaced as an init failure.
+//
+// A store lands in the segment held in memory and reaches disk at the next
+// checkpoint, so the two serializations a session makes (end of init, then
+// teardown) cost one write between them rather than one each.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use concinnity_core::blob::CacheEntryKind;
 
 // Neither VkPipelineCache nor a D3D12 pipeline library evicts internally, so a
 // long-lived checkout accumulates entries for every edited shader. Past this
-// cap the file is deleted and rebuilt cold rather than growing forever.
+// cap the entry is dropped and rebuilt cold rather than growing forever.
 const FILE_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+
+const KIND: CacheEntryKind = CacheEntryKind::Pipeline;
 
 static CREATED: AtomicU64 = AtomicU64::new(0);
 static CREATE_MICROS: AtomicU64 = AtomicU64::new(0);
@@ -25,7 +33,7 @@ pub(crate) fn note_creation(micros: u64) {
     CREATE_MICROS.fetch_add(micros, Ordering::Relaxed);
 }
 
-// Log the pipeline-creation cost of a renderer init and whether the disk blob
+// Log the pipeline-creation cost of a renderer init and whether the disk entry
 // was used. Pipelines built lazily after init (wireframe twins, world shader
 // buckets) land after this tally, so it is a snapshot rather than a total.
 pub(crate) fn report_init(disk: &str) {
@@ -42,146 +50,55 @@ pub(crate) fn report_init(disk: &str) {
     );
 }
 
-// Off under `cargo test` so the suite never writes into a developer's state
-// dir nor warms a run from a previous test's blob.
-fn enabled() -> bool {
-    !cfg!(test)
-}
-
-// `None` when no host installed a state root, which turns every operation
-// below into a no-op: pipelines are created fresh rather than warmed from disk.
-fn file_path(name: &str) -> Option<PathBuf> {
-    concinnity_host::store::paths::pipeline_cache_dir().map(|dir| dir.join(name))
-}
-
-// Read the persisted blob for `name`. An empty or over-budget file is deleted
+// Read the persisted blob for `key`. An empty or over-budget entry is dropped
 // and reads as absent.
-pub(crate) fn load(name: &str) -> Option<Vec<u8>> {
-    if !enabled() {
-        return None;
-    }
-    load_in(&file_path(name)?)
-}
-
-fn load_in(path: &std::path::Path) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(path).ok()?;
-    if bytes.is_empty() || bytes.len() as u64 > FILE_BUDGET_BYTES {
-        let _ = std::fs::remove_file(path);
-        return None;
-    }
-    Some(bytes)
-}
-
-// Persist `bytes` for `name` when they hold more than `previous_len` (the size
-// of the blob this run loaded or last wrote). Growth is the only reliable "new
-// content" signal: a driver cache only accumulates, but its serialization is not
-// deterministic (MoltenVK shuffles entry order run to run), so a byte compare
-// would rewrite an unchanged cache every launch. A length is all the check needs,
-// and holding one frees callers from keeping the previous blob alive. Returns
-// whether a write happened, for the caller's bookkeeping.
-pub(crate) fn store_if_grown(name: &str, bytes: &[u8], previous_len: usize) -> bool {
-    if !enabled() {
-        return false;
-    }
-    match file_path(name) {
-        Some(path) => store_in(&path, bytes, previous_len),
-        None => false,
+pub(crate) fn load(key: &str) -> Option<Vec<u8>> {
+    let bytes = crate::runtime_cache::load(KIND, key)?;
+    if within_budget(&bytes) {
+        Some(bytes)
+    } else {
+        delete(key);
+        None
     }
 }
 
-fn store_in(path: &std::path::Path, bytes: &[u8], previous_len: usize) -> bool {
-    if bytes.is_empty() || bytes.len() <= previous_len {
-        return false;
-    }
-    let Some(dir) = path.parent() else {
-        return false;
-    };
-    if std::fs::create_dir_all(dir).is_err() {
-        return false;
-    }
-    // Process-unique temp plus rename, so a concurrent reader (a second `cn
-    // debug` on the same checkout) never observes a partial blob.
-    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    if std::fs::write(&tmp, bytes).is_err() {
-        return false;
-    }
-    if std::fs::rename(&tmp, path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return false;
-    }
-    true
+// Hold `bytes` for `key` until the next checkpoint. The segment keeps whichever
+// blob is larger, which is the growth check this needs: a driver cache only
+// accumulates, but its serialization is not deterministic (MoltenVK shuffles
+// entry order run to run), so a byte compare would rewrite an unchanged cache
+// every launch. Returns whether the segment took them.
+pub(crate) fn store(key: &str, bytes: &[u8]) -> bool {
+    crate::runtime_cache::store(KIND, key, bytes)
 }
 
-// Drop the persisted blob for `name`; used when the driver rejects it.
-pub(crate) fn delete(name: &str) {
-    if let Some(path) = file_path(name) {
-        let _ = std::fs::remove_file(path);
-    }
+// Drop the persisted blob for `key`; used when the driver rejects it.
+pub(crate) fn delete(key: &str) {
+    crate::runtime_cache::delete(KIND, key);
+}
+
+// Whether an entry is worth keeping: a truncated write reads back empty, and a
+// cache past the budget is rebuilt cold instead of growing forever.
+fn within_budget(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.len() as u64 <= FILE_BUDGET_BYTES
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn temp_file(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("cn_pso_{tag}_{}", std::process::id()))
+    #[test]
+    fn an_empty_or_over_budget_blob_is_not_kept() {
+        assert!(within_budget(&[1]));
+        assert!(within_budget(&vec![0u8; FILE_BUDGET_BYTES as usize]));
+        assert!(!within_budget(&[]), "a truncated entry");
+        assert!(!within_budget(&vec![0u8; FILE_BUDGET_BYTES as usize + 1]));
     }
 
+    // Under `cargo test` nothing reaches the state dir, in either direction.
     #[test]
-    fn a_blob_round_trips_through_a_file() {
-        let path = temp_file("roundtrip").join("adapter.bin");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert!(store_in(&path, &[1, 2, 3], 0));
-        assert_eq!(load_in(&path), Some(vec![1, 2, 3]));
-        let leftovers = std::fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .flatten()
-            .filter(|e| e.path().extension().is_some_and(|x| x == "tmp"))
-            .count();
-        assert_eq!(leftovers, 0, "temp files must not survive a store");
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn only_growth_rewrites_the_blob() {
-        let path = temp_file("growth").join("adapter.bin");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert!(store_in(&path, &[5, 5], 0));
-        let first_write = std::fs::metadata(&path).unwrap().modified().unwrap();
-        // Same or reshuffled content of equal length is not new content: the
-        // driver's serialization is nondeterministic, so equal-length bytes
-        // must leave the file untouched (byte-stable warm launches).
-        assert!(!store_in(&path, &[5, 5], 2));
-        assert!(!store_in(&path, &[6, 5], 2), "reshuffled");
-        assert!(!store_in(&path, &[5], 2), "shrunk");
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().modified().unwrap(),
-            first_write
-        );
-        assert!(store_in(&path, &[5, 5, 6], 2), "growth writes");
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn an_empty_blob_is_neither_stored_nor_loaded() {
-        let path = temp_file("empty").join("adapter.bin");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert!(!store_in(&path, &[], 0));
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, []).unwrap();
-        assert_eq!(load_in(&path), None);
-        assert!(!path.exists(), "a truncated file is deleted on load");
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn an_over_budget_blob_is_deleted_on_load() {
-        let path = temp_file("budget").join("adapter.bin");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, vec![0u8; (FILE_BUDGET_BYTES + 1) as usize]).unwrap();
-        assert_eq!(load_in(&path), None);
-        assert!(!path.exists());
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    fn the_cache_is_off_under_test() {
+        assert!(!crate::runtime_cache::enabled());
+        assert_eq!(load("vk-probe"), None);
+        assert!(!store("vk-probe", &[1, 2, 3]));
     }
 }

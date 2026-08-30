@@ -448,7 +448,7 @@ impl DxContext {
     pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::build::texture::TextureImage,
+        image: &crate::bake::texture::TextureImage,
     ) -> Result<(), String> {
         if slot >= self.descriptors.textures.len() {
             return Err(format!(
@@ -516,7 +516,7 @@ impl DxContext {
     // back. The grey is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
     pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        let grey = crate::build::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        let grey = crate::bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         self.update_texture_slot(slot, &grey)
     }
 
@@ -549,7 +549,7 @@ impl DxContext {
     // now-stale SRVs) before they are overwritten and dropped. Mirrors
     // `MtlContext::update_environment_map`.
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::build::environment_map::deserialise(payload)
+        let view = crate::bake::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
         let irr_srv_cpu = self.env_map.irradiance.srv_cpu;

@@ -121,7 +121,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
         .name("cn-envmap-reload".into())
         .spawn(move || {
             let result = crate::jobs::pool().install(|| {
-                concinnity_cook::environment_map::decode_source(
+                concinnity_cook::compile::environment_map::decode_source(
                     &env_map_copy.resolved_path,
                     env_map_copy.prefilter_face_size,
                     env_map_copy.irradiance_face_size,
@@ -174,18 +174,18 @@ pub(super) fn decode_asset_batch(
     // worker threads; contention only fires the first time each unique
     // source is seen.
     let parsed_glb_cache: Mutex<
-        std::collections::HashMap<String, concinnity_cook::gltf_source::GltfDoc>,
+        std::collections::HashMap<String, concinnity_cook::import::gltf_source::GltfDoc>,
     > = Mutex::new(std::collections::HashMap::new());
 
     // Helper: fetch (or parse + cache) the glTF doc for `source`. Returns a
     // cloned `GltfDoc`: the parsed document is reference-counted internally
     // and the resolved buffers are `Arc`-backed, so the clone is cheap.
     let assets_dir = crate::authoring::assets_root::assets_dir();
-    let load_glb = |source: &str| -> Result<concinnity_cook::gltf_source::GltfDoc, String> {
+    let load_glb = |source: &str| -> Result<concinnity_cook::import::gltf_source::GltfDoc, String> {
         if let Some(doc) = parsed_glb_cache.lock().unwrap().get(source) {
             return Ok(doc.clone());
         }
-        let doc = concinnity_cook::glb::parse_glb(source, assets_dir.as_deref())?;
+        let doc = concinnity_cook::import::glb::parse_glb(source, assets_dir.as_deref())?;
         parsed_glb_cache
             .lock()
             .unwrap()
@@ -201,7 +201,7 @@ pub(super) fn decode_asset_batch(
             let lower = entry.source.to_lowercase();
             let decoded = if lower.ends_with(".glb") || lower.ends_with(".gltf") {
                 match load_glb(&entry.source) {
-                    Ok(doc) => concinnity_cook::texture::decode_glb_image_from_doc(
+                    Ok(doc) => concinnity_cook::compile::texture::decode_glb_image_from_doc(
                         &doc,
                         &entry.source,
                         entry.image_index,
@@ -209,7 +209,7 @@ pub(super) fn decode_asset_batch(
                     Err(e) => Err(e),
                 }
             } else {
-                concinnity_cook::texture::decode_source(
+                concinnity_cook::compile::texture::decode_source(
                     &entry.source,
                     entry.image_index,
                     assets_dir.as_deref(),
@@ -241,7 +241,7 @@ pub(super) fn decode_asset_batch(
 
     // ColorLut: single source, decoded serially.
     if let Some(lut) = color_lut {
-        match concinnity_cook::color_lut::decode_source(&lut.resolved_path) {
+        match concinnity_cook::compile::color_lut::decode_source(&lut.resolved_path) {
             Ok((size, data)) => {
                 batch.color_lut = Some(DecodedColorLut {
                     size,
@@ -280,7 +280,7 @@ pub(super) fn decode_asset_batch(
                 continue;
             }
         };
-        match concinnity_cook::mesh_reimport::decode_mesh_from_parsed_glb(
+        match concinnity_cook::import::mesh_reimport::decode_mesh_from_parsed_glb(
             &doc,
             &entry.source,
             entry.primitive_index,
@@ -323,7 +323,7 @@ pub(super) fn decode_asset_batch(
                 continue;
             }
         };
-        match concinnity_cook::mesh_reimport::decode_skinned_from_parsed_glb(
+        match concinnity_cook::import::mesh_reimport::decode_skinned_from_parsed_glb(
             &doc,
             &entry.source,
             entry.skin_index,
@@ -431,7 +431,7 @@ pub(crate) fn poll_pending_assets(
     for tex in &batch.textures {
         // Hot-reload decodes sources to RGBA8; wrap them so the backend
         // regenerates the mip chain on upload.
-        let image = concinnity_core::build::texture::TextureImage::rgba8(
+        let image = concinnity_core::bake::texture::TextureImage::rgba8(
             tex.width,
             tex.height,
             tex.pixels.clone(),

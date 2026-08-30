@@ -4,7 +4,7 @@
 
 mod validator;
 
-use concinnity_cook::shader::{ShaderCompileArgs, ShaderToolchain, set_shader_toolchain};
+use concinnity_cook::compile::shader::{ShaderCompileArgs, ShaderToolchain, set_shader_toolchain};
 
 pub(crate) fn install() {
     set_shader_toolchain(Box::new(MetalToolchain));

@@ -1,16 +1,25 @@
-//! concinnity-cook: the asset compile pipeline, kept out of the runtime
-//! foundation so that foundation carries none of the build-only dependencies
-//! (fbxcel, shaderc, sha2, kira). This crate turns world.jsonl + source files
-//! into the binary blobs the runtime reads; it depends on concinnity-core and
-//! core has no edge back into it.
+//! concinnity-cook: the build side, kept out of the runtime foundation so that
+//! foundation carries none of the build-only dependencies (fbxcel, shaderc,
+//! sha2, kira). This crate turns world.jsonl + source files into the binary
+//! blobs the runtime reads; it depends on concinnity-core and core has no edge
+//! back into it.
+//!
+//! The stages read in order: `authoring` is the authored model and the type
+//! vocabulary it is written in, `build_only` expands the types that never reach
+//! a blob, `check` validates the expanded world, and the compile path turns
+//! what is left into payloads. That path is three groups plus the orchestration
+//! that sequences them: `import` reads the artist-supplied source files,
+//! `codec` decodes the container and image formats they carry, `compile` turns
+//! an asset's args and sources into its payload, and `pipeline` / `blob` /
+//! `cache` at the root drive the whole run.
 //!
 //! Bridge: the vocabulary and compute modules below are re-exported crate-wide
 //! so code moved here keeps resolving its `crate::{components,ecs,gfx,result}`
 //! paths. `crate::components` is the runtime half only; the authoring-only
-//! types this crate expands away are named from `concinnity_world::registry::build_only` where
-//! they are used, so a use site says which half it works on. The payload
-//! *decoders* and shared payload types live in `concinnity_core::build`; this
-//! crate's modules call back into them.
+//! types this crate expands away are named from
+//! `crate::authoring::registry::build_only` where they are used, so a use site
+//! says which half it works on. The payload *decoders* and shared payload types
+//! live in `concinnity_core::bake`; this crate's modules call back into them.
 //! The source importers parse artist-supplied files, so a panic here is a crash
 //! on a malformed asset rather than a bug. Invariants that genuinely cannot fail
 //! use `expect` with the invariant named; tests unwrap freely.
@@ -49,77 +58,43 @@ pub(crate) use concinnity_host::store::source;
 pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
 
-// The world front half -- the authored model, the type vocabulary
-// (`RegisteredType` / `RegisteredType`), the typed spec vocabulary, and the
-// pure semantic checks -- lives in concinnity-world; the registry is bound here
-// so cook code keeps resolving `crate::registry`. cook composes its
-// compile-backed checks on top (crate::check) and owns expansion (crate::world).
-// Consumers reach the rest of the authoring surface through concinnity-world
-// directly.
-pub(crate) use concinnity_world::registry;
+// The authoring type vocabulary, bound at the root so the compile path keeps
+// resolving `crate::registry` without naming the namespace it belongs to.
+pub(crate) use authoring::registry;
 
-pub mod asset;
+pub(crate) mod asset;
 pub mod asset_api;
 pub(crate) mod asset_impls;
-pub(crate) mod audio_clip;
-// Source-image format decoders (Targa, DDS, and the BCn block decompressors DDS
-// needs). Build-only: they turn an authored `.tga` / `.dds` into RGBA the
-// texture encoder packs; the runtime plays the compiled RGBA payload.
-pub(crate) mod bcn;
+/// The authored world model: world.jsonl parsing and I/O, the type vocabulary,
+/// the asset cross-reference metadata, the typed spec vocabulary, and the
+/// build-only args schemas. Everything the cook reads before it compiles
+/// anything.
+pub mod authoring;
 pub mod blob;
+/// The build-time expansion passes: one module per build-only asset type, plus
+/// preset loading and the build front-half orchestrator.
+pub mod build_only;
 pub mod cache;
-pub mod character;
-pub(crate) mod character_shape;
 pub mod check;
-pub mod color_lut;
-pub mod cubemap;
-pub(crate) mod dds;
-/// The asset reference, extracted at build time and embedded.
-pub mod environment_map;
-pub mod fbx;
-/// Referenced-file assets: paths and their compiled payloads.
-pub mod file;
+// Container and image format decoders, shared by the compilers that encode
+// their output.
+pub(crate) mod codec;
+/// The compile path: per-asset payload compilers plus the whole-world passes
+/// that run with them.
+pub mod compile;
 // Stat-based identity behind the cook's read memos, and the settle window that
 // keeps a same-tick equal-length rewrite from being served stale.
 mod file_stamp;
-pub mod font;
-/// Build-time mesh generators + payload compilers. The runtime-side mesh helpers
-/// they share (tangents, the voxel mesher, chunk streaming) stay in
-/// `concinnity_core::geometry`; this module re-exports what cook code names.
-pub mod geometry;
-pub mod glb;
-pub mod gltf;
-pub mod gltf_source;
-/// Build-time HDR source primitives (Radiance decode, equirect->cube, cube
-/// payload format) shared by the CubemapTexture + EnvironmentMap compilers.
-pub mod hdr;
+/// Source-file readers: the scene expansion and the container readers it
+/// dispatches into.
 pub mod import;
-/// KTX2 container decode: BCn block passthrough + Basis Universal (ETC1S / UASTC)
-/// transcode into the tagged compressed texture payload. Build-only.
-pub mod ktx2;
-pub mod mesh_compile;
-pub mod mesh_reimport;
-/// Recognises a `.glb` that packages an environment image as a sphere you stand
-/// inside, so it imports as an EnvironmentMap instead of scene geometry.
-pub mod panorama;
-pub(crate) mod physics_budget;
 pub mod pipeline;
 pub mod resource_handles;
-pub(crate) mod root_motion;
-pub(crate) mod scene_partition;
-pub mod shader;
-pub(crate) mod spawn_population;
-pub mod texture;
-pub mod tga;
-pub mod thumbnail;
-pub(crate) mod wavefront;
-/// world.jsonl parsing, validation, and macro expansion.
-pub mod world;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode API stays in concinnity-core.
+pub use build_only::prepare_world;
 pub use pipeline::{
     BuildProgress, PipelineResult, build_compiled, build_compiled_with_progress, build_from_path,
     build_pipeline_from_str, validate_asset, validate_world_jsonl, write_build_outputs,
 };
-pub use world::prepare_world;

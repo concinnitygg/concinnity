@@ -1,6 +1,11 @@
 //! The world an application is assembled from.
 
+use alloc::vec::Vec;
+
+use concinnity_core::components::{Material, ProceduralMesh};
 use concinnity_core::ecs::RuntimeComponent;
+
+use crate::{EnvironmentMapHandle, MaterialHandle, MeshHandle};
 
 // One world on both tiers: it carries the components and the systems built over
 // them, and needs no operating system to do either. What differs is what a tier
@@ -52,6 +57,33 @@ impl World {
         self.inner.add_component(component);
     }
 
+    /// Add a mesh with its baked geometry payload, returning the handle a
+    /// [`Prop`](crate::components::Prop) references it by.
+    ///
+    /// The payload comes from [`bake::procedural_mesh`](crate::bake::procedural_mesh)
+    /// (or, through the `cook` module, from a compiled world). Handles count up
+    /// in the order meshes are added.
+    pub fn add_mesh(&mut self, mesh: ProceduralMesh, payload: Vec<u8>) -> MeshHandle {
+        self.inner.add_mesh(mesh, payload)
+    }
+
+    /// Add a material, returning the handle a
+    /// [`Prop`](crate::components::Prop) references it by. The value's fields
+    /// are clamped into their valid ranges on the way in, exactly as the
+    /// `cook` module clamps an authored material.
+    pub fn add_material(&mut self, material: Material) -> MaterialHandle {
+        self.inner.add_material(material)
+    }
+
+    /// Add a baked image-based-lighting payload, from
+    /// [`bake::environment_map`](crate::bake::environment_map). The renderer
+    /// lights with the map at handle 0.
+    pub fn add_environment_map(&mut self, payload: Vec<u8>) -> EnvironmentMapHandle {
+        self.inner.add_environment_map(payload)
+    }
+
+    // Only the cook module compiles a core world it then wraps; the raw path
+    // starts from `World::new` and never converts.
     #[cfg(feature = "cook")]
     pub(crate) fn from_inner(inner: Inner) -> Self {
         Self { inner }
@@ -64,5 +96,12 @@ impl World {
     #[cfg(test)]
     pub(crate) fn inner(&self) -> &Inner {
         &self.inner
+    }
+
+    // Only the cook-vs-bake parity oracle starts a world to compare the two,
+    // and it is the one test that needs the inner world mutably.
+    #[cfg(all(test, feature = "cook"))]
+    pub(crate) fn inner_mut(&mut self) -> &mut Inner {
+        &mut self.inner
     }
 }

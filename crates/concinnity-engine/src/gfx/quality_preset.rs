@@ -7,7 +7,9 @@
 // under Auto) cannot honor them. A ceiling never turns a feature on -- it only
 // reduces -- so a world authored conservatively is never "upgraded", and an
 // explicit per-row user override always wins over the ceiling (applied by the
-// caller). This keeps the per-field `None = use the world's value` contract: the
+// caller). The component defaults author the top-tier look, so under `Auto`
+// this is what actually picks a world's quality: every tier below Ultra is
+// reached by clamping, not by opting in. This keeps the per-field `None = use the world's value` contract: the
 // only thing persisted is the one preset marker, not a bake of every field.
 
 use serde::{Deserialize, Serialize};
@@ -145,9 +147,8 @@ pub(crate) fn coarser_reflection_blur(
 }
 
 // No ceiling: everything permitted, no forced upscaling. The resolved ceiling
-// for `Custom`, and for `Auto` on hardware we could not classify (clamping an
-// unknown GPU on a guess would risk needlessly degrading a capable one; the
-// world's authored look is the best signal we have there).
+// for `Custom` alone -- every `Auto` tier, unclassified hardware included,
+// resolves to a named tier.
 // The engine maxima for the SSGI sub-quality caps, used wherever a tier imposes
 // no SSGI ceiling: `Full` gather resolution, and the upper clamp bounds the
 // gather honours (rays <= 32, steps <= 64). A world's authored value always
@@ -292,8 +293,7 @@ const ULTRA: QualityCeiling = QualityCeiling {
 };
 
 // The active ceiling for the persisted preset and detected GPU. `Auto` maps the
-// GPU tier to a named tier (Unknown -> no ceiling); `Custom` imposes no ceiling;
-// a named tier is fixed.
+// GPU tier to a named tier; `Custom` imposes no ceiling; a named tier is fixed.
 pub(crate) fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> QualityCeiling {
     match preset {
         QualityPreset::Custom => NONE,
@@ -362,18 +362,23 @@ pub(crate) fn preset_at(index: usize) -> QualityPreset {
 }
 
 // The named tier `Auto` resolves to on this GPU, for the menu label (e.g.
-// "Auto (High)"). `None` when the GPU is unclassified, where `Auto` imposes no
-// ceiling and the bare "Auto" reads correctly.
+// "Auto (High)"). Always `Some` today; the `Option` keeps the label honest if a
+// future tier is left unmapped.
 pub(crate) fn auto_resolved_name(profile: &GpuProfile) -> Option<&'static str> {
     auto_tier(profile).map(|(name, _)| name)
 }
 
-// The named tier `Auto` resolves to on this GPU, as (label, ceiling). `None`
-// for an unclassified GPU, where `Auto` imposes no ceiling. One table, so the
-// menu label can never disagree with the ceiling actually applied.
+// The named tier `Auto` resolves to on this GPU, as (label, ceiling). One
+// table, so the menu label can never disagree with the ceiling actually
+// applied.
 fn auto_tier(profile: &GpuProfile) -> Option<(&'static str, QualityCeiling)> {
     match profile.tier {
-        GpuTier::Unknown => None,
+        // A discrete GPU whose driver would not report its VRAM. The world's
+        // defaults describe the top-tier look, so declining to clamp here would
+        // hand an unclassified card the whole stack; the mid tier keeps the
+        // cheap wins (TAA, ambient occlusion) and drops what an unknown GPU
+        // might not carry, matching `GpuProfile::UNKNOWN`'s fail-safe intent.
+        GpuTier::Unknown => Some(("Medium", MEDIUM)),
         GpuTier::Integrated => Some(("Low", LOW)),
         GpuTier::EntryDiscrete => Some(("Medium", MEDIUM)),
         GpuTier::MidDiscrete => Some(("High", HIGH)),
@@ -406,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_and_unknown_impose_no_ceiling() {
+    fn only_custom_imposes_no_ceiling() {
         // Custom never clamps, regardless of hardware.
         assert_eq!(
             resolve_ceiling(
@@ -415,10 +420,11 @@ mod tests {
             ),
             NONE
         );
-        // Auto on an unclassified GPU does not clamp on a guess.
+        // Auto on an unclassified GPU takes the mid tier rather than handing it
+        // the whole stack the component defaults author.
         assert_eq!(
             resolve_ceiling(QualityPreset::Auto, &profile_with_tier(GpuTier::Unknown)),
-            NONE
+            MEDIUM
         );
     }
 
@@ -680,10 +686,10 @@ mod tests {
             preset_label(QualityPreset::Auto, &profile_with_tier(GpuTier::Integrated)),
             "Auto (Low)"
         );
-        // An unclassified GPU imposes no ceiling, so bare "Auto" is honest.
+        // An unclassified GPU resolves to the mid tier, and says so.
         assert_eq!(
             preset_label(QualityPreset::Auto, &profile_with_tier(GpuTier::Unknown)),
-            "Auto"
+            "Auto (Medium)"
         );
         // A named preset is just its own name, hardware-independent.
         assert_eq!(

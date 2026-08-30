@@ -27,6 +27,12 @@ pub enum ShadowUpdate {
 /// One per world. The GPU backend is chosen by the engine for the platform and
 /// is not user-configurable.
 ///
+/// The shadow and anisotropy defaults describe the quality capable hardware
+/// runs, not what every GPU runs: the `Auto` graphics quality preset resolves
+/// the detected GPU into a ceiling that caps them tier by tier. Frame pacing
+/// (`vsync`, `fps_cap`, `frames_in_flight`) is a user preference rather than a
+/// quality tier, so no preset touches it.
+///
 /// ```json
 /// {
 ///   "name": "gfx",
@@ -56,11 +62,13 @@ pub struct GraphicsConfig {
     pub fps_cap: u32,
     /// Background clear colour [r, g, b, a] in linear 0..1 space.
     pub clear_color: [f32; 4],
-    /// Shadow map resolution in texels (e.g. 2048). Set to 0 to disable shadows.
+    /// Shadow map resolution in texels. `4096` by default, capped by the quality
+    /// preset down to 1024 on the lowest tier. Set to 0 to disable shadows.
     pub shadow_map_size: u32,
-    /// How often shadow cascades are re-rendered. `hybrid` (default) amortizes
-    /// the far cascades across frames; `every_frame` refreshes them all every
-    /// frame.
+    /// How often shadow cascades are re-rendered. `every_frame` (default)
+    /// refreshes them all every frame; `hybrid` amortizes the far cascades
+    /// across frames. Only the top quality tier permits `every_frame`, so
+    /// everything below it runs `hybrid`.
     pub shadow_update: ShadowUpdate,
     /// How far from the camera shadows are cast, in world units (e.g. 80). The
     /// cascades cover from the near plane out to this distance; a larger value
@@ -77,7 +85,9 @@ pub struct GraphicsConfig {
     /// (albedo + normal maps), e.g. 8. Higher keeps textures viewed at a grazing
     /// angle (floors, walls receding into the distance) sharp instead of blurring
     /// along the minor axis, at a small sampling cost. `1` disables anisotropy
-    /// (plain trilinear). Clamped to the GPU's supported range (1..16) at init.
+    /// (plain trilinear). `16` by default, capped by the quality preset down to
+    /// 4 on the lowest tier. Clamped to the GPU's supported range (1..16) at
+    /// init.
     pub anisotropy: u32,
 }
 
@@ -89,11 +99,11 @@ impl Default for GraphicsConfig {
             vsync: false,
             fps_cap: 0,
             clear_color: [0.01, 0.01, 0.02, 1.0],
-            shadow_map_size: 2048,
-            shadow_update: ShadowUpdate::default(),
+            shadow_map_size: 4096,
+            shadow_update: ShadowUpdate::EveryFrame,
             shadow_distance: 80,
             shadow_cascades: 4,
-            anisotropy: 8,
+            anisotropy: 16,
         }
     }
 }
@@ -103,18 +113,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_run_uncapped_with_hybrid_cascaded_shadows() {
+    fn defaults_run_uncapped_with_live_cascaded_shadows() {
         let g = GraphicsConfig::default();
         // No frame ceiling and no fps cap: `cn run` renders until it is closed.
         assert_eq!(g.max_frames, None);
         assert_eq!(g.fps_cap, 0);
         assert!(!g.vsync);
         assert_eq!(g.frames_in_flight, 2);
-        assert_eq!(g.shadow_update, ShadowUpdate::Hybrid);
-        assert_eq!(g.shadow_map_size, 2048);
+        // The shadow + sampler quality capable hardware runs; the quality
+        // preset's ceiling caps each of these down per GPU tier.
+        assert_eq!(g.shadow_update, ShadowUpdate::EveryFrame);
+        assert_eq!(g.shadow_map_size, 4096);
         assert_eq!(g.shadow_cascades, 4);
         assert_eq!(g.shadow_distance, 80);
-        assert_eq!(g.anisotropy, 8);
+        assert_eq!(g.anisotropy, 16);
+        // The bare enum default stays the cheap cadence, which is the right
+        // fallback wherever a `ShadowUpdate` is defaulted on its own.
         assert_eq!(ShadowUpdate::default(), ShadowUpdate::Hybrid);
     }
 

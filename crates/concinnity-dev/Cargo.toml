@@ -8,17 +8,15 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "The Concinnity dev tooling library: world authoring, the in-engine editor, the debug server, docs and packaging"
+readme = "README.md"
 keywords = ["gamedev", "editor", "cli", "concinnity"]
 categories = ["game-engines", "development-tools"]
 include = [
+    "/README.md",
     "/src",
     "/assets",
     "/build.rs",
 ]
-
-[lib]
-name = "concinnity_dev"
-path = "src/lib.rs"
 
 [features]
 # Mirror the runtime's Vulkan feature so an editor build can target the Vulkan
@@ -35,7 +33,6 @@ vulkan = [
 concinnity-engine = { workspace = true }
 concinnity-device = { workspace = true }
 concinnity-cook = { workspace = true }
-concinnity-world = { workspace = true }
 concinnity-shader = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }

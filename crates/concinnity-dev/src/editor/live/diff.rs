@@ -101,10 +101,12 @@ fn effective(
     shadows: &ShadowBaselines,
 ) -> Map<String, Value> {
     let authored = match shadows.get(name) {
-        Some(baseline) => crate::world::merge_args(baseline, &Value::Object(args.clone()))
-            .as_object()
-            .cloned()
-            .unwrap_or_else(|| args.clone()),
+        Some(baseline) => {
+            concinnity_cook::build_only::merge_args(baseline, &Value::Object(args.clone()))
+                .as_object()
+                .cloned()
+                .unwrap_or_else(|| args.clone())
+        }
         None => args.clone(),
     };
     form::working_args(ty, Some(&authored))

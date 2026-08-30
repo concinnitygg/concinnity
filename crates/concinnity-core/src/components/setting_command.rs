@@ -62,3 +62,19 @@ impl Default for SettingCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A command with nothing stated names no setting and writes through to the
+    // store: a cycle is one discrete change, and only a slider drag opts out.
+    #[test]
+    fn a_default_command_persists_and_advances() {
+        let command = SettingCommand::default();
+        assert!(command.setting.is_empty());
+        assert!(matches!(command.op, SettingOp::Next));
+        assert_eq!(command.value_label, None);
+        assert!(command.persist);
+    }
+}

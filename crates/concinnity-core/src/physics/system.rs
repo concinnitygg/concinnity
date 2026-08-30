@@ -844,8 +844,11 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
-    use crate::components::{CameraController, CharacterRig, FollowController, PropCollider};
+    use crate::components::{
+        CameraController, CharacterRig, FollowController, ProceduralMesh, PropCollider,
+    };
     use crate::ecs::SkinnedMeshHandle;
+    use crate::physics::LayerMask;
     use crate::physics::budget::{record_of, scan_counts};
     use crate::physics::test_world::TestWorld;
 
@@ -1501,6 +1504,230 @@ mod tests {
         assert!(
             y < -10.0,
             "the ghost-layer prop fell through the floor (y = {y})"
+        );
+    }
+
+    // Where the floor sits under (x, z), by dropping a ray onto it.
+    fn floor_height(physics: &PhysicsSystem, x: f32, z: f32) -> Option<f32> {
+        physics
+            .world
+            .as_ref()?
+            .raycast([x, 100.0, z], [0.0, -1.0, 0.0], 200.0, None, LayerMask::ALL)
+            .map(|hit| hit.point[1])
+    }
+
+    fn terrain_config() -> PhysicsConfig {
+        PhysicsConfig {
+            terrain_half_width: 32.0,
+            terrain_half_depth: 32.0,
+            terrain_subdivisions: 32,
+            terrain_amplitude: 4.0,
+            ..PhysicsConfig::default()
+        }
+    }
+
+    // A config that authors subdivisions gets a noise floor whose height
+    // varies with position, rather than the flat slab a bare config gets.
+    #[test]
+    fn authored_subdivisions_build_a_noise_floor_instead_of_a_slab() {
+        let mut world = TestWorld::new();
+        let mut physics = PhysicsSystem::new(terrain_config());
+        assert!(physics.terrain.is_some(), "the config authored a terrain");
+        physics.init(&mut world.ctx());
+
+        let a = floor_height(&physics, 0.0, 0.0).expect("the ray meets the floor");
+        let b = floor_height(&physics, 12.0, -7.0).expect("the ray meets the floor");
+        assert_ne!(a, b, "a noise floor is not level");
+    }
+
+    #[test]
+    fn no_subdivisions_leaves_a_level_slab() {
+        let mut world = TestWorld::new();
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        assert!(physics.terrain.is_none());
+        physics.init(&mut world.ctx());
+
+        let a = floor_height(&physics, 0.0, 0.0).expect("the ray meets the floor");
+        let b = floor_height(&physics, 12.0, -7.0).expect("the ray meets the floor");
+        assert_eq!(a, b, "a slab is level");
+    }
+
+    // A named terrain mesh that does not resolve to a usable heightfield
+    // collider falls through to the fallback floor rather than leaving the
+    // world without one. Each way it can fail to resolve takes that path:
+    // no such asset, the wrong generator, and a payload the store cannot read
+    // (this world carries no blob, so the read always fails).
+    #[test]
+    fn an_unusable_terrain_mesh_falls_through_to_the_fallback_floor() {
+        let cases: [(&str, Option<ProceduralMesh>); 3] = [
+            ("no such asset", None),
+            (
+                "wrong generator",
+                Some(ProceduralMesh {
+                    asset_id: AssetId(7),
+                    generator: "box".to_string(),
+                    ..ProceduralMesh::default()
+                }),
+            ),
+            (
+                "unreadable payload",
+                Some(ProceduralMesh {
+                    asset_id: AssetId(7),
+                    generator: "heightfield".to_string(),
+                    ..ProceduralMesh::default()
+                }),
+            ),
+        ];
+
+        for (what, mesh) in cases {
+            let mut world = TestWorld::new();
+            if let Some(mesh) = mesh {
+                world.components.push_typed(mesh);
+            }
+            let mut config = terrain_config();
+            config.terrain_mesh = Some(AssetId(7));
+            let mut physics = PhysicsSystem::new(config);
+            physics.init(&mut world.ctx());
+            assert!(
+                floor_height(&physics, 0.0, 0.0).is_some(),
+                "{what}: the world was left with no floor at all"
+            );
+        }
+    }
+
+    // A capsule that jumps leaves the ground, then lands: the impulse is
+    // applied on the tick the request arrives, gravity brings it back, and
+    // touching down clears the downward velocity rather than letting it
+    // accumulate into the floor. The grounded state is published back to the
+    // RigidBody, which is what gates the next jump.
+    #[test]
+    fn a_grounded_player_jumps_and_lands() {
+        let mut world = TestWorld::new();
+        world.components.push_typed(RigidBody {
+            gravity_scale: 1.0,
+            capsule_radius: 0.3,
+            capsule_height: 1.8,
+            jump_height: 1.0,
+            ..RigidBody::default()
+        });
+        let mut camera = controlled_camera();
+        camera.jump_requested = true;
+        world.components.push_typed(camera);
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        assert!(
+            physics.player.as_ref().expect("a capsule").has_gravity,
+            "a RigidBody in the world is what makes the capsule fall"
+        );
+
+        physics.step(&mut world.ctx());
+        let launched = physics.player.as_ref().expect("a capsule").vy;
+        assert!(
+            launched > 0.0,
+            "the jump did not lift the capsule: {launched}"
+        );
+
+        // Stop asking, and let it come back down.
+        for camera in world.ctx().query_mut::<Camera3D>() {
+            camera.jump_requested = false;
+        }
+        for _ in 0..240 {
+            physics.step(&mut world.ctx());
+        }
+
+        let player = physics.player.as_ref().expect("a capsule");
+        assert!(player.grounded, "the capsule never landed");
+        assert_eq!(player.vy, 0.0, "landing clears the downward velocity");
+        assert!(
+            world
+                .ctx()
+                .query::<RigidBody>()
+                .all(|body| body.is_grounded),
+            "the grounded state that gates the next jump was not published"
+        );
+    }
+
+    // Interacting twice picks the prop up and then throws it: the second
+    // interaction hands it back to dynamic simulation and drops the Held tag,
+    // so a carried prop cannot be left tagged after it has been released.
+    #[test]
+    fn interacting_twice_picks_up_then_throws_the_prop() {
+        let id = AssetId(1);
+        let mut world = TestWorld::new();
+        let carriable = world.spawn_prop(id, [0.0, 1.0, -2.0], true);
+        make_dynamic(&mut world, carriable);
+        world
+            .components
+            .push_typed(interacting_camera([0.0, 1.0, 0.0]));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+
+        physics.step(&mut world.ctx());
+        assert_eq!(world.ctx().query::<Held>().count(), 1, "picked up");
+        assert!(physics.held.is_some());
+
+        // The camera is still asking, so the next step is the drop.
+        physics.step(&mut world.ctx());
+        assert!(physics.held.is_none(), "the prop was not released");
+        assert_eq!(
+            world.ctx().query::<Held>().count(),
+            0,
+            "the Held tag outlived the throw"
+        );
+    }
+
+    // Build a world holding one trigger volume with the given filter, plus a
+    // falling prop, and report the crossings `steps` steps produce.
+    fn crossings_through(detects: TriggerFilter, steps: usize) -> Vec<VolumeEvent> {
+        let volume_id = AssetId(9);
+        let mut world = TestWorld::new();
+        world.components.push_typed(TriggerVolume {
+            asset_id: volume_id,
+            position: [0.0, 3.0, 0.0],
+            rotation_deg: [0.0; 3],
+            collider: PropCollider {
+                shape: "cuboid".to_string(),
+                half_extents: [1.0, 0.5, 1.0],
+                ..Default::default()
+            },
+            detects,
+        });
+        let ball = world.spawn_prop(AssetId(1), [0.0, 6.0, 0.0], false);
+        make_dynamic(&mut world, ball);
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+
+        let mut cursor = EventCursor::default();
+        let mut crossings = Vec::new();
+        for _ in 0..steps {
+            physics.step(&mut world.ctx());
+            let ctx = world.ctx();
+            if let Some(events) = ctx.events::<VolumeEvent>() {
+                crossings.extend(events.read(&mut cursor).copied());
+            }
+        }
+        crossings
+    }
+
+    // An `any` volume takes whatever crosses it, so the same prop that a
+    // `props` volume reports is reported here too.
+    #[test]
+    fn an_any_volume_reports_a_prop_crossing_it() {
+        let crossings = crossings_through(TriggerFilter::Any, 180);
+        assert_eq!(crossings.len(), 2, "in, then out: {crossings:?}");
+    }
+
+    // A `player` volume classifies by body: a prop is not the player, so the
+    // same crossing that an `any` volume reports is filtered out here.
+    #[test]
+    fn a_player_volume_ignores_a_prop_crossing_it() {
+        let crossings = crossings_through(TriggerFilter::Player, 180);
+        assert!(
+            crossings.is_empty(),
+            "a prop is not the player: {crossings:?}"
         );
     }
 }

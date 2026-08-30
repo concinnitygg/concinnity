@@ -19,26 +19,31 @@
 // `CULL_PHASE2` / `SHADOW_CULL` variants) that a build-time table would have had
 // to enumerate by hand.
 //
+// Artifacts live in the runtime cache segment, so an init that misses fifty
+// times writes one file at its checkpoint rather than fifty as it goes -- see
+// `crate::runtime_cache`. A bundle ships a segment of the same kind, warmed by
+// `cn export` and read after the writable one; both tiers are read once, so a
+// lookup in either is a memory lookup.
+//
 // Every operation is best-effort: a miss, an unreadable entry, or a failed write
 // all fall back to compiling normally, so the cache can never break a run.
-// Deleting the directory is the way to force a full recompile, and is what a
-// host toolchain upgrade whose output differs for identical source wants.
+// Deleting `cache/` is the way to force a full recompile, and is what a host
+// toolchain upgrade whose output differs for identical source wants.
 
+use concinnity_core::blob::CacheEntryKind;
+#[cfg(any(backend_dx, backend_vk))]
+use concinnity_host::store::cache::Segment;
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // SHADER_COMPILE_SOURCE_HASH: derived by build.rs from the modules that decide
 // how an artifact is produced, so a change to a compiler invocation or to what
-// `cached` stores orphans every entry it would otherwise serve stale. `prune`
-// reclaims the orphans.
+// `cached` stores orphans every entry it would otherwise serve stale. The
+// segment's own budget reclaims the orphans.
 include!(concat!(env!("OUT_DIR"), "/shader_compile_source_hash.rs"));
 
-// Keep the cache from growing without bound: every shader edit orphans the
-// previous artifact, and a long-lived checkout would otherwise accumulate them
-// forever. Generous next to the ~100 live entries a single build needs.
-const CACHE_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
+const KIND: CacheEntryKind = CacheEntryKind::Shader;
 
 // The inputs a compiled shader artifact is a function of. `compiler` separates
 // the toolchains (FXC's DXBC must never be served to a Vulkan build); `options`
@@ -103,8 +108,8 @@ pub(crate) fn cached(
 }
 
 // How `ensure_in` satisfied a request: the artifact was already in the target
-// directory, was copied over from this machine's local cache tiers, or had to
-// be compiled fresh.
+// segment, was copied over from this machine's own cache tiers, or had to be
+// compiled fresh.
 #[cfg(any(backend_dx, backend_vk))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Ensured {
@@ -113,13 +118,16 @@ pub(crate) enum Ensured {
     Compiled,
 }
 
-// Make sure the artifact for `key` exists in `dir` (a bundle's shader-cache/),
-// compiling only when neither `dir` nor the local cache tiers already hold it.
-// A fresh compile is also stored locally, so repeated exports stay warm. Used
-// by the export-time precompile; the runtime path stays on `cached`.
+// Make sure the artifact for `key` is in `bundle` (the segment `cn export`
+// ships), compiling only when neither it nor this machine's own cache tiers
+// already hold it. A fresh compile is also stored locally, so repeated exports
+// stay warm. `bundle` accumulates in memory and its caller writes it once, so
+// warming a hundred artifacts costs one file write.
+//
+// Used by the export-time precompile; the runtime path stays on `cached`.
 #[cfg(any(backend_dx, backend_vk))]
 pub(crate) fn ensure_in(
-    dir: &Path,
+    bundle: &mut Segment,
     key: &Key<'_>,
     compile: impl FnOnce() -> Result<Vec<u8>, String>,
 ) -> Result<Ensured, String> {
@@ -127,31 +135,31 @@ pub(crate) fn ensure_in(
         verify_toolchain();
     }
     let digest = key.digest();
-    if load_in(dir, &digest).is_some() {
+    if bundle.get(KIND, &digest).is_some_and(|b| !b.is_empty()) {
         return Ok(Ensured::Present);
     }
     if enabled()
         && let Some(bytes) = load(&digest)
     {
-        store_in(dir, &digest, &bytes);
+        bundle.put(KIND, &digest, &bytes);
         return Ok(Ensured::Copied);
     }
     let bytes = compile()?;
     if bytes.is_empty() {
         return Err("compile produced an empty artifact".to_string());
     }
-    store_in(dir, &digest, &bytes);
+    bundle.put(KIND, &digest, &bytes);
     if enabled() {
         store(&digest, &bytes);
     }
     Ok(Ensured::Compiled)
 }
 
-// Log what the cache did during a renderer init, and reclaim orphaned entries.
-// Called once per backend init. Shaders built lazily after it (the skinned-mesh
-// pipelines on first upload, a world shader bucket on scene pin) are cached the
-// same way but land after this tally, so it is a snapshot rather than a total.
-pub(crate) fn report_init_and_prune() {
+// Log what the cache did during a renderer init. Called once per backend init.
+// Shaders built lazily after it (the skinned-mesh pipelines on first upload, a
+// world shader bucket on scene pin) are cached the same way but land after this
+// tally, so it is a snapshot rather than a total.
+pub(crate) fn report_init() {
     let (hits, misses, micros) = (
         HITS.load(Ordering::Relaxed),
         MISSES.load(Ordering::Relaxed),
@@ -164,182 +172,59 @@ pub(crate) fn report_init_and_prune() {
         "shader cache: {hits} reused, {misses} compiled ({:.0} ms) at renderer init",
         micros as f64 / 1000.0
     );
-    if misses > 0
-        && let Some(dir) = cache_dir()
-    {
-        prune(&dir, CACHE_BUDGET_BYTES);
-    }
 }
 
 // Off under `cargo test` so the suite neither writes into a developer's state dir
 // nor lets an entry from a previous run mask a compile change.
 fn enabled() -> bool {
-    !cfg!(test)
+    crate::runtime_cache::enabled()
 }
 
-// `None` when no host installed a state root, which turns every cache
-// operation below into a no-op: compiling is still correct, just not persisted.
-fn cache_dir() -> Option<PathBuf> {
-    concinnity_host::store::paths::shader_cache_dir()
-}
-
-// Scratch directory for runtime slangc invocations (the compiler works on
-// files; source and artifact are removed after each compile). Lives beside
-// the cache so it stays inside the engine's state root. Entries in `prune`'s
-// walk are filtered to files, so the subdirectory never confuses eviction.
-//
-// Compiler scratch is not project state, so with no state root it falls back to
-// the platform temp directory rather than failing the compile.
-pub(crate) fn slang_work_dir() -> PathBuf {
-    cache_dir().map_or_else(
-        || std::env::temp_dir().join("concinnity-slang-work"),
-        |dir| dir.join("slang-work"),
-    )
-}
-
-// Names the shader toolchains this directory's entries were produced by. Not a
-// digest, so it can never collide with one.
-const TOOLCHAIN_STAMP: &str = "toolchain";
-
-// Discard the writable tier when the shader toolchain changes. An entry is a
-// function of its source, not of what compiled it, and slangc is an external
-// binary that can be upgraded -- or shadowed by another install earlier on
-// PATH -- without a byte of source moving; without this, that upgrade never
-// takes effect and the old compiler's output is replayed forever. The
-// read-only tier is deliberately left alone: a bundle ships it on purpose, and
-// it is what a host with no compiler of its own has to run from.
+// Discard the segment's artifacts when the shader toolchain changes. An entry
+// is a function of its source, not of what compiled it, and slangc is an
+// external binary that can be upgraded -- or shadowed by another install
+// earlier on PATH -- without a byte of source moving; without this, that
+// upgrade never takes effect and the old compiler's output is replayed forever.
+// The bundled tier is deliberately left alone: a bundle ships it on purpose,
+// and it is what a host with no compiler of its own has to run from. `cn
+// export` leaves the segment it warms unstamped for the same reason -- on a
+// writable bundle that file is also the one this stamps, and a player whose
+// slangc differs from the exporter's must keep the shipped artifacts rather
+// than discard them on its first launch.
 //
 // Costs one `slangc -version` per process, which is why it is a `OnceLock`.
 fn verify_toolchain() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        let Some(dir) = cache_dir() else {
-            return;
-        };
         let current = concinnity_slang::compiler_id();
-        let stamp = dir.join(TOOLCHAIN_STAMP);
-        if std::fs::read_to_string(&stamp).is_ok_and(|found| found == current) {
-            return;
-        }
-        discard_entries(&dir);
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let _ = std::fs::write(&stamp, current);
+        if crate::runtime_cache::verify_toolchain(current) {
+            tracing::info!("shader cache: {current} did not write it, discarding entries");
         }
     });
 }
 
-// Drop every artifact in `dir`, leaving subdirectories (the slang work dir) be.
-fn discard_entries(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if entry.metadata().is_ok_and(|meta| meta.is_file()) {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-}
-
+// The segment this process writes, then the read-only one a bundle ships. Both
+// are in memory by the time a second lookup arrives, so the tiering costs no
+// I/O per shader. They only diverge for a bundle: a dev checkout ships no
+// artifacts, and a read-only install cannot write beside the ones it has.
+//
+// A zero-length artifact is never a legitimate compile result, so a hand-edited
+// or truncated entry reads as a miss and recompiles rather than failing
+// pipeline creation with an empty bytecode blob.
 fn load(digest: &str) -> Option<Vec<u8>> {
-    dirs_to_read(
-        cache_dir(),
-        concinnity_host::store::paths::bundled_shader_cache_dir(),
-    )
-    .iter()
-    .find_map(|dir| load_in(dir, digest))
-}
-
-// Directories to search, in order: the writable dir this process stores into,
-// then the read-only tier a bundle ships. Split from `load` so the de-duplication
-// is unit-testable: the two resolve to the same path unless a read-only install
-// redirected writable state, and searching it twice would be wasted syscalls.
-// Empty when no state root is installed: there is nothing to search.
-fn dirs_to_read(writable: Option<PathBuf>, bundled: Option<PathBuf>) -> Vec<PathBuf> {
-    match (writable, bundled) {
-        (Some(w), Some(b)) if w == b => vec![w],
-        (Some(w), Some(b)) => vec![w, b],
-        (Some(d), None) | (None, Some(d)) => vec![d],
-        (None, None) => Vec::new(),
-    }
-}
-
-fn load_in(dir: &Path, digest: &str) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(dir.join(digest)).ok()?;
-    // A zero-length artifact is never a legitimate compile result; treat it as
-    // a miss so a truncated entry recompiles instead of failing pipeline
-    // creation with an empty bytecode blob.
-    (!bytes.is_empty()).then_some(bytes)
+    let usable = |bytes: Vec<u8>| (!bytes.is_empty()).then_some(bytes);
+    crate::runtime_cache::load(KIND, digest)
+        .and_then(usable)
+        .or_else(|| crate::runtime_cache::load_bundled(KIND, digest).and_then(usable))
 }
 
 fn store(digest: &str, bytes: &[u8]) {
-    let Some(dir) = cache_dir() else {
-        return;
-    };
-    store_in(&dir, digest, bytes);
-}
-
-// Write via a process-unique temp file and rename, so a concurrent reader (a
-// second `cn debug` on the same checkout) never observes a partial artifact.
-fn store_in(dir: &Path, digest: &str, bytes: &[u8]) {
-    if std::fs::create_dir_all(dir).is_err() {
-        return;
-    }
-    let tmp = dir.join(format!("{digest}.{}.tmp", std::process::id()));
-    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, dir.join(digest)).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-}
-
-// Delete oldest-first until the directory fits `budget`. Content-addressed
-// entries are interchangeable, so evicting the least recently written one is
-// both safe and a decent proxy for least recently useful.
-fn prune(dir: &Path, budget: u64) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut listing: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
-        .flatten()
-        .filter_map(|e| {
-            let meta = e.metadata().ok()?;
-            // The stamp is not an artifact, and evicting it would make the next
-            // run read the directory as another toolchain's and discard it all.
-            if !meta.is_file() || e.file_name() == TOOLCHAIN_STAMP {
-                return None;
-            }
-            Some((meta.modified().ok()?, meta.len(), e.path()))
-        })
-        .collect();
-    for path in evictions(&mut listing, budget) {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-// Oldest entries to drop so the total fits `budget`. Split from the filesystem
-// walk so the policy is unit-testable.
-fn evictions(
-    listing: &mut [(std::time::SystemTime, u64, PathBuf)],
-    budget: u64,
-) -> Vec<std::path::PathBuf> {
-    let mut total: u64 = listing.iter().map(|(_, len, _)| len).sum();
-    if total <= budget {
-        return Vec::new();
-    }
-    listing.sort_by_key(|(modified, _, _)| *modified);
-    let mut doomed = Vec::new();
-    for (_, len, path) in listing.iter() {
-        if total <= budget {
-            break;
-        }
-        total -= len;
-        doomed.push(path.clone());
-    }
-    doomed
+    crate::runtime_cache::store(KIND, digest, bytes);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, SystemTime};
 
     fn key<'a>(source: &'a str, entry: &'a str, target: &'a str, options: u64) -> Key<'a> {
         Key {
@@ -380,177 +265,50 @@ mod tests {
         );
     }
 
+    // Under `cargo test` nothing reaches the state dir, in either direction,
+    // and that covers the bundled tier too.
     #[test]
-    fn store_then_load_round_trips_through_a_directory() {
-        let dir = std::env::temp_dir().join(format!("cn_shader_cache_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        store_in(&dir, "deadbeef", &[1, 2, 3, 4]);
-        assert_eq!(
-            std::fs::read(dir.join("deadbeef")).ok(),
-            Some(vec![1, 2, 3, 4])
-        );
-        // Temp files must not survive a successful store.
-        let leftovers = std::fs::read_dir(&dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.path().extension().is_some_and(|x| x == "tmp"))
-            .count();
-        assert_eq!(leftovers, 0);
-        std::fs::remove_dir_all(&dir).unwrap();
+    fn the_cache_is_off_under_test() {
+        assert!(!enabled());
+        assert_eq!(load("deadbeef"), None);
     }
 
-    // A toolchain change drops the entries but not the slang work directory, so
-    // a compile already writing into it is not pulled out from under itself.
-    #[test]
-    fn discarding_entries_spares_subdirectories() {
-        let tmp = std::env::temp_dir().join(format!("cn_sc_discard_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        store_in(&tmp, "cafe", &[1, 2]);
-        store_in(&tmp, "f00d", &[3, 4]);
-        let work = tmp.join("slang-work");
-        std::fs::create_dir_all(&work).unwrap();
-        std::fs::write(work.join("in-flight.slang"), "x").unwrap();
-
-        discard_entries(&tmp);
-
-        assert!(load_in(&tmp, "cafe").is_none());
-        assert!(load_in(&tmp, "f00d").is_none());
-        assert!(work.join("in-flight.slang").exists());
-        std::fs::remove_dir_all(&tmp).unwrap();
-    }
-
-    // Evicting the stamp would make the next run read the directory as another
-    // toolchain's and throw away everything the eviction just made room for.
-    #[test]
-    fn pruning_never_evicts_the_toolchain_stamp() {
-        let tmp = std::env::temp_dir().join(format!("cn_sc_stamp_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        // Oldest file in the directory, so an LRU walk would reach it first.
-        std::fs::write(tmp.join(TOOLCHAIN_STAMP), "slang 2026.1").unwrap();
-        store_in(&tmp, "cafe", &[0u8; 512]);
-
-        prune(&tmp, 16);
-
-        assert!(tmp.join(TOOLCHAIN_STAMP).exists());
-        assert!(load_in(&tmp, "cafe").is_none(), "artifact should evict");
-        std::fs::remove_dir_all(&tmp).unwrap();
-    }
-
-    #[test]
-    fn a_shared_path_is_searched_once() {
-        let p = PathBuf::from("/state/shader-cache");
-        assert_eq!(dirs_to_read(Some(p.clone()), Some(p.clone())), vec![p]);
-    }
-
-    #[test]
-    fn a_read_only_install_searches_writable_then_bundled() {
-        let writable = PathBuf::from("/user/appdata/shader-cache");
-        let bundled = PathBuf::from("/program files/game/shader-cache");
-        assert_eq!(
-            dirs_to_read(Some(writable.clone()), Some(bundled.clone())),
-            vec![writable, bundled]
-        );
-    }
-
-    // With no state root installed there is nothing to search, so every lookup
-    // misses and every compile is simply not persisted.
-    #[test]
-    fn no_state_root_searches_nothing() {
-        assert!(dirs_to_read(None, None).is_empty());
-    }
-
-    // A bundle ships its artifacts read-only; a player's first launch must find
-    // them there even though nothing has been written to the writable dir yet.
-    #[test]
-    fn an_artifact_is_found_in_the_bundled_tier() {
-        let tmp = std::env::temp_dir().join(format!("cn_sc_tiers_{}", std::process::id()));
-        let writable = tmp.join("writable");
-        let bundled = tmp.join("bundled");
-        let _ = std::fs::remove_dir_all(&tmp);
-        store_in(&bundled, "cafe", &[9, 9]);
-
-        let dirs = dirs_to_read(Some(writable.clone()), Some(bundled.clone()));
-        assert_eq!(
-            dirs.iter().find_map(|d| load_in(d, "cafe")),
-            Some(vec![9, 9])
-        );
-        // The writable tier wins when both hold the key, so a locally recompiled
-        // artifact is never shadowed by a stale bundled one.
-        store_in(&writable, "cafe", &[1, 1]);
-        assert_eq!(
-            dirs.iter().find_map(|d| load_in(d, "cafe")),
-            Some(vec![1, 1])
-        );
-        std::fs::remove_dir_all(&tmp).unwrap();
-    }
-
-    #[test]
-    fn a_truncated_artifact_reads_as_a_miss() {
-        let tmp = std::env::temp_dir().join(format!("cn_sc_trunc_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        store_in(&tmp, "empty", &[]);
-        assert_eq!(load_in(&tmp, "empty"), None);
-        std::fs::remove_dir_all(&tmp).unwrap();
-    }
-
-    fn entry(secs: u64, len: u64, name: &str) -> (SystemTime, u64, PathBuf) {
-        (
-            SystemTime::UNIX_EPOCH + Duration::from_secs(secs),
-            len,
-            PathBuf::from(name),
-        )
-    }
-
-    #[test]
-    fn nothing_is_evicted_under_budget() {
-        let mut listing = [entry(1, 10, "a"), entry(2, 10, "b")];
-        assert!(evictions(&mut listing, 100).is_empty());
-    }
-
-    #[test]
-    fn eviction_drops_oldest_first_until_it_fits() {
-        let mut listing = [
-            entry(3, 40, "newest"),
-            entry(1, 40, "oldest"),
-            entry(2, 40, "middle"),
-        ];
-        let doomed = evictions(&mut listing, 80);
-        assert_eq!(doomed, [PathBuf::from("oldest")]);
-    }
-
-    #[test]
-    fn eviction_can_clear_everything_for_a_zero_budget() {
-        let mut listing = [entry(1, 40, "a"), entry(2, 40, "b")];
-        assert_eq!(evictions(&mut listing, 0).len(), 2);
-    }
-
+    // The segment `cn export` ships: warmed in memory here, written by the
+    // precompile once, and read back the way a player's first launch reads it.
     #[cfg(any(backend_dx, backend_vk))]
     #[test]
     fn ensure_in_compiles_once_then_finds_the_artifact_present() {
         let dir = std::env::temp_dir().join(format!("cn_sc_ensure_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        let path = concinnity_host::store::paths::runtime_cache_in(&dir);
+        let mut bundle = Segment::read_from(&path);
         let k = key("ensure src", "main", "ps_5_1", 3);
 
-        let first = ensure_in(&dir, &k, || Ok(vec![7, 7, 7])).unwrap();
+        let first = ensure_in(&mut bundle, &k, || Ok(vec![7, 7, 7])).unwrap();
         assert_eq!(first, Ensured::Compiled);
-        assert_eq!(load_in(&dir, &k.digest()), Some(vec![7, 7, 7]));
 
-        // The second request must be served from `dir` without recompiling.
-        let second = ensure_in(&dir, &k, || panic!("must not recompile")).unwrap();
+        // The second request must be served from the segment without
+        // recompiling, and without having touched the filesystem yet.
+        let second = ensure_in(&mut bundle, &k, || panic!("must not recompile")).unwrap();
         assert_eq!(second, Ensured::Present);
+        assert!(!path.exists(), "warming is memory until the caller writes");
+
+        assert!(bundle.write_to(&path, 1 << 20));
+        let mut shipped = Segment::read_from(&path);
+        assert_eq!(shipped.get(KIND, &k.digest()), Some(&[7, 7, 7][..]));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(any(backend_dx, backend_vk))]
     #[test]
     fn ensure_in_propagates_a_compile_error_and_stores_nothing() {
-        let dir = std::env::temp_dir().join(format!("cn_sc_ensure_err_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let mut bundle = Segment::read_from(std::path::Path::new("/nonexistent/cache/0"));
         let k = key("bad src", "main", "ps_5_1", 0);
-        assert!(ensure_in(&dir, &k, || Err("boom".to_string())).is_err());
-        assert!(ensure_in(&dir, &k, || Ok(Vec::new())).is_err(), "empty");
-        assert_eq!(load_in(&dir, &k.digest()), None);
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(ensure_in(&mut bundle, &k, || Err("boom".to_string())).is_err());
+        assert!(
+            ensure_in(&mut bundle, &k, || Ok(Vec::new())).is_err(),
+            "empty"
+        );
+        assert_eq!(bundle.get(KIND, &k.digest()), None);
     }
 }

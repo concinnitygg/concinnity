@@ -1089,7 +1089,7 @@ impl VkContext {
         //  IBL resources (always created so descriptor bindings 4/5 are valid)
         let cube_sampler = create_sampler_cube_linear(&device)?;
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::build::environment_map::deserialise(bytes)
+            let view = crate::bake::environment_map::deserialise(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
                 &GpuUploadContext {
@@ -1131,7 +1131,7 @@ impl VkContext {
         // 2x2x2 identity LUT so the composite pass always binds a valid 3D
         // texture. With the identity LUT the grade is a no-op at any strength.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::build::color_lut::deserialise(bytes)
+            let (size, data) = crate::bake::color_lut::deserialise(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
             upload_color_lut(
                 &GpuUploadContext {
@@ -3004,6 +3004,16 @@ impl VkContext {
             (None, None, None, Vec::new(), Vec::new())
         };
 
+        // The reflection-probe convolution kernels, under the same gate the bake
+        // itself needs: a probe capture renders through the bindless GPU cull, so a
+        // world without the cull pipeline never bakes one and never needs them.
+        let probe_prefilter = match cull_pipeline.is_some() {
+            true => Some(super::probe_prefilter::ProbePrefilterPipelines::new(
+                &device, hot_reload,
+            )?),
+            false => None,
+        };
+
         // Two-pass Hi-Z occlusion resources. Built only when the world
         // requested `occlusion_two_pass` AND the bindless cull path is active:
         // the phase-2 cull pipeline (`main_phase2`, same layout as phase 1), a
@@ -4194,7 +4204,8 @@ impl VkContext {
                 maps: Vec::new(),
                 bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
                 rendering: None,
-                converting: None,
+                prefiltering: None,
+                prefilter: probe_prefilter,
             },
             stream: super::context::StreamState {
                 pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue::new(frames),
@@ -4233,12 +4244,14 @@ impl VkContext {
             me.alloc.stats(),
             me.alloc.max_allocations(),
         );
-        crate::shader_cache::report_init_and_prune();
-        // Persist the pipeline cache now that every init-built pipeline has
-        // populated it; a crash mid-session then still leaves the next launch
-        // warm.
+        crate::shader_cache::report_init();
+        // Serialize the pipeline cache now that every init-built pipeline has
+        // populated it, then write the segment holding it and every shader
+        // artifact this init compiled; a crash mid-session then still leaves
+        // the next launch warm.
         super::pipeline_cache::serialize(&me.device);
         crate::pipeline_cache::report_init(super::pipeline_cache::disk_state());
+        crate::runtime_cache::checkpoint();
         Ok(me)
     }
 

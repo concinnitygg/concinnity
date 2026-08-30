@@ -3,7 +3,7 @@
 //! format are built from.
 //!
 //! All authoring metadata (reference fields, args schema, validators) lives in
-//! the build-side registry in concinnity-world, derived from the
+//! the build-side registry in concinnity-cook, derived from the
 //! `for_each_component!` metadata blocks in [`crate::ecs::registry`].
 
 use crate::ecs::asset_id::AssetId;
@@ -58,7 +58,7 @@ pub enum AssetPayload {
 /// only: a component loads from its baked blob bytes and receives its injected
 /// identity/payload hooks. All authoring metadata (origin, payload kind,
 /// reference fields, args schema, validators) lives in the build-side registry
-/// (concinnity-world), derived from the `for_each_component!` metadata blocks.
+/// (concinnity-cook), derived from the `for_each_component!` metadata blocks.
 pub trait Component: Sized + Send + core::fmt::Debug + 'static {
     /// The registry name a world authors this component under.
     const NAME: &'static str;
@@ -94,7 +94,7 @@ mod tests {
     // compile if an entry moves between the registry's groups, and the storage
     // half is generated from the same grouping, so a type reaching the wrong
     // marker also loses (or gains) its column. The authoring-only group's
-    // marker lives with its list in concinnity-world.
+    // marker lives with its list in concinnity-cook.
     #[test]
     fn origin_markers_follow_the_registry() {
         runtime::<TextLabel>();

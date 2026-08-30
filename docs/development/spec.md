@@ -86,48 +86,10 @@ file is an error, not a panic or an out-of-bounds read.
 
 The workspace is split so that each crate's dependencies match its job. The two
 properties that matter most: `no_std` crates carry the runtime vocabulary and
-can be consumed by a minimal client, and the cook-only crates
-(`cook`, `world`, `shader`, `font`, `docs`) are never linked into a shipped
-player.
+can be consumed by a minimal client, and the cook-only crates are never linked
+into a shipped player.
 
-No crate below builds a binary. The root package is the `concinnity` facade over
-them and owns both binary targets; the CLI's sits behind an `editor` feature, so a
-consumer of the facade never pulls the command tree into its graph.
-
-| Crate                  | Kind      | `no_std` | Role                                                      |
-| ---------------------- | --------- | :------: | --------------------------------------------------------- |
-| `concinnity-cli`       | lib       |          | The `concinnity` developer CLI's command tree.            |
-| `concinnity-editor`    | lib       |          | In-engine world editor, live preview, hot reload.         |
-| `concinnity-cook`      | lib       |          | Asset compile pipeline: authored world to blob, and docs. |
-| `concinnity-world`     | lib       |          | Authored world model, schema, validation, spec builders.  |
-| `concinnity-engine`    | lib       |          | Runtime engine: schedule, systems, audio, app loop.       |
-| `concinnity-device`    | lib       |          | GPU backends behind a device facade.                      |
-| `concinnity-shader`    | lib       |          | Cook-time shader compilers for the target backend.        |
-| `concinnity-render`    | lib       |          | GPU-free render preparation and the backend trait.        |
-| `concinnity-host`      | lib       |          | Host services: on-disk state tree, worker pool, interner. |
-| `concinnity-core`      | lib       |   yes    | Runtime vocabulary and the CPU compute over it: GPU layouts, ECS storage and components, the world with its schedule and headless driver, the simulation drivers over that world, blob format, payload codecs, geometry, kernels. |
-| `concinnity-asset`     | lib       |   yes    | User-facing asset schema (data only).                     |
-| `concinnity-memory`    | lib       |   yes    | Tracking allocator, tagged budgets, arenas, pools.        |
-| `concinnity-physics`   | lib       |   yes    | Rigid-body simulation: bodies, contacts, solver, queries. |
-| `concinnity-toolchain` | build-dep |          | Build-script support: cfgs, SDKs, source hashing, docs.   |
-
-- `concinnity-asset` holds **data only**. No behaviour, one dependency (serde).
-- `concinnity-core` may not name a path, a file, or an I/O type.
-- The `World` is `concinnity-core`'s, data half and running half both: the
-  components, resources, events, payload store, profile and frame scratch, plus
-  the systems built over them, their schedule, `start` and `step`. What stays in
-  `concinnity-engine` is the system table itself, whose gates name the engine's
-  own system types, and it is passed to `start`. Building and running world
-  content therefore needs no operating system, which is what the facade's
-  `--no-default-features` tier is.
-- `concinnity_core::App` is the headless driver over that world: a loop on
-  virtual fixed-timestep time, with no window, no pacing, and no wall clock.
-  A host that has those drives the world itself, which is what
-  `concinnity-engine`'s own `App` does.
-- `concinnity_core::blob` performs no I/O and holds no residency policy.
-- `concinnity-cook` never appears in the runtime's dependency closure.
-- The cook itself carries no backend cfgs, so it runs on hosts with no GPU.
-- `concinnity-device` depends on `concinnity-render`, never the reverse.
+Crates are defined under [crates/](../../crates).
 
 ### 2.2 Binaries
 
@@ -313,7 +275,7 @@ except through the explicit runtime spawn-by-name path.
 
 ### 4.4 Typed authoring
 
-`concinnity-world`'s `spec` module provides `AssetSpec` builders: a
+`concinnity-cook`'s `authoring::spec` module provides `AssetSpec` builders: a
 struct-first, `no_std` vocabulary that produces the same world entries as
 hand-written JSON. It exists so hosts and tools can construct worlds without
 string-building JSON.
@@ -507,6 +469,13 @@ The header is fixed at 16 bytes, so the payload section always begins at
 locator's offset into an absolute file offset without loading the image, which
 is what the disk-backed streaming source relies on.
 
+The magic belongs to the metadata type rather than to the encoder, through the
+`BlobKind` trait: `BlobMeta` is the cooked world (`CNB\0`), `CacheMeta` a
+segment of regenerable cache (`CNC\0`, section 7.2). Encoding and parsing are
+generic over that trait, so a container of one kind can never be read as
+another, and each kind decides what the header's second word means -- a schema
+hash for the world, an index layout version for a cache segment.
+
 The schema hash is derived at compile time from the record schema itself. On
 load, an image whose hash does not match the running binary's is rejected with a
 distinct error rather than being decoded into misinterpreted bytes. Because a
@@ -678,15 +647,14 @@ Everything the engine writes for a project lives under one state directory.
 ```
 <state root>/
 ├── data/            compiled blobs (0, 1, 2, ...)          read-only at runtime
-├── cache/           cook payload cache                     cook only
-├── thumbnails/      baked asset thumbnails + index.json    cook only
+├── cache/           regenerable, deletable at any time     see 7.2
+│   ├── 0            runtime cache segment                  runtime-writable
+│   └── 1            build cache segment                    cook only
 ├── assets/          fetched source assets                  cook only
 ├── worlds/          named world files                      authored
 ├── saves/           runtime save files                     runtime-writable
 ├── preview-saves/   sandboxed saves for preview sessions   runtime-writable
 ├── crashes/         crash reports and minidumps            runtime-writable
-├── shader-cache/    shader binaries compiled post-cook     runtime-writable
-├── pipeline-cache/  driver pipeline blobs, keyed per GPU   runtime-writable
 └── settings         persisted settings (CBOR)              runtime-writable
 ```
 
@@ -719,11 +687,11 @@ absolute path verbatim, a relative one against the content root, empty for
 
 **Read-only install.** An application installed where it cannot write beside its
 data (Program Files) installs a separate writable root, so only `saves/`,
-`settings`, `crashes/`, and the two shader caches relocate to a per-user
-directory while the data stays beside the executable. The runtime player probes
-writability at startup and does this only when needed, so the portable
-single-folder layout is preserved whenever it works; an authored `home` takes
-precedence over the probe.
+`settings`, `crashes/`, and the runtime cache segment relocate to a per-user
+directory while the data stays beside the executable. The runtime
+player probes writability at startup and does this only when needed, so the
+portable single-folder layout is preserved whenever it works; an authored `home`
+takes precedence over the probe.
 
 Per-user base directories: `%LOCALAPPDATA%` on Windows (falling back to
 `%APPDATA%`), `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or
@@ -731,16 +699,60 @@ Per-user base directories: `%LOCALAPPDATA%` on Windows (falling back to
 
 ### 7.2 Cache separation
 
-Three cache-like directories are deliberately separate:
+`cache/` holds what can be regenerated. A user may delete it at any time and
+whatever is missing is recomputed, which is the contract every writer in it
+keeps.
 
-- `cache/` holds cooked asset payloads. A deterministic product of the cook.
-- `shader-cache/` holds shader binaries the renderer compiled after the cook
-  (backend IR: DXBC, SPIR-V). Portable across machines with the same backend, so
-  a bundle can ship a warmed copy.
-- `pipeline-cache/` holds driver pipeline blobs (a serialised `VkPipelineCache`,
-  a D3D12 pipeline library). Machine code tied to one GPU and driver, so these
-  never ship and live as a sibling of `shader-cache/` rather than inside it —
-  the shader cache prunes by age and would otherwise reclaim them.
+It is segmented by writer rather than by content, so two processes never write
+one file even when a build runs against a live editor:
+
+- `cache/0` is the runtime segment, a container of its own kind (magic `CNC\0`)
+  written by the running application. Its index keys each entry by producer and
+  by the key that entry is valid for, so the driver pipeline blobs of two
+  adapters share a file with the compiled shader binaries without any of them
+  sharing bytes. A pipeline blob is machine code tied to one GPU and driver: it
+  never ships, and one built on another adapter is a miss rather than a load the
+  driver has to reject. A shader artifact keys on a digest of everything its
+  compile was a function of, and the segment's meta names the host shader
+  toolchain that produced them, so a compiler upgrade discards them.
+- `cache/1` is the build segment, the same container written by a cook: the
+  compiled asset payloads and the entry lists a scene import expands to, keyed
+  by a digest of the args and source files each was produced from. Its header
+  carries the identity of the cook binary that wrote it -- the modification
+  time and length of that executable -- so a segment an older binary wrote is
+  dropped whole rather than replayed against code that has moved. The baked
+  asset thumbnails ride it too, keyed by a digest of what each depicts, beside
+  one entry holding the whole set's asset-name-to-key map. They are the one
+  thing in either segment a different process reads than writes: cook renders
+  them and the editor shows them, so the editor stamps its loaded set on that
+  map's digest rather than on the file, which every build moves.
+
+Each segment is read once, at the first lookup, and written when the work
+producing its entries finishes: a renderer init and the backend's teardown for
+`cache/0`, the end of an expansion, the end of a compile, and the thumbnail
+bake that closes a disk build for `cache/1`.
+Nothing writes either per entry, so an init that compiles fifty shaders costs
+one write rather than fifty, and a crash before that write costs a recompute.
+
+The two differ in how much they hold resident. The runtime segment is bounded by
+a budget and keeps its entries in memory; a build cache has no such ceiling, so
+`cache/1` keeps only its index and seeks to the one entry a lookup wants, the
+way `data/` addresses a payload. Its write streams the entries it is carrying
+forward straight out of the file it replaces.
+
+`cn export` warms a `cache/0` of its own into the bundle, holding the shader
+artifacts a first launch would otherwise compile; those are backend IR (DXBC,
+SPIR-V) and so portable across machines with the same backend, which is what
+lets a bundle ship them. The player reads it like any other cache, so deleting
+it costs one slow launch and nothing more. A lookup therefore has two tiers: the
+segment under the writable root, then the one under the content root. They are
+one file in the portable layout -- the writable tier reads it, serves the
+shipped entries, and writes them back with whatever the launch added -- and
+diverge only for an install that cannot write beside its data, which is the case
+the second tier exists for. Both are read once, so neither tier costs I/O per
+lookup. The exported segment carries no toolchain stamp: a shipped artifact is a
+function of its source, not of the slangc that produced it, so a player whose
+own compiler differs keeps what the bundle shipped.
 
 ---
 
@@ -1575,7 +1587,7 @@ because reading it is a syscall. Sustained pressure narrows the budget.
 
 ### 12.1 The allocation layer
 
-Five independent facilities live in `concinnity-memory`:
+Five independent facilities live in `concinnity_core::memory`:
 
 | Facility    | Purpose                                                                                                            |
 | ----------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -1886,6 +1898,14 @@ clamping quality under the world's authored look, then saving once. `Auto`
 re-resolves each launch; a named tier is a fixed ceiling; `Custom` imposes no
 ceiling.
 
+`GraphicsConfig` and `PostProcessConfig` default to the look capable hardware
+runs -- temporal anti-aliasing, ambient occlusion, reflections, a screen-space
+indirect bounce, 4096-texel every-frame shadows, 16x anisotropy -- so a world
+that authors none of them is settled entirely by the preset: every tier below
+the top is reached by clamping down, never by opting in. A world that wants a
+cheaper look regardless of hardware turns the effects off itself, which a
+ceiling can never undo.
+
 ### 16.2 Saves
 
 Runtime save files live under the writable state root as CBOR, for the same
@@ -1924,7 +1944,7 @@ The player is copied, never compiled, so a user needs no compiler toolchain and
 no engine source. A bundle therefore targets exactly the platform this CLI was
 built for.
 
-Neither the cook cache nor the thumbnails ship.
+The cook cache does not ship, and the baked thumbnails inside it do not either.
 
 ### 17.2 The backend stamp
 

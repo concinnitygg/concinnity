@@ -14,8 +14,8 @@
 
 use crate::ecs::World;
 use crate::gfx::lighting_preview;
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::ComponentAsset;
-use concinnity_world::registry::RegisteredType;
 use serde_json::{Map, Value};
 
 use super::{Apply, RenderConfig, component};

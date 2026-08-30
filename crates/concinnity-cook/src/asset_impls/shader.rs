@@ -1,9 +1,9 @@
 // asset_impls/shader.rs
 
 use crate::asset::BuildCtx;
+use crate::authoring::source_args::resolve_source_from_args;
 use concinnity_core::components::shader::platform_key;
 use concinnity_core::components::{Shader, ShaderKind, ShaderPayload};
-use concinnity_world::source_args::resolve_source_from_args;
 
 // Resolve a raw per-platform source string to the on-disk path the build will
 // read. A bare filename is looked up recursively under the build's asset search
@@ -92,13 +92,13 @@ fn compile_stage(
 
     let source_path = resolve_source_path_for(&raw, ctx);
 
-    let compile_args = crate::shader::ShaderCompileArgs {
+    let compile_args = crate::compile::shader::ShaderCompileArgs {
         source_path,
         asset_name: ctx.name.to_string(),
         kind: kind.compile_kind().to_string(),
         required_entry: required_entry(kind, ctx),
     };
-    crate::shader::compile_shader(compile_args)
+    crate::compile::shader::compile_shader(compile_args)
         .map(Some)
         .map_err(|e| std::io::Error::other(format!("Asset '{}' compile error: {}", ctx.name, e)))
 }

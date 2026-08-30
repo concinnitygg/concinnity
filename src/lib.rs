@@ -34,6 +34,14 @@
 //! only from those runs on the default feature set alone -- no authoring step
 //! and no file on disk.
 //!
+//! What is not a component but can be computed -- generated geometry,
+//! image-based lighting, the built-in font -- is baked by the [`bake`](mod@bake)
+//! module's functions and handed to the world's data-entry methods
+//! ([`World::add_mesh`], [`World::add_material`],
+//! [`World::add_environment_map`]), which return the handle a component
+//! references the result by. Every build of the crate carries `bake`; only an
+//! asset that has to be read from a file needs the `cook` importers.
+//!
 //! Adding a [`GraphicsConfig`](components::GraphicsConfig) is what opens a
 //! window. A world without one still runs, with everything but the rendering,
 //! which is how a test or a simulation-only tool drives one:
@@ -88,16 +96,25 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+// The world vocabulary is heap-backed on every tier, so the facade names
+// `alloc` rather than `std` wherever it holds one.
+extern crate alloc;
+
 // The test harness is a std program whichever tier is built, so the `no_std`
 // build still gets one.
 #[cfg(all(test, not(feature = "std")))]
 extern crate std;
 
 mod app;
+pub mod bake;
 mod world;
 
 pub use app::App;
 pub use world::World;
+
+// The dense per-kind handles the world's data-entry methods return and a
+// component's reference fields hold.
+pub use concinnity_core::ecs::{EnvironmentMapHandle, MaterialHandle, MeshHandle};
 
 /// The runtime component vocabulary (`Camera3D`, `Room`, `DirectionalLight`,
 /// `Transform`, ...): every type a [`World`] holds, each addable with
@@ -119,8 +136,12 @@ pub mod components {
 #[cfg(feature = "cook")]
 pub mod cook;
 
+#[cfg(all(test, feature = "cook"))]
+mod bake_parity_tests;
 #[cfg(test)]
 mod namespaces;
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod tests {

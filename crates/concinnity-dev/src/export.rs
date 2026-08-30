@@ -17,8 +17,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_cook::build_from_path;
-use concinnity_cook::world::{WorldJsonlAsset, prepare_world};
+use concinnity_cook::build_only::prepare_world;
 
 use crate::command::resolve_world_path;
 
@@ -35,7 +36,8 @@ struct AppMeta {
 }
 
 /// Package a built world into a distributable bundle: the player binary, the
-/// blob, and the shader cache, written to `out` as a zip or a directory.
+/// blob, and a warmed runtime cache segment, written to `out` as a zip or a
+/// directory.
 pub fn export(
     json_path: Option<&str>,
     name: Option<&str>,
@@ -128,9 +130,9 @@ fn export_portable(
     copy_runtime_sidecars(runtime, runtime_platform, &bundle_dir)?;
 
     let blobs = copy_blobs(data_dir, &bundle_dir.join("data"))?;
-    // Before archiving, so the precompiled shader cache is inside the zip. The
-    // player resolves its state root to the bundle folder, so `shader-cache/`
-    // sits beside the exe.
+    // Before archiving, so the warmed cache segment is inside the zip. The
+    // player resolves its state root to the bundle folder, so `cache/0` sits
+    // beside the exe.
     precompile_shaders(&bundle_dir);
     report_export(&meta.display_name, &bundle_dir, blobs);
 
@@ -203,14 +205,15 @@ fn export_macos(
     Ok(())
 }
 
-// Compile the engine's built-in shaders into the bundle's `shader-cache/`, so
-// a player's first launch reuses every artifact instead of compiling (measured
-// ~1 s on a DirectX release build). Compilation is pure CPU, so this runs
-// in-process with no GPU device or window: the compile set is enumerated from
-// the same declarations renderer init compiles through, and the pool-sized
-// Vulkan shaders are compiled for the world just built (its texture count).
-// The artifacts are backend IR, not machine code, so ones compiled here are
-// valid on any machine.
+// Compile the engine's built-in shaders into the bundle's `cache/0`, so a
+// player's first launch reuses every artifact instead of compiling (measured
+// ~1 s on a DirectX release build). The player reads that segment like any
+// other cache, so deleting it costs one slow launch and nothing more.
+// Compilation is pure CPU, so this runs in-process with no GPU device or
+// window: the compile set is enumerated from the same declarations renderer
+// init compiles through, and the pool-sized Vulkan shaders are compiled for the
+// world just built (its texture count). The artifacts are backend IR, not
+// machine code, so ones compiled here are valid on any machine.
 //
 // Best-effort by design: a failed program is reported and simply compiles at
 // the bundle's first launch, so failures warn rather than failing the export.
@@ -218,14 +221,14 @@ fn export_macos(
 fn precompile_shaders(state_dir: &Path) {
     // The suite asserts bundle layout, not shader output: skip so no test runs
     // the shader compiler, reads the world data anchor, or writes into the
-    // developer's shader cache. Mirrors `shader_cache`'s own test opt-out,
+    // developer's cache segment. Mirrors `shader_cache`'s own test opt-out,
     // which does not apply here because concinnity-device is a dependency of
     // this test binary rather than the crate under test.
     if cfg!(test) {
         return;
     }
     println!("Compiling built-in shaders...");
-    let report = concinnity_engine::precompile_builtin_shaders(&state_dir.join("shader-cache"));
+    let report = concinnity_engine::precompile_builtin_shaders(state_dir);
     println!(
         "  cached {} shader binaries ({} compiled, {} reused)",
         report.cached(),

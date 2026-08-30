@@ -49,6 +49,23 @@ impl GpuImage {
         self.aux_views.push(view);
     }
 
+    // Wrap a pooled image with a primary view and a set of auxiliary views
+    // already attached to its lease. The reflection-probe convolution builds its
+    // cube and every view it dispatches through before there is a `GpuImage` to
+    // put them in, and hands the finished set over here.
+    pub(super) fn from_pooled_with_aux(
+        pooled: PooledImage,
+        view: vk::ImageView,
+        aux_views: Vec<vk::ImageView>,
+    ) -> Self {
+        Self {
+            image: pooled.image(),
+            view,
+            aux_views,
+            pooled,
+        }
+    }
+
     // Wrap handles owned elsewhere (e.g. the transient pool), so a mip chain
     // can index owned and borrowed images uniformly. Dropping it releases
     // nothing.
@@ -505,8 +522,8 @@ pub(super) struct TextureLevel<'a> {
 
 // Vulkan equivalent of a compiled texture payload format. The BC formats need
 // the `textureCompressionBC` device feature, enabled in `vulkan::device`.
-fn vk_texture_format(format: concinnity_core::build::texture::TextureFormat) -> vk::Format {
-    use concinnity_core::build::texture::TextureFormat;
+fn vk_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> vk::Format {
+    use concinnity_core::bake::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
         TextureFormat::Bc1 => vk::Format::BC1_RGBA_UNORM_BLOCK,
@@ -521,9 +538,9 @@ fn vk_texture_format(format: concinnity_core::build::texture::TextureFormat) -> 
 // their container mip chain verbatim.
 pub(super) fn upload_texture_image_deferred(
     ctx: &GpuUploadContext,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_core::bake::texture::TextureImage,
 ) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
-    use concinnity_core::build::texture::TextureFormat;
+    use concinnity_core::bake::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips
@@ -546,7 +563,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     ctx: &GpuUploadContext,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_core::bake::texture::TextureImage,
 ) -> crate::gfx::error::RenderResult<GpuImage> {
     let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
     finish_upload(ctx, in_flight)?;
@@ -1544,25 +1561,6 @@ pub(super) fn upload_environment_map(
         prefilter,
         prefilter_mip_count: mip_bytes.len() as u32,
     })
-}
-
-// Upload one baked reflection-probe's prefiltered radiance cube. A probe is
-// sampled only by the specular reflection term (never as a skybox + no diffuse
-// irradiance), so just the multi-mip prefilter cube is uploaded, not the
-// irradiance cube `upload_environment_map` also builds. `mip_bytes[m]` holds
-// `6 * (face >> m)² * 16` bytes in face-major order (the serialised `ENVM`
-// prefilter chain from `reflection_probe::build_probe_payload`). The returned
-// `GpuImage` carries a `CUBE` view spanning every mip, sampled through the
-// shared `cube_sampler`. Mirrors `directx::texture::upload_probe_prefilter_cube`.
-pub(super) fn upload_probe_prefilter_cube(
-    ctx: &GpuUploadContext,
-    prefilter_face: u32,
-    mip_bytes: &[&[u8]],
-) -> Result<GpuImage, String> {
-    if mip_bytes.is_empty() {
-        return Err("probe prefilter upload: mip_bytes must not be empty".into());
-    }
-    create_cube_image(ctx, prefilter_face, mip_bytes).map_err(|e| format!("probe prefilter: {e}"))
 }
 
 // Linear-clamp sampler with full mipmap support, used by the IBL prefilter

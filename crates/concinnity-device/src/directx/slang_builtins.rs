@@ -83,18 +83,21 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<V
         entries: &[program.entry],
         target: program.target(),
     };
-    slang::compile(&job, &crate::shader_cache::slang_work_dir())
+    slang::compile(&job, &crate::compiler_work::dir())
 }
 
-// Compile every declared program into `out_dir`, reusing local cache artifacts
+// Compile every declared program into `bundle`, reusing local cache artifacts
 // where present. Called by the export-time precompile alongside the HLSL table.
-pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompile::Report) {
+pub(crate) fn precompile(
+    bundle: &mut concinnity_host::store::cache::Segment,
+    report: &mut crate::precompile::Report,
+) {
     for program in ALL {
         let source = program.source(false);
         let key = program.cache_key(&source);
         report.record(
             &format!("{} {}", program.entry, program.profile),
-            crate::shader_cache::ensure_in(out_dir, &key, || compile_uncached(program, &source)),
+            crate::shader_cache::ensure_in(bundle, &key, || compile_uncached(program, &source)),
         );
     }
 }

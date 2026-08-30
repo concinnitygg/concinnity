@@ -220,4 +220,38 @@ mod tests {
         let q = Quat::from_euler_deg([10.0, 20.0, 30.0]);
         assert_eq!(Quat::from_xyzw(q.to_xyzw()), q);
     }
+
+    // A default rotation is no rotation, so a body built without one starts
+    // axis-aligned rather than at an arbitrary orientation.
+    #[test]
+    fn a_default_rotation_is_the_identity() {
+        assert_eq!(Quat::default(), Quat::IDENTITY);
+        assert!(close(Quat::default().rotate(Vec3::X), Vec3::X));
+    }
+
+    // A quaternion that has decayed to zero length names no rotation and
+    // cannot be scaled back to one, so it reads as the identity instead of
+    // dividing by zero.
+    #[test]
+    fn normalising_a_zero_length_rotation_yields_the_identity() {
+        let zero = Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.0,
+        };
+        assert_eq!(zero.normalize(), Quat::IDENTITY);
+
+        // An ordinary rotation still comes back unit-length.
+        let scaled = Quat {
+            x: 0.0,
+            y: 6.0,
+            z: 0.0,
+            w: 6.0,
+        }
+        .normalize();
+        let len =
+            scaled.x * scaled.x + scaled.y * scaled.y + scaled.z * scaled.z + scaled.w * scaled.w;
+        assert!((len - 1.0).abs() < 1.0e-5, "{len}");
+    }
 }

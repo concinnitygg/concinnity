@@ -2252,4 +2252,52 @@ mod tests {
         assert_eq!(flags & DrawArgsFlags::CULLABLE, DrawArgsFlags::CULLABLE);
         assert_eq!((flags >> DrawArgsFlags::BUCKET_SHIFT) & 0xFF, 2);
     }
+
+    // One authored quality knob scales both shadow kinds: a spot slice is a
+    // quarter of the directional map, bounded so a very low or very high
+    // setting still allocates a usable array.
+    #[test]
+    fn a_spot_shadow_slice_is_a_bounded_quarter_of_the_directional_map() {
+        assert_eq!(spot_shadow_slice_size(4096), 1024);
+        assert_eq!(spot_shadow_slice_size(2048), 512);
+        assert_eq!(spot_shadow_slice_size(1024), 256);
+        // Clamped at both ends rather than scaling without limit.
+        assert_eq!(spot_shadow_slice_size(64), 256, "floored");
+        assert_eq!(spot_shadow_slice_size(u32::MAX), 1024, "ceilinged");
+    }
+
+    // A degenerate cluster AABB disables culling rather than culling
+    // everything: a non-finite bound cannot be compared against a frustum.
+    #[test]
+    fn a_cluster_is_cullable_only_with_finite_bounds() {
+        let cluster = |min: [f32; 3], max: [f32; 3]| InstancedCluster {
+            vertex_offset: 0,
+            vertex_count: 0,
+            index_offset: 0,
+            index_count: 0,
+            texture_slot: 0,
+            normal_map_slot: 0,
+            material: MaterialUniforms::DEFAULT,
+            cluster_bb_min: min,
+            cluster_bb_max: max,
+            local_bb_min: [-1.0; 3],
+            local_bb_max: [1.0; 3],
+            cull_distance: 0.0,
+            instances: Vec::new(),
+            lod_alternates: Vec::new(),
+        };
+        assert!(cluster([-1.0; 3], [1.0; 3]).cullable());
+        assert!(!cluster([f32::NAN; 3], [1.0; 3]).cullable());
+        assert!(!cluster([-1.0; 3], [f32::INFINITY; 3]).cullable());
+    }
+
+    // With no alternates every distance picks the object's own slice, so a
+    // skinned mesh that declared one LOD renders the same however far it is.
+    #[test]
+    fn a_skinned_object_without_alternates_keeps_its_own_slice() {
+        let obj = crate::test_support::skinned_draw_object();
+        let expected = (obj.index_offset, obj.index_count);
+        assert_eq!(obj.active_lod(0.0), expected);
+        assert_eq!(obj.active_lod(1000.0), expected);
+    }
 }

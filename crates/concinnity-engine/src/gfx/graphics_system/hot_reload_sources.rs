@@ -176,7 +176,7 @@ pub(crate) fn resolve_runtime_source_path(raw: &str) -> String {
 /// One world-loaded Shader stage reload entry. Captures
 /// the stage's kind + the resolved on-disk source path that the build
 /// pipeline read at compile time, so the hot-reload helper can rerun
-/// `concinnity_cook::shader::compile_shader` on the same file and feed the
+/// `concinnity_cook::compile::shader::compile_shader` on the same file and feed the
 /// fresh metallib / SPIR-V / DXBC bytes back to the backend for a pipeline
 /// rebuild. Stages whose source is the embedded GLSL fallback (Vulkan-only,
 /// no on-disk file) have an empty `resolved_path` and are filtered by the

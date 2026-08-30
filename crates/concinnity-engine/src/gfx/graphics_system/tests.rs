@@ -237,7 +237,7 @@ fn quad_mesh_payload() -> Vec<u8> {
 
 // A w x h mid-gray RGBA image in the compiled texture payload format.
 fn texture_payload(w: u32, h: u32) -> Vec<u8> {
-    crate::build::texture::serialise(&crate::build::texture::TextureImage::rgba8(
+    crate::bake::texture::serialise(&crate::bake::texture::TextureImage::rgba8(
         w,
         h,
         vec![0x7Fu8; (w * h * 4) as usize],
@@ -690,7 +690,7 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     let mut world = scene_builder().build();
     let gs = init_graphics(&mut world, hooks);
 
-    // The authored GraphicsConfig defaults (2048 / 80 / 4 / 8) are clamped
+    // The authored GraphicsConfig defaults (4096 / 80 / 4 / 16) are clamped
     // under the Low ceiling; the authored baselines are kept for a later
     // preset up-shift.
     let s = lock(&state);
@@ -699,10 +699,10 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     assert_eq!(init.shadows.distance, 40);
     assert_eq!(init.shadows.cascades, 2);
     assert_eq!(init.anisotropy, 4);
-    assert_eq!(gs.authored_shadow_map_size, 2048);
+    assert_eq!(gs.authored_shadow_map_size, 4096);
     assert_eq!(gs.authored_shadow_distance, 80);
     assert_eq!(gs.authored_shadow_cascades, 4);
-    assert_eq!(gs.authored_anisotropy, 8);
+    assert_eq!(gs.authored_anisotropy, 16);
 }
 
 #[test]
@@ -2057,6 +2057,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
         // Deliberately the opposite of every override above, so a value that
         // survives to the backend can only have come from the store.
         aa_mode: AaMode::Off,
+        ssao: false,
         exposure_ev: -3.0,
         ..Default::default()
     })
@@ -2279,21 +2280,66 @@ fn the_ray_tracing_flags_reach_the_backend() {
     }
 }
 
-// A ceiling only ever reduces: a world that authored nothing is not "upgraded"
-// by a high tier, and the resolved preset is held for the master menu row.
+// A ceiling only ever reduces: a world that turned the expensive effects off is
+// not "upgraded" by a high tier, and the resolved preset is held for the master
+// menu row.
 #[test]
-fn a_high_ceiling_never_enables_what_the_world_did_not_author() {
+fn a_high_ceiling_never_enables_what_the_world_turned_off() {
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Ultra);
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::HighDiscrete));
-    let mut world = post_config_scene(Default::default()).build();
+    let mut world = post_config_scene(crate::components::PostProcessConfig {
+        ssao: false,
+        ssr: false,
+        ray_traced_reflections: false,
+        ..Default::default()
+    })
+    .build();
     let gs = init_graphics(&mut world, hooks);
 
     assert_eq!(gs.quality_preset, QualityPreset::Ultra);
     let live = settings_state(&world);
-    assert!(!live.post_config.ssao, "an unauthored feature stays off");
+    assert!(!live.post_config.ssao, "a feature turned off stays off");
     assert!(!live.post_config.ssr);
     assert!(!live.post_config.ray_traced_reflections);
+}
+
+// The other direction: a world that authors nothing takes the schema defaults,
+// so the top tier runs the whole stack without the world asking for it.
+#[test]
+fn the_top_tier_runs_the_default_stack_for_a_world_that_authors_nothing() {
+    let mut settings = crate::config::Settings::default();
+    settings.graphics.quality_preset = Some(QualityPreset::Ultra);
+    let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::HighDiscrete));
+    let mut world = scene_builder().build();
+    init_graphics(&mut world, hooks);
+
+    let live = settings_state(&world);
+    assert!(live.post_config.ssao);
+    assert!(live.post_config.ssr);
+    assert!(live.post_config.ray_traced_reflections);
+    assert_eq!(live.post_config.aa_mode, crate::components::AaMode::Taa);
+}
+
+// And the tier below it clamps that same default stack down, which is how a
+// world that authors nothing ends up matching its GPU.
+#[test]
+fn a_low_tier_clamps_the_default_stack_off() {
+    let mut settings = crate::config::Settings::default();
+    settings.graphics.quality_preset = Some(QualityPreset::Low);
+    let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
+    let mut world = scene_builder().build();
+    init_graphics(&mut world, hooks);
+
+    let live = settings_state(&world);
+    assert!(!live.post_config.ssao);
+    assert!(!live.post_config.ssr);
+    assert!(!live.post_config.ray_traced_reflections);
+    assert_eq!(
+        live.post_config.indirect_lighting,
+        crate::components::IndirectLighting::Ibl
+    );
+    assert_eq!(live.post_config.aa_mode, crate::components::AaMode::Fxaa);
 }
 
 // Under `Auto` the ceiling re-resolves from the detected tier each launch: a
@@ -2324,8 +2370,8 @@ fn auto_preset_shadow_ceiling_tracks_the_detected_tier() {
     );
     assert_eq!(
         sizes.last().copied(),
-        Some(2048),
-        "the top tier leaves the world's authored 2048 unclamped"
+        Some(4096),
+        "the top tier leaves the world's authored 4096 unclamped"
     );
 }
 

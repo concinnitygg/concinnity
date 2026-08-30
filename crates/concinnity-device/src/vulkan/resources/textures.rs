@@ -248,7 +248,7 @@ impl VkContext {
     pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::build::texture::TextureImage,
+        image: &crate::bake::texture::TextureImage,
     ) -> crate::gfx::error::RenderResult<()> {
         if slot >= self.textures.len() {
             return Err(format!(
@@ -299,7 +299,7 @@ impl VkContext {
 
     // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
     pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        let grey = crate::build::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        let grey = crate::bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         Ok(self.update_texture_slot(slot, &grey)?)
     }
 
@@ -409,7 +409,7 @@ impl VkContext {
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::build::environment_map::deserialise(payload)
+        let view = crate::bake::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(

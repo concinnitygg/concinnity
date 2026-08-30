@@ -13,7 +13,7 @@
 //! expands away, and the authored args schemas that diverge from the component
 //! they bake into -- is not named here. It lives in
 //! [`cook`], and the registry half of it in
-//! `concinnity_world::registry::build_only`.
+//! `concinnity_cook::authoring::registry::build_only`.
 //!
 //! Systems are not components: every system is internal code (see
 //! `World::start`), driven by the presence of the components defined here. The
@@ -45,6 +45,7 @@ mod debug_hud;
 mod decal;
 mod despawn_request;
 mod directional_light;
+mod engine_defaults;
 mod entity_target;
 mod environment_map;
 mod file;
@@ -136,6 +137,7 @@ mod transform;
 
 pub mod cook;
 pub mod stored;
+pub mod validate;
 
 // Serde / default / round-trip coverage for the generated data-only
 // components, gathered here after their per-type modules were removed.
@@ -182,6 +184,7 @@ pub use cubemap_texture::CubemapTexture;
 pub use decal::Decal;
 pub use despawn_request::DespawnRequest;
 pub use directional_light::DirectionalLight;
+pub use engine_defaults::EngineDefaults;
 pub use entity_target::EntityTarget;
 pub use environment_map::EnvironmentMap;
 pub use file::File;

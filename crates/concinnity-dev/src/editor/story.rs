@@ -121,7 +121,7 @@ mod tests {
     // change breaks this test instead of shipping a broken template.
     #[test]
     fn starter_story_parses() {
-        concinnity_cook::world::validate_story_source(STARTER_STORY)
+        concinnity_cook::build_only::validate_story_source(STARTER_STORY)
             .expect("the starter story template parses");
     }
 }

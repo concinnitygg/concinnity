@@ -1,14 +1,15 @@
 // The device's ID3D12PipelineLibrary, persisted across launches.
 //
-// Mirrors `vulkan::pipeline_cache`: one library per adapter, loaded from
-// `pipeline-cache/dx-<vendor>-<device>-<rev>.bin` at init, consulted by every
-// PSO creation through `create_graphics` / `create_compute`, serialized at the
-// end of init and at shutdown. D3D12 gives no content addressing, so each PSO
-// is stored under a name derived from its desc: the stage bytecode plus every
-// fixed-function discriminator, hashed. A shader edit or state change is a
-// different name and simply misses; the driver validates the blob itself and
-// answers a stale one with an adapter/driver-mismatch HRESULT, on which the
-// file is deleted and the launch proceeds cold. Nothing here can fail init.
+// Mirrors `vulkan::pipeline_cache`: one library per adapter, loaded from the
+// runtime cache segment's `dx-<vendor>-<device>-<rev>` entry at init, consulted
+// by every PSO creation through `create_graphics` / `create_compute`,
+// serialized at the end of init and at shutdown. D3D12 gives no content
+// addressing, so each PSO is stored under a name derived from its desc: the
+// stage bytecode plus every fixed-function discriminator, hashed. A shader edit
+// or state change is a different name and simply misses; the driver validates
+// the blob itself and answers a stale one with an adapter/driver-mismatch
+// HRESULT, on which the entry is dropped and the launch proceeds cold. Nothing
+// here can fail init.
 //
 // The library lives in a thread-local rather than on `DxContext` because every
 // PSO build funnels through the two wrappers here, `DxContext` is pinned to
@@ -36,13 +37,11 @@ struct State {
     // Declared before `_seed`: D3D12 parses the initial blob in place, so the
     // library must drop before its backing bytes.
     library: ID3D12PipelineLibrary,
-    file: String,
+    key: String,
     // The blob `CreatePipelineLibrary` parsed in place. Never read from Rust and
     // never replaced: the library keeps reading it for its whole life, so this
     // owns it until the library is gone.
     _seed: Option<Vec<u8>>,
-    // Size of the blob last written for `file`; the growth check's baseline.
-    written: usize,
     warm: bool,
 }
 
@@ -66,14 +65,16 @@ pub(super) fn install(device: &ID3D12Device, adapter: Option<&IDXGIAdapter3>) {
             tracing::info!("pipeline library: ID3D12Device1 unavailable, PSOs build uncached");
             return;
         };
-        let file = format!(
-            "dx-{:04x}-{:04x}-{:02x}.bin",
+        // The entry key is the adapter this library is machine code for, so a
+        // blob built on another GPU is a miss rather than a rejected load.
+        let key = format!(
+            "dx-{:04x}-{:04x}-{:02x}",
             desc.VendorId, desc.DeviceId, desc.Revision
         );
-        let mut disk = crate::pipeline_cache::load(&file);
+        let mut disk = crate::pipeline_cache::load(&key);
         let mut created = create_library(&device1, disk.as_deref());
         // E_INVALIDARG covers a corrupt blob; the two mismatch codes are a
-        // driver update or a GPU swap that kept the file name. All three drop
+        // driver update or a GPU swap that kept the entry key. All three drop
         // the blob and retry empty.
         let rejected = matches!(
             &created,
@@ -84,20 +85,18 @@ pub(super) fn install(device: &ID3D12Device, adapter: Option<&IDXGIAdapter3>) {
             ].contains(&e.code())
         );
         if rejected {
-            tracing::warn!("pipeline library: driver rejected {file}, rebuilding cold");
-            crate::pipeline_cache::delete(&file);
+            tracing::warn!("pipeline library: driver rejected {key}, rebuilding cold");
+            crate::pipeline_cache::delete(&key);
             disk = None;
             created = create_library(&device1, None);
         }
         match created {
             Ok(library) => {
                 let warm = disk.is_some();
-                let written = disk.as_ref().map_or(0, Vec::len);
                 *state = Some(State {
                     library,
-                    file,
+                    key,
                     _seed: disk,
-                    written,
                     warm,
                 });
             }
@@ -212,26 +211,26 @@ pub(super) fn disk_state() -> &'static str {
     })
 }
 
-// Persist the library if it accumulated new content since the last write. Called at
-// the end of init (so a crash later in the session cannot lose the warm-up)
-// and again from `shutdown`.
+// Hand the library's current contents to the segment, which keeps them only if
+// they grew. Called at the end of init (so a crash later in the session cannot
+// lose the warm-up) and again from `shutdown`; the segment reaches disk at the
+// checkpoint after each.
 pub(super) fn serialize() {
     STATE.with(|state| {
-        if let Some(state) = state.borrow_mut().as_mut() {
-            // SAFETY: a property query on the live pipeline library; it only reads.
-            let size = unsafe { state.library.GetSerializedSize() };
-            if size == 0 {
-                return;
-            }
-            let mut bytes = vec![0u8; size];
-            // SAFETY: `bytes` is a live local the `GetSerializedSize` query above sized for the
-            // whole blob.
-            let serialized = unsafe { state.library.Serialize(&mut bytes) };
-            if serialized.is_ok()
-                && crate::pipeline_cache::store_if_grown(&state.file, &bytes, state.written)
-            {
-                state.written = bytes.len();
-            }
+        let state = state.borrow();
+        let Some(state) = state.as_ref() else {
+            return;
+        };
+        // SAFETY: a property query on the live pipeline library; it only reads.
+        let size = unsafe { state.library.GetSerializedSize() };
+        if size == 0 {
+            return;
+        }
+        let mut bytes = vec![0u8; size];
+        // SAFETY: `bytes` is a live local the `GetSerializedSize` query above sized for the whole
+        // blob.
+        if unsafe { state.library.Serialize(&mut bytes) }.is_ok() {
+            crate::pipeline_cache::store(&state.key, &bytes);
         }
     });
 }

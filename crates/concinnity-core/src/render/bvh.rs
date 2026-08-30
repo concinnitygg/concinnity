@@ -116,7 +116,9 @@ impl Bvh {
         };
         // Recursive-style traversal using an explicit stack avoids blowing
         // the program stack on degenerate inputs and keeps the hot path
-        // amenable to inlining.
+        // amenable to inlining. `build_recursive` splits at the median, so
+        // depth is ceil(log2(leaves)) whatever the input geometry: 64 entries
+        // bound every tree this builder can produce.
         let mut stack: [u32; 64] = [0; 64];
         let mut sp: usize = 0;
         stack[sp] = root;
@@ -133,55 +135,10 @@ impl Bvh {
                     // Push both children. Order doesn't matter for correctness;
                     // pushing right first means left is visited first (cache
                     // locality if leaves were arranged by build order).
-                    if sp + 2 > stack.len() {
-                        // Tree depth exceeded the inline stack; fall back to
-                        // a heap stack for the rest of this subtree. In
-                        // practice 64 entries handles ~2^64 leaves.
-                        self.query_heap(idx, frustum, cam_pos, &mut visit);
-                        continue;
-                    }
                     stack[sp] = *right;
                     sp += 1;
                     stack[sp] = *left;
                     sp += 1;
-                }
-                Node::Leaf {
-                    bb,
-                    cull_distance,
-                    index,
-                } => {
-                    if !frustum.intersects_aabb(bb.min, bb.max) {
-                        continue;
-                    }
-                    if *cull_distance > 0.0 {
-                        let dsq = aabb_distance_sq(cam_pos, bb.min, bb.max);
-                        if dsq > (*cull_distance) * (*cull_distance) {
-                            continue;
-                        }
-                    }
-                    visit(*index);
-                }
-            }
-        }
-    }
-
-    fn query_heap<F: FnMut(u32)>(
-        &self,
-        start: u32,
-        frustum: &Frustum,
-        cam_pos: [f32; 3],
-        visit: &mut F,
-    ) {
-        let mut stack: Vec<u32> = Vec::with_capacity(32);
-        stack.push(start);
-        while let Some(idx) = stack.pop() {
-            match &self.nodes[idx as usize] {
-                Node::Internal { bb, left, right } => {
-                    if !frustum.intersects_aabb(bb.min, bb.max) {
-                        continue;
-                    }
-                    stack.push(*right);
-                    stack.push(*left);
                 }
                 Node::Leaf {
                     bb,
@@ -370,6 +327,23 @@ mod tests {
         assert_eq!(out, vec![1]);
     }
 
+    // The traversal stack is a fixed 64 entries with no fallback, which holds
+    // only because the build splits at the median: depth stays
+    // ceil(log2(leaves)) even when every centroid is identical and a
+    // centroid-based split would degenerate into a chain. A split that stopped
+    // dividing evenly would overflow the stack here rather than in a scene.
+    #[test]
+    fn a_pile_of_coincident_items_still_builds_a_shallow_tree() {
+        let items: Vec<BvhItem> = (0..4096)
+            .map(|i| item(i, [-0.1, -0.1, -0.1], [0.1, 0.1, 0.1]))
+            .collect();
+        let bvh = Bvh::build(&items);
+        let f = Frustum::from_view_projection(ident_vp());
+        let mut seen = 0u32;
+        bvh.query(&f, [0.0, 0.0, 0.0], |_| seen += 1);
+        assert_eq!(seen, 4096, "every coincident leaf has to be reachable");
+    }
+
     #[test]
     fn many_items_all_visible_inside_frustum() {
         let mut items = Vec::new();
@@ -493,43 +467,23 @@ mod tests {
 mod bench {
     use super::{Bvh, BvhItem};
     use crate::gfx::frustum::Frustum;
+    use crate::test_support::{Pace, bench};
     use alloc::vec::Vec;
-    use std::println;
-    use std::time::Instant;
 
     const OBJECTS: usize = 10_000;
-    const TARGET_NS: u128 = 200_000_000;
-    const MAX_ITERS: u64 = 1 << 20;
 
-    fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
-        let mut iters: u64 = 1;
-        loop {
-            let start = Instant::now();
-            for _ in 0..iters {
-                core::hint::black_box(body());
-            }
-            if start.elapsed().as_nanos() >= TARGET_NS || iters >= MAX_ITERS {
-                break;
-            }
-            iters = iters.saturating_mul(4).min(MAX_ITERS);
-        }
-
-        let start = Instant::now();
-        for _ in 0..iters {
-            core::hint::black_box(body());
-        }
-        let per_item_ns = start.elapsed().as_secs_f64() * 1e9 / (iters * items.max(1)) as f64;
-        println!("  {name:<40} {per_item_ns:>10.2} ns/item");
-    }
-
-    // Unit boxes on a 100x100 ground grid straddling the camera plane, so the
+    // Unit boxes on a square ground grid straddling the camera plane, so the
     // frustum query sees a real mix of accepted, rejected, and straddling
-    // nodes.
-    fn scene_items() -> Vec<BvhItem> {
-        (0..OBJECTS)
+    // nodes. The grid spans the same 300x600 extent at any count, so a smaller
+    // one still reaches behind the camera and past the far plane.
+    fn scene_items(objects: usize) -> Vec<BvhItem> {
+        let per_row = (objects as f32).sqrt().ceil().max(1.0) as usize;
+        let rows = objects.div_ceil(per_row);
+        let (x_step, z_step) = (300.0 / per_row as f32, 600.0 / rows as f32);
+        (0..objects)
             .map(|i| {
-                let x = (i % 100) as f32 * 3.0 - 150.0;
-                let z = (i / 100) as f32 * 6.0 - 300.0;
+                let x = (i % per_row) as f32 * x_step - 150.0;
+                let z = (i / per_row) as f32 * z_step - 300.0;
                 BvhItem {
                     bb_min: [x - 0.5, 0.0, z - 0.5],
                     bb_max: [x + 0.5, 1.0, z + 0.5],
@@ -555,13 +509,18 @@ mod bench {
         Frustum::from_view_projection(vp)
     }
 
-    #[test]
-    #[ignore = "benchmark; run with --ignored --test-threads=1"]
-    fn bench_bvh() {
-        let items = scene_items();
+    fn run(pace: Pace) {
+        // A single-run pass keeps the grid shape and a hundredth of the
+        // objects: enough that the tree still branches and the query still
+        // straddles, without paying for a measurement it does not take.
+        let objects = match pace {
+            Pace::Timed => OBJECTS,
+            Pace::Once => 100,
+        };
+        let items = scene_items(objects);
         let frustum = camera_frustum();
 
-        bench("render/bvh_build/10k", OBJECTS as u64, || {
+        bench(pace, "render/bvh_build/10k", objects as u64, || {
             Bvh::build(&items)
         });
 
@@ -569,13 +528,24 @@ mod bench {
         let mut visible = 0u32;
         bvh.query(&frustum, [0.0; 3], |_| visible += 1);
         assert!(
-            visible > 0 && (visible as usize) < OBJECTS,
+            visible > 0 && (visible as usize) < objects,
             "the query fixture must accept some objects and reject others, saw {visible}"
         );
-        bench("render/bvh_query/10k", OBJECTS as u64, || {
+        bench(pace, "render/bvh_query/10k", objects as u64, || {
             let mut seen = 0u32;
             bvh.query(&frustum, [0.0; 3], |_| seen += 1);
             seen
         });
+    }
+
+    #[test]
+    #[ignore = "benchmark; run with --ignored --test-threads=1"]
+    fn bench_bvh() {
+        run(Pace::Timed);
+    }
+
+    #[test]
+    fn bvh_fixtures_build_and_run() {
+        run(Pace::Once);
     }
 }

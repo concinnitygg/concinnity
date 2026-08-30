@@ -28,6 +28,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("particle_types.slang", PARTICLE_TYPES),
     ("post_common.slang", POST_COMMON),
     ("probe_common.slang", PROBE_COMMON),
+    ("probe_prefilter.slang", PROBE_PREFILTER),
     ("probe_types.slang", PROBE_TYPES),
     ("reflection.slang", REFLECTION),
     ("rt_reflections.slang", RT_REFLECTIONS),
@@ -88,6 +89,8 @@ pub const PARTICLE_TYPES: &str = include_str!("shaders/particle_types.slang");
 pub const POST_COMMON: &str = include_str!("shaders/post_common.slang");
 /// `probe_common.slang`.
 pub const PROBE_COMMON: &str = include_str!("shaders/probe_common.slang");
+/// `probe_prefilter.slang`.
+pub const PROBE_PREFILTER: &str = include_str!("shaders/probe_prefilter.slang");
 /// `probe_types.slang`.
 pub const PROBE_TYPES: &str = include_str!("shaders/probe_types.slang");
 /// `reflection.slang`.

@@ -1,20 +1,76 @@
-//! Cook's semantic-validation surface: the pure checks live in
-//! concinnity-world (re-exported below); this module adds the per-asset checks
-//! that validate by running a compiler (mesh generators, texture generators,
-//! cubemap/environment-map sources) and composes both sets behind the same
-//! `check_asset` / `check_world` entry points callers have always used.
+//! Semantic validation of an expanded world: per-asset arg checks, cross-asset
+//! reference checks, and world-shape rules (crate::check::shape). Structural
+//! validation (name/type present, known type, unique names) happens earlier in
+//! crate::authoring::world::load_world.
+//!
+//! Most checks here are pure JSON-shape validation. A few asset types validate
+//! by running their compiler (mesh generators, texture generators,
+//! cubemap/environment-map sources); those live in the four modules below and
+//! run in the same collection pass as the pure ones.
 
+pub(crate) mod animation_graph;
+pub(crate) mod asset_refs;
+pub(crate) mod audio;
+pub mod behavior;
+pub(crate) mod cross_reference;
 pub(crate) mod cubemap_texture;
 pub(crate) mod environment_map;
+pub mod fault;
+pub(crate) mod instanced_prop;
 pub(crate) mod mesh;
+pub(crate) mod physics;
+/// `Prop` argument checks.
+pub(crate) mod prop;
+/// `SdfVolume` argument checks.
+pub(crate) mod sdf_volume;
+/// `Shader` argument checks.
+pub(crate) mod shader;
+pub(crate) mod shape;
 pub(crate) mod texture;
+pub(crate) mod voxel_chunk;
+pub(crate) mod voxel_world;
 
-pub use concinnity_world::check::{behavior, cross_reference, fault, report_validation_errors};
+use crate::authoring::world::WorldJsonlAsset;
 
-use crate::world::WorldJsonlAsset;
+/// Print each validation error in CLI form and collapse them into a single
+/// io::Error. Shared by the `cn test` command and the build orchestrator so a
+/// failed world surfaces every problem in one pass.
+pub fn report_validation_errors(errors: &[String]) -> std::io::Error {
+    for e in errors {
+        eprintln!("error:   {}", e);
+    }
+    eprintln!("\nvalidation failed ({} error(s))", errors.len());
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("validation failed with {} error(s)", errors.len()),
+    )
+}
 
-// The compile-backed per-asset checks only cook can run. Fed into
-// concinnity-world's `check_world_with` as the extra hook.
+// The pure per-asset checks: JSON-shape validation that runs no compiler.
+fn check_authored_asset(
+    type_norm: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<(), String> {
+    match type_norm {
+        "animationgraph" => animation_graph::check(name, args),
+        "behavior" => behavior::check(name, args),
+        "variables" => behavior::check_variables(name, args),
+        "shader" => shader::check(name, args),
+        "prop" => prop::check(name, args),
+        "sdfvolume" | "sdf" => sdf_volume::check(name, args),
+        "voxelchunk" | "chunk" => voxel_chunk::check(name, args),
+        "voxelworld" => voxel_world::check(name, args),
+        "instancedprop" | "instanced" => instanced_prop::check(name, args),
+        "triggervolume" => physics::check(name, args),
+        "audioemitter" => audio::check_emitter(name, args),
+        "audiocue" => audio::check_cue(name, args),
+        "propbody" => audio::check_prop_body(name, args),
+        _ => Ok(()),
+    }
+}
+
+// The per-asset checks that validate by running the asset's compiler.
 fn check_compiled_asset(
     type_norm: &str,
     name: &str,
@@ -29,22 +85,71 @@ fn check_compiled_asset(
     }
 }
 
-// The full per-asset check: the pure world-crate checks plus the
-// compile-backed ones above.
+// The full per-asset check: the pure checks plus the compile-backed ones.
 pub(crate) fn check_asset(
     type_norm: &str,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<(), String> {
-    concinnity_world::check::check_asset(type_norm, name, args)?;
+    check_authored_asset(type_norm, name, args)?;
     check_compiled_asset(type_norm, name, args)
 }
 
-// Run all semantic validation on a fully expanded world: the world crate's
-// pure checks, cross-references, and graphics rules, with the compile-backed
-// checks folded into the same error-collection pass.
+/// Run all semantic validation on a fully expanded world. Collects every
+/// problem found (per-asset arg errors, unresolved cross-references, and
+/// graphics-rule violations) so the caller can report them in a single pass.
 pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
-    concinnity_world::check::check_world_with(assets, &check_compiled_asset)
+    let mut errors: Vec<String> = Vec::new();
+
+    // Names must still be unique after expansion and injection: a duplicate
+    // here means a generated or injected asset silently aliased another (the
+    // authored world's uniqueness was already checked before expansion).
+    let mut seen_names: std::collections::HashSet<&str> = Default::default();
+    for asset in assets {
+        if !seen_names.insert(asset.name.as_str()) {
+            errors.push(format!(
+                "duplicate name '{}' after build-time expansion: a generated or \
+                 injected asset collides with another; rename one of them",
+                asset.name
+            ));
+        }
+    }
+
+    // The world's declared variable table, if it declares one. Behaviors are
+    // checked against it rather than in isolation, so a `set` resolves to the
+    // variable's declared type and a misspelled name is caught here.
+    let declared_vars = assets
+        .iter()
+        .find(|a| a.asset_type.to_lowercase().replace('_', "") == "variables")
+        .map(|a| behavior::DeclaredVars::from_args(&a.args))
+        .unwrap_or_default();
+
+    for asset in assets {
+        let type_norm = asset.asset_type.to_lowercase().replace('_', "");
+        let checked = if type_norm == "behavior" {
+            behavior::check_with_vars(&asset.name, &asset.args, &declared_vars)
+        } else {
+            check_authored_asset(&type_norm, &asset.name, &asset.args)
+        };
+        if let Err(e) = checked {
+            errors.push(e);
+        }
+        if let Err(e) = check_compiled_asset(&type_norm, &asset.name, &asset.args) {
+            errors.push(e);
+        }
+    }
+
+    if let Err(ref_errors) = cross_reference::validate_cross_references(assets) {
+        errors.extend(ref_errors);
+    }
+
+    shape::check_shape(assets, &mut errors);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[cfg(test)]
@@ -59,9 +164,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn graphics_config_with_full_render_stack_passes_graphics_rules() {
+        let assets = vec![
+            asset("gfx", "GraphicsConfig", serde_json::json!({})),
+            asset("win", "Window", serde_json::json!({})),
+            asset(
+                "scene_shader",
+                "Shader",
+                serde_json::json!({
+                    "vertex": {"sources": {"metal": "x.metal", "hlsl": "x.hlsl", "glsl": "x.glsl"}},
+                    "fragment": {"sources": {"metal": "x.metal", "hlsl": "x.hlsl", "glsl": "x.glsl"}}
+                }),
+            ),
+        ];
+        assert!(check_world(&assets).is_ok());
+    }
+
+    #[test]
+    fn per_asset_and_cross_reference_errors_both_collected() {
+        // Prop with no mesh/model/prefab (per-asset error) plus a Material
+        // with a missing albedo texture (cross-reference error).
+        let assets = vec![
+            asset("bad_prop", "Prop", serde_json::json!({})),
+            asset("bad_mat", "Material", serde_json::json!({"albedo":"ghost"})),
+        ];
+        let errs = check_world(&assets).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("bad_prop")));
+        assert!(errs.iter().any(|e| e.contains("ghost")));
+    }
+
     // The composed pass surfaces a compile-backed error (unknown texture
-    // generator) alongside a pure world-crate error (Prop with no source) --
-    // both check sets run in one collection.
+    // generator) alongside a pure one (Prop with no source) -- both check sets
+    // run in one collection.
     #[test]
     fn composed_checks_collect_pure_and_compile_backed_errors() {
         let assets = vec![

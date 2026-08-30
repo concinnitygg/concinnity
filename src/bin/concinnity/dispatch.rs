@@ -83,5 +83,6 @@ pub(crate) fn dispatch(cli: &Cli) -> std::io::Result<()> {
             &args.format,
             args.dmg,
         ),
+        Commands::Version => command::version(),
     }
 }

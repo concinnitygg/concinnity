@@ -19,12 +19,11 @@
 
 use std::collections::VecDeque;
 use std::format;
-use std::println;
-use std::time::Instant;
 use std::vec::Vec;
 
 use crate::define_component_storage;
 use crate::ecs::{Entity, EventCursor, Events};
+use crate::test_support::{Pace, bench};
 
 // Deterministic xorshift so fixtures lay out identically across runs.
 struct Rng(u64);
@@ -49,33 +48,6 @@ impl Rng {
             items.swap(i, j);
         }
     }
-}
-
-// One measured pass runs at least this long before its time is trusted.
-const TARGET_NS: u128 = 200_000_000;
-const MAX_ITERS: u64 = 1 << 20;
-
-// Time `body` over a calibrated iteration count and report its per-item cost.
-fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
-    let mut iters: u64 = 1;
-    loop {
-        let start = Instant::now();
-        for _ in 0..iters {
-            core::hint::black_box(body());
-        }
-        if start.elapsed().as_nanos() >= TARGET_NS || iters >= MAX_ITERS {
-            break;
-        }
-        iters = iters.saturating_mul(4).min(MAX_ITERS);
-    }
-
-    let start = Instant::now();
-    for _ in 0..iters {
-        core::hint::black_box(body());
-    }
-    let elapsed = start.elapsed();
-    let per_item_ns = elapsed.as_secs_f64() * 1e9 / (iters * items.max(1)) as f64;
-    println!("  {name:<40} {per_item_ns:>10.2} ns/item");
 }
 
 // A world matrix, the bulky per-entity datum the render prep walks.
@@ -111,11 +83,35 @@ define_component_storage! {
     Motion => Motion, 3,
 }
 
-const SIZES: [(usize, &str); 2] = [(10_000, "10k"), (100_000, "100k")];
 const RENDERABLE_PERMIL: usize = 750;
-const CHURN: usize = 1_024;
-const LOOKUPS: usize = 4_096;
-const EVENTS: usize = 1_024;
+
+// The world sizes and per-body counts a pass drives, per pace. A single-run
+// pass keeps every shape and shrinks every count: it proves the fixtures still
+// build and the joins still walk, and measures nothing, so a 100k-entity world
+// in an unoptimized build would buy it nothing.
+struct Fixture {
+    sizes: [(usize, &'static str); 2],
+    churn: usize,
+    lookups: usize,
+    events: usize,
+}
+
+fn fixture(pace: Pace) -> Fixture {
+    match pace {
+        Pace::Timed => Fixture {
+            sizes: [(10_000, "10k"), (100_000, "100k")],
+            churn: 1_024,
+            lookups: 4_096,
+            events: 1_024,
+        },
+        Pace::Once => Fixture {
+            sizes: [(64, "64"), (128, "128")],
+            churn: 8,
+            lookups: 16,
+            events: 8,
+        },
+    }
+}
 
 // A world of `n` transform entities, `renderable_permil`/1000 of which also
 // carry a Renderer and a Motion, inserted in shuffled order so their rows do
@@ -150,11 +146,16 @@ fn build_world(n: usize, renderable_permil: usize, seed: u64) -> (BenchWorld, Ve
     (world, entities)
 }
 
-#[test]
-#[ignore = "benchmark; run with --ignored --test-threads=1"]
-fn bench_storage() {
-    for (n, label) in SIZES {
-        bench(&format!("ecs/spawn_prop/{label}"), n as u64, || {
+fn run(pace: Pace) {
+    let Fixture {
+        sizes,
+        churn,
+        lookups,
+        events: event_count,
+    } = fixture(pace);
+
+    for (n, label) in sizes {
+        bench(pace, &format!("ecs/spawn_prop/{label}"), n as u64, || {
             let mut world = BenchWorld::default();
             for i in 0..n {
                 let e = world.push_typed(Transform::keyed(i));
@@ -173,10 +174,11 @@ fn bench_storage() {
             let (mut world, entities) = build_world(n, 0, 1);
             let mut live: VecDeque<Entity> = entities.into();
             bench(
+                pace,
                 &format!("ecs/despawn_spawn/{label}"),
-                CHURN as u64,
+                churn as u64,
                 move || {
-                    for i in 0..CHURN {
+                    for i in 0..churn {
                         let dead = live.pop_front().expect("churn fixture stays populated");
                         world.despawn(dead);
                         live.push_back(world.push_typed(Transform::keyed(i)));
@@ -198,62 +200,87 @@ fn bench_storage() {
             renderable
         );
 
-        bench(&format!("ecs/scan_transforms/{label}"), n as u64, || {
-            let mut acc = 0.0f32;
-            for t in world.Transform.iter() {
-                acc += t.m[0];
-            }
-            acc
-        });
+        bench(
+            pace,
+            &format!("ecs/scan_transforms/{label}"),
+            n as u64,
+            || {
+                let mut acc = 0.0f32;
+                for t in world.Transform.iter() {
+                    acc += t.m[0];
+                }
+                acc
+            },
+        );
 
-        bench(&format!("ecs/join2/{label}"), renderable as u64, || {
-            let mut acc = 0u64;
-            for (e, t, r) in world.join2::<Transform, Renderer>() {
-                acc = acc
-                    .wrapping_add(t.m[0].to_bits() as u64)
-                    .wrapping_add(r.mesh as u64)
-                    .wrapping_add(e.index() as u64);
-            }
-            acc
-        });
+        bench(
+            pace,
+            &format!("ecs/join2/{label}"),
+            renderable as u64,
+            || {
+                let mut acc = 0u64;
+                for (e, t, r) in world.join2::<Transform, Renderer>() {
+                    acc = acc
+                        .wrapping_add(t.m[0].to_bits() as u64)
+                        .wrapping_add(r.mesh as u64)
+                        .wrapping_add(e.index() as u64);
+                }
+                acc
+            },
+        );
 
-        bench(&format!("ecs/join3/{label}"), renderable as u64, || {
-            let mut acc = 0u64;
-            for (e, t, r, m) in world.join3::<Transform, Renderer, Motion>() {
-                acc = acc
-                    .wrapping_add(t.m[0].to_bits() as u64)
-                    .wrapping_add(r.material as u64)
-                    .wrapping_add(m.velocity[1].to_bits() as u64)
-                    .wrapping_add(e.index() as u64);
-            }
-            acc
-        });
+        bench(
+            pace,
+            &format!("ecs/join3/{label}"),
+            renderable as u64,
+            || {
+                let mut acc = 0u64;
+                for (e, t, r, m) in world.join3::<Transform, Renderer, Motion>() {
+                    acc = acc
+                        .wrapping_add(t.m[0].to_bits() as u64)
+                        .wrapping_add(r.material as u64)
+                        .wrapping_add(m.velocity[1].to_bits() as u64)
+                        .wrapping_add(e.index() as u64);
+                }
+                acc
+            },
+        );
 
         let mut handles = entities.clone();
         Rng::new(3).shuffle(&mut handles);
-        handles.truncate(LOOKUPS);
-        bench(&format!("ecs/get_random/{label}"), LOOKUPS as u64, || {
-            let mut acc = 0.0f32;
-            for &e in &handles {
-                if let Some(t) = world.get::<Transform>(e) {
-                    acc += t.m[0];
+        handles.truncate(lookups);
+        bench(
+            pace,
+            &format!("ecs/get_random/{label}"),
+            lookups as u64,
+            || {
+                let mut acc = 0.0f32;
+                for &e in &handles {
+                    if let Some(t) = world.get::<Transform>(e) {
+                        acc += t.m[0];
+                    }
                 }
-            }
-            acc
-        });
+                acc
+            },
+        );
 
-        bench(&format!("ecs/write_transforms/{label}"), n as u64, || {
-            for t in world.values_mut::<Transform>() {
-                t.m[0] += 1.0;
-            }
-        });
+        bench(
+            pace,
+            &format!("ecs/write_transforms/{label}"),
+            n as u64,
+            || {
+                for t in world.values_mut::<Transform>() {
+                    t.m[0] += 1.0;
+                }
+            },
+        );
     }
 
     {
         let mut events: Events<Motion> = Events::new();
         let mut cursor = EventCursor::default();
-        bench("ecs/events_pump/1k", EVENTS as u64, move || {
-            for i in 0..EVENTS {
+        bench(pace, "ecs/events_pump/1k", event_count as u64, move || {
+            for i in 0..event_count {
                 events.send(Motion {
                     velocity: [i as f32, 0.0, 0.0, 0.0],
                 });
@@ -263,4 +290,15 @@ fn bench_storage() {
             seen
         });
     }
+}
+
+#[test]
+#[ignore = "benchmark; run with --ignored --test-threads=1"]
+fn bench_storage() {
+    run(Pace::Timed);
+}
+
+#[test]
+fn storage_fixtures_build_and_run() {
+    run(Pace::Once);
 }

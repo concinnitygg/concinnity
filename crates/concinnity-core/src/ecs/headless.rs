@@ -69,6 +69,10 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
             before: &[],
         },
     ],
+    // The headless tier renders nothing, so the completion pass leaves it with
+    // the one default that is not a rendering concern: the PhysicsConfig its
+    // simulation already runs on.
+    complete_world: Some(crate::defaults::run),
     before_init: None,
     prepare_events: None,
 };

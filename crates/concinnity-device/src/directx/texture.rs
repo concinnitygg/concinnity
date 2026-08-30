@@ -314,8 +314,8 @@ pub(super) struct TextureLevel<'a> {
 }
 
 // DXGI equivalent of a compiled texture payload format.
-fn dxgi_texture_format(format: concinnity_core::build::texture::TextureFormat) -> DXGI_FORMAT {
-    use concinnity_core::build::texture::TextureFormat;
+fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> DXGI_FORMAT {
+    use concinnity_core::bake::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => DXGI_FORMAT_R8G8B8A8_UNORM,
         TextureFormat::Bc1 => DXGI_FORMAT_BC1_UNORM,
@@ -331,9 +331,9 @@ fn dxgi_texture_format(format: concinnity_core::build::texture::TextureFormat) -
 // result, which picks the view format back off the resource.
 pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_core::bake::texture::TextureImage,
 ) -> Result<(PooledTexture, UploadInFlight), String> {
-    use concinnity_core::build::texture::TextureFormat;
+    use concinnity_core::bake::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips
@@ -356,7 +356,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_core::bake::texture::TextureImage,
 ) -> Result<PooledTexture, String> {
     let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
     wait_for_upload(alloc.device(), alloc.queue())?;
@@ -1307,8 +1307,26 @@ pub(super) fn write_cube_srv_mips(
     mip_count: u32,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
+    write_cube_srv_mips_format(
+        device,
+        resource,
+        mip_count,
+        DXGI_FORMAT_R32G32B32A32_FLOAT,
+        srv_cpu,
+    );
+}
+
+// The same, for a cube whose format is not the imported env map's RGBA32F: a
+// runtime-baked reflection probe is convolved straight into an RGBA16F cube.
+pub(super) fn write_cube_srv_mips_format(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    mip_count: u32,
+    format: DXGI_FORMAT,
+    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+) {
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
-        Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+        Format: format,
         ViewDimension: D3D12_SRV_DIMENSION_TEXTURECUBE,
         Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
         Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
@@ -1425,19 +1443,6 @@ pub(super) fn upload_environment_map(
         },
         prefilter_mip_count: mip_bytes.len() as u32,
     })
-}
-
-// Create a multi-mip prefiltered radiance cube from a reflection-probe ENVM
-// payload's prefilter mips and return the bare resource (no SRV). The probe
-// capture (`directx/probe.rs`) stores these per probe; the SRVs into the probe
-// cube array are written separately when the array is bound to the shaders.
-// `mip_bytes[m]` is `6 * (face_size >> m)² * 16` bytes in face-major order.
-pub(super) fn upload_probe_prefilter_cube(
-    alloc: &DeviceAllocator,
-    face_size: u32,
-    mip_bytes: &[&[u8]],
-) -> Result<PooledTexture, String> {
-    upload_prefilter_cube_resource(alloc, face_size, mip_bytes)
 }
 
 // Create a single-mip RGBA32F TextureCube resource and upload `bytes` (six

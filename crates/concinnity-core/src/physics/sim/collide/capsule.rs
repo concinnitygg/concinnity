@@ -526,4 +526,67 @@ mod tests {
         ));
         assert_eq!(m.count, 0);
     }
+
+    // The capsule's axis crosses a box edge rather than lying against a face:
+    // the separating axis is the cross of the box's edge direction with the
+    // capsule's own, and the contact is the single closest pair between the
+    // two crossing segments. A face normal here would push the capsule along
+    // the wrong direction and let it settle into the corner.
+    #[test]
+    fn a_capsule_crossing_a_box_edge_contacts_along_the_edge_normal() {
+        let mut m = manifold();
+        // Box edge running along Y at (1, ., 1); capsule axis horizontal and
+        // perpendicular to the diagonal, just overlapping the edge.
+        let d = core::f32::consts::FRAC_1_SQRT_2;
+        let centre = vec3(1.1, 0.0, 1.1);
+        let along = vec3(d, 0.0, -d) * 0.5;
+        assert!(box_capsule(
+            oriented(vec3(1.0, 1.0, 1.0), Vec3::ZERO, [0.0; 3]),
+            (centre - along, centre + along),
+            0.2,
+            0.0,
+            &mut m
+        ));
+
+        assert_eq!(m.count, 1, "an edge crossing is a single contact: {m:?}");
+        let expected = vec3(d, 0.0, d);
+        assert!(
+            (m.normal - expected).length() < 1.0e-4,
+            "{:?} is not the edge normal",
+            m.normal
+        );
+        let point = m.points()[0];
+        assert_eq!(
+            point.id,
+            EDGE_ID_BASE + 1,
+            "the winning edge runs along the box's Y axis"
+        );
+        assert!(point.separation < 0.0, "{point:?} is not overlapping");
+    }
+
+    // The box's closest feature is a corner, so neither a face nor an edge
+    // axis separates: the contact falls back to the nearest pair of points.
+    #[test]
+    fn a_capsule_aimed_at_a_box_corner_contacts_at_the_nearest_points() {
+        let mut m = manifold();
+        let d = 1.0 / (3.0f32).sqrt();
+        let centre = vec3(1.2, 1.2, 1.2);
+        let along = vec3(d, d, d) * 0.3;
+        assert!(box_capsule(
+            oriented(vec3(1.0, 1.0, 1.0), Vec3::ZERO, [0.0; 3]),
+            (centre - along, centre + along),
+            0.2,
+            0.0,
+            &mut m
+        ));
+
+        assert_eq!(m.count, 1, "a corner is a single contact: {m:?}");
+        assert_eq!(m.points()[0].id, NEAREST_ID);
+        let expected = vec3(d, d, d);
+        assert!(
+            (m.normal - expected).length() < 1.0e-4,
+            "{:?} does not point out of the corner",
+            m.normal
+        );
+    }
 }

@@ -24,8 +24,8 @@ use crate::components::{
     Transform, VolumetricFog,
 };
 use crate::ecs::{Entity, World};
+use concinnity_cook::authoring::registry::{RegisteredType, ScopeResolution};
 use concinnity_core::ecs::ComponentAsset;
-use concinnity_world::registry::{RegisteredType, ScopeResolution};
 use serde_json::Value;
 use std::collections::BTreeMap;
 

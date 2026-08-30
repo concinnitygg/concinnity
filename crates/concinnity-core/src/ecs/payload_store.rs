@@ -50,3 +50,25 @@ impl PayloadStore for NoPayloads {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A world built without a blob runs on this: nothing is resident, so every
+    // read fails rather than handing back bytes it does not have, and every
+    // release is a no-op.
+    #[test]
+    fn a_store_holding_nothing_reads_nothing_and_frees_nothing() {
+        let mut store = NoPayloads;
+        let locator = PayloadLocator {
+            blob_index: 0,
+            offset: 0,
+            len: 4,
+        };
+        assert_eq!(store.read(&locator), Err(CnResult::FileIo));
+        store.release(0);
+        assert!(!store.disk_backed());
+        assert_eq!(store.release_all_resident(), 0);
+    }
+}

@@ -13,7 +13,7 @@
 // search filter. The panel draws the rows; the hook owns when to re-cook and
 // the per-session hide / lock sets.
 
-use concinnity_cook::world::LoadedWorld;
+use concinnity_cook::build_only::LoadedWorld;
 
 // The group holding the world.jsonl lines themselves.
 pub(crate) const WORLD_GROUP: &str = "World";
@@ -66,11 +66,13 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
     for asset in &loaded.assets {
         let prov = loaded.provenance(&asset.name);
         let (label, badge) = match &prov {
-            concinnity_cook::world::Provenance::AuthoredShadowing { generated_by } => {
+            concinnity_cook::build_only::Provenance::AuthoredShadowing { generated_by } => {
                 (generated_by.as_str(), Badge::Overridden)
             }
             _ if prov.is_authored() => (WORLD_GROUP, Badge::Authored),
-            concinnity_cook::world::Provenance::Injected { by } => (by.as_str(), Badge::Injected),
+            concinnity_cook::build_only::Provenance::Injected { by } => {
+                (by.as_str(), Badge::Injected)
+            }
             _ => match prov.source() {
                 Some(source) => (source, Badge::Imported),
                 None => (UNATTRIBUTED, Badge::Imported),
@@ -117,7 +119,7 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
 // compiled asset's.
 fn promote_entry(
     loaded: &LoadedWorld,
-    asset: &concinnity_cook::world::WorldJsonlAsset,
+    asset: &concinnity_cook::authoring::world::WorldJsonlAsset,
 ) -> serde_json::Value {
     let args = loaded
         .injected
@@ -211,7 +213,8 @@ pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<Tr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_cook::world::{GeneratedAsset, InjectedAsset, ShadowedAsset, WorldJsonlAsset};
+    use concinnity_cook::authoring::world::WorldJsonlAsset;
+    use concinnity_cook::build_only::{GeneratedAsset, InjectedAsset, ShadowedAsset};
 
     fn asset(name: &str, ty: &str) -> WorldJsonlAsset {
         WorldJsonlAsset {

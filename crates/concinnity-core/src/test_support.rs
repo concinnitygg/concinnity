@@ -24,22 +24,45 @@ use crate::gfx::transform::IDENTITY;
 const TARGET_NS: u128 = 200_000_000;
 const MAX_ITERS: u64 = 1 << 20;
 
+// How hard a benchmark pass drives its body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pace {
+    // Calibrate an iteration count, time the body, and report its per-item cost.
+    Timed,
+    // Run the body exactly once and report nothing. What a non-ignored test
+    // drives, so a fixture that stopped building or started panicking fails on
+    // an ordinary run instead of waiting for someone to pass `--ignored`.
+    Once,
+}
+
 // Time `body` over a calibrated iteration count and report its per-item cost
 // beside the allocations one item causes. `items` is how many units of work one
 // call performs, so a number is comparable across fixture sizes.
 //
 // The allocation pass is separate, so the counter reads sit outside the timed
-// window. Those counters are process-global, which is why every benchmark here
-// asks for `--test-threads=1`: one running beside another reads the other's
-// allocations as its own.
-pub(crate) fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
+// window. This crate's test binary installs the tracking allocator, so the
+// counters are always live here. They are process-global, which is why every
+// benchmark asks for `--test-threads=1`: one running beside another reads the
+// other's allocations as its own.
+pub(crate) fn bench<R>(pace: Pace, name: &str, items: u64, body: impl FnMut() -> R) {
+    bench_over(TARGET_NS, pace, name, items, body);
+}
+
+// `bench` against an explicit measurement window, so a test can drive the
+// calibration loop without waiting out a real one.
+fn bench_over<R>(target_ns: u128, pace: Pace, name: &str, items: u64, mut body: impl FnMut() -> R) {
+    if pace == Pace::Once {
+        core::hint::black_box(body());
+        return;
+    }
+
     let mut iters: u64 = 1;
     loop {
         let start = Instant::now();
         for _ in 0..iters {
             core::hint::black_box(body());
         }
-        if start.elapsed().as_nanos() >= TARGET_NS || iters >= MAX_ITERS {
+        if start.elapsed().as_nanos() >= target_ns || iters >= MAX_ITERS {
             break;
         }
         iters = iters.saturating_mul(4).min(MAX_ITERS);
@@ -51,21 +74,18 @@ pub(crate) fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
     }
     let elapsed = start.elapsed();
 
-    let before = crate::memory::alloc_count();
+    let before = crate::memory::alloc_count().unwrap_or(0);
     for _ in 0..iters {
         core::hint::black_box(body());
     }
-    let after = crate::memory::alloc_count();
+    let allocated = crate::memory::alloc_count()
+        .unwrap_or(0)
+        .saturating_sub(before);
 
     let units = (iters * items.max(1)) as f64;
     let per_item_ns = elapsed.as_secs_f64() * 1e9 / units;
-    match (before, after) {
-        (Some(before), Some(after)) => {
-            let allocs = (after - before) as f64 / units;
-            println!("  {name:<40} {per_item_ns:>10.2} ns/item {allocs:>10.3} allocs/item");
-        }
-        _ => println!("  {name:<40} {per_item_ns:>10.2} ns/item"),
-    }
+    let allocs = allocated as f64 / units;
+    println!("  {name:<40} {per_item_ns:>10.2} ns/item {allocs:>10.3} allocs/item");
 }
 
 // Per-thread, like the production interner: the harness runs tests in parallel
@@ -220,5 +240,52 @@ impl<'de> Deserializer<'de> for NoneDeserializer {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
         bytes byte_buf option unit unit_struct newtype_struct seq tuple
         tuple_struct map struct enum identifier ignored_any
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    // A single-run pass drives the body exactly once and reports nothing.
+    #[test]
+    fn a_single_run_pass_drives_the_body_once() {
+        let runs = AtomicU32::new(0);
+        bench(Pace::Once, "test/once", 4, || {
+            runs.fetch_add(1, Ordering::Relaxed)
+        });
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+    }
+
+    // A measured pass calibrates an iteration count against its window, then
+    // runs that count twice more: once timed, once counting allocations. The
+    // window here is a microsecond rather than the real fifth of a second, so
+    // the loop is driven rather than waited out.
+    #[test]
+    fn a_measured_pass_calibrates_then_times_and_counts() {
+        let runs = AtomicU32::new(0);
+        bench_over(1_000, Pace::Timed, "test/timed", 1, || {
+            runs.fetch_add(1, Ordering::Relaxed)
+        });
+        assert!(
+            runs.load(Ordering::Relaxed) >= 3,
+            "a measured pass runs the body far more than a single-run one"
+        );
+    }
+
+    // A body slow enough to fill the window on its first iteration never
+    // multiplies the count, so the calibration cannot run away.
+    #[test]
+    fn a_body_that_fills_the_window_stays_at_one_iteration() {
+        let runs = AtomicU32::new(0);
+        bench_over(0, Pace::Timed, "test/wide", 0, || {
+            runs.fetch_add(1, Ordering::Relaxed)
+        });
+        assert_eq!(
+            runs.load(Ordering::Relaxed),
+            3,
+            "one calibration pass, one timed, one counted"
+        );
     }
 }

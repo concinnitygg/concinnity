@@ -24,11 +24,22 @@ use crate::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, PropInstance, Transform,
 };
 use crate::ecs::System;
-use crate::test_support::bench;
+use crate::test_support::{Pace, bench};
 
 const BEHAVIORS: usize = 256;
 const SMALL_WORLD: usize = 1_000;
 const LARGE_WORLD: usize = 20_000;
+
+// How many behaviors and how large the two worlds are, per pace. A single-run
+// pass drives the same shapes at a fraction of the size: it proves the fixtures
+// still build and tick, and compares nothing, so paying for 20k entities in an
+// unoptimized build would buy it nothing.
+fn fixture(pace: Pace) -> (usize, [(usize, &'static str); 2]) {
+    match pace {
+        Pace::Timed => (BEHAVIORS, [(SMALL_WORLD, "1k"), (LARGE_WORLD, "20k")]),
+        Pace::Once => (4, [(8, "8"), (16, "16")]),
+    }
+}
 
 // A world-scoped tick behavior that only does arithmetic on its own variable,
 // so the measurement is evaluation cost and never transform writes.
@@ -68,31 +79,51 @@ fn started(world: &mut TestWorld) -> BehaviorSystem {
     sys
 }
 
-#[test]
-#[ignore = "microbench; run it by name with --ignored --nocapture --test-threads=1"]
-fn behavior_tick() {
-    println!("\nbehavior evaluation ({BEHAVIORS} tick behaviors)");
+fn run(pace: Pace) {
+    let (behaviors, worlds) = fixture(pace);
+    if pace == Pace::Timed {
+        println!("\nbehavior evaluation ({behaviors} tick behaviors)");
+    }
 
     // The two rows that matter: same behaviors, 20x the world. If these
     // diverge, the tick has gone back to scanning the world.
-    for (props, label) in [(SMALL_WORLD, "1k"), (LARGE_WORLD, "20k")] {
-        let mut world = padded_world(BEHAVIORS, props);
+    for (props, label) in worlds {
+        let mut world = padded_world(behaviors, props);
         let mut sys = started(&mut world);
         let mut elapsed = 0.0f32;
-        bench(&format!("tick_world{label}"), BEHAVIORS as u64, || {
-            elapsed += 0.016;
-            sys.tick(&mut world.ctx(), 0.016, elapsed);
-        });
+        bench(
+            pace,
+            &format!("tick_world{label}"),
+            behaviors as u64,
+            || {
+                elapsed += 0.016;
+                sys.tick(&mut world.ctx(), 0.016, elapsed);
+            },
+        );
     }
 
     // `gather` on its own, at the same two world sizes: the snapshot build is
     // the half that used to carry the world-size term.
-    for (props, label) in [(SMALL_WORLD, "1k"), (LARGE_WORLD, "20k")] {
-        let mut world = padded_world(BEHAVIORS, props);
+    for (props, label) in worlds {
+        let mut world = padded_world(behaviors, props);
         let mut sys = started(&mut world);
         let mut snapshot = Snapshot::default();
-        bench(&format!("gather_world{label}"), BEHAVIORS as u64, || {
-            sys.gather(&world.ctx(), &mut snapshot)
-        });
+        bench(
+            pace,
+            &format!("gather_world{label}"),
+            behaviors as u64,
+            || sys.gather(&world.ctx(), &mut snapshot),
+        );
     }
+}
+
+#[test]
+#[ignore = "microbench; run it by name with --ignored --nocapture --test-threads=1"]
+fn behavior_tick() {
+    run(Pace::Timed);
+}
+
+#[test]
+fn behavior_tick_fixtures_build_and_run() {
+    run(Pace::Once);
 }

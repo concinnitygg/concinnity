@@ -239,4 +239,15 @@ mod tests {
             assert!(close(m.cols[i], t.cols[i]), "column {i}");
         }
     }
+
+    // A zeroed matrix is the additive identity the accumulators start from,
+    // not the multiplicative one: an inertia tensor is summed into.
+    #[test]
+    fn a_default_matrix_is_zero() {
+        assert_eq!(Mat3::default(), Mat3::ZERO);
+        assert!(close(
+            Mat3::default().mul_vec3(vec3(1.0, 2.0, 3.0)),
+            Vec3::ZERO
+        ));
+    }
 }

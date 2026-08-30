@@ -204,7 +204,11 @@ impl GlfwWindow {
         resizable: bool,
         title_bar: bool,
     ) -> Result<Self, String> {
-        let mut glfw = glfw::init(glfw::fail_on_errors).map_err(|e| format!("glfw init: {e}"))?;
+        // No error callback: glfw-rs transmutes the code into an Error enum
+        // that stops at GLFW 3.3, so a 3.4 code (PlatformUnavailable on a
+        // headless host, FeatureUnavailable on Wayland) aborts the process.
+        let mut glfw = glfw::init_no_callbacks()
+            .map_err(|e| format!("glfw init: {e} (no window platform available?)"))?;
 
         glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
         glfw.window_hint(glfw::WindowHint::Resizable(resizable));

@@ -548,4 +548,23 @@ mod tests {
             }
         }
     }
+
+    // A collapsed axis has no direction to recover a rotation from, so it
+    // decomposes to a zero scale and contributes nothing to the basis rather
+    // than dividing by its own zero length.
+    #[test]
+    fn decomposing_a_collapsed_axis_yields_a_zero_scale() {
+        let mut m = IDENTITY;
+        m[1] = [0.0, 0.0, 0.0, 0.0];
+        m[3] = [1.0, 2.0, 3.0, 1.0];
+
+        let (translation, rotation, scale) = decompose(m);
+        assert_eq!(translation, [1.0, 2.0, 3.0]);
+        assert_eq!(scale[1], 0.0, "the collapsed axis has no length");
+        assert_eq!((scale[0], scale[2]), (1.0, 1.0), "the others are intact");
+        assert!(
+            rotation.iter().all(|v| v.is_finite()),
+            "{rotation:?} is not a usable rotation"
+        );
+    }
 }

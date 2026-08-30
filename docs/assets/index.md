@@ -44,7 +44,7 @@
 - [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics floor / terrain.
 - [PhysicsJoint](PhysicsJoint.md) - A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
 - [PointLight](PointLight.md) - A spherical point light with quadratic distance attenuation.
-- [PostProcessConfig](PostProcessConfig.md) - Tunables for the post-process stack. One per world; the first declared instance wins. With no `PostProcessConfig` present, the defaults below are used (bloom on at a moderate intensity).
+- [PostProcessConfig](PostProcessConfig.md) - Tunables for the post-process stack. One per world; the first declared instance wins. With no `PostProcessConfig` present, the defaults below are used.
 - [Prefab](Prefab.md) - A reusable template of [Prop](Prop.md)s, [PointLight](PointLight.md)s, and nested prefabs.
 - [ProceduralMesh](ProceduralMesh.md) - Geometry built by a named generator at compile time. Use for standard shapes.
 - [Prop](Prop.md) - A scene object: places geometry at a world-space transform.

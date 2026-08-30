@@ -132,7 +132,7 @@ impl GlslProgram {
     }
 }
 
-// Compile every declared program (all enumerable variants) into `out_dir`,
+// Compile every declared program (all enumerable variants) into `bundle`,
 // reusing local cache artifacts where present.
 //
 // Both the pool length and the probe cube-array length are properties of the
@@ -140,7 +140,10 @@ impl GlslProgram {
 // baked at the ceiling every desktop driver affords. A device that reports less
 // headroom than that (MoltenVK) simply misses these entries and compiles them
 // at first launch.
-pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompile::Report) {
+pub(crate) fn precompile(
+    bundle: &mut concinnity_host::store::cache::Segment,
+    report: &mut crate::precompile::Report,
+) {
     let pool_size = concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
     for program in ALL {
         let ctx = Ctx {
@@ -164,7 +167,7 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
         };
         report.record(
             program.label,
-            crate::shader_cache::ensure_in(out_dir, &key, compile),
+            crate::shader_cache::ensure_in(bundle, &key, compile),
         );
     }
 
@@ -190,7 +193,7 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
             let key = program.cache_key(&source);
             report.record(
                 program.label,
-                crate::shader_cache::ensure_in(out_dir, &key, || {
+                crate::shader_cache::ensure_in(bundle, &key, || {
                     super::slang_builtins::compile_uncached(program, &source)
                 }),
             );

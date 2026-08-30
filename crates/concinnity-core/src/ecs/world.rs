@@ -15,11 +15,13 @@ use crate::memory::{Arena, MemTag};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::ecs::waves::{self, ExecSchedule};
 use crate::ecs::{
     BuiltSystem, Clock, ComponentAsset, ComponentId, ComponentSlot, ComponentStorage, Entity,
-    EventStore, Events, FrameContext, NoPayloads, PayloadStore, PipelineContext, Resources,
-    RuntimeComponent, StepResult, SystemEntry, SystemTable,
+    EnvironmentMapHandle, EventStore, Events, FrameContext, MaterialHandle, MeshHandle, NoPayloads,
+    PayloadStore, PipelineContext, Resources, RuntimeComponent, StepResult, SystemEntry,
+    SystemTable,
 };
 use crate::gfx::profile::FrameProfile;
 use crate::result::CnResult;
@@ -106,6 +108,17 @@ impl Default for World {
     }
 }
 
+// The next minted id, drawn from the world's shared counter so ids handed out
+// before start and by the completion pass never collide.
+fn mint_id(ctx: &mut PipelineContext) -> AssetId {
+    if ctx.resource::<MintedIds>().is_none() {
+        ctx.insert_resource(MintedIds::default());
+    }
+    ctx.resource_mut::<MintedIds>()
+        .expect("the counter was just ensured")
+        .next_id()
+}
+
 impl World {
     /// An empty world, for contexts that have no compiled payloads (e.g. unit
     /// tests, or worlds built entirely from runtime-only components).
@@ -150,6 +163,39 @@ impl World {
     /// by the cook and never reaches a world.
     pub fn add_component<C: RuntimeComponent>(&mut self, c: C) {
         self.components.push(c.into());
+    }
+
+    /// Add a mesh with its baked geometry `payload` and return the handle a
+    /// [`Prop`](crate::components::Prop) references it by.
+    ///
+    /// The world names the mesh itself (from the minted range) and holds the
+    /// payload directly, so no compiled blob is involved; handles count up in
+    /// call order, after any the build assigned.
+    pub fn add_mesh(
+        &mut self,
+        mut mesh: crate::components::ProceduralMesh,
+        payload: Vec<u8>,
+    ) -> MeshHandle {
+        let mut ctx = self.context();
+        mesh.asset_id = mint_id(&mut ctx);
+        let handle = crate::resource::append_mesh(&mut ctx, mesh.asset_id, payload);
+        ctx.push(mesh);
+        handle
+    }
+
+    /// Add a material and return the handle a
+    /// [`Prop`](crate::components::Prop) references it by. The value's fields
+    /// are clamped into their valid ranges on the way in, the same way the
+    /// cook clamps an authored material.
+    pub fn add_material(&mut self, material: crate::components::Material) -> MaterialHandle {
+        crate::resource::append_material(&mut self.context(), material)
+    }
+
+    /// Add a baked image-based-lighting `payload` (see
+    /// [`bake::payload::environment_map`](crate::bake::payload::environment_map))
+    /// and return its handle. The renderer lights with the map at handle 0.
+    pub fn add_environment_map(&mut self, payload: Vec<u8>) -> EnvironmentMapHandle {
+        crate::resource::append_environment_map(&mut self.context(), payload)
     }
 
     /// Remove and drop every component of type C.
@@ -366,9 +412,11 @@ impl World {
     /// in run order. Runs the same gates [`start`](World::start) runs, so
     /// tooling that reports a world's schedule cannot drift from the runtime;
     /// the probe constructs and discards each gated system, which is why
-    /// constructors must stay cheap and side-effect-free. After `start` has
-    /// drained the gating components it reports the systems a rebuild of the
-    /// CURRENT content would get, not the built set.
+    /// constructors must stay cheap and side-effect-free. It reads the world
+    /// as it stands: before `start` the table's `complete_world` pass has not
+    /// run, so a system only an injected default turns on is not listed yet,
+    /// and after `start` has drained the gating components it reports the
+    /// systems a rebuild of the CURRENT content would get, not the built set.
     pub fn system_manifest(&self, table: &SystemTable) -> Vec<&'static str> {
         table
             .entries
@@ -397,6 +445,16 @@ impl World {
     /// Build the systems `table` gates in for this world's content and run
     /// their `init`.
     pub fn start(&mut self, table: &SystemTable) -> Result<(), CnResult> {
+        // The host's completion pass, before the gates read the world: an
+        // injected component brings its own system into the schedule. Guarded
+        // by the same once-per-world flag as the build below, so a second
+        // `start` neither re-injects nor re-gates.
+        if !self.systems_built
+            && let Some(complete) = table.complete_world
+        {
+            let mut ctx = self.context();
+            complete(&mut ctx)?;
+        }
         self.build_systems(table);
         let (systems, mut ctx) = self.systems_and_context();
         // The host's load-time pass, before systems init: the engine gives each

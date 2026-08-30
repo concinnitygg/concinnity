@@ -16,7 +16,7 @@ impl crate::asset::BuildAsset for File {
                 format!("Asset '{}': unsupported File kind '{}'", ctx.name, kind_str),
             )
         })?;
-        crate::file::compile_file_payload(path, &kind)
+        crate::compile::file::compile_file_payload(path, &kind)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }

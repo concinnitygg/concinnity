@@ -64,3 +64,53 @@ impl ProbeSet {
         probes: [ProbeUniforms::DISABLED; MAX_PROBES],
     };
 }
+
+/// Per-dispatch params for the runtime reflection-probe prefilter kernels.
+/// Matches `ProbePrefilterParams` in `shaders/probe_prefilter.slang`. 32 bytes.
+///
+/// Built by [`crate::render::reflection_probe::PrefilterPlan`], which is what
+/// decides the sizes, the roughness per mip and the firefly clamp so the three
+/// backends dispatch identical work.
+#[derive(Copy, Clone, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct ProbePrefilterParams {
+    /// Destination cube-face edge in texels.
+    pub dst_size: u32,
+    /// Source cube-face edge at mip 0, in texels.
+    pub src_size: u32,
+    /// GGX samples per output texel.
+    pub sample_count: u32,
+    /// Source mip the downsample kernel reduces; it writes `src_mip + 1`.
+    pub src_mip: u32,
+    /// GGX roughness of the destination mip.
+    pub roughness: f32,
+    /// Firefly clamp luminance; `<= 0` disables the cap.
+    pub clamp_lum: f32,
+    /// Mip levels the source pyramid has, bounding the solid-angle lod.
+    pub src_mip_count: f32,
+    /// Padding so the field layout matches the shader-side struct.
+    pub _pad: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    // Eight tightly-packed 4-byte scalars, the layout
+    // `ProbePrefilterParams` in `shaders/probe_prefilter.slang` declares. Every
+    // field is a scalar, so no target 16-aligns one and shifts the rest; a
+    // vector added here would, and would silently feed each kernel garbage.
+    #[test]
+    fn probe_prefilter_params_layout_matches_the_shader() {
+        assert_eq!(size_of::<ProbePrefilterParams>(), 32);
+        assert_eq!(offset_of!(ProbePrefilterParams, dst_size), 0);
+        assert_eq!(offset_of!(ProbePrefilterParams, src_size), 4);
+        assert_eq!(offset_of!(ProbePrefilterParams, sample_count), 8);
+        assert_eq!(offset_of!(ProbePrefilterParams, src_mip), 12);
+        assert_eq!(offset_of!(ProbePrefilterParams, roughness), 16);
+        assert_eq!(offset_of!(ProbePrefilterParams, clamp_lum), 20);
+        assert_eq!(offset_of!(ProbePrefilterParams, src_mip_count), 24);
+        assert_eq!(offset_of!(ProbePrefilterParams, _pad), 28);
+    }
+}

@@ -177,7 +177,9 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
     assert!(h.entries.is_empty(), "picking adds nothing on its own");
 
     h.apply_template_detail(TemplateAction::Apply);
-    let first = concinnity_world::template::TEMPLATES[0].assets().len();
+    let first = concinnity_cook::authoring::template::TEMPLATES[0]
+        .assets()
+        .len();
     assert_eq!(h.entries.len(), first, "Apply adds all template entries");
     assert_eq!(h.open_template, None, "Apply closes the detail panel");
 
@@ -198,7 +200,9 @@ fn template_detail_rows_and_close() {
     let names = rows.iter().filter(|r| !r.is_header).count();
     assert_eq!(
         names,
-        concinnity_world::template::TEMPLATES[0].assets().len(),
+        concinnity_cook::authoring::template::TEMPLATES[0]
+            .assets()
+            .len(),
         "one name row per template asset"
     );
     assert!(
@@ -1279,7 +1283,9 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
     );
     assert_eq!(
         h.entries.len(),
-        concinnity_world::template::TEMPLATES[0].assets().len(),
+        concinnity_cook::authoring::template::TEMPLATES[0]
+            .assets()
+            .len(),
         "Apply layered the template's assets"
     );
 }

@@ -24,12 +24,12 @@ use crate::ecs::asset_id::de_opt_asset_ref;
 /// Developer-facing readouts (per-pass GPU timings, cursor position, live
 /// camera pose) live on the separate [DebugHud](#debughud), toggled with F1.
 ///
-/// A world that declares a [MainMenu](#mainmenu) receives a `StatHud`, its
-/// chip labels, and their font at build time when it declares none (the
-/// menu's performance-stats toggles drive the chips), so the example below is
-/// only needed to restyle the chips or run a HUD without a menu. Declare an
-/// [EngineDefaults](#enginedefaults) with `"hud": false` to remove the
-/// injection entirely.
+/// A world that declares a [MainMenu](#mainmenu) receives a `StatHud` from the
+/// build when it declares none, since the menu's performance-stats toggles
+/// drive the chips, and any label field left unset receives a chip at start.
+/// So the example below is only needed to restyle the chips or run a HUD
+/// without a menu. Declare an [EngineDefaults](#enginedefaults) with
+/// `"hud": false` to leave the chips unfilled.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StatHud {

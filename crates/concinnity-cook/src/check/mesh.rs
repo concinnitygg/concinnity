@@ -10,7 +10,7 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
     // geometry math, no I/O -- the one source-reading generator (heightfield)
     // needs a `source`, which the early return above already excluded -- so
     // the check needs no asset search root.
-    crate::mesh_compile::compile_mesh_payload(args, None)
+    crate::compile::mesh_compile::compile_mesh_payload(args, None)
         .map(|_| ())
         .map_err(|e| format!("Asset '{}' mesh compile error: {}", name, e))
 }

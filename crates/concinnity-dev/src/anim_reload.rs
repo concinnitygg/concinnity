@@ -27,7 +27,8 @@ pub(crate) fn reload_clips_if_pending(anim: &mut AnimationSystem) {
 fn reload_clips(anim: &mut AnimationSystem) {
     // Parse each unique source .glb once per reload; many clips can target the
     // same character file.
-    let mut parsed_cache: HashMap<String, concinnity_cook::gltf_source::GltfDoc> = HashMap::new();
+    let mut parsed_cache: HashMap<String, concinnity_cook::import::gltf_source::GltfDoc> =
+        HashMap::new();
     let assets_dir = crate::authoring::assets_root::assets_dir();
     let mut reloaded = 0usize;
     let mut failed = 0usize;
@@ -38,7 +39,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
         let imported = if entry.source.to_lowercase().ends_with(".fbx") {
             // FBX parses per entry: the importer owns its tree walk end to
             // end, and rigs are small at hot-reload scale.
-            concinnity_cook::fbx::import_fbx_animation(
+            concinnity_cook::import::fbx::import_fbx_animation(
                 &entry.source,
                 entry.animation_index,
                 &entry.animation_name,
@@ -48,14 +49,16 @@ fn reload_clips(anim: &mut AnimationSystem) {
         } else {
             match parsed_cache.get(&entry.source) {
                 Some(d) => Ok(d),
-                None => match concinnity_cook::glb::parse_glb(&entry.source, assets_dir.as_deref())
-                {
+                None => match concinnity_cook::import::glb::parse_glb(
+                    &entry.source,
+                    assets_dir.as_deref(),
+                ) {
                     Ok(d) => Ok(&*parsed_cache.entry(entry.source.clone()).or_insert(d)),
                     Err(e) => Err(e),
                 },
             }
             .and_then(|doc| {
-                concinnity_cook::glb::import_glb_animation_from_doc(
+                concinnity_cook::import::glb::import_glb_animation_from_doc(
                     doc,
                     &entry.source,
                     entry.skin_index,
@@ -100,7 +103,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
 
 // Convert a build-side ImportedAnimation into the runtime AnimationClip form.
 fn imported_to_clip(
-    imported: &concinnity_cook::glb::ImportedAnimation,
+    imported: &concinnity_cook::import::glb::ImportedAnimation,
     looping: bool,
 ) -> AnimationClip {
     AnimationClip {
@@ -352,12 +355,16 @@ mod tests {
 
     #[test]
     fn imported_to_clip_maps_tracks_and_clamps_duration() {
-        let doc =
-            concinnity_cook::gltf_source::GltfDoc::from_slice(&skinned_glb(), None, "hero.glb")
-                .expect("fixture parses");
-        let imported =
-            concinnity_cook::glb::import_glb_animation_from_doc(&doc, "hero.glb", 0, 0, "wave")
-                .expect("fixture animation imports");
+        let doc = concinnity_cook::import::gltf_source::GltfDoc::from_slice(
+            &skinned_glb(),
+            None,
+            "hero.glb",
+        )
+        .expect("fixture parses");
+        let imported = concinnity_cook::import::glb::import_glb_animation_from_doc(
+            &doc, "hero.glb", 0, 0, "wave",
+        )
+        .expect("fixture animation imports");
         let clip = imported_to_clip(&imported, true);
         assert!(clip.looping);
         assert!((clip.duration - 1.0).abs() < 1e-6);
@@ -366,7 +373,7 @@ mod tests {
         assert_eq!(clip.tracks[0].keys[1].time, 1.0);
 
         // A degenerate zero-length import clamps to a positive duration.
-        let zero = concinnity_cook::glb::ImportedAnimation {
+        let zero = concinnity_cook::import::glb::ImportedAnimation {
             morph_track: Vec::new(),
             name: "flat".to_string(),
             duration: 0.0,

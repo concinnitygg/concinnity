@@ -1,10 +1,10 @@
-//! GPU-free pixel-decode math shared by the backends' frame-capture and
-//! reflection-probe read-back paths. Turns the raw bytes read back from a GPU
-//! texture into tightly-packed opaque RGBA8, and decodes a single IEEE 754 half.
-//! The backend classifies its own format enum (MTLPixelFormat / vk::Format /
-//! DXGI_FORMAT) into a `PixelLayout` and calls `decode_to_rgba8`; the per-channel
-//! math here is identical across backends. PNG encoding + file I/O stay in the
-//! backends (debug-only, and would pull std::fs / the png crate into core).
+//! GPU-free pixel-decode math shared by the backends' frame-capture paths.
+//! Turns the raw bytes read back from a GPU texture into tightly-packed opaque
+//! RGBA8. The backend classifies its own format enum (MTLPixelFormat /
+//! vk::Format / DXGI_FORMAT) into a `PixelLayout` and calls `decode_to_rgba8`;
+//! the per-channel math here is identical across backends. PNG encoding + file
+//! I/O stay in the backends (debug-only, and would pull std::fs / the png crate
+//! into core).
 
 use crate::math::{powf, powi};
 use alloc::vec::Vec;
@@ -95,10 +95,9 @@ fn decode_a2b10g10r10(raw: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Decode an IEEE 754 half (binary16) to f32. Handles zero, subnormals, normals,
-/// and inf/NaN. Shared with the reflection-probe cube-face read-back, which
-/// decodes its `RGBA16Float` faces the same way.
-pub fn f16_to_f32(h: u16) -> f32 {
+// Decode an IEEE 754 half (binary16) to f32. Handles zero, subnormals, normals,
+// and inf/NaN.
+fn f16_to_f32(h: u16) -> f32 {
     let sign = if (h >> 15) & 1 == 1 { -1.0 } else { 1.0 };
     let exp = (h >> 10) & 0x1f;
     let mant = (h & 0x3ff) as f32;

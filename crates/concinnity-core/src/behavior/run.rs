@@ -387,3 +387,517 @@ fn set_binding(view: &mut View<'_>, slot: u16, value: Option<Val>) {
         *slot = value;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::CueKind;
+    use crate::ecs::AudioClipHandle;
+    use alloc::boxed::Box;
+    use alloc::vec;
+    use core::num::NonZeroU32;
+
+    fn entity(index: u32) -> Entity {
+        Entity::new(index, NonZeroU32::MIN)
+    }
+
+    fn moved(position: [f32; 3]) -> Transform {
+        Transform {
+            position,
+            ..Transform::default()
+        }
+    }
+
+    // What one evaluated run reads, so a test states only the parts it is
+    // about. Every list defaults empty: an entity absent from `entities` is
+    // dead, one absent from `transforms` has none, and a name absent from
+    // `names` resolves to nothing.
+    #[derive(Default)]
+    struct Run {
+        dt: f32,
+        elapsed: f32,
+        vars: Vec<Val>,
+        locals: Vec<Val>,
+        queries: Vec<Vec<Entity>>,
+        entities: Vec<Entity>,
+        transforms: Vec<(Entity, Transform)>,
+        names: Vec<(AssetId, Entity)>,
+        self_entity: Option<Entity>,
+        bindings: usize,
+    }
+
+    impl Run {
+        fn with_view<R>(&self, body: impl FnOnce(&mut View<'_>) -> R) -> R {
+            let mut bindings = vec![None; self.bindings];
+            let mut trace = None;
+            let mut view = View {
+                dt: self.dt,
+                elapsed: self.elapsed,
+                vars: &self.vars,
+                locals: &self.locals,
+                bindings: &mut bindings,
+                queries: &self.queries,
+                by_name: &|id| self.names.iter().find(|(n, _)| *n == id).map(|(_, e)| *e),
+                transforms: &|e| {
+                    self.transforms
+                        .iter()
+                        .find(|(t, _)| *t == e)
+                        .map(|(_, t)| *t)
+                },
+                alive: &|e| self.entities.contains(&e),
+                self_entity: self.self_entity,
+                trace: &mut trace,
+            };
+            body(&mut view)
+        }
+
+        fn eval(&self, expr: &CExpr) -> Option<Val> {
+            self.with_view(|view| eval(expr, view))
+        }
+
+        fn exec(&self, nodes: &[CNode]) -> Vec<Effect> {
+            let mut out = Vec::new();
+            self.with_view(|view| exec(nodes, view, &mut out));
+            out
+        }
+    }
+
+    fn node(op: COp) -> CNode {
+        CNode { id: 0, op }
+    }
+
+    fn lit(v: Val) -> Box<CExpr> {
+        Box::new(CExpr::Lit(v))
+    }
+
+    #[test]
+    fn a_local_reads_its_slot_and_an_out_of_range_one_yields_nothing() {
+        let run = Run {
+            locals: vec![Val::Int(4), Val::Float(1.5)],
+            ..Run::default()
+        };
+        assert_eq!(run.eval(&CExpr::Local(1)), Some(Val::Float(1.5)));
+        assert_eq!(run.eval(&CExpr::Local(9)), None);
+    }
+
+    #[test]
+    fn dt_and_elapsed_read_the_tick() {
+        let run = Run {
+            dt: 0.25,
+            elapsed: 12.0,
+            ..Run::default()
+        };
+        assert_eq!(run.eval(&CExpr::Dt), Some(Val::Float(0.25)));
+        assert_eq!(run.eval(&CExpr::Elapsed), Some(Val::Float(12.0)));
+    }
+
+    #[test]
+    fn normalize_scales_to_unit_length() {
+        let run = Run::default();
+        let v = run
+            .eval(&CExpr::Normalize(lit(Val::Vec3([0.0, 3.0, 4.0]))))
+            .expect("a vector normalizes");
+        assert_eq!(v, Val::Vec3([0.0, 0.6, 0.8]));
+    }
+
+    // A zero-length vector has no direction, so it normalizes to zero rather
+    // than to the infinities a division by its length would produce.
+    #[test]
+    fn normalize_of_a_zero_vector_is_zero() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Normalize(lit(Val::Vec3([0.0; 3])))),
+            Some(Val::Vec3([0.0; 3]))
+        );
+    }
+
+    #[test]
+    fn normalize_of_a_non_vector_yields_nothing() {
+        let run = Run::default();
+        assert_eq!(run.eval(&CExpr::Normalize(lit(Val::Int(3)))), None);
+    }
+
+    #[test]
+    fn not_inverts_a_bool_and_rejects_anything_else() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Not(lit(Val::Bool(false)))),
+            Some(Val::Bool(true))
+        );
+        assert_eq!(run.eval(&CExpr::Not(lit(Val::Int(1)))), None);
+    }
+
+    #[test]
+    fn all_holds_only_when_every_operand_does() {
+        let run = Run::default();
+        let all = |items: Vec<CExpr>| run.eval(&CExpr::All(items));
+        assert_eq!(all(Vec::new()), Some(Val::Bool(true)));
+        assert_eq!(
+            all(vec![
+                CExpr::Lit(Val::Bool(true)),
+                CExpr::Lit(Val::Bool(true))
+            ]),
+            Some(Val::Bool(true))
+        );
+        assert_eq!(
+            all(vec![
+                CExpr::Lit(Val::Bool(true)),
+                CExpr::Lit(Val::Bool(false))
+            ]),
+            Some(Val::Bool(false))
+        );
+        assert_eq!(all(vec![CExpr::Lit(Val::Int(1))]), None);
+    }
+
+    #[test]
+    fn any_holds_as_soon_as_one_operand_does() {
+        let run = Run::default();
+        let any = |items: Vec<CExpr>| run.eval(&CExpr::Any(items));
+        assert_eq!(any(Vec::new()), Some(Val::Bool(false)));
+        assert_eq!(
+            any(vec![
+                CExpr::Lit(Val::Bool(false)),
+                CExpr::Lit(Val::Bool(true))
+            ]),
+            Some(Val::Bool(true))
+        );
+        assert_eq!(
+            any(vec![
+                CExpr::Lit(Val::Bool(false)),
+                CExpr::Lit(Val::Bool(false))
+            ]),
+            Some(Val::Bool(false))
+        );
+        assert_eq!(any(vec![CExpr::Lit(Val::Int(1))]), None);
+    }
+
+    #[test]
+    fn a_never_expression_yields_nothing() {
+        assert_eq!(Run::default().eval(&CExpr::Never), None);
+    }
+
+    #[test]
+    fn arithmetic_on_two_ints_stays_an_int() {
+        let run = Run::default();
+        let op = |op| run.eval(&CExpr::Arith(op, lit(Val::Int(7)), lit(Val::Int(2))));
+        assert_eq!(op(Arith::Add), Some(Val::Int(9)));
+        assert_eq!(op(Arith::Sub), Some(Val::Int(5)));
+        assert_eq!(op(Arith::Mul), Some(Val::Int(14)));
+        assert_eq!(op(Arith::Div), Some(Val::Int(3)));
+    }
+
+    // A quotient by zero yields zero rather than the infinity that would
+    // silently poison every transform downstream of it.
+    #[test]
+    fn division_by_zero_yields_zero() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Div,
+                lit(Val::Int(7)),
+                lit(Val::Int(0))
+            )),
+            Some(Val::Int(0))
+        );
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Div,
+                lit(Val::Vec3([1.0, 2.0, 3.0])),
+                lit(Val::Float(0.0)),
+            )),
+            Some(Val::Vec3([0.0; 3]))
+        );
+    }
+
+    #[test]
+    fn arithmetic_on_two_vectors_is_component_wise() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Add,
+                lit(Val::Vec3([1.0, 2.0, 3.0])),
+                lit(Val::Vec3([10.0, 20.0, 30.0])),
+            )),
+            Some(Val::Vec3([11.0, 22.0, 33.0]))
+        );
+    }
+
+    #[test]
+    fn a_vector_and_a_scalar_combine_component_wise_either_way_round() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Mul,
+                lit(Val::Vec3([1.0, 2.0, 3.0])),
+                lit(Val::Float(2.0)),
+            )),
+            Some(Val::Vec3([2.0, 4.0, 6.0]))
+        );
+        // Order matters for the non-commutative operators: the scalar is the
+        // left operand of every component.
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Sub,
+                lit(Val::Int(10)),
+                lit(Val::Vec3([1.0, 2.0, 3.0])),
+            )),
+            Some(Val::Vec3([9.0, 8.0, 7.0]))
+        );
+    }
+
+    #[test]
+    fn a_vector_against_a_non_numeric_yields_nothing() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Add,
+                lit(Val::Vec3([1.0; 3])),
+                lit(Val::Bool(true)),
+            )),
+            None
+        );
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Add,
+                lit(Val::Bool(true)),
+                lit(Val::Vec3([1.0; 3])),
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn a_mixed_int_and_float_widens_to_a_float() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Add,
+                lit(Val::Int(1)),
+                lit(Val::Float(0.5)),
+            )),
+            Some(Val::Float(1.5))
+        );
+        assert_eq!(
+            run.eval(&CExpr::Arith(
+                Arith::Add,
+                lit(Val::Bool(true)),
+                lit(Val::Int(1)),
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn entities_and_bools_compare_by_identity_rather_than_as_numbers() {
+        let run = Run::default();
+        let cmp = |op, a, b| run.eval(&CExpr::Compare(op, lit(a), lit(b)));
+        let (a, b) = (Val::Entity(entity(1)), Val::Entity(entity(2)));
+        assert_eq!(cmp(Cmp::Eq, a, a), Some(Val::Bool(true)));
+        assert_eq!(cmp(Cmp::Eq, a, b), Some(Val::Bool(false)));
+        assert_eq!(cmp(Cmp::Ne, a, b), Some(Val::Bool(true)));
+        assert_eq!(
+            cmp(Cmp::Eq, Val::Bool(true), Val::Bool(true)),
+            Some(Val::Bool(true))
+        );
+        // Neither side reads as a number, so an ordering comparison of them
+        // has no answer.
+        assert_eq!(cmp(Cmp::Lt, a, b), None);
+    }
+
+    #[test]
+    fn numbers_compare_in_every_ordering() {
+        let run = Run::default();
+        let cmp = |op| {
+            run.eval(&CExpr::Compare(op, lit(Val::Int(1)), lit(Val::Float(2.0))))
+                .and_then(Val::as_bool)
+        };
+        assert_eq!(cmp(Cmp::Eq), Some(false));
+        assert_eq!(cmp(Cmp::Ne), Some(true));
+        assert_eq!(cmp(Cmp::Lt), Some(true));
+        assert_eq!(cmp(Cmp::Le), Some(true));
+        assert_eq!(cmp(Cmp::Gt), Some(false));
+        assert_eq!(cmp(Cmp::Ge), Some(false));
+    }
+
+    #[test]
+    fn an_unevaluable_comparison_yields_nothing() {
+        let run = Run::default();
+        assert_eq!(
+            run.eval(&CExpr::Compare(
+                Cmp::Eq,
+                lit(Val::Bool(true)),
+                lit(Val::Int(1)),
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn a_condition_that_is_not_a_bool_runs_neither_branch() {
+        let run = Run::default();
+        let effects = run.exec(&[node(COp::If {
+            cond: CExpr::Lit(Val::Int(1)),
+            then: vec![node(COp::Save)],
+            otherwise: vec![node(COp::Save)],
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    #[test]
+    fn a_for_each_over_an_undeclared_query_runs_nothing() {
+        let run = Run {
+            bindings: 1,
+            ..Run::default()
+        };
+        let effects = run.exec(&[node(COp::ForEach {
+            query: 3,
+            bind: 0,
+            body: vec![node(COp::Save)],
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    #[test]
+    fn setting_a_local_from_an_unevaluable_value_asks_for_nothing() {
+        let run = Run::default();
+        let effects = run.exec(&[node(COp::SetLocal {
+            slot: 0,
+            value: CExpr::Never,
+            add: false,
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    #[test]
+    fn a_transform_write_skips_an_entity_it_cannot_resolve() {
+        let ghost = entity(7);
+        // Resolves to no entity at all.
+        let run = Run::default();
+        let effects = run.exec(&[node(COp::SetTransform {
+            entity: CExpr::Never,
+            position: None,
+            rotation_deg: None,
+            scale: None,
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+
+        // Resolves to an entity that carries no transform to overwrite.
+        let effects = run.exec(&[node(COp::SetTransform {
+            entity: CExpr::Lit(Val::Entity(ghost)),
+            position: None,
+            rotation_deg: None,
+            scale: None,
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    #[test]
+    fn a_transform_write_keeps_the_fields_it_was_not_given() {
+        let e = entity(1);
+        let run = Run {
+            transforms: vec![(e, moved([1.0, 2.0, 3.0]))],
+            ..Run::default()
+        };
+        let effects = run.exec(&[node(COp::SetTransform {
+            entity: CExpr::Lit(Val::Entity(e)),
+            position: Some(CExpr::Lit(Val::Vec3([9.0; 3]))),
+            // Neither an absent field nor one that evaluates to a non-vector
+            // overwrites what the entity already carries.
+            rotation_deg: None,
+            scale: Some(CExpr::Lit(Val::Int(2))),
+        })]);
+        let [Effect::SetTransform { entity, transform }] = effects.as_slice() else {
+            panic!("expected one transform write, got {effects:?}");
+        };
+        assert_eq!(*entity, e);
+        assert_eq!(transform.position, [9.0; 3]);
+        assert_eq!(transform.scale, Transform::default().scale);
+    }
+
+    #[test]
+    fn a_reparent_skips_a_child_it_cannot_resolve() {
+        let run = Run::default();
+        let effects = run.exec(&[node(COp::Reparent {
+            child: CExpr::Never,
+            parent: None,
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    // A stale parent reference skips the whole node rather than detaching the
+    // child to the root, which is what a `None` parent means.
+    #[test]
+    fn a_reparent_onto_an_unresolvable_parent_skips_rather_than_detaching() {
+        let run = Run::default();
+        let effects = run.exec(&[node(COp::Reparent {
+            child: CExpr::Lit(Val::Entity(entity(1))),
+            parent: Some(CExpr::Never),
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    #[test]
+    fn a_reparent_moves_the_child_under_a_parent_or_to_the_root() {
+        let (child, parent) = (entity(1), entity(2));
+        let run = Run::default();
+        let effects = run.exec(&[
+            node(COp::Reparent {
+                child: CExpr::Lit(Val::Entity(child)),
+                parent: Some(CExpr::Lit(Val::Entity(parent))),
+            }),
+            node(COp::Reparent {
+                child: CExpr::Lit(Val::Entity(child)),
+                parent: None,
+            }),
+        ]);
+        let [
+            Effect::Reparent {
+                child: a,
+                parent: Some(p),
+            },
+            Effect::Reparent {
+                child: b,
+                parent: None,
+            },
+        ] = effects.as_slice()
+        else {
+            panic!("expected two reparents, got {effects:?}");
+        };
+        assert_eq!((*a, *p, *b), (child, parent, child));
+    }
+
+    #[test]
+    fn the_request_only_nodes_each_push_what_they_name() {
+        let run = Run::default();
+        let effects = run.exec(&[
+            node(COp::Sound {
+                clip: AudioClipHandle(3),
+                kind: CueKind::Music,
+                volume: 0.5,
+            }),
+            node(COp::Scene {
+                scene: AssetId(1),
+                transition: String::from("fade"),
+            }),
+            node(COp::Screen(AssetId(2))),
+            // A node the checker should have rejected asks for nothing rather
+            // than guessing at what it meant.
+            node(COp::Never),
+        ]);
+        let [
+            Effect::Sound(cue),
+            Effect::Scene { scene, transition },
+            Effect::Screen(screen),
+        ] = effects.as_slice()
+        else {
+            panic!("expected three requests, got {effects:?}");
+        };
+        assert_eq!(
+            (cue.clip, cue.kind, cue.volume),
+            (AudioClipHandle(3), CueKind::Music, 0.5)
+        );
+        assert_eq!(*scene, AssetId(1));
+        assert_eq!(transition, "fade");
+        assert_eq!(*screen, AssetId(2));
+    }
+}

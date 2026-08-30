@@ -110,41 +110,73 @@ mod imp {
         }
     }
 
-    static CLASSES: [Class; CLASS_COUNT] = [const { Class::new() }; CLASS_COUNT];
-
-    pub(crate) fn record_alloc(size: usize) {
-        let class = &CLASSES[class_of(size)];
-        class.allocs.fetch_add(1, Relaxed);
-        class.live.fetch_add(1, Relaxed);
+    // The histogram behind the global allocator. Split out from the free
+    // functions so the bookkeeping is testable on its own instance: the
+    // process-global one is fed by every thread at once, so a delta read across
+    // it is a race rather than a measurement.
+    pub(crate) struct Histogram {
+        classes: [Class; CLASS_COUNT],
     }
 
-    pub(crate) fn record_free(size: usize) {
-        let live = &CLASSES[class_of(size)].live;
-        let _ = live.fetch_update(Relaxed, Relaxed, |n| Some(n.saturating_sub(1)));
-    }
+    impl Histogram {
+        pub(crate) const fn new() -> Self {
+            Self {
+                classes: [const { Class::new() }; CLASS_COUNT],
+            }
+        }
 
-    // A resize moves a block between classes without being an allocation of its
-    // own, matching how the global counters treat it.
-    pub(crate) fn record_realloc(old_size: usize, new_size: usize) {
-        let (old, new) = (class_of(old_size), class_of(new_size));
-        if old != new {
-            record_free(old_size);
-            CLASSES[new].live.fetch_add(1, Relaxed);
+        pub(crate) fn record_alloc(&self, size: usize) {
+            let class = &self.classes[class_of(size)];
+            class.allocs.fetch_add(1, Relaxed);
+            class.live.fetch_add(1, Relaxed);
+        }
+
+        pub(crate) fn record_free(&self, size: usize) {
+            let live = &self.classes[class_of(size)].live;
+            let _ = live.fetch_update(Relaxed, Relaxed, |n| Some(n.saturating_sub(1)));
+        }
+
+        // A resize moves a block between classes without being an allocation of
+        // its own, matching how the global counters treat it.
+        pub(crate) fn record_realloc(&self, old_size: usize, new_size: usize) {
+            let (old, new) = (class_of(old_size), class_of(new_size));
+            if old != new {
+                self.record_free(old_size);
+                self.classes[new].live.fetch_add(1, Relaxed);
+            }
+        }
+
+        pub(crate) fn snapshot(&self) -> SizeClasses {
+            SizeClasses {
+                classes: core::array::from_fn(|i| {
+                    let (min_bytes, max_bytes) = class_bounds(i);
+                    SizeClass {
+                        min_bytes,
+                        max_bytes,
+                        allocs: self.classes[i].allocs.load(Relaxed),
+                        live_blocks: self.classes[i].live.load(Relaxed),
+                    }
+                }),
+            }
         }
     }
 
+    static CLASSES: Histogram = Histogram::new();
+
+    pub(crate) fn record_alloc(size: usize) {
+        CLASSES.record_alloc(size);
+    }
+
+    pub(crate) fn record_free(size: usize) {
+        CLASSES.record_free(size);
+    }
+
+    pub(crate) fn record_realloc(old_size: usize, new_size: usize) {
+        CLASSES.record_realloc(old_size, new_size);
+    }
+
     pub(crate) fn snapshot() -> Option<SizeClasses> {
-        Some(SizeClasses {
-            classes: core::array::from_fn(|i| {
-                let (min_bytes, max_bytes) = class_bounds(i);
-                SizeClass {
-                    min_bytes,
-                    max_bytes,
-                    allocs: CLASSES[i].allocs.load(Relaxed),
-                    live_blocks: CLASSES[i].live.load(Relaxed),
-                }
-            }),
-        })
+        Some(CLASSES.snapshot())
     }
 }
 
@@ -158,6 +190,8 @@ pub fn size_classes() -> Option<SizeClasses> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "detail")]
+    use super::imp::Histogram;
     use super::*;
 
     #[test]
@@ -201,23 +235,37 @@ mod tests {
         assert_eq!(size_classes(), None);
     }
 
-    // The counters are process-global, so this asserts on deltas.
     #[cfg(feature = "detail")]
     #[test]
     fn allocations_and_frees_move_their_class() {
         const SIZE: usize = 1 << 17;
         let class = class_of(SIZE);
-        let before = size_classes().expect("the feature is on").classes[class];
+        let histogram = Histogram::new();
 
-        record_alloc(SIZE);
-        let during = size_classes().expect("the feature is on").classes[class];
-        assert_eq!(during.allocs, before.allocs + 1);
-        assert_eq!(during.live_blocks, before.live_blocks + 1);
+        histogram.record_alloc(SIZE);
+        let during = histogram.snapshot().classes[class];
+        assert_eq!(during.allocs, 1);
+        assert_eq!(during.live_blocks, 1);
 
-        record_free(SIZE);
-        let after = size_classes().expect("the feature is on").classes[class];
-        assert_eq!(after.live_blocks, before.live_blocks);
-        assert_eq!(after.allocs, before.allocs + 1, "a free is not an alloc");
+        histogram.record_free(SIZE);
+        let after = histogram.snapshot().classes[class];
+        assert_eq!(after.live_blocks, 0);
+        assert_eq!(after.allocs, 1, "a free is not an alloc");
+    }
+
+    // A free of a class that never allocated cannot take the live count below
+    // zero: the allocator sees frees of blocks older than the histogram.
+    #[cfg(feature = "detail")]
+    #[test]
+    fn a_free_without_a_matching_alloc_leaves_the_class_empty() {
+        const SIZE: usize = 1 << 11;
+        let histogram = Histogram::new();
+
+        histogram.record_free(SIZE);
+
+        let class = histogram.snapshot().classes[class_of(SIZE)];
+        assert_eq!(class.live_blocks, 0);
+        assert_eq!(class.allocs, 0);
     }
 
     // A resize moves the block's live count between classes and counts as no
@@ -228,43 +276,97 @@ mod tests {
         const SMALL: usize = 1 << 13;
         const LARGE: usize = 1 << 19;
         let (small, large) = (class_of(SMALL), class_of(LARGE));
-        let before = size_classes().expect("the feature is on");
+        let histogram = Histogram::new();
 
-        record_alloc(SMALL);
-        record_realloc(SMALL, LARGE);
-        let after = size_classes().expect("the feature is on");
+        histogram.record_alloc(SMALL);
+        histogram.record_realloc(SMALL, LARGE);
+        let after = histogram.snapshot();
 
-        assert_eq!(
-            after.classes[small].live_blocks,
-            before.classes[small].live_blocks
-        );
-        assert_eq!(
-            after.classes[large].live_blocks,
-            before.classes[large].live_blocks + 1
-        );
-        assert_eq!(after.classes[large].allocs, before.classes[large].allocs);
+        assert_eq!(after.classes[small].live_blocks, 0);
+        assert_eq!(after.classes[large].live_blocks, 1);
+        assert_eq!(after.classes[large].allocs, 0, "a resize is not an alloc");
+        assert_eq!(after.classes[small].allocs, 1);
+    }
 
-        record_free(LARGE);
+    // A resize inside one class is not a move at all.
+    #[cfg(feature = "detail")]
+    #[test]
+    fn a_resize_within_a_class_leaves_the_counts_alone() {
+        const SMALL: usize = 1 << 13;
+        const LARGER: usize = (1 << 13) + 64;
+        let class = class_of(SMALL);
+        let histogram = Histogram::new();
+
+        histogram.record_alloc(SMALL);
+        histogram.record_realloc(SMALL, LARGER);
+
+        let after = histogram.snapshot().classes[class];
+        assert_eq!(after.live_blocks, 1);
+        assert_eq!(after.allocs, 1);
     }
 
     #[cfg(feature = "detail")]
     #[test]
     fn the_busiest_class_is_the_one_holding_the_most_live_blocks() {
-        const SIZE: usize = 1 << 9;
-        // Enough to outweigh whatever the test harness itself is holding.
-        let target = size_classes().expect("the feature is on").live_blocks() + 1;
-        for _ in 0..target {
-            record_alloc(SIZE);
+        const BUSY: usize = 1 << 9;
+        const QUIET: usize = 1 << 3;
+        let histogram = Histogram::new();
+
+        histogram.record_alloc(QUIET);
+        for _ in 0..3 {
+            histogram.record_alloc(BUSY);
         }
 
-        let busiest = size_classes()
-            .expect("the feature is on")
-            .busiest()
-            .expect("blocks are live");
-        assert_eq!(busiest.min_bytes, class_bounds(class_of(SIZE)).0);
+        let snapshot = histogram.snapshot();
+        let busiest = snapshot.busiest().expect("blocks are live");
+        assert_eq!(busiest.min_bytes, class_bounds(class_of(BUSY)).0);
+        assert_eq!(busiest.live_blocks, 3);
+        assert_eq!(snapshot.live_blocks(), 4);
+    }
 
-        for _ in 0..target {
-            record_free(SIZE);
+    #[cfg(feature = "detail")]
+    #[test]
+    fn an_empty_histogram_has_no_busiest_class() {
+        let histogram = Histogram::new();
+        assert_eq!(histogram.snapshot().busiest(), None);
+        assert_eq!(histogram.snapshot().live_blocks(), 0);
+    }
+
+    // The global histogram is the one the allocator feeds, and every other test
+    // thread feeds it too, so this asserts only what stays true under that
+    // traffic: a recorded allocation reaches it, and the lifetime count only
+    // ever climbs.
+    #[cfg(feature = "detail")]
+    #[test]
+    fn the_global_histogram_takes_what_the_allocator_records() {
+        const SIZE: usize = 1 << 17;
+        let class = class_of(SIZE);
+        let before = size_classes().expect("the feature is on").classes[class];
+
+        record_alloc(SIZE);
+        let after = size_classes().expect("the feature is on").classes[class];
+        assert!(after.allocs > before.allocs);
+
+        record_free(SIZE);
+    }
+
+    // The whole partition is readable as one array, which is what a readout
+    // walks: every class in ascending order, covering the range without a gap.
+    // Only a build carrying the histogram has one to read.
+    #[cfg(feature = "detail")]
+    #[test]
+    fn the_classes_are_readable_as_one_ascending_array() {
+        let snapshot = size_classes().expect("this build tracks size classes");
+        let classes = snapshot.classes();
+        assert_eq!(classes.len(), CLASS_COUNT);
+        for pair in classes.windows(2) {
+            assert!(
+                pair[0].max_bytes < pair[1].min_bytes || pair[0].max_bytes + 1 == pair[1].min_bytes,
+                "{:?} then {:?} do not meet",
+                pair[0],
+                pair[1]
+            );
         }
+        assert_eq!(classes[CLASS_COUNT - 1].max_bytes, u64::MAX);
     }
 }

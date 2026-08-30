@@ -516,7 +516,7 @@ impl MtlContext {
         // bound. The fragment shader uses `prefilter_mip_count == 0` to
         // detect the fallback and skip IBL math.
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::build::environment_map::deserialise(bytes)
+            let view = crate::bake::environment_map::deserialise(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
                 &allocator,
@@ -537,7 +537,7 @@ impl MtlContext {
         // 2x2x2 identity LUT so the composite pass always binds a valid 3D
         // texture. With the identity LUT the grade is a no-op at any strength.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::build::color_lut::deserialise(bytes)
+            let (size, data) = crate::bake::color_lut::deserialise(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {}", e))?;
             upload_color_lut(&allocator, size, data)?
         } else {
@@ -763,6 +763,17 @@ impl MtlContext {
         let hiz = if cull_pipeline.is_some() {
             Some(super::hiz::HiZResources::new(
                 &device, render_w, render_h, hot_reload,
+            )?)
+        } else {
+            None
+        };
+
+        // The reflection-probe convolution kernels, under the same gate: a probe
+        // capture renders through the bindless ICB, so a world without the cull
+        // pipeline never bakes one and never needs them.
+        let probe_prefilter = if cull_pipeline.is_some() {
+            Some(super::probe_prefilter::ProbePrefilterPipelines::new(
+                &device, hot_reload,
             )?)
         } else {
             None
@@ -1267,7 +1278,8 @@ impl MtlContext {
                 bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
                 set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
                 rendering: None,
-                converting: None,
+                prefiltering: None,
+                prefilter: probe_prefilter,
                 retire_pool: super::transient::RetirePool::new(),
             },
             cube_sampler,
@@ -1467,7 +1479,8 @@ impl MtlContext {
         );
         // Tally the raymarch metallib cache (the only shader-cache client on
         // Metal; everything else precompiles at build time).
-        crate::shader_cache::report_init_and_prune();
+        crate::shader_cache::report_init();
+        crate::runtime_cache::checkpoint();
         Ok(ctx)
     }
 

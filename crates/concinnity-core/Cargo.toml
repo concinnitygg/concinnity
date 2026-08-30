@@ -8,17 +8,15 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Runtime vocabulary for the Concinnity engine: GPU layouts, ECS components, registry, CPU kernels"
+readme = "README.md"
 keywords = ["gamedev", "graphics", "ecs", "concinnity"]
 categories = ["game-engines", "no-std"]
 include = [
+    "/README.md",
     "/src",
     "/tests",
     "/build.rs",
 ]
-
-[lib]
-name = "concinnity_core"
-path = "src/lib.rs"
 
 [features]
 # Per-size-class allocation histograms, for development binaries only. The

@@ -284,7 +284,17 @@ pub(crate) fn load_mesh_geometry(
     // querying ProceduralMesh for the live heightfield args. Same precedent as
     // the audio-clip residency the graphics init leaves resident for AudioSystem:
     // leave the component in place so a later init step can still read it.
-    let proc_meshes: Vec<ProceduralMesh> = ctx.query::<ProceduralMesh>().cloned().collect();
+    // A generator the world baked for itself at start carries no locator; those
+    // are the trailing `MeshBlock::Runtime` block, loaded after the compiled
+    // ones so a handle the build assigned keeps its index.
+    let (proc_meshes, baked_meshes): (Vec<ProceduralMesh>, Vec<ProceduralMesh>) = ctx
+        .query::<ProceduralMesh>()
+        .cloned()
+        .partition(|m| m.locator.is_some());
+    let baked_payloads = ctx
+        .resource::<concinnity_core::resource::RuntimeMeshPayloads>()
+        .cloned()
+        .unwrap_or_default();
     let voxel_chunks = ctx.drain::<VoxelChunk>();
     let file_assets = ctx.drain::<File>();
     let file_meshes: Vec<&File> = file_assets
@@ -294,6 +304,7 @@ pub(crate) fn load_mesh_geometry(
 
     if mesh_table.is_empty()
         && proc_meshes.is_empty()
+        && baked_meshes.is_empty()
         && voxel_chunks.is_empty()
         && file_meshes.is_empty()
     {
@@ -461,11 +472,43 @@ pub(crate) fn load_mesh_geometry(
     load_meshes!("VoxelChunk", voxel_chunks);
     load_meshes!("File", file_meshes);
 
+    // The world's own block: geometry baked at start, whose payload bytes are
+    // already in memory rather than behind a locator.
+    for mesh in &baked_meshes {
+        let Some(bytes) = baked_payloads.get(mesh.asset_id) else {
+            tracing::error!(
+                "GraphicsSystem: ProceduralMesh {} was baked at start but left no payload",
+                mesh.asset_id
+            );
+            return None;
+        };
+        match crate::gfx::mesh_payload::deserialise_with_lods(bytes) {
+            Ok((verts, idxs, alternates)) => {
+                component_mesh_handles.insert(mesh.asset_id, geometry.len());
+                geometry.push(LoadedMesh {
+                    vertices: verts,
+                    indices: idxs,
+                    lod_alternates: alternates,
+                    bounds: None,
+                    counts: None,
+                });
+            }
+            Err(e) => {
+                tracing::error!(
+                    "GraphicsSystem: malformed baked ProceduralMesh payload: {}",
+                    e
+                );
+                return None;
+            }
+        }
+    }
+
     // Skybox-generated meshes enclose the camera, so any prop using one must
     // opt out of frustum culling AND streaming residency (per the
     // StreamingConfig docstring's "skybox always stays resident" promise).
     let always_resident_meshes: std::collections::HashSet<usize> = proc_meshes
         .iter()
+        .chain(&baked_meshes)
         .filter(|pm| pm.generator == "skybox")
         .filter_map(|pm| component_mesh_handles.get(&pm.asset_id).copied())
         .collect();
@@ -1877,6 +1920,59 @@ mod tests {
         assert_eq!(component_handles.get(&AssetId(2)), Some(&0));
         assert_eq!(geometry.len(), 1);
         assert!(resident.contains(&0), "skybox generator stays resident");
+    }
+
+    // Geometry the world baked for itself at start loads from the payload map
+    // rather than a locator, and lands past every handle the build assigned.
+    #[test]
+    fn load_mesh_geometry_loads_the_baked_block_last() {
+        let mut b = BlobWorld::new();
+        let compiled = b.payload(&tri_payload());
+        // One compiled ProceduralMesh (handle 1, after the Mesh block) and one
+        // baked at start.
+        b.push(ProceduralMesh {
+            asset_id: AssetId(2),
+            generator: "box".to_string(),
+            locator: Some(compiled.clone()),
+            ..Default::default()
+        });
+        b.push(ProceduralMesh {
+            asset_id: AssetId(3),
+            generator: "skybox".to_string(),
+            ..Default::default()
+        });
+        let mut world = b.seal().with_mesh_table(vec![Some(compiled)]);
+        let mut payloads = concinnity_core::resource::RuntimeMeshPayloads::default();
+        payloads.0.insert(AssetId(3), tri_payload());
+        world.resources.insert(payloads);
+        let mut ctx = world.ctx();
+
+        let (geometry, _sources, resident, component_handles, _deferred) =
+            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
+        assert_eq!(geometry.len(), 3);
+        assert_eq!(component_handles.get(&AssetId(2)), Some(&1));
+        assert_eq!(
+            component_handles.get(&AssetId(3)),
+            Some(&2),
+            "the baked mesh trails the compiled blocks"
+        );
+        assert_eq!(geometry[2].vertices.len(), 3, "the baked payload decoded");
+        assert!(resident.contains(&2), "a baked skybox stays resident too");
+    }
+
+    // A mesh baked at start whose payload never reached the map aborts the
+    // load, the way a missing compiled payload does.
+    #[test]
+    fn load_mesh_geometry_baked_mesh_without_a_payload_returns_none() {
+        let mut b = BlobWorld::new();
+        b.push(ProceduralMesh {
+            asset_id: AssetId(3),
+            generator: "skybox".to_string(),
+            ..Default::default()
+        });
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+        assert!(load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).is_none());
     }
 
     // A Mesh with no compiled payload aborts the whole load.

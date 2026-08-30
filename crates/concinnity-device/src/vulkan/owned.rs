@@ -189,8 +189,10 @@ impl Drop for DeviceInner {
         }
         // Persist and destroy the device's pipeline cache while the device
         // still exists. A lost device fails the serialize inside and keeps the
-        // blob already on disk.
+        // blob already on disk. The checkpoint after it also writes whatever
+        // shader artifacts were compiled lazily since init's own.
         super::pipeline_cache::shutdown(&self.raw);
+        crate::runtime_cache::checkpoint();
         // SAFETY: destroyed exactly once, when the last handle to it drops; every object created
         // from it has been destroyed above or by the context's own teardown, which runs first.
         unsafe { self.raw.destroy_device(None) };

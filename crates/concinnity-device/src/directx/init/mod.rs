@@ -477,6 +477,10 @@ impl DxContext {
             raymarch_srv_base_slot,
             hiz_srv_slot,
             hiz_uav_base_slot,
+            probe_capture_srv_slot,
+            probe_capture_uav_base_slot,
+            probe_cube_uav_base_slot,
+            probe_mip0_pair_slot,
             transparent_scene_copy_srv_slot,
             ssgi_gi_srv_slot,
             gbuffer_srv_base_slot,
@@ -783,7 +787,7 @@ impl DxContext {
         // upload both cubes. Otherwise bind a 1×1 grey fallback for each; the
         // shader keys off prefilter_mip_count == 0 to skip IBL math.
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::build::environment_map::deserialise(bytes)
+            let view = crate::bake::environment_map::deserialise(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {e}"))?;
             upload_environment_map(
                 &alloc,
@@ -1116,7 +1120,7 @@ impl DxContext {
         // so the composite pass always binds a valid Texture3D. With the
         // identity LUT the grade is a no-op at any `lut_strength`.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::build::color_lut::deserialise(bytes)
+            let (size, data) = crate::bake::color_lut::deserialise(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
             upload_color_lut(
                 &alloc,
@@ -2055,6 +2059,26 @@ impl DxContext {
         // them. The init kernel reads the main-depth SRV that the decal +
         // fog passes already wrote; `decal_depth_srv_gpu` carries the
         // matching GPU handle.
+        // The reflection-probe convolution kernels, under the same gate the bake
+        // itself needs: a probe capture renders through the bindless GPU cull, so a
+        // world without the cull PSO never bakes one and never needs them.
+        //
+        // The convolution kernels also read their source mip through a UAV, which
+        // D3D12 allows for this format only under `TypedUAVLoadAdditionalFormats`.
+        // Without it there is no probe bake and the cube array keeps sampling the sky.
+        let typed_uav_load = crate::directx::probe_prefilter::typed_uav_load_supported(&device);
+        if cull_pso.is_some() && !typed_uav_load {
+            tracing::warn!(
+                "reflection probes: device lacks TypedUAVLoadAdditionalFormats, skipping probe baking"
+            );
+        }
+        let probe_prefilter = match cull_pso.is_some() && typed_uav_load {
+            true => Some(
+                crate::directx::probe_prefilter::ProbePrefilterPipelines::new(&device, hot_reload)?,
+            ),
+            false => None,
+        };
+
         let hiz = if cull_pso.is_some() {
             let mut mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE> =
                 Vec::with_capacity(HIZ_MAX_MIPS);
@@ -2222,12 +2246,14 @@ impl DxContext {
             None
         };
 
-        crate::shader_cache::report_init_and_prune();
-        // Persist the pipeline library now that every init-built PSO has
-        // populated it; a crash mid-session then still leaves the next launch
-        // warm.
+        crate::shader_cache::report_init();
+        // Serialize the pipeline library now that every init-built PSO has
+        // populated it, then write the segment holding it and every shader
+        // artifact this init compiled; a crash mid-session then still leaves
+        // the next launch warm.
         super::pso_library::serialize();
         crate::pipeline_cache::report_init(super::pso_library::disk_state());
+        crate::runtime_cache::checkpoint();
 
         let pooled = alloc.stats();
         tracing::info!(
@@ -2318,6 +2344,10 @@ impl DxContext {
                 flat_pool_base_slot,
                 flat_pool_len,
                 probe_cube_base_slot,
+                probe_capture_srv_slot,
+                probe_capture_uav_base_slot,
+                probe_cube_uav_base_slot,
+                probe_mip0_pair_slot,
                 sampler_heap,
                 shadow_sampler_gpu,
                 linear_sampler_gpu,
@@ -2587,7 +2617,8 @@ impl DxContext {
                 bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
                 set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
                 rendering: None,
-                converting: None,
+                prefiltering: None,
+                prefilter: probe_prefilter,
                 maps: Vec::new(),
                 set_cbvs: probe_set_cbvs,
                 set_cbv_ptrs: probe_set_cbv_ptrs,

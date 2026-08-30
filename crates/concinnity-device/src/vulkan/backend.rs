@@ -88,7 +88,7 @@ impl RenderBackend for VkContext {
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
         fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
-        fn update_texture_slot(&mut self, slot: usize, image: &crate::build::texture::TextureImage) -> crate::gfx::error::RenderResult<()>;
+        fn update_texture_slot(&mut self, slot: usize, image: &crate::bake::texture::TextureImage) -> crate::gfx::error::RenderResult<()>;
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> crate::gfx::error::RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);

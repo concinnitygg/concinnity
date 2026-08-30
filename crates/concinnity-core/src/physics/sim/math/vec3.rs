@@ -276,4 +276,19 @@ mod tests {
         assert_eq!(b.abs(), vec3(0.5, 1.0, 2.0));
         assert_eq!(a.clamp(Vec3::ZERO, Vec3::splat(2.0)), vec3(1.0, 2.0, 2.0));
     }
+
+    // The compound assignments are the in-place forms of the operators the
+    // integrator uses every step.
+    #[test]
+    fn compound_assignment_matches_the_operator() {
+        let (a, b) = (vec3(1.0, 2.0, 3.0), vec3(0.5, -1.0, 2.0));
+
+        let mut sum = a;
+        sum += b;
+        assert_eq!(sum, a + b);
+
+        let mut difference = a;
+        difference -= b;
+        assert_eq!(difference, a - b);
+    }
 }

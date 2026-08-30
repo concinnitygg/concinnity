@@ -35,10 +35,12 @@ mod sdks;
 mod slang_artifacts;
 mod source_hash;
 mod targets;
+mod version_stamp;
 
 pub use metal_shaders::{SlangLibSpec, precompile_metal_shaders};
 use sdks::SdkEnv;
 pub use slang_artifacts::{SlangArtifact, precompile_slang_artifacts};
+pub use version_stamp::emit_version_stamp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// The graphics backend a build targets.

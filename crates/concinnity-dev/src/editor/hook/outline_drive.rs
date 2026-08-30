@@ -500,7 +500,7 @@ mod tests {
         for (ty, c, _) in EXTENTS {
             assert!(seen.insert(ty), "{ty} repeats");
             assert!(
-                concinnity_world::registry::RegisteredType::parse(ty).is_some(),
+                concinnity_cook::authoring::registry::RegisteredType::parse(ty).is_some(),
                 "{ty} is not a registered component type"
             );
             assert_ne!(

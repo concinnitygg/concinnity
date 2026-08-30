@@ -11,6 +11,7 @@
 use alloc::boxed::Box;
 
 use crate::ecs::{Access, EventStore, PipelineContext, System, World};
+use crate::result::CnResult;
 
 /// One row of the system table. Table order is run order.
 pub struct SystemEntry {
@@ -31,6 +32,10 @@ pub struct SystemEntry {
     pub before: &'static [&'static str],
 }
 
+/// A host's completion pass: it runs over the world before the gates read it,
+/// and fails the start when the world cannot be completed.
+pub type CompleteWorld = fn(&mut PipelineContext) -> Result<(), CnResult>;
+
 /// A host's system table and the load-time passes only the host can supply.
 ///
 /// The entries name the host's own system types, so the table is written where
@@ -38,6 +43,10 @@ pub struct SystemEntry {
 pub struct SystemTable {
     /// One entry per system, in run order.
     pub entries: &'static [SystemEntry],
+    /// Runs over the world before the gates read it, so a component the pass
+    /// injects can still bring its system into the schedule. Absent leaves the
+    /// world exactly as it was loaded.
+    pub complete_world: Option<CompleteWorld>,
     /// Runs over the world once its systems are built and before their `init`.
     /// Absent leaves the loaded content exactly as it was added.
     pub before_init: Option<fn(&mut PipelineContext)>,
@@ -52,6 +61,7 @@ impl SystemTable {
     /// its host contributes none.
     pub const EMPTY: Self = Self {
         entries: &[],
+        complete_world: None,
         before_init: None,
         prepare_events: None,
     };

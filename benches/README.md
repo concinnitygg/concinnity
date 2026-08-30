@@ -1,4 +1,4 @@
-# concinnity-bench
+# Benchmarks
 
 Microbenchmarks for the engine's in-process foundations, measured with the
 engine's own instruments. Each benchmark reports CPU time per unit of work next
@@ -15,14 +15,18 @@ numbers agree with what the engine's own readouts would say.
 
 ## Running
 
+The benchmarks are one `suite` bench target on the root package; bare-word
+arguments select benchmarks by substring, and every name is prefixed with its
+module.
+
 ```
-cargo bench -p concinnity-bench                      # every target
-cargo bench -p concinnity-bench --bench cook         # one target
-cargo bench -p concinnity-bench --bench cook -- 10k  # substring filter
-cargo bench -p concinnity-bench -- --json out.json   # machine-readable report
+cargo bench --features cook,player                      # every benchmark
+cargo bench --features cook,player -- cook/             # one module
+cargo bench --features cook,player -- 10k               # substring filter
+cargo bench --features cook,player -- --json out.json   # machine-readable report
 ```
 
-## Targets
+## Modules
 
 - `cook`: the world cook and blob load path. Front-half parse + expand +
   validate, the full in-memory compile, and the blob encode / parse pair, on
@@ -102,10 +106,10 @@ so numbers are comparable across runs on one machine.
 
 ## Adding a benchmark
 
-Call `Bench::run(name, items, body)` from a bench target. Name benchmarks
-`target/what/size`. Keep bodies self-contained: tear down what you build, or
-the heap column will show the drift. New targets are a file in the package
-root with a `[[bench]]` entry naming it via `path`, `harness = false`.
+Call `Bench::run(name, items, body)` from a module's `benches` function. Name
+benchmarks `module/what/size`. Keep bodies self-contained: tear down what you
+build, or the heap column will show the drift. A new area is a module under
+`suite/`, declared in `suite.rs` and called from its `main`.
 
 Whole-frame, whole-world measurements (system schedules, streaming, physics
 under load) are a different instrument: they run a real client against a

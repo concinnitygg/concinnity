@@ -3,7 +3,7 @@
 pub(crate) use concinnity_cook::build_compiled;
 
 use crate::ecs::{ComponentAsset, World};
-use concinnity_cook::world::LoadedWorld;
+use concinnity_cook::build_only::LoadedWorld;
 
 // Load, validate, and (when server credentials are present) fetch the missing
 // source files for a world. The returned LoadedWorld has passed the full
@@ -31,13 +31,15 @@ pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
 
 // Normalized asset-type match (lowercase, underscores stripped), matching the
 // convention used across the cook world passes.
-fn type_is(asset: &concinnity_cook::world::WorldJsonlAsset, norm_type: &str) -> bool {
+fn type_is(asset: &concinnity_cook::authoring::world::WorldJsonlAsset, norm_type: &str) -> bool {
     asset.asset_type.to_lowercase().replace('_', "") == norm_type
 }
 
 // The first declared ColorLut's authored `source` path (non-empty), or `None`.
 // Dev-only; feeds the hot-reload watcher.
-fn scan_color_lut_source(assets: &[concinnity_cook::world::WorldJsonlAsset]) -> Option<String> {
+fn scan_color_lut_source(
+    assets: &[concinnity_cook::authoring::world::WorldJsonlAsset],
+) -> Option<String> {
     assets
         .iter()
         .find(|a| type_is(a, "colorlut"))
@@ -50,7 +52,7 @@ fn scan_color_lut_source(assets: &[concinnity_cook::world::WorldJsonlAsset]) -> 
 // procedural `generator` has no file to watch). The face-size / sample defaults
 // mirror the EnvironmentMap schema defaults in `concinnity-core/src/components/environment_map.rs`.
 fn scan_environment_map_source(
-    assets: &[concinnity_cook::world::WorldJsonlAsset],
+    assets: &[concinnity_cook::authoring::world::WorldJsonlAsset],
 ) -> Option<crate::resource::EnvironmentMapSourceInfo> {
     let a = assets.iter().find(|a| type_is(a, "environmentmap"))?;
     let generator = a
@@ -190,7 +192,7 @@ pub fn build_world_from_str(content: &str) -> std::io::Result<World> {
 /// the baseline the patch merges over.
 pub(crate) fn build_world_and_shadows(
     content: &str,
-) -> std::io::Result<(World, Vec<concinnity_cook::world::ShadowedAsset>)> {
+) -> std::io::Result<(World, Vec<concinnity_cook::build_only::ShadowedAsset>)> {
     let loaded = prepare(content)?;
     let shadowed = loaded.shadowed.clone();
     Ok((world_from_loaded(loaded)?, shadowed))
@@ -266,8 +268,8 @@ mod tests {
         assert!(prepare("{ not json\n").is_err());
     }
 
-    fn asset(json: serde_json::Value) -> concinnity_cook::world::WorldJsonlAsset {
-        concinnity_cook::world::WorldJsonlAsset::from_value(&json)
+    fn asset(json: serde_json::Value) -> concinnity_cook::authoring::world::WorldJsonlAsset {
+        concinnity_cook::authoring::world::WorldJsonlAsset::from_value(&json)
     }
 
     // The type match is the cook's normalized one, so `color_lut`, `ColorLut`,

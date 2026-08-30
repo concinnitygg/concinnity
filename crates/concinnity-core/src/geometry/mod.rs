@@ -1,20 +1,34 @@
-//! The runtime geometry the engine builds on the fly: voxel-chunk streaming
-//! (`build_chunk_mesh` / `build_chunk_impostor_mesh` regenerate a chunk's mesh as
-//! it streams in), the glass/water quad generators the GPU backends call, and the
-//! shared low-level mesh math (per-vertex tangents, face normals, the vertex
-//! tuple type) that both this runtime path and the cook compile path use.
+//! The geometry the engine can build without any source file: voxel-chunk
+//! streaming (`build_chunk_mesh` / `build_chunk_impostor_mesh` regenerate a
+//! chunk's mesh as it streams in), the glass/water quad generators the GPU
+//! backends call, the procedural mesh generators (room, box, cylinder, plane,
+//! sphere, terrain, skybox, extrude, heightfield-from-pixels), and the shared
+//! low-level mesh math (per-vertex tangents, face normals, the vertex tuple
+//! type).
 //!
-//! The build-time payload compilers (`compile_mesh_payload` / `compile_room_payload`
-//! / ... ) and the procedural generators they invoke (room, extrude, primitives,
-//! terrain, skybox, heightfield) live in `concinnity-cook`; they call back into
-//! the shared helpers exported here.
+//! The generators produce `(Vec<Vert>, Vec<u16>)`; packing that into a payload
+//! is [`crate::bake::mesh`]. The cook crate's JSON compile front end parses
+//! world.jsonl args and calls down into both.
 
 // Procedural voxel-chunk generation, consumed by the backends' chunk-streaming
 // path.
 mod chunk_gen;
+mod extrude;
 pub mod glass_quad;
+mod heightfield;
+mod primitives;
+mod room;
+mod skybox;
+mod terrain;
 mod voxel;
 pub mod water_grid;
+
+pub use extrude::build_extrude;
+pub use heightfield::{HeightfieldField, build_heightfield_from_pixels};
+pub use primitives::{build_box, build_cylinder, build_plane, build_sphere};
+pub use room::build_room_geometry;
+pub use skybox::build_skybox;
+pub use terrain::build_terrain;
 
 use crate::math::vec3::{vec3_add, vec3_normalise};
 use alloc::format;

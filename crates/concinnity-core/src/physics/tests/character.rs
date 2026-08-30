@@ -138,6 +138,13 @@ impl Mover {
     }
 }
 
+/// A mover standing on a flat floor, with nothing else in the scene.
+fn on_floor() -> Mover {
+    let mut sim = scene(1);
+    add_floor(&mut sim);
+    Mover::new(sim, [0.0, STAND, 0.0])
+}
+
 /// A mover standing on a flat floor, with a wall whose near face is at
 /// `z = 1`.
 fn walled() -> Mover {
@@ -489,4 +496,38 @@ fn a_wedge_ends_the_move_instead_of_circling_inside_it() {
     assert!(drift < 0.01, "still creeping {drift} into the wedge");
     assert!(mover.x().abs() < 0.35, "squeezed sideways to {}", mover.x());
     assert!(mover.grounded, "it never left the floor");
+}
+
+// A move built from a NaN -- a behavior variable that divided by zero, a
+// controller reading an uninitialised axis -- has no direction to resolve.
+// The capsule stays where it is and reports itself airborne rather than
+// translating by a NaN, which would put the body somewhere no query can find
+// it again.
+#[test]
+fn a_non_finite_move_translates_nowhere() {
+    let mut mover = on_floor();
+    let before = mover.center;
+
+    for desired in [
+        [f32::NAN, 0.0, 0.0],
+        [0.0, f32::INFINITY, 0.0],
+        [0.0, 0.0, f32::NEG_INFINITY],
+    ] {
+        let moved = mover.drive(desired);
+        assert_eq!(moved.translation, [0.0; 3], "{desired:?} moved the capsule");
+        assert!(!moved.grounded, "{desired:?} reported a ground contact");
+    }
+    assert_eq!(mover.center, before, "the capsule drifted");
+}
+
+// The same guard on the other side: a capsule whose own centre has gone
+// non-finite cannot be resolved against anything, so the move is refused
+// rather than searching from an unusable position.
+#[test]
+fn a_capsule_at_a_non_finite_centre_does_not_move() {
+    let mut mover = on_floor();
+    mover.center = [f32::NAN, 0.0, 0.0];
+    let moved = mover.drive([PACE, 0.0, 0.0]);
+    assert_eq!(moved.translation, [0.0; 3]);
+    assert!(!moved.grounded);
 }

@@ -1,4 +1,4 @@
-/examples/**/assets/
+/target*/
 
 /world.jsonl
 world-lock.json
@@ -21,9 +21,8 @@ logs/
 node_modules/
 out/
 private/
-target/
-target-vk/
 tmp/
+vendor/
 venv/
 xcuserdata/
 

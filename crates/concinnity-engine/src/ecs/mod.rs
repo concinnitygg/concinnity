@@ -266,10 +266,11 @@ pub(crate) struct DisplayModes(pub Vec<crate::gfx::display_mode::DisplayMode>);
 /// The system table. Generates the `SYSTEMS` table a world starts from; table
 /// order is run order.
 ///
-/// The two leading fields are the load-time passes that bracket the systems:
-/// one that runs over the world once the gates have built them and before
-/// their `init`, and one that pre-creates the event queues a scheduled
-/// system's declared access can touch.
+/// The three leading fields are the load-time passes around the systems: one
+/// that completes the world before the gates read it, one that runs over the
+/// world once the gates have built them and before their `init`, and one that
+/// pre-creates the event queues a scheduled system's declared access can
+/// touch.
 ///
 /// Every system is internal: it has no declarable asset, is never parsed from a
 /// world or written to a blob, and is constructed by its gate from world
@@ -279,7 +280,8 @@ pub(crate) struct DisplayModes(pub Vec<crate::gfx::display_mode::DisplayMode>);
 /// logging.
 #[macro_export]
 macro_rules! define_systems {
-    ( before_init: $before_init:path,
+    ( complete_world: $complete_world:path,
+      before_init: $before_init:path,
       prepare_events: $prepare_events:path,
       $( $name:ident => $behavior:path {
             gate: $gate:path,
@@ -313,6 +315,7 @@ macro_rules! define_systems {
                     before: &[ $( stringify!($before) ),* ],
                 }, )*
             ],
+            complete_world: Some($complete_world),
             before_init: Some($before_init),
             prepare_events: Some($prepare_events),
         };

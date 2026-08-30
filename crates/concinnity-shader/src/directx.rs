@@ -2,7 +2,7 @@
 // targeting this backend author HLSL, so the GLSL arm carries a hint rather than
 // falling to the generic unsupported message.
 
-use concinnity_cook::shader::{ShaderCompileArgs, ShaderToolchain, set_shader_toolchain};
+use concinnity_cook::compile::shader::{ShaderCompileArgs, ShaderToolchain, set_shader_toolchain};
 
 pub(crate) fn install() {
     set_shader_toolchain(Box::new(DirectXToolchain));

@@ -14,43 +14,27 @@
 use super::hud;
 use super::registry::{self, PanelKey};
 use super::theme;
-use crate::components::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window, WindowMode};
+use crate::components::{
+    DebugHud, EngineDefaults, Sprite, TextInput, TextLabel, Window, WindowMode,
+};
 use crate::ecs::FontHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-use concinnity_world::spec::{AssetSpec, asset};
+use concinnity_cook::authoring::spec::{AssetSpec, asset};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
 // the true window corner from the first frame's viewport (`hud::layout`).
 const REF_W: f32 = 1280.0;
 
-// Reuse the engine HUD font for the button + field text. Every rendering
-// world carries an injected `hud_font` through the engine-default DebugHud /
-// StatHud chip labels unless it explicitly opted out. Resolving through the
-// chip ids keeps a user world's display font (e.g. the oversized default-font
-// fallback on a font-less label) from restyling the editor. A chip-less world
-// falls back to any label's font: a label with no loaded font is not drawn at
-// all, so a mis-sized HUD still beats an invisible one.
-fn hud_font(world: &World) -> Option<FontHandle> {
-    let chips: Vec<AssetId> = world
-        .query::<DebugHud>()
-        .flat_map(|d| [d.mouse_label, d.camera_label, d.sys_label, d.passes_label])
-        .chain(world.query::<StatHud>().flat_map(|s| {
-            [
-                s.fps_label,
-                s.vram_label,
-                s.ram_label,
-                s.ev_label,
-                s.edr_label,
-            ]
-        }))
-        .flatten()
-        .collect();
-    world
-        .query::<TextLabel>()
-        .filter(|l| chips.contains(&l.asset_id))
-        .find_map(|l| l.font)
-        .or_else(|| world.query::<TextLabel>().find_map(|l| l.font))
+// Reuse the engine HUD font for the button + field text: the same face the
+// injected HUD chips draw with, baked here rather than at world start so the
+// panels have a handle before the completion pass runs. Sharing it keeps a
+// user world's display font (e.g. the oversized default-font fallback on a
+// font-less label) from restyling the editor, and costs one atlas rather than
+// two. A bake failure leaves the panels on the built-in face: a mis-sized HUD
+// still beats an invisible one.
+fn hud_font(world: &mut World) -> Option<FontHandle> {
+    concinnity_core::defaults::hud_font(&mut world.context()).ok()
 }
 
 // Inject the editor HUD: every registered floating panel and the top bar
@@ -79,10 +63,18 @@ pub(crate) fn editor_hud(world: &mut World) {
     // that persist play state sample this at init and sandbox their saves, so
     // every preview run starts fresh (see the protocol type).
     world.insert_resource(crate::ecs::TransientSaves(true));
-    // The editor HUD replaces the baked-in debug HUD (both would answer F1):
-    // resolve the HUD font from its chips above, then drop the DebugHud so
-    // `World::start` never constructs its system.
+    // The editor HUD replaces the engine's debug HUD (both would answer F1):
+    // drop one the world declares and turn the injected one off, so
+    // `World::start` neither completes the world with one nor constructs its
+    // system.
     world.remove_all::<DebugHud>();
+    match world.query_mut::<EngineDefaults>().next() {
+        Some(declared) => declared.debug_hud = false,
+        None => world.add_component(EngineDefaults {
+            debug_hud: false,
+            ..Default::default()
+        }),
+    }
     // The billboards, selection rings, marquee rect, and gizmo go in first:
     // overlay fallback draw order is insertion order, so they stay under
     // every panel and the top bar even before the per-frame HudLayers publish
@@ -450,84 +442,64 @@ mod tests {
         assert!(world.query::<TextInput>().all(|t| t.screen.is_none()));
     }
 
-    // The button + field text reuses the font of the engine HUD chip labels,
-    // resolved through the DebugHud's chip ids -- NOT the first label in the
-    // world, whose font may be a user world's oversized display face. The
-    // DebugHud itself is dropped by the injection (the editor takes over F1).
+    // The button + field text draws with the engine HUD face, baked into the
+    // world's font table here rather than at world start -- NOT the first
+    // label in the world, whose font may be a user world's oversized display
+    // face. The DebugHud is dropped and its default turned off, since the
+    // editor takes over F1.
     #[test]
-    fn prefers_the_hud_chip_font_over_the_first_label() {
+    fn bakes_the_engine_hud_face_and_takes_over_the_debug_hud() {
         let mut world = World::new();
         world.add_component(TextLabel {
             asset_id: AssetId(0),
             font: Some(FontHandle(99)),
             ..Default::default()
         });
-        world.add_component(TextLabel {
-            asset_id: AssetId(7),
-            font: Some(FontHandle(42)),
-            ..Default::default()
-        });
-        world.add_component(DebugHud {
-            mouse_label: Some(AssetId(7)),
-            ..Default::default()
-        });
+        world.add_component(DebugHud::default());
         editor_hud(&mut world);
+
+        // One face appended, and it is the one the panels use.
+        let fonts = world
+            .resource::<crate::resource::FontTable>()
+            .expect("the face was baked");
+        assert_eq!(fonts.len(), 1);
+        let baked = FontHandle(0);
         let save = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == hud::SAVE_LABEL)
             .unwrap();
-        assert_eq!(save.font, Some(FontHandle(42)));
+        assert_eq!(save.font, Some(baked));
         let field = world
             .query::<TextInput>()
             .find(|t| t.asset_id == form_panel::NAME_INPUT)
             .unwrap();
-        assert_eq!(field.font, Some(FontHandle(42)));
+        assert_eq!(field.font, Some(baked));
+
         assert_eq!(world.query::<DebugHud>().count(), 0, "DebugHud dropped");
+        let defaults = world
+            .query::<EngineDefaults>()
+            .next()
+            .expect("the debug HUD default is turned off");
+        assert!(!defaults.debug_hud);
+        assert!(defaults.hud, "every other default is left alone");
     }
 
-    // The StatHud chips also resolve the font (e.g. a world that opted out of
-    // the debug HUD only).
+    // A world that already declares the directive keeps its own flags; only the
+    // debug HUD is forced off, and no second directive appears (two would fail
+    // the world start).
     #[test]
-    fn resolves_the_font_from_stat_hud_chips() {
+    fn a_declared_directive_is_amended_rather_than_duplicated() {
         let mut world = World::new();
-        world.add_component(TextLabel {
-            asset_id: AssetId(0),
-            font: Some(FontHandle(99)),
-            ..Default::default()
-        });
-        world.add_component(TextLabel {
-            asset_id: AssetId(3),
-            font: Some(FontHandle(9)),
-            ..Default::default()
-        });
-        world.add_component(StatHud {
-            fps_label: Some(AssetId(3)),
+        world.add_component(EngineDefaults {
+            sky: false,
             ..Default::default()
         });
         editor_hud(&mut world);
-        let save = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == hud::SAVE_LABEL)
-            .unwrap();
-        assert_eq!(save.font, Some(FontHandle(9)));
-    }
 
-    // A world with no HUD chips at all still gets a font: any label's font
-    // beats none, because a label without a loaded font is not drawn.
-    #[test]
-    fn falls_back_to_any_label_font_without_hud_chips() {
-        let mut world = World::new();
-        world.add_component(TextLabel {
-            asset_id: AssetId(0),
-            font: Some(FontHandle(42)),
-            ..Default::default()
-        });
-        editor_hud(&mut world);
-        let save = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == hud::SAVE_LABEL)
-            .unwrap();
-        assert_eq!(save.font, Some(FontHandle(42)));
+        assert_eq!(world.query::<EngineDefaults>().count(), 1);
+        let defaults = world.query::<EngineDefaults>().next().unwrap();
+        assert!(!defaults.debug_hud);
+        assert!(!defaults.sky, "the world's own opt-out stands");
     }
 
     // The templates-spec-driven constructors materialize the same components the

@@ -20,6 +20,41 @@ use crate::ecs::resolver::resolve_name;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct AssetId(pub u32);
 
+impl AssetId {
+    /// First id in the range a running world mints from.
+    ///
+    /// A build interns names from zero in declaration order, so reserving the
+    /// top of the space lets a load-time pass name what it injects without
+    /// consulting an interner the shipped runtime does not carry. A world would
+    /// have to declare four billion assets to reach it.
+    pub const MINTED_BASE: u32 = u32::MAX - 0xFFFF;
+
+    /// Whether this id was minted by a running world rather than interned from
+    /// a declared name.
+    pub fn is_minted(self) -> bool {
+        self.0 >= Self::MINTED_BASE
+    }
+}
+
+/// Hands out ids in the range a running world mints from, in call order.
+///
+/// One per world, carried as a world resource: everything that mints -- a
+/// data-entry method before start, the completion pass at start -- draws from
+/// the same counter, so no two minted assets collide.
+#[derive(Debug, Clone, Default)]
+pub struct MintedIds {
+    next: u32,
+}
+
+impl MintedIds {
+    /// The next unused minted id.
+    pub fn next_id(&mut self) -> AssetId {
+        let id = AssetId(AssetId::MINTED_BASE + self.next);
+        self.next += 1;
+        id
+    }
+}
+
 impl fmt::Display for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "#{}", self.0)

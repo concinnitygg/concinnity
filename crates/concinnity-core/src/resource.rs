@@ -8,11 +8,19 @@
 //! client re-exports them under `crate::resource::*`, alongside the engine-side
 //! `install_resource_tables` that inserts them as World resources.
 
+mod handles;
+mod install;
+mod runtime;
+
+pub use handles::{MeshBlock, ResourceHandles};
+pub use install::{append_environment_map, append_material, append_mesh};
+pub use runtime::RuntimeMeshPayloads;
+
 use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord};
+use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord, World};
 
 /// One loaded resource's runtime form. A payload resource (audio clip, and later
 /// meshes / textures) carries a `PayloadLocator` into the blob payload section; a
@@ -23,6 +31,24 @@ pub struct ResourceEntry {
     pub payload: Option<PayloadLocator>,
     /// The runtime bytes, for a data resource.
     pub data_bytes: Vec<u8>,
+}
+
+impl ResourceEntry {
+    /// A payload resource the world baked for itself at start, holding its
+    /// bytes directly because no blob backs them.
+    pub fn baked(payload_bytes: Vec<u8>) -> Self {
+        Self {
+            payload: None,
+            data_bytes: payload_bytes,
+        }
+    }
+
+    /// The payload bytes this entry holds directly, for one baked at start.
+    /// `None` for a build-compiled resource, whose bytes are read through its
+    /// [`PayloadLocator`] instead.
+    pub fn baked_bytes(&self) -> Option<&[u8]> {
+        (self.payload.is_none() && !self.data_bytes.is_empty()).then_some(&self.data_bytes[..])
+    }
 }
 
 // Build a dense per-kind table from the blob's resource stream, indexed by
@@ -80,6 +106,16 @@ macro_rules! resource_tables {
                 /// Whether the table holds no resources.
                 pub fn is_empty(&self) -> bool {
                     self.0.is_empty()
+                }
+
+                /// Append a resource the running world baked for itself and
+                /// return the handle it landed on. The table index is the
+                /// handle, so an append extends the space past every handle
+                /// the build assigned and moves none of them.
+                pub fn append(&mut self, entry: ResourceEntry) -> u32 {
+                    let handle = self.0.len() as u32;
+                    self.0.push(entry);
+                    handle
                 }
 
                 /// The payload locator for a handle, if the handle is in range
@@ -163,6 +199,24 @@ impl MaterialTable {
     pub fn data_bytes(&self, handle: usize) -> Option<&[u8]> {
         self.0.get(handle).map(|e| e.data_bytes.as_slice())
     }
+}
+
+/// Install every per-kind table built from a compiled world's resource stream
+/// into `world`. The single place the table set is enumerated: the shipped
+/// runtime's blob load, the in-memory cook build, and the [`bake`](crate::bake)
+/// builder all reach it, so a kind that migrates into the stream gets wired
+/// into every host by adding one line here. Each builder MOVES its kind's data
+/// bytes out of the records, so the caller's record slice is spent scaffolding
+/// afterwards.
+pub fn install_tables(world: &mut World, records: &mut [ResourceRecord]) {
+    world.insert_resource(AudioClipTable::from_records(records));
+    world.insert_resource(TextureTable::from_records(records));
+    world.insert_resource(ColorLutTable::from_records(records));
+    world.insert_resource(EnvironmentMapTable::from_records(records));
+    world.insert_resource(FontTable::from_records(records));
+    world.insert_resource(MaterialTable::from_records(records));
+    world.insert_resource(MeshTable::from_records(records));
+    world.insert_resource(SkinnedMeshTable::from_records(records));
 }
 
 #[cfg(test)]

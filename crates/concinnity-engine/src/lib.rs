@@ -22,7 +22,7 @@ mod bench;
 // from concinnity-core. Re-exported under the historical crate::* paths so the
 // rest of the client keeps resolving. world.jsonl I/O lives in concinnity-cook
 // (authoring), which the runtime does not link.
-pub(crate) use concinnity_core::{build, geometry, result};
+pub(crate) use concinnity_core::{bake, geometry, result};
 
 // The access-declaration mask builders, reached crate-wide as
 // `crate::component_mask!` / `crate::resource_mask!`.
@@ -44,8 +44,8 @@ pub use app::state::App;
 pub use concinnity_host::store::paths;
 pub use concinnity_host::store::paths::set_writable_state_dir;
 
-// Export-time compilation of the built-in shaders into a bundle's
-// shader-cache/, for backends that compile them at renderer init. Re-exported
+// Export-time compilation of the built-in shaders into the cache segment a
+// bundle ships, for backends that compile them at renderer init. Re-exported
 // so `cn export` reaches it without a direct device dependency.
 #[cfg(any(backend_dx, backend_vk))]
 pub use concinnity_device::precompile::{

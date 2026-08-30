@@ -334,3 +334,270 @@ fn compile_expr(expr: &BehaviorExpr, names: &mut Names<'_>, vars: &mut VarTable)
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{BehaviorLiteral, BehaviorLocal, BehaviorQuery, CueKind};
+    use crate::ecs::AudioClipHandle;
+    use crate::ecs::asset_id::AssetId;
+    use alloc::vec;
+
+    // A behavior with one local, one query over props, and the given body, so
+    // a test states only the nodes it is about.
+    fn behavior(body: Vec<BehaviorNode>) -> Behavior {
+        Behavior {
+            locals: vec![BehaviorLocal {
+                name: String::from("hp"),
+                value: BehaviorLiteral::Int(3),
+            }],
+            queries: vec![BehaviorQuery {
+                name: String::from("props"),
+                has: vec![String::from("Prop")],
+            }],
+            body,
+            ..Behavior::default()
+        }
+    }
+
+    fn compiled(body: Vec<BehaviorNode>) -> Program {
+        compile(behavior(body), &mut VarTable::default())
+    }
+
+    // The single compiled op a one-node body produces.
+    fn op(node: BehaviorNode) -> COp {
+        let mut body = compiled(vec![node]).body;
+        assert_eq!(body.len(), 1, "expected exactly one compiled node");
+        body.remove(0).op
+    }
+
+    fn expr(e: BehaviorExpr) -> CExpr {
+        match op(BehaviorNode::Despawn { target: e }) {
+            COp::Despawn(e) => e,
+            other => panic!("expected a despawn, got {other:?}"),
+        }
+    }
+
+    fn int(i: i32) -> Box<BehaviorExpr> {
+        Box::new(BehaviorExpr::Int(i))
+    }
+
+    // Compilation is total: the world checker has already rejected these, so a
+    // name that does not resolve becomes a node that does nothing rather than
+    // a panic.
+    #[test]
+    fn an_unresolvable_name_compiles_to_a_node_that_does_nothing() {
+        assert!(matches!(
+            op(BehaviorNode::ForEach {
+                query: String::from("undeclared"),
+                bind: String::from("it"),
+                body: Vec::new(),
+            }),
+            COp::Never
+        ));
+        assert!(matches!(
+            op(BehaviorNode::SetLocal {
+                local: String::from("undeclared"),
+                value: BehaviorExpr::Int(1),
+                add: false,
+            }),
+            COp::Never
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Spawn {
+                template: None,
+                position: [0.0; 3],
+                rotation_deg: [0.0; 3],
+                scale: [1.0; 3],
+                lifetime: 0.0,
+                bind: None,
+            }),
+            COp::Never
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Sound {
+                clip: None,
+                kind: CueKind::Sound,
+                volume: 1.0,
+            }),
+            COp::Never
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Scene {
+                scene: None,
+                transition: String::from("Cut"),
+            }),
+            COp::Never
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Screen { screen: None }),
+            COp::Never
+        ));
+    }
+
+    #[test]
+    fn a_resolvable_name_compiles_to_the_node_it_denotes() {
+        assert!(matches!(
+            op(BehaviorNode::Sound {
+                clip: Some(AudioClipHandle(2)),
+                kind: CueKind::Music,
+                volume: 0.5,
+            }),
+            COp::Sound {
+                clip: AudioClipHandle(2),
+                kind: CueKind::Music,
+                volume: 0.5,
+            }
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Scene {
+                scene: Some(AssetId(4)),
+                transition: String::from("FadeBlack"),
+            }),
+            COp::Scene {
+                scene: AssetId(4),
+                ..
+            }
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Screen {
+                screen: Some(AssetId(5)),
+            }),
+            COp::Screen(AssetId(5))
+        ));
+    }
+
+    // A zero scale would make the copy invisible, so it reads as the
+    // template's own size instead.
+    #[test]
+    fn a_zero_scaled_spawn_compiles_to_unit_scale() {
+        let spawn = |scale| {
+            op(BehaviorNode::Spawn {
+                template: Some(AssetId(1)),
+                position: [1.0, 2.0, 3.0],
+                rotation_deg: [0.0; 3],
+                scale,
+                lifetime: 2.0,
+                bind: Some(String::from("copy")),
+            })
+        };
+        let COp::Spawn { scale, bind, .. } = spawn([0.0; 3]) else {
+            panic!("expected a spawn");
+        };
+        assert_eq!(scale, [1.0; 3]);
+        assert_eq!(bind, Some(0));
+
+        let COp::Spawn { scale, .. } = spawn([2.0; 3]) else {
+            panic!("expected a spawn");
+        };
+        assert_eq!(scale, [2.0; 3]);
+    }
+
+    #[test]
+    fn show_and_hide_compile_to_the_same_node_with_opposite_visibility() {
+        let target = || BehaviorExpr::Named(Some(AssetId(1)));
+        assert!(matches!(
+            op(BehaviorNode::Show { target: target() }),
+            COp::Visible(_, true)
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Hide { target: target() }),
+            COp::Visible(_, false)
+        ));
+    }
+
+    #[test]
+    fn a_reparent_compiles_both_its_parent_forms() {
+        assert!(matches!(
+            op(BehaviorNode::Reparent {
+                child: BehaviorExpr::SelfEntity,
+                parent: Some(BehaviorExpr::Named(Some(AssetId(1)))),
+            }),
+            COp::Reparent {
+                parent: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            op(BehaviorNode::Reparent {
+                child: BehaviorExpr::SelfEntity,
+                parent: None,
+            }),
+            COp::Reparent { parent: None, .. }
+        ));
+    }
+
+    #[test]
+    fn a_local_and_the_tick_readings_compile_to_their_slots() {
+        assert!(matches!(
+            expr(BehaviorExpr::Local(String::from("hp"))),
+            CExpr::Local(0)
+        ));
+        assert!(matches!(
+            expr(BehaviorExpr::Local(String::from("undeclared"))),
+            CExpr::Never
+        ));
+        assert!(matches!(expr(BehaviorExpr::Dt), CExpr::Dt));
+        assert!(matches!(expr(BehaviorExpr::Elapsed), CExpr::Elapsed));
+    }
+
+    #[test]
+    fn the_unary_expressions_compile_to_their_operators() {
+        assert!(matches!(
+            expr(BehaviorExpr::Normalize(int(1))),
+            CExpr::Normalize(_)
+        ));
+        assert!(matches!(expr(BehaviorExpr::Not(int(1))), CExpr::Not(_)));
+    }
+
+    #[test]
+    fn every_arithmetic_operator_compiles_to_its_own_kind() {
+        let arith = |e| match expr(e) {
+            CExpr::Arith(op, _, _) => op,
+            other => panic!("expected arithmetic, got {other:?}"),
+        };
+        assert!(matches!(
+            arith(BehaviorExpr::Add(int(1), int(2))),
+            Arith::Add
+        ));
+        assert!(matches!(
+            arith(BehaviorExpr::Sub(int(1), int(2))),
+            Arith::Sub
+        ));
+        assert!(matches!(
+            arith(BehaviorExpr::Mul(int(1), int(2))),
+            Arith::Mul
+        ));
+        assert!(matches!(
+            arith(BehaviorExpr::Div(int(1), int(2))),
+            Arith::Div
+        ));
+    }
+
+    #[test]
+    fn every_comparison_operator_compiles_to_its_own_kind() {
+        let cmp = |e| match expr(e) {
+            CExpr::Compare(op, _, _) => op,
+            other => panic!("expected a comparison, got {other:?}"),
+        };
+        assert!(matches!(cmp(BehaviorExpr::Eq(int(1), int(2))), Cmp::Eq));
+        assert!(matches!(cmp(BehaviorExpr::Ne(int(1), int(2))), Cmp::Ne));
+        assert!(matches!(cmp(BehaviorExpr::Lt(int(1), int(2))), Cmp::Lt));
+        assert!(matches!(cmp(BehaviorExpr::Le(int(1), int(2))), Cmp::Le));
+        assert!(matches!(cmp(BehaviorExpr::Gt(int(1), int(2))), Cmp::Gt));
+        assert!(matches!(cmp(BehaviorExpr::Ge(int(1), int(2))), Cmp::Ge));
+    }
+
+    #[test]
+    fn the_variadic_expressions_compile_each_operand() {
+        let items = || vec![BehaviorExpr::Bool(true), BehaviorExpr::Dt];
+        let CExpr::All(all) = expr(BehaviorExpr::All(items())) else {
+            panic!("expected an all");
+        };
+        assert_eq!(all.len(), 2);
+        let CExpr::Any(any) = expr(BehaviorExpr::Any(items())) else {
+            panic!("expected an any");
+        };
+        assert_eq!(any.len(), 2);
+    }
+}

@@ -105,6 +105,34 @@ pub static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     msaa: false,
 };
 
+/// `probe_mip0` from `probe_prefilter.slang`.
+pub static PROBE_MIP0: SlangProgram = SlangProgram {
+    file: "probe_prefilter.slang",
+    entry: "probe_mip0",
+    label: "probe_mip0.slang",
+    gates: &["PROBE_MIP0"],
+    sizes: Sizes::None,
+    msaa: false,
+};
+/// `probe_downsample` from `probe_prefilter.slang`.
+pub static PROBE_DOWNSAMPLE: SlangProgram = SlangProgram {
+    file: "probe_prefilter.slang",
+    entry: "probe_downsample",
+    label: "probe_downsample.slang",
+    gates: &["PROBE_DOWNSAMPLE"],
+    sizes: Sizes::None,
+    msaa: false,
+};
+/// `probe_ggx` from `probe_prefilter.slang`.
+pub static PROBE_GGX: SlangProgram = SlangProgram {
+    file: "probe_prefilter.slang",
+    entry: "probe_ggx",
+    label: "probe_ggx.slang",
+    gates: &["PROBE_GGX"],
+    sizes: Sizes::None,
+    msaa: false,
+};
+
 // The G-buffer pre-pass and shadow families. Every entry is its own program so
 // it declares only the resources it binds; the `[[vk::binding]]` annotations
 // reproduce the descriptor sets the GLSL declared, so the SPIR-V is a drop-in
@@ -592,6 +620,9 @@ pub static ALL: &[&SlangProgram] = &[
     &HIZ_INIT_MSAA,
     &HIZ_INIT_SINGLE,
     &HIZ_DOWNSAMPLE,
+    &PROBE_MIP0,
+    &PROBE_DOWNSAMPLE,
+    &PROBE_GGX,
     &GBUFFER_PREPASS_VERT,
     &GBUFFER_PREPASS_VERT_INSTANCED,
     &GBUFFER_PREPASS_VERT_SKINNED,

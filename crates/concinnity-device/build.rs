@@ -520,6 +520,24 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         defines: &[("HIZ_DOWNSAMPLE", "1")],
     },
     SlangLibSpec {
+        name: "probe_mip0.slang",
+        file: "probe_prefilter.slang",
+        entries: &["probe_mip0"],
+        defines: &[("PROBE_MIP0", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "probe_downsample.slang",
+        file: "probe_prefilter.slang",
+        entries: &["probe_downsample"],
+        defines: &[("PROBE_DOWNSAMPLE", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "probe_ggx.slang",
+        file: "probe_prefilter.slang",
+        entries: &["probe_ggx"],
+        defines: &[("PROBE_GGX", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
         name: "gbuffer_prepass_vert.slang",
         file: "gbuffer_prepass.slang",
         entries: &["gbuffer_prepass_vertex"],
@@ -874,6 +892,7 @@ const SLANG_WATER_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
 // this crate has no sibling copy to read.
 const SHADER_COMPILE_SOURCES: &[&str] = &[
     "src/shader_cache.rs",
+    "src/runtime_cache.rs",
     "src/slang_source.rs",
     "src/directx/pipeline.rs",
     "src/directx/slang_builtins.rs",

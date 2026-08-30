@@ -7,7 +7,7 @@ impl crate::asset::BuildAsset for Room {
         args: &serde_json::Value,
         _ctx: &crate::asset::BuildCtx<'_>,
     ) -> std::io::Result<Vec<u8>> {
-        crate::geometry::compile_room_payload(args)
+        crate::compile::geometry::compile_room_payload(args)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
@@ -32,7 +32,7 @@ mod tests {
         let payload = Room::compile_payload(&args, &ctx()).expect("room compiles");
         assert_eq!(
             payload,
-            crate::geometry::compile_room_payload(&args).unwrap()
+            crate::compile::geometry::compile_room_payload(&args).unwrap()
         );
     }
 

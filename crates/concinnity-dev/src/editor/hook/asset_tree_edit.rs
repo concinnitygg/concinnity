@@ -42,7 +42,7 @@ impl EditorHook {
     // what is on disk.
     pub(super) fn cook_working_entries(
         &self,
-    ) -> Result<concinnity_cook::world::LoadedWorld, String> {
+    ) -> Result<concinnity_cook::build_only::LoadedWorld, String> {
         Self::cook_entries(&self.entries)
     }
 
@@ -52,7 +52,7 @@ impl EditorHook {
     // from.
     pub(super) fn cook_entries(
         entries: &[serde_json::Value],
-    ) -> Result<concinnity_cook::world::LoadedWorld, String> {
+    ) -> Result<concinnity_cook::build_only::LoadedWorld, String> {
         let content = crate::world::write_world_jsonl(entries).map_err(|e| e.to_string())?;
         concinnity_cook::prepare_world(
             &content,

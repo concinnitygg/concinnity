@@ -7,8 +7,8 @@
 // world-free; the hook owns the entries and `character_shape_panel.rs` the
 // layout.
 
-use concinnity_world::registry::build_only::CharacterSchema;
-use concinnity_world::registry::build_only::ShapePreset;
+use concinnity_cook::authoring::registry::build_only::CharacterSchema;
+use concinnity_cook::authoring::registry::build_only::ShapePreset;
 
 use crate::components::{JointProportion, ShapeSlider};
 use rand::{Rng, SeedableRng};
@@ -360,7 +360,7 @@ pub(crate) fn rows(derived: &Rows, presets: usize, has_shape: bool) -> Vec<Row> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_cook::character::builtin_schema;
+    use concinnity_cook::compile::character::builtin_schema;
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

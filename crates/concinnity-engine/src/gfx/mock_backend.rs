@@ -442,7 +442,7 @@ impl RenderBackend for MockBackend {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::build::texture::TextureImage,
+        image: &crate::bake::texture::TextureImage,
     ) -> RenderResult<()> {
         self.record(Call::UpdateTextureSlot {
             slot,

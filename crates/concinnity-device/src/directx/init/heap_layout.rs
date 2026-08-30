@@ -37,6 +37,10 @@
 //   [raymarch_srv_base_slot..+4]   raymarch t0..t3 (shadow, irr, prefilter, scene)
 //   [hiz_srv_slot]                 Hi-Z pyramid SRV (covers every mip)
 //   [hiz_uav_base_slot..]          HIZ_MAX_MIPS per-mip UAVs
+//   [probe_capture_srv_slot]       reflection-probe capture pyramid SRV
+//   [probe_capture_uav_base_slot..] PROBE_MAX_MIPS capture per-mip UAVs
+//   [probe_cube_uav_base_slot..]   PROBE_MAX_MIPS probe-cube per-mip UAVs
+//   [probe_mip0_pair_slot..+2]     the mirror copy's (capture mip 0, probe mip 0)
 //   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
 //   [ssgi_gi_srv_slot..]           (SSGI) gather-target SRV
 //   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
@@ -48,6 +52,7 @@ use crate::directx::decal::MAX_DECALS;
 use crate::directx::particle::MAX_EMITTERS;
 
 use super::HIZ_MAX_MIPS;
+use crate::directx::probe_prefilter::PROBE_MAX_MIPS;
 
 // Per-world feature counts that size the variable-length blocks of the SRV
 // heap. The fixed-size blocks (decals, skinned, clones, particles, raymarch,
@@ -115,6 +120,10 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub raymarch_srv_base_slot: usize,
     pub hiz_srv_slot: usize,
     pub hiz_uav_base_slot: usize,
+    pub probe_capture_srv_slot: usize,
+    pub probe_capture_uav_base_slot: usize,
+    pub probe_cube_uav_base_slot: usize,
+    pub probe_mip0_pair_slot: usize,
     pub transparent_scene_copy_srv_slot: usize,
     pub ssgi_gi_srv_slot: usize,
     pub gbuffer_srv_base_slot: usize,
@@ -179,7 +188,14 @@ impl SrvHeapLayout {
         let raymarch_srv_base_slot = upscale_srv_slot + 1;
         let hiz_srv_slot = raymarch_srv_base_slot + 4;
         let hiz_uav_base_slot = hiz_srv_slot + 1;
-        let transparent_scene_copy_srv_slot = hiz_uav_base_slot + HIZ_MAX_MIPS;
+        // One bake's convolution descriptors. Rewritten per bake rather than per
+        // probe slot: only one probe convolves at a time, and the install's fence
+        // gate proves the prior bake's dispatches retired before the next rewrite.
+        let probe_capture_srv_slot = hiz_uav_base_slot + HIZ_MAX_MIPS;
+        let probe_capture_uav_base_slot = probe_capture_srv_slot + 1;
+        let probe_cube_uav_base_slot = probe_capture_uav_base_slot + PROBE_MAX_MIPS;
+        let probe_mip0_pair_slot = probe_cube_uav_base_slot + PROBE_MAX_MIPS;
+        let transparent_scene_copy_srv_slot = probe_mip0_pair_slot + 2;
         let ssgi_gi_srv_slot = transparent_scene_copy_srv_slot + 1;
         // Unified G-buffer SRVs (normal+depth, roughness, velocity). 3 slots
         // when any screen-space consumer drives the pre-pass, else 0.
@@ -232,6 +248,10 @@ impl SrvHeapLayout {
             raymarch_srv_base_slot,
             hiz_srv_slot,
             hiz_uav_base_slot,
+            probe_capture_srv_slot,
+            probe_capture_uav_base_slot,
+            probe_cube_uav_base_slot,
+            probe_mip0_pair_slot,
             transparent_scene_copy_srv_slot,
             ssgi_gi_srv_slot,
             gbuffer_srv_base_slot,
@@ -262,7 +282,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 31] = [
+        let blocks: [(usize, usize); 35] = [
             (
                 l.object_base_slot,
                 p.n_objects * 2 + p.n_clusters * 2 + p.n_atlases.max(1),
@@ -287,6 +307,10 @@ mod tests {
             (l.raymarch_srv_base_slot, 4),
             (l.hiz_srv_slot, 1),
             (l.hiz_uav_base_slot, HIZ_MAX_MIPS),
+            (l.probe_capture_srv_slot, 1),
+            (l.probe_capture_uav_base_slot, PROBE_MAX_MIPS),
+            (l.probe_cube_uav_base_slot, PROBE_MAX_MIPS),
+            (l.probe_mip0_pair_slot, 2),
             (l.transparent_scene_copy_srv_slot, 1),
             (l.ssgi_gi_srv_slot, p.ssgi_srv_extra),
             (l.gbuffer_srv_base_slot, p.gbuffer_srv_extra),

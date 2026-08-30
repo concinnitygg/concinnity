@@ -14,8 +14,8 @@
 //! payload codecs (`build`, `decode`). Each asset's AUTHORED schema (what a
 //! world.jsonl declares) sits in `components` beside the runtime half it bakes
 //! into; the build-only assets, which never reach a running world, live with
-//! their registry group in concinnity-world. The asset COMPILE pipeline is
-//! concinnity-cook, which this crate has no edge into.
+//! their registry group in concinnity-cook, the build-side crate that also owns
+//! the asset COMPILE pipeline and that this crate has no edge into.
 
 #![no_std]
 // The blob container and the payload codecs parse bytes the process did not
@@ -37,7 +37,7 @@ extern crate std;
 
 /// The version of everything a cooked blob's bytes depend on: the
 /// postcard-visible component schema, the blob container's record shapes, and
-/// the payload formats in [`build`]. Stamped into every blob header and folded
+/// the payload formats in [`bake`]. Stamped into every blob header and folded
 /// into the cook's payload cache key.
 ///
 /// A blob whose stored version differs was written by a different engine and
@@ -57,11 +57,12 @@ extern crate std;
 pub const SCHEMA_VERSION: u32 = 1;
 
 mod app;
+pub mod bake;
 pub mod behavior;
 pub mod blob;
-pub mod build;
 pub mod components;
 pub mod decode;
+pub mod defaults;
 pub mod ecs;
 pub mod geometry;
 pub mod gfx;

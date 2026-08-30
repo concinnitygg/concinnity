@@ -11,22 +11,26 @@
 // (`crate::gfx::reflection_probe`); this module drives the GPU capture, mirroring
 // `crate::metal::probe`. The bake is STAGGERED + ASYNCHRONOUS across frames so the
 // render thread never blocks: one probe is in flight at a time, its six cube faces
-// submitted one per frame, then read back and convolved on a worker thread.
+// submitted one per frame into a capture cube, then convolved into the probe cube
+// by the compute kernels in `probe_prefilter.slang`. Nothing is read back and no
+// convolution runs on the CPU.
 //
 // DirectX simplification vs Metal: a per-face fence VALUE gives ordered GPU
 // completion for free (the queue is FIFO), so there is no completion handler / atomic
 // -- a face is done when `frame_sync.fence` reaches the value signalled after it. The
 // bake never calls `wait_idle` (that would reintroduce a multi-hundred-ms freeze);
-// readback is deferred until the fence reaches the last face's value.
+// the convolution is deferred until the fence reaches the last face's value.
 //
 // Each probe passes through three phases (`gfx::reflection_probe::BakePhase`, driven by
 // the pure `next_bake_action` transition table called once per pipeline slot per frame):
-//   * Rendering   -- six cube faces submitted to the GPU (one per frame) into a RESERVED
-//                    ring slot (`bake_ring_slot`) the frame never overwrites.
-//   * Converting  -- the six faces are read back (`CopyTextureRegion` into READBACK
-//                    buffers, fence-gated) and the GGX prefilter convolution runs on a
-//                    WORKER THREAD.
-//   * (install)   -- the convolved cube is uploaded into `probe.maps` + `probe.set`.
+//   * Rendering    -- six cube faces submitted to the GPU (one per frame) into a RESERVED
+//                     ring slot (`bake_ring_slot`) the frame never overwrites, each
+//                     copied into its slice of the capture cube.
+//   * Prefiltering -- the convolution runs as compute dispatches: the clamped mirror
+//                     mip plus the capture's source pyramid in the first frame (all
+//                     cheap), then ONE GGX mip per frame after it.
+//   * (install)    -- the finished cube is installed into `probe.maps` + `probe.set`.
+//                     No upload: the cube was written in place.
 //
 // Known V1 simplifications (documented intentionally; mirror Metal where noted):
 //   * Static + instanced geometry only -- skinned meshes are not captured into the
@@ -34,33 +38,27 @@
 //   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
 //     a probe bakes on an early frame), exactly like Metal.
 
-use std::sync::Arc;
-use std::sync::OnceLock;
-
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::{DxContext, FRAMES};
+use super::probe_prefilter::PrefilterGpu;
 use super::texture::{
     HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
-    transition_barrier, upload_probe_prefilter_cube,
+    transition_barrier,
 };
-use crate::gfx::image_decode::f16_to_f32;
-use crate::gfx::reflection_probe::{self, BakeAction, BakePhase};
+use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, BakeSignals, PrefilterPlan};
 
-// Captured cube-face resolution (mip 0 of the prefilter chain). Matches the
-// `EnvironmentMap` asset default + Metal's `PROBE_FACE_SIZE`.
-const PROBE_FACE_SIZE: u32 = 512;
-// Irradiance cube resolution (diffuse is low frequency, so this stays small).
-const PROBE_IRRADIANCE_FACE: u32 = 16;
-// GGX prefilter samples per output texel (a runtime bake uses far fewer than the
-// importer's 1024; the convolution is rayon-parallel).
-const PROBE_PREFILTER_SAMPLES: u32 = 128;
-// Firefly clamp during the prefilter convolution (matches the asset default).
-const PROBE_PREFILTER_CLAMP: f32 = 12.0;
+// What a runtime capture bakes: face size, mip count, GGX sample count and firefly
+// clamp, shared with the Metal and Vulkan backends (and with the build-time CPU
+// convolution's roughness ramp) so a probe looks the same whichever backend
+// captured it.
+const PLAN: PrefilterPlan = PrefilterPlan::RUNTIME;
+// Captured cube-face resolution (mip 0 of the prefilter chain).
+const PROBE_FACE_SIZE: u32 = PLAN.face_size();
 // Cube faces per probe, rendered one per frame.
 const PROBE_FACE_COUNT: usize = 6;
 
@@ -72,13 +70,13 @@ pub(in crate::directx) struct ProbeCube {
         dead_code,
         reason = "held to keep the prefilter cube resident; the array SRV is what the shaders bind"
     )]
-    pub(in crate::directx) prefilter: PooledTexture,
+    pub(in crate::directx) prefilter: ID3D12Resource,
 }
 
 // The GPU resources + state of one in-flight capture. The six faces share one
 // (MSAA) colour + depth target reused across frames; each face has its own view
-// CBV + readback buffer + command allocator/list (held until the faces are read
-// back, so the fence guarantees their GPU work has retired before they drop).
+// CBV + command allocator/list (held until the convolution starts, so the fence
+// guarantees their GPU work has retired before they drop).
 pub(in crate::directx) struct RenderingBake {
     index: usize,
     placement: reflection_probe::ProbePlacement,
@@ -96,8 +94,7 @@ pub(in crate::directx) struct RenderingBake {
     _dsv_heap: ID3D12DescriptorHeap,
     rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    // Per-face: a 160-byte ViewUniforms CBV (kept mapped) + its GVA, and a READBACK
-    // buffer the resolved face is copied into.
+    // Per-face: a 160-byte ViewUniforms CBV (kept mapped) + its GVA.
     _view_cbvs: Vec<PooledBuffer>,
     view_gvas: Vec<u64>,
     // Per-capture light + shadow snapshots (so the six faces share one consistent
@@ -106,22 +103,35 @@ pub(in crate::directx) struct RenderingBake {
     shadow_gva: u64,
     _light_cbv: PooledBuffer,
     _shadow_cbv: PooledBuffer,
-    readbacks: Vec<PooledBuffer>,
-    readback_layout: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
-    // One fresh allocator + list per submitted face, held until readback.
+    // The capture cube each face is copied into, and the probe cube the convolution
+    // will write. Allocated with the capture because face 0 copies into it, and
+    // handed to the prefiltering slot once every face has landed.
+    prefilter: PrefilterGpu,
+    // One fresh allocator + list per submitted face, held until the convolution
+    // starts (the fence proves their GPU work retired before they drop).
     cmd_allocs: Vec<ID3D12CommandAllocator>,
     cmd_lists: Vec<ID3D12GraphicsCommandList>,
-    // Fence value signalled after the LAST face; readback waits for the shared
-    // `frame_sync.fence` to reach it.
+    // Fence value signalled after the LAST face; the convolution waits for the
+    // shared `frame_sync.fence` to reach it.
     last_fence_value: u64,
 }
 
-// The prior probe whose read-back faces are convolving on a worker thread. Holds
-// only the worker's payload slot (plain data), so it drops freely.
-pub(in crate::directx) struct ConvertingBake {
+// A finished capture convolving into its cube on the GPU, one destination mip per
+// frame. Holds both cubes plus the allocator and list of every dispatch it has
+// submitted, which install drops once the fence covers them. Nothing else bakes
+// while this slot is full: the dispatches address their cubes through the one
+// reserved descriptor block a starting capture would rewrite.
+pub(in crate::directx) struct PrefilteringBake {
     index: usize,
     placement: reflection_probe::ProbePlacement,
-    payload: Arc<OnceLock<Vec<u8>>>,
+    gpu: PrefilterGpu,
+    // Next destination mip to convolve. Starts at 1: mip 0 is the clamped copy,
+    // dispatched with the source pyramid when this slot is filled.
+    cursor: u32,
+    cmd_allocs: Vec<ID3D12CommandAllocator>,
+    cmd_lists: Vec<ID3D12GraphicsCommandList>,
+    // Fence value signalled after the LAST dispatch submitted so far.
+    last_fence_value: u64,
 }
 
 // Colour + depth attachments for a probe-face / planar mirror capture.
@@ -195,15 +205,11 @@ impl DxContext {
         // free capture resources the GPU may still be reading. Idle the GPU first so
         // the dropped command lists + reserved-slot buffers are safe to release. The
         // first call has nothing in flight, so it never idles.
-        if self.probe.rendering.is_some() {
-            self.wait_idle();
-        }
+        self.abandon_in_flight_bakes();
         self.probe.placements = placements;
         self.probe.maps.clear();
         self.probe.set = ProbeSet::EMPTY;
         self.probe.bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe.placements.len());
-        self.probe.rendering = None;
-        self.probe.converting = None;
     }
 
     // The reserved transient-ring slot the asynchronous bake builds its bindless
@@ -270,84 +276,115 @@ impl DxContext {
         let _ = elapsed;
         if !self.probe.bake_queue.pending()
             && self.probe.rendering.is_none()
-            && self.probe.converting.is_none()
+            && self.probe.prefiltering.is_none()
         {
             return Ok(());
         }
         // Permanent ineligibility: a probe only improves on a real environment, and
         // the capture renders through the bindless cull. Abandon the queue rather than
         // re-checking forever.
-        if self.env_map.prefilter_mip_count <= 1 || !self.probe_capture_supported() {
-            self.probe.rendering = None;
-            self.probe.converting = None;
+        if self.env_map.prefilter_mip_count <= 1
+            || !self.probe_capture_supported()
+            || self.probe.prefilter.is_none()
+        {
+            self.abandon_in_flight_bakes();
             self.probe.bake_queue.abort();
             return Ok(());
         }
 
-        // Converting slot first: install the convolved cube once the worker finishes,
-        // freeing the slot so the rendering slot can read its finished capture back
-        // this same frame.
-        let converting_occupied = self.probe.converting.is_some();
-        let payload_ready = self
+        // Prefiltering slot first: convolve one mip, or install the finished cube,
+        // freeing the slot so the rendering slot can hand its capture over this same
+        // frame.
+        let prefiltering_occupied = self.probe.prefiltering.is_some();
+        let more_mips = self
             .probe
-            .converting
+            .prefiltering
             .as_ref()
-            .is_some_and(|c| c.payload.get().is_some());
-        let install = reflection_probe::next_bake_action(
-            if converting_occupied {
-                BakePhase::Converting
+            .is_some_and(|p| p.cursor < PLAN.mips());
+        // The install drops each dispatch's allocator and list, so unlike Metal it
+        // must wait for the GPU to retire them, not just for them to be submitted.
+        // SAFETY: the fence was created from this device; the query only reads.
+        let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
+        let mips_done = self
+            .probe
+            .prefiltering
+            .as_ref()
+            .is_some_and(|p| completed >= p.last_fence_value);
+        match reflection_probe::next_bake_action(
+            if prefiltering_occupied {
+                BakePhase::Prefiltering
             } else {
                 BakePhase::Idle
             },
-            false,
-            payload_ready,
-            false,
-            false,
-            false,
-        ) == BakeAction::Install;
-        if install && let Err(e) = self.probe_install() {
-            self.fail_bake(e);
-            return Ok(());
+            BakeSignals {
+                more_mips,
+                mips_done,
+                ..Default::default()
+            },
+        ) {
+            BakeAction::PrefilterMip => {
+                if let Err(e) = self.probe_prefilter_next_mip() {
+                    self.fail_bake(e);
+                    return Ok(());
+                }
+            }
+            BakeAction::Install => {
+                if let Err(e) = self.probe_install() {
+                    self.fail_bake(e);
+                    return Ok(());
+                }
+            }
+            _ => {}
         }
-        let converting_free = !converting_occupied || install;
+        let prefiltering_free = self.probe.prefiltering.is_none();
 
         // Rendering slot: submit one face per frame; once all six are done on the GPU
-        // (the fence reached the last face's value) AND the converting slot is free,
-        // read the faces back and hand them to the worker; or start the next placement.
+        // (the fence reached the last face's value) AND the prefiltering slot is free,
+        // hand the capture over; or start the next placement.
         let rendering_occupied = self.probe.rendering.is_some();
         let more_faces = self
             .probe
             .rendering
             .as_ref()
             .is_some_and(|r| r.cursor < PROBE_FACE_COUNT);
-        let done = self.probe.rendering.as_ref().is_some_and(|r| {
-            r.cursor >= PROBE_FACE_COUNT
-                // SAFETY: the fence and the event were created from this device and are live for
-                // the call.
-                && unsafe { self.frame_sync.fence.GetCompletedValue() } >= r.last_fence_value
-        });
+        // SAFETY: the fence was created from this device; the query only reads.
+        let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
+        let done = self
+            .probe
+            .rendering
+            .as_ref()
+            .is_some_and(|r| r.cursor >= PROBE_FACE_COUNT && completed >= r.last_fence_value);
         // Transient ineligibility: geometry may still be streaming. A zero cull keeps
         // the queue cursor so a later frame retries rather than baking an empty cube.
-        let eligible = self.cull_count() > 0;
+        //
+        // `prefiltering_free` is a DirectX-only term: both cubes of a bake are
+        // addressed through ONE reserved SRV-heap block, written by `PrefilterGpu::new`
+        // at the start of a capture, so starting a second bake while the first is
+        // still convolving would rewrite the descriptors its remaining dispatches
+        // bind. Metal and Vulkan give each bake its own resources and keep the
+        // capture / convolution pipelined.
+        let eligible = self.cull_count() > 0 && prefiltering_free;
         match reflection_probe::next_bake_action(
             if rendering_occupied {
                 BakePhase::Rendering
             } else {
                 BakePhase::Idle
             },
-            done && converting_free,
-            false,
-            self.probe.bake_queue.pending(),
-            eligible,
-            more_faces,
+            BakeSignals {
+                faces_done: done && prefiltering_free,
+                queue_pending: self.probe.bake_queue.pending(),
+                eligible,
+                more_faces,
+                ..Default::default()
+            },
         ) {
             BakeAction::RenderFace => {
                 if let Err(e) = self.probe_render_next_face() {
                     self.fail_bake(e);
                 }
             }
-            BakeAction::Readback => {
-                if let Err(e) = self.probe_readback_and_convolve() {
+            BakeAction::StartPrefilter => {
+                if let Err(e) = self.probe_begin_prefilter() {
                     self.fail_bake(e);
                 }
             }
@@ -356,9 +393,20 @@ impl DxContext {
                     self.fail_bake(e);
                 }
             }
-            BakeAction::Install | BakeAction::Idle => {}
+            BakeAction::PrefilterMip | BakeAction::Install | BakeAction::Idle => {}
         }
         Ok(())
+    }
+
+    // Drop whatever both bake slots hold, after idling the device: their command
+    // lists may still be executing, and every payload owns resources a submission
+    // could still name.
+    fn abandon_in_flight_bakes(&mut self) {
+        if self.probe.rendering.is_some() || self.probe.prefiltering.is_some() {
+            self.wait_idle();
+        }
+        self.probe.rendering = None;
+        self.probe.prefiltering = None;
     }
 
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
@@ -369,20 +417,16 @@ impl DxContext {
             "reflection probe bake failed, keeping {} baked: {e}",
             self.probe.maps.len()
         );
-        // Idle before dropping the in-flight capture's GPU resources: its command
-        // lists may still be executing. A bake failure is rare (allocation / device
-        // error), so the one-time stall is acceptable.
-        if self.probe.rendering.is_some() {
-            self.wait_idle();
-        }
-        self.probe.rendering = None;
-        self.probe.converting = None;
+        // Idle before dropping either slot's GPU resources: their command lists may
+        // still be executing. A bake failure is rare (allocation / device error), so
+        // the one-time stall is acceptable.
+        self.abandon_in_flight_bakes();
         self.probe.bake_queue.abort();
     }
 
     // Begin baking the next pending placement: build the reserved-slot bindless
     // buffers (object + draw-args, frustum-independent) ONCE, and allocate the capture
-    // targets + per-face view CBVs + readback buffers. No face is submitted here; the
+    // targets + per-face view CBVs + both cubes. No face is submitted here; the
     // faces follow one per frame via `probe_render_next_face`.
     fn probe_start_next(&mut self, near: f32, far: f32) -> Result<(), String> {
         let Some(index) = self.probe.bake_queue.take_next() else {
@@ -448,7 +492,7 @@ impl DxContext {
         };
         let (shadow_cbv, shadow_gva) = make_snapshot_cbv(alloc, shadow_bytes)?;
 
-        // Per-face ViewUniforms CBVs (the only per-face binding) + readback buffers.
+        // Per-face ViewUniforms CBVs, the only per-face binding.
         // The capture renders with the real env IBL (so the scene carries ambient
         // lighting), exactly like the main pass minus the SSR/RT resolve.
         let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
@@ -493,45 +537,11 @@ impl DxContext {
             view_cbvs.push(cbv);
         }
 
-        // Readback footprint for one RGBA16Float face (same for all six).
-        let face_desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: size as u64,
-            Height: size,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            Format: HDR_FORMAT,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            ..Default::default()
-        };
-        let mut readback_layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-        let mut readback_total: u64 = 0;
-        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
-        // fills are live locals that outlive the call.
-        unsafe {
-            device.GetCopyableFootprints(
-                &face_desc,
-                0,
-                1,
-                0,
-                Some(&mut readback_layout),
-                None,
-                None,
-                Some(&mut readback_total),
-            );
-        }
-        let mut readbacks = Vec::with_capacity(PROBE_FACE_COUNT);
-        for _ in 0..PROBE_FACE_COUNT {
-            readbacks.push(create_buffer(
-                alloc,
-                readback_total,
-                D3D12_HEAP_TYPE_READBACK,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-            )?);
-        }
+        // The capture cube each face is copied into, and the probe cube the
+        // convolution writes. Allocated with the capture rather than at the
+        // convolution's start: face 0 copies into the cube, so it has to exist
+        // before the first face records.
+        let prefilter = PrefilterGpu::new(self, &PLAN)?;
 
         self.probe.rendering = Some(RenderingBake {
             index,
@@ -554,8 +564,7 @@ impl DxContext {
             shadow_gva,
             _light_cbv: light_cbv,
             _shadow_cbv: shadow_cbv,
-            readbacks,
-            readback_layout,
+            prefilter,
             cmd_allocs: Vec::with_capacity(PROBE_FACE_COUNT),
             cmd_lists: Vec::with_capacity(PROBE_FACE_COUNT),
             last_fence_value: 0,
@@ -565,9 +574,9 @@ impl DxContext {
 
     // Submit the in-flight capture's next cube face (one per frame): a fresh command
     // list that culls the face frustum into the reserved slot, renders the bindless
-    // static + instance geometry into the face target, (resolves +) copies it into the
-    // face's readback buffer, then signals a fence value. The last face's value is what
-    // readback waits for.
+    // static + instance geometry into the face target, (resolves +) copies it into its
+    // slice of the capture cube, then signals a fence value. The last face's value is
+    // what the convolution waits for.
     fn probe_render_next_face(&mut self) -> Result<(), String> {
         let slot = self.bake_ring_slot();
         let (face, eye, near, far, sample_count, view_gva, light_gva, shadow_gva) = {
@@ -591,8 +600,8 @@ impl DxContext {
         let vp = reflection_probe::face_view_projection(eye, face, near, far);
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
 
-        // A fresh allocator + list per face (held until readback, so no reset of an
-        // in-flight allocator).
+        // A fresh allocator + list per face, held until the fence proves the face
+        // retired, so no in-flight allocator is ever reset.
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         let alloc: ID3D12CommandAllocator = unsafe {
@@ -607,6 +616,13 @@ impl DxContext {
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
         .map_err(|e| format!("probe: face cmd list: {e}"))?;
+        // Register the recording on the bake before anything can fail: once it is
+        // submitted, only `abandon_in_flight_bakes` idling the device makes it safe to
+        // drop, and that reaches it only through the bake.
+        if let Some(bake) = self.probe.rendering.as_mut() {
+            bake.cmd_allocs.push(alloc);
+            bake.cmd_lists.push(cmd.clone());
+        }
 
         // Cull this face's frustum into the reserved indirect buffer, then render.
         self.encode_probe_cull(&cmd, slot, &frustum, eye);
@@ -639,8 +655,8 @@ impl DxContext {
             },
         );
 
-        // Resolve (MSAA) + copy the face into its readback buffer.
-        self.copy_face_to_readback(&cmd, face, sample_count)?;
+        // Resolve (MSAA) + copy the face into its slice of the capture cube.
+        self.copy_face_to_capture(&cmd, face, sample_count)?;
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
@@ -651,7 +667,7 @@ impl DxContext {
         // the call.
         unsafe { self.command_queue.ExecuteCommandLists(&[Some(list)]) };
 
-        // Signal a unique fence value on the shared fence; the readback waits for it.
+        // Signal a unique fence value on the shared fence; the convolution waits for it.
         let fence_val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(fence_val + 1);
         // SAFETY: the fence and the event were created from this device and are live for the call.
@@ -659,18 +675,18 @@ impl DxContext {
             .map_err(|e| format!("probe: face signal: {e}"))?;
 
         if let Some(bake) = self.probe.rendering.as_mut() {
-            bake.cmd_allocs.push(alloc);
-            bake.cmd_lists.push(cmd);
             bake.last_fence_value = fence_val;
             bake.cursor += 1;
         }
         Ok(())
     }
 
-    // Resolve (when MSAA) + copy the just-rendered face colour into readback buffer
-    // `face`. The colour rests in RENDER_TARGET and is restored to it for the next
-    // face; the resolve target rests in PIXEL_SHADER_RESOURCE.
-    fn copy_face_to_readback(
+    // Resolve (when MSAA) + copy the just-rendered face colour into slice `face` of
+    // the capture cube. The colour rests in RENDER_TARGET and is restored to it for
+    // the next face; the resolve target rests in PIXEL_SHADER_RESOURCE. Face order is
+    // the hardware cube order (`gfx::cubemap`), so slice `face` is the face a sampler
+    // finds looking that way.
+    fn copy_face_to_capture(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         face: usize,
@@ -681,12 +697,14 @@ impl DxContext {
             .rendering
             .as_ref()
             .expect("probe bake targets are live while a bake is recording");
-        let layout = bake.readback_layout;
+        // Subresource index of mip 0 of array slice `face`, which D3D12 orders
+        // mip-major within a slice.
+        let dst_subresource = face as u32 * bake.prefilter.mips();
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: com::borrowed(&bake.readbacks[face]),
-            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            pResource: com::borrowed(bake.prefilter.capture()),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: layout,
+                SubresourceIndex: dst_subresource,
             },
         };
         if sample_count > 1 {
@@ -763,89 +781,166 @@ impl DxContext {
         Ok(())
     }
 
-    // The GPU has finished the capture (the fence reached the last face's value): map
-    // the six readback buffers, decode RGBA16Float -> f32, free the capture's GPU
-    // resources, and hand the faces to a worker thread that runs the GGX prefilter
-    // convolution off the render thread. Moves the bake to Converting.
-    fn probe_readback_and_convolve(&mut self) -> Result<(), String> {
+    // The GPU has finished the capture (the fence reached the last face's value):
+    // free the capture's draw resources (so the next probe can start rendering), take
+    // ownership of the two cubes, and submit the cheap half of the convolution -- the
+    // firefly-clamped mirror mip plus the capture's source pyramid. The bake moves to
+    // the Prefiltering slot with the mip cursor at 1.
+    fn probe_begin_prefilter(&mut self) -> Result<(), String> {
         let bake = self
             .probe
             .rendering
             .take()
-            .ok_or("probe: readback with no bake in flight")?;
-        let row_pitch = bake.readback_layout.Footprint.RowPitch as usize;
-        let tight_row = PROBE_FACE_SIZE as usize * 8; // four halfs per texel
-        let mut faces: [Vec<f32>; 6] = std::array::from_fn(|_| Vec::new());
-        for (face, readback) in bake.readbacks.iter().enumerate() {
-            faces[face] = read_face_rgba_f32(readback, row_pitch, tight_row)?;
-        }
-        // The capture's GPU resources (targets + command lists + readbacks) drop here;
-        // the fence reached `last_fence_value`, so the GPU is done with all of them.
-        let index = bake.index;
-        let placement = bake.placement;
-        drop(bake);
-
-        let payload = Arc::new(OnceLock::new());
-        let slot = Arc::clone(&payload);
-        std::thread::spawn(move || {
-            let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reflection_probe::build_probe_payload(
-                    &crate::pool_rows::PoolRows,
-                    &faces,
-                    PROBE_FACE_SIZE,
-                    PROBE_IRRADIANCE_FACE,
-                    PROBE_PREFILTER_SAMPLES,
-                    PROBE_PREFILTER_CLAMP,
-                )
-            }))
-            .unwrap_or_else(|_| {
-                tracing::error!("reflection probe convolution panicked; abandoning bake");
-                Vec::new()
-            });
-            let _ = slot.set(bytes);
-        });
-
-        self.probe.converting = Some(ConvertingBake {
+            .ok_or("probe: convolve with no bake in flight")?;
+        let RenderingBake {
             index,
             placement,
-            payload,
+            prefilter,
+            ..
+        } = bake;
+        // The capture's draw resources (targets + command lists) drop here; the fence
+        // reached `last_fence_value`, so the GPU is done with all of them.
+
+        let mut bake = PrefilteringBake {
+            index,
+            placement,
+            gpu: prefilter,
+            cursor: 1,
+            cmd_allocs: Vec::with_capacity(PLAN.mips() as usize),
+            cmd_lists: Vec::with_capacity(PLAN.mips() as usize),
+            last_fence_value: 0,
+        };
+        // Store the bake whether or not the recording succeeded: it owns both cubes and
+        // every list submitted for them, so a failure has to reach `fail_bake`'s idle
+        // through the slot rather than dropping them here.
+        let result = self.record_prefilter_step(&mut bake, |ctx, cmd, bake| {
+            ctx.encode_probe_pyramid(cmd, &bake.gpu, &PLAN)
         });
+        self.probe.prefiltering = Some(bake);
+        result
+    }
+
+    // Convolve one destination mip of the in-flight probe cube (one per frame, so no
+    // frame pays the whole convolution). Each dispatch reads the finished pyramid and
+    // writes a mip nothing else touches, so consecutive mips need no barrier; the
+    // queue's FIFO order puts every one of them after the pyramid build that produced
+    // their source.
+    fn probe_prefilter_next_mip(&mut self) -> Result<(), String> {
+        let mut bake = self
+            .probe
+            .prefiltering
+            .take()
+            .ok_or("probe: convolve mip with no bake in flight")?;
+        let cursor = bake.cursor;
+        // The last mip's list also carries the cube into PIXEL_SHADER_RESOURCE. The
+        // install has no list of its own to submit that transition on: it would have
+        // to drop that list immediately, and D3D12 does not keep a command allocator
+        // alive for the GPU.
+        let last = cursor + 1 == PLAN.mips();
+        let result = self.record_prefilter_step(&mut bake, |ctx, cmd, bake| {
+            ctx.encode_probe_ggx_mip(cmd, &PLAN, cursor)?;
+            if last {
+                // SAFETY: the command list is in the recording state and the resource the
+                // barrier names is live for the call.
+                unsafe {
+                    cmd.ResourceBarrier(&[transition_barrier(
+                        bake.gpu.probe(),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    )]);
+                }
+            }
+            Ok(())
+        });
+        bake.cursor += 1;
+        self.probe.prefiltering = Some(bake);
+        result
+    }
+
+    // Record and submit one convolution step on a fresh allocator + list, registering
+    // both on the bake so a later failure still reclaims them, and signalling a fence
+    // value the install waits for. The shader-visible descriptor heaps are bound
+    // first: every dispatch addresses its cubes through the SRV heap.
+    fn record_prefilter_step(
+        &self,
+        bake: &mut PrefilteringBake,
+        encode: impl FnOnce(&Self, &ID3D12GraphicsCommandList, &PrefilteringBake) -> Result<(), String>,
+    ) -> Result<(), String> {
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
+        let alloc: ID3D12CommandAllocator = unsafe {
+            self.device
+                .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
+        }
+        .map_err(|e| format!("probe: convolve allocator: {e}"))?;
+        // SAFETY: as above.
+        let cmd: ID3D12GraphicsCommandList = unsafe {
+            self.device
+                .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
+        }
+        .map_err(|e| format!("probe: convolve cmd list: {e}"))?;
+        bake.cmd_allocs.push(alloc);
+        bake.cmd_lists.push(cmd.clone());
+
+        // SAFETY: the command list is in the recording state and the heaps it names are live.
+        unsafe {
+            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
+        }
+        encode(self, &cmd, bake)?;
+        // SAFETY: the command list is live and in the recording state, which is what `Close`
+        // requires.
+        unsafe { cmd.Close() }.map_err(|e| format!("probe: convolve close: {e}"))?;
+        let list: ID3D12CommandList = windows::core::Interface::cast(&cmd)
+            .map_err(|e| format!("probe: convolve cast: {e}"))?;
+        // SAFETY: every command list in the submission is live and closed, and the slice outlives
+        // the call.
+        unsafe { self.command_queue.ExecuteCommandLists(&[Some(list)]) };
+
+        let fence_val = self.frame_sync.next_fence_value.get();
+        self.frame_sync.next_fence_value.set(fence_val + 1);
+        // SAFETY: the fence was created from this device and is live for the call.
+        unsafe { self.command_queue.Signal(&self.frame_sync.fence, fence_val) }
+            .map_err(|e| format!("probe: convolve signal: {e}"))?;
+        bake.last_fence_value = fence_val;
         Ok(())
     }
 
-    // The off-thread convolution finished: deserialise its payload, upload the
-    // prefiltered radiance cube, and install it into `probe.maps` + `probe.set` (the
-    // specular reflection source), leaving `env_map` / the sky untouched.
+    // Every mip is convolved and retired (the last one carried the cube into
+    // PIXEL_SHADER_RESOURCE): point this probe's slot in the cube array at it and
+    // bump `probe.set.count` so the forward specular samples it. Leaves `env_map` /
+    // the sky untouched.
+    //
+    // Purely CPU work. Nothing is uploaded -- the cube was written in place -- and
+    // the dispatch recordings free here, which the fence gate on this transition
+    // proved the GPU had finished with.
     fn probe_install(&mut self) -> Result<(), String> {
-        let ConvertingBake {
-            index,
-            placement: p,
-            payload,
-        } = self
+        let bake = self
             .probe
-            .converting
+            .prefiltering
             .take()
             .ok_or("probe: install with no bake in flight")?;
-        let bytes = payload.get().ok_or("probe: install before payload ready")?;
-        let view = crate::build::environment_map::deserialise(bytes)
-            .map_err(|e| format!("probe: deserialise payload: {e}"))?;
-        if view.prefilter_mip_bytes.is_empty() {
-            return Err("probe: payload has no prefilter mips".into());
-        }
-        let mip_count = view.prefilter_mip_bytes.len() as u32;
-        let prefilter = upload_probe_prefilter_cube(
-            &self.alloc,
-            view.prefilter_face,
-            &view.prefilter_mip_bytes,
-        )?;
+        let mips = bake.gpu.mips();
+        let PrefilteringBake {
+            index,
+            placement: p,
+            gpu,
+            ..
+        } = bake;
+        let prefilter = gpu.into_probe_cube();
 
-        // Point this probe's slot in the cube array at the baked cube (it held the
-        // sky prefilter until now). The forward shader samples it once `probe.set.count`
+        // Point this probe's slot in the cube array at the baked cube (it held the sky
+        // prefilter until now). The forward shader samples it once `probe.set.count`
         // covers this index.
-        super::texture::write_cube_srv_mips(
+        //
+        // The slot is rewritten in place while up to FRAMES-1 submitted frames still
+        // reference it. Both the sky prefilter and the probe cube are live, correctly
+        // formatted cubes, so either one an in-flight frame reads shades; only the
+        // frame the swap lands in is undefined about which it gets.
+        super::texture::write_cube_srv_mips_format(
             &self.device,
             &prefilter,
-            mip_count,
+            mips,
+            super::probe_prefilter::PROBE_CUBE_FORMAT,
             self.probe_cube_slot_cpu(index),
         );
 
@@ -995,49 +1090,6 @@ impl DxContext {
     pub(super) fn scene_world_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         reflection_probe::fold_world_bounds(self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)))
     }
-}
-
-// Read one READBACK buffer back as tightly-packed linear f32 RGBA, decoding the
-// RGBA16Float half values and stripping the 256-byte row padding. Row 0 is the top
-// of the framebuffer = the `v = -1` cube edge, exactly the layout the build-time
-// convolutions consume (matching the shared `face_view_projection` orientation).
-fn read_face_rgba_f32(
-    readback: &ID3D12Resource,
-    row_pitch: usize,
-    tight_row: usize,
-) -> Result<Vec<f32>, String> {
-    let h = PROBE_FACE_SIZE as usize;
-    let w = PROBE_FACE_SIZE as usize;
-    let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
-    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
-    // receives the mapping.
-    unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
-        .map_err(|e| format!("probe: map readback: {e}"))?;
-    let mut out = vec![0.0f32; w * h * 4];
-    for row in 0..h {
-        // SAFETY: the readback buffer holds `row_pitch * h` padded bytes, so
-        // `row * row_pitch` addresses the start of a row inside it, and the fence
-        // reached the face's value, so the copy completed.
-        let src = unsafe { (map_ptr as *const u8).add(row * row_pitch) };
-        for col in 0..w {
-            // SAFETY: the face is RGBA16F, so a row holds `w` eight-byte pixels within `row_pitch`,
-            // and `col < w`.
-            let px = unsafe { src.add(col * 8) };
-            let half =
-                // SAFETY: `o` is at most 6, so both reads stay inside this pixel's eight bytes.
-                |o: usize| unsafe { f16_to_f32(u16::from_le_bytes([*px.add(o), *px.add(o + 1)])) };
-            let base = (row * w + col) * 4;
-            out[base] = half(0);
-            out[base + 1] = half(2);
-            out[base + 2] = half(4);
-            out[base + 3] = half(6);
-        }
-    }
-    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
-    // call.
-    unsafe { readback.Unmap(0, None) };
-    let _ = tight_row;
-    Ok(out)
 }
 
 // Create a persistently-mapped UPLOAD constant buffer holding `bytes` (256-aligned)

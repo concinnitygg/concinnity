@@ -7,7 +7,7 @@
 //! comes from [`define_component_storage!`](crate::define_component_storage).
 //!
 //! The authoring `RegisteredType` registry is built from the same list in
-//! concinnity-world. Systems are registered separately, client-side, by the
+//! concinnity-cook. Systems are registered separately, client-side, by the
 //! `define_systems!` table.
 
 // Internal helper. Resolves an entry's `consumed` flag into the tag that still
@@ -23,6 +23,27 @@ macro_rules! __cn_surviving_tag {
     };
     ($variant:ident; consumed $($rest:tt)*) => { None };
     ($variant:ident; $skip:tt $($rest:tt)*) => { $crate::__cn_surviving_tag!($variant; $($rest)*) };
+}
+
+// Internal helper. Applies an entry's `validate: <fn>` clamp to a value of the
+// component's own type, or leaves it alone when the entry declares none. The
+// clamps live in `crate::components::validate`, the same ones the authored JSON
+// path runs, so a typed build and a cooked build land on the same component.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __cn_validate {
+    ($val:expr;) => { $val };
+    ($val:expr; validate: $f:ident $($r:tt)*) => { $crate::components::validate::$f($val) };
+    ($val:expr; $t:tt $($r:tt)*) => { $crate::__cn_validate!($val; $($r)*) };
+}
+
+// Internal helper. Resolves a resource entry's `resource: <Kind>` flag into the
+// handle space it is assigned into.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __cn_resource_kind {
+    (resource: $kind:ident $($r:tt)*) => { $crate::ecs::ResourceKind::$kind };
+    ($t:tt $($r:tt)*) => { $crate::__cn_resource_kind!($($r)*) };
 }
 
 // Internal helper. Emits the runtime `<Kind>Asset` value enum the ECS stores
@@ -148,6 +169,57 @@ macro_rules! define_components {
                 match self {
                     $( ComponentAsset::$variant(c) => c.inject_locator(locator) ),+
                 }
+            }
+
+            /// Inject the asset's declared identity after construction.
+            /// Delegates to `Component::inject_name`; a no-op for types that
+            /// never look themselves up by id.
+            pub fn inject_name(&mut self, id: $crate::ecs::asset_id::AssetId) {
+                match self {
+                    $( ComponentAsset::$variant(c) => c.inject_name(id) ),+
+                }
+            }
+
+            /// Apply the component's registered validation clamps, the ones a
+            /// cooked world's args pass through on their way to the blob. A
+            /// type declaring none is returned unchanged.
+            pub fn validated(self) -> Self {
+                match self {
+                    $(
+                        ComponentAsset::$variant(c) => ComponentAsset::$variant(
+                            $crate::__cn_validate!(c; $($meta)*)
+                        ),
+                    )+
+                }
+            }
+
+            /// The registry name of the component this value holds.
+            pub fn type_name(&self) -> &'static str {
+                match self {
+                    $( ComponentAsset::$variant(_) => stringify!($variant) ),+
+                }
+            }
+
+            /// The tag of the component this value holds.
+            pub fn tag(&self) -> ComponentTag {
+                match self {
+                    $( ComponentAsset::$variant(_) => ComponentTag::$variant ),+
+                }
+            }
+        }
+
+        impl $crate::ecs::ResourceKind {
+            /// The handle space an asset type name compiles into, or `None`
+            /// when the name is not a resource asset. The names are the
+            /// registry's own, so `parse` and the authoring registry agree on
+            /// what counts as a resource.
+            pub fn parse(name: &str) -> Option<$crate::ecs::ResourceKind> {
+                $(
+                    if name == stringify!($rvariant) {
+                        return Some($crate::__cn_resource_kind!($($rmeta)*));
+                    }
+                )+
+                None
             }
         }
 

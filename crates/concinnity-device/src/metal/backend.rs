@@ -173,7 +173,7 @@ impl RenderBackend for MtlContext {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::build::texture::TextureImage,
+        image: &crate::bake::texture::TextureImage,
     ) -> RenderResult<()> {
         debug_assert_main_thread("update_texture_slot");
         Ok(MtlContext::update_texture_slot(self, slot, image)?)

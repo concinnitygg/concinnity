@@ -383,4 +383,80 @@ mod tests {
         assert_eq!(gaps[0].kind, GapKind::MissingReadStage);
         assert_eq!(gaps[0].pass, PassId::AutoExposure);
     }
+
+    // The producer's own barrier stripped: the write it was opened for is no
+    // longer covered, which is the other half of the replay's report and the
+    // one a dropped first-use transition produces.
+    #[test]
+    fn a_dropped_producer_barrier_is_reported_as_an_uncovered_write() {
+        let mut g = GraphBuilder::new();
+        let t = g.create_texture("t", tex());
+        let t1 = g.add_pass(PassId::Main, PassKind::Render).write_texture(t);
+        g.add_pass(PassId::Composite, PassKind::Render)
+            .read_texture(t1)
+            .presents();
+        let mut g = g.compile().expect("compiles");
+        g.passes[0].barriers_before.clear();
+
+        let gaps = barrier_coverage_gaps(&g);
+        assert!(
+            gaps.iter().any(|gap| gap.kind == GapKind::UncoveredWrite
+                && gap.pass == PassId::Main
+                && gap.resource_label == "t"),
+            "{gaps:?}"
+        );
+    }
+
+    // A gap prints what the pass did and to what, so a sweep failure names the
+    // access rather than dumping a struct.
+    #[test]
+    fn every_gap_kind_says_what_the_pass_did() {
+        let gap = |kind| {
+            BarrierGap {
+                pass: PassId::Composite,
+                resource_label: "t",
+                kind,
+            }
+            .to_string()
+        };
+        assert_eq!(gap(GapKind::UncoveredRead), "pass Composite reads t");
+        assert_eq!(gap(GapKind::UncoveredWrite), "pass Composite writes t");
+        assert_eq!(
+            gap(GapKind::MissingReadStage),
+            "pass Composite reads (stage not in the run union) t"
+        );
+    }
+
+    // The resting state is the last barrier's, and a resource no barrier
+    // touches never leaves `Undefined`: a backend pairs this with its own
+    // translation to check that the next frame's producer barrier declares a
+    // source state the resource is actually in.
+    #[test]
+    fn the_final_state_is_the_last_barrier_each_resource_took() {
+        let mut g = GraphBuilder::new();
+        let t = g.create_texture("t", tex());
+        let untouched = g.create_texture("untouched", tex());
+        let t1 = g.add_pass(PassId::Main, PassKind::Render).write_texture(t);
+        g.add_pass(PassId::Composite, PassKind::Render)
+            .read_texture(t1)
+            .presents();
+        let g = g.compile().expect("compiles");
+
+        let states = final_states(&g);
+        assert_eq!(states.len(), g.resources.len());
+        let (state, stages) = states[t.resource.index()];
+        assert_eq!(
+            state,
+            ResourceState::Read,
+            "the last barrier opened it for the composite's read"
+        );
+        assert!(
+            !stages.is_empty(),
+            "a read barrier names its consumer stage"
+        );
+        assert_eq!(
+            states[untouched.resource.index()],
+            (ResourceState::Undefined, ReadStages::empty())
+        );
+    }
 }

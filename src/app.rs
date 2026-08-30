@@ -116,7 +116,7 @@ mod tests {
             .expect("the world is written");
 
         let mut app = App::from_blob(&primary).expect("the written blob loads");
-        assert_eq!(app.inner_mut().start(), Ok(()));
+        crate::test_support::assert_starts_headless(&mut app);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

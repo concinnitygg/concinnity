@@ -181,7 +181,7 @@ pub(super) struct ProbeState {
     // `auto_seed_probes`).
     pub placements: Vec<crate::gfx::reflection_probe::ProbePlacement>,
     // The baked cube per placement, parallel to `placements`.
-    pub maps: Vec<EnvironmentMapTextures>,
+    pub maps: Vec<ProbeCube>,
     // Staggered bake cursor. Reset to the placement count when placements are
     // set; each eligible frame bakes a bounded budget and advances it, so the
     // load cost spreads over several frames instead of one.
@@ -194,17 +194,26 @@ pub(super) struct ProbeState {
     // thread never blocks: the faces are submitted without `waitUntilCompleted`
     // and a completion handler flags GPU completion. `None` when idle.
     pub rendering: Option<super::probe::RenderingBake>,
-    // The probe whose read-back faces are convolving on a worker thread (one at
-    // a time). Holds only the worker's payload slot (plain data), so it overlaps
-    // the next probe's render -- pipelining the convolution shortens the bake
-    // warm-up. `None` when idle.
-    pub converting: Option<super::probe::ConvertingBake>,
+    // The probe whose capture is convolving into its cube on the GPU (one at a
+    // time), one destination mip per frame. It overlaps the next probe's render,
+    // which shortens the bake warm-up. `None` when idle.
+    pub prefiltering: Option<super::probe::PrefilteringBake>,
+    // The three convolution kernels, built at init under the same gate the bake
+    // needs (the bindless cull pipeline). `None` disables baking.
+    pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
     // Deferred-free pool for an in-flight bake's GPU resources when a
     // re-placement (`set_reflection_probes`) interrupts it: the capture command
     // buffers may still be reading those buffers/textures, so they are parked
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
-    pub retire_pool: super::transient::RetirePool<super::probe::BakeGpu>,
+    pub retire_pool: super::transient::RetirePool<super::probe::RetiredBake>,
+}
+
+// One baked reflection probe: the prefiltered radiance cube the specular term
+// samples. No irradiance cube -- a probe feeds specular only, and the diffuse
+// term keeps sampling `env_map`.
+pub(super) struct ProbeCube {
+    pub prefilter: super::allocator::PooledTexture,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `pipeline_state` is
@@ -869,7 +878,7 @@ impl MtlContext {
     // `env_map` directly, so they keep the sky regardless.
     pub(super) fn probe_cube_or_sky(&self, i: usize) -> &ProtocolObject<dyn MTLTexture> {
         match self.probe.maps.get(i) {
-            Some(p) => p.prefilter.as_ref(),
+            Some(p) => &p.prefilter,
             None => self.env_map.prefilter.as_ref(),
         }
     }
@@ -1508,6 +1517,10 @@ impl Drop for MtlContext {
         // still executing a committed command buffer can corrupt ObjC retain
         // counts and produce EXC_BAD_ACCESS in objc_release.
         self.wait_idle();
+        // Write whatever metallibs were compiled lazily since init's own
+        // checkpoint. Ahead of the reload guard below: the artifacts belong to
+        // the process, not to the window this context may have handed on.
+        crate::runtime_cache::checkpoint();
         // A context whose window was transplanted to a successor (a live editor
         // reload) must tear nothing down: the successor owns the window, view,
         // and cursor state now, so closing the window here would order the reused

@@ -80,7 +80,7 @@ pub struct MediaPayloads<'a> {
     /// handle; the backend appends a flat-normal fallback past the last entry for
     /// normal-less draws. RGBA8 images regenerate mips on upload; block-
     /// compressed images upload their chain verbatim.
-    pub textures: &'a [crate::build::texture::TextureImage],
+    pub textures: &'a [crate::bake::texture::TextureImage],
     /// Glyph atlas textures for text rendering; empty = no text support.
     pub text_atlases: Vec<(u32, u32, Vec<u8>)>,
     /// Serialised EnvironmentMap payload (irradiance + prefilter cubemaps).

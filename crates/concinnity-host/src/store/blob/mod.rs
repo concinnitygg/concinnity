@@ -67,7 +67,7 @@ fn resolve_blob_path(
 /// records). Returns (meta, payload_start_offset).
 pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnResult> {
     let data = read_file(path)?;
-    parse_cnb(SCHEMA_VERSION, &data).map_err(|e| report(path, e))
+    parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data).map_err(|e| report(path, e))
 }
 
 /// Byte offset within a blob file at which its payload section begins. Reads
@@ -85,7 +85,7 @@ pub fn payload_section_start(path: &str) -> Result<u64, CnResult> {
         tracing::error!("Failed to read header of {}: {}", path, e);
         CnResult::FileIo
     })?;
-    parse_payload_section_start(&header).map_err(|e| report(path, e))
+    parse_payload_section_start::<BlobMeta>(&header).map_err(|e| report(path, e))
 }
 
 // Read just the payload section of a blob file into memory.
@@ -107,7 +107,7 @@ fn report(path: &str, e: BlobError) -> CnResult {
     match e {
         BlobError::TooShort => tracing::error!("{}: file too short", path),
         BlobError::BadMagic => tracing::error!("{}: bad magic", path),
-        BlobError::SchemaMismatch(_) => tracing::error!(
+        BlobError::ValidityMismatch(_) => tracing::error!(
             "{}: world data was built by a different version of the engine",
             path
         ),
@@ -244,7 +244,7 @@ mod tests {
     fn format_failures_fold_onto_file_io() {
         assert_eq!(report("x.cnb", BlobError::BadMagic), CnResult::FileIo);
         assert_eq!(
-            report("x.cnb", BlobError::SchemaMismatch(99)),
+            report("x.cnb", BlobError::ValidityMismatch(99)),
             CnResult::FileIo
         );
     }

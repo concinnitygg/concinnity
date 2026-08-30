@@ -14,8 +14,8 @@
 //! stay covered by the flag alone.
 
 use crate::components::{
-    AudioEmitter, Behavior, HitRegion, KeyBinding, PhysicsJoint, Prop, PropBody, Screen,
-    ScrollPanel, TriggerVolume,
+    AudioEmitter, Behavior, EngineDefaults, HitRegion, KeyBinding, PhysicsJoint, Prop, PropBody,
+    Screen, ScrollPanel, TriggerVolume,
 };
 use crate::ecs::SYSTEMS;
 use crate::ecs::World;
@@ -37,6 +37,7 @@ fn seed(world: &mut World) -> Vec<ComponentTag> {
     world.add_component(Behavior::default());
     world.add_component(AudioEmitter::default());
     world.add_component(TriggerVolume::default());
+    world.add_component(EngineDefaults::default());
     vec![
         ComponentTag::Prop,
         ComponentTag::PropBody,
@@ -48,6 +49,7 @@ fn seed(world: &mut World) -> Vec<ComponentTag> {
         ComponentTag::Behavior,
         ComponentTag::AudioEmitter,
         ComponentTag::TriggerVolume,
+        ComponentTag::EngineDefaults,
     ]
 }
 

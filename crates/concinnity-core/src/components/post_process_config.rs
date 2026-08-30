@@ -11,7 +11,16 @@ use crate::math::exp2;
 
 /// Tunables for the post-process stack. One per world; the first declared
 /// instance wins. With no `PostProcessConfig` present, the defaults below are
-/// used (bloom on at a moderate intensity).
+/// used.
+///
+/// The defaults describe the look on capable hardware: temporal
+/// anti-aliasing, ambient occlusion, reflections and a screen-space indirect
+/// bounce are all on. They are not what every GPU runs. The `Auto` graphics
+/// quality preset resolves the detected GPU into a performance ceiling that
+/// forces the expensive effects off tier by tier, so a world that authors
+/// nothing still runs well on a laptop and still looks its best on a
+/// workstation. A world that wants a cheaper look regardless of hardware turns
+/// the effects off here; a ceiling only ever reduces, so it cannot undo that.
 ///
 /// Colour-LUT grading is a separate [ColorLut](#colorlut) asset; `lut_strength`
 /// here is the blend amount applied to whichever [ColorLut](#colorlut) the world
@@ -48,13 +57,15 @@ pub struct PostProcessConfig {
     /// one by this amount. Only matters when the world declares a
     /// [ColorLut](#colorlut); with none, grading is a no-op at any strength.
     pub lut_strength: f32,
-    /// Anti-aliasing mode. `fxaa` (default) applies a cheap composite-pass edge
-    /// filter; `taa` adds a temporal pass that jitters the projection and
+    /// Anti-aliasing mode. `fxaa` applies a cheap composite-pass edge filter;
+    /// `taa` (default) adds a temporal pass that jitters the projection and
     /// accumulates detail across frames for the cleanest edges, at the cost of a
     /// velocity pre-pass and a history buffer; `off` disables edge smoothing.
+    /// Clamped to `fxaa` below the mid quality tier.
     pub aa_mode: AaMode,
     /// Screen-space ambient occlusion toggle. Darkens creases and contact areas
-    /// where ambient light is occluded.
+    /// where ambient light is occluded. On by default, forced off on the lowest
+    /// quality tier.
     pub ssao: bool,
     /// How far the ambient-occlusion search reaches for occluders, in world
     /// units. Larger values pick up broader, softer occlusion.
@@ -63,7 +74,8 @@ pub struct PostProcessConfig {
     /// amount; higher values exaggerate the contact darkening.
     pub ssao_intensity: f32,
     /// Screen-space reflection toggle. Mixes reflected scene colour over glossy
-    /// surfaces (water, polished floors).
+    /// surfaces (water, polished floors). On by default, forced off below the
+    /// high quality tier.
     pub ssr: bool,
     /// Reflection blend strength, clamped to `[0, 1]`. Scales the
     /// Fresnel-weighted reflection mixed over the base shading.
@@ -75,7 +87,8 @@ pub struct PostProcessConfig {
     /// traces real reflection rays so off-screen geometry still appears, instead
     /// of the screen-space method. Reuses the `ssr_intensity` /
     /// `ssr_max_distance` tunables and takes precedence over `ssr`, falling back
-    /// to it where ray tracing isn't available.
+    /// to it where ray tracing isn't available. On by default; only the top
+    /// quality tier permits it, so everything below falls back to `ssr`.
     pub ray_traced_reflections: bool,
     /// Internal resolution of the roughness-aware reflection blur the SSR /
     /// ray-traced reflection composite runs. `half` (default) blurs at a
@@ -85,10 +98,11 @@ pub struct PostProcessConfig {
     /// reflection for low roughness). Only matters when `ssr` or
     /// `ray_traced_reflections` is on.
     pub reflection_blur_resolution: ReflectionBlurResolution,
-    /// Indirect-diffuse lighting source. `ibl` (default) uses the environment
-    /// map's ambient alone. `ssgi` adds a screen-space global-illumination pass
-    /// on top, so nearby lit surfaces bleed colour onto one another; the
-    /// environment ambient still covers the off-screen / sky fallback.
+    /// Indirect-diffuse lighting source. `ibl` uses the environment map's
+    /// ambient alone. `ssgi` (default) adds a screen-space global-illumination
+    /// pass on top, so nearby lit surfaces bleed colour onto one another; the
+    /// environment ambient still covers the off-screen / sky fallback. Clamped
+    /// back to `ibl` below the high quality tier.
     pub indirect_lighting: IndirectLighting,
     /// Multiplier on the indirect (ambient / IBL) lighting term, clamped to
     /// `[0, 16]`. 1.0 (default) leaves the environment-derived ambient at its
@@ -156,7 +170,7 @@ pub struct PostProcessConfig {
     pub upscale_backend: UpscalerBackend,
     /// Two-pass occlusion culling toggle. Reduces objects popping in a frame
     /// late when they're revealed by camera or occluder motion, at the cost of
-    /// extra culling work each frame.
+    /// extra culling work each frame. Needs the bindless GPU-cull path.
     pub occlusion_two_pass: bool,
 }
 
@@ -348,16 +362,16 @@ impl Default for PostProcessConfig {
             exposure_ev: 0.0,
             vignette_strength: 0.0,
             lut_strength: 1.0,
-            aa_mode: AaMode::Fxaa,
-            ssao: false,
+            aa_mode: AaMode::Taa,
+            ssao: true,
             ssao_radius: 0.5,
             ssao_intensity: 1.0,
-            ssr: false,
+            ssr: true,
             ssr_intensity: 0.7,
             ssr_max_distance: 40.0,
-            ray_traced_reflections: false,
+            ray_traced_reflections: true,
             reflection_blur_resolution: ReflectionBlurResolution::default(),
-            indirect_lighting: IndirectLighting::Ibl,
+            indirect_lighting: IndirectLighting::Ssgi,
             ambient_intensity: 1.0,
             ssgi_intensity: 0.5,
             ssgi_max_distance: 8.0,
@@ -373,7 +387,7 @@ impl Default for PostProcessConfig {
             temporal_upscaling: false,
             upscale_quality: UpscaleQuality::default(),
             upscale_backend: UpscalerBackend::default(),
-            occlusion_two_pass: false,
+            occlusion_two_pass: true,
         }
     }
 }
@@ -383,26 +397,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_leave_the_expensive_effects_off() {
-        // Bloom and FXAA are cheap enough to ship on; everything that costs a
-        // full-screen pass is opt-in so a blank world runs on any hardware.
+    fn defaults_author_the_capable_hardware_look() {
+        // The renderer's optional work is on by default; the quality preset's
+        // ceiling is what takes it back off tier by tier, so a world that
+        // authors nothing gets the best look its GPU can carry.
         let c = PostProcessConfig::default();
-        assert_eq!(c.aa_mode, AaMode::Fxaa);
+        assert_eq!(c.aa_mode, AaMode::Taa);
         assert_eq!(c.bloom_intensity, 0.6);
-        assert!(!c.ssao);
-        assert!(!c.ssr);
-        assert!(!c.ray_traced_reflections);
-        assert!(!c.auto_exposure);
-        assert!(!c.temporal_upscaling);
-        assert!(!c.hdr_display);
-        assert!(!c.occlusion_two_pass);
-        assert_eq!(c.indirect_lighting, IndirectLighting::Ibl);
+        assert!(c.ssao);
+        assert!(c.ssr);
+        assert!(c.ray_traced_reflections);
+        assert!(c.occlusion_two_pass);
+        assert_eq!(c.indirect_lighting, IndirectLighting::Ssgi);
         assert_eq!(c.ssgi_rays, DEFAULT_SSGI_RAYS);
         assert_eq!(c.ssgi_steps, DEFAULT_SSGI_STEPS);
     }
 
     #[test]
-    fn every_enum_default_matches_the_config_default() {
+    fn look_and_display_choices_stay_off_by_default() {
+        // No quality tier turns these on, so they are authoring decisions, not
+        // hardware ones: auto-exposure meters a scene the author framed, HDR
+        // output and temporal upscaling trade fidelity the author chose.
+        let c = PostProcessConfig::default();
+        assert!(!c.auto_exposure);
+        assert!(!c.temporal_upscaling);
+        assert!(!c.hdr_display);
+        assert!(!c.hdr_pq);
+        assert_eq!(c.vignette_strength, 0.0);
+    }
+
+    #[test]
+    fn enum_defaults_are_the_cheap_variants() {
         let c = PostProcessConfig::default();
         assert_eq!(c.upscale_quality, UpscaleQuality::Quality);
         assert_eq!(c.upscale_backend, UpscalerBackend::Auto);
@@ -410,6 +435,11 @@ mod tests {
         assert_eq!(c.reflection_blur_resolution, ReflectionBlurResolution::Half);
         assert_eq!(AaMode::default(), AaMode::Fxaa);
         assert_eq!(IndirectLighting::default(), IndirectLighting::Ibl);
+        // The two enum `Default`s the config deliberately does not use: the
+        // cheap variant is the right fallback for a bare `AaMode` /
+        // `IndirectLighting`, while the config defaults to the richer one.
+        assert_ne!(c.aa_mode, AaMode::default());
+        assert_ne!(c.indirect_lighting, IndirectLighting::default());
     }
 
     #[test]
@@ -720,13 +750,13 @@ mod runtime_tests {
     }
 
     #[test]
-    fn aa_mode_defaults_to_fxaa_and_round_trips_through_args() {
-        assert_eq!(PostProcessConfig::default().aa_mode, AaMode::Fxaa);
+    fn aa_mode_defaults_to_taa_and_round_trips_through_args() {
+        assert_eq!(PostProcessConfig::default().aa_mode, AaMode::Taa);
         let cfg = PostProcessConfig {
-            aa_mode: AaMode::Taa,
+            aa_mode: AaMode::Fxaa,
             ..Default::default()
         };
-        assert_eq!(cfg.clone().aa_mode, AaMode::Taa);
+        assert_eq!(cfg.clone().aa_mode, AaMode::Fxaa);
     }
 
     #[test]
@@ -744,13 +774,18 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssao_defaults_off_with_neutral_tunables() {
+    fn ssao_defaults_on_with_neutral_tunables() {
         let cfg = PostProcessConfig::default();
-        assert!(!cfg.ssao);
+        assert!(cfg.ssao);
         assert_eq!(cfg.ssao_radius, 0.5);
         assert_eq!(cfg.ssao_intensity, 1.0);
-        // No SsaoSettings produced while the toggle is off.
-        assert!(cfg.ssao_settings().is_none());
+        assert!(cfg.ssao_settings().is_some());
+        // No SsaoSettings once the toggle is off.
+        let off = PostProcessConfig {
+            ssao: false,
+            ..Default::default()
+        };
+        assert!(off.ssao_settings().is_none());
     }
 
     #[test]
@@ -777,13 +812,18 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssr_defaults_off_with_neutral_tunables() {
+    fn ssr_defaults_on_with_neutral_tunables() {
         let cfg = PostProcessConfig::default();
-        assert!(!cfg.ssr);
+        assert!(cfg.ssr);
         assert_eq!(cfg.ssr_intensity, 0.7);
         assert_eq!(cfg.ssr_max_distance, 40.0);
-        // No SsrSettings produced while the toggle is off.
-        assert!(cfg.ssr_settings().is_none());
+        assert!(cfg.ssr_settings().is_some());
+        // No SsrSettings once the toggle is off.
+        let off = PostProcessConfig {
+            ssr: false,
+            ..Default::default()
+        };
+        assert!(off.ssr_settings().is_none());
     }
 
     #[test]
@@ -810,11 +850,16 @@ mod runtime_tests {
     }
 
     #[test]
-    fn rt_reflections_default_off_and_resolve_to_none() {
+    fn rt_reflections_default_on_and_resolve_to_settings() {
         let cfg = PostProcessConfig::default();
-        assert!(!cfg.ray_traced_reflections);
-        // No RtReflectionSettings produced while the toggle is off.
-        assert!(cfg.rt_reflection_settings().is_none());
+        assert!(cfg.ray_traced_reflections);
+        assert!(cfg.rt_reflection_settings().is_some());
+        // No RtReflectionSettings once the toggle is off.
+        let off = PostProcessConfig {
+            ray_traced_reflections: false,
+            ..Default::default()
+        };
+        assert!(off.rt_reflection_settings().is_none());
     }
 
     #[test]
@@ -838,9 +883,10 @@ mod runtime_tests {
                 .expect("parse");
         assert!(cfg.ray_traced_reflections);
         assert!(cfg.rt_reflection_settings().is_some());
-        // Omitting the field leaves ray tracing off.
+        // An explicit false is what turns ray tracing off; omitting the field
+        // keeps the default on.
         let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"bloom_intensity":0.5}"#).expect("parse");
+            serde_json::from_str(r#"{"ray_traced_reflections":false}"#).expect("parse");
         assert!(!cfg.ray_traced_reflections);
         assert!(cfg.rt_reflection_settings().is_none());
     }
@@ -867,9 +913,9 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssgi_defaults_to_ibl_with_neutral_tunables() {
+    fn ssgi_defaults_on_with_neutral_tunables() {
         let cfg = PostProcessConfig::default();
-        assert_eq!(cfg.indirect_lighting, IndirectLighting::Ibl);
+        assert_eq!(cfg.indirect_lighting, IndirectLighting::Ssgi);
         assert_eq!(cfg.ssgi_intensity, 0.5);
         assert_eq!(cfg.ssgi_max_distance, 8.0);
         // The gather defaults to half resolution with the historical 8x12
@@ -877,8 +923,13 @@ mod runtime_tests {
         assert_eq!(cfg.ssgi_resolution, SsgiResolution::Half);
         assert_eq!(cfg.ssgi_rays, 8);
         assert_eq!(cfg.ssgi_steps, 12);
-        // No SsgiSettings produced while indirect lighting is IBL-only.
-        assert!(cfg.ssgi_settings().is_none());
+        assert!(cfg.ssgi_settings().is_some());
+        // No SsgiSettings once indirect lighting is IBL-only.
+        let ibl = PostProcessConfig {
+            indirect_lighting: IndirectLighting::Ibl,
+            ..Default::default()
+        };
+        assert!(ibl.ssgi_settings().is_none());
     }
 
     #[test]
@@ -983,9 +1034,10 @@ mod runtime_tests {
         assert_eq!(cfg.ssgi_intensity, 0.8);
         // Omitted distance falls back to the default.
         assert_eq!(cfg.ssgi_max_distance, 8.0);
-        // Omitting the field leaves indirect lighting on IBL.
+        // An explicit "ibl" is what drops the screen-space bounce; omitting the
+        // field keeps the default on.
         let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"bloom_intensity":0.5}"#).expect("parse");
+            serde_json::from_str(r#"{"indirect_lighting":"ibl"}"#).expect("parse");
         assert_eq!(cfg.indirect_lighting, IndirectLighting::Ibl);
         assert!(cfg.ssgi_settings().is_none());
     }
@@ -1031,10 +1083,10 @@ mod runtime_tests {
     fn aa_mode_deserialises_from_jsonl_args() {
         let cfg: PostProcessConfig = serde_json::from_str(r#"{"aa_mode":"taa"}"#).expect("parse");
         assert_eq!(cfg.aa_mode, AaMode::Taa);
-        // Omitting the field falls back to the FXAA default.
+        // Omitting the field falls back to the TAA default.
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"bloom_intensity":0.5}"#).expect("parse");
-        assert_eq!(cfg.aa_mode, AaMode::Fxaa);
+        assert_eq!(cfg.aa_mode, AaMode::Taa);
         // "off" disables edge smoothing entirely.
         let cfg: PostProcessConfig = serde_json::from_str(r#"{"aa_mode":"off"}"#).expect("parse");
         assert_eq!(cfg.aa_mode, AaMode::Off);
@@ -1078,20 +1130,20 @@ mod runtime_tests {
     }
 
     #[test]
-    fn occlusion_two_pass_defaults_off_and_round_trips() {
-        assert!(!PostProcessConfig::default().occlusion_two_pass);
+    fn occlusion_two_pass_defaults_on_and_round_trips() {
+        assert!(PostProcessConfig::default().occlusion_two_pass);
         let cfg = PostProcessConfig {
-            occlusion_two_pass: true,
+            occlusion_two_pass: false,
             ..Default::default()
         };
-        assert!(cfg.clone().occlusion_two_pass);
-        // Deserialises from jsonl args; omitting it leaves the feature off.
+        assert!(!cfg.clone().occlusion_two_pass);
+        // Deserialises from jsonl args; omitting it leaves the feature on.
         let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"occlusion_two_pass":true}"#).expect("parse");
-        assert!(cfg.occlusion_two_pass);
+            serde_json::from_str(r#"{"occlusion_two_pass":false}"#).expect("parse");
+        assert!(!cfg.occlusion_two_pass);
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"bloom_intensity":0.5}"#).expect("parse");
-        assert!(!cfg.occlusion_two_pass);
+        assert!(cfg.occlusion_two_pass);
     }
 
     #[test]

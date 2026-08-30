@@ -97,15 +97,15 @@
 
 use std::path::Path;
 
+use concinnity_cook::build_only::LoadedWorld;
 use concinnity_cook::pipeline::PipelineResult;
-use concinnity_cook::world::LoadedWorld;
 use concinnity_cook::{build_compiled, check::report_validation_errors, prepare_world};
 use concinnity_engine::blob::BlobData;
 use concinnity_engine::ecs::ComponentAsset;
 
-use concinnity_world::registry::{asset_line, set_reference};
+use concinnity_cook::authoring::registry::{asset_line, set_reference};
 
-pub use concinnity_world::registry::Authored;
+pub use concinnity_cook::authoring::registry::Authored;
 
 // The authoring-only half of the asset vocabulary, globbed from the schema
 // crate's own partition: the build-only assets the cook expands, the resources
@@ -114,13 +114,13 @@ pub use concinnity_world::registry::Authored;
 // The authoring vocabulary, from the two crates that own its halves: the
 // compiled resources and the five diverging args schemas from the runtime
 // crate, the build-only assets from the authoring one.
-pub use concinnity_core::components::cook::*;
-pub use concinnity_world::registry::build_only::{
-    CameraShot, CharacterModel, CharacterSchema, EngineDefaults, KeyPolarity, LightRig, MainMenu,
-    MainMenuItem, MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection, Prefab,
-    PrefabEntry, PrefabKind, ProportionGroup, SceneImport, SchemaJoint, SchemaKey, SchemaRegion,
+pub use concinnity_cook::authoring::registry::build_only::{
+    CameraShot, CharacterModel, CharacterSchema, KeyPolarity, LightRig, MainMenu, MainMenuItem,
+    MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection, Prefab, PrefabEntry,
+    PrefabKind, ProportionGroup, SceneImport, SchemaJoint, SchemaKey, SchemaRegion,
     SettingsProfile, ShapePreset, Slider, StoryImport, SynthParams, SynthesizedTarget,
 };
+pub use concinnity_core::components::cook::*;
 
 use crate::World;
 

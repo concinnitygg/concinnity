@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 /// Configures the world's physics floor / terrain.
 ///
 /// Optional: a world with physics bodies but no `PhysicsConfig` simulates over a
-/// flat floor at Y = 0, and the build injects one carrying these values so the
-/// settings are visible in `world-lock.json`. Physics runs whenever the world
+/// flat floor at Y = 0, and receives one carrying these values at start so the
+/// settings are a component rather than a fallback. Physics runs whenever the world
 /// declares a `PhysicsConfig`, a [RigidBody](#rigidbody), a
 /// [PropBody](#propbody), a [TriggerVolume](#triggervolume), or a
 /// [SkinnedMesh](#skinnedmesh) with a `capsule`. Declare a `PhysicsConfig` to

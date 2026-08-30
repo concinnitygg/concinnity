@@ -1,7 +1,7 @@
 // src/editor/behavior/fault.rs
 //
 // Turning the checker's complaint into a place in the panel. The checker
-// addresses the authored args it read (`concinnity_world::check::fault`) and the
+// addresses the authored args it read (`concinnity_cook::check::fault`) and the
 // outline addresses the same args, so the two agree on where a value is -- the
 // only work here is mapping one hop type onto the other and settling for the
 // nearest row when the exact spot has none of its own.

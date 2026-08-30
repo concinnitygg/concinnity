@@ -737,7 +737,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn update_texture_slot(
             &mut self,
             _: usize,
-            _: &concinnity_core::build::texture::TextureImage,
+            _: &concinnity_core::bake::texture::TextureImage,
         ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
@@ -889,7 +889,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &concinnity_core::build::texture::TextureImage,
+        image: &concinnity_core::bake::texture::TextureImage,
     ) -> crate::gfx::error::RenderResult<()> {
         self.texture_updates
             .push((slot, image.width(), image.height()));

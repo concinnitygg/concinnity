@@ -25,11 +25,12 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use super::{Pool, WORKERS, bench};
+use super::{Pool, WORKERS};
 use crate::physics::{
     BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, Inline, JointMotor, JointSpec,
     LayerMask, ShapeCast, SimConfig, Simulation,
 };
+use crate::test_support::{Pace, bench};
 
 // Reserve the per-worker scratch for the split a bench may ask for, the way
 // the driver does at init. A world stepped serially keeps the reservation and
@@ -46,11 +47,101 @@ const CHARACTER_CENTER: [f32; 3] = [1.0, 1.1, 1.0];
 const CHARACTER_STEP: [f32; 3] = [0.05, 0.0, 0.02];
 
 const TICK: f32 = 1.0 / 60.0;
-// Steps per iteration for the deterministic drop benches: enough to cover
-// the fall, the impacts, and sustained stack jostle.
-const DROP_STEPS: usize = 60;
-const SIZES: [(usize, &str); 2] = [(256, "256"), (1024, "1k")];
 const STACK: usize = 8;
+
+// The counts a pass drives, per pace. A single-run pass keeps every fixture
+// shape -- stacks, hail, sensors, joints, terrain, the query worlds and the
+// churn -- and shrinks each count to the smallest that still exercises it, so
+// an unoptimized build walks every path once instead of paying for a
+// measurement it does not take.
+struct Fixture {
+    sizes: [(usize, &'static str); 2],
+    joint_sizes: [(usize, &'static str); 2],
+    // Steps per iteration for the deterministic drop benches: enough to cover
+    // the fall, the impacts, and sustained stack jostle.
+    drop_steps: usize,
+    // Steps a fixture is driven for before it is measured.
+    settle_steps: usize,
+    // Whether `settle_steps` is long enough to put the stacks to sleep. The
+    // idle-path benches only mean what they claim on a fixture that has
+    // stopped moving, and only the timed pace pays for one; the checks that
+    // hold a measured window to that are the ones this gates.
+    settled: bool,
+    warmup_steps: usize,
+    query_bodies: usize,
+    terrain_bodies: usize,
+    // Cells per side of the collided height grid. Fixed at the timed pace, so
+    // a terrain number is comparable run to run; shrunk at the single-run one,
+    // where the grid is the most expensive thing an instrumented build walks
+    // and its size proves nothing the smaller one does not.
+    terrain_side: usize,
+    rays: usize,
+    sweeps: usize,
+    churn: usize,
+    determinism: Determinism,
+}
+
+// The five worlds `assert_deterministic` compares over, and how far each is
+// stepped. Determinism holds at any size, so the single-run pace walks every
+// fixture at a fraction of the count: the claim stays true, and only the odds
+// of a broken step showing up in it drop.
+struct Determinism {
+    bodies: usize,
+    chains: usize,
+    links: usize,
+    steps: usize,
+    hail_steps: usize,
+    terrain_side: usize,
+}
+
+fn fixture(pace: Pace) -> Fixture {
+    match pace {
+        Pace::Timed => Fixture {
+            sizes: [(256, "256"), (1024, "1k")],
+            joint_sizes: [(64, "64"), (256, "256")],
+            drop_steps: 60,
+            settle_steps: 600,
+            settled: true,
+            warmup_steps: 60,
+            query_bodies: 1024,
+            terrain_bodies: 256,
+            terrain_side: 65,
+            rays: 1024,
+            sweeps: 256,
+            churn: 64,
+            determinism: Determinism {
+                bodies: 256,
+                chains: 8,
+                links: 6,
+                steps: 120,
+                hail_steps: 90,
+                terrain_side: 65,
+            },
+        },
+        Pace::Once => Fixture {
+            sizes: [(8, "8"), (16, "16")],
+            joint_sizes: [(8, "8"), (16, "16")],
+            drop_steps: 2,
+            settle_steps: 4,
+            settled: false,
+            warmup_steps: 2,
+            query_bodies: 16,
+            terrain_bodies: 16,
+            terrain_side: 9,
+            rays: 8,
+            sweeps: 4,
+            churn: 4,
+            determinism: Determinism {
+                bodies: 8,
+                chains: 1,
+                links: 2,
+                steps: 4,
+                hail_steps: 3,
+                terrain_side: 9,
+            },
+        },
+    }
+}
 const CUBE: ColliderShape = ColliderShape::Cuboid {
     half_extents: [0.4, 0.4, 0.4],
 };
@@ -189,8 +280,8 @@ fn jointed_world(chains: usize, links: usize) -> (Simulation, Vec<BodyHandle>) {
 
 // Rolling terrain with a grid of boxes settled on it: the fixture both the
 // terrain narrow phase and the terrain queries are measured on.
-fn terrain_world(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
-    const SIDE: usize = 65;
+fn terrain_world(bodies: usize, side: usize) -> (Simulation, Vec<BodyHandle>) {
+    let side = side.max(2);
     const EXTENT: f32 = 200.0;
     let mut sim = Simulation::new(
         SimConfig {
@@ -200,17 +291,17 @@ fn terrain_world(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
         // One spare slot for the character capsule the move bench adds.
         bodies + 2,
     );
-    let mut heights = Vec::with_capacity(SIDE * SIDE);
-    for row in 0..SIDE {
-        let z = row as f32 / (SIDE - 1) as f32;
-        for col in 0..SIDE {
-            let x = col as f32 / (SIDE - 1) as f32;
+    let mut heights = Vec::with_capacity(side * side);
+    for row in 0..side {
+        let z = row as f32 / (side - 1) as f32;
+        for col in 0..side {
+            let x = col as f32 / (side - 1) as f32;
             heights.push((x * 9.0).sin() * 1.5 + (z * 7.0).cos() * 1.2);
         }
     }
     sim.add_heightfield(
-        SIDE,
-        SIDE,
+        side,
+        side,
         heights,
         [EXTENT, 1.0, EXTENT],
         [0.0; 3],
@@ -348,10 +439,18 @@ fn poses(sim: &Simulation, handles: &[BodyHandle]) -> Vec<([f32; 3], [f32; 3])> 
 // The premise the stepping benches rest on: identical worlds stepped the
 // same count report bit-identical poses. If a change to the simulation breaks
 // this, fail loudly instead of quietly turning into a noisy benchmark.
-fn assert_deterministic() {
+fn assert_deterministic(d: Determinism) {
+    let Determinism {
+        bodies,
+        chains,
+        links,
+        steps,
+        hail_steps,
+        terrain_side,
+    } = d;
     let stacked = |fanout: &dyn Fn(&mut Simulation)| {
-        let (mut sim, handles) = stacked_world(256, 0.85, 0.0, true, 1);
-        for _ in 0..120 {
+        let (mut sim, handles) = stacked_world(bodies, 0.85, 0.0, true, 1);
+        for _ in 0..steps {
             fanout(&mut sim);
         }
         poses(&sim, &handles)
@@ -373,8 +472,8 @@ fn assert_deterministic() {
     );
 
     let jointed = |fanout: &dyn Fn(&mut Simulation)| {
-        let (mut sim, handles) = jointed_world(8, 6);
-        for _ in 0..120 {
+        let (mut sim, handles) = jointed_world(chains, links);
+        for _ in 0..steps {
             fanout(&mut sim);
         }
         poses(&sim, &handles)
@@ -394,8 +493,8 @@ fn assert_deterministic() {
     // resolution and the stop itself all have to be repeatable, and none of
     // them is exercised by a world slow enough to stay off that path.
     let hail = || {
-        let (mut sim, handles) = hail_world(256);
-        for _ in 0..90 {
+        let (mut sim, handles) = hail_world(bodies);
+        for _ in 0..hail_steps {
             sim.step_with(TICK, &Pool);
         }
         assert_eq!(sim.ccd_overflows(), 0, "the sweep was declined");
@@ -408,8 +507,8 @@ fn assert_deterministic() {
     );
 
     let terrain = |fanout: &dyn Fn(&mut Simulation)| {
-        let (mut sim, handles) = terrain_world(256);
-        for _ in 0..120 {
+        let (mut sim, handles) = terrain_world(bodies, terrain_side);
+        for _ in 0..steps {
             fanout(&mut sim);
         }
         poses(&sim, &handles)
@@ -429,11 +528,11 @@ fn assert_deterministic() {
     // a crossing sequence or a hit order that shifts between runs is a hash
     // or a set that crept onto the step path.
     let reported = |fanout: &dyn Fn(&mut Simulation)| {
-        let (mut sim, _) = sensor_world(256);
+        let (mut sim, _) = sensor_world(bodies);
         sim.set_contact_min_impulse(2.0, TICK);
         let (mut crossings, mut hits) = (Vec::new(), Vec::new());
         let mut recorded = Vec::new();
-        for _ in 0..120 {
+        for _ in 0..steps {
             fanout(&mut sim);
             sim.drain_sensor_crossings_into(&mut crossings);
             sim.drain_contact_hits_into(&mut hits);
@@ -458,18 +557,33 @@ fn assert_deterministic() {
     );
 }
 
-#[test]
-#[ignore = "benchmark; run with --ignored --test-threads=1"]
-fn bench_simulation() {
-    for (n, label) in SIZES {
-        let body_steps = (n * DROP_STEPS) as u64;
+fn run(pace: Pace) {
+    let Fixture {
+        sizes,
+        joint_sizes,
+        drop_steps,
+        settle_steps,
+        settled,
+        warmup_steps,
+        query_bodies,
+        terrain_bodies,
+        terrain_side,
+        rays,
+        sweeps,
+        churn,
+        determinism,
+    } = fixture(pace);
+
+    for (n, label) in sizes {
+        let body_steps = (n * drop_steps) as u64;
 
         bench(
+            pace,
             &format!("physics/step_settling/{label}"),
             body_steps,
             || {
                 let (mut sim, handles) = stacked_world(n, 0.85, 0.0, true, 1);
-                for _ in 0..DROP_STEPS {
+                for _ in 0..drop_steps {
                     sim.step_with(TICK, &Pool);
                 }
                 sim.body_pose(handles[0]).expect("live").0[1].to_bits()
@@ -479,11 +593,12 @@ fn bench_simulation() {
         // The same world with nothing lent: what the split is worth on this
         // machine is the distance between this entry and the one above.
         bench(
+            pace,
             &format!("physics/step_settling_serial/{label}"),
             body_steps,
             || {
                 let (mut sim, handles) = stacked_world(n, 0.85, 0.0, true, 1);
-                for _ in 0..DROP_STEPS {
+                for _ in 0..drop_steps {
                     sim.step_with(TICK, &Inline);
                 }
                 sim.body_pose(handles[0]).expect("live").0[1].to_bits()
@@ -491,11 +606,12 @@ fn bench_simulation() {
         );
 
         bench(
+            pace,
             &format!("physics/step_free_fall/{label}"),
             body_steps,
             || {
                 let (mut sim, handles) = stacked_world(n, 0.85, 0.0, false, 1);
-                for _ in 0..DROP_STEPS {
+                for _ in 0..drop_steps {
                     sim.step_with(TICK, &Pool);
                 }
                 sim.body_pose(handles[0]).expect("live").0[1].to_bits()
@@ -503,81 +619,105 @@ fn bench_simulation() {
         );
 
         bench(
+            pace,
             &format!("physics/step_free_fall_serial/{label}"),
             body_steps,
             || {
                 let (mut sim, handles) = stacked_world(n, 0.85, 0.0, false, 1);
-                for _ in 0..DROP_STEPS {
+                for _ in 0..drop_steps {
                     sim.step_with(TICK, &Inline);
                 }
                 sim.body_pose(handles[0]).expect("live").0[1].to_bits()
             },
         );
 
-        bench(&format!("physics/step_ccd/{label}"), body_steps, || {
-            let (mut sim, _handles) = hail_world(n);
-            let mut swept = 0usize;
-            for _ in 0..DROP_STEPS {
-                sim.step_with(TICK, &Pool);
-                swept = swept.max(sim.swept_body_count());
-            }
-            assert_eq!(swept, n, "every body has to have been swept");
-            assert_eq!(sim.ccd_overflows(), 0, "the sweep was declined");
-            swept
-        });
+        bench(
+            pace,
+            &format!("physics/step_ccd/{label}"),
+            body_steps,
+            || {
+                let (mut sim, _handles) = hail_world(n);
+                let mut swept = 0usize;
+                for _ in 0..drop_steps {
+                    sim.step_with(TICK, &Pool);
+                    swept = swept.max(sim.swept_body_count());
+                }
+                assert_eq!(swept, n, "every body has to have been swept");
+                assert_eq!(sim.ccd_overflows(), 0, "the sweep was declined");
+                swept
+            },
+        );
 
-        bench(&format!("physics/build_world/{label}"), n as u64, || {
-            stacked_world(n, 0.85, 0.0, true, 1).1.len()
-        });
+        bench(
+            pace,
+            &format!("physics/build_world/{label}"),
+            n as u64,
+            || stacked_world(n, 0.85, 0.0, true, 1).1.len(),
+        );
 
         // Stepped to sleep, then measured: this is the idle path, and the
         // reservation the simulation was built with means it must report zero
         // allocations per iteration.
-        let (mut settled, handles) = stacked_world(n, 0.0, 0.5, true, 1);
-        for _ in 0..600 {
-            settled.step_with(TICK, &Pool);
+        let (mut resting, handles) = stacked_world(n, 0.0, 0.5, true, 1);
+        for _ in 0..settle_steps {
+            resting.step_with(TICK, &Pool);
         }
-        let poses_before = poses(&settled, &handles);
-        bench(&format!("physics/step_settled/{label}"), n as u64, || {
-            settled.step_with(TICK, &Pool);
-            handles.len()
-        });
+        let poses_before = poses(&resting, &handles);
         bench(
-            &format!("physics/step_settled_serial/{label}"),
+            pace,
+            &format!("physics/step_settled/{label}"),
             n as u64,
             || {
-                settled.step_with(TICK, &Inline);
+                resting.step_with(TICK, &Pool);
                 handles.len()
             },
         );
-        assert_eq!(
-            poses(&settled, &handles),
-            poses_before,
-            "settled fixture was still moving while measured"
+        bench(
+            pace,
+            &format!("physics/step_settled_serial/{label}"),
+            n as u64,
+            || {
+                resting.step_with(TICK, &Inline);
+                handles.len()
+            },
         );
+        if settled {
+            assert_eq!(
+                poses(&resting, &handles),
+                poses_before,
+                "settled fixture was still moving while measured"
+            );
+        }
     }
 
-    for (n, label) in SIZES {
+    for (n, label) in sizes {
         // Settled under regions: every resting body is inside one, which is
         // the sensor stage's worst case rather than a typical world's. The
         // measured step is a full pass over one overlapping pair per body,
         // finding nothing new to report.
         let (mut regions, handles) = sensor_world(n);
-        for _ in 0..600 {
+        for _ in 0..settle_steps {
             regions.step_with(TICK, &Pool);
         }
         let poses_before = poses(&regions, &handles);
         let mut crossings = Vec::with_capacity(n);
-        bench(&format!("physics/step_sensors/{label}"), n as u64, || {
-            regions.step_with(TICK, &Pool);
-            regions.drain_sensor_crossings_into(&mut crossings);
-            crossings.len()
-        });
-        assert_eq!(
-            poses(&regions, &handles),
-            poses_before,
-            "settled region fixture was still moving while measured"
+        bench(
+            pace,
+            &format!("physics/step_sensors/{label}"),
+            n as u64,
+            || {
+                regions.step_with(TICK, &Pool);
+                regions.drain_sensor_crossings_into(&mut crossings);
+                crossings.len()
+            },
         );
+        if settled {
+            assert_eq!(
+                poses(&regions, &handles),
+                poses_before,
+                "settled region fixture was still moving while measured"
+            );
+        }
         assert_eq!(regions.sensor_overflows(), 0, "the sensor queue overflowed");
         assert!(
             regions.sensor_overlap_count() >= n,
@@ -604,18 +744,24 @@ fn bench_simulation() {
             ..*jostling.config()
         });
         jostling.set_contact_min_impulse(5.0, TICK);
-        for _ in 0..60 {
+        for _ in 0..warmup_steps {
             jostling.step_with(TICK, &Pool);
         }
         let mut hits = Vec::with_capacity(n * 4);
         let mut reported = 0usize;
-        bench(&format!("physics/step_contacts/{label}"), n as u64, || {
-            jostling.step_with(TICK, &Pool);
-            jostling.drain_contact_hits_into(&mut hits);
-            reported += hits.len();
-            hits.len()
-        });
         bench(
+            pace,
+            &format!("physics/step_contacts/{label}"),
+            n as u64,
+            || {
+                jostling.step_with(TICK, &Pool);
+                jostling.drain_contact_hits_into(&mut hits);
+                reported += hits.len();
+                hits.len()
+            },
+        );
+        bench(
+            pace,
             &format!("physics/step_contacts_serial/{label}"),
             n as u64,
             || {
@@ -625,7 +771,9 @@ fn bench_simulation() {
                 hits.len()
             },
         );
-        assert!(reported > 0, "the fixture reported no impacts to measure");
+        if settled {
+            assert!(reported > 0, "the fixture reported no impacts to measure");
+        }
         assert!(
             handles
                 .iter()
@@ -639,16 +787,17 @@ fn bench_simulation() {
         );
     }
 
-    for (n, label) in [(64usize, "64"), (256, "256")] {
+    for (n, label) in joint_sizes {
         // A chain of hinged links never settles while its motors are driving
         // it, so the measured step is a real joint solve every iteration.
         let chains = n / 8;
         let (mut jointed, handles) = jointed_world(chains, 8);
-        for _ in 0..60 {
+        for _ in 0..warmup_steps {
             jointed.step_with(TICK, &Pool);
         }
         assert_eq!(jointed.joint_count(), chains * 8);
         bench(
+            pace,
             &format!("physics/step_joints/{label}"),
             handles.len() as u64,
             || {
@@ -657,6 +806,7 @@ fn bench_simulation() {
             },
         );
         bench(
+            pace,
             &format!("physics/step_joints_serial/{label}"),
             handles.len() as u64,
             || {
@@ -668,20 +818,27 @@ fn bench_simulation() {
         // Settled on terrain: the idle path with a height grid under it, and
         // the one that must report no allocation now that a grid can hand a
         // pair several manifolds.
-        let (mut terrain, handles) = terrain_world(n);
-        for _ in 0..600 {
+        let (mut terrain, handles) = terrain_world(n, terrain_side);
+        for _ in 0..settle_steps {
             terrain.step_with(TICK, &Pool);
         }
         let poses_before = poses(&terrain, &handles);
-        bench(&format!("physics/step_terrain/{label}"), n as u64, || {
-            terrain.step_with(TICK, &Pool);
-            handles.len()
-        });
-        assert_eq!(
-            poses(&terrain, &handles),
-            poses_before,
-            "settled terrain fixture was still moving while measured"
+        bench(
+            pace,
+            &format!("physics/step_terrain/{label}"),
+            n as u64,
+            || {
+                terrain.step_with(TICK, &Pool);
+                handles.len()
+            },
         );
+        if settled {
+            assert_eq!(
+                poses(&terrain, &handles),
+                poses_before,
+                "settled terrain fixture was still moving while measured"
+            );
+        }
         assert_eq!(
             terrain.heightfield_overflows(),
             0,
@@ -693,13 +850,12 @@ fn bench_simulation() {
         // Terrain queries, on a world stepped once so the sweep order is
         // current. A ray walks the grid cell by cell and a sweep clips against
         // the cells its swept box names, so neither allocates.
-        let (mut sim, _handles) = terrain_world(256);
+        let (mut sim, _handles) = terrain_world(terrain_bodies, terrain_side);
         sim.step_with(TICK, &Pool);
-        const TERRAIN_RAYS: usize = 1024;
         let fan = |sim: &Simulation| {
             let mut hits = 0u32;
-            for i in 0..TERRAIN_RAYS {
-                let angle = i as f32 * core::f32::consts::TAU / TERRAIN_RAYS as f32;
+            for i in 0..rays {
+                let angle = i as f32 * core::f32::consts::TAU / rays as f32;
                 let hit = sim.raycast(
                     [angle.cos() * 60.0, 30.0, angle.sin() * 60.0],
                     [0.0, -1.0, 0.0],
@@ -712,19 +868,18 @@ fn bench_simulation() {
             hits
         };
         assert!(fan(&sim) > 0, "the fan has to meet the terrain it measures");
-        bench("physics/terrain_raycast/1k", TERRAIN_RAYS as u64, || {
+        bench(pace, "physics/terrain_raycast/1k", rays as u64, || {
             fan(&sim)
         });
 
-        const SWEEPS: usize = 256;
         let capsule = ColliderShape::Capsule {
             half_height: CHARACTER_HALF_HEIGHT,
             radius: CHARACTER_RADIUS,
         };
         let drops = |sim: &Simulation| {
             let mut hits = 0u32;
-            for i in 0..SWEEPS {
-                let angle = i as f32 * core::f32::consts::TAU / SWEEPS as f32;
+            for i in 0..sweeps {
+                let angle = i as f32 * core::f32::consts::TAU / sweeps as f32;
                 let hit = sim.shape_cast(&ShapeCast::new(
                     capsule,
                     [angle.cos() * 60.0, 30.0, angle.sin() * 60.0],
@@ -735,7 +890,9 @@ fn bench_simulation() {
             hits
         };
         assert!(drops(&sim) > 0, "the sweeps have to meet the terrain");
-        bench("physics/terrain_sweep/256", SWEEPS as u64, || drops(&sim));
+        bench(pace, "physics/terrain_sweep/256", sweeps as u64, || {
+            drops(&sim)
+        });
         assert_eq!(
             sim.heightfield_overflows(),
             0,
@@ -747,13 +904,12 @@ fn bench_simulation() {
         // Stepped once so the sweep order is current: that is the state a
         // query is asked in, and it is what makes the traversal a window over
         // the sorted proxies rather than a walk over all of them.
-        let (mut sim, _handles) = stacked_world(1024, 0.0, 0.5, true, 1);
+        let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, 1);
         sim.step_with(TICK, &Pool);
-        const RAYS: usize = 1024;
         let fan = |sim: &Simulation| {
             let mut hits = 0u32;
-            for i in 0..RAYS {
-                let angle = i as f32 * core::f32::consts::TAU / RAYS as f32;
+            for i in 0..rays {
+                let angle = i as f32 * core::f32::consts::TAU / rays as f32;
                 let hit = sim.raycast(
                     [12.0, 6.0, 12.0],
                     [angle.cos(), -0.6, angle.sin()],
@@ -766,7 +922,7 @@ fn bench_simulation() {
             hits
         };
         assert!(fan(&sim) > 0, "the fan has to meet the world it measures");
-        bench("physics/raycast/1k", RAYS as u64, || fan(&sim));
+        bench(pace, "physics/raycast/1k", rays as u64, || fan(&sim));
 
         let capsule = sim
             .add_kinematic(
@@ -801,7 +957,7 @@ fn bench_simulation() {
             walk(&sim).grounded,
             "the move has to find the floor it measures"
         );
-        bench("physics/character_move/1", 1, || walk(&sim).grounded);
+        bench(pace, "physics/character_move/1", 1, || walk(&sim).grounded);
     }
 
     {
@@ -809,12 +965,11 @@ fn bench_simulation() {
         // a settled world, on a reservation that has room for them. The pool
         // hands back the slots it just freed, so an iteration ends where it
         // began and none of it allocates.
-        const CHURN: usize = 64;
-        let (mut sim, _handles) = stacked_world(1024, 0.0, 0.5, true, CHURN);
+        let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, churn);
         sim.step_with(TICK, &Pool);
-        let mut churned = Vec::with_capacity(CHURN);
-        bench("physics/body_churn/64", CHURN as u64, || {
-            for i in 0..CHURN {
+        let mut churned = Vec::with_capacity(churn);
+        bench(pace, "physics/body_churn/64", churn as u64, || {
+            for i in 0..churn {
                 churned.push(
                     sim.add_dynamic(
                         &CUBE,
@@ -834,5 +989,58 @@ fn bench_simulation() {
         });
     }
 
-    assert_deterministic();
+    assert_deterministic(determinism);
+}
+
+#[test]
+#[ignore = "benchmark; run with --ignored --test-threads=1"]
+fn bench_simulation() {
+    run(Pace::Timed);
+}
+
+#[test]
+fn simulation_fixtures_build_and_run() {
+    run(Pace::Once);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Both fixture tables are well formed: a zero anywhere would make a
+    // benchmark measure nothing while still reporting a number.
+    #[test]
+    fn every_fixture_names_a_world_with_something_in_it() {
+        for pace in [Pace::Timed, Pace::Once] {
+            let f = fixture(pace);
+            for (n, label) in f.sizes.iter().chain(f.joint_sizes.iter()) {
+                assert!(*n > 0, "{label} is an empty world");
+                assert!(!label.is_empty(), "a size with no label");
+            }
+            assert!(f.drop_steps > 0);
+            assert!(f.settle_steps > 0);
+            assert!(f.warmup_steps > 0);
+            assert!(f.query_bodies > 0);
+            assert!(f.terrain_bodies > 0);
+            assert!(f.terrain_side >= 2, "a grid needs two rows to span a cell");
+            assert!(f.rays > 0);
+            assert!(f.sweeps > 0);
+            assert!(f.churn > 0);
+            assert!(f.determinism.bodies > 0);
+            assert!(f.determinism.chains > 0);
+            assert!(f.determinism.links > 0);
+            assert!(f.determinism.steps > 0);
+            assert!(f.determinism.hail_steps > 0);
+            assert!(f.determinism.terrain_side >= 2);
+        }
+    }
+
+    // Only the measured pace settles its fixtures far enough to be judged as
+    // idle; the flag is what keeps the single-run pass from asserting it.
+    #[test]
+    fn only_the_measured_pace_claims_a_settled_world() {
+        assert!(fixture(Pace::Timed).settled);
+        assert!(!fixture(Pace::Once).settled);
+        assert!(fixture(Pace::Timed).settle_steps > fixture(Pace::Once).settle_steps);
+    }
 }

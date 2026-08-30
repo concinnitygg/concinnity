@@ -8,17 +8,14 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "GPU backends (Metal, Vulkan, DirectX) behind a device facade for Concinnity"
+readme = "README.md"
 keywords = ["gamedev", "vulkan", "metal", "directx", "concinnity"]
 categories = ["game-engines", "rendering::graphics-api"]
 include = [
+    "/README.md",
     "/src",
     "/build.rs",
 ]
-
-[lib]
-name = "concinnity_device"
-crate-type = ["rlib"]
-path = "src/lib.rs"
 
 [features]
 # Build the macOS or Windows device against the Vulkan backend instead of the

@@ -108,6 +108,12 @@ const AUDITS: &[BackendAudit] = &[
             ("particle.rs", "cmd_pipeline_barrier", 3, Reason::IntraPass),
             ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
             ("probe.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
+            (
+                "probe_prefilter.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::OutOfFrame,
+            ),
             ("raytrace.rs", "cmd_pipeline_barrier", 6, Reason::OutOfFrame),
             (
                 "screenshot.rs",
@@ -257,7 +263,13 @@ const AUDITS: &[BackendAudit] = &[
                 6,
                 Reason::OutOfFrame,
             ),
-            ("probe.rs", ".ResourceBarrier(", 5, Reason::OutOfFrame),
+            ("probe.rs", ".ResourceBarrier(", 6, Reason::OutOfFrame),
+            (
+                "probe_prefilter.rs",
+                ".ResourceBarrier(",
+                3,
+                Reason::OutOfFrame,
+            ),
             ("raytrace.rs", ".ResourceBarrier(", 11, Reason::OutOfFrame),
             ("screenshot.rs", ".ResourceBarrier(", 2, Reason::OutOfFrame),
             ("draw/composite.rs", ".ResourceBarrier(", 2, Reason::Present),

@@ -43,7 +43,7 @@ impl EditorHook {
     pub(super) fn form_template_for(&mut self, name: &str) -> Option<(String, FormTemplate)> {
         let info = self.template_info(name)?;
         let defaults = serde_json::Value::Object(form::base_args(&info.asset_type));
-        let baseline = concinnity_cook::world::merge_args(&defaults, &info.baseline);
+        let baseline = concinnity_cook::build_only::merge_args(&defaults, &info.baseline);
         Some((
             info.asset_type.clone(),
             FormTemplate {
@@ -143,7 +143,7 @@ impl EditorHook {
                 ));
             }
             if !authored
-                && !concinnity_cook::world::preset::load_preset_obj(
+                && !concinnity_cook::build_only::preset::load_preset_obj(
                     &prefab_ref,
                     "prefabs",
                     crate::authoring::assets_root::assets_dir().as_deref(),
@@ -291,7 +291,7 @@ impl EditorHook {
             .ok_or("nothing is overridden on this asset")?;
         let baseline = serde_json::Value::Object(t.baseline.clone());
         let patch = self.committed_patch_of(idx);
-        let effective = concinnity_cook::world::merge_args(&baseline, &patch);
+        let effective = concinnity_cook::build_only::merge_args(&baseline, &patch);
         match overrides::minimal_patch(&baseline, &effective) {
             Some(p) => {
                 if let Some(obj) = self.entries[idx].as_object_mut() {
@@ -315,7 +315,7 @@ impl EditorHook {
         {
             return Ok(());
         }
-        let preset = concinnity_cook::world::preset::load_preset_obj(
+        let preset = concinnity_cook::build_only::preset::load_preset_obj(
             name,
             "prefabs",
             crate::authoring::assets_root::assets_dir().as_deref(),

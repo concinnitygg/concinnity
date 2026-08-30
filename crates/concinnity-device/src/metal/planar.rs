@@ -236,6 +236,7 @@ impl MtlContext {
                     color_msaa: &targets.msaa_color,
                     depth_msaa: &targets.msaa_depth,
                     resolve: &targets.resolve,
+                    resolve_slice: 0,
                 },
                 crate::metal::draw::main::MainPassCamera {
                     elapsed: params.elapsed,

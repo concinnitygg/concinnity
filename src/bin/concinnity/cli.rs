@@ -102,14 +102,27 @@ pub(crate) enum Commands {
     /// Package a built world into a distributable app
     #[command(name = "export")]
     Export(ExportArgs),
+
+    /// Print the version
+    #[command(name = "version")]
+    Version,
 }
 
 #[derive(Parser, Debug)]
 #[command(name = "concinnity")]
 #[command(about = BANNER, long_about = None)]
+// clap renders its own flag as "{name} {version}", which is the pair
+// `command::version_line` prints, so `cn version` and `cn --version` render
+// the same line off one source. The auto-generated flag is off only so the
+// short can carry `-v` alongside clap's conventional `-V`.
+#[command(version = concinnity_dev::command::version_details(), disable_version_flag = true)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Commands,
+
+    /// Print the version
+    #[arg(short = 'V', short_alias = 'v', long, action = clap::ArgAction::Version)]
+    pub(crate) version: (),
 }
 
 // The argv face of the launch-time render knobs the engine reads through

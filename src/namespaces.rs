@@ -6,7 +6,7 @@
 //
 // The groups come from two lists: the runtime's (`stored` and `resource`, in
 // concinnity-core) and the authoring-only one (`build_only`, in
-// concinnity-world, which the runtime tier never links). One derived check per
+// concinnity-cook, which the runtime tier never links). One derived check per
 // list, so each name is checked for being both reachable and reachable through
 // the right namespace. The entries' metadata blocks are captured and ignored.
 
@@ -42,11 +42,11 @@ concinnity_core::for_each_component!(assert_runtime_groups_are_partitioned);
 
 // The same, for the group the authoring registry owns. Gated whole: without
 // `cook` there is no `cook` namespace to reach these through, and no
-// concinnity-world to read the list from.
+// concinnity-cook to read the list from.
 #[cfg(feature = "cook")]
 macro_rules! assert_the_build_only_group_is_reachable {
     (build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? } $(,)?) => {
-        fn the_cook_expands<T: concinnity_world::registry::BuildOnlyAsset>() {}
+        fn the_cook_expands<T: concinnity_cook::authoring::registry::BuildOnlyAsset>() {}
 
         #[test]
         fn the_cook_namespace_holds_the_expanded_types() {
@@ -56,4 +56,4 @@ macro_rules! assert_the_build_only_group_is_reachable {
 }
 
 #[cfg(feature = "cook")]
-concinnity_world::for_each_build_only_type!(assert_the_build_only_group_is_reachable);
+concinnity_cook::for_each_build_only_type!(assert_the_build_only_group_is_reachable);

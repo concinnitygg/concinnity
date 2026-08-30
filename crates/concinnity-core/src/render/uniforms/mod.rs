@@ -30,7 +30,7 @@ pub mod view;
 pub use bindless::BINDLESS_POOL_SIZE;
 pub use geometry::{DecalParams, DecalView, GpuParticle, LineView, ParticleView, SkinParams};
 pub use post::{AutoExposureParams, HizParams, TaaParams};
-pub use probe::{MAX_PROBES, ProbeSet, ProbeUniforms};
+pub use probe::{MAX_PROBES, ProbePrefilterParams, ProbeSet, ProbeUniforms};
 pub use transparent::{
     GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
 };

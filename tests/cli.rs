@@ -127,6 +127,19 @@ impl Project {
             .output()
             .expect("spawn concinnity binary")
     }
+
+    // Write a source file into the project's asset root, where a bare `source`
+    // filename in the world resolves.
+    fn write_asset(&self, name: &str, bytes: &[u8]) {
+        let dir = self.path().join(".concinnity").join("assets");
+        std::fs::create_dir_all(&dir).expect("create assets dir");
+        std::fs::write(dir.join(name), bytes).expect("write asset");
+    }
+
+    // The blob a build wrote.
+    fn blob(&self) -> Vec<u8> {
+        std::fs::read(self.path().join(".concinnity").join("data").join("0")).expect("read blob")
+    }
 }
 
 fn stdout(out: &Output) -> String {
@@ -148,6 +161,41 @@ fn help_exits_zero() {
     let out = run(&["--help"]);
     assert!(out.status.success(), "--help should exit 0");
     assert!(String::from_utf8_lossy(&out.stdout).contains("Usage"));
+}
+
+// The subcommand, the long flag, and both shorts render the same line: they
+// share one source, and nothing else proves the flags reach it.
+#[test]
+fn every_version_spelling_prints_the_same_line() {
+    let expected = stdout(&run(&["version"]));
+    assert!(
+        expected.starts_with(&format!("concinnity {}", env!("CARGO_PKG_VERSION"))),
+        "cn version printed {expected:?}"
+    );
+    for args in [&["--version"] as &[&str], &["-V"], &["-v"]] {
+        let out = run(args);
+        expect_ok(&out, &format!("cn {}", args.join(" ")));
+        assert_eq!(
+            stdout(&out),
+            expected,
+            "cn {} printed a different line",
+            args.join(" ")
+        );
+    }
+}
+
+// The build stamp: a commit and its date off a checkout, the build date
+// otherwise. A build that stamped neither would print the bare version.
+#[test]
+fn the_version_carries_a_build_stamp() {
+    let line = stdout(&run(&["version"]));
+    let stamp = line
+        .trim()
+        .split_once(" (")
+        .map(|(_, stamp)| stamp.trim_end_matches(')').to_string())
+        .unwrap_or_else(|| panic!("no build stamp in {line:?}"));
+    let date = stamp.rsplit(' ').next().expect("a stamp has a last field");
+    assert_eq!(date.split('-').count(), 3, "{date} is not a date");
 }
 
 #[test]
@@ -253,16 +301,20 @@ fn list_systems_names_each_system_and_its_gate() {
 }
 
 // An injected asset has no line in the authored file, so `cn explain` printing a
-// pasteable one is the only way to override it.
+// pasteable one is the only way to override it. The label's render marker is
+// the companion every drawn world receives.
 #[test]
 fn explain_prints_an_injected_asset_as_a_pasteable_line() {
     let project = Project::with_world(HELLO_WORLD);
-    let out = project.cn(&["explain", "debug_hud"]);
-    expect_ok(&out, "cn explain debug_hud");
+    let out = project.cn(&["explain", "GraphicsConfig"]);
+    expect_ok(&out, "cn explain GraphicsConfig");
 
     let printed = stdout(&out);
-    assert!(printed.contains("injected:debug_hud"), "got: {printed}");
-    assert!(printed.contains("\"type\":\"DebugHud\""), "got: {printed}");
+    assert!(printed.contains("injected:companion"), "got: {printed}");
+    assert!(
+        printed.contains("\"type\":\"GraphicsConfig\""),
+        "got: {printed}"
+    );
 }
 
 #[test]
@@ -367,7 +419,7 @@ fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
 fn docs_writes_the_asset_reference_pages() {
     let project = Project::empty();
     for tree in [
-        "crates/concinnity-world/src/schema",
+        "crates/concinnity-cook/src/authoring/schema",
         "crates/concinnity-core/src/components",
     ] {
         copy_dir(&repo_root().join(tree), &project.path().join(tree));
@@ -487,4 +539,163 @@ fn new_refuses_a_directory_that_already_has_a_world() {
         "{}",
         stderr(&out)
     );
+}
+
+// The glTF half of [`skinned_morph_glb`]. Buffer layout, in bytes: POSITION at
+// 0, u16 indices at 36 (padded to 44), JOINTS_0 at 44, WEIGHTS_0 at 56, then
+// the two morph targets' position deltas at 104 and 140.
+const SKINNED_MORPH_GLTF: &str = r#"{
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0, 1]}],
+  "nodes": [
+    {"mesh": 0, "skin": 0},
+    {"name": "root", "children": [2], "translation": [0.0, 1.0, 0.0]},
+    {"name": "tip", "translation": [0.0, 0.5, 0.0]}
+  ],
+  "skins": [{"joints": [1, 2]}],
+  "meshes": [{
+    "extras": {"targetNames": ["wide", "tall"]},
+    "primitives": [{
+      "attributes": {"POSITION": 0, "JOINTS_0": 2, "WEIGHTS_0": 3},
+      "indices": 1,
+      "targets": [{"POSITION": 4}, {"POSITION": 5}]
+    }]
+  }],
+  "buffers": [{"byteLength": 176}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 6},
+    {"buffer": 0, "byteOffset": 44, "byteLength": 12},
+    {"buffer": 0, "byteOffset": 56, "byteLength": 48},
+    {"buffer": 0, "byteOffset": 104, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 140, "byteLength": 36}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+     "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0]},
+    {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"},
+    {"bufferView": 2, "componentType": 5121, "count": 3, "type": "VEC4"},
+    {"bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC4"},
+    {"bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 5, "componentType": 5126, "count": 3, "type": "VEC3"}
+  ]
+}"#;
+
+// A minimal skinned `.glb`: one triangle bound to a two-joint skeleton ("root"
+// with child "tip") and two named morph targets. Assembled here rather than
+// checked in as a binary, the way the cook crate builds its own glTF fixtures.
+fn skinned_morph_glb() -> Vec<u8> {
+    fn f32s(vals: &[f32]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    bin.extend([0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()));
+    bin.extend([0u8; 2]);
+    bin.extend([0u8; 12]);
+    bin.extend(f32s(&[
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+    ]));
+    bin.extend(f32s(&[0.2, 0.0, 0.0, 0.2, 0.0, 0.0, 0.2, 0.0, 0.0]));
+    bin.extend(f32s(&[0.0, 0.3, 0.0, 0.0, 0.3, 0.0, 0.0, 0.3, 0.0]));
+
+    let mut json = SKINNED_MORPH_GLTF.as_bytes().to_vec();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let total = 12 + 8 + json.len() + 8 + bin.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(b"glTF");
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"JSON");
+    out.extend_from_slice(&json);
+    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"BIN\0");
+    out.extend_from_slice(&bin);
+    out
+}
+
+// A world over that mesh, covering both ways an imported SkinnedMesh reaches
+// the blob. `body` keeps its morph targets, so the import writes them into its
+// args on a miss and not on a hit; `npc` is claimed by a baking CharacterShape,
+// whose proportions scale a capsule that rides the args rather than the payload.
+const SKINNED_WORLD: &str = concat!(
+    r#"{"name":"skin_mat","type":"Material","args":{"roughness":0.55,"tint":[0.85,0.62,0.5]}}"#,
+    "\n",
+    r#"{"name":"body","type":"SkinnedMesh","args":{"source":"body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}}"#,
+    "\n",
+    r#"{"name":"npc","type":"SkinnedMesh","args":{"source":"body.glb","material":"skin_mat","position":[2,0,0],"scale":[1,1,1],"capsule":{"half_height":0.9,"radius":0.35}}}"#,
+    "\n",
+    r#"{"name":"npc_shape","type":"CharacterShape","args":{"target":"npc","bake":true,"sliders":[{"name":"wide","value":0.5}],"proportions":[{"joint":"root","scale":1.2},{"joint":"tip","length":0.25}]}}"#,
+    "\n",
+);
+
+// A world whose payloads all come from generators, so it needs no source file:
+// the EnvironmentMap convolutions the payload cache exists for, a generated
+// texture, and a procedural mesh. `rig` is a build-only asset, so the cooked
+// blob is reached through an expansion pass whose output rides on the args the
+// cache keys on.
+const GENERATED_WORLD: &str = concat!(
+    r#"{"name":"ibl","type":"EnvironmentMap","args":{"generator":"sky","prefilter_face_size":32,"irradiance_face_size":16,"prefilter_samples":32}}"#,
+    "\n",
+    r#"{"name":"ground_tex","type":"Texture","args":{"generator":"checker","resolution":64}}"#,
+    "\n",
+    r#"{"name":"ground_mat","type":"Material","args":{"albedo":"ground_tex","roughness":0.8}}"#,
+    "\n",
+    r#"{"name":"ball","type":"ProceduralMesh","args":{"generator":"sphere","radius":1.0,"segments":16}}"#,
+    "\n",
+    r#"{"name":"ball_prop","type":"Prop","args":{"mesh":"ball","material":"ground_mat","position":[0,1,0]}}"#,
+    "\n",
+    r#"{"name":"rig","type":"LightRig","args":{"preset":"studio"}}"#,
+    "\n",
+);
+
+// The payload cache has to be transparent: replaying a hit must reproduce the
+// bytes the miss produced, or a world cooks differently depending on whether
+// the machine happens to hold a cache entry. Driving the binary twice is the
+// only way to see this -- the cook crate's in-crate tests disable the payload
+// cache outright, so nothing there ever observes a hit.
+fn assert_warm_build_reproduces_the_cold_one(project: &Project) {
+    let cold = project.cn(&["build"]);
+    expect_ok(&cold, "cold build");
+    assert!(
+        stdout(&cold).contains("0 reused"),
+        "the first build should find an empty cache: {}",
+        stdout(&cold)
+    );
+    let cold_blob = project.blob();
+
+    let warm = project.cn(&["build"]);
+    expect_ok(&warm, "warm build");
+    assert!(
+        stdout(&warm).contains("0 compiled"),
+        "the second build should replay every payload: {}",
+        stdout(&warm)
+    );
+    let warm_blob = project.blob();
+
+    assert_eq!(
+        cold_blob.len(),
+        warm_blob.len(),
+        "the replayed blob is a different size"
+    );
+    assert!(
+        cold_blob == warm_blob,
+        "the replayed blob differs from the compiled one"
+    );
+}
+
+#[test]
+fn a_warm_build_reproduces_the_cold_build_byte_for_byte() {
+    let project = Project::with_world(SKINNED_WORLD);
+    project.write_asset("body.glb", &skinned_morph_glb());
+    assert_warm_build_reproduces_the_cold_one(&project);
+}
+
+#[test]
+fn a_warm_build_of_generated_payloads_reproduces_the_cold_one() {
+    assert_warm_build_reproduces_the_cold_one(&Project::with_world(GENERATED_WORLD));
 }

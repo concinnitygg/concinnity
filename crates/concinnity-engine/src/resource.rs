@@ -105,24 +105,15 @@ pub struct MeshSources(pub Vec<MeshSource>);
 pub struct MaterialNames(pub Vec<u32>);
 
 /// Install every per-kind resource table from a compiled blob's resource stream
-/// into `world`. This is the single place the table set is enumerated: the
-/// shipped runtime (`App::load_blob`), the editor's in-memory build, and the
-/// examples' `compile_world` all call it, so a resource kind that migrates into
-/// the stream gets wired into every host by adding one line here. Systems then
-/// read their table by handle. Each builder MOVES its kind's data bytes out of
-/// the records, so the caller's record vec is spent scaffolding afterwards.
-/// Dev-only source catalogues (hot-reload) stay with the debug path that
-/// captures them, not here.
+/// into `world`, and report the footprint they cost. The table set itself is
+/// enumerated once in `concinnity_core::resource::install_tables`, shared with
+/// the typed bake builder; what this adds is the load-time accounting. Each
+/// builder MOVES its kind's data bytes out of the records, so the caller's
+/// record vec is spent scaffolding afterwards. Dev-only source catalogues
+/// (hot-reload) stay with the debug path that captures them, not here.
 pub fn install_resource_tables(world: &mut crate::ecs::World, records: &mut [ResourceRecord]) {
     log_resource_footprint(records);
-    world.insert_resource(AudioClipTable::from_records(records));
-    world.insert_resource(TextureTable::from_records(records));
-    world.insert_resource(ColorLutTable::from_records(records));
-    world.insert_resource(EnvironmentMapTable::from_records(records));
-    world.insert_resource(FontTable::from_records(records));
-    world.insert_resource(MaterialTable::from_records(records));
-    world.insert_resource(MeshTable::from_records(records));
-    world.insert_resource(SkinnedMeshTable::from_records(records));
+    concinnity_core::resource::install_tables(world, records);
 }
 
 // Log the compiled-resource footprint at load: the payload bytes each record

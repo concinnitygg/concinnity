@@ -6,7 +6,7 @@
 // `add_to_path` scaffolds a fresh world at that location.
 
 use crate::add_to_path;
-use concinnity_cook::world::{WORLD_JSONL, find_world_jsonl};
+use concinnity_cook::authoring::world::{WORLD_JSONL, find_world_jsonl};
 
 /// Create an asset from `target` and apply it to the discovered world.
 ///

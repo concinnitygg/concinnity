@@ -458,121 +458,26 @@ impl GraphicsSystem {
         // Quality-feature toggles: the world's config overlaid with the user's
         // persisted choices, stored as the source of truth for the Quality-group
         // rows. A runtime toggle flips a field here, re-derives the per-feature
-        // settings, and rebuilds the affected GPU resources. The overlay applies
-        // only when the world declares a config: overriding a feature is
-        // meaningless without its tunables, and the upscaler / ambient resolution
-        // below intentionally keys off `post_config.is_some()` (synthesizing a
-        // config would wrongly engage the upscaler). The stored copy is still
-        // defaulted when absent so a runtime toggle has a config to flip.
+        // settings, and rebuilds the affected GPU resources. A world that
+        // declares no config falls back to the schema defaults, which author the
+        // top-tier look, so the overrides + ceiling below apply either way: the
+        // preset is what settles a default world's quality.
         self.post_config = post_config.clone().unwrap_or_default();
         // The pristine world baseline, before the user overrides + preset ceiling
         // below. A live preset change re-clamps the quality toggles from this, so
         // raising a preset restores the world's features (a ceiling never enables
         // anything the world did not author, so re-clamping the baseline is exact).
         self.authored_post_config = self.post_config.clone();
-        if post_config.is_some() {
-            if let Some(v) = user_graphics.ssao {
-                super::set_quality_toggle(&mut self.post_config, "ssao", v);
-            }
-            if let Some(v) = user_graphics.ssr {
-                super::set_quality_toggle(&mut self.post_config, "ssr", v);
-            }
-            if let Some(v) = user_graphics.ray_traced_reflections {
-                super::set_quality_toggle(&mut self.post_config, "ray_traced_reflections", v);
-            }
-            if let Some(v) = user_graphics.ssgi {
-                super::set_quality_toggle(&mut self.post_config, "ssgi", v);
-            }
-            if let Some(v) = user_graphics.auto_exposure {
-                super::set_quality_toggle(&mut self.post_config, "auto_exposure", v);
-            }
-            // AA mode + SSGI gather + reflection blur sub-quality overrides
-            // (cycle dropdowns), alongside the boolean toggles above.
-            if let Some(v) = user_graphics.aa_mode {
-                self.post_config.aa_mode = v;
-            }
-            if let Some(v) = user_graphics.ssgi_resolution {
-                self.post_config.ssgi_resolution = v;
-            }
-            if let Some(v) = user_graphics.ssgi_rays {
-                self.post_config.ssgi_rays = v;
-            }
-            if let Some(v) = user_graphics.ssgi_steps {
-                self.post_config.ssgi_steps = v;
-            }
-            if let Some(v) = user_graphics.reflection_blur_resolution {
-                self.post_config.reflection_blur_resolution = v;
-            }
-            // Per-feature sub-quality slider overrides (look-tuning, applied live
-            // via update_quality_params).
-            resolve::overlay_quality_scalars(&mut self.post_config, &user_graphics);
-        }
-        // Apply the active quality preset as a performance ceiling over the
-        // world's authored toggles: where the ceiling disallows a feature, force
-        // it off -- but only for a toggle the user did not explicitly override (an
-        // explicit choice wins), and never turning a feature on. A no-op under
-        // Custom / an unclassified GPU (the ceiling permits everything). Runs
-        // after the user-override overlay and before the per-feature derivation
-        // below, so the backend builds against the clamped config.
-        if post_config.is_some() {
-            let clamp = |cfg: &mut crate::components::PostProcessConfig,
-                         key: &str,
-                         overridden: bool,
-                         allowed: bool| {
-                if !overridden && !allowed {
-                    super::set_quality_toggle(cfg, key, false);
-                }
-            };
-            clamp(
-                &mut self.post_config,
-                "ssao",
-                user_graphics.ssao.is_some(),
-                quality_ceiling.ssao,
-            );
-            clamp(
-                &mut self.post_config,
-                "ssr",
-                user_graphics.ssr.is_some(),
-                quality_ceiling.ssr,
-            );
-            clamp(
-                &mut self.post_config,
-                "ray_traced_reflections",
-                user_graphics.ray_traced_reflections.is_some(),
-                quality_ceiling.ray_traced_reflections,
-            );
-            clamp(
-                &mut self.post_config,
-                "ssgi",
-                user_graphics.ssgi.is_some(),
-                quality_ceiling.ssgi,
-            );
-            clamp(
-                &mut self.post_config,
-                "auto_exposure",
-                user_graphics.auto_exposure.is_some(),
-                quality_ceiling.auto_exposure,
-            );
-            // Clamp the cycle quality knobs (SSGI gather + reflection blur) under
-            // the ceiling too (coarser resolution / fewer rays / steps), skipping
-            // any the user explicitly overrode.
-            let cycle_overridden = |key: &str| match key {
-                "aa_mode" => user_graphics.aa_mode.is_some(),
-                "ssgi_resolution" => user_graphics.ssgi_resolution.is_some(),
-                "ssgi_rays" => user_graphics.ssgi_rays.is_some(),
-                "ssgi_steps" => user_graphics.ssgi_steps.is_some(),
-                "reflection_blur_resolution" => user_graphics.reflection_blur_resolution.is_some(),
-                _ => false,
-            };
-            for key in crate::gfx::settings::QUALITY_CYCLE_KEYS {
-                super::clamp_quality_cycle(
-                    &mut self.post_config,
-                    key,
-                    &quality_ceiling,
-                    cycle_overridden(key),
-                );
-            }
-        }
+        resolve::overlay_quality_overrides(&mut self.post_config, &user_graphics);
+        // The active quality preset as a performance ceiling over the toggles
+        // above: where the ceiling disallows a feature, force it off -- but only
+        // for a toggle the user did not explicitly override, and never turning a
+        // feature on. A no-op under Custom (the ceiling permits everything).
+        resolve::clamp_quality_under_ceiling(
+            &mut self.post_config,
+            &user_graphics,
+            &quality_ceiling,
+        );
         // Per-feature settings, derived from the overlaid config. Each is the
         // init-time gate the backend builds against; the same derivation feeds a
         // live rebuild (`derive_quality_settings`). RT reflections need an
@@ -1608,20 +1513,24 @@ impl GraphicsSystem {
         let mut env_map_bytes: Option<Vec<u8>> = None;
         let mut environment_map_source: Option<super::hot_reload_sources::EnvironmentMapSource> =
             None;
-        // The runtime uses handle 0; a compiled EnvironmentMap always carries a
-        // payload (procedural generators bake one too), so a `None` locator here
-        // means simply "no EnvironmentMap declared".
-        if let Some(locator) = env_map_table.locator(0) {
-            match ctx.read_payload(&locator) {
-                Ok(b) => env_map_bytes = Some(b.to_vec()),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read EnvironmentMap payload: {:?}",
-                        e
-                    );
-                    self.failed = true;
-                    return None;
-                }
+        // The runtime uses handle 0. A map installed at runtime holds its
+        // payload directly; a compiled one is read through its locator. An
+        // entry with neither means simply "no EnvironmentMap declared".
+        if let Some(entry) = env_map_table.0.first() {
+            match (entry.baked_bytes(), &entry.payload) {
+                (Some(baked), _) => env_map_bytes = Some(baked.to_vec()),
+                (None, Some(locator)) => match ctx.read_payload(&locator.clone()) {
+                    Ok(b) => env_map_bytes = Some(b.to_vec()),
+                    Err(e) => {
+                        tracing::error!(
+                            "GraphicsSystem: failed to read EnvironmentMap payload: {:?}",
+                            e
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+                (None, None) => {}
             }
         }
         if capture_sources
@@ -1713,9 +1622,23 @@ impl GraphicsSystem {
             .unwrap_or_default();
         let mut text_atlas_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
         for (slot, entry) in font_table.0.iter().enumerate() {
-            let locator = match &entry.payload {
-                Some(l) => l.clone(),
-                None => {
+            // A face the world baked for itself at start holds its payload
+            // directly; a compiled one is read through its locator.
+            let bytes = match (entry.baked_bytes(), &entry.payload) {
+                (Some(baked), _) => baked.to_vec(),
+                (None, Some(locator)) => match ctx.read_payload(&locator.clone()) {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => {
+                        tracing::error!(
+                            "GraphicsSystem: failed to read Font handle {} payload: {:?}",
+                            slot,
+                            e
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                },
+                (None, None) => {
                     tracing::error!(
                         "GraphicsSystem: Font handle {} has no compiled payload -- did the build succeed?",
                         slot
@@ -1724,19 +1647,7 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            let bytes = match ctx.read_payload(&locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read Font handle {} payload: {:?}",
-                        slot,
-                        e
-                    );
-                    self.failed = true;
-                    return None;
-                }
-            };
-            match crate::build::font::deserialise(&bytes) {
+            match crate::bake::font::deserialise(&bytes) {
                 Ok((aw, ah, supersample, size_px, rgba, metrics)) => {
                     let metrics_map: text::FontMetrics =
                         metrics.into_iter().map(|m| (m.char_code, m)).collect();
@@ -1827,7 +1738,7 @@ impl GraphicsSystem {
                 continue;
             };
             match ctx.read_payload(&locator) {
-                Ok(bytes) => match crate::build::texture::deserialise(bytes)
+                Ok(bytes) => match crate::bake::texture::deserialise(bytes)
                     .and_then(|image| image.into_rgba8())
                 {
                     Ok((w, h, rgba)) => {
@@ -2007,7 +1918,7 @@ impl GraphicsSystem {
             None => return,
         };
 
-        let mut texture_data: Vec<crate::build::texture::TextureImage> = Vec::new();
+        let mut texture_data: Vec<crate::bake::texture::TextureImage> = Vec::new();
         // Raw compiled texture payloads, kept past blob release so the
         // asset-streaming subsystem can re-decode them off the main thread.
         // Left empty when the blobs are disk-backed: the streamer then re-reads
@@ -2024,7 +1935,7 @@ impl GraphicsSystem {
         );
         for (slot, locator) in texture_locators.iter().enumerate() {
             if deferred_slots.contains(&slot) {
-                texture_data.push(crate::build::texture::TextureImage::rgba8(
+                texture_data.push(crate::bake::texture::TextureImage::rgba8(
                     1,
                     1,
                     vec![0, 0, 0, 255],
@@ -2052,7 +1963,7 @@ impl GraphicsSystem {
                     return;
                 }
             };
-            match crate::build::texture::deserialise(&tex_bytes) {
+            match crate::bake::texture::deserialise(&tex_bytes) {
                 Ok(t) => texture_data.push(t),
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed texture payload: {}", e);
@@ -2720,7 +2631,9 @@ impl GraphicsSystem {
             },
             None => match self.test_hooks.as_mut() {
                 Some(hooks) => (hooks.backend_factory)(backend_init),
-                None => concinnity_device::init_backend(backend_init),
+                // A test builds no real device: one that forgets its hooks
+                // fails its own assertions instead of opening a window.
+                None => None,
             },
         };
         #[cfg(not(test))]

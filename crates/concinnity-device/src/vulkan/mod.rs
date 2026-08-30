@@ -38,6 +38,7 @@ mod pipeline_cache;
 mod planar;
 mod post;
 mod probe;
+mod probe_prefilter;
 mod quality;
 mod raymarch;
 mod raytrace;

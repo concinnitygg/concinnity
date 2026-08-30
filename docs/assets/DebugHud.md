@@ -21,13 +21,13 @@ rather than the authored coordinates.
 The always-on frame-rate and GPU-memory readouts live on the separate
 [StatHud](StatHud.md).
 
-Every rendering world receives a `DebugHud` and its chip labels at build
-time when it declares none, so the example below is only needed to restyle
-the chips. The HUD only activates in developer contexts: a debug build of
-the host binary, or a world launched through `cn debug`; release builds
-leave it inert even when declared. Declare an
-[EngineDefaults](EngineDefaults.md) with `"debug_hud": false` to remove it
-from the build entirely.
+Every rendering world receives a `DebugHud` at start when it declares none,
+and any label field left unset receives a chip, so the example below is
+only needed to restyle them. The HUD only activates in developer contexts:
+a debug build of the host binary, or a world launched through `cn debug`;
+release builds leave it inert even when declared. Declare an
+[EngineDefaults](EngineDefaults.md) with `"debug_hud": false` to leave the
+world without one.
 
 ## Parameters
 

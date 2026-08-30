@@ -9,7 +9,7 @@
 //!
 //! The build-only assets, which the cook expands away before a blob is written,
 //! are the other half of this namespace and live in
-//! `concinnity_world::registry::build_only`.
+//! `concinnity_cook::authoring::registry::build_only`.
 
 pub use super::app_config::AppConfigArgs as AppConfig;
 pub use super::audio_clip::AudioClip;

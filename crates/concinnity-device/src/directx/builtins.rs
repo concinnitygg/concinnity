@@ -61,16 +61,19 @@ impl HlslProgram {
     }
 }
 
-// Compile every declared program into `out_dir`, reusing local cache artifacts
+// Compile every declared program into `bundle`, reusing local cache artifacts
 // where present. A failure is reported rather than failing the export.
-pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompile::Report) {
+pub(crate) fn precompile(
+    bundle: &mut concinnity_host::store::cache::Segment,
+    report: &mut crate::precompile::Report,
+) {
     for program in ALL {
         let source = program.source(false);
         let key = super::pipeline::fxc_cache_key(&source, program.entry, program.target);
         let compile = || super::pipeline::compile_hlsl(&source, program.entry, program.target);
         report.record(
             &format!("{} {}", program.entry, program.target),
-            crate::shader_cache::ensure_in(out_dir, &key, compile),
+            crate::shader_cache::ensure_in(bundle, &key, compile),
         );
     }
 }

@@ -30,7 +30,7 @@
 //!
 //! The interner that assigns asset identities keeps a per-thread table and
 //! lives in concinnity-host. The authoring `Registration` record lives in
-//! concinnity-world, constructed from the trait's metadata consts.
+//! concinnity-cook, constructed from the trait's metadata consts.
 
 pub mod access_check;
 pub mod asset_id;
@@ -138,7 +138,7 @@ pub use payload_store::{NoPayloads, PayloadStore};
 // owns, for a world that runs with no host beyond it.
 pub use built_system::BuiltSystem;
 pub use headless::HEADLESS_SYSTEMS;
-pub use system_entry::{SystemEntry, SystemTable};
+pub use system_entry::{CompleteWorld, SystemEntry, SystemTable};
 pub use world::{ScratchStats, World};
 
 // The host-installed monotonic clock the step loop times systems with.

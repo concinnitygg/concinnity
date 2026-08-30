@@ -436,3 +436,86 @@ fn a_terrain_scene_runs_identically_twice() {
     };
     assert_eq!(run(), run());
 }
+
+/// A world whose height grid is added *after* the bodies that stand on it, so
+/// the terrain holds the higher body index and every pair meets it the other
+/// way round.
+fn terrain_added_last(capacity: usize) -> (Simulation, BodyHandle) {
+    let mut sim = Simulation::new(awake(), capacity + 1);
+    let ball = drop_ball(&mut sim, [1.3, 3.0, -2.1], 0.6);
+    let side = 9;
+    let heights = vec![0.0f32; side * side];
+    sim.add_heightfield(
+        side,
+        side,
+        heights,
+        [EXTENT, 1.0, EXTENT],
+        [0.0; 3],
+        LayerMask::ALL,
+    )
+    .expect("room for the terrain");
+    (sim, ball)
+}
+
+// Which body a pair names first is an artefact of insertion order, not of the
+// scene: a grid that happens to be the second body of a pair has to produce
+// the same contact as one that is the first, normal flipped to still point up
+// out of the surface. Otherwise a world would push its props into the ground
+// depending only on the order it was built in.
+#[test]
+fn a_body_rests_the_same_whichever_order_the_terrain_was_added_in() {
+    let (mut first, _ground) = flat(2);
+    let ball = drop_ball(&mut first, [1.3, 3.0, -2.1], 0.6);
+    step_for(&mut first, 300);
+    let terrain_first = position(&first, ball);
+
+    let (mut second, ball) = terrain_added_last(2);
+    step_for(&mut second, 300);
+    let terrain_last = position(&second, ball);
+
+    assert!(
+        (terrain_last[1] - 0.5).abs() < 0.02,
+        "the ball sank into a grid it met second, resting at {}",
+        terrain_last[1]
+    );
+    for k in 0..3 {
+        assert!(
+            (terrain_first[k] - terrain_last[k]).abs() < 0.02,
+            "insertion order changed where the ball came to rest: \
+             {terrain_first:?} vs {terrain_last:?}"
+        );
+    }
+}
+
+// Terrain never moves, so two grids can never meet. A world holding both has
+// to step without trying to collide them against each other, and still carry
+// the bodies standing on them.
+#[test]
+fn two_height_grids_in_one_world_never_collide_with_each_other() {
+    let (mut sim, _ground) = flat(3);
+    let side = 9;
+    sim.add_heightfield(
+        side,
+        side,
+        vec![0.0f32; side * side],
+        [EXTENT, 1.0, EXTENT],
+        [0.0, -5.0, 0.0],
+        LayerMask::ALL,
+    )
+    .expect("room for the second grid");
+
+    let ball = drop_ball(&mut sim, [1.3, 3.0, -2.1], 0.6);
+    step_for(&mut sim, 300);
+
+    let landed = position(&sim, ball);
+    assert!(
+        (landed[1] - 0.5).abs() < 0.02,
+        "the ball should rest on the upper grid, rests at {}",
+        landed[1]
+    );
+    assert_eq!(
+        sim.heightfield_overflows(),
+        0,
+        "a grid pair consumed manifold budget it should never have asked for"
+    );
+}

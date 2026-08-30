@@ -309,9 +309,11 @@ mod tests {
     #[test]
     fn build_texture_payload_source_mem_backed_decodes_payload() {
         // 1x1 RGBA tagged payload via the shared serialiser.
-        let payload = crate::build::texture::serialise(
-            &crate::build::texture::TextureImage::rgba8(1, 1, vec![0x11, 0x22, 0x33, 0xFF]),
-        );
+        let payload = crate::bake::texture::serialise(&crate::bake::texture::TextureImage::rgba8(
+            1,
+            1,
+            vec![0x11, 0x22, 0x33, 0xFF],
+        ));
 
         let src = build_texture_payload_source(vec![payload], &[], false).expect("mem source");
         let decoded = src.fetch(0).expect("decodes item 0");

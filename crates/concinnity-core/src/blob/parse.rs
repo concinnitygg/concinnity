@@ -2,22 +2,28 @@
 // off disk is the caller's job, so the payload residency store lives in
 // concinnity-core and the state root's `data/` layout in `concinnity_host::store`.
 
+use crate::blob::HEADER_SIZE;
 use crate::blob::error::BlobError;
 use crate::blob::frame::{FrameError, decode_exact};
-use crate::blob::schema::BlobMeta;
-use crate::blob::{BLOB_MAGIC, HEADER_SIZE};
+use crate::blob::kind::BlobKind;
 
 /// Parse a blob image's header and metadata block. Returns the metadata and the
 /// offset at which the payload section begins.
 ///
-/// `schema_version` is what the header must carry for the image to be readable by
-/// this build; runtime callers pass `concinnity_core::SCHEMA_VERSION`.
-pub fn parse_cnb(schema_version: u32, data: &[u8]) -> Result<(BlobMeta, usize), BlobError> {
-    let meta_len = parse_header(data)? as usize;
+/// `K` decides both the magic the header must carry and the type the metadata
+/// block decodes into, so an image written for another kind is rejected as
+/// [`BlobError::BadMagic`] rather than decoded into the wrong shape.
+///
+/// `validity` is what the header's token must equal for the image to be
+/// readable by this build. What it means belongs to the kind: for
+/// [`BlobMeta`](crate::blob::BlobMeta) it is a schema version, and runtime
+/// callers pass `concinnity_core::SCHEMA_VERSION`.
+pub fn parse_cnb<K: BlobKind>(validity: u32, data: &[u8]) -> Result<(K, usize), BlobError> {
+    let meta_len = parse_header::<K>(data)? as usize;
 
     let stored = le_u32(data, 4).ok_or(BlobError::TooShort)?;
-    if stored != schema_version {
-        return Err(BlobError::SchemaMismatch(stored));
+    if stored != validity {
+        return Err(BlobError::ValidityMismatch(stored));
     }
 
     let meta_end = HEADER_SIZE
@@ -36,15 +42,16 @@ pub fn parse_cnb(schema_version: u32, data: &[u8]) -> Result<(BlobMeta, usize), 
 /// Payload-section offset read from the header alone, so a caller holding only
 /// the first HEADER_SIZE bytes can turn a `PayloadLocator` offset into an
 /// absolute file offset without loading the image.
-pub fn parse_payload_section_start(header: &[u8]) -> Result<u64, BlobError> {
-    Ok(HEADER_SIZE as u64 + parse_header(header)?)
+pub fn parse_payload_section_start<K: BlobKind>(header: &[u8]) -> Result<u64, BlobError> {
+    Ok(HEADER_SIZE as u64 + parse_header::<K>(header)?)
 }
 
 /// The payload section of a full blob image.
 ///
 /// Infallible and lenient: an image too short to hold a header, or one whose
 /// header points past its end, yields an empty section. Overflow blobs carry no
-/// metadata and reach here without a magic or version check.
+/// metadata and reach here without a magic or validity check, so this is the one
+/// container read that needs no kind.
 pub fn payload_section(data: &[u8]) -> &[u8] {
     let Some(meta_len) = le_u64(data, 8) else {
         return &[];
@@ -56,13 +63,13 @@ pub fn payload_section(data: &[u8]) -> &[u8] {
         .unwrap_or(&[])
 }
 
-// Validate magic and return the declared metadata length. The version is
-// checked only where the metadata is actually decoded.
-fn parse_header(data: &[u8]) -> Result<u64, BlobError> {
+// Validate the kind's magic and return the declared metadata length. The
+// validity token is checked only where the metadata is actually decoded.
+fn parse_header<K: BlobKind>(data: &[u8]) -> Result<u64, BlobError> {
     if data.len() < HEADER_SIZE {
         return Err(BlobError::TooShort);
     }
-    if data.get(..4) != Some(&BLOB_MAGIC[..]) {
+    if data.get(..4) != Some(&K::MAGIC[..]) {
         return Err(BlobError::BadMagic);
     }
     le_u64(data, 8).ok_or(BlobError::TooShort)
@@ -87,8 +94,10 @@ fn le_u64(data: &[u8], at: usize) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blob::cache::CacheMeta;
     use crate::blob::encode::encode_cnb;
-    use crate::blob::schema::{AssetKind, BlobAssetDef, ResourceKind, ResourceRecord};
+    use crate::blob::schema::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
+    use crate::blob::{BLOB_MAGIC, kind::BlobKind};
     use crate::ecs::PayloadLocator;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -136,11 +145,12 @@ mod tests {
         let payload = [0xAA, 0xBB, 0xCC];
         let image = encode_cnb(TEST_SCHEMA_VERSION, &m, &payload).unwrap();
 
-        let (got, payload_start) = parse_cnb(TEST_SCHEMA_VERSION, &image).expect("parse");
+        let (got, payload_start) =
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &image).expect("parse");
         assert_eq!(got, m);
         assert_eq!(&image[payload_start..], &payload);
         assert_eq!(
-            parse_payload_section_start(&image).unwrap(),
+            parse_payload_section_start::<BlobMeta>(&image).unwrap(),
             payload_start as u64
         );
         assert_eq!(payload_section(&image), &payload);
@@ -149,7 +159,7 @@ mod tests {
     #[test]
     fn encode_with_no_metadata_and_no_payload_is_parseable() {
         let image = encode_cnb(TEST_SCHEMA_VERSION, &BlobMeta::default(), &[]).unwrap();
-        let (m, payload_start) = parse_cnb(TEST_SCHEMA_VERSION, &image).expect("parse");
+        let (m, payload_start) = parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &image).expect("parse");
         assert!(m.defs.is_empty());
         assert!(m.resources.is_empty());
         assert_eq!(image.len(), payload_start);
@@ -157,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_emits_magic_and_schema_version_header() {
+    fn encode_emits_magic_and_validity_token_header() {
         let image = encode_cnb(TEST_SCHEMA_VERSION, &BlobMeta::default(), &[1]).unwrap();
         assert_eq!(&image[0..4], &BLOB_MAGIC);
         assert_eq!(
@@ -168,14 +178,37 @@ mod tests {
         assert_eq!(image.len(), HEADER_SIZE + meta_len + 1);
     }
 
+    // The reason the magic hangs off the kind: a container written for one kind
+    // must not decode as another, even when both metadata types would accept
+    // the bytes.
     #[test]
-    fn parse_rejects_short_bad_magic_and_schema_mismatch() {
+    fn a_container_of_another_kind_is_rejected() {
+        let other = encode_cnb(TEST_SCHEMA_VERSION, &CacheMeta::default(), &[]).unwrap();
+        assert_eq!(&other[0..4], &CacheMeta::MAGIC);
         assert_eq!(
-            parse_cnb(TEST_SCHEMA_VERSION, &[0u8; HEADER_SIZE - 1]),
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &other),
+            Err(BlobError::BadMagic)
+        );
+        assert_eq!(
+            parse_payload_section_start::<BlobMeta>(&other),
+            Err(BlobError::BadMagic)
+        );
+
+        let world = encode_cnb(TEST_SCHEMA_VERSION, &meta(), &[]).unwrap();
+        assert_eq!(
+            parse_cnb::<CacheMeta>(TEST_SCHEMA_VERSION, &world),
+            Err(BlobError::BadMagic)
+        );
+    }
+
+    #[test]
+    fn parse_rejects_short_bad_magic_and_validity_mismatch() {
+        assert_eq!(
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &[0u8; HEADER_SIZE - 1]),
             Err(BlobError::TooShort)
         );
         assert_eq!(
-            parse_cnb(TEST_SCHEMA_VERSION, &[0u8; HEADER_SIZE]),
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &[0u8; HEADER_SIZE]),
             Err(BlobError::BadMagic)
         );
 
@@ -183,8 +216,8 @@ mod tests {
         let stored = TEST_SCHEMA_VERSION.wrapping_add(1);
         mismatched[4..8].copy_from_slice(&stored.to_le_bytes());
         assert_eq!(
-            parse_cnb(TEST_SCHEMA_VERSION, &mismatched),
-            Err(BlobError::SchemaMismatch(stored))
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &mismatched),
+            Err(BlobError::ValidityMismatch(stored))
         );
     }
 
@@ -201,7 +234,7 @@ mod tests {
         widened.extend_from_slice(&[0, 0]);
 
         assert_eq!(
-            parse_cnb(TEST_SCHEMA_VERSION, &widened),
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &widened),
             Err(BlobError::TrailingMeta(2))
         );
     }
@@ -210,7 +243,7 @@ mod tests {
     fn parse_rejects_a_truncated_meta_section() {
         let image = encode_cnb(TEST_SCHEMA_VERSION, &meta(), &[]).unwrap();
         assert_eq!(
-            parse_cnb(TEST_SCHEMA_VERSION, &image[..image.len() - 1]),
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, &image[..image.len() - 1]),
             Err(BlobError::TruncatedMeta)
         );
     }
@@ -219,11 +252,11 @@ mod tests {
     fn parse_rejects_a_non_blob_image() {
         let garbage = b"this is not a blob file at all";
         assert_eq!(
-            parse_cnb(TEST_SCHEMA_VERSION, garbage),
+            parse_cnb::<BlobMeta>(TEST_SCHEMA_VERSION, garbage),
             Err(BlobError::BadMagic)
         );
         assert_eq!(
-            parse_payload_section_start(garbage),
+            parse_payload_section_start::<BlobMeta>(garbage),
             Err(BlobError::BadMagic)
         );
     }

@@ -291,9 +291,10 @@ mod tests {
     fn an_export_round_trips_through_the_cook_importer() {
         let mesh = quad_mesh();
         let glb = export_glb(&mesh).expect("export");
-        let doc = concinnity_cook::gltf_source::GltfDoc::from_slice(&glb, None, "roundtrip")
-            .expect("exported GLB parses");
-        let back = concinnity_cook::mesh_reimport::decode_skinned_inline_from_parsed_glb(
+        let doc =
+            concinnity_cook::import::gltf_source::GltfDoc::from_slice(&glb, None, "roundtrip")
+                .expect("exported GLB parses");
+        let back = concinnity_cook::import::mesh_reimport::decode_skinned_inline_from_parsed_glb(
             &doc,
             "roundtrip",
             0,

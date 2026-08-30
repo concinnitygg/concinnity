@@ -1,6 +1,6 @@
 [workspace.package]
-version = "0.18.69"
-description = "Asset-driven application world framework"
+version = "0.19.0"
+description = "Asset-driven world engine"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
@@ -12,19 +12,25 @@ keywords = ["gamedev", "graphics", "engine", "rendering", "3d"]
 categories = ["game-engines", "graphics", "rendering::engine"]
 
 [workspace.dependencies]
-concinnity-cook = { path = "crates/concinnity-cook", version = "0.18" }
-concinnity-core = { path = "crates/concinnity-core", version = "0.18" }
-concinnity-dev = { path = "crates/concinnity-dev", version = "0.18" }
-concinnity-device = { path = "crates/concinnity-device", version = "0.18" }
-concinnity-engine = { path = "crates/concinnity-engine", version = "0.18" }
-concinnity-host = { path = "crates/concinnity-host", version = "0.18" }
-concinnity-shader = { path = "crates/concinnity-shader", version = "0.18" }
-concinnity-slang = { path = "crates/concinnity-slang", version = "0.18" }
-concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.18" }
-concinnity-world = { path = "crates/concinnity-world", version = "0.18" }
+concinnity-cook = { path = "crates/concinnity-cook", version = "0.19" }
+concinnity-core = { path = "crates/concinnity-core", version = "0.19" }
+concinnity-dev = { path = "crates/concinnity-dev", version = "0.19" }
+concinnity-device = { path = "crates/concinnity-device", version = "0.19" }
+concinnity-engine = { path = "crates/concinnity-engine", version = "0.19" }
+concinnity-host = { path = "crates/concinnity-host", version = "0.19" }
+concinnity-shader = { path = "crates/concinnity-shader", version = "0.19" }
+concinnity-slang = { path = "crates/concinnity-slang", version = "0.19" }
+concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.19" }
 
 [package]
 name = "concinnity"
+default-run = "concinnity"
+include = [
+    "/src",
+    "/build.rs",
+    "/README.md",
+    "/LICENSE",
+]
 version.workspace = true
 description.workspace = true
 authors.workspace = true
@@ -36,48 +42,29 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-autobenches = false
-autotests = false
-autobins = false
-autoexamples = false
-default-run = "concinnity"
-include = [
-    "/src",
-    "/build.rs",
-    "/README.md",
-    "/LICENSE",
-]
-
-[lib]
-name = "concinnity"
-path = "src/lib.rs"
 
 [[bin]]
 name = "concinnity"
-path = "src/bin/concinnity/main.rs"
 required-features = ["editor"]
 doc = false
 
 [[bin]]
 name = "concinnity-run"
-path = "src/bin/concinnity-run/main.rs"
 required-features = ["player"]
-doc = false
 
 [[test]]
 name = "cli"
-path = "tests/cli.rs"
 required-features = ["editor"]
+
+[[bench]]
+name = "suite"
+harness = false
+required-features = ["cook", "player"]
 
 [workspace]
 resolver = "2"
 members = [
     "crates/*",
-    "benches",
-]
-
-default-members = [
-    ".",
 ]
 
 [package.metadata.docs.rs]
@@ -90,14 +77,13 @@ default = ["std"]
 std = ["dep:concinnity-engine"]
 player = ["std", "dep:concinnity-toolchain"]
 editor = ["player", "cook", "dep:concinnity-dev", "dep:clap"]
-cook = ["std", "dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
+cook = ["std", "dep:concinnity-cook", "dep:concinnity-shader"]
 vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan", "concinnity-dev?/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-engine = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
-concinnity-world = { workspace = true, optional = true }
 concinnity-shader = { workspace = true, optional = true }
 concinnity-dev = { workspace = true, optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
@@ -110,8 +96,7 @@ concinnity-toolchain = { workspace = true, optional = true }
 
 [[example]]
 name = "cube"
-path = "examples/cube.rs"
-required-features = ["cook"]
+required-features = ["std"]
 
 [lints]
 workspace = true

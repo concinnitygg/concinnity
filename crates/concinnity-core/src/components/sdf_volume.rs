@@ -2,7 +2,8 @@
 //! `cone_ratio`, and `SDF_PARAMS_LEN`), the `Component` impl, the blob-residency
 //! helper the engine init uses, and the runtime step-count clamp bounds. The
 //! JSON-args source selection, validation, and the bake-time clamp live in
-//! concinnity-world (`source_args`, `check::sdf_volume`, `validate::sdf_volume`).
+//! concinnity-cook (`authoring::source_args`, `check::sdf_volume`,
+//! `authoring::validate::sdf_volume`).
 
 use crate::ecs::Component;
 use crate::ecs::PayloadLocator;

@@ -2,9 +2,11 @@
 //! of the directories hanging off it.
 //!
 //! Everything the engine writes for a project lives under one state directory:
-//! the compiled blobs (`data/`), the payload cache (`cache/`), fetched source
-//! assets (`assets/`), named worlds (`worlds/`), the runtime save files
-//! (`saves/`), and the mutable settings file (`settings`).
+//! the compiled blobs (`data/`), the regenerable cache (`cache/`: `0` for the
+//! running application, `1` for a build, the baked asset thumbnails included),
+//! fetched source assets (`assets/`),
+//! named worlds (`worlds/`), the runtime save files (`saves/`), and the
+//! mutable settings file (`settings`).
 //!
 //! Nothing here has a default. A host installs the state directory via
 //! [`set_state_dir`] before anything reads the tree, and until it does every
@@ -26,7 +28,7 @@
 //! is `super::source` (finding a source asset) and `super::blob` (the compiled
 //! blob).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod root;
 
@@ -80,56 +82,56 @@ pub fn worlds_dir() -> Option<PathBuf> {
     state_dir().map(|d| d.join("worlds"))
 }
 
-/// The state root's `cache/` directory.
-pub fn cache_dir() -> Option<PathBuf> {
-    state_dir().map(|d| d.join("cache"))
+/// The runtime cache segment inside `state_dir`, for a caller naming a state
+/// tree other than the installed one: `cn export` warms the segment it writes
+/// into a bundle before that bundle is ever launched.
+pub fn runtime_cache_in(state_dir: &Path) -> PathBuf {
+    state_dir.join("cache").join("0")
 }
 
-/// Directory holding baked asset thumbnails: content-addressed `<sha256>.png`
-/// files plus an `index.json` mapping asset names to keys. Deterministic
-/// products of the build like [`cache_dir`]'s payloads, but kept apart so they
-/// can be listed and cleared independently (and never ship: `cn export` copies
-/// neither).
-pub fn thumbnails_dir() -> Option<PathBuf> {
-    state_dir().map(|d| d.join("thumbnails"))
-}
-
-/// Directory the renderer writes compiled built-in shader binaries to, keyed by
-/// a hash of their compile inputs. Resolves under the writable-state dir, since
-/// a shipped install's content root may be read-only. Distinct from
-/// [`cache_dir`], which holds cooked asset payloads: these artifacts belong to
-/// the machine's shader compiler, not to the build.
-pub fn shader_cache_dir() -> Option<PathBuf> {
-    writable_state_dir().map(|d| d.join("shader-cache"))
-}
-
-/// Directory the renderer persists driver pipeline blobs to (a serialized
-/// VkPipelineCache, a D3D12 pipeline library), keyed per adapter. Unlike
-/// [`shader_cache_dir`] artifacts these are machine code tied to one GPU and
-/// driver, so they resolve under the writable-state dir only and never ship in
-/// a bundle. A sibling of `shader-cache/` rather than a subdirectory, since the
-/// shader cache prunes its directory by age and would reclaim these.
-pub fn pipeline_cache_dir() -> Option<PathBuf> {
-    writable_state_dir().map(|d| d.join("pipeline-cache"))
-}
-
-/// Directory holding shader binaries shipped inside a bundle, read-only. `cn
-/// export` warms this so a player's first launch does not pay the compile;
-/// because the artifacts are backend IR (DXBC / SPIR-V) rather than machine
-/// code, one warmed at package time is valid on any machine.
+/// The runtime cache segment, `cache/0`: one container holding every
+/// regenerable artifact the running application produces for its own later
+/// launches, indexed by producer and key. Resolves under the writable-state
+/// dir, since a shipped install's content root may be read-only.
 ///
-/// Equal to [`shader_cache_dir`] whenever the content root is writable (the
-/// portable-folder case). The two diverge only for a read-only install, which
-/// redirects writable state to a per-user directory: the bundled artifacts then
-/// stay readable here while new ones land in the writable dir.
-pub fn bundled_shader_cache_dir() -> Option<PathBuf> {
-    state_dir().map(|d| d.join("shader-cache"))
+/// Deletable at any time; whatever is missing is recomputed. The running
+/// application writes this file and no other, so a concurrent build writing a
+/// segment of its own never shares a file with it.
+pub fn runtime_cache_path() -> Option<PathBuf> {
+    writable_state_dir().map(|d| runtime_cache_in(&d))
+}
+
+/// The runtime cache segment a bundle ships, read-only. `cn export` warms it
+/// with the shader binaries a first launch would otherwise compile; because
+/// those artifacts are backend IR (DXBC / SPIR-V) rather than machine code, one
+/// warmed at package time is valid on any machine.
+///
+/// Resolves against the content root, so it stays readable on a read-only
+/// install. That is also the only layout where this differs from
+/// [`runtime_cache_path`]: a bundle the player can write to has one segment
+/// serving both roles.
+pub fn bundled_runtime_cache_path() -> Option<PathBuf> {
+    state_dir().map(|d| runtime_cache_in(&d))
+}
+
+/// The build cache segment, `cache/1`: one container holding every payload,
+/// expansion, and baked thumbnail a cook produced, indexed by producer and
+/// key. A build writes this
+/// file and no other, so a cook running against a live application never
+/// shares a file with the segment that application writes.
+///
+/// Resolves against the content root rather than the writable one: a build
+/// writes the `data/` beside it, so a tree it cannot write is a tree it cannot
+/// cook into either.
+///
+/// Deletable at any time; whatever is missing is recompiled.
+pub fn build_cache_path() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("cache").join("1"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     // Exercises the process-global roots end to end. The single test that drives
     // the globals, so its mutations never race another test that reads them.
@@ -139,7 +141,8 @@ mod tests {
         set_state_dir(flat);
         assert_eq!(state_dir().as_deref(), Some(flat));
         assert_eq!(data_dir().unwrap(), flat.join("data"));
-        assert_eq!(cache_dir().unwrap(), flat.join("cache"));
+        assert_eq!(runtime_cache_path().unwrap(), flat.join("cache").join("0"));
+        assert_eq!(build_cache_path().unwrap(), flat.join("cache").join("1"));
         assert_eq!(assets_dir().unwrap(), flat.join("assets"));
         assert_eq!(worlds_dir().unwrap(), flat.join("worlds"));
         // With no writable override, writable state stays beside the data.
@@ -149,20 +152,24 @@ mod tests {
         assert_eq!(crashes_dir().unwrap(), flat.join("crashes"));
 
         // A writable override relocates only the runtime-writable state
-        // (`saves/`, `settings`, `crashes/`); `data/` (and cache/assets/worlds)
-        // stay at the content root.
+        // (`saves/`, `settings`, `crashes/`); `data/` (and assets/worlds) stay
+        // at the content root, and so does the segment a build writes.
         let writable = Path::new("/tmp/per-user-probe");
         set_writable_state_dir(writable);
         assert_eq!(writable_state_dir().as_deref(), Some(writable));
         assert_eq!(saves_dir().unwrap(), writable.join("saves"));
         assert_eq!(settings_path().unwrap(), writable.join("settings"));
         assert_eq!(crashes_dir().unwrap(), writable.join("crashes"));
-        assert_eq!(shader_cache_dir().unwrap(), writable.join("shader-cache"));
-        // The bundled shader cache stays with the content, which is what makes
-        // a read-only install's warmed artifacts still readable.
         assert_eq!(
-            bundled_shader_cache_dir().unwrap(),
-            flat.join("shader-cache")
+            runtime_cache_path().unwrap(),
+            writable.join("cache").join("0")
+        );
+        assert_eq!(build_cache_path().unwrap(), flat.join("cache").join("1"));
+        // The bundle's warmed segment stays with the content, which is what
+        // makes a read-only install's shipped artifacts still readable.
+        assert_eq!(
+            bundled_runtime_cache_path().unwrap(),
+            flat.join("cache").join("0")
         );
         assert_eq!(data_dir().unwrap(), flat.join("data"));
         clear_writable_state_dir();
@@ -174,17 +181,15 @@ mod tests {
         assert_eq!(state_dir(), None);
         for path in [
             data_dir(),
-            cache_dir(),
             assets_dir(),
             worlds_dir(),
             saves_dir(),
             preview_saves_dir(),
             settings_path(),
             crashes_dir(),
-            thumbnails_dir(),
-            shader_cache_dir(),
-            pipeline_cache_dir(),
-            bundled_shader_cache_dir(),
+            runtime_cache_path(),
+            bundled_runtime_cache_path(),
+            build_cache_path(),
             writable_state_dir(),
         ] {
             assert_eq!(path, None);

@@ -980,7 +980,7 @@ mod tests {
     impl PayloadSource for ConstTexture {
         fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
             Ok(DecodedTexture {
-                image: crate::build::texture::TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]),
+                image: crate::bake::texture::TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]),
             })
         }
     }

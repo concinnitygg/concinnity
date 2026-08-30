@@ -19,7 +19,7 @@ use crate::resource::{
     ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
     MeshSources, TextureSource, TextureSources,
 };
-use concinnity_world::registry::RegisteredType;
+use concinnity_cook::authoring::registry::RegisteredType;
 
 // Reconstruct the source catalogues from the working directory's
 // world-lock.json plus the parsed authored entries, and install them as world

@@ -1,5 +1,3 @@
-// src/source_hash.rs
-//
 // FNV-1a over a set of Rust sources, for a cache or container whose stored
 // bytes are a function of the code that produced them. Folding the hash into a
 // key means a change to any of those sources changes the key, so a stale entry
@@ -23,7 +21,7 @@ pub(crate) fn fnv(mut hash: u32, bytes: &[u8]) -> u32 {
     hash
 }
 
-// Every .rs file under `root` (or `root` itself when it is a file). Panics on a
+// Every .rs file under `root`, or `root` itself when it is a file. Panics on a
 // missing root: a typo would otherwise hash nothing and leave the key blind to
 // the sources it is meant to track.
 pub(crate) fn collect(root: &Path, out: &mut Vec<PathBuf>) {

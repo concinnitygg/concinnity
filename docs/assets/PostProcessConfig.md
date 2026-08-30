@@ -4,7 +4,16 @@
 
 Tunables for the post-process stack. One per world; the first declared
 instance wins. With no `PostProcessConfig` present, the defaults below are
-used (bloom on at a moderate intensity).
+used.
+
+The defaults describe the look on capable hardware: temporal
+anti-aliasing, ambient occlusion, reflections and a screen-space indirect
+bounce are all on. They are not what every GPU runs. The `Auto` graphics
+quality preset resolves the detected GPU into a performance ceiling that
+forces the expensive effects off tier by tier, so a world that authors
+nothing still runs well on a laptop and still looks its best on a
+workstation. A world that wants a cheaper look regardless of hardware turns
+the effects off here; a ceiling only ever reduces, so it cannot undo that.
 
 Colour-LUT grading is a separate [ColorLut](ColorLut.md) asset; `lut_strength`
 here is the blend amount applied to whichever [ColorLut](ColorLut.md) the world
@@ -23,16 +32,16 @@ value.
 - `exposure_ev`: A float. Exposure offset in photographic stops. Each +1 doubles scene brightness before bloom and tonemapping; 0 is neutral. Defaults to `0.0`.
 - `vignette_strength`: A float. Vignette strength in `[0, 1]`. 0 disables the corner darkening. Defaults to `0.0`.
 - `lut_strength`: A float. Colour-LUT blend in `[0, 1]`. Mixes the graded colour over the ungraded one by this amount. Only matters when the world declares a [ColorLut](ColorLut.md); with none, grading is a no-op at any strength. Defaults to `1.0`.
-- `aa_mode`: A string (see [AaMode](AaMode.md)). Anti-aliasing mode. `fxaa` (default) applies a cheap composite-pass edge filter; `taa` adds a temporal pass that jitters the projection and accumulates detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a history buffer; `off` disables edge smoothing.
-- `ssao`: A boolean. Screen-space ambient occlusion toggle. Darkens creases and contact areas where ambient light is occluded. Defaults to `false`.
+- `aa_mode`: A string (see [AaMode](AaMode.md)). Anti-aliasing mode. `fxaa` applies a cheap composite-pass edge filter; `taa` (default) adds a temporal pass that jitters the projection and accumulates detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a history buffer; `off` disables edge smoothing. Clamped to `fxaa` below the mid quality tier.
+- `ssao`: A boolean. Screen-space ambient occlusion toggle. Darkens creases and contact areas where ambient light is occluded. On by default, forced off on the lowest quality tier.
 - `ssao_radius`: A float. How far the ambient-occlusion search reaches for occluders, in world units. Larger values pick up broader, softer occlusion. Defaults to `0.5`.
 - `ssao_intensity`: A float. Ambient-occlusion strength, clamped to `[0, 4]`. 1.0 is the natural amount; higher values exaggerate the contact darkening. Defaults to `1.0`.
-- `ssr`: A boolean. Screen-space reflection toggle. Mixes reflected scene colour over glossy surfaces (water, polished floors). Defaults to `false`.
+- `ssr`: A boolean. Screen-space reflection toggle. Mixes reflected scene colour over glossy surfaces (water, polished floors). On by default, forced off below the high quality tier.
 - `ssr_intensity`: A float. Reflection blend strength, clamped to `[0, 1]`. Scales the Fresnel-weighted reflection mixed over the base shading. Defaults to `0.7`.
 - `ssr_max_distance`: A float. How far a reflection reaches, in world units. Longer reaches catch more distant reflections, more coarsely. Defaults to `40.0`.
-- `ray_traced_reflections`: A boolean. Hardware ray-traced reflection toggle. When the GPU supports ray tracing, traces real reflection rays so off-screen geometry still appears, instead of the screen-space method. Reuses the `ssr_intensity` / `ssr_max_distance` tunables and takes precedence over `ssr`, falling back to it where ray tracing isn't available. Defaults to `false`.
+- `ray_traced_reflections`: A boolean. Hardware ray-traced reflection toggle. When the GPU supports ray tracing, traces real reflection rays so off-screen geometry still appears, instead of the screen-space method. Reuses the `ssr_intensity` / `ssr_max_distance` tunables and takes precedence over `ssr`, falling back to it where ray tracing isn't available. On by default; only the top quality tier permits it, so everything below falls back to `ssr`.
 - `reflection_blur_resolution`: A string (see [ReflectionBlurResolution](ReflectionBlurResolution.md)). Internal resolution of the roughness-aware reflection blur the SSR / ray-traced reflection composite runs. `half` (default) blurs at a quarter of the pixels for a large saving and bilinearly upsamples; `full` blurs at native resolution; `quarter` is the cheapest. Smooth mirror surfaces stay sharp at any setting (the composite keeps the sharp reflection for low roughness). Only matters when `ssr` or `ray_traced_reflections` is on.
-- `indirect_lighting`: A string (see [IndirectLighting](IndirectLighting.md)). Indirect-diffuse lighting source. `ibl` (default) uses the environment map's ambient alone. `ssgi` adds a screen-space global-illumination pass on top, so nearby lit surfaces bleed colour onto one another; the environment ambient still covers the off-screen / sky fallback.
+- `indirect_lighting`: A string (see [IndirectLighting](IndirectLighting.md)). Indirect-diffuse lighting source. `ibl` uses the environment map's ambient alone. `ssgi` (default) adds a screen-space global-illumination pass on top, so nearby lit surfaces bleed colour onto one another; the environment ambient still covers the off-screen / sky fallback. Clamped back to `ibl` below the high quality tier.
 - `ambient_intensity`: A float. Multiplier on the indirect (ambient / IBL) lighting term, clamped to `[0, 16]`. 1.0 (default) leaves the environment-derived ambient at its physical level. Raising it lifts fill light in areas the directional light cannot reach (shadowed facades, alleys) without brightening directly lit surfaces, which the sun already dominates. Scales the diffuse and specular IBL together, so reflections stay consistent with the brighter ambient. Useful for high-contrast exterior scenes where a strong sun would otherwise crush shadows to black.
 - `ssgi_intensity`: A float. Indirect-bounce strength, clamped to `[0, 4]`. Scales the gathered indirect light added on top of the existing shading; 0 makes it a no-op. Only matters when `indirect_lighting` is `ssgi`. Defaults to `0.5`.
 - `ssgi_max_distance`: A float. How far the indirect-light gather reaches, in world units. A near-field effect, so it defaults well below `ssr_max_distance`. Only matters when `indirect_lighting` is `ssgi`.
@@ -48,4 +57,4 @@ value.
 - `temporal_upscaling`: A boolean. Temporal upscaling toggle. Renders the 3D scene at a lower resolution (set by `upscale_quality`) and reconstructs a full-resolution image, trading some sharpness for performance. Replaces TAA while on (the `taa` flag is ignored). Defaults to `false`.
 - `upscale_quality`: A string (see [UpscaleQuality](UpscaleQuality.md)). Render-scale preset for `temporal_upscaling`; each step progressively lowers the internal resolution. No effect when `temporal_upscaling` is off.
 - `upscale_backend`: A string (see [UpscalerBackend](UpscalerBackend.md)). Which upscaler backend `temporal_upscaling` uses. `auto` (default) picks the best available at runtime (DLSS on NVIDIA RTX, else XeSS, else FSR3); `fsr3` / `dlss` / `xess` request a specific one and fall back when it is unavailable on the current GPU or build. No effect when `temporal_upscaling` is off. DLSS and XeSS are DirectX-only.
-- `occlusion_two_pass`: A boolean. Two-pass occlusion culling toggle. Reduces objects popping in a frame late when they're revealed by camera or occluder motion, at the cost of extra culling work each frame. Defaults to `false`.
+- `occlusion_two_pass`: A boolean. Two-pass occlusion culling toggle. Reduces objects popping in a frame late when they're revealed by camera or occluder motion, at the cost of extra culling work each frame. Needs the bindless GPU-cull path. Defaults to `true`.

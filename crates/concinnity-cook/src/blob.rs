@@ -17,13 +17,11 @@ use concinnity_core::blob::{
 };
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
-// Re-export the read side from `concinnity_host::store` so `crate::blob::{BlobData,
-// load_raw, ...}` resolves for build-crate consumers that read blobs back.
-// `blob_path` is shared: the build names blob 0 through it, and readers
-// resolve the same layout.
-pub use concinnity_host::store::blob::{
-    BlobData, blob_path, load_defs, load_raw, payload_section_start, read_cnb,
-};
+// `blob_path` is shared with the read side in `concinnity_host::store`: the
+// build names blob 0 through it, and readers resolve the same layout.
+pub(crate) use concinnity_host::store::blob::blob_path;
+#[cfg(test)]
+pub(crate) use concinnity_host::store::blob::read_cnb;
 
 use serde::{Deserialize, Serialize};
 
@@ -325,8 +323,8 @@ impl PayloadPacker {
 pub(crate) fn write_lock(
     named_defs: &[(&str, &BlobAssetDef)],
     resources: &[LockedResource],
-    injected: &[crate::world::InjectedAsset],
-    shadowed: &[crate::world::ShadowedAsset],
+    injected: &[crate::build_only::InjectedAsset],
+    shadowed: &[crate::build_only::ShadowedAsset],
     blob_paths: &[String],
 ) -> std::io::Result<()> {
     let mut blobs = Vec::new();
@@ -651,13 +649,13 @@ mod tests {
             payload_blob: None,
             ..Default::default()
         }];
-        let injected = vec![crate::world::InjectedAsset {
+        let injected = vec![crate::build_only::InjectedAsset {
             name: "debug_hud".to_string(),
             asset_type: "DebugHud".to_string(),
             args: serde_json::json!({"enabled": true}),
             injected_by: "engine",
         }];
-        let shadowed = vec![crate::world::ShadowedAsset {
+        let shadowed = vec![crate::build_only::ShadowedAsset {
             name: "bistro_mat_wood".to_string(),
             asset_type: "Material".to_string(),
             generated_by: "bistro".to_string(),

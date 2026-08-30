@@ -65,3 +65,43 @@ impl<T> Copy for ParallelCtxRef<'_, T> {}
 unsafe impl<T: ParallelEncodeCtx> Send for ParallelCtxRef<'_, T> {}
 // SAFETY: as for `Send` above -- the wrapper only ever hands out `&T`.
 unsafe impl<T: ParallelEncodeCtx> Sync for ParallelCtxRef<'_, T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Ctx(u32);
+
+    // SAFETY: a plain integer with no interior mutability, so concurrent `&Ctx`
+    // access during the fan-out is trivially sound.
+    unsafe impl ParallelEncodeCtx for Ctx {}
+
+    // The wrapper hands back the borrow it was built from, and copying one
+    // hands back the same borrow: workers each hold their own copy of the
+    // handle and reach one shared context through it.
+    #[test]
+    fn every_copy_of_the_handle_reaches_the_same_context() {
+        let ctx = Ctx(7);
+        let handle = ParallelCtxRef::new(&ctx);
+        let copied = handle;
+        // Spelled through the trait: the wrapper is `Copy`, so method-call
+        // syntax would take the copy path and never reach this impl.
+        let cloned = Clone::clone(&handle);
+        assert_eq!(handle.as_ctx().0, 7);
+        assert_eq!(copied.as_ctx().0, 7);
+        assert_eq!(cloned.as_ctx().0, 7);
+        assert!(core::ptr::eq(handle.as_ctx(), cloned.as_ctx()));
+    }
+
+    // The Send/Sync claim is what lets a worker thread hold one, so borrow a
+    // handle across a scoped thread to prove the impls are in force.
+    #[test]
+    fn a_handle_crosses_a_thread_boundary() {
+        let ctx = Ctx(3);
+        let handle = ParallelCtxRef::new(&ctx);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || handle.as_ctx().0);
+            assert_eq!(worker.join().expect("the worker finished"), 3);
+        });
+    }
+}

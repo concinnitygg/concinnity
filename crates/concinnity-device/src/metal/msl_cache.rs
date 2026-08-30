@@ -66,7 +66,7 @@ fn source_library(
 // exit path.
 fn compile_to_metallib(source: &str, label: &str) -> Result<Vec<u8>, String> {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    let dir = crate::shader_cache::slang_work_dir();
+    let dir = crate::compiler_work::dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let stem = dir.join(format!(
         "msl.{}.{}",

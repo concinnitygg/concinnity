@@ -3,7 +3,7 @@
 //
 // The asset schema is read from two source trees: the assets a world can hold
 // or the cook compiles, in concinnity-core, and the build-only ones the cook
-// expands away, in concinnity-world. Both are read here and joined into one
+// expands away, in concinnity-cook. Both are read here and joined into one
 // index.
 //
 // For each asset (and each nested value type) the entry contains:
@@ -54,8 +54,8 @@ pub(super) struct AssetDoc {
 // The schema source trees, relative to a checkout of the engine. The stored
 // and resource vocabulary sits with its runtime half in core; the build-only
 // assets, which never reach a running world, sit with their registry group in
-// concinnity-world.
-const BUILD_ONLY_SCHEMA: &str = "crates/concinnity-world/src/schema";
+// concinnity-cook.
+const BUILD_ONLY_SCHEMA: &str = "crates/concinnity-cook/src/authoring/schema";
 const RUNTIME_SCHEMA: &str = "crates/concinnity-core/src/components";
 
 /// Every documented type, assets first, each group sorted by name.
@@ -195,7 +195,7 @@ struct Reference {
 // from it.
 fn assemble(types: &[DocType]) -> Reference {
     // Manual components keep a literal `impl Component`; the rest come from the
-    // concinnity-world registries. A type appears in exactly one of the two.
+    // authoring registries. A type appears in exactly one of the two.
     let all_components = collect_registry_components();
 
     // Authorable assets only: a RuntimeOnly component is engine-internal, never
@@ -287,14 +287,14 @@ fn assemble(types: &[DocType]) -> Reference {
     Reference { assets, ref_types }
 }
 
-// Every documented asset type, read through the concinnity-world authoring
-// registry (the single source of the origin / args-schema metadata, since the
+// Every documented asset type, read through the cook's authoring registry (the
+// single source of the origin / args-schema metadata, since the
 // runtime `Component` trait carries none). `RegisteredType::all` covers every
 // declarable type, components and resources alike; `args_struct_name` names the
 // authored args schema (the type itself for pass-through assets, the `args:`
 // override for the divergent ones, whose fields the parameter table renders).
 fn collect_registry_components() -> Vec<ComponentMeta> {
-    use concinnity_world::registry::RegisteredType;
+    use concinnity_cook::authoring::registry::RegisteredType;
 
     RegisteredType::all()
         .iter()

@@ -7,23 +7,19 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Asset cook pipeline that bakes an authored Concinnity world into a blob"
+description = "Authored world model, validation, and the asset cook pipeline that bakes a Concinnity world into a blob"
+readme = "README.md"
 keywords = ["gamedev", "assets", "concinnity"]
 categories = ["game-engines", "development-tools::build-utils"]
 include = [
+    "/README.md",
     "/src",
     "/assets",
-    "/build.rs",
 ]
-
-[lib]
-name = "concinnity_cook"
-path = "src/lib.rs"
 
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-world = { workspace = true }
 
 bytemuck = "1"
 serde = { version = "1", features = ["derive"] }
@@ -43,9 +39,6 @@ pulldown-cmark = { version = "0.13", default-features = false }
 rayon = "1"
 sha2 = "0.10.9"
 time = { version = "0.3.47", features = ["formatting", "parsing"] }
-
-[build-dependencies]
-concinnity-toolchain = { workspace = true }
 
 [dev-dependencies]
 # The binary FBX writer builds synthetic .fbx fixtures for the importer tests.

@@ -764,6 +764,14 @@ pub(super) struct DxDescriptors {
     // bindless main shader's `probe_cubes` table). Filled with the sky prefilter
     // cube at init; a baked probe overwrites its slot. See [`super::probe`].
     pub probe_cube_base_slot: usize,
+    // The reflection-probe convolution's descriptor block, rewritten per bake:
+    // the capture pyramid's all-mips SRV, one UAV per mip of each cube, and the
+    // contiguous (capture mip 0, probe mip 0) pair the mirror copy binds as one
+    // table. See [`super::probe_prefilter`].
+    pub probe_capture_srv_slot: usize,
+    pub probe_capture_uav_base_slot: usize,
+    pub probe_cube_uav_base_slot: usize,
+    pub probe_mip0_pair_slot: usize,
     // Sampler heap (shader-visible). Slots:
     //   [0] shadow comparison (s0)   [1] linear repeat (s1)
     //   [2] cube linear-clamp + mip linear (s2)   [3] text linear-clamp
@@ -886,11 +894,14 @@ pub(super) struct ProbeState {
     pub set: concinnity_core::render::uniforms::ProbeSet,
     // The probe whose six cube faces are currently rendering on the GPU (one at a
     // time, spread one face per frame). Owns the reserved-ring-slot capture
-    // resources until its faces are read back.
+    // resources until its faces have landed in the capture cube.
     pub rendering: Option<super::probe::RenderingBake>,
-    // The prior probe whose read-back faces are convolving on a worker thread.
-    // Holds only the worker's payload slot (plain data), so it drops freely.
-    pub converting: Option<super::probe::ConvertingBake>,
+    // The prior probe whose capture is convolving into its cube on the GPU, one
+    // destination mip per frame.
+    pub prefiltering: Option<super::probe::PrefilteringBake>,
+    // The three convolution kernels and their root signatures, built at init under
+    // the same gate the bake needs. `None` disables baking.
+    pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
     // One baked prefilter cube per installed probe, aligned with `set` (index `i`
     // is placement `i`). Distinct from `env_map`; sampled only by the specular
     // reflection term.
@@ -2555,6 +2566,9 @@ impl Drop for DxContext {
         // the device and the installed library.
         if self.win_state.is_some() {
             super::pso_library::shutdown();
+            // Also writes whatever shader artifacts were compiled lazily since
+            // init's own checkpoint.
+            crate::runtime_cache::checkpoint();
         }
         // Restore cursor clip + visibility so the OS isn't left in a bad state
         // if the caller didn't release explicitly. `None` on the outgoing context

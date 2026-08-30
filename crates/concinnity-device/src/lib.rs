@@ -35,11 +35,8 @@ pub(crate) mod gfx {
 // backends reach by their historical `crate::` paths, plus the shared rayon job
 // pool.
 pub(crate) use concinnity_core::components;
-pub(crate) use concinnity_core::{build, geometry};
+pub(crate) use concinnity_core::{bake, geometry};
 pub(crate) use concinnity_host::thread::jobs;
-
-// The job pool as a `RowScheduler`, for the probe bake.
-pub(crate) mod pool_rows;
 
 #[cfg(backend_dx)]
 pub(crate) mod directx;
@@ -56,11 +53,19 @@ pub(crate) mod win32;
 #[cfg(all(target_os = "macos", any(backend_metal, backend_vk)))]
 pub(crate) mod appkit;
 
+// The runtime cache segment both caches below write into, and the checkpoints
+// at which it reaches disk.
+pub(crate) mod runtime_cache;
+
 // Disk cache for shader binaries compiled after build time: the built-ins the
 // DirectX and Vulkan backends compile at init, and the Metal raymarch
 // libraries assembled from world-authored SdfVolume fragments (the rest of
 // Metal precompiles into the binary via the toolchain crate).
 pub(crate) mod shader_cache;
+
+// Scratch directory for the shader compilers that work on files.
+#[cfg(any(backend_dx, backend_vk, backend_metal))]
+pub(crate) mod compiler_work;
 
 // Shared source assembly for the single-source `.slang` shaders every backend
 // draws from.
@@ -73,8 +78,8 @@ pub(crate) mod slang_source;
 #[cfg(any(backend_dx, backend_vk))]
 pub(crate) mod pipeline_cache;
 
-// Export-time precompilation of the built-in shaders into a bundle's
-// shader-cache/. Backends whose shaders compile at renderer init (DX, VK)
+// Export-time precompilation of the built-in shaders into the cache segment a
+// bundle ships. Backends whose shaders compile at renderer init (DX, VK)
 // declare their compile set as data; `cn export` compiles it here, in-process,
 // with no GPU device. Metal precompiles at build time and needs none of this.
 #[cfg(any(backend_dx, backend_vk))]

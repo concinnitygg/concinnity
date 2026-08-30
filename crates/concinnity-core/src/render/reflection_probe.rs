@@ -9,11 +9,12 @@
 //! `face_dir(face, u, v)` projects to NDC `(u, -v)` (screen-down is +v), which
 //! the orientation test pins exactly.
 
-use crate::build::environment_map as em;
+use crate::bake::environment_map as em;
 use crate::gfx::cubemap::FACE_BASIS;
 use crate::gfx::projection::{perspective_rh, view_from_basis};
 use crate::gfx::transform::mat4_mul;
 use crate::math::{ceil, floor, powi, round, sqrt};
+use crate::render::uniforms::ProbePrefilterParams;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::f32::consts::FRAC_PI_2;
@@ -113,27 +114,28 @@ impl ProbeBakeQueue {
 
 /// Phase of the single in-flight asynchronous bake. Exactly one probe is baked at
 /// a time, walking three phases across frames so the render thread never blocks on
-/// the capture: `Rendering` (six faces submitted, GPU running), `Converting` (faces
-/// read back, the prefilter convolution running off the render thread), and `Idle`
-/// (nothing in flight). The renderer holds the GPU resources for the in-flight
-/// probe; this enum only names which phase it is in.
+/// the capture: `Rendering` (six faces submitted, GPU running), `Prefiltering` (the
+/// GGX convolution dispatched one destination mip per frame), and `Idle` (nothing
+/// in flight). The renderer holds the GPU resources for the in-flight probe; this
+/// enum only names which phase it is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BakePhase {
     /// Nothing to bake.
     Idle,
     /// Rendering the probe's cube faces.
     Rendering,
-    /// Converting the rendered faces into the prefiltered cube.
-    Converting,
+    /// Convolving the captured faces into the probe cube's mip chain.
+    Prefiltering,
 }
 
 /// What the renderer should do this frame to advance the asynchronous bake. The
 /// renderer maps each variant to a side effect: `StartNext` builds the next
 /// placement's capture buffers + targets (no face submitted yet), `RenderFace`
 /// submits one cube face (the six are spread one-per-frame so no single frame
-/// pays the whole capture), `Readback` copies the finished faces back and kicks
-/// the off-thread convolution, `Install` uploads the convolved cube and advances
-/// the queue, `Idle` does nothing.
+/// pays the whole capture), `StartPrefilter` releases the capture's draw
+/// resources and builds the probe cube plus the capture pyramid the convolution
+/// reads, `PrefilterMip` dispatches one destination mip's convolution, `Install`
+/// publishes the finished cube and advances the queue, `Idle` does nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BakeAction {
     /// Nothing to do this frame.
@@ -142,10 +144,36 @@ pub enum BakeAction {
     StartNext,
     /// Render one cube face.
     RenderFace,
-    /// Install the converted cube into the probe pool.
+    /// Move a finished capture into the convolution, building its pyramid.
+    StartPrefilter,
+    /// Convolve one destination mip of the probe cube.
+    PrefilterMip,
+    /// Install the convolved cube into the probe pool.
     Install,
-    /// Read the rendered faces back for conversion.
-    Readback,
+}
+
+/// What the renderer knows this frame about the bake in flight, as the pure
+/// transition table below reads it. Defaulted so a call site naming one slot's
+/// signals leaves the other slot's at "nothing happening" rather than spelling
+/// out a row of `false`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BakeSignals {
+    /// Every cube face has been submitted and the GPU has signalled completion.
+    pub faces_done: bool,
+    /// Every convolution dispatch has retired on the GPU. A backend whose queue
+    /// ordering already puts those writes before any frame that samples the cube,
+    /// and which has no per-dispatch recording resources to reclaim, has nothing
+    /// to wait for and reports this the moment the last mip is dispatched.
+    pub mips_done: bool,
+    /// A placement is still waiting to bake.
+    pub queue_pending: bool,
+    /// The world can bake this frame (bindless plus geometry present plus a
+    /// non-empty cull).
+    pub eligible: bool,
+    /// Cube faces remain to submit.
+    pub more_faces: bool,
+    /// Destination mips remain to convolve.
+    pub more_mips: bool,
 }
 
 /// Decide the next action for the single-in-flight asynchronous bake. Pure so the
@@ -153,47 +181,143 @@ pub enum BakeAction {
 ///
 /// - while `Rendering`, submit the next cube face while `more_faces` remain
 ///   (one per frame); once all six are submitted, do nothing until the GPU
-///   completion flag `done` is set, then `Readback`;
-/// - while `Converting`, do nothing until the off-thread `payload_ready`, then
-///   `Install`;
+///   completion flag `faces_done` is set, then `StartPrefilter`;
+/// - while `Prefiltering`, convolve one destination mip per frame while
+///   `more_mips` remain, then wait for `mips_done` and `Install`;
 /// - while `Idle`, start the next placement only when one is `queue_pending`
-///   and the world is `eligible` to bake this frame (bindless plus geometry
-///   present plus a non-empty cull); otherwise stay `Idle`.
+///   and the world is `eligible` to bake this frame; otherwise stay `Idle`.
 ///
-/// The invariants this guarantees: never read faces back before all six are
-/// submitted and the GPU signals completion, never install before the convolution
-/// finishes, and never begin a second bake while one is already in flight.
-pub fn next_bake_action(
-    phase: BakePhase,
-    done: bool,
-    payload_ready: bool,
-    queue_pending: bool,
-    eligible: bool,
-    more_faces: bool,
-) -> BakeAction {
+/// The invariants this guarantees: never convolve before all six faces are
+/// submitted and the GPU signals completion, never install before every mip has
+/// been dispatched and retired, and never begin a second bake while one is
+/// already in flight.
+pub fn next_bake_action(phase: BakePhase, signals: BakeSignals) -> BakeAction {
     match phase {
         BakePhase::Rendering => {
-            if more_faces {
+            if signals.more_faces {
                 BakeAction::RenderFace
-            } else if done {
-                BakeAction::Readback
+            } else if signals.faces_done {
+                BakeAction::StartPrefilter
             } else {
                 BakeAction::Idle
             }
         }
-        BakePhase::Converting => {
-            if payload_ready {
+        BakePhase::Prefiltering => {
+            if signals.more_mips {
+                BakeAction::PrefilterMip
+            } else if signals.mips_done {
                 BakeAction::Install
             } else {
                 BakeAction::Idle
             }
         }
         BakePhase::Idle => {
-            if queue_pending && eligible {
+            if signals.queue_pending && signals.eligible {
                 BakeAction::StartNext
             } else {
                 BakeAction::Idle
             }
+        }
+    }
+}
+
+/// The dispatch plan of one runtime probe prefilter: which kernel runs at which
+/// destination mip, and the parameters each one pushes.
+///
+/// The three backends drive identical dispatches, so the sizes, the roughness per
+/// mip, the sample count and the firefly clamp are decided once here rather than
+/// in three copies that could drift and make a probe look different per platform.
+/// The roughness comes from the same [`em::prefilter_roughness`] the build-time
+/// CPU convolution uses, so a captured probe and an imported HDR agree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrefilterPlan {
+    face_size: u32,
+    mips: u32,
+    samples: u32,
+    clamp: f32,
+}
+
+impl PrefilterPlan {
+    /// The plan a runtime capture bakes with.
+    ///
+    /// 512px faces match the `EnvironmentMap` asset default, so a captured probe
+    /// resolves reflections as sharply as an imported HDR. 128 GGX samples per
+    /// texel is well short of the importer's 1024, which the solid-angle mip
+    /// selection in `probe_prefilter.slang` pays for: each sample reads the
+    /// pyramid level matching its own footprint, so a sparse set still integrates
+    /// a wide lobe without aliasing. The clamp matches the asset default, so a
+    /// captured probe and an imported HDR suppress the same bright-square fringe.
+    pub const RUNTIME: PrefilterPlan = PrefilterPlan {
+        face_size: 512,
+        mips: em::max_mip_count(512),
+        samples: 128,
+        clamp: 12.0,
+    };
+
+    /// A plan over `face_size` faces at `samples` GGX samples and firefly cap
+    /// `clamp`. `face_size` must be a power of two of at least four.
+    pub const fn new(face_size: u32, samples: u32, clamp: f32) -> PrefilterPlan {
+        PrefilterPlan {
+            face_size,
+            mips: em::max_mip_count(face_size),
+            samples,
+            clamp,
+        }
+    }
+
+    /// Cube-face edge of the capture, in texels: mip 0 of both cubes.
+    pub const fn face_size(&self) -> u32 {
+        self.face_size
+    }
+
+    /// Mip levels in the probe cube, and in the capture pyramid feeding it.
+    pub const fn mips(&self) -> u32 {
+        self.mips
+    }
+
+    /// Cube-face edge of mip `mip`, in texels.
+    pub const fn mip_face_size(&self, mip: u32) -> u32 {
+        self.face_size >> mip
+    }
+
+    /// Params for the clamped copy of the capture into probe-cube mip 0.
+    pub fn mip0_params(&self) -> ProbePrefilterParams {
+        ProbePrefilterParams {
+            dst_size: self.face_size,
+            ..self.base_params()
+        }
+    }
+
+    /// Params for the box reduction producing capture-pyramid mip `dst_mip`,
+    /// which reads mip `dst_mip - 1`. Only valid for `1 <= dst_mip < mips`.
+    pub fn downsample_params(&self, dst_mip: u32) -> ProbePrefilterParams {
+        ProbePrefilterParams {
+            dst_size: self.mip_face_size(dst_mip),
+            src_mip: dst_mip - 1,
+            ..self.base_params()
+        }
+    }
+
+    /// Params for the GGX convolution producing probe-cube mip `dst_mip`. Only
+    /// valid for `1 <= dst_mip < mips`; mip 0 is the clamped copy instead.
+    pub fn ggx_params(&self, dst_mip: u32) -> ProbePrefilterParams {
+        ProbePrefilterParams {
+            dst_size: self.mip_face_size(dst_mip),
+            roughness: em::prefilter_roughness(dst_mip, self.mips),
+            ..self.base_params()
+        }
+    }
+
+    fn base_params(&self) -> ProbePrefilterParams {
+        ProbePrefilterParams {
+            dst_size: self.face_size,
+            src_size: self.face_size,
+            sample_count: self.samples,
+            src_mip: 0,
+            roughness: 0.0,
+            clamp_lum: self.clamp,
+            src_mip_count: self.mips as f32,
+            _pad: 0.0,
         }
     }
 }
@@ -843,52 +967,6 @@ pub fn fold_world_bounds(
     acc
 }
 
-/// Convert six captured cube faces (each `face_size*face_size` RGBA `f32`, row
-/// major, in the FACE_BASIS order) into the serialised `ENVM` payload the
-/// environment sampler consumes: a cosine-convolved irradiance cube + a GGX
-/// prefilter mip chain. Reuses the exact build-time convolutions (including the
-/// firefly clamp), so a scene-captured probe and an imported HDR produce
-/// byte-compatible payloads that flow through the same `upload_environment_map`.
-/// `scheduler` runs each convolution's independent output rows; the engine hands
-/// in its job pool.
-pub fn build_probe_payload<S: em::RowScheduler>(
-    scheduler: &S,
-    faces: &[Vec<f32>; 6],
-    face_size: u32,
-    irradiance_face: u32,
-    prefilter_samples: u32,
-    prefilter_clamp: f32,
-) -> Vec<u8> {
-    let mips = em::max_mip_count(face_size);
-    let irradiance = em::CubeBake::irradiance(
-        faces,
-        face_size,
-        irradiance_face,
-        em::DEFAULT_IRRADIANCE_PHI_SAMPLES,
-        em::DEFAULT_IRRADIANCE_THETA_SAMPLES,
-    )
-    .bake(scheduler);
-    // A probe cube is sampled only by the specular term (never drawn as a skybox), so
-    // clamp mip 0 too: it suppresses a lone blown highlight aliasing into a bright
-    // square on a near-mirror surface that falls back to the probe (SSR/RT miss).
-    let mut prefilter = Vec::with_capacity(mips as usize);
-    prefilter.push(em::prefilter_mip0(faces, face_size, prefilter_clamp, true));
-    for mip in 1..mips {
-        prefilter.push(
-            em::CubeBake::ggx(
-                faces,
-                face_size,
-                face_size >> mip,
-                em::prefilter_roughness(mip, mips),
-                prefilter_samples,
-                prefilter_clamp,
-            )
-            .bake(scheduler),
-        );
-    }
-    em::serialise_payload(irradiance_face, face_size, mips, &irradiance, &prefilter)
-}
-
 // Pick the eye point a single scene probe captures from: the horizontal centre
 // of the scene bounds, raised to eye height above the floor. A probe serves a
 // volume rather than a viewpoint, so centring it degrades most gracefully as a
@@ -926,7 +1004,7 @@ mod tests {
 
     // Each face's view-projection must map face_dir(face, u, v) to NDC
     // (u, -v): screen-right is +u, screen-down is +v, exactly the layout the
-    // readback stores and the prefilter samples. A flipped or rotated face
+    // capture cube stores and the prefilter samples. A flipped or rotated face
     // would break this and is the classic cube-capture bug.
     #[test]
     fn face_view_projection_matches_cube_convention() {
@@ -955,28 +1033,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn build_probe_payload_round_trips() {
-        // Six small solid faces convolve into a valid ENVM payload that
-        // deserialises with the requested sizes.
-        let face = 8usize;
-        let faces: [Vec<f32>; 6] = core::array::from_fn(|f| {
-            let mut v = vec![0.0f32; face * face * 4];
-            for px in v.chunks_exact_mut(4) {
-                px[0] = f as f32 * 0.1;
-                px[1] = 0.2;
-                px[2] = 0.3;
-                px[3] = 1.0;
-            }
-            v
-        });
-        let bytes = build_probe_payload(&em::Serial, &faces, face as u32, 8, 16, 12.0);
-        let view = crate::build::environment_map::deserialise(&bytes).expect("deserialise");
-        assert_eq!(view.prefilter_face, 8);
-        assert_eq!(view.irradiance_face, 8);
-        assert!(view.prefilter_mip_bytes.len() >= 2);
     }
 
     #[test]
@@ -1374,68 +1430,193 @@ mod tests {
     fn bake_action_idle_starts_only_when_pending_and_eligible() {
         // Idle with work waiting and the world able to bake -> begin.
         assert_eq!(
-            next_bake_action(BakePhase::Idle, false, false, true, true, false),
+            next_bake_action(
+                BakePhase::Idle,
+                BakeSignals {
+                    queue_pending: true,
+                    eligible: true,
+                    ..Default::default()
+                }
+            ),
             BakeAction::StartNext
         );
         // Idle but nothing queued -> stay put.
         assert_eq!(
-            next_bake_action(BakePhase::Idle, false, false, false, true, false),
+            next_bake_action(
+                BakePhase::Idle,
+                BakeSignals {
+                    eligible: true,
+                    ..Default::default()
+                }
+            ),
             BakeAction::Idle
         );
         // Idle with work queued but the world not eligible this frame (e.g. the
         // cull is still empty while geometry streams in) -> wait, do not start.
         assert_eq!(
-            next_bake_action(BakePhase::Idle, false, false, true, false, false),
+            next_bake_action(
+                BakePhase::Idle,
+                BakeSignals {
+                    queue_pending: true,
+                    ..Default::default()
+                }
+            ),
             BakeAction::Idle
         );
     }
 
     #[test]
     fn bake_action_rendering_submits_faces_before_waiting_for_completion() {
-        // While faces remain, submit the next one (one per frame) -- even if `done`
-        // somehow read true, more_faces takes precedence so the capture finishes.
+        // While faces remain, submit the next one (one per frame) -- even if
+        // `faces_done` somehow read true, more_faces takes precedence so the
+        // capture finishes.
         assert_eq!(
-            next_bake_action(BakePhase::Rendering, false, false, true, true, true),
+            next_bake_action(
+                BakePhase::Rendering,
+                BakeSignals {
+                    faces_done: true,
+                    more_faces: true,
+                    ..Default::default()
+                }
+            ),
             BakeAction::RenderFace
         );
         // All six submitted, GPU not done yet -> wait.
         assert_eq!(
-            next_bake_action(BakePhase::Rendering, false, false, true, true, false),
+            next_bake_action(BakePhase::Rendering, BakeSignals::default()),
             BakeAction::Idle
         );
-        // All six submitted and the GPU completion flag set -> read them back.
+        // All six submitted and the GPU completion flag set -> convolve them.
         assert_eq!(
-            next_bake_action(BakePhase::Rendering, true, false, true, true, false),
-            BakeAction::Readback
+            next_bake_action(
+                BakePhase::Rendering,
+                BakeSignals {
+                    faces_done: true,
+                    ..Default::default()
+                }
+            ),
+            BakeAction::StartPrefilter
         );
     }
 
     #[test]
-    fn bake_action_converting_waits_for_offthread_payload() {
-        // The off-thread convolution gates the install: never upload early.
+    fn bake_action_prefiltering_installs_only_once_every_mip_is_dispatched() {
+        // A mip still owed -> convolve it, never install early: installing here
+        // would publish a cube whose rough mips are still uninitialised.
         assert_eq!(
-            next_bake_action(BakePhase::Converting, true, false, true, true, false),
+            next_bake_action(
+                BakePhase::Prefiltering,
+                BakeSignals {
+                    more_mips: true,
+                    mips_done: true,
+                    ..Default::default()
+                }
+            ),
+            BakeAction::PrefilterMip
+        );
+        // Every mip dispatched but the GPU has not retired them -> wait. A backend
+        // that frees each dispatch's recording resources at install would free them
+        // out from under the GPU otherwise.
+        assert_eq!(
+            next_bake_action(BakePhase::Prefiltering, BakeSignals::default()),
             BakeAction::Idle
         );
+        // Dispatched and retired -> publish the cube.
         assert_eq!(
-            next_bake_action(BakePhase::Converting, true, true, false, true, false),
+            next_bake_action(
+                BakePhase::Prefiltering,
+                BakeSignals {
+                    mips_done: true,
+                    ..Default::default()
+                }
+            ),
             BakeAction::Install
         );
     }
 
     #[test]
     fn bake_action_never_starts_a_second_bake_while_one_is_in_flight() {
-        // With a probe rendering or converting, a pending queue must not trigger a
-        // second StartNext regardless of eligibility -- one bake in flight at a time.
-        for phase in [BakePhase::Rendering, BakePhase::Converting] {
-            assert_ne!(
-                next_bake_action(phase, false, false, true, true, false),
-                BakeAction::StartNext
-            );
-            assert_ne!(
-                next_bake_action(phase, false, false, true, true, true),
-                BakeAction::StartNext
-            );
+        // With a probe rendering or prefiltering, a pending queue must not trigger
+        // a second StartNext regardless of eligibility -- one bake in flight at a
+        // time per slot.
+        for phase in [BakePhase::Rendering, BakePhase::Prefiltering] {
+            for more_faces in [false, true] {
+                for more_mips in [false, true] {
+                    assert_ne!(
+                        next_bake_action(
+                            phase,
+                            BakeSignals {
+                                queue_pending: true,
+                                eligible: true,
+                                more_faces,
+                                more_mips,
+                                ..Default::default()
+                            }
+                        ),
+                        BakeAction::StartNext
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_runtime_prefilter_plan_halves_each_mip_down_to_four_texels() {
+        let plan = PrefilterPlan::RUNTIME;
+        assert_eq!(plan.face_size(), 512);
+        // 512, 256, 128, 64, 32, 16, 8, 4: the convolution stops at 4x4 faces,
+        // where a rougher lobe has nothing left to integrate.
+        assert_eq!(plan.mips(), 8);
+        assert_eq!(plan.mip_face_size(0), 512);
+        assert_eq!(plan.mip_face_size(plan.mips() - 1), 4);
+        for mip in 1..plan.mips() {
+            assert_eq!(plan.mip_face_size(mip), plan.mip_face_size(mip - 1) / 2);
+        }
+    }
+
+    #[test]
+    fn the_prefilter_plan_matches_the_cpu_convolution_it_replaces() {
+        // The GPU kernels have to reproduce what the build-time CPU convolution
+        // produces for the same capture, so the roughness ramp is the shared one:
+        // 0 at the mirror mip, 1 at the roughest.
+        let plan = PrefilterPlan::RUNTIME;
+        for mip in 1..plan.mips() {
+            let p = plan.ggx_params(mip);
+            assert_eq!(p.roughness, em::prefilter_roughness(mip, plan.mips()));
+            assert_eq!(p.dst_size, plan.mip_face_size(mip));
+            // Every GGX dispatch reads the whole pyramid, from mip 0.
+            assert_eq!(p.src_size, plan.face_size());
+            assert_eq!(p.src_mip_count, plan.mips() as f32);
+        }
+        assert_eq!(plan.ggx_params(plan.mips() - 1).roughness, 1.0);
+        // The mirror mip is a clamped copy, not a convolution.
+        assert_eq!(plan.mip0_params().dst_size, plan.face_size());
+        assert_eq!(plan.mip0_params().roughness, 0.0);
+    }
+
+    #[test]
+    fn a_downsample_reads_the_level_above_the_one_it_writes() {
+        let plan = PrefilterPlan::RUNTIME;
+        for mip in 1..plan.mips() {
+            let p = plan.downsample_params(mip);
+            assert_eq!(p.src_mip, mip - 1);
+            assert_eq!(p.dst_size, plan.mip_face_size(mip));
+            // A 2x2 reduction, so the source is exactly twice the destination.
+            assert_eq!(plan.mip_face_size(p.src_mip), 2 * p.dst_size);
+        }
+    }
+
+    #[test]
+    fn every_prefilter_dispatch_carries_the_same_firefly_clamp() {
+        // The clamp bites in three places -- the mirror copy, each pyramid level,
+        // and each GGX sample -- and a level that lost it would leak a firefly's
+        // energy back into the coarse taps.
+        let plan = PrefilterPlan::RUNTIME;
+        let clamp = plan.mip0_params().clamp_lum;
+        assert!(clamp > 0.0);
+        for mip in 1..plan.mips() {
+            assert_eq!(plan.downsample_params(mip).clamp_lum, clamp);
+            assert_eq!(plan.ggx_params(mip).clamp_lum, clamp);
         }
     }
 }

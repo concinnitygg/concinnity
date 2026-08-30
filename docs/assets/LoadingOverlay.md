@@ -11,8 +11,8 @@ The overlay is assembled from ordinary UI elements the fields reference: a
 the canvas, a progress-bar track and fill [Sprite](Sprite.md) pair, and a
 [TextLabel](TextLabel.md) above the bar. Each frame the engine widens the
 fill to the destination scene's load progress and rewrites the label with
-the percentage; restyle any piece by declaring it yourself under the same
-name.
+the percentage; restyle any piece by declaring it yourself and pointing the
+overlay's field at it.
 
 While the overlay's screen is up the world pauses and its render is
 skipped, exactly like an opaque menu, but streaming keeps running so the
@@ -20,10 +20,11 @@ load it reports can finish. Scenes whose content is already resident jump
 without the overlay ever appearing.
 
 Every rendering world that declares [Scene](Scene.md)s and a
-[StreamingConfig](StreamingConfig.md) receives a `LoadingOverlay` and its
-pieces at build time when it declares none, so the example below is only
-needed to restyle them. Declare an [EngineDefaults](EngineDefaults.md) with
-`"loading_overlay": false` to remove it from the build entirely.
+[StreamingConfig](StreamingConfig.md) receives a `LoadingOverlay` at start
+when it declares none, and any field left unset receives the piece it
+names, so the example below is only needed to restyle them. Declare an
+[EngineDefaults](EngineDefaults.md) with `"loading_overlay": false` to leave
+the world without one.
 
 ## Parameters
 

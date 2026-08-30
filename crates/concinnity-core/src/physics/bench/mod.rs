@@ -5,7 +5,9 @@
 // they measure is `pub(crate)`: the overflow counters, the pose and sleep
 // readouts, and the kinematic and shape-cast paths are not part of the
 // simulation's public surface, and widening them for a benchmark would be the
-// wrong trade. Ignored by default, so a normal test run never pays for them.
+// wrong trade. The measured pass is ignored by default, so a normal test run
+// pays only for the single-run pass beside it, which drives the same
+// fixtures once at a fraction of the size.
 // `--test-threads=1` is required rather than tidy: a benchmark sharing a
 // machine with another reads the other's contention as its own.
 //
@@ -13,8 +15,6 @@
 //         --test-threads=1 physics::bench
 
 mod sim;
-
-use std::time::Instant;
 
 use crate::physics::Fanout;
 
@@ -51,33 +51,31 @@ impl Fanout for Pool {
     }
 }
 
-// One measured pass runs at least this long before its time is trusted.
-const TARGET_NS: u128 = 200_000_000;
-const MAX_ITERS: u64 = 1 << 20;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec::Vec;
 
-// Time `body` over a calibrated iteration count and report its per-item cost.
-// `items` is how many units of work one call performs, so a number is
-// comparable across fixture sizes.
-pub(crate) fn bench<R>(name: &str, items: u64, mut body: impl FnMut() -> R) {
-    let mut iters: u64 = 1;
-    loop {
-        let start = Instant::now();
-        for _ in 0..iters {
-            std::hint::black_box(body());
-        }
-        if start.elapsed().as_nanos() >= TARGET_NS || iters >= MAX_ITERS {
-            break;
-        }
-        iters = iters.saturating_mul(4).min(MAX_ITERS);
+    // The fan-out gives every unit of work its own thread and joins them all,
+    // so each item is touched exactly once however the split lands.
+    #[test]
+    fn the_fan_out_touches_every_item_once() {
+        let mut items: Vec<u32> = (0..16).collect();
+        Pool.for_each(&mut items, |item| *item += 1);
+        assert_eq!(items, (1..17).collect::<Vec<u32>>());
+        assert_eq!(Pool.workers(), WORKERS);
     }
 
-    let start = Instant::now();
-    for _ in 0..iters {
-        std::hint::black_box(body());
-    }
-    let elapsed = start.elapsed();
+    // Below two items there is nothing to split, so the body runs on the
+    // calling thread rather than paying for a scope.
+    #[test]
+    fn a_split_of_one_or_none_runs_on_the_calling_thread() {
+        let mut one = [7u32];
+        Pool.for_each(&mut one, |item| *item += 1);
+        assert_eq!(one, [8]);
 
-    let units = (iters * items.max(1)) as f64;
-    let per_item_ns = elapsed.as_secs_f64() * 1e9 / units;
-    std::println!("  {name:<40} {per_item_ns:>10.2} ns/item");
+        let mut none: [u32; 0] = [];
+        Pool.for_each(&mut none, |item| *item += 1);
+        assert!(none.is_empty());
+    }
 }

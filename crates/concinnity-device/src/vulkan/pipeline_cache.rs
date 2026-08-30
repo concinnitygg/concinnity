@@ -1,7 +1,7 @@
 // The device's VkPipelineCache, persisted across launches.
 //
-// One cache exists per logical device, seeded from `pipeline-cache/vk-<uuid>.bin`
-// at init and handed to every pipeline creation in the backend, so a warm
+// One cache exists per logical device, seeded from the runtime cache segment's
+// `vk-<uuid>` entry at init and handed to every pipeline creation, so a warm
 // launch skips the driver's back-end compile of each pipeline. The handle
 // lives in a process global rather than on `VkContext` because every path
 // that builds pipelines (init, shader hot-reload, lazy wireframe twins, world
@@ -9,9 +9,9 @@
 // editor `reload_world` inherits the device: the cache simply stays installed
 // across the successor context.
 //
-// The blob is machine code for one GPU and driver. The file name carries the
+// The blob is machine code for one GPU and driver. The entry key carries the
 // device's `pipeline_cache_uuid` and the blob's own header is checked against
-// the device before use; a mismatched or unreadable blob is deleted and the
+// the device before use; a mismatched or unreadable blob is dropped and the
 // launch proceeds cold. Nothing here can fail init.
 
 use ash::vk::Handle;
@@ -29,12 +29,7 @@ static CURRENT: AtomicU64 = AtomicU64::new(0);
 static STATE: Mutex<Option<Persisted>> = Mutex::new(None);
 
 struct Persisted {
-    file: String,
-    // Size of the blob currently on disk (loaded at install, updated per
-    // serialize), so an unchanged cache never rewrites the file. Only the
-    // length is kept: `vkCreatePipelineCache` copies the seed bytes, so nothing
-    // here has to outlive `install`.
-    written: usize,
+    key: String,
     warm: bool,
 }
 
@@ -143,8 +138,8 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
     if state.is_some() {
         return;
     }
-    let file = file_name(&props.pipeline_cache_uuid);
-    let disk = crate::pipeline_cache::load(&file).filter(|blob| {
+    let key = entry_key(&props.pipeline_cache_uuid);
+    let disk = crate::pipeline_cache::load(&key).filter(|blob| {
         let ok = header_matches(
             blob,
             props.vendor_id,
@@ -152,8 +147,8 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
             &props.pipeline_cache_uuid,
         );
         if !ok {
-            tracing::warn!("pipeline cache: {file} does not match this device, rebuilding cold");
-            crate::pipeline_cache::delete(&file);
+            tracing::warn!("pipeline cache: {key} does not match this device, rebuilding cold");
+            crate::pipeline_cache::delete(&key);
         }
         ok
     });
@@ -164,8 +159,8 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
         // A header can match while the driver still rejects the payload (a
         // truncated tail, a driver update with an unchanged UUID). Drop the
         // blob and retry empty.
-        tracing::warn!("pipeline cache: driver rejected {file} ({e}), rebuilding cold");
-        crate::pipeline_cache::delete(&file);
+        tracing::warn!("pipeline cache: driver rejected {key} ({e}), rebuilding cold");
+        crate::pipeline_cache::delete(&key);
         let empty = vk::PipelineCacheCreateInfo::default();
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
@@ -174,13 +169,8 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
     match created {
         Ok(cache) => {
             let warm = disk.is_some();
-            let written = disk.as_ref().map_or(0, Vec::len);
             CURRENT.store(cache.as_raw(), Ordering::Relaxed);
-            *state = Some(Persisted {
-                file,
-                written,
-                warm,
-            });
+            *state = Some(Persisted { key, warm });
         }
         Err(e) => {
             // Every creation site tolerates a null cache, so init proceeds
@@ -200,12 +190,13 @@ pub(in crate::vulkan) fn disk_state() -> &'static str {
     }
 }
 
-// Persist the cache if it accumulated new content since the last write. Called at
-// the end of init (so a crash later in the session cannot lose the warm-up)
-// and again at clean shutdown.
+// Hand the cache's current contents to the segment, which keeps them only if
+// they grew. Called at the end of init (so a crash later in the session cannot
+// lose the warm-up) and again at clean shutdown; the segment reaches disk at
+// the checkpoint after each.
 pub(in crate::vulkan) fn serialize(device: &Device) {
-    let mut state = STATE.lock().expect("pipeline cache state");
-    let Some(persisted) = state.as_mut() else {
+    let state = STATE.lock().expect("pipeline cache state");
+    let Some(persisted) = state.as_ref() else {
         return;
     };
     // On a lost device this returns an error and the write is skipped; the
@@ -214,9 +205,7 @@ pub(in crate::vulkan) fn serialize(device: &Device) {
     let Ok(data) = (unsafe { device.get_pipeline_cache_data(current()) }) else {
         return;
     };
-    if crate::pipeline_cache::store_if_grown(&persisted.file, &data, persisted.written) {
-        persisted.written = data.len();
-    }
+    crate::pipeline_cache::store(&persisted.key, &data);
 }
 
 // Serialize, then destroy the cache and clear the global. Called from the
@@ -236,9 +225,11 @@ pub(in crate::vulkan) fn shutdown(device: &Device) {
     }
 }
 
-fn file_name(uuid: &[u8; vk::UUID_SIZE]) -> String {
+// The cache entry this device's blob is stored under: its identity is the
+// device, so the key is what makes a blob built on another GPU a miss.
+fn entry_key(uuid: &[u8; vk::UUID_SIZE]) -> String {
     let hex: String = uuid.iter().map(|b| format!("{b:02x}")).collect();
-    format!("vk-{hex}.bin")
+    format!("vk-{hex}")
 }
 
 // Validate the blob's spec-defined header (all fields little-endian): u32
@@ -306,8 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn the_file_name_is_per_device() {
-        assert_eq!(file_name(&UUID), "vk-30313233343536373839616263646566.bin");
-        assert_ne!(file_name(&UUID), file_name(&[0u8; 16]));
+    fn the_entry_key_is_per_device() {
+        assert_eq!(entry_key(&UUID), "vk-30313233343536373839616263646566");
+        assert_ne!(entry_key(&UUID), entry_key(&[0u8; 16]));
     }
 }

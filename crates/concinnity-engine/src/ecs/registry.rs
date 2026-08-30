@@ -33,7 +33,9 @@
 use crate::ecs::{PipelineContext, access_ids, decompose, schedule};
 
 // Runs once at world start, after the gates have built the systems and before
-// their `init`.
+// their `init`. The engine defaults the world is completed with land earlier
+// still (`complete_world` below), so a Prop one of them injects decomposes
+// here like any other.
 fn before_init(ctx: &mut PipelineContext) {
     // Every context touch a stepping system makes is asserted against what it
     // declared; the hook is installed before the first step can happen.
@@ -43,6 +45,7 @@ fn before_init(ctx: &mut PipelineContext) {
 }
 
 crate::define_systems! {
+    complete_world: concinnity_core::defaults::run,
     before_init: before_init,
     prepare_events: access_ids::ensure_event_queues,
 
@@ -205,6 +208,24 @@ mod tests {
         world.start(SYSTEMS).unwrap();
         let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(manifest, built);
+    }
+
+    // The table's completion pass runs from `start`, before the gates read the
+    // world: a world with physics content gets the config its simulation runs
+    // on, and the PhysicsSystem is built either way.
+    #[test]
+    fn start_completes_the_world_with_its_engine_defaults() {
+        use crate::components::{EngineDefaults, PhysicsConfig, PropBody};
+
+        let mut world = World::new();
+        world.add_component(PropBody::default());
+        world.start(SYSTEMS).unwrap();
+
+        assert_eq!(world.query::<PhysicsConfig>().count(), 1);
+        // The directive is consumed by the pass, so nothing holds one after.
+        assert_eq!(world.query::<EngineDefaults>().count(), 0);
+        let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(built, ["PhysicsSystem"]);
     }
 
     // Manifest names come out in table order, and every name is a real table

@@ -383,7 +383,7 @@ mod tests {
     use super::super::character_shape::{self, Rows};
     use super::*;
     use crate::components::{Sprite, TextLabel};
-    use concinnity_cook::character::builtin_schema;
+    use concinnity_cook::compile::character::builtin_schema;
 
     fn injected_world() -> World {
         let mut world = World::new();

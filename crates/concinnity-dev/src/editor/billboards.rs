@@ -22,7 +22,7 @@ use super::widget;
 use crate::components::Sprite;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-use concinnity_world::registry::RegisteredType;
+use concinnity_cook::authoring::registry::RegisteredType;
 
 // Reserved id family: the next free block after the panel families below 0x1000.
 // Icons at +0x00, their glyph labels at +0x40, and the drag ghost's dotted box

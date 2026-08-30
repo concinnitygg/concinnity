@@ -442,4 +442,59 @@ mod tests {
         let expected = 0.5 * 1.0 * core::f32::consts::SQRT_2;
         assert!((radius - expected).abs() < 1e-5);
     }
+
+    fn one_record(emitter: ParticleEmitter) -> ParticleEmitterRecord {
+        *build_particle_records(&[&emitter], 4)
+            .first()
+            .expect("a visible emitter with a pool makes a record")
+    }
+
+    // The uniform is the record's static fields plus the three the runtime
+    // carries per dispatch, so a field that stopped being forwarded shows up
+    // as a kernel reading a stale or zeroed value.
+    #[test]
+    fn the_per_frame_uniform_carries_the_records_fields() {
+        let record = one_record(ParticleEmitter::default());
+        let params = record.params(0.016, 5, 42);
+
+        assert_eq!(params.position, record.position);
+        assert_eq!(params.direction, record.direction);
+        assert_eq!(params.spread_cos, record.spread_cos);
+        assert_eq!(params.speed_min, record.speed_min);
+        assert_eq!(params.speed_max, record.speed_max);
+        assert_eq!(params.gravity, record.gravity);
+        assert_eq!(params.color_start, record.color_start);
+        assert_eq!(params.color_end, record.color_end);
+        assert_eq!(params.lifetime_min, record.lifetime_min);
+        assert_eq!(params.lifetime_max, record.lifetime_max);
+        assert_eq!(params.size_start, record.size_start);
+        assert_eq!(params.size_end, record.size_end);
+        assert_eq!(params.max_particles, record.max_particles);
+
+        assert_eq!(params.dt, 0.016);
+        assert_eq!(params.spawn_budget, 5);
+        assert_eq!(params.random_seed, 42);
+    }
+
+    // A clock that went backwards between dispatches integrates as a stopped
+    // one, rather than pulling every live particle back along its velocity.
+    #[test]
+    fn a_backwards_step_integrates_as_a_stopped_one() {
+        let record = one_record(ParticleEmitter::default());
+        assert_eq!(record.params(-1.0, 0, 0).dt, 0.0);
+    }
+
+    // A non-finite authored colour would propagate NaN through the gradient
+    // the kernel lerps, so it reads as zero instead.
+    #[test]
+    fn a_non_finite_colour_channel_reads_as_zero() {
+        assert_eq!(
+            sanitised_color([f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0]),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            sanitised_color([0.25, 0.5, 0.75, 1.0]),
+            [0.25, 0.5, 0.75, 1.0]
+        );
+    }
 }

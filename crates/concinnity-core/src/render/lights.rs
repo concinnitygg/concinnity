@@ -563,4 +563,34 @@ mod tests {
         assert_eq!(buf.len(), MAX_LOCAL_LIGHTS);
         assert_eq!(buf[MAX_LOCAL_LIGHTS - 1].kind, LIGHT_KIND_SPOT);
     }
+
+    // The cascade projection and the fog ray-march follow the first declared
+    // directional light, and its colour is weighted by intensity so a dim sun
+    // does not light the march as brightly as a bright one.
+    #[test]
+    fn the_sun_is_the_first_declared_directional_light() {
+        let u = uniforms(
+            vec![
+                dir([-0.3, 0.85, 0.4], [1.0, 0.5, 0.25], 2.0),
+                dir([0.1, -1.0, 0.0], [0.0, 1.0, 0.0], 9.0),
+            ],
+            vec![],
+        );
+        assert_eq!(sun_direction(&u), u.directional[0].direction);
+        assert_eq!(sun_color(&u), [2.0, 1.0, 0.5]);
+    }
+
+    // A world lit only by point lights declares no directional one, but the
+    // cascade projection still needs an axis and the fog still needs a colour
+    // to integrate against, so both fall back to the neutral sun.
+    #[test]
+    fn a_world_with_no_directional_light_falls_back_to_a_neutral_sun() {
+        let u = uniforms(vec![], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
+        assert_eq!(u.num_directional, 0);
+        assert_eq!(
+            sun_direction(&u),
+            LightUniforms::DEFAULT.directional[0].direction
+        );
+        assert_eq!(sun_color(&u), [1.0, 1.0, 1.0]);
+    }
 }

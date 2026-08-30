@@ -1,35 +1,32 @@
-//! Resource handle assignment.
+//! Resource handle assignment over an authored world.
 //!
 //! A resource (mesh, texture, material, ...) is addressed at runtime by a dense
-//! per-kind handle. Today the renderer assigns those indices itself at init (it
-//! drains the component column and enumerates it) and resolves every `AssetId`
-//! reference to one by scanning. This module moves the assignment to build time:
-//! cook walks the world's assets, gives each resource the next handle in its
-//! kind's `0..N` space (declaration order), and records `AssetId -> handle` so a
-//! later pass can resolve a reference to a handle without a runtime scan.
-//!
-//! This is the additive first step of the resource-table migration; nothing
-//! consumes the map yet.
+//! per-kind handle, and the table index *is* the handle. The rules that decide
+//! it -- per-kind declaration order, and block order across the four geometry
+//! producers -- are `concinnity_core::resource::ResourceHandles`, shared with
+//! the typed bake builder so the two producers of a world can never drift. What
+//! lives here is the authored-world half: classifying JSON assets into those
+//! spaces, the resolver seams a reference name deserializes through, and the
+//! per-type compile dispatch.
 
 use serde::Deserialize;
 
-use crate::ecs::asset_id::AssetId;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Once;
 
 // The vocabulary half -- `RegisteredType` and the classifiers
-// (`asset_resource_kind`, `is_mesh_source`) -- lives in concinnity-world;
-// re-exported here so cook code and downstream consumers keep resolving
-// `resource_handles::...` paths. This module keeps the build mechanics: handle
-// assignment, the resolver seams, and the compile dispatch below.
-pub use concinnity_world::registry::RegisteredType;
-pub use concinnity_world::resource_type::{ResourceKind, asset_resource_kind, is_mesh_source};
+// (`asset_resource_kind`, `is_mesh_source`) -- lives in `crate::authoring`;
+// re-exported here so cook code keeps resolving `resource_handles::...`
+// paths. The assignment rules come from core.
+pub(crate) use crate::authoring::registry::RegisteredType;
+pub use crate::authoring::resource_type::ResourceKind;
+pub(crate) use crate::authoring::resource_type::{asset_resource_kind, is_mesh_source};
+pub(crate) use concinnity_core::resource::ResourceHandles;
 
 // Compile dispatch for resource assets, as an extension trait: the vocabulary
-// enum lives in concinnity-world (which links no compilers), so the per-type
-// compile arms attach here in cook, where the compilers live.
+// enum is authoring-side, so the per-type compile arms attach here, where the
+// compilers live.
 pub(crate) trait ResourceAssetCompile {
     // Compile this resource's payload from its authored args, resolving bare
     // source filenames under `assets_dir`. Bypasses the `BuildAsset` trait
@@ -61,23 +58,25 @@ impl ResourceAssetCompile for RegisteredType {
         assets_dir: Option<&Path>,
     ) -> std::io::Result<Vec<u8>> {
         match self {
-            Self::AudioClip => crate::audio_clip::compile_audio_clip_payload(args)
+            Self::AudioClip => crate::compile::audio_clip::compile_audio_clip_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Texture => crate::texture::compile_texture_payload(args, assets_dir)
+            Self::Texture => crate::compile::texture::compile_texture_payload(args, assets_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::CubemapTexture => crate::cubemap::compile_cubemap_payload(args)
+            Self::CubemapTexture => crate::compile::cubemap::compile_cubemap_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::EnvironmentMap => {
-                crate::environment_map::compile_environment_map_payload(args, assets_dir)
+                crate::compile::environment_map::compile_environment_map_payload(args, assets_dir)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
             }
-            Self::ColorLut => crate::color_lut::compile_color_lut_payload(args, assets_dir)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Font => crate::font::compile_font_payload(args)
+            Self::ColorLut => {
+                crate::compile::color_lut::compile_color_lut_payload(args, assets_dir)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }
+            Self::Font => crate::compile::font::compile_font_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Material => compile_material_data(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Mesh => crate::mesh_compile::compile_mesh_payload(args, assets_dir)
+            Self::Mesh => crate::compile::mesh_compile::compile_mesh_payload(args, assets_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::SkinnedMesh => compile_skinned_mesh_payload(args),
             // The registry spans every declarable type; only the resource group
@@ -111,12 +110,16 @@ impl ResourceAssetCompile for RegisteredType {
                 if let Some(src) = files.first().cloned()
                     && src.to_lowercase().ends_with(".gltf")
                 {
-                    files.extend(crate::gltf_source::referenced_files(&src, assets_dir));
+                    files.extend(crate::import::gltf_source::referenced_files(
+                        &src, assets_dir,
+                    ));
                 }
                 // A character model reads its source file.
                 if let Some(arg) = args.get("character_model").and_then(|v| {
-                    serde_json::from_value::<crate::character::import::CharacterModelArg>(v.clone())
-                        .ok()
+                    serde_json::from_value::<crate::compile::character::import::CharacterModelArg>(
+                        v.clone(),
+                    )
+                    .ok()
                 }) {
                     files.extend(arg.source_files());
                 }
@@ -159,7 +162,7 @@ impl ResourceAssetCompile for RegisteredType {
 fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let mat: crate::components::Material =
         Deserialize::deserialize(args).map_err(|e| format!("Material args: {e}"))?;
-    let mat = concinnity_world::validate::material(mat);
+    let mat = crate::authoring::validate::material(mat);
     postcard::to_allocvec(&mat).map_err(|e| format!("Material serialize: {e}"))
 }
 
@@ -183,13 +186,13 @@ fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec
         })?,
         None => Vec::new(),
     };
-    crate::geometry::compile_skinned_mesh_payload_with_lods(
+    crate::compile::geometry::compile_skinned_mesh_payload_with_lods(
         &mesh.vertices,
         &mesh.indices,
         &skeleton,
         &mesh.morph_target_names,
         &mesh.morph_deltas,
-        &crate::geometry::SkinnedLods {
+        &crate::compile::geometry::SkinnedLods {
             levels: mesh.lod_levels,
             distances: &mesh.lod_distances,
         },
@@ -220,79 +223,16 @@ fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec
     // bound; cap it. The skinned index buffer is u16, so init applies a further
     // per-mesh limit when the copies would overflow that.
     sm.max_instances = sm.max_instances.min(4096);
-    // Geometry rides the compiled payload, not the baked data.
+    // Geometry rides the compiled payload, not the baked data. The morph
+    // fields are geometry too: the desugar pass writes them into the args only
+    // on a payload-cache miss, so leaving them here would make the record
+    // depend on whether the payload was compiled or replayed.
     sm.vertices = Vec::new();
     sm.indices = Vec::new();
+    sm.morph_target_names = Vec::new();
+    sm.morph_deltas = Vec::new();
     let name_id = crate::ecs::asset_id::intern(name);
     postcard::to_allocvec(&(name_id.0, sm)).map_err(|e| format!("SkinnedMesh serialize: {e}"))
-}
-
-// Per-kind handles assigned to each resource asset, keyed by its identity.
-#[derive(Debug, Default, Clone)]
-pub(crate) struct ResourceHandles {
-    // Next unused handle per kind (the count assigned so far).
-    next: HashMap<ResourceKind, u32>,
-    // The handle each resource asset received.
-    map: HashMap<(ResourceKind, AssetId), u32>,
-    // Shader handles, a space of their own: a Shader is a component (its
-    // payload rides the def stream, not the resource stream), so it has no
-    // ResourceKind, but a Material's `shader` reference still bakes to a
-    // dense declaration-order index the renderer uses directly.
-    shader_map: HashMap<AssetId, u32>,
-    shader_next: u32,
-}
-
-impl ResourceHandles {
-    // Give one resource the next handle in its kind's space and record it.
-    // Declaration order in, dense `0..N` out.
-    pub(crate) fn assign(&mut self, kind: ResourceKind, id: AssetId) -> u32 {
-        let next = self.next.entry(kind).or_insert(0);
-        let handle = *next;
-        *next += 1;
-        self.map.insert((kind, id), handle);
-        handle
-    }
-
-    // The handle a resource received, if it was assigned one.
-    pub(crate) fn get(&self, kind: ResourceKind, id: AssetId) -> Option<u32> {
-        self.map.get(&(kind, id)).copied()
-    }
-
-    // How many handles a kind has assigned (its table length).
-    #[cfg(test)]
-    pub(crate) fn count(&self, kind: ResourceKind) -> u32 {
-        self.next.get(&kind).copied().unwrap_or(0)
-    }
-
-    // Assign handles across a world's resources, in the order given. The caller
-    // has already classified each asset (via `asset_resource_kind`) and passes
-    // only the resources; each kind counts independently from zero.
-    pub(crate) fn from_assets(assets: impl IntoIterator<Item = (AssetId, ResourceKind)>) -> Self {
-        let mut handles = Self::default();
-        for (id, kind) in assets {
-            handles.assign(kind, id);
-        }
-        handles
-    }
-
-    // Give one Shader the next handle in the shader space and record it.
-    pub(crate) fn assign_shader(&mut self, id: AssetId) -> u32 {
-        let handle = self.shader_next;
-        self.shader_next += 1;
-        self.shader_map.insert(id, handle);
-        handle
-    }
-
-    // The handle a Shader received, if it was assigned one.
-    pub(crate) fn shader(&self, id: AssetId) -> Option<u32> {
-        self.shader_map.get(&id).copied()
-    }
-
-    // How many shader handles were assigned.
-    #[cfg(test)]
-    pub(crate) fn shader_count(&self) -> u32 {
-        self.shader_next
-    }
 }
 
 // Assign the shader handle space over the expanded world, in declaration
@@ -302,7 +242,7 @@ impl ResourceHandles {
 // `assign_mesh_source_handles`, before installing the map.
 pub(crate) fn assign_shader_handles(
     handles: &mut ResourceHandles,
-    assets: &[crate::world::WorldJsonlAsset],
+    assets: &[crate::authoring::world::WorldJsonlAsset],
 ) {
     for asset in assets
         .iter()
@@ -312,29 +252,18 @@ pub(crate) fn assign_shader_handles(
     }
 }
 
-// Assign the shared mesh-source handle space over the expanded world. Every
-// geometry-producing kind draws from one dense `ResourceKind::Mesh` space; the
-// handles are assigned in the fixed block order the runtime enumerates them
-// (Mesh, then ProceduralMesh, then VoxelChunk, then mesh-kind File), each in
-// declaration order, so a `.mesh` reference resolves to the same index the
-// runtime assigns while decoding geometry. Call over the same expanded +
-// injected `assets` list the blob is emitted from, after the per-kind generic
-// pass and before installing the map.
+// Classify the expanded world's geometry producers into the shared mesh-source
+// handle space and assign it. Call over the same expanded + injected `assets`
+// list the blob is emitted from, after the per-kind generic pass and before
+// installing the map; the block ordering itself is core's.
 pub(crate) fn assign_mesh_source_handles(
     handles: &mut ResourceHandles,
-    assets: &[crate::world::WorldJsonlAsset],
+    assets: &[crate::authoring::world::WorldJsonlAsset],
 ) {
-    for block in 0..=3u8 {
-        for asset in assets.iter().filter(|a| {
-            concinnity_world::resource_type::mesh_source_block(&a.asset_type, &a.args)
-                == Some(block)
-        }) {
-            handles.assign(
-                ResourceKind::Mesh,
-                crate::ecs::asset_id::intern(&asset.name),
-            );
-        }
-    }
+    handles.assign_mesh_sources(assets.iter().filter_map(|a| {
+        crate::authoring::resource_type::mesh_source_block(&a.asset_type, &a.args)
+            .map(|block| (crate::ecs::asset_id::intern(&a.name), block))
+    }));
 }
 
 // The current build's handle map, consulted by the per-kind resource-handle
@@ -408,7 +337,7 @@ mod tests {
     use crate::registry::RegisteredType;
 
     // The classification tests (which types are resources, mesh-source blocks)
-    // live in concinnity-world with the classifiers.
+    // live in `crate::authoring::resource_type` with the classifiers.
 
     // The load-bearing invariant of the shared mesh-source handle space: handles
     // are assigned across all four producer kinds in the fixed block order the
@@ -418,8 +347,8 @@ mod tests {
     // a `.mesh` reference resolves to the mesh source the runtime loaded there.
     #[test]
     fn mesh_source_handles_are_block_ordered_across_kinds() {
+        use crate::authoring::world::WorldJsonlAsset;
         use crate::ecs::asset_id;
-        use crate::world::WorldJsonlAsset;
 
         let a = |name: &str, ty: &str, args: serde_json::Value| WorldJsonlAsset {
             name: name.to_string(),
@@ -517,37 +446,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handles_are_dense_per_kind_in_order() {
-        // The caller passes only the resources (pre-classified via
-        // `asset_resource_kind`), each with its kind; non-resources never reach
-        // here. An AudioClip lands in its own handle space, independent of Mesh.
-        let assets = [
-            (AssetId(10), ResourceKind::Texture),
-            (AssetId(11), ResourceKind::Mesh),
-            (AssetId(12), ResourceKind::Texture),
-            (AssetId(20), ResourceKind::AudioClip),
-            (AssetId(14), ResourceKind::Texture),
-        ];
-        let handles = ResourceHandles::from_assets(assets);
-
-        // Each kind counts independently from zero, in declaration order.
-        assert_eq!(handles.get(ResourceKind::Texture, AssetId(10)), Some(0));
-        assert_eq!(handles.get(ResourceKind::Texture, AssetId(12)), Some(1));
-        assert_eq!(handles.get(ResourceKind::Texture, AssetId(14)), Some(2));
-        assert_eq!(handles.get(ResourceKind::Mesh, AssetId(11)), Some(0));
-
-        assert_eq!(handles.count(ResourceKind::Texture), 3);
-        assert_eq!(handles.count(ResourceKind::Mesh), 1);
-        assert_eq!(handles.count(ResourceKind::AudioClip), 1);
-        assert_eq!(handles.count(ResourceKind::Material), 0);
-        // The AudioClip counts from zero in its own space, not after the textures.
-        assert_eq!(handles.get(ResourceKind::AudioClip, AssetId(20)), Some(0));
-
-        // An unassigned id has no handle.
-        assert_eq!(handles.get(ResourceKind::Texture, AssetId(99)), None);
-    }
-
     // A Material's `shader` reference bakes to the Shader's declaration-order
     // handle -- the same order the blob emits Shader defs and the runtime
     // drains the Shader column, so the handle indexes the pipeline table
@@ -555,9 +453,9 @@ mod tests {
     // `assign_shader_handles` over the asset list, not by kind classification.
     #[test]
     fn a_shader_reference_name_bakes_to_its_declaration_order_handle() {
+        use crate::authoring::world::WorldJsonlAsset;
         use crate::ecs::ShaderHandle;
         use crate::ecs::asset_id;
-        use crate::world::WorldJsonlAsset;
 
         asset_id::reset_interner();
         let world_asset = |name: &str, ty: &str| WorldJsonlAsset {
@@ -592,17 +490,6 @@ mod tests {
             .unwrap();
         let mat: crate::components::Material = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(mat.shader, None);
-    }
-
-    #[test]
-    fn the_same_id_in_two_kinds_gets_independent_handles() {
-        // Handle spaces are per kind, so the same AssetId can hold a Texture 0
-        // and a Mesh 0 without collision (they are distinct resources).
-        let mut handles = ResourceHandles::default();
-        assert_eq!(handles.assign(ResourceKind::Texture, AssetId(1)), 0);
-        assert_eq!(handles.assign(ResourceKind::Mesh, AssetId(1)), 0);
-        assert_eq!(handles.get(ResourceKind::Texture, AssetId(1)), Some(0));
-        assert_eq!(handles.get(ResourceKind::Mesh, AssetId(1)), Some(0));
     }
 
     // The load-bearing invariant of the migration: a texture reference name
@@ -721,6 +608,46 @@ mod tests {
         assert_eq!(
             clip_field(RegisteredType::AudioCue, "clip_b"),
             Some(AudioClipHandle(1))
+        );
+    }
+
+    // The record's baked data has to be blind to the geometry the desugar pass
+    // inlines: those args are present only when the payload was compiled this
+    // build, so anything of theirs that reached the record would make the blob
+    // depend on whether the payload came from the cache.
+    #[test]
+    fn skinned_mesh_data_is_the_same_before_and_after_the_geometry_is_inlined() {
+        crate::ecs::asset_id::reset_interner();
+        let authored = serde_json::json!({
+            "source": "hero.glb",
+            "position": [1.0, 2.0, 3.0],
+            "scale": [1.0, 1.0, 1.0],
+            "lod_levels": 2,
+            "capsule": {"half_height": 0.9, "radius": 0.35},
+        });
+        let mut desugared = authored.clone();
+        let obj = desugared.as_object_mut().unwrap();
+        obj.insert(
+            "vertices".into(),
+            serde_json::json!([{"pos": [0.0, 0.0, 0.0]}, {"pos": [1.0, 0.0, 0.0]}]),
+        );
+        obj.insert("indices".into(), serde_json::json!([0, 1, 0]));
+        obj.insert("skeleton".into(), serde_json::json!([{"name": "root"}]));
+        obj.insert(
+            "morph_target_names".into(),
+            serde_json::json!(["weight", "jaw+"]),
+        );
+        obj.insert(
+            "morph_deltas".into(),
+            serde_json::json!([
+                {"position": [0.1, 0.0, 0.0]}, {"position": [0.2, 0.0, 0.0]},
+                {"position": [0.0, 0.3, 0.0]}, {"position": [0.0, 0.4, 0.0]}
+            ]),
+        );
+
+        assert_eq!(
+            compile_skinned_mesh_data("body", &desugared).unwrap(),
+            compile_skinned_mesh_data("body", &authored).unwrap(),
         );
     }
 }

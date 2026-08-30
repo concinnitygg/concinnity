@@ -1112,4 +1112,32 @@ mod tests {
         assert_eq!(main.barriers_before[0].to_state(), ResourceState::Write);
         assert!(main.barriers_before[0].read_stages().is_empty());
     }
+
+    // A compile failure is reported to a human, so each variant has to say
+    // which pass and which resource it is about rather than printing a bare
+    // discriminant.
+    #[test]
+    fn every_compile_error_says_what_went_wrong() {
+        use alloc::string::ToString;
+
+        let missing = GraphError::MissingPresenter.to_string();
+        assert!(missing.contains("presents()"), "{missing}");
+        assert!(missing.contains("terminal"), "{missing}");
+
+        let multiple = GraphError::MultiplePresenters(3).to_string();
+        assert!(multiple.contains('3'), "{multiple}");
+        assert!(multiple.contains("only one"), "{multiple}");
+
+        let producer = GraphError::MissingProducer {
+            pass: PassId::Composite,
+            resource_label: "hdr_color",
+            version: 2,
+        }
+        .to_string();
+        assert!(producer.contains("Composite"), "{producer}");
+        assert!(producer.contains("hdr_color"), "{producer}");
+        assert!(producer.contains("v2"), "{producer}");
+
+        assert!(GraphError::Cycle.to_string().contains("cycle"));
+    }
 }

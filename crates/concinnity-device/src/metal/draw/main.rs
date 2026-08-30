@@ -85,6 +85,10 @@ pub(in crate::metal) struct FaceTargets<'a> {
     pub color_msaa: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
     pub depth_msaa: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
     pub resolve: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
+    // Array slice of `resolve` this face resolves into. The probe capture passes
+    // the cube face it is rendering; the planar mirror's target is a plain 2D
+    // texture, so it passes 0.
+    pub resolve_slice: usize,
 }
 
 impl MtlContext {
@@ -274,6 +278,7 @@ impl MtlContext {
             color_msaa: face_color_msaa,
             depth_msaa: face_depth_msaa,
             resolve: face_resolve,
+            resolve_slice,
         } = face_targets;
         let MainPassCamera {
             elapsed,
@@ -294,6 +299,7 @@ impl MtlContext {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(face_color_msaa));
             ca.setResolveTexture(Some(face_resolve));
+            ca.setResolveSlice(resolve_slice);
             ca.setLoadAction(MTLLoadAction::Clear);
             ca.setStoreAction(MTLStoreAction::MultisampleResolve);
             ca.setClearColor(MTLClearColor {

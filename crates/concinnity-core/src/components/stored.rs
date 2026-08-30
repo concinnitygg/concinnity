@@ -20,6 +20,7 @@ pub use super::character_shape::{CharacterShape, JointProportion, ResolvedSlider
 pub use super::debug_hud::DebugHud;
 pub use super::decal::Decal;
 pub use super::directional_light::DirectionalLight;
+pub use super::engine_defaults::EngineDefaults;
 pub use super::file::FileKind;
 pub use super::fps_counter::FpsCounter;
 pub use super::glass_panel::GlassPanel;

@@ -479,7 +479,7 @@ pub trait RenderBackend: SceneControl + Send {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::build::texture::TextureImage,
+        image: &crate::bake::texture::TextureImage,
     ) -> RenderResult<()>;
 
     /// Mesh streaming.
@@ -924,7 +924,7 @@ pub trait RenderBackend: SceneControl + Send {
 
     /// Replace the live IBL environment map with a freshly precomputed payload.
     /// `payload` is the serialised byte format emitted by
-    /// `crate::build::environment_map::compile_environment_map_payload`
+    /// `crate::bake::environment_map::compile_environment_map_payload`
     /// (header + irradiance cube + prefilter mip chain), so init and hot-reload
     /// share a single byte format. Driven by asset hot-reload (`cn debug`
     /// only). Default no-op: backends that have not implemented the swap leave
@@ -1175,7 +1175,7 @@ pub(crate) mod test_stub {
         fn update_texture_slot(
             &mut self,
             _slot: usize,
-            _image: &crate::build::texture::TextureImage,
+            _image: &crate::bake::texture::TextureImage,
         ) -> RenderResult<()> {
             Ok(())
         }

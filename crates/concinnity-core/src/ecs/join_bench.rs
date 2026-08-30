@@ -26,6 +26,7 @@ use crate::ecs::entity::{Entities, Entity};
 use crate::ecs::join::JoinIndex;
 use crate::ecs::mask::{ComponentId, ComponentMask};
 use crate::ecs::tick::Tick;
+use crate::test_support::Pace;
 
 fn transform_id() -> ComponentId {
     ComponentId::new(1)
@@ -211,13 +212,16 @@ fn join_strategies_are_equivalent() {
     );
 }
 
-#[test]
-#[ignore = "microbench; run with `cargo test -p concinnity-core --release -- --ignored --nocapture join_probe`"]
-fn join_probe_microbench() {
-    let n = 200_000usize;
+fn run(pace: Pace) {
+    // A single-run pass keeps all three strategies and one repetition each: it
+    // proves they still build, walk and agree, and compares nothing, so a
+    // 200k-entity world in an unoptimized build would buy it nothing.
+    let (n, reps) = match pace {
+        Pace::Timed => (200_000usize, 200u32),
+        Pace::Once => (2_000usize, 1u32),
+    };
     let b = build(n, 750, 0x00C0_FFEE);
     let renderable = b.dense_t.len();
-    let reps = 200u32;
 
     let strategies: [(&str, Strategy); 3] = [
         ("dense_zip (archetype ideal)", run_dense),
@@ -225,7 +229,9 @@ fn join_probe_microbench() {
         ("hashmap_crossref (today)", run_hashmap),
     ];
 
-    println!("\njoin microbench: {n} entities, {renderable} renderable, {reps} reps/strategy");
+    if pace == Pace::Timed {
+        println!("\njoin microbench: {n} entities, {renderable} renderable, {reps} reps/strategy");
+    }
     for (name, f) in strategies {
         let warm = core::hint::black_box(f(&b));
         let start = std::time::Instant::now();
@@ -235,8 +241,21 @@ fn join_probe_microbench() {
         }
         let elapsed = start.elapsed();
         assert_eq!(last, warm, "{name} is not deterministic");
-        let per_ns = elapsed.as_secs_f64() * 1e9 / (reps as f64 * renderable as f64);
-        let ms = elapsed.as_secs_f64() * 1e3;
-        println!("  {name:30} {ms:8.2} ms   {per_ns:6.2} ns/entity");
+        if pace == Pace::Timed {
+            let per_ns = elapsed.as_secs_f64() * 1e9 / (reps as f64 * renderable as f64);
+            let ms = elapsed.as_secs_f64() * 1e3;
+            println!("  {name:30} {ms:8.2} ms   {per_ns:6.2} ns/entity");
+        }
     }
+}
+
+#[test]
+#[ignore = "microbench; run with `cargo test -p concinnity-core --release -- --ignored --nocapture join_probe`"]
+fn join_probe_microbench() {
+    run(Pace::Timed);
+}
+
+#[test]
+fn join_probe_strategies_build_and_run() {
+    run(Pace::Once);
 }

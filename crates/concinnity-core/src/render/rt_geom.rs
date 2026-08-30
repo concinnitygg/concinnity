@@ -275,4 +275,74 @@ mod tests {
         assert_eq!(e.tint, [0.2, 0.4, 0.6]);
         assert_eq!(e.model[3], [3.0, 4.0, 5.0, 1.0]);
     }
+
+    // A static draw's entry carries the mesh slice as authored: the index
+    // offset and the base vertex both come from the draw, because static
+    // indices are relative to the shared vertex buffer.
+    #[test]
+    fn a_static_entry_keeps_the_draws_own_mesh_slice() {
+        let obj = crate::test_support::draw_object();
+        let texture_count = 12u32;
+        let e = geom_entry(&obj, texture_count);
+
+        assert_eq!(e.index_offset, obj.index_offset as u32);
+        assert_eq!(e.base_vertex, obj.base_vertex as u32);
+        // Nothing about a static draw is skinned, so the flag bit stays clear
+        // and the shader reads the static u32 index buffer.
+        assert_eq!(e.normal_index & RT_SKINNED_FLAG, 0);
+        let (albedo, normal) = pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
+        assert_eq!((e.albedo_index, e.normal_index), (albedo, normal));
+        assert_eq!(e.model, obj.model);
+        assert_eq!(e.tint, obj.material.tint);
+        assert_eq!(e.roughness, obj.material.roughness);
+    }
+
+    // A cluster instance shares the cluster's mesh slice and material but
+    // carries its own transform, and its indices are already absolute, so the
+    // base vertex folds to zero the way the skinned path's does.
+    #[test]
+    fn a_cluster_instance_zeroes_the_base_vertex_and_takes_its_own_model() {
+        use crate::gfx::render_types::{InstancedCluster, MaterialUniforms};
+        let cluster = InstancedCluster {
+            vertex_offset: 64,
+            vertex_count: 24,
+            index_offset: 36,
+            index_count: 36,
+            texture_slot: 4,
+            normal_map_slot: 2,
+            material: MaterialUniforms {
+                tint: [0.9, 0.8, 0.7],
+                roughness: 0.25,
+                ..MaterialUniforms::DEFAULT
+            },
+            cluster_bb_min: [-1.0; 3],
+            cluster_bb_max: [1.0; 3],
+            local_bb_min: [-1.0; 3],
+            local_bb_max: [1.0; 3],
+            cull_distance: 0.0,
+            instances: Vec::new(),
+            lod_alternates: Vec::new(),
+        };
+        let model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [8.0, 9.0, 10.0, 1.0],
+        ];
+        let texture_count = 12u32;
+        let e = cluster_geom_entry(&cluster, model, texture_count);
+
+        assert_eq!(e.base_vertex, 0, "cluster indices are already absolute");
+        assert_eq!(e.index_offset, cluster.index_offset as u32);
+        assert_eq!(
+            e.model, model,
+            "the instance's own transform, not the cluster's"
+        );
+        assert_eq!(e.normal_index & RT_SKINNED_FLAG, 0);
+        let (albedo, normal) =
+            pool_indices(cluster.texture_slot, cluster.normal_map_slot, texture_count);
+        assert_eq!((e.albedo_index, e.normal_index), (albedo, normal));
+        assert_eq!(e.tint, [0.9, 0.8, 0.7]);
+        assert_eq!(e.roughness, 0.25);
+    }
 }

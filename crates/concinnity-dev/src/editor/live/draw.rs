@@ -13,7 +13,7 @@
 
 use crate::ecs::{Entity, World};
 use crate::gfx::draw_preview::{self, DrawMaterial};
-use concinnity_world::registry::RegisteredType;
+use concinnity_cook::authoring::registry::RegisteredType;
 use serde_json::{Map, Value};
 
 use super::Apply;

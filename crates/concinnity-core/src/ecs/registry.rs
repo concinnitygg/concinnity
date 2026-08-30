@@ -23,7 +23,7 @@
 //
 // A third group -- the types a world declares and the cook expands away before a
 // blob is written -- is the authoring vocabulary, which this crate does not
-// name: its list lives in `concinnity_world::registry::build_only`, and the
+// name: its list lives in `concinnity_cook::authoring::registry::build_only`, and the
 // authoring registry composes the two by passing it through the `$extra` tail
 // below.
 //
@@ -53,7 +53,7 @@ use crate::result::CnResult;
 ///
 /// The `$cb; $extra` form prepends arbitrary tokens to what `$cb` receives, so a
 /// consumer holding a group this crate does not name (the authoring-only
-/// vocabulary in concinnity-world) can hand its own list to the same callback.
+/// vocabulary in concinnity-cook) can hand its own list to the same callback.
 #[macro_export]
 macro_rules! for_each_component {
     ($cb:ident) => { $crate::for_each_component!($cb;); };
@@ -142,6 +142,7 @@ macro_rules! for_each_component {
                 LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders, refs: [("screen", "Screen"), ("backdrop", "Sprite"), ("track", "Sprite"), ("fill", "Sprite"), ("label", "TextLabel")] },
                 AudioOcclusionProbe => $crate::components::AudioOcclusionProbe { runtime },
                 CharacterShape    => $crate::components::CharacterShape { gen, external, id, refs: [("target", "SkinnedMesh")] },
+                EngineDefaults    => $crate::components::EngineDefaults { gen, external, singleton, consumed },
             },
 
             // Resource: declared in a world and compiled into the blob's
@@ -176,7 +177,7 @@ crate::for_each_component!(define_components);
 // `{ ... }` metadata block. Entries whose impl is bespoke mark themselves
 // `manual` and keep their impl; their trailing flags (origin, args type, refs)
 // are authoring metadata consumed only by the build-side registry in
-// concinnity-world.
+// concinnity-cook.
 //
 // Metadata grammar (inside the braces):
 //   manual, <flags...>          -- skip; the impl is hand-written elsewhere
@@ -295,7 +296,29 @@ crate::for_each_component!(cn_impl_components);
 
 #[cfg(test)]
 mod tests {
-    use crate::ecs::ComponentTag;
+    use crate::blob::BlobAssetDef;
+    use crate::components::{Prop, Transform};
+    use crate::ecs::asset_id::AssetId;
+    use crate::ecs::{
+        AssetKind, ComponentAsset, ComponentStorage, ComponentTag, PayloadLocator, ResourceKind,
+    };
+    use crate::result::CnResult;
+    use alloc::vec::Vec;
+
+    // Both halves of the shared list, so the tests below drive the generated
+    // per-entry arms over every entry rather than a hand-picked sample that
+    // goes stale as the list grows.
+    macro_rules! registry_names {
+        (
+            stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
+            resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
+        ) => {
+            const STORED: &[(ComponentTag, &str)] =
+                &[$( (ComponentTag::$variant, stringify!($variant)) ),+];
+            const RESOURCES: &[&str] = &[$( stringify!($rvariant) ),+];
+        };
+    }
+    crate::for_each_component!(registry_names);
 
     #[test]
     fn an_undrained_component_survives_as_itself() {
@@ -323,5 +346,153 @@ mod tests {
             ComponentTag::Prop.surviving_tag(),
             Some(ComponentTag::PropInstance)
         );
+    }
+
+    // The tag, its authored name, and the enum discriminant are one fact in
+    // three forms: the name round-trips through `parse`, and the discriminant
+    // is the entry's position in the list.
+    #[test]
+    fn every_tag_names_itself_and_parses_back() {
+        for (i, (tag, name)) in STORED.iter().enumerate() {
+            assert_eq!(tag.as_str(), *name);
+            assert_eq!(ComponentTag::parse(name), Some(*tag));
+            assert_eq!(*tag as u8, i as u8, "{name} is not at its list position");
+        }
+    }
+
+    #[test]
+    fn a_name_no_component_carries_parses_to_nothing() {
+        assert_eq!(ComponentTag::parse("NotAComponent"), None);
+        assert_eq!(ComponentTag::parse(""), None);
+    }
+
+    // Every entry resolves, and the whole list stays inside the mask ceiling
+    // that makes a tag usable as a ComponentId.
+    #[test]
+    fn every_tag_resolves_a_surviving_tag_and_fits_the_mask() {
+        for (tag, name) in STORED {
+            let surviving = tag.surviving_tag();
+            assert!(
+                surviving.is_none_or(|s| STORED.iter().any(|(t, _)| *t == s)),
+                "{name} survives as a tag that is not in the list"
+            );
+        }
+        assert!(
+            STORED.len() < 128,
+            "the list outgrew the ComponentMask ceiling"
+        );
+    }
+
+    #[test]
+    fn every_resource_name_resolves_to_a_handle_space() {
+        for name in RESOURCES {
+            assert!(
+                ResourceKind::parse(name).is_some(),
+                "{name} is a resource entry with no handle space"
+            );
+        }
+        assert_eq!(ResourceKind::parse("Transform"), None);
+        assert_eq!(ResourceKind::parse("NotAResource"), None);
+    }
+
+    #[test]
+    fn a_loaded_component_reports_the_type_it_holds() {
+        let asset = ComponentAsset::from(Transform::default());
+        assert_eq!(asset.type_name(), "Transform");
+        assert_eq!(asset.tag(), ComponentTag::Transform);
+    }
+
+    // Injection is a no-op for a type that overrides neither hook, so it lands
+    // on the value without changing what the value holds.
+    #[test]
+    fn injection_dispatches_to_the_variant_it_holds() {
+        let mut asset = ComponentAsset::from(Transform::default());
+        asset.inject_name(AssetId(3));
+        asset.inject_locator(PayloadLocator {
+            blob_index: 0,
+            offset: 0,
+            len: 0,
+        });
+        assert_eq!(asset.tag(), ComponentTag::Transform);
+    }
+
+    // A type declaring no clamp comes back unchanged; one declaring a clamp is
+    // returned through it.
+    #[test]
+    fn validation_runs_only_where_an_entry_declares_a_clamp() {
+        let plain = ComponentAsset::from(Transform::default()).validated();
+        assert_eq!(plain.tag(), ComponentTag::Transform);
+
+        let clamped = ComponentAsset::from(Prop::default()).validated();
+        assert_eq!(clamped.tag(), ComponentTag::Prop);
+    }
+
+    fn baked(discriminant: u8, args_bytes: Vec<u8>, name: Option<AssetId>) -> BlobAssetDef {
+        BlobAssetDef {
+            name,
+            kind: AssetKind::Component,
+            discriminant,
+            args_bytes,
+            payload: None,
+        }
+    }
+
+    // The record's discriminant picks the type, the bytes rebuild the value,
+    // and a named record has its identity injected on the way out.
+    #[test]
+    fn a_baked_record_loads_as_the_component_its_discriminant_names() {
+        let prop = Prop {
+            position: [1.0, 2.0, 3.0],
+            ..Prop::default()
+        };
+        let bytes = postcard::to_allocvec(&prop).expect("a prop encodes");
+        let asset =
+            ComponentAsset::from_baked(&baked(ComponentTag::Prop as u8, bytes, Some(AssetId(7))))
+                .expect("the record loads");
+        let ComponentAsset::Prop(loaded) = asset else {
+            panic!("expected a prop");
+        };
+        assert_eq!(loaded.position, [1.0, 2.0, 3.0]);
+        assert_eq!(loaded.asset_id, AssetId(7));
+    }
+
+    #[test]
+    fn a_record_no_tag_claims_is_rejected() {
+        assert_eq!(
+            ComponentAsset::from_baked(&baked(u8::MAX, Vec::new(), None)).err(),
+            Some(CnResult::AssetInvalidType)
+        );
+    }
+
+    // Storage dispatch: pushing through the value enum lands in the column the
+    // variant names, replacing overwrites it in place, and an entity holding no
+    // component of that type reports so rather than gaining one.
+    #[test]
+    fn the_value_enum_pushes_replaces_and_counts_through_its_column() {
+        let mut storage = ComponentStorage::default();
+        let entity = storage.push(ComponentAsset::from(Transform::default()));
+        assert_eq!(
+            storage.entities_with_tag(ComponentTag::Transform as u8),
+            &[entity]
+        );
+        assert_eq!(
+            storage.component_census(),
+            alloc::vec![(ComponentTag::Transform as u8, 1)]
+        );
+
+        let moved = Transform {
+            position: [4.0, 5.0, 6.0],
+            ..Transform::default()
+        };
+        assert!(storage.replace(entity, ComponentAsset::from(moved)));
+        assert_eq!(
+            storage.get::<Transform>(entity).map(|t| t.position),
+            Some([4.0, 5.0, 6.0])
+        );
+
+        // The entity carries no Prop, so there is nothing of that type to
+        // overwrite.
+        assert!(!storage.replace(entity, ComponentAsset::from(Prop::default())));
+        assert!(storage.entities_with_tag(u8::MAX).is_empty());
     }
 }

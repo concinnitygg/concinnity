@@ -938,11 +938,14 @@ pub(super) struct ProbeState {
     // staggered bake installs each probe. Destroyed in `Drop`.
     pub maps: Vec<GpuImage>,
     // Hands out placements in order; at most one probe is `rendering` (six faces
-    // submitting one per frame, on per-face fences) and one `converting` (its
-    // faces read back, the prefilter convolution running off the render thread).
+    // submitting one per frame, on per-face fences) and one `prefiltering` (its
+    // capture convolving into its cube on the GPU, one destination mip per frame).
     pub bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
     pub rendering: Option<super::probe::RenderingBake>,
-    pub converting: Option<super::probe::ConvertingBake>,
+    pub prefiltering: Option<super::probe::PrefilteringBake>,
+    // The three convolution kernels and the layouts they bind, built at init under
+    // the same gate the bake needs. `None` disables baking.
+    pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
 }
 
 // Stall-free texture streaming. A streamed slot swap replaces `textures[slot]`
@@ -2239,13 +2242,14 @@ impl VkContext {
         let device = self.device.clone();
         let device = &device;
 
-        // Abandon any in-flight staggered probe bake: free its per-face command
-        // buffers (before `self.commands` is destroyed below) + fences + bake target.
-        // `wait_idle` above retired its GPU work. The converting slot holds only CPU
-        // data (drops freely; its worker thread, if still running, touches no vk
-        // handle, only the shared payload `OnceLock`).
+        // Abandon any in-flight staggered probe bake: free both slots' command
+        // buffers (before `self.commands` is destroyed below) + fences + targets.
+        // `wait_idle` above retired their GPU work.
         if let Some(rendering) = self.probe.rendering.take() {
             rendering.destroy(device, self.commands.command_pool);
+        }
+        if let Some(prefiltering) = self.probe.prefiltering.take() {
+            prefiltering.destroy(device, self.commands.command_pool);
         }
 
         // Parked streamed-texture retires (`wait_idle` above covered them).

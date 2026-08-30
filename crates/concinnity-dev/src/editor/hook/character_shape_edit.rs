@@ -9,14 +9,14 @@
 // per-frame drag preview lives in `shape_drag.rs`.
 
 use super::*;
-use concinnity_world::registry::build_only::CharacterSchema;
-use concinnity_world::registry::build_only::ShapePreset;
+use concinnity_cook::authoring::registry::build_only::CharacterSchema;
+use concinnity_cook::authoring::registry::build_only::ShapePreset;
 
 use crate::components::CharacterCapsule;
 use crate::editor::character_shape::{self, Row, Rows, ShapeValues};
 use crate::editor::character_shape_panel::{self, ShapeAction, ShapeView};
 use crate::gfx::shape_preview::{self, ShapeTarget};
-use concinnity_cook::character::builtin_schema;
+use concinnity_cook::compile::character::builtin_schema;
 
 // What the panel edits: the selected skinned mesh and the shape entry
 // targeting it, if the world has one.

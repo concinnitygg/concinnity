@@ -509,4 +509,57 @@ mod tests {
         drop(values);
         assert_eq!(Rc::strong_count(&witness), 1);
     }
+
+    // Every operation has to behave the same whether the vector is still
+    // inline or has spilled to the heap: the representation is an allocation
+    // optimisation, not a difference in contents.
+    #[test]
+    fn a_spilled_vector_pushes_pops_and_retains_like_an_inline_one() {
+        let mut v: InlineVec<u32> = InlineVec::default();
+        v.push(1);
+        v.push(2); // spills here
+        v.push(3);
+        assert_eq!(v.as_slice(), &[1, 2, 3]);
+
+        assert_eq!(v.pop(), Some(3));
+        v.retain(|value| value % 2 == 1);
+        assert_eq!(v.as_slice(), &[1]);
+    }
+
+    // The mutable views reach the contents in every representation, so a
+    // caller can write through one without knowing which it holds.
+    #[test]
+    fn the_mutable_views_reach_every_representation() {
+        let mut empty: InlineVec<u32> = InlineVec::default();
+        assert!(empty.as_mut_slice().is_empty());
+
+        let mut one: InlineVec<u32> = InlineVec::default();
+        one.push(7);
+        one.as_mut_slice()[0] = 8;
+        assert_eq!(one.as_slice(), &[8]);
+
+        // Retaining over an empty vector has nothing to filter.
+        let mut nothing: InlineVec<u32> = InlineVec::default();
+        nothing.retain(|_| false);
+        assert!(nothing.as_slice().is_empty());
+
+        let mut spilled: InlineVec<u32> = InlineVec::default();
+        spilled.push(1);
+        spilled.push(2);
+        // Through DerefMut rather than the inherent method.
+        spilled[1] = 9;
+        assert_eq!(&spilled[..], &[1, 9]);
+    }
+
+    #[test]
+    fn a_vector_converts_into_a_heap_vec() {
+        let mut v: InlineVec<u32> = InlineVec::default();
+        v.push(4);
+        v.push(5);
+        let heap: Vec<u32> = v.into();
+        assert_eq!(heap, alloc::vec![4, 5]);
+
+        let empty: Vec<u32> = InlineVec::<u32>::default().into();
+        assert!(empty.is_empty());
+    }
 }

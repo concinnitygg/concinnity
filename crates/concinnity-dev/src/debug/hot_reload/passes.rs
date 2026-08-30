@@ -46,7 +46,7 @@ pub(super) fn reload_volumetric_fog(
             return result;
         }
     };
-    let entries = match concinnity_cook::world::expand_world_from_str(
+    let entries = match concinnity_cook::build_only::expand_world_from_str(
         &content,
         crate::authoring::assets_root::assets_dir().as_deref(),
     ) {
@@ -85,7 +85,7 @@ pub(super) fn reload_volumetric_fog(
             }
         };
         // Apply the build-side validator, exactly as a rebuild would at bake.
-        let clamped = concinnity_world::validate::volumetric_fog(parsed);
+        let clamped = concinnity_cook::authoring::validate::volumetric_fog(parsed);
         if clamped.enabled {
             resolved = Some(crate::gfx::volumetric_fog::FogSettings::resolve(
                 clamped.color,
@@ -159,7 +159,7 @@ pub(super) fn reload_procedural_meshes(
     // Expand prefabs / etc. so auto-injected ProceduralMeshes match the
     // init-time captured set; otherwise an unchanged entry shows up as
     // "missing from JSONL" every reload.
-    let entries = match concinnity_cook::world::expand_world_from_str(
+    let entries = match concinnity_cook::build_only::expand_world_from_str(
         &content,
         crate::authoring::assets_root::assets_dir().as_deref(),
     ) {
@@ -236,7 +236,7 @@ pub(super) fn reload_procedural_meshes(
         // Regenerate from the new args. Routed through the build wrapper so a
         // live-edited `heightfield` ProceduralMesh still decodes its source
         // image (core's compile_mesh_payload links no image decoders).
-        let payload = match concinnity_cook::mesh_compile::compile_mesh_payload(
+        let payload = match concinnity_cook::compile::mesh_compile::compile_mesh_payload(
             raw_args,
             crate::authoring::assets_root::assets_dir().as_deref(),
         ) {
@@ -393,7 +393,7 @@ pub(super) fn reload_stories(
             return Vec::new();
         }
     };
-    let entries = match concinnity_cook::world::expand_world_from_str(
+    let entries = match concinnity_cook::build_only::expand_world_from_str(
         &content,
         crate::authoring::assets_root::assets_dir().as_deref(),
     ) {
@@ -470,7 +470,7 @@ pub(crate) struct ShaderStageReloadResult {
 // watcher when one of the world's authored shader sources changes.
 //
 // Each captured kind goes through
-// [`concinnity_cook::shader::compile_shader`]; on any per-stage compile
+// [`concinnity_cook::compile::shader::compile_shader`]; on any per-stage compile
 // failure the helper logs and aborts the whole pass without touching the
 // backend, so a typo in one shader never desyncs the others. When every
 // stage compiles cleanly the bytes are forwarded through
@@ -496,7 +496,7 @@ pub(super) fn reload_shader_stages(
     let mut compiled: std::collections::HashMap<ShaderKind, Vec<u8>> =
         std::collections::HashMap::new();
     for entry in &shader_stages.entries {
-        let compile_args = concinnity_cook::shader::ShaderCompileArgs {
+        let compile_args = concinnity_cook::compile::shader::ShaderCompileArgs {
             source_path: entry.resolved_path.clone(),
             // Asset name is used by the metal compiler to derive temp paths
             // for the `.air` / `.metallib` intermediates. The source's bare
@@ -522,7 +522,7 @@ pub(super) fn reload_shader_stages(
             // entry point had that checked at `cn build`.
             required_entry: None,
         };
-        match concinnity_cook::shader::compile_shader(compile_args) {
+        match concinnity_cook::compile::shader::compile_shader(compile_args) {
             Ok(bytes) => {
                 compiled.insert(entry.kind, bytes);
                 result.recompiled += 1;

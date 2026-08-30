@@ -17,8 +17,8 @@
 
 use crate::world::{WORLD_JSONL, patch_world_jsonl_to};
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::build_from_path;
-use concinnity_world::registry::RegisteredType;
 
 /// Add an asset to `world_path` and rebuild. See module docs.
 ///
@@ -272,7 +272,7 @@ fn scaffold_to_inject(
 }
 
 // Map a `--template <name>` value to its entries, looked up in the engine-owned
-// `concinnity_world::template` registry. Returns:
+// `concinnity_cook::authoring::template` registry. Returns:
 //   - `Ok(None)`              when no template was requested (use default scaffold)
 //   - `Ok(Some(entries))`     when the named template is known
 //   - `Err(InvalidInput)`     when the name is unrecognised (typo → fail fast)
@@ -280,7 +280,7 @@ fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_
     let Some(name) = template else {
         return Ok(None);
     };
-    match concinnity_world::template::by_name(name) {
+    match concinnity_cook::authoring::template::by_name(name) {
         Some(t) => Ok(Some(
             crate::authoring::template_spec::world_template_entries(t),
         )),
@@ -296,7 +296,7 @@ fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_
 
 // Comma-separated list of known template names, for the "unknown template" error.
 fn available_templates() -> String {
-    concinnity_world::template::TEMPLATES
+    concinnity_cook::authoring::template::TEMPLATES
         .iter()
         .map(|t| t.name)
         .collect::<Vec<_>>()
@@ -326,7 +326,7 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
             Err(_) => continue,
         };
         if let Some(t) = value.get("type").and_then(|v| v.as_str())
-            && concinnity_world::registry::type_renders(t)
+            && concinnity_cook::authoring::registry::type_renders(t)
         {
             return true;
         }
@@ -505,7 +505,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
     // stem without extension, dots replaced with underscores (shared with
     // companion injection so a generated default asset is named identically)
-    let stem = concinnity_cook::world::asset_name_from_path(path_str);
+    let stem = concinnity_cook::authoring::world::asset_name_from_path(path_str);
 
     // full filename with dots replaced with underscores (used for most types)
     let base_name = if ext == "json" {
@@ -624,7 +624,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
-        // world.jsonl stays compact (see concinnity_core::build::import).
+        // world.jsonl stays compact (see concinnity_core::bake::import).
         //
         // A `.glb` is checked for the panorama-sphere packaging first: those
         // files carry an environment image, not geometry, and importing one as
@@ -644,10 +644,10 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 }
 
 // A `.glb` / `.gltf` becomes an EnvironmentMap when it is a panorama sphere
-// (see `concinnity_cook::panorama`) and scene geometry otherwise. The choice
+// (see `concinnity_cook::import::panorama`) and scene geometry otherwise. The choice
 // is logged because the same extension lands two different asset types.
 fn scene_or_panorama_entry(stem: &str, path_str: &str) -> std::io::Result<serde_json::Value> {
-    if concinnity_cook::panorama::file_is_panorama_sphere(path_str) {
+    if concinnity_cook::import::panorama::file_is_panorama_sphere(path_str) {
         tracing::info!(
             "'{}' is a panorama sphere: importing it as an EnvironmentMap (sky \
              and image-based lighting) rather than scene geometry",
@@ -1409,10 +1409,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let world = dir.join("world.jsonl");
 
-        let name = concinnity_world::template::TEMPLATES[0].name;
+        let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some(name))
             .expect("a named template should apply for a renderer-less glb add");
-        let expected = concinnity_world::template::by_name(name)
+        let expected = concinnity_cook::authoring::template::by_name(name)
             .unwrap()
             .assets()
             .len();
@@ -1428,7 +1428,7 @@ mod tests {
     #[test]
     fn every_template_entry_validates_as_a_real_asset() {
         let _guard = crate::test_support::lock();
-        for t in concinnity_world::template::TEMPLATES {
+        for t in concinnity_cook::authoring::template::TEMPLATES {
             let entries = crate::authoring::template_spec::world_template_entries(t);
             assert!(!entries.is_empty(), "template '{}' is empty", t.name);
             for entry in entries {
@@ -1883,7 +1883,7 @@ mod tests {
         let dir = text_test_dir(line!());
         let world = dir.join("world.jsonl");
 
-        let name = concinnity_world::template::TEMPLATES[0].name;
+        let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
         let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -2089,7 +2089,7 @@ mod tests {
     // scene / panorama split
     //
     // Which side of the split a file lands on is
-    // `concinnity_cook::panorama`'s call and is covered against real panorama
+    // `concinnity_cook::import::panorama`'s call and is covered against real panorama
     // and multi-mesh fixtures there; these pin what each answer produces here.
 
     #[test]

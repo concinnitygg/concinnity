@@ -384,4 +384,85 @@ mod tests {
             assert!((point - base).length() < 1.0e-5, "{rotation}: {point:?}");
         }
     }
+
+    // Each of a triangle's three vertex regions has to answer with that
+    // vertex alone. A and B are covered above; C is the arm the walk reaches
+    // last, and a triangle placed so the origin sits past it must reduce to
+    // one point rather than carrying an edge the caller would then search.
+    #[test]
+    fn a_triangle_reduces_to_the_vertex_the_origin_sits_past() {
+        // C is the near corner; the origin lies beyond it, outside both
+        // edges that meet there.
+        let a = vec3(3.0, 2.0, 0.0);
+        let b = vec3(3.0, -2.0, 0.0);
+        let c = vec3(1.0, 0.0, 0.0);
+        let closest = check(&[a, b, c], c);
+        assert_eq!(closest.count, 1, "{closest:?}");
+        assert_eq!(closest.keep[0], 2, "the answer is C's own index");
+    }
+
+    // The edge between the two far vertices: the origin is outside the
+    // triangle across BC, so the answer is the foot of the perpendicular on
+    // that edge and the two vertices carrying it.
+    #[test]
+    fn a_triangle_reduces_to_the_edge_the_origin_faces() {
+        let a = vec3(1.0, 0.0, 2.0);
+        let b = vec3(1.0, -1.0, 0.0);
+        let c = vec3(1.0, 1.0, 0.0);
+        let closest = check(&[a, b, c], vec3(1.0, 0.0, 0.0));
+        assert_eq!(closest.count, 2, "{closest:?}");
+        let mut kept = [closest.keep[0], closest.keep[1]];
+        kept.sort();
+        assert_eq!(kept, [1, 2], "B and C carry the closest point");
+    }
+
+    // Three collinear points enclose no area, so the barycentric split has
+    // nothing to divide by. The longest edge carries whatever the hull has,
+    // and the answer still has to rebuild from its weights.
+    #[test]
+    fn a_collinear_triangle_answers_from_an_edge() {
+        let closest = check(
+            &[
+                vec3(1.0, -2.0, 0.0),
+                vec3(1.0, 0.0, 0.0),
+                vec3(1.0, 2.0, 0.0),
+            ],
+            vec3(1.0, 0.0, 0.0),
+        );
+        assert!(closest.count >= 1, "{closest:?}");
+        assert!(!closest.encloses_origin);
+    }
+
+    // A triangle with area small enough that the barycentric denominators
+    // underflow: the region guards do not fire, and the split has nothing to
+    // divide by. Exactly-collinear points never get this far -- one of the
+    // vertex or edge regions always claims them first -- so this is the shape
+    // the fallback actually exists for. The answer still has to be finite and
+    // rebuild from its weights.
+    #[test]
+    fn a_triangle_too_thin_to_divide_by_still_answers() {
+        let closest = closest_to_origin(&[
+            vec3(1.0, -2.0, 0.0),
+            vec3(1.0, 2.0, 0.0),
+            vec3(1.0, 0.0, 1.0e-24),
+        ]);
+        assert!(
+            closest.point.x.is_finite()
+                && closest.point.y.is_finite()
+                && closest.point.z.is_finite(),
+            "{closest:?}"
+        );
+        assert!(closest.count >= 1, "{closest:?}");
+        let sum: f32 = closest.weights[..closest.count].iter().sum();
+        assert!((sum - 1.0).abs() < 1.0e-5, "{closest:?}");
+    }
+
+    // Collinear and coincident at once: every edge is degenerate, so the
+    // walk falls all the way back to a single vertex.
+    #[test]
+    fn a_triangle_of_one_repeated_point_collapses_to_that_point() {
+        let p = vec3(2.0, 1.0, 0.0);
+        let closest = check(&[p, p, p], p);
+        assert_eq!(closest.count, 1, "{closest:?}");
+    }
 }

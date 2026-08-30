@@ -31,7 +31,7 @@
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-use concinnity_world::registry::RegisteredType;
+use concinnity_cook::authoring::registry::RegisteredType;
 
 use crate::components::TextAlign;
 use crate::ecs::World;
@@ -1967,7 +1967,7 @@ mod tests {
     fn add_types_cook_with_default_args() {
         isolate_state_dir();
         for ty in picker_types() {
-            let ct = concinnity_world::registry::RegisteredType::parse(ty)
+            let ct = concinnity_cook::authoring::registry::RegisteredType::parse(ty)
                 .unwrap_or_else(|| panic!("{ty} must be a known asset type"));
             assert!(ct.addable(), "{ty} must be External / addable");
             cook_blank(ty).unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));
@@ -1983,7 +1983,7 @@ mod tests {
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
         isolate_state_dir();
-        use concinnity_world::registry::RegisteredType;
+        use concinnity_cook::authoring::registry::RegisteredType;
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[

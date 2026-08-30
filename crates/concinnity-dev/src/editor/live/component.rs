@@ -16,11 +16,11 @@
 
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
+use concinnity_cook::authoring::refs::referenced_names;
+use concinnity_cook::authoring::registry::{self, RegisteredType};
+use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_core::blob::{AssetKind, BlobAssetDef};
 use concinnity_core::ecs::ComponentAsset;
-use concinnity_world::refs::referenced_names;
-use concinnity_world::registry::{self, RegisteredType};
-use concinnity_world::world::WorldJsonlAsset;
 use serde_json::{Map, Value};
 
 use super::Apply;

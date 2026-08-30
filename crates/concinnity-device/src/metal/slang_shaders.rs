@@ -86,6 +86,29 @@ pub(super) static HIZ_DOWNSAMPLE: SlangLib = SlangLib {
     defines: &[("HIZ_DOWNSAMPLE", "1")],
 };
 
+// The runtime reflection-probe prefilter. One variant per kernel, so each
+// declares exactly the textures it binds (Metal assigns indices in declaration
+// order). `METAL_BINDINGS` puts the params at buffer(0), which is where the
+// compute encoder writes them.
+pub(super) static PROBE_MIP0: SlangLib = SlangLib {
+    name: "probe_mip0.slang",
+    file: "probe_prefilter.slang",
+    entries: &["probe_mip0"],
+    defines: &[("PROBE_MIP0", "1"), ("METAL_BINDINGS", "1")],
+};
+pub(super) static PROBE_DOWNSAMPLE: SlangLib = SlangLib {
+    name: "probe_downsample.slang",
+    file: "probe_prefilter.slang",
+    entries: &["probe_downsample"],
+    defines: &[("PROBE_DOWNSAMPLE", "1"), ("METAL_BINDINGS", "1")],
+};
+pub(super) static PROBE_GGX: SlangLib = SlangLib {
+    name: "probe_ggx.slang",
+    file: "probe_prefilter.slang",
+    entries: &["probe_ggx"],
+    defines: &[("PROBE_GGX", "1"), ("METAL_BINDINGS", "1")],
+};
+
 // The G-buffer pre-pass and shadow families. Every entry compiles on its own so
 // it declares only the resources it binds, and `METAL_BINDINGS` selects the
 // constant shape this host writes (see the file headers).
@@ -459,6 +482,9 @@ pub(super) static ALL: &[&SlangLib] = &[
     &RT_SKIN,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,
+    &PROBE_MIP0,
+    &PROBE_DOWNSAMPLE,
+    &PROBE_GGX,
     &GBUFFER_PREPASS_VERT,
     &GBUFFER_PREPASS_VERT_INSTANCED,
     &GBUFFER_PREPASS_VERT_SKINNED,
@@ -544,7 +570,7 @@ impl SlangLib {
                 entries: self.entries,
                 target: slang::SlangTarget::Metallib,
             };
-            slang::compile(&job, &crate::shader_cache::slang_work_dir())
+            slang::compile(&job, &crate::compiler_work::dir())
         })?;
         load_library(device, &bytes)
             .map_err(|e| format!("{}: metallib load failed: {e}", self.name))

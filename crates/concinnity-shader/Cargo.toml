@@ -8,16 +8,14 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Build-time shader compilers for the Concinnity engine backends"
+readme = "README.md"
 keywords = ["gamedev", "shader", "concinnity"]
 categories = ["game-engines", "rendering::graphics-api"]
 include = [
+    "/README.md",
     "/src",
     "/build.rs",
 ]
-
-[lib]
-name = "concinnity_shader"
-path = "src/lib.rs"
 
 [features]
 vulkan = ["dep:shaderc", "concinnity-device/vulkan"]

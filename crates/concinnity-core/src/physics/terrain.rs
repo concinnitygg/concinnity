@@ -157,6 +157,16 @@ fn lcg_hash(mut v: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::ProceduralMesh;
+    use crate::ecs::{
+        Arena, ComponentStorage, FrameContext, NoPayloads, PayloadLocator, PayloadStore, Resources,
+    };
+    use crate::gfx::mesh_payload::serialise_heightfield_trailer;
+    use crate::gfx::profile::FrameProfile;
+    use crate::physics::{SimConfig, Simulation};
+    use crate::result::CnResult;
+    use alloc::boxed::Box;
+    use alloc::vec;
 
     fn terrain(amplitude: f32) -> TerrainParams {
         TerrainParams {
@@ -198,5 +208,151 @@ mod tests {
         let t = terrain(4.0);
         assert!(build_heightfield(&mut sim, &t, LayerMask::ALL).is_some());
         assert_eq!(sim.body_count(), 1);
+    }
+
+    // A store handing back one fixed payload, standing in for the terrain
+    // blob held resident past GraphicsSystem init for exactly this read.
+    struct OnePayload(Vec<u8>);
+
+    impl PayloadStore for OnePayload {
+        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnResult> {
+            Ok(&self.0)
+        }
+
+        fn release(&mut self, _blob_index: u32) {}
+
+        fn disk_backed(&self) -> bool {
+            false
+        }
+    }
+
+    // The pieces a `PipelineContext` borrows, with only the payload store
+    // standing in for anything real.
+    struct World {
+        components: ComponentStorage,
+        blob: Box<dyn PayloadStore>,
+        profile: FrameProfile,
+        resources: Resources,
+        scratch: Arena,
+    }
+
+    impl World {
+        fn new(blob: Box<dyn PayloadStore>) -> World {
+            World {
+                components: ComponentStorage::default(),
+                blob,
+                profile: FrameProfile::default(),
+                resources: Resources::new(),
+                scratch: Arena::with_capacity(4 * 1024),
+            }
+        }
+
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
+                components: &mut self.components,
+                blob: self.blob.as_mut(),
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+                frame: FrameContext::new(&self.scratch),
+            }
+        }
+    }
+
+    // A mesh payload with no geometry and, when asked, a baked collider grid
+    // trailer: the collider build reads past the vertex and index blocks to
+    // reach the trailer, so empty blocks exercise the same walk.
+    fn payload(grid: Option<(usize, usize, Vec<f32>)>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        if let Some((rows, cols, heights)) = grid {
+            bytes.extend_from_slice(&serialise_heightfield_trailer(rows, cols, &heights));
+        }
+        bytes
+    }
+
+    fn terrain_mesh(locator: Option<PayloadLocator>) -> ProceduralMesh {
+        ProceduralMesh {
+            generator: String::from("heightfield"),
+            half_width: 8.0,
+            half_depth: 4.0,
+            locator,
+            ..ProceduralMesh::default()
+        }
+    }
+
+    fn locator() -> Option<PayloadLocator> {
+        Some(PayloadLocator {
+            blob_index: 0,
+            offset: 0,
+            len: 0,
+        })
+    }
+
+    fn build(sim: &mut Simulation, mesh: &ProceduralMesh, world: &mut World) -> Result<(), String> {
+        build_heightfield_collider(sim, mesh, 1.0, LayerMask::ALL, &mut world.ctx())
+    }
+
+    fn sim(capacity: usize) -> Simulation {
+        Simulation::new(SimConfig::default(), capacity)
+    }
+
+    #[test]
+    fn a_baked_grid_becomes_one_heightfield_body() {
+        let mut world = World::new(Box::new(OnePayload(payload(Some((
+            2,
+            2,
+            vec![0.0, 1.0, 2.0, 3.0],
+        ))))));
+        let mut sim = sim(4);
+        build(&mut sim, &terrain_mesh(locator()), &mut world).expect("the collider builds");
+        assert_eq!(sim.body_count(), 1);
+    }
+
+    // Every refusal names what was missing rather than building a collider
+    // that does not match the rendered surface.
+    #[test]
+    fn a_mesh_with_no_compiled_payload_is_refused() {
+        let mut world = World::new(Box::new(NoPayloads));
+        let err = build(&mut sim(4), &terrain_mesh(None), &mut world)
+            .expect_err("a mesh with no payload cannot be collided");
+        assert!(err.contains("no compiled payload"), "{err}");
+    }
+
+    #[test]
+    fn a_payload_the_store_cannot_read_is_refused() {
+        let mut world = World::new(Box::new(NoPayloads));
+        let err = build(&mut sim(4), &terrain_mesh(locator()), &mut world)
+            .expect_err("an unreadable payload cannot be collided");
+        assert!(err.contains("read terrain payload"), "{err}");
+    }
+
+    #[test]
+    fn a_payload_with_no_baked_grid_is_refused() {
+        let mut world = World::new(Box::new(OnePayload(payload(None))));
+        let err = build(&mut sim(4), &terrain_mesh(locator()), &mut world)
+            .expect_err("a payload with no trailer cannot be collided");
+        assert!(err.contains("no baked heightfield collider"), "{err}");
+    }
+
+    // A grid needs two rows and two columns before it spans a single cell.
+    #[test]
+    fn a_grid_too_small_to_span_a_cell_is_refused() {
+        let mut world = World::new(Box::new(OnePayload(payload(Some((1, 1, vec![0.0]))))));
+        let err = build(&mut sim(4), &terrain_mesh(locator()), &mut world)
+            .expect_err("a single-vertex grid cannot be collided");
+        assert!(err.contains("too small"), "{err}");
+    }
+
+    #[test]
+    fn a_simulation_with_no_room_declines_the_heightfield() {
+        let mut world = World::new(Box::new(OnePayload(payload(Some((
+            2,
+            2,
+            vec![0.0, 1.0, 2.0, 3.0],
+        ))))));
+        let err = build(&mut sim(0), &terrain_mesh(locator()), &mut world)
+            .expect_err("a full simulation takes no more bodies");
+        assert!(err.contains("declined the heightfield"), "{err}");
     }
 }

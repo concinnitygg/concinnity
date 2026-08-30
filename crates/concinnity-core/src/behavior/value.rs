@@ -119,3 +119,82 @@ pub enum Cmp {
     /// Greater than or equal.
     Ge,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::num::NonZeroU32;
+
+    fn entity() -> Entity {
+        Entity::new(7, NonZeroU32::MIN)
+    }
+
+    // Each reader answers for its own shape and declines every other, so a
+    // mistyped expression yields nothing rather than a coerced guess.
+    #[test]
+    fn each_reader_answers_only_for_its_own_shape() {
+        assert_eq!(Val::Bool(true).as_bool(), Some(true));
+        assert_eq!(Val::Int(1).as_bool(), None);
+
+        assert_eq!(Val::Entity(entity()).as_entity(), Some(entity()));
+        assert_eq!(Val::Int(1).as_entity(), None);
+
+        assert_eq!(Val::Vec3([1.0; 3]).as_vec3(), Some([1.0; 3]));
+        assert_eq!(Val::Int(1).as_vec3(), None);
+    }
+
+    // The scalar reading is the one that widens: an int and a float both read
+    // as numbers, and nothing else does.
+    #[test]
+    fn the_scalar_reading_covers_both_numeric_shapes() {
+        assert_eq!(Val::Int(3).as_f32(), Some(3.0));
+        assert_eq!(Val::Float(0.5).as_f32(), Some(0.5));
+        assert_eq!(Val::Bool(true).as_f32(), None);
+        assert_eq!(Val::Vec3([1.0; 3]).as_f32(), None);
+        assert_eq!(Val::Entity(entity()).as_f32(), None);
+    }
+
+    #[test]
+    fn a_literal_round_trips_through_its_runtime_value() {
+        for lit in [
+            BehaviorLiteral::Bool(true),
+            BehaviorLiteral::Int(-2),
+            BehaviorLiteral::Float(1.5),
+            BehaviorLiteral::Vec3([1.0, 2.0, 3.0]),
+        ] {
+            assert_eq!(Val::from_literal(&lit).to_literal(), lit);
+        }
+    }
+
+    // An entity is a runtime-only identity with no authored form, so it saves
+    // as the declared-away default rather than as a handle a later run would
+    // misread.
+    #[test]
+    fn an_entity_persists_as_the_declared_away_default() {
+        assert_eq!(Val::Entity(entity()).to_literal(), BehaviorLiteral::Int(0));
+    }
+
+    #[test]
+    fn every_value_has_a_trace_form() {
+        assert_eq!(Val::Bool(true).to_trace(), TraceVal::Bool(true));
+        assert_eq!(Val::Int(-2).to_trace(), TraceVal::Int(-2));
+        assert_eq!(Val::Float(1.5).to_trace(), TraceVal::Float(1.5));
+        assert_eq!(
+            Val::Vec3([1.0, 2.0, 3.0]).to_trace(),
+            TraceVal::Vec3([1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            Val::Entity(entity()).to_trace(),
+            TraceVal::Entity(entity().to_bits())
+        );
+    }
+
+    // Shape, not value: a restored save whose declaration changed type under
+    // it is rejected, while one that merely changed value is not.
+    #[test]
+    fn same_type_compares_shape_rather_than_value() {
+        assert!(Val::Int(1).same_type(Val::Int(9)));
+        assert!(!Val::Int(1).same_type(Val::Float(1.0)));
+        assert!(!Val::Bool(true).same_type(Val::Int(1)));
+    }
+}

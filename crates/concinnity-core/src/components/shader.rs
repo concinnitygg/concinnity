@@ -2,7 +2,7 @@
 //! the ShaderPayload container), the `Component` impl, and the
 //! `StageSourceExt::current_platform_source` extension the engine init and
 //! hot-reload paths use. The JSON-args source selection and validation live in
-//! concinnity-world (`source_args`, `check::shader`).
+//! concinnity-cook (`authoring::source_args`, `check::shader`).
 
 use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
@@ -297,7 +297,7 @@ mod tests {
 
 /// Resolve the source filename for the current build platform from a stage's
 /// declared `source` / `sources`. Mirrors the build-time selection
-/// (concinnity-world `source_args`) so the hot-reload subsystem picks the
+/// (concinnity-cook `authoring::source_args`) so the hot-reload subsystem picks the
 /// same per-platform source the build read at compile time. Returns `None` when
 /// no current-platform source is declared (e.g. a stage that only declares `glsl`
 /// running on the Metal backend, which loads the embedded GLSL fallback at init
@@ -393,5 +393,66 @@ mod runtime_tests {
             stage.current_platform_source().is_some(),
             platform.accepts_ext("metal")
         );
+    }
+
+    // The map is consulted first; a stage declaring only a bare `source` falls
+    // back to it, but only when the file's extension is one this platform can
+    // actually load. A stage declaring nothing resolves to nothing rather than
+    // handing back an empty path.
+    #[test]
+    fn a_bare_source_resolves_only_when_the_platform_accepts_its_extension() {
+        let bare = |source: &str| StageSource {
+            source: source.to_string(),
+            sources: None,
+        };
+
+        assert_eq!(bare("").current_platform_source(), None, "nothing declared");
+
+        // A generic extension is not platform-specific, so it is accepted
+        // whichever backend is running.
+        assert_eq!(
+            bare("v.slang").current_platform_source(),
+            Some("v.slang".to_string())
+        );
+
+        // A source for a different backend's language resolves to nothing.
+        let other = ["metal", "hlsl", "glsl"]
+            .into_iter()
+            .find(|ext| *ext != platform_key())
+            .expect("some other platform exists");
+        assert_eq!(
+            bare(&alloc::format!("v.{other}")).current_platform_source(),
+            None,
+            "a {other} source is not loadable here"
+        );
+    }
+
+    #[test]
+    fn the_platform_key_is_the_running_backends_own() {
+        assert!(["metal", "hlsl", "glsl"].contains(&platform_key()));
+        assert_eq!(platform_key(), crate::platform::Platform::current().key());
+    }
+
+    // Shader keeps a hand-written Component impl rather than the generated
+    // one, so its identity and payload injection are its own code.
+    #[test]
+    fn a_shader_takes_its_identity_and_payload_on_load() {
+        use crate::ecs::Component;
+        use crate::ecs::asset_id::AssetId;
+
+        let bytes = postcard::to_allocvec(&Shader::default()).expect("a shader encodes");
+        let mut shader = <Shader as Component>::from_baked(&bytes).expect("it loads back");
+        assert_eq!(Shader::NAME, "Shader");
+
+        shader.inject_name(AssetId(4));
+        assert_eq!(shader.asset_id, AssetId(4));
+
+        let locator = PayloadLocator {
+            blob_index: 1,
+            offset: 8,
+            len: 16,
+        };
+        shader.inject_locator(locator.clone());
+        assert_eq!(shader.locator, Some(locator));
     }
 }

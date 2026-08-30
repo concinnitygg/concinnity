@@ -4,7 +4,7 @@
 // doesn't exist on disk, fall back to discovery via find_world_jsonl.
 
 use crate::check_at_path;
-use concinnity_cook::world::find_world_jsonl;
+use concinnity_cook::authoring::world::find_world_jsonl;
 
 /// Validate a world and report its errors without building blobs.
 ///

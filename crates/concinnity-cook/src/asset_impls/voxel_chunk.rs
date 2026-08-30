@@ -16,7 +16,7 @@ impl crate::asset::BuildAsset for VoxelChunk {
                 })
                 .map(|a| a.args.clone())
         };
-        crate::geometry::compile_voxel_chunk_payload(args, palette_lookup)
+        crate::compile::geometry::compile_voxel_chunk_payload(args, palette_lookup)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
@@ -25,7 +25,7 @@ impl crate::asset::BuildAsset for VoxelChunk {
 mod tests {
     use super::*;
     use crate::asset::{BuildAsset, BuildCtx};
-    use crate::world::WorldJsonlAsset;
+    use crate::authoring::world::WorldJsonlAsset;
 
     fn block_type(name: &str, asset_type: &str) -> WorldJsonlAsset {
         WorldJsonlAsset {
@@ -51,7 +51,7 @@ mod tests {
                 all_assets: &assets,
             };
             let payload = VoxelChunk::compile_payload(&args(), &ctx).expect("chunk compiles");
-            let expected = crate::geometry::compile_voxel_chunk_payload(&args(), |_| {
+            let expected = crate::compile::geometry::compile_voxel_chunk_payload(&args(), |_| {
                 Some(serde_json::json!({"solid": true}))
             })
             .unwrap();

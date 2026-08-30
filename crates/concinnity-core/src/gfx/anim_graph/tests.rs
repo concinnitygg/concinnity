@@ -487,3 +487,105 @@ fn refresh_clip_duration_updates_every_member_playing_it() {
     assert_eq!(b.plays[0].duration_secs, 3.0);
     assert_eq!(b.plays[1].duration_secs, 1.0, "other clip untouched");
 }
+
+// A 2x2 blendspace over two parameters, members in row-major grid order.
+fn blend2d(sync: bool) -> StatePlay {
+    StatePlay::Blend2D(Blend2D {
+        param_x: 0,
+        param_y: 1,
+        x_values: vec![0.0, 1.0],
+        y_values: vec![0.0, 1.0],
+        plays: vec![
+            clip_play(0, 1.0),
+            clip_play(1, 2.0),
+            clip_play(2, 3.0),
+            clip_play(3, 4.0),
+        ],
+        sync,
+    })
+}
+
+// A blendspace's members share one phase clock only when it asks to; a single
+// clip has nothing to sync against.
+#[test]
+fn only_a_blendspace_that_asks_for_it_syncs_its_members() {
+    assert!(!StatePlay::Clip(clip_play(0, 1.0)).sync());
+    assert!(blend2d(true).sync());
+    assert!(!blend2d(false).sync());
+}
+
+#[test]
+fn a_blendspace_exposes_every_grid_member() {
+    let mut play = blend2d(false);
+    assert_eq!(play.members().len(), 4);
+    assert_eq!(play.members()[3].clip, 3);
+    // The mutable view addresses the same members, which is how clip
+    // hot-reload refreshes the durations copied at compile time.
+    play.members_mut()[3].duration_secs = 9.0;
+    assert_eq!(play.members()[3].duration_secs, 9.0);
+}
+
+// Bilinear across the four grid members surrounding the parameter point: a
+// point on a corner is that member alone, and the centre is an even quarter
+// each.
+#[test]
+fn a_2d_blendspace_weights_bilinearly_across_its_grid() {
+    let play = blend2d(false);
+
+    assert_eq!(play.weights(&[0.0, 0.0]), vec![1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(play.weights(&[1.0, 1.0]), vec![0.0, 0.0, 0.0, 1.0]);
+
+    let centre = play.weights(&[0.5, 0.5]);
+    for w in &centre {
+        assert!((w - 0.25).abs() < 1e-5, "{centre:?}");
+    }
+
+    // Outside the grid clamps to the nearest edge rather than extrapolating.
+    assert_eq!(play.weights(&[-5.0, -5.0]), vec![1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(play.weights(&[5.0, 5.0]), vec![0.0, 0.0, 0.0, 1.0]);
+
+    // A parameter the caller never supplied reads as zero rather than
+    // panicking, so a graph outliving its parameter list still blends.
+    assert_eq!(play.weights(&[]), vec![1.0, 0.0, 0.0, 0.0]);
+}
+
+// A grid with no members has no weights to hand back, and must not index an
+// empty axis to discover that.
+#[test]
+fn an_empty_blendspace_weights_nothing() {
+    let play = StatePlay::Blend2D(Blend2D {
+        param_x: 0,
+        param_y: 1,
+        x_values: Vec::new(),
+        y_values: Vec::new(),
+        plays: Vec::new(),
+        sync: false,
+    });
+    assert!(play.weights(&[0.5, 0.5]).is_empty());
+}
+
+// A NaN parameter has no bracketing pair on either axis. It must still land
+// on a real grid index rather than indexing past the end.
+#[test]
+fn a_non_finite_parameter_still_lands_on_a_member() {
+    let play = blend2d(false);
+    let weights = play.weights(&[f32::NAN, f32::NAN]);
+    assert_eq!(weights.len(), 4);
+    assert!(
+        weights.iter().all(|w| w.is_finite()),
+        "{weights:?} is not a usable weight set"
+    );
+}
+
+// The state's length is the weighted average of its members', so a pure-walk
+// pose is one walk cycle long. With no weight at all there is no average to
+// take, so the first member's length stands in rather than a zero that would
+// make the cursor divide by it.
+#[test]
+fn effective_duration_averages_by_weight_and_falls_back_when_there_is_none() {
+    let play = blend2d(false);
+    assert_eq!(play.effective_duration(&[1.0, 0.0, 0.0, 0.0]), 1.0);
+    assert_eq!(play.effective_duration(&[0.0, 0.0, 0.0, 1.0]), 4.0);
+    assert_eq!(play.effective_duration(&[0.5, 0.5, 0.0, 0.0]), 1.5);
+    assert_eq!(play.effective_duration(&[0.0; 4]), 1.0, "the first member");
+}

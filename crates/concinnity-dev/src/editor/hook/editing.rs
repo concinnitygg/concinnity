@@ -38,7 +38,7 @@ impl EditorHook {
                     .and_then(|e| e.get("args"))
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
-                let effective = concinnity_cook::world::merge_args(
+                let effective = concinnity_cook::build_only::merge_args(
                     &serde_json::Value::Object(t.baseline.clone()),
                     &patch,
                 );

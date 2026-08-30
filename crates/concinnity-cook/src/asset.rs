@@ -11,8 +11,8 @@
 
 use std::path::Path;
 
+use crate::authoring::world::WorldJsonlAsset;
 use crate::ecs::Component;
-use crate::world::WorldJsonlAsset;
 
 // The on-disk inputs an asset's `compile_payload` reads, and how they relate to
 // the payload cache's generic walk of the args JSON.

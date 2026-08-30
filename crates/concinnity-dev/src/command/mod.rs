@@ -14,6 +14,7 @@ mod explain;
 mod list;
 mod new;
 mod rm;
+mod version;
 
 pub use add::add;
 pub use build::build;
@@ -22,5 +23,6 @@ pub use explain::explain;
 pub use list::list;
 pub use new::{init, new};
 pub use rm::rm;
+pub use version::{VERSION, version, version_details, version_line};
 
 pub(crate) use list::{provenance, resolve_world_path};

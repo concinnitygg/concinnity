@@ -8,16 +8,14 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "The slangc invocation shared by Concinnity build scripts and the renderer"
+readme = "README.md"
 keywords = ["gamedev", "shader", "slang", "concinnity"]
 categories = ["game-engines", "rendering::graphics-api"]
 include = [
+    "/README.md",
     "/src",
     "/build.rs",
 ]
-
-[lib]
-name = "concinnity_slang"
-path = "src/lib.rs"
 
 [lints]
 workspace = true

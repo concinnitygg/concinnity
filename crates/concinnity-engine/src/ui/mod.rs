@@ -1795,7 +1795,7 @@ fn fire_action(
     }
     if let Some(scene_ref) = action.strip_prefix("scene:") {
         // The build rewrites `scene:<name>` to `scene:<id>` so the target is
-        // a plain integer here (see concinnity_cook::pipeline::resolve_scene_refs).
+        // a plain integer here (see concinnity_cook::pipeline::scene_refs).
         match scene_ref.parse::<u32>() {
             Ok(id) => {
                 ctx.events_mut::<SceneCommand>().send(SceneCommand {

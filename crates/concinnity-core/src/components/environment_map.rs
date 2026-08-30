@@ -32,7 +32,7 @@ use alloc::string::String;
 ///
 /// The sky mesh that displays the map (a skybox
 /// [ProceduralMesh](#proceduralmesh) plus its [Material](#material) and
-/// [Prop](#prop)) is injected at build time when the world declares no skybox
+/// [Prop](#prop)) is injected at world start when the world declares no skybox
 /// mesh of its own. Declare an [EngineDefaults](#enginedefaults) with
 /// `"sky": false` to use the map for image-based lighting only, with the
 /// background left to `clear_color` or your own geometry.

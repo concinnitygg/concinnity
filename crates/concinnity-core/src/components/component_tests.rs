@@ -20,10 +20,10 @@ mod graphics_config {
     use crate::components::ShadowUpdate;
 
     #[test]
-    fn shadow_update_defaults_to_hybrid() {
+    fn shadow_update_defaults_to_every_frame() {
         assert_eq!(
             GraphicsConfig::default().shadow_update,
-            ShadowUpdate::Hybrid
+            ShadowUpdate::EveryFrame
         );
         assert_eq!(ShadowUpdate::default(), ShadowUpdate::Hybrid);
     }
@@ -33,10 +33,10 @@ mod graphics_config {
         let cfg: GraphicsConfig =
             serde_json::from_str(r#"{"shadow_update":"every_frame"}"#).expect("parse");
         assert_eq!(cfg.shadow_update, ShadowUpdate::EveryFrame);
-        // Omitting the field falls back to the hybrid default.
+        // Omitting the field falls back to the every-frame default.
         let cfg: GraphicsConfig =
             serde_json::from_str(r#"{"shadow_map_size":1024}"#).expect("parse");
-        assert_eq!(cfg.shadow_update, ShadowUpdate::Hybrid);
+        assert_eq!(cfg.shadow_update, ShadowUpdate::EveryFrame);
     }
 
     #[test]
@@ -84,15 +84,15 @@ mod graphics_config {
     }
 
     #[test]
-    fn anisotropy_defaults_to_8_and_round_trips() {
-        // The default matches the value the backends historically hardcoded.
-        assert_eq!(GraphicsConfig::default().anisotropy, 8);
-        // An authored value is honoured; omitting the field falls back to 8.
-        let cfg: GraphicsConfig = serde_json::from_str(r#"{"anisotropy":16}"#).expect("parse");
-        assert_eq!(cfg.anisotropy, 16);
+    fn anisotropy_defaults_to_16_and_round_trips() {
+        // The GPU maximum: the quality preset caps it back down per tier.
+        assert_eq!(GraphicsConfig::default().anisotropy, 16);
+        // An authored value is honoured; omitting the field falls back to 16.
+        let cfg: GraphicsConfig = serde_json::from_str(r#"{"anisotropy":4}"#).expect("parse");
+        assert_eq!(cfg.anisotropy, 4);
         let cfg: GraphicsConfig =
             serde_json::from_str(r#"{"shadow_map_size":1024}"#).expect("parse");
-        assert_eq!(cfg.anisotropy, 8);
+        assert_eq!(cfg.anisotropy, 16);
     }
 
     #[test]
