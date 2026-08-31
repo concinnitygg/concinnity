@@ -105,9 +105,7 @@ mod tests {
     use crate::import::glb::test_fixtures::{skinned_glb, static_triangle_glb};
 
     fn write_glb(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
-        let path = dir.path().join(name);
-        std::fs::write(&path, bytes).expect("write fixture glb");
-        path.to_string_lossy().into_owned()
+        concinnity_testing::utf8(&concinnity_testing::write_into(dir.path(), name, bytes))
     }
 
     #[test]

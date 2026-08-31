@@ -51,6 +51,7 @@ shaderc = { version = "0.10.1", optional = true }
 shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"] }
 
 [dev-dependencies]
+concinnity-testing = { workspace = true }
 tempfile = "3.25.0"
 
 [build-dependencies]

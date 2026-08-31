@@ -1,0 +1,17 @@
+[package]
+name = "concinnity-testing"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Test scaffolding for the Concinnity workspace: temp trees, synthetic asset fixtures, and the process-global guards"
+publish = false
+
+[dependencies]
+concinnity-core = { workspace = true }
+
+png = "0.18.1"
+tempfile = "3.25.0"
+
+[lints]
+workspace = true

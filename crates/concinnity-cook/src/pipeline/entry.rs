@@ -603,11 +603,7 @@ mod tests {
     // record of what went into them would leave the output unexplainable.
     #[test]
     fn write_build_outputs_fails_when_the_lock_cannot_be_written() {
-        let _output = crate::blob::test_output::LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _state = crate::blob::test_output::StateDir::new();
-        let _lock_file = crate::blob::test_output::LockFile;
+        let _output = crate::blob::test_output::Output::new();
         // A directory where the lock file belongs makes the write fail.
         std::fs::create_dir_all(crate::blob::LOCK_PATH).expect("occupy the lock path");
 
@@ -638,11 +634,7 @@ mod tests {
     fn build_from_path_writes_the_blobs_and_the_lock_beside_them() {
         let _shaders = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::compile::shader::install_stub_toolchain();
-        let _output = crate::blob::test_output::LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _state = crate::blob::test_output::StateDir::new();
-        let _lock_file = crate::blob::test_output::LockFile;
+        let _output = crate::blob::test_output::Output::new();
 
         let dir = tempfile::tempdir().expect("tempdir");
         let world_path = dir.path().join("world.jsonl");

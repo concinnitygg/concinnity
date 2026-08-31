@@ -144,34 +144,15 @@ mod tests {
     // on the tip joint). Assembled by hand so no binary file is checked in.
 
     fn f32s(vals: &[f32]) -> Vec<u8> {
-        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+        concinnity_testing::fixtures::glb::f32_bytes(vals)
     }
 
     fn u16s(vals: &[u16]) -> Vec<u8> {
-        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+        concinnity_testing::fixtures::glb::u16_bytes(vals)
     }
 
     fn make_glb(json: &serde_json::Value, bin: &[u8]) -> Vec<u8> {
-        let mut json_bytes = serde_json::to_vec(json).expect("serialise glTF json");
-        while !json_bytes.len().is_multiple_of(4) {
-            json_bytes.push(b' ');
-        }
-        let mut bin_bytes = bin.to_vec();
-        while !bin_bytes.len().is_multiple_of(4) {
-            bin_bytes.push(0);
-        }
-        let total = 12 + 8 + json_bytes.len() + 8 + bin_bytes.len();
-        let mut out = Vec::with_capacity(total);
-        out.extend_from_slice(b"glTF");
-        out.extend_from_slice(&2u32.to_le_bytes());
-        out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(b"JSON");
-        out.extend_from_slice(&json_bytes);
-        out.extend_from_slice(&(bin_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(b"BIN\0");
-        out.extend_from_slice(&bin_bytes);
-        out
+        concinnity_testing::fixtures::glb::container(&json.to_string(), Some(bin))
     }
 
     fn skinned_glb() -> Vec<u8> {
@@ -231,9 +212,11 @@ mod tests {
     }
 
     fn write_fixture(dir: &tempfile::TempDir) -> String {
-        let path = dir.path().join("hero.glb");
-        std::fs::write(&path, skinned_glb()).unwrap();
-        path.to_string_lossy().into_owned()
+        concinnity_testing::utf8(&concinnity_testing::write_into(
+            dir.path(),
+            "hero.glb",
+            skinned_glb(),
+        ))
     }
 
     // A file-backed Animation targeting a SkinnedMesh named "reload_hero".

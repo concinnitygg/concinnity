@@ -393,43 +393,29 @@ fn now_iso8601() -> String {
 
 // Shared harness for tests that drive the build's file output. Both writes
 // target process-global locations -- the blobs go under the installed state
-// root, the lock file is written relative to the working directory -- so the
-// lock serialises them and the guards restore the process afterwards.
+// root, the lock file is written relative to the working directory -- so one
+// guard owns the lock, the state root, and the working directory together.
 #[cfg(test)]
 pub(crate) mod test_output {
-    pub(crate) static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use std::path::PathBuf;
 
-    // Anchors the state root at a temp tree for the life of the guard, so
-    // `write_blobs` lands its files there instead of under the cwd.
-    pub(crate) struct StateDir(tempfile::TempDir);
+    use concinnity_testing::GlobalState;
 
-    impl StateDir {
+    /// Anchors both output locations at a private tree for the life of the
+    /// guard. The working directory moves too, so `LOCK_PATH` resolves inside
+    /// the tree rather than into the crate's own source directory.
+    pub(crate) struct Output(GlobalState);
+
+    impl Output {
         pub(crate) fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            concinnity_host::store::paths::set_state_dir(dir.path());
-            Self(dir)
+            Self(GlobalState::acquire().with_cwd().with_state_dir(
+                |dir| concinnity_host::store::paths::set_state_dir(dir),
+                concinnity_host::store::paths::clear_state_dir,
+            ))
         }
 
-        pub(crate) fn data_dir(&self) -> std::path::PathBuf {
-            self.0.path().join("data")
-        }
-    }
-
-    impl Drop for StateDir {
-        fn drop(&mut self) {
-            concinnity_host::store::paths::clear_state_dir();
-        }
-    }
-
-    // Clears the cwd-relative lock path when the test ends, however it ends.
-    // A test may leave a directory there instead of a file to make the write
-    // fail, so both are removed.
-    pub(crate) struct LockFile;
-
-    impl Drop for LockFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(super::LOCK_PATH);
-            let _ = std::fs::remove_dir_all(super::LOCK_PATH);
+        pub(crate) fn data_dir(&self) -> PathBuf {
+            self.0.root().join("data")
         }
     }
 }
@@ -438,7 +424,7 @@ pub(crate) mod test_output {
 mod tests {
     use super::*;
     use crate::ecs::{AssetKind, asset_id::AssetId};
-    use test_output::{LockFile, StateDir};
+    use test_output::Output;
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
         PayloadLocator {
@@ -477,8 +463,7 @@ mod tests {
 
     #[test]
     fn write_blobs_keeps_metadata_in_blob_zero_and_splits_payload_bytes() {
-        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let state = StateDir::new();
+        let state = Output::new();
 
         let defs = vec![
             component_def(3, Some(locator(0, 0, 3))),
@@ -526,8 +511,7 @@ mod tests {
     // so the runtime reads what cook counted without re-deriving it.
     #[test]
     fn write_blobs_ships_the_physics_budget_in_blob_zero() {
-        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _state = StateDir::new();
+        let _output = Output::new();
 
         let defs = vec![component_def(3, None)];
         let budget = PhysicsBudgetRecord {
@@ -562,8 +546,7 @@ mod tests {
 
     #[test]
     fn write_blobs_removes_stale_overflow_blobs_from_a_larger_build() {
-        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _state = StateDir::new();
+        let _output = Output::new();
 
         let defs = vec![component_def(3, None)];
         let payloads = vec![vec![1], vec![2], vec![3]];
@@ -582,8 +565,7 @@ mod tests {
 
     #[test]
     fn write_blobs_without_payloads_still_writes_the_primary_blob() {
-        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _state = StateDir::new();
+        let _output = Output::new();
 
         let defs = vec![component_def(5, None)];
         let paths = write_blobs(streams(&defs, &[]), &[], &primary())
@@ -599,8 +581,7 @@ mod tests {
     // belongs) fails the build rather than shipping a partial data set.
     #[test]
     fn write_blobs_surfaces_a_write_failure() {
-        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let state = StateDir::new();
+        let state = Output::new();
         fs::create_dir_all(state.data_dir().join("0")).expect("occupy blob 0");
 
         let result = write_blobs(streams(&[component_def(1, None)], &[]), &[], &primary());
@@ -628,9 +609,7 @@ mod tests {
 
     #[test]
     fn write_lock_records_blob_checksums_payload_sizes_and_provenance() {
-        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _state = StateDir::new();
-        let _lock_file = LockFile;
+        let _output = Output::new();
 
         let defs = vec![
             component_def(3, Some(locator(0, 0, 3))),
@@ -699,8 +678,7 @@ mod tests {
     // records the empty checksum and no payload bytes rather than failing.
     #[test]
     fn write_lock_tolerates_a_missing_blob_file() {
-        let _guard = test_output::LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _lock_file = LockFile;
+        let _output = Output::new();
 
         let paths = vec!["/no/such/data/0".to_string()];
         write_lock(&[], &[], &[], &[], &paths).expect("write_lock");

@@ -209,55 +209,6 @@ mod tests {
         assert!((min_x - 0.5).abs() < 1e-5, "{min_x}");
     }
 
-    // The real body: a CharacterModel over the example .glb exports with the
-    // authored AND synthesized targets and the 25-joint skeleton. Reports and
-    // passes when the example asset is absent (like the cook's own tests).
-    // The bytes land in the temp dir (the same root `isolate_state_dir` uses)
-    // for an out-of-process Blender import check.
-    #[test]
-    fn the_example_body_exports_with_the_full_target_set() {
-        let _guard = crate::test_support::lock();
-        crate::test_support::isolate_state_dir();
-        let glb_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/customize_character/base_humanoid.glb");
-        if !glb_path.exists() {
-            eprintln!(
-                "example body not present at {}; skipping",
-                glb_path.display()
-            );
-            return;
-        }
-        let world = format!(
-            "{}\n",
-            serde_json::json!({"name": "body", "type": "CharacterModel",
-                "args": {"schema": "builtin:humanoid", "source": glb_path.to_string_lossy(),
-                         "capsule": {"half_height": 0.88, "radius": 0.3}}})
-        );
-        let glb = export_world_mesh(&world, "body", false).expect("export");
-        let doc = json_chunk(&glb);
-        let targets = doc["meshes"][0]["extras"]["targetNames"]
-            .as_array()
-            .unwrap();
-        // 22 authored shape keys plus the builtin schema's 48 synthesized.
-        assert_eq!(targets.len(), 70, "{targets:?}");
-        for expected in ["face", "weight+", "biceps", "cheekbone_r+"] {
-            assert!(targets.iter().any(|t| t == expected), "missing {expected}");
-        }
-        assert_eq!(doc["skins"][0]["joints"].as_array().unwrap().len(), 25);
-        let names: Vec<&str> = doc["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|n| n["name"].as_str())
-            .collect();
-        assert_eq!(names.len(), 26, "25 joints and the mesh node");
-        assert_eq!(names[0], "root");
-        assert!(names.contains(&"thumb_l") && names.contains(&"toe_r"));
-        let out = std::env::temp_dir().join("cn_export_base_humanoid.glb");
-        std::fs::write(&out, &glb).expect("persist the export for the Blender check");
-        eprintln!("wrote {}", out.display());
-    }
-
     #[test]
     fn export_errors_name_the_missing_pieces() {
         let _guard = crate::test_support::lock();

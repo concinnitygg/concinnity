@@ -31,24 +31,16 @@ mod tests {
 
     #[test]
     fn heightfield_end_to_end_via_tmp_png() {
-        // Write a minimal valid PNG to a temp file and verify the build-side
-        // path decodes it, generates the grid, and bakes a collider trailer
-        // whose heights equal the rendered mesh's per-vertex Y.
-        use std::io::Write;
-        let path = std::env::temp_dir().join("concinnity_test_heightfield_build.png");
-        let mut buf: Vec<u8> = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut buf, 8, 8);
-            encoder.set_color(png::ColorType::Grayscale);
-            encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header().expect("png header");
-            // A diagonal ramp 0..63 across the 8x8 grid.
-            let pixels: Vec<u8> = (0..64u8).collect();
-            writer.write_image_data(&pixels).expect("png data");
-        }
-        let mut f = std::fs::File::create(&path).expect("tmp file");
-        f.write_all(&buf).expect("write png");
-        drop(f);
+        // Verify the build-side path decodes a PNG, generates the grid, and
+        // bakes a collider trailer whose heights equal the rendered mesh's
+        // per-vertex Y.
+        let tree = concinnity_testing::TempTree::new();
+        // A diagonal ramp 0..63 across the 8x8 grid.
+        let pixels: Vec<u8> = (0..64u8).collect();
+        let path = tree.write(
+            "heightfield.png",
+            concinnity_testing::fixtures::png::gray(8, 8, &pixels),
+        );
 
         let args = serde_json::json!({
             "generator": "heightfield",

@@ -74,6 +74,7 @@ windows = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+concinnity-testing = { workspace = true }
 serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3.25.0"
 

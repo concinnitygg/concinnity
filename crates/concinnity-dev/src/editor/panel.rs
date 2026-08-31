@@ -1185,20 +1185,6 @@ mod tests {
     use super::*;
     use crate::components::{Sprite, TextInput, TextLabel};
 
-    // Point the cook's state tree (its content-addressed cache) at a private
-    // temp dir for the whole test process, so the cook-based tests below never read
-    // or write the working directory (the shader compile itself already uses a unique
-    // temp path). Set once per process; the shared cache is race-tolerant.
-    fn isolate_state_dir() {
-        use std::sync::Once;
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
-            let dir = std::env::temp_dir().join(format!("cn-editor-tests-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&dir);
-            concinnity_host::store::paths::set_state_dir(dir);
-        });
-    }
-
     // An upper bound on the body font's per-character advance (it measures
     // ~8.2px), for the geometry guards that keep a clipped caption clear of the
     // chrome beside it.
@@ -1966,7 +1952,7 @@ mod tests {
     // Joint, ...) fails here and must not be listed.
     #[test]
     fn add_types_cook_with_default_args() {
-        isolate_state_dir();
+        crate::test_support::isolate_state_dir();
         for ty in picker_types() {
             let ct = concinnity_cook::authoring::registry::RegisteredType::parse(ty)
                 .unwrap_or_else(|| panic!("{ty} must be a known asset type"));
@@ -1983,7 +1969,7 @@ mod tests {
     // the registry, not forgotten.
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
-        isolate_state_dir();
+        crate::test_support::isolate_state_dir();
         use concinnity_cook::authoring::registry::RegisteredType;
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.

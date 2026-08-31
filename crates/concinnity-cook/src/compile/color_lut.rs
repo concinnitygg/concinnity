@@ -186,15 +186,8 @@ mod tests {
         color: png::ColorType,
         data: &[u8],
     ) -> String {
-        let path = dir.path().join(name);
-        let file = std::fs::File::create(&path).expect("create png");
-        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-        enc.set_color(color);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut writer = enc.write_header().expect("png header");
-        writer.write_image_data(data).expect("png data");
-        writer.finish().expect("png finish");
-        path.to_string_lossy().into_owned()
+        let bytes = concinnity_testing::fixtures::png::encode(width, height, color, data);
+        concinnity_testing::utf8(&concinnity_testing::write_into(dir.path(), name, bytes))
     }
 
     // A size-2 strip is 4x2: two 2x2 slices side by side. Each pixel encodes

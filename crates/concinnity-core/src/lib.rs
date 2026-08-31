@@ -76,6 +76,7 @@ pub mod result;
 pub mod spawn;
 #[cfg(test)]
 mod test_support;
+pub mod window_policy;
 
 // The headless driver over a world and the trait any loop that runs one
 // implements, named at the crate root because they are the counterpart to

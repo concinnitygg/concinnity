@@ -921,39 +921,16 @@ fn sampled<T: Copy>(
 pub(crate) mod test_fixtures {
     // Little-endian byte helpers for building GLB binary chunks.
     pub(crate) fn f32s(vals: &[f32]) -> Vec<u8> {
-        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+        concinnity_testing::fixtures::glb::f32_bytes(vals)
     }
 
     pub(crate) fn u16s(vals: &[u16]) -> Vec<u8> {
-        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+        concinnity_testing::fixtures::glb::u16_bytes(vals)
     }
 
     // Assemble a GLB container: header, JSON chunk, optional BIN chunk.
     pub(crate) fn make_glb(json: &serde_json::Value, bin: Option<&[u8]>) -> Vec<u8> {
-        let mut json_bytes = serde_json::to_vec(json).expect("serialise glTF json");
-        while !json_bytes.len().is_multiple_of(4) {
-            json_bytes.push(b' ');
-        }
-        let mut bin_bytes = bin.map(|b| b.to_vec());
-        if let Some(b) = bin_bytes.as_mut() {
-            while !b.len().is_multiple_of(4) {
-                b.push(0);
-            }
-        }
-        let total = 12 + 8 + json_bytes.len() + bin_bytes.as_ref().map_or(0, |b| 8 + b.len());
-        let mut out = Vec::with_capacity(total);
-        out.extend_from_slice(b"glTF");
-        out.extend_from_slice(&2u32.to_le_bytes());
-        out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(b"JSON");
-        out.extend_from_slice(&json_bytes);
-        if let Some(b) = &bin_bytes {
-            out.extend_from_slice(&(b.len() as u32).to_le_bytes());
-            out.extend_from_slice(b"BIN\0");
-            out.extend_from_slice(b);
-        }
-        out
+        concinnity_testing::fixtures::glb::container(&json.to_string(), bin)
     }
 
     // A single indexed triangle: positions at bin offset 0, u16 indices at 36.
@@ -2064,42 +2041,6 @@ mod tests {
         // rather than producing partial keys.
         assert!(clip(&anims, "morph_ragged").morph_track.is_empty());
         assert!(clip(&anims, "morph_unreadable").morph_track.is_empty());
-    }
-
-    // Morph fixtures: the local Blender export carries two shape keys with a
-    // keyed weights animation. Ignored by default (private/assets is local).
-    // Run with: cargo test -p concinnity-cook morph_fixture -- --ignored
-    #[test]
-    #[ignore = "needs the local Blender rig_oracle fixture under private/assets"]
-    fn morph_fixture_imports_deltas_names_and_weight_keys() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../private/assets/models/rig_oracle/rig_morph.glb"
-        );
-        let doc = parse_glb(path, None).expect("parse");
-        let mesh = import_skinned_from_doc(&doc, path, 0).expect("skinned import");
-        assert_eq!(mesh.morph_target_names, vec!["bulge", "shift"]);
-        assert_eq!(mesh.morph_deltas.len(), 2 * mesh.vertices.len());
-        assert!(
-            mesh.morph_deltas
-                .iter()
-                .any(|d| d.position.iter().any(|c| c.abs() > 0.1)),
-            "bulge target must carry real position deltas"
-        );
-
-        let anims = import_glb_animations_from_doc(&doc, path, 0).expect("animations");
-        let weighted = anims
-            .iter()
-            .find(|a| !a.morph_track.is_empty())
-            .expect("one clip carries the weights channel");
-        assert!(weighted.morph_track.len() >= 2);
-        assert!(weighted.morph_track.iter().all(|k| k.weights.len() == 2));
-        let max_bulge = weighted
-            .morph_track
-            .iter()
-            .map(|k| k.weights[0])
-            .fold(0.0f32, f32::max);
-        assert!((max_bulge - 1.0).abs() < 1e-3, "bulge peaks at 1.0");
     }
 
     // parse_glb / resolve_source

@@ -65,6 +65,8 @@ pub(crate) fn create_window(
     height: u32,
     title_bar: bool,
 ) -> Result<Retained<NSWindow>, String> {
+    concinnity_core::window_policy::assert_windows_allowed("the AppKit window");
+
     let content_rect = NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(width as f64, height as f64),

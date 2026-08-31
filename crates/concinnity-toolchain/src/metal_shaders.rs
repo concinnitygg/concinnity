@@ -301,18 +301,15 @@ mod tests {
 
     #[test]
     fn eligible_shaders_excludes_source_only_and_non_metal() {
-        let dir =
-            std::env::temp_dir().join(format!("cn_metal_shaders_test_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tree = concinnity_testing::TempTree::new();
         for name in ["a.metal", "b.metal", "template.metal", "notes.txt"] {
-            std::fs::write(dir.join(name), "").unwrap();
+            tree.write(name, "");
         }
-        let shaders = eligible_shaders(&dir, &["template.metal"]);
+        let shaders = eligible_shaders(tree.path(), &["template.metal"]);
         let names: Vec<_> = shaders
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
             .collect();
         assert_eq!(names, ["a.metal", "b.metal"]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

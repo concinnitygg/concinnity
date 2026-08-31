@@ -110,9 +110,8 @@ mod tests {
     // what `from_blob` reads back, with no state-tree anchor in between.
     #[test]
     fn a_written_blob_loads_back_into_a_runnable_app() {
-        let dir = std::env::temp_dir().join("concinnity-app-from-blob");
-        let primary = dir.join("data").join("0");
-        let _ = std::fs::remove_dir_all(&dir);
+        let tree = concinnity_testing::TempTree::new();
+        let primary = tree.join("data/0");
 
         cook::world()
             .add(
@@ -127,17 +126,14 @@ mod tests {
 
         let app = App::from_blob(&primary).expect("the written blob loads");
         crate::test_support::assert_starts_headless(app);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // A path with no blob behind it is an error naming the file, not a panic
     // and not an empty world that fails later.
     #[test]
     fn a_missing_blob_reports_the_path_it_could_not_read() {
-        let missing = std::env::temp_dir()
-            .join("concinnity-no-such-blob")
-            .join("0");
+        let tree = concinnity_testing::TempTree::new();
+        let missing = tree.join("concinnity-no-such-blob/0");
         let err = App::from_blob(&missing).expect_err("nothing to load");
         assert!(matches!(err, crate::Error::MissingData { .. }), "{err:?}");
         assert!(err.to_string().contains("concinnity-no-such-blob"), "{err}");

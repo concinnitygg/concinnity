@@ -204,6 +204,8 @@ impl GlfwWindow {
         resizable: bool,
         title_bar: bool,
     ) -> Result<Self, String> {
+        concinnity_core::window_policy::assert_windows_allowed("the GLFW window");
+
         // No error callback: glfw-rs transmutes the code into an Error enum
         // that stops at GLFW 3.3, so a 3.4 code (PlatformUnavailable on a
         // headless host, FeatureUnavailable on Wayland) aborts the process.

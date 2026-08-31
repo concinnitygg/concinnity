@@ -376,13 +376,9 @@ mod tests {
     fn decode_source_of_an_unlit_hdr_integrates_to_zero_radiance() {
         // A source with no radiance anywhere convolves to a black irradiance
         // cube; only the alpha channel carries a value.
-        let tmp = std::env::temp_dir().join(format!(
-            "concinnity_envmap_black_test_{}.hdr",
-            std::process::id()
-        ));
-        std::fs::write(&tmp, raw_hdr_blob(16, 8, [0.0, 0.0, 0.0])).expect("write hdr");
-        let payload = decode_source(tmp.to_str().unwrap(), 16, 8, 16, 0.0).expect("decode");
-        let _ = std::fs::remove_file(&tmp);
+        let tree = concinnity_testing::TempTree::new();
+        let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.0, 0.0, 0.0]));
+        let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
         let view = deserialise(&payload).expect("deserialise");
         for (i, texel) in view.irradiance_bytes.chunks_exact(4).enumerate() {
             if i % 4 == 3 {
@@ -397,13 +393,9 @@ mod tests {
     fn decode_source_round_trips_through_deserialise() {
         // Write a tiny solid-colour HDR into a tempfile, decode it, and verify
         // the resulting payload deserialises with the requested sizes.
-        let tmp = std::env::temp_dir().join(format!(
-            "concinnity_envmap_decode_test_{}.hdr",
-            std::process::id()
-        ));
-        std::fs::write(&tmp, raw_hdr_blob(16, 8, [0.6, 0.3, 0.15])).expect("write hdr");
-        let payload = decode_source(tmp.to_str().unwrap(), 16, 8, 16, 0.0).expect("decode");
-        let _ = std::fs::remove_file(&tmp);
+        let tree = concinnity_testing::TempTree::new();
+        let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.6, 0.3, 0.15]));
+        let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
         let view = deserialise(&payload).expect("deserialise");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);

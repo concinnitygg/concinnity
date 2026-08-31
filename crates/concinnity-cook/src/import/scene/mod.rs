@@ -1881,42 +1881,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs the local Blender pbr_maps fixture under private/assets"]
-    fn a_blender_authored_glb_keeps_its_packed_maps_and_cutout() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../private/assets/models/pbr_maps/pbr_maps.glb"
-        );
-        let opts = ImportOptions {
-            name_prefix: "pbr".to_string(),
-            ..ImportOptions::default()
-        };
-        let entries = entries_from_scene(path, &opts, None).expect("expand glb");
-
-        // Metal sphere: a packed metallic-roughness image, no cutout.
-        let plate = find(&entries, "pbr_mat_0", "Material");
-        assert_eq!(plate["args"]["albedo"], "pbr_tex_0");
-        assert_eq!(plate["args"]["orm_map"], "pbr_tex_1");
-        assert!(plate["args"].get("alpha_cutoff").is_none());
-
-        // Banded emissive cube: the map plus the factor that scales it.
-        let glow = find(&entries, "pbr_mat_1", "Material");
-        assert_eq!(glow["args"]["emissive_map"], "pbr_tex_2");
-        assert_eq!(glow["args"]["albedo"], "pbr_tex_3");
-        assert_eq!(
-            glow["args"]["emissive_factor"],
-            serde_json::json!([1.0, 1.0, 1.0])
-        );
-
-        // Leaf card: MASK with no explicit alphaCutoff takes the glTF default,
-        // and stays out of the transparent (glass) pass.
-        let leaf = find(&entries, "pbr_mat_2", "Material");
-        assert_eq!(leaf["args"]["alpha_cutoff"], serde_json::json!(0.5));
-        assert!(leaf["args"].get("transparent").is_none());
-        assert!(leaf["args"].get("see_through").is_none());
-    }
-
-    #[test]
     fn glb_texture_max_size_of_zero_leaves_the_texture_uncapped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tex.glb");

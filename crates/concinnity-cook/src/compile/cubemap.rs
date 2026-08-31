@@ -159,9 +159,7 @@ mod tests {
     }
 
     fn write_hdr(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
-        let path = dir.path().join(name);
-        std::fs::write(&path, bytes).expect("write hdr");
-        path.to_string_lossy().into_owned()
+        concinnity_testing::utf8(&concinnity_testing::write_into(dir.path(), name, bytes))
     }
 
     #[test]

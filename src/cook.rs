@@ -415,9 +415,8 @@ mod tests {
     fn write_blob_writes_a_readable_world_at_the_named_path() {
         use concinnity_engine::ecs::ComponentSlot;
 
-        let dir = std::env::temp_dir().join("concinnity-cook-write-blob");
-        let primary = dir.join("data").join("0");
-        let _ = std::fs::remove_dir_all(&dir);
+        let tree = concinnity_testing::TempTree::new();
+        let primary = tree.join("data/0");
 
         world()
             .add(
@@ -438,6 +437,5 @@ mod tests {
                 .any(|d| d.discriminant == DirectionalLight::DISCRIMINANT),
             "the sun is in the def table"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

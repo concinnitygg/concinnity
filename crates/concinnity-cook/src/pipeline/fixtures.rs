@@ -20,7 +20,5 @@ pub(super) fn wja(
 
 // Write a fixture container into `dir` and return its path as a string.
 pub(super) fn write_fixture(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
-    let path = dir.path().join(name);
-    std::fs::write(&path, bytes).expect("write fixture");
-    path.to_string_lossy().into_owned()
+    concinnity_testing::utf8(&concinnity_testing::write_into(dir.path(), name, bytes))
 }

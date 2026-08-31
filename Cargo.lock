@@ -577,6 +577,7 @@ dependencies = [
  "concinnity-dev",
  "concinnity-engine",
  "concinnity-shader",
+ "concinnity-testing",
  "concinnity-toolchain",
  "tempfile",
  "thiserror 2.0.18",
@@ -590,6 +591,7 @@ dependencies = [
  "bytemuck",
  "concinnity-core",
  "concinnity-host",
+ "concinnity-testing",
  "fbxcel",
  "gltf",
  "jpeg-decoder",
@@ -640,6 +642,7 @@ dependencies = [
  "concinnity-engine",
  "concinnity-host",
  "concinnity-shader",
+ "concinnity-testing",
  "concinnity-toolchain",
  "ctrlc",
  "directories",
@@ -679,6 +682,7 @@ dependencies = [
  "concinnity-core",
  "concinnity-host",
  "concinnity-slang",
+ "concinnity-testing",
  "concinnity-toolchain",
  "dispatch2",
  "glfw",
@@ -710,6 +714,7 @@ dependencies = [
  "concinnity-core",
  "concinnity-device",
  "concinnity-host",
+ "concinnity-testing",
  "concinnity-toolchain",
  "core-foundation",
  "crash-handler",
@@ -748,6 +753,7 @@ version = "0.19.1"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
+ "concinnity-testing",
  "concinnity-toolchain",
  "shaderc",
  "tempfile",
@@ -758,6 +764,18 @@ dependencies = [
 [[package]]
 name = "concinnity-slang"
 version = "0.19.1"
+dependencies = [
+ "concinnity-testing",
+]
+
+[[package]]
+name = "concinnity-testing"
+version = "0.0.0"
+dependencies = [
+ "concinnity-core",
+ "png",
+ "tempfile",
+]
 
 [[package]]
 name = "concinnity-toolchain"
@@ -765,6 +783,7 @@ version = "0.19.1"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",
+ "concinnity-testing",
  "tempfile",
 ]
 

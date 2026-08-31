@@ -7,8 +7,10 @@
 // pages. That makes this a command for a checkout of the engine, which is the
 // only place the pages are regenerated.
 //
-// The pages are committed to the repository; `committed_pages_are_current` fails
-// when they drift from the sources.
+// The pages are committed to the repository. Whether they still match the
+// sources is a question about a checkout, not about this code, so it belongs to
+// a repository check rather than a unit test: a test that reads the committed
+// pages passes or fails on files no test wrote.
 
 mod page;
 mod reference;
@@ -122,66 +124,95 @@ fn remove_stale_pages(dir: &Path, keep: &BTreeMap<String, String>) -> io::Result
 mod tests {
     use super::*;
 
-    // The repository root, two levels above this crate: the engine checkout the
-    // reference is read out of.
-    fn repo_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-    }
-
-    fn reference_pages() -> BTreeMap<String, String> {
-        pages(&reference::build(&repo_root()).expect("read the asset sources"))
-    }
-
-    // The committed pages are what the asset sources render to. A failure means
-    // an asset's rustdoc or args changed without a `cn docs` run.
-    #[test]
-    fn committed_pages_are_current() {
-        let dir = repo_root().join(PAGES_DIR);
-        for (file, expected) in &reference_pages() {
-            let path = dir.join(file);
-            let on_disk = fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("read {}: {e}; run `cn docs`", path.display()));
-            assert_eq!(
-                &on_disk, expected,
-                "{PAGES_DIR}/{file} is out of date; run `cn docs`"
-            );
+    // A vocabulary the test wrote, in the shape the extractor reads: rustdoc on
+    // the struct and on each field, and a `Default` impl for the defaults the
+    // parameter table renders.
+    //
+    // Reading the engine's own sources instead would tie these to whichever
+    // assets it happens to declare, and would assert nothing a source edit
+    // could not silently satisfy: the anchor-link check below only means
+    // something because this vocabulary contains an anchor link.
+    const SOURCES: &str = r#"
+        /// A widget in the world.
+        ///
+        /// The shape it embeds is a [collider](#widgetcollider).
+        pub struct Widget {
+            /// The mesh to draw.
+            pub mesh: String,
+            /// The shape it collides with.
+            pub collider: Option<WidgetCollider>,
         }
-    }
-
-    // No generated page lingers for a type the reference no longer covers.
-    #[test]
-    fn no_generated_page_is_orphaned() {
-        let pages = reference_pages();
-        for entry in fs::read_dir(repo_root().join(PAGES_DIR)).expect("read the pages directory") {
-            let path = entry.expect("directory entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
+        impl Default for Widget {
+            fn default() -> Self {
+                Self { mesh: "cube".to_string(), collider: None }
             }
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap()
-                .to_string();
-            let generated = fs::read_to_string(&path).is_ok_and(|s| s.starts_with(AUTOGEN_MARKER));
-            assert!(
-                !generated || pages.contains_key(&name),
-                "{PAGES_DIR}/{name} is generated but no longer in the reference; run `cn docs`"
-            );
         }
+
+        /// A collider shape a widget embeds.
+        pub struct WidgetCollider {
+            /// Half the box's size on each axis.
+            pub half_extents: [f32; 3],
+        }
+        impl Default for WidgetCollider {
+            fn default() -> Self {
+                Self { half_extents: [0.5, 0.5, 0.5] }
+            }
+        }
+
+        /// A gadget that makes noise.
+        pub struct Gadget {
+            /// How loud, from silent to full.
+            pub volume: f32,
+        }
+        impl Default for Gadget {
+            fn default() -> Self {
+                Self { volume: 1.0 }
+            }
+        }
+
+        /// Engine bookkeeping no world declares.
+        pub struct Internal {
+            /// A counter.
+            pub ticks: u32,
+        }
+        impl Default for Internal {
+            fn default() -> Self {
+                Self { ticks: 0 }
+            }
+        }
+    "#;
+
+    // The reference over `SOURCES`, and the tree it was read from. The tree is
+    // returned so it outlives the borrow-free `Vec` the caller works with.
+    fn synthetic_reference() -> (concinnity_testing::TempTree, Vec<AssetDoc>) {
+        let tree = concinnity_testing::TempTree::new();
+        tree.write("schema/vocabulary.rs", SOURCES);
+        // A non-Rust neighbour the walk must skip.
+        tree.write("schema/notes.md", "not rust");
+
+        let components = [
+            reference::ComponentMeta::pass_through("Widget", "External"),
+            reference::ComponentMeta::pass_through("Gadget", "External"),
+            // Never declared in a world, so it must get no page.
+            reference::ComponentMeta::pass_through("Internal", "RuntimeOnly"),
+        ];
+        let docs = reference::build_from(&[tree.join("schema")], &components)
+            .expect("the synthetic sources parse");
+        (tree, docs)
     }
 
     // Writing into a fresh directory produces the whole page set; a stale
     // generated page is pruned on the next run and a hand-authored one is not.
     #[test]
     fn writing_is_complete_and_prunes_only_generated_pages() {
-        let dir = std::env::temp_dir().join("cn-docs-write-test");
-        fs::remove_dir_all(&dir).ok();
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.path();
 
         let pages: BTreeMap<String, String> = ["Prop", "Texture"]
             .iter()
             .map(|n| (format!("{n}.md"), render_page(n, "A body.")))
             .collect();
-        assert_eq!(write_pages(&dir, &pages).expect("first run"), (2, 0));
+        assert_eq!(write_pages(dir, &pages).expect("first run"), (2, 0));
         for (file, content) in &pages {
             assert_eq!(
                 &fs::read_to_string(dir.join(file)).expect("written"),
@@ -190,21 +221,19 @@ mod tests {
         }
 
         // A second run over an unchanged tree touches nothing.
-        assert_eq!(write_pages(&dir, &pages).expect("second run"), (0, 0));
+        assert_eq!(write_pages(dir, &pages).expect("second run"), (0, 0));
 
         fs::write(dir.join("Gone.md"), format!("{AUTOGEN_MARKER}\n\n# Gone\n")).unwrap();
         fs::write(dir.join("notes.md"), "hand written\n").unwrap();
         // Non-Markdown neighbours are skipped outright, marker or not.
         fs::write(dir.join("diagram.png"), format!("{AUTOGEN_MARKER}\n")).unwrap();
-        assert_eq!(write_pages(&dir, &pages).expect("third run"), (0, 1));
+        assert_eq!(write_pages(dir, &pages).expect("third run"), (0, 1));
         assert!(!dir.join("Gone.md").exists(), "stale page should be pruned");
         assert!(
             dir.join("notes.md").exists(),
             "hand-authored page should stay"
         );
         assert!(dir.join("diagram.png").exists(), "non-page should stay");
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     fn describe<'a>(docs: &'a [AssetDoc], type_name: &str) -> Option<&'a AssetDoc> {
@@ -212,29 +241,37 @@ mod tests {
             .find(|d| d.type_name.eq_ignore_ascii_case(type_name))
     }
 
+    // An asset is found by name whatever its casing, a type a field embeds is
+    // documented in its own right rather than only inlined, and a RuntimeOnly
+    // component -- one no world declares -- gets no page at all.
     #[test]
     fn every_documented_type_is_found_by_name() {
-        let docs = reference::build(&repo_root()).expect("read the asset sources");
-        let d = describe(&docs, "Texture").expect("Texture should be documented");
-        assert_eq!(d.type_name, "Texture");
+        let (_tree, docs) = synthetic_reference();
+
+        let d = describe(&docs, "Widget").expect("Widget should be documented");
+        assert_eq!(d.type_name, "Widget");
         assert!(d.full_doc.contains(&d.summary));
-        assert!(describe(&docs, "texture").is_some());
-        assert!(describe(&docs, "TEXTURE").is_some());
+        assert!(describe(&docs, "widget").is_some());
+        assert!(describe(&docs, "WIDGET").is_some());
         assert!(describe(&docs, "NotARealAsset").is_none());
 
-        // A nested value type an asset embeds (Prop.collider) is documented in
-        // its own right, not just inlined into the asset that embeds it.
-        let d = describe(&docs, "PropCollider").expect("PropCollider should be documented");
-        assert!(d.is_reference_type);
+        let embedded = describe(&docs, "WidgetCollider").expect("the embedded type is documented");
+        assert!(embedded.is_reference_type);
+        assert!(!d.is_reference_type, "an asset is not a reference type");
+
+        assert!(
+            describe(&docs, "Internal").is_none(),
+            "a RuntimeOnly component is engine-internal and gets no page"
+        );
     }
 
-    // The extraction resolved real prose for every type. An empty summary means
-    // the asset sources went unread, which would otherwise surface as a page set
-    // of bare titles.
+    // Every entry resolved real prose. An empty summary means the sources went
+    // unread, which would otherwise surface as a page set of bare titles.
     #[test]
     fn every_type_resolved_documentation() {
-        let docs = reference::build(&repo_root()).expect("read the asset sources");
-        assert!(docs.len() > 50, "suspiciously small reference");
+        let (_tree, docs) = synthetic_reference();
+        assert_eq!(docs.len(), 3, "two assets and the type they embed");
+
         for d in &docs {
             assert!(!d.summary.is_empty(), "{} has no summary", d.type_name);
             assert!(
@@ -244,12 +281,25 @@ mod tests {
                 d.summary
             );
         }
+
+        // The summary is the first paragraph, not the whole body.
+        let widget = describe(&docs, "Widget").expect("Widget");
+        assert_eq!(widget.summary, "A widget in the world.");
+
+        // A field's own prose and its default both reach the parameter table.
+        assert!(
+            widget.full_doc.contains("The mesh to draw."),
+            "{:?}",
+            widget.full_doc
+        );
+        assert!(widget.full_doc.contains("cube"), "{:?}", widget.full_doc);
     }
 
     #[test]
     fn pages_cover_every_type_plus_the_index() {
-        let docs = reference::build(&repo_root()).expect("read the asset sources");
+        let (_tree, docs) = synthetic_reference();
         let pages = pages(&docs);
+
         assert_eq!(pages.len(), docs.len() + 1);
         assert!(pages.contains_key("index.md"));
         for d in &docs {
@@ -263,9 +313,20 @@ mod tests {
     // rewritten to a relative `Name.md` link. Code spans and fenced blocks are
     // exempt, since they never render as links and a doc may legitimately show
     // anchor syntax verbatim (StoryImport documents its own Markdown dialect).
+    //
+    // `SOURCES` contains such a link, so this fails if the rewriting stops
+    // happening -- not only if some asset's prose happens to carry one.
     #[test]
     fn no_in_page_anchor_links_remain() {
-        for d in &reference::build(&repo_root()).expect("read the asset sources") {
+        let (_tree, docs) = synthetic_reference();
+        let widget = describe(&docs, "Widget").expect("Widget");
+
+        assert!(
+            widget.full_doc.contains("](WidgetCollider.md)"),
+            "the anchor was rewritten to a relative page link: {:?}",
+            widget.full_doc
+        );
+        for d in &docs {
             assert!(
                 !prose_only(&d.full_doc).contains("](#"),
                 "{} still has an in-page anchor link outside code: {:?}",

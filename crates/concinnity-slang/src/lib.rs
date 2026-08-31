@@ -571,7 +571,8 @@ mod tests {
         if slangc_path().is_none() {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("cn_slang_test_{}", std::process::id()));
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.path();
         let job = SlangJob {
             source: "RWStructuredBuffer<float> o;\n[shader(\"compute\")] [numthreads(1,1,1)]\n\
                      void k(uint3 t : SV_DispatchThreadID) { o[t.x] = 1.0; }\n",
@@ -579,10 +580,9 @@ mod tests {
             entries: &["k"],
             target: SlangTarget::Spirv,
         };
-        let bytes = compile(&job, &dir).expect("trivial slang compile");
+        let bytes = compile(&job, dir).expect("trivial slang compile");
         // SPIR-V magic.
         assert_eq!(&bytes[0..4], &0x0723_0203u32.to_le_bytes());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Reflection is the layout oracle the shader-struct checks read, so it has
@@ -594,7 +594,8 @@ mod tests {
         if slangc_path().is_none() {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("cn_slang_refl_{}", std::process::id()));
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.path();
         let source = "struct Hazard { float3 a; float b; };\n\
                       ConstantBuffer<Hazard> h;\n\
                       RWStructuredBuffer<float> o;\n\
@@ -608,7 +609,7 @@ mod tests {
                     entries: &["k"],
                     target,
                 },
-                &dir,
+                dir,
             )
             .expect("reflection compile")
         };
@@ -619,7 +620,6 @@ mod tests {
         // types and pad fields exist to avoid: 16 + 4 on Metal, 12 + 4 elsewhere.
         assert!(msl.contains("\"offset\": 16, \"size\": 4"), "{msl}");
         assert!(spirv.contains("\"offset\": 12, \"size\": 4"), "{spirv}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -627,18 +627,18 @@ mod tests {
         if slangc_path().is_none() {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("cn_slang_err_{}", std::process::id()));
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.path();
         let job = SlangJob {
             source: "void broken( {",
             file_name: "broken.slang",
             entries: &["k"],
             target: SlangTarget::Spirv,
         };
-        let err = compile(&job, &dir).expect_err("broken source must fail");
+        let err = compile(&job, dir).expect_err("broken source must fail");
         assert!(
             err.contains("broken.slang"),
             "diagnostic names the file: {err}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1997,9 +1997,9 @@ fn tick_lays_out_the_open_panel_in_every_state() {
 
 #[test]
 fn write_jsonl_persists_entries_atomically() {
-    let path = std::env::temp_dir().join("cn_editor_write_jsonl_test.jsonl");
+    let tree = concinnity_testing::TempTree::new();
+    let path = tree.join("world.jsonl");
     let path_str = path.to_str().unwrap().to_string();
-    let _ = std::fs::remove_file(&path);
 
     let mut h = hook(vec![serde_json::json!({
         "name": "scene", "type": "GraphicsConfig", "args": {}
@@ -2430,10 +2430,8 @@ fn story_up_down_commit_and_navigate() {
 // refreshes the live preview without touching the world.jsonl dirty flag.
 #[test]
 fn story_apply_validates_then_writes() {
-    let dir = std::env::temp_dir().join(format!("cn-story-apply-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("tale.md");
-    std::fs::write(&path, super::super::story::STARTER_STORY).unwrap();
+    let tree = concinnity_testing::TempTree::new();
+    let path = tree.write("tale.md", super::super::story::STARTER_STORY);
     let src = path.to_string_lossy().to_string();
 
     let mut world = World::new();
@@ -2473,7 +2471,6 @@ fn story_apply_validates_then_writes() {
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(on_disk.contains("And they lived on."));
     assert!(on_disk.ends_with('\n'));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // A missing source file loads as an empty editable story with the error shown.
@@ -2494,10 +2491,9 @@ fn story_load_missing_file_shows_status() {
 #[test]
 fn story_create_writes_starter_and_adds_the_import() {
     let _guard = crate::test_support::lock();
-    let dir = std::env::temp_dir().join(format!("cn-story-create-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tree = concinnity_testing::TempTree::new();
     let old = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&dir).unwrap();
+    std::env::set_current_dir(tree.path()).unwrap();
 
     let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
@@ -2516,35 +2512,25 @@ fn story_create_writes_starter_and_adds_the_import() {
     assert!(h.dirty, "the new entry is a world edit");
     assert!(h.story_lines.len() > 5, "the starter story is loaded");
     assert!(!h.make_story_view([0.0, 0.0]).create);
-    let written = std::fs::read_to_string(dir.join("story.md")).unwrap();
+    let written = std::fs::read_to_string(tree.join("story.md")).unwrap();
     assert_eq!(written, super::super::story::STARTER_STORY);
     // A second create is a no-op while an import exists.
     h.create_story(&mut world);
     assert_eq!(h.entries.len(), 1);
 
     std::env::set_current_dir(old).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // Import panel
 
-fn import_session() -> (EditorHook, World, std::path::PathBuf) {
+fn import_session() -> (EditorHook, World, concinnity_testing::TempTree) {
     let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(Vec::new());
     h.import_open = true;
     h.import_focus = true;
     h.focus_panel(PanelKey::Import);
-    let dir = std::env::temp_dir().join(format!(
-        "cn-import-{}-{}",
-        std::process::id(),
-        std::thread::current()
-            .name()
-            .unwrap_or("t")
-            .replace(':', "_")
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    (h, world, dir)
+    (h, world, concinnity_testing::TempTree::new())
 }
 
 fn type_path(world: &mut World, path: &str) {
@@ -2574,7 +2560,6 @@ fn import_add_resolves_a_scene_file() {
         "",
         "the path field clears on success"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // A story markdown resolves to a StoryImport; a colliding name is uniquified
@@ -2591,7 +2576,6 @@ fn import_add_uniquifies_a_colliding_name() {
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["type"], "StoryImport");
     assert_eq!(h.entries[1]["name"], "tale_1", "renamed past the collision");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // Failures land on the status line and commit nothing: a missing file, and an
@@ -2616,7 +2600,6 @@ fn import_add_rejects_missing_files_and_unknown_extensions() {
     h.add_import(&mut world);
     assert!(h.import_status.is_some(), "unknown extension rejected");
     assert!(h.entries.is_empty() && !h.dirty);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // A `.hdr` into a world with no lighting environment adds one.
@@ -2635,7 +2618,6 @@ fn import_add_resolves_an_hdr_to_an_environment_map() {
         h.entries[0]["args"]["source"],
         serde_json::Value::String(hdr.to_string_lossy().to_string())
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // A second `.hdr` retargets the world's existing map instead of appending one
@@ -2669,7 +2651,6 @@ fn import_add_retargets_an_existing_environment_map() {
         "",
         "the path field clears on success"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // Enter in the focused path field adds, like clicking the Add button.
@@ -2684,14 +2665,13 @@ fn import_enter_key_adds() {
         &story_key_input(crate::components::InputKey::Enter),
     );
     assert_eq!(h.entries.len(), 1);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // The list shows the world's file-backed entries and opens one in the
 // standard edit form (alongside the Assets browse panel).
 #[test]
 fn import_rows_list_and_open_in_the_edit_form() {
-    let (mut h, mut world, dir) = import_session();
+    let (mut h, mut world, _dir) = import_session();
     h.entries = vec![
         entry("lamp", "PointLight"),
         serde_json::json!({"name": "town", "type": "SceneImport", "args": {"source": "town.glb"}}),
@@ -2713,7 +2693,6 @@ fn import_rows_list_and_open_in_the_edit_form() {
         FormTarget::Entry(1),
         "the clicked entry is being edited"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // A browsed file lands in the path field as a project-relative path, ready for
@@ -2725,10 +2704,9 @@ fn import_browse_result_fills_the_path_field_relatively() {
     let _guard = crate::test_support::lock();
     let (mut h, mut world, dir) = import_session();
     let old = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&dir).unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
 
-    let assets = dir.join("assets");
-    std::fs::create_dir_all(&assets).unwrap();
+    let assets = dir.dir("assets");
     let picked = assets.join("hero.glb");
     std::fs::write(&picked, b"glb").unwrap();
     h.import_status = Some(import_panel::ImportStatus::Error("stale error".to_string()));
@@ -2751,7 +2729,6 @@ fn import_browse_result_fills_the_path_field_relatively() {
     assert_eq!(h.entries[0]["args"]["source"], "assets/hero.glb");
 
     std::env::set_current_dir(old).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // The Assets panel's origin-grouped tree

@@ -21,6 +21,7 @@ concinnity-core = { workspace = true }
 concinnity-slang = { workspace = true }
 
 [dev-dependencies]
+concinnity-testing = { workspace = true }
 tempfile = "3.25.0"
 
 [lints]

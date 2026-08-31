@@ -65,6 +65,7 @@ ureq = { version = "3.2.0", features = ["json"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+concinnity-testing = { workspace = true }
 tempfile = "3.25.0"
 
 [build-dependencies]

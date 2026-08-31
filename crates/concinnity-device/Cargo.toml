@@ -91,6 +91,7 @@ objc2-metal-kit = "0.3.2"
 objc2-quartz-core = "0.3.2"
 
 [dev-dependencies]
+concinnity-testing = { workspace = true }
 serde_json = "1"
 
 [build-dependencies]

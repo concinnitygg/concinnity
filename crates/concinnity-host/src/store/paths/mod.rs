@@ -82,11 +82,18 @@ pub fn worlds_dir() -> Option<PathBuf> {
     state_dir().map(|d| d.join("worlds"))
 }
 
+/// The subdirectory a state tree keeps its cache segments in.
+///
+/// Named so a caller that has to reason about the tree's shape -- a test
+/// harness deciding what may survive between runs -- asks this crate rather
+/// than spelling the layout itself.
+pub const CACHE_DIR: &str = "cache";
+
 /// The runtime cache segment inside `state_dir`, for a caller naming a state
 /// tree other than the installed one: `cn export` warms the segment it writes
 /// into a bundle before that bundle is ever launched.
 pub fn runtime_cache_in(state_dir: &Path) -> PathBuf {
-    state_dir.join("cache").join("0")
+    state_dir.join(CACHE_DIR).join("0")
 }
 
 /// The runtime cache segment, `cache/0`: one container holding every
@@ -126,7 +133,7 @@ pub fn bundled_runtime_cache_path() -> Option<PathBuf> {
 ///
 /// Deletable at any time; whatever is missing is recompiled.
 pub fn build_cache_path() -> Option<PathBuf> {
-    state_dir().map(|d| d.join("cache").join("1"))
+    state_dir().map(|d| d.join(CACHE_DIR).join("1"))
 }
 
 #[cfg(test)]

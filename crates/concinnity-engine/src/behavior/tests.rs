@@ -73,8 +73,8 @@ fn a_saving_world_restores_its_variable_through_the_file_store() {
     use crate::ecs::System;
     use concinnity_core::behavior::{BehaviorStore, BehaviorSystem};
 
-    let dir = std::env::temp_dir().join(format!("cn-behavior-wired-{}", std::process::id()));
-    std::fs::remove_dir_all(&dir).ok();
+    let tree = concinnity_testing::TempTree::new();
+    let dir = tree.join("state");
 
     let saver = || Behavior {
         asset_id: AssetId(1),

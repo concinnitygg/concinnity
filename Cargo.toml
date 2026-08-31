@@ -20,6 +20,7 @@ concinnity-engine = { path = "crates/concinnity-engine", version = "0.19", defau
 concinnity-host = { path = "crates/concinnity-host", version = "0.19" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.19", default-features = false }
 concinnity-slang = { path = "crates/concinnity-slang", version = "0.19" }
+concinnity-testing = { path = "crates/concinnity-testing" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.19" }
 
 [package]
@@ -93,6 +94,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 thiserror = { version = "2.0.18", default-features = false }
 
 [dev-dependencies]
+concinnity-testing = { workspace = true }
 tempfile = "3.25.0"
 
 [build-dependencies]

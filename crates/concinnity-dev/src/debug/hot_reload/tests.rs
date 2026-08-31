@@ -264,14 +264,12 @@ fn md_extension_is_an_asset_event() {
 
 #[test]
 fn reload_stories_re_expands_and_dedupes_by_snapshot() {
-    let dir = std::env::temp_dir().join(format!("story_reload_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let md = dir.join("tale.md");
-    std::fs::write(
-        &md,
+    let tree = concinnity_testing::TempTree::new();
+    let dir = tree.path();
+    let md = tree.write(
+        "tale.md",
         "---\ntitle: Tale\ncharacters:\n  a: Ana\n---\n\n# start\n\nHello there.\n",
-    )
-    .unwrap();
+    );
     let world = dir.join("world.jsonl");
     std::fs::write(
         &world,
@@ -310,8 +308,6 @@ fn reload_stories_re_expands_and_dedupes_by_snapshot() {
     std::fs::write(&md, "---\ntitle: Broken\n").unwrap();
     let broken = reload_stories(world.to_str().unwrap(), &mut snapshots);
     assert!(broken.is_empty());
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -1026,56 +1022,9 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     }
 }
 
-// CRC-32 (IEEE) for the hand-rolled PNG chunks below. Bitwise so the test
-// fixture needs no image or checksum dependency.
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
-        }
-    }
-    !crc
-}
-
-fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(kind);
-    out.extend_from_slice(data);
-    let mut crc_input = kind.to_vec();
-    crc_input.extend_from_slice(data);
-    out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
-    out
-}
-
-// Write a valid 1x1 RGBA8 PNG using a stored (uncompressed) deflate block so
-// the texture-decode path has a real file to chew on without an encoder dep.
+// A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.
 fn write_tiny_png(path: &std::path::Path) {
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&1u32.to_be_bytes());
-    ihdr.extend_from_slice(&1u32.to_be_bytes());
-    // 8-bit RGBA, deflate, adaptive filtering, no interlace.
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-    // One scanline: filter byte 0 + a single RGBA pixel.
-    let raw = [0u8, 10, 20, 30, 255];
-    let mut idat = vec![0x78, 0x01, 0x01];
-    idat.extend_from_slice(&(raw.len() as u16).to_le_bytes());
-    idat.extend_from_slice(&(!(raw.len() as u16)).to_le_bytes());
-    idat.extend_from_slice(&raw);
-    let (mut a, mut b) = (1u32, 0u32);
-    for &byte in &raw {
-        a = (a + byte as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    idat.extend_from_slice(&((b << 16) | a).to_be_bytes());
-    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    png.extend(png_chunk(b"IHDR", &ihdr));
-    png.extend(png_chunk(b"IDAT", &idat));
-    png.extend(png_chunk(b"IEND", &[]));
-    std::fs::write(path, png).unwrap();
+    std::fs::write(path, concinnity_testing::fixtures::png::one_pixel()).unwrap();
 }
 
 // Write a 2x2x2 identity-ish Adobe Cube LUT (8 data lines).

@@ -35,30 +35,21 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips_through_a_created_directory() {
-        let dir = std::env::temp_dir()
-            .join(format!("cn_cbor_file_round_trip_{}", std::process::id()))
-            .join("nested");
-        let path = dir.join("store");
-        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("outer/nested/store");
 
         write(&path, &vec![1u32, 2, 3]).expect("write creates the parent dir");
         assert_eq!(read::<Vec<u32>>(&path, "test store"), Some(vec![1, 2, 3]));
-
-        let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
     }
 
     #[test]
     fn a_missing_or_corrupt_file_reads_as_none() {
-        let dir = std::env::temp_dir().join(format!("cn_cbor_file_corrupt_{}", std::process::id()));
-        let path = dir.join("store");
-        let _ = std::fs::remove_dir_all(&dir);
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("store");
 
         assert_eq!(read::<Vec<u32>>(&path, "test store"), None, "missing file");
 
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&path, b"not cbor at all").unwrap();
+        tree.write("store", b"not cbor at all");
         assert_eq!(read::<Vec<u32>>(&path, "test store"), None, "corrupt file");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

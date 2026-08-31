@@ -62,8 +62,8 @@ mod tests {
 
     #[test]
     fn round_trips_through_the_file() {
-        let dir = std::env::temp_dir().join(format!("cn-session-store-{}", std::process::id()));
-        let path = dir.join("editor");
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("editor");
         let mut store = SessionStore::default();
         let mut session = WorldSession::default();
         session.bookmarks[3] = Some(CameraPose {
@@ -78,18 +78,14 @@ mod tests {
         assert_eq!(pose.position, [1.0, 2.0, 3.0]);
         assert_eq!((pose.yaw, pose.pitch), (0.5, -0.25));
         assert!(back.worlds["world"].bookmarks[0].is_none());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn missing_or_corrupt_files_load_fresh() {
-        let dir = std::env::temp_dir().join(format!("cn-session-corrupt-{}", std::process::id()));
-        assert!(load(&dir.join("absent")).worlds.is_empty());
-        std::fs::create_dir_all(&dir).unwrap();
-        let bad = dir.join("editor");
-        std::fs::write(&bad, b"not cbor").unwrap();
+        let tree = concinnity_testing::TempTree::new();
+        assert!(load(&tree.join("absent")).worlds.is_empty());
+        let bad = tree.write("editor", b"not cbor");
         assert!(load(&bad).worlds.is_empty());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

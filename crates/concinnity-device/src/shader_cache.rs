@@ -278,9 +278,8 @@ mod tests {
     #[cfg(any(backend_dx, backend_vk))]
     #[test]
     fn ensure_in_compiles_once_then_finds_the_artifact_present() {
-        let dir = std::env::temp_dir().join(format!("cn_sc_ensure_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = concinnity_host::store::paths::runtime_cache_in(&dir);
+        let tree = concinnity_testing::TempTree::new();
+        let path = concinnity_host::store::paths::runtime_cache_in(&tree.join("cache"));
         let mut bundle = Segment::read_from(&path);
         let k = key("ensure src", "main", "ps_5_1", 3);
 
@@ -296,7 +295,6 @@ mod tests {
         assert!(bundle.write_to(&path, 1 << 20));
         let mut shipped = Segment::read_from(&path);
         assert_eq!(shipped.get(KIND, &k.digest()), Some(&[7, 7, 7][..]));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(any(backend_dx, backend_vk))]

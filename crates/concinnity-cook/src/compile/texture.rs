@@ -894,22 +894,10 @@ mod tests {
     use super::*;
     use crate::import::glb::test_fixtures::make_glb;
 
-    // Encode an 8-bit PNG in memory for decode-path tests.
-    fn encode_png(width: u32, height: u32, color: png::ColorType, data: &[u8]) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut enc = png::Encoder::new(&mut out, width, height);
-        enc.set_color(color);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut writer = enc.write_header().expect("png header");
-        writer.write_image_data(data).expect("png data");
-        writer.finish().expect("png finish");
-        out
-    }
+    use concinnity_testing::fixtures::png::encode as encode_png;
 
     fn write_file(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
-        let path = dir.path().join(name);
-        std::fs::write(&path, bytes).expect("write fixture");
-        path.to_string_lossy().into_owned()
+        concinnity_testing::utf8(&concinnity_testing::write_into(dir.path(), name, bytes))
     }
 
     // PNG decode

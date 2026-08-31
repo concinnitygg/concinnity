@@ -78,10 +78,25 @@ pub(super) fn build(engine_root: &Path) -> io::Result<Vec<AssetDoc>> {
         }
     }
 
-    let mut types = schema::extract(&[authored_src], &[])?;
-    types.extend(schema::extract(&[runtime_src], &[])?);
+    build_from(&[authored_src, runtime_src], &collect_registry_components())
+}
 
-    let reference = assemble(&types);
+/// [`build`] against explicit source trees and an explicit component list.
+///
+/// `build` finds the trees in a checkout and reads the components from the
+/// authoring registry. Splitting that out is what lets a test drive the whole
+/// pipeline over a vocabulary it wrote itself, rather than over whichever
+/// assets the engine happens to declare.
+pub(super) fn build_from(
+    sources: &[std::path::PathBuf],
+    components: &[ComponentMeta],
+) -> io::Result<Vec<AssetDoc>> {
+    let mut types = Vec::new();
+    for dir in sources {
+        types.extend(schema::extract(std::slice::from_ref(dir), &[])?);
+    }
+
+    let reference = assemble_from(&types, components);
     let mut out = Vec::with_capacity(reference.assets.len() + reference.ref_types.len());
     for e in reference.assets {
         out.push(AssetDoc {
@@ -160,12 +175,29 @@ fn enum_is_documented(doc: &str, values: &[DocValue]) -> bool {
     !doc.trim().is_empty() || values.iter().any(|v| !v.doc.trim().is_empty())
 }
 
-struct ComponentMeta {
+pub(super) struct ComponentMeta {
     name: String,
     struct_ident: String,
     args_struct: String,
     // "External" | "RuntimeOnly" | "BuildOnly" (RuntimeOnly when unspecified).
     origin: String,
+}
+
+impl ComponentMeta {
+    /// A pass-through component: the type is its own args schema, which is
+    /// every asset that does not override `args:`.
+    ///
+    /// The production list comes from the authoring registry; this is how a
+    /// test names a vocabulary of its own.
+    #[cfg(test)]
+    pub(super) fn pass_through(name: &str, origin: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            struct_ident: name.to_string(),
+            args_struct: name.to_string(),
+            origin: origin.to_string(),
+        }
+    }
 }
 
 // Value-type structs and documented enums a render pass discovered as reachable
@@ -193,11 +225,7 @@ struct Reference {
 
 // Join the extracted schema into one index and render every documented type
 // from it.
-fn assemble(types: &[DocType]) -> Reference {
-    // Manual components keep a literal `impl Component`; the rest come from the
-    // authoring registries. A type appears in exactly one of the two.
-    let all_components = collect_registry_components();
-
+fn assemble_from(types: &[DocType], all_components: &[ComponentMeta]) -> Reference {
     // Authorable assets only: a RuntimeOnly component is engine-internal, never
     // declared in a world, so it gets no page.
     let documented: Vec<&ComponentMeta> = all_components

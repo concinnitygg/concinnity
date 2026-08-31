@@ -19,3 +19,6 @@ include = [
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+concinnity-testing = { workspace = true }

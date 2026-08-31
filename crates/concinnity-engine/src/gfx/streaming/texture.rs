@@ -333,17 +333,13 @@ mod tests {
 
     #[test]
     fn disk_payload_source_reads_a_payload_at_offset() {
-        use std::io::Write;
-        let path =
-            std::env::temp_dir().join(format!("cn_disk_payload_read_{}.bin", std::process::id()));
+        let tree = concinnity_testing::TempTree::new();
         let payload = make_payload(2, 1, 0xCD);
         // arbitrary leading bytes standing in for a blob header + defs section
         let prefix = vec![0u8; 37];
-        {
-            let mut f = std::fs::File::create(&path).expect("create temp file");
-            f.write_all(&prefix).unwrap();
-            f.write_all(&payload).unwrap();
-        }
+        let mut bytes = prefix.clone();
+        bytes.extend_from_slice(&payload);
+        let path = tree.write("payload.bin", &bytes);
         let source = DiskPayloadSource::new(vec![DiskTextureLocator {
             path: path.to_string_lossy().into_owned(),
             file_offset: prefix.len() as u64,

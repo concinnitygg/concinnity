@@ -88,9 +88,7 @@ mod tests {
     }
 
     fn write_source(dir: &std::path::Path, name: &str, text: &str) -> String {
-        let path = dir.join(name);
-        std::fs::write(&path, text).expect("write source");
-        path.to_string_lossy().into_owned()
+        concinnity_testing::utf8(&concinnity_testing::write_into(dir, name, text))
     }
 
     #[test]

@@ -1320,9 +1320,7 @@ mod tests {
     fn scaffold_to_inject_writes_nothing_without_a_template() {
         // Existing world with renderer-less assets + a .glb target: the
         // renderer stack is injected at build time, so no lines are written.
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         std::fs::write(
             &world,
@@ -1337,15 +1335,11 @@ mod tests {
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn scaffold_to_inject_returns_empty_when_world_has_graphics_config() {
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         std::fs::write(
             &world,
@@ -1355,8 +1349,6 @@ mod tests {
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1364,9 +1356,7 @@ mod tests {
         // No file present, target is `.glb`: the caller is expected to create
         // the file; the renderer stack comes from build-time injection, so no
         // template entries are needed.
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
@@ -1375,9 +1365,7 @@ mod tests {
 
     #[test]
     fn scaffold_to_inject_errors_for_missing_world_with_non_scene_target() {
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
         let err = scaffold_to_inject(world.to_str().unwrap(), "Logger", None)
@@ -1387,9 +1375,7 @@ mod tests {
 
     #[test]
     fn scaffold_to_inject_returns_empty_for_non_scene_target_into_existing_world() {
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         std::fs::write(&world, "").unwrap();
 
@@ -1397,17 +1383,13 @@ mod tests {
         // has no renderer: we don't try to guess intent for shaders/fonts.
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "Logger", None).unwrap();
         assert!(scaffold.is_empty());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // template dispatch
 
     #[test]
     fn scaffold_to_inject_uses_named_template() {
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
@@ -1452,9 +1434,7 @@ mod tests {
 
     #[test]
     fn scaffold_to_inject_errors_on_unknown_template() {
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
         let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
@@ -1471,9 +1451,7 @@ mod tests {
         // An unknown template name is a typo, full stop. We don't want the
         // user to silently get nothing when they intended to ask for a
         // template.
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_test_{}_{}", std::process::id(), line!()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         // Existing world with a renderer trigger: scaffolding wouldn't fire.
         std::fs::write(
@@ -1485,23 +1463,13 @@ mod tests {
         let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
             .expect_err("unknown template should fail fast regardless of scaffold path");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // text-file targets
 
-    fn text_test_dir(line: u32) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("cn_add_text_test_{}_{}", std::process::id(), line));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn text_file_becomes_text_label_with_content() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("greeting.txt");
         std::fs::write(&path, "Hello, world!").unwrap();
 
@@ -1513,13 +1481,11 @@ mod tests {
         assert_eq!(entry["args"]["content"], "Hello, world!");
         // Mirrors `cn init`: short labels render centered by default.
         assert_eq!(entry["args"]["centered"], serde_json::json!(true));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn text_file_strips_single_trailing_newline() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let lf = dir.join("lf.txt");
         std::fs::write(&lf, "line one\nline two\n").unwrap();
         let crlf = dir.join("crlf.md");
@@ -1529,13 +1495,11 @@ mod tests {
         assert_eq!(lf_entry["args"]["content"], "line one\nline two");
         let crlf_entry = &entry_from_path(crlf.to_str().unwrap()).unwrap()[0];
         assert_eq!(crlf_entry["args"]["content"], "line one\r\nline two");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn audio_file_becomes_audio_clip() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("door_creak.wav");
         std::fs::write(&path, b"not-really-audio").unwrap();
 
@@ -1545,13 +1509,11 @@ mod tests {
         assert_eq!(entry["type"], "AudioClip");
         assert_eq!(entry["name"], "door_creak");
         assert_eq!(entry["args"]["source"], path.to_str().unwrap());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn hdr_file_becomes_an_environment_map() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("san_giuseppe_4k.hdr");
         std::fs::write(&path, b"not-really-radiance").unwrap();
 
@@ -1566,15 +1528,13 @@ mod tests {
         assert_eq!(entry["args"]["generator"], "");
         // Registration defaults are materialized alongside the source.
         assert_eq!(entry["args"]["prefilter_face_size"], serde_json::json!(512));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // The entry a `.hdr` add produces is one the cook accepts.
     #[test]
     fn an_hdr_entry_validates_against_the_environment_map_schema() {
         let _guard = crate::test_support::lock();
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("studio.hdr");
         std::fs::write(&path, b"radiance").unwrap();
 
@@ -1586,8 +1546,6 @@ mod tests {
             crate::cook_platform(),
         )
         .expect("a `.hdr` add must produce a cookable EnvironmentMap");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // try_retarget_environment_map
@@ -1707,7 +1665,7 @@ mod tests {
 
     #[test]
     fn markdown_with_frontmatter_becomes_story_import() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("crossroads.md");
         std::fs::write(&path, "---\ntitle: T\n---\n\n# a\n\nhi\n").unwrap();
 
@@ -1719,26 +1677,22 @@ mod tests {
         assert_eq!(entry["args"]["source"], path.to_str().unwrap());
         // Registration defaults are materialized alongside the source.
         assert_eq!(entry["args"]["title_screen"], serde_json::json!(true));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn markdown_without_frontmatter_stays_a_text_label() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("notes.md");
         std::fs::write(&path, "# Notes\n\nplain markdown\n").unwrap();
 
         let entries = entry_from_path(path.to_str().unwrap()).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["type"], "TextLabel");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn text_file_over_size_cap_errors() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("huge.txt");
         let blob = "a".repeat(TEXT_LABEL_MAX_BYTES + 1);
         std::fs::write(&path, blob).unwrap();
@@ -1747,26 +1701,22 @@ mod tests {
             .expect_err("oversized text file must fail rather than silently truncate");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("capped"));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn scaffold_to_inject_empty_for_missing_world_with_text_target() {
         // Text targets bootstrap a missing world via the TextLabel itself:
         // no separate scaffold needed, and the missing file must not error.
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", None).unwrap();
         assert!(scaffold.is_empty(), "text target should emit no scaffold");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn scaffold_to_inject_empty_for_renderer_less_world_with_text_target() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         std::fs::write(&world, r#"{"name":"tex","type":"Texture","args":{}}"#).unwrap();
 
@@ -1775,8 +1725,6 @@ mod tests {
             scaffold.is_empty(),
             "text target never injects GLB scaffold"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // try_refresh_text_label
@@ -1887,15 +1835,13 @@ mod tests {
 
     #[test]
     fn scaffold_to_inject_rejects_template_with_text_target() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
         let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // entry_from_inline_json
@@ -1969,45 +1915,39 @@ mod tests {
 
     #[test]
     fn json_file_requires_a_type_field() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("thing.json");
         std::fs::write(&path, r#"{"name":"thing"}"#).unwrap();
 
         let err = entry_from_json_file(&path, "thing").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("no `type` field"), "got: {err}");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn json_file_rejects_build_config() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("cfg.json");
         std::fs::write(&path, r#"{"type":"BuildConfig"}"#).unwrap();
 
         let err = entry_from_json_file(&path, "cfg").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn json_file_uses_the_stem_when_unnamed() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("main_window.json");
         std::fs::write(&path, r#"{"type":"Window","args":{}}"#).unwrap();
 
         let entry = entry_from_json_file(&path, "main_window").unwrap();
         assert_eq!(entry["name"], "main_window");
         assert_eq!(entry["type"], "Window");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn json_file_read_and_parse_failures_are_reported() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         // Missing file.
         let missing = dir.join("missing.json");
         assert!(entry_from_json_file(&missing, "missing").is_err());
@@ -2016,8 +1956,6 @@ mod tests {
         std::fs::write(&junk, "{ nope").unwrap();
         let err = entry_from_json_file(&junk, "junk").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // resolve_add_target
@@ -2101,7 +2039,7 @@ mod tests {
 
     #[test]
     fn a_glb_that_is_not_a_panorama_imports_as_geometry() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("scene.glb");
         std::fs::write(&path, b"not a panorama").unwrap();
 
@@ -2121,7 +2059,7 @@ mod tests {
 
     #[test]
     fn an_hdr_still_becomes_an_environment_map() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.join("studio.hdr");
         std::fs::write(&path, b"#?RADIANCE\n").unwrap();
 
@@ -2139,7 +2077,7 @@ mod tests {
 
     #[test]
     fn ensure_world_file_exists_creates_parents_and_is_idempotent() {
-        let dir = text_test_dir(line!());
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.join("nested").join("deeper").join("world.jsonl");
 
         ensure_world_file_exists(world.to_str().unwrap()).unwrap();
@@ -2150,8 +2088,6 @@ mod tests {
         std::fs::write(&world, "content").unwrap();
         ensure_world_file_exists(world.to_str().unwrap()).unwrap();
         assert_eq!(std::fs::read_to_string(&world).unwrap(), "content");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // is_path_like

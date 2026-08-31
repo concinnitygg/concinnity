@@ -439,7 +439,12 @@ mod tests {
             .iter()
             .filter(|r| !matches!(r.kind, RowKind::Proportion { .. }))
             .count();
-        assert_eq!(morph, 18, "32 keys collapse into 18 rows");
+        assert_eq!(
+            morph,
+            13,
+            "{} keys collapse into 13 rows",
+            humanoid_keys().len()
+        );
         let groups = rows
             .sliders
             .iter()

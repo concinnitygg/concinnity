@@ -101,13 +101,6 @@ static RT_SKINNED_GEOMETRY: AtomicU8 = AtomicU8::new(0);
 // Path to the world.jsonl the dev host is running, or None outside a dev host.
 static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
 
-// The harness runs a binary's tests on parallel threads, so a test that writes
-// a flag races every test whose code reads one -- graphics init reads three.
-// Writers take this exclusively, readers share it, so only the writers
-// serialise.
-#[cfg(test)]
-static FLAG_ACCESS: std::sync::RwLock<()> = std::sync::RwLock::new(());
-
 /// Mark this process as running under a dev-loop entry point. Call once
 /// before world build; the library only reads the flag.
 pub fn set_enabled(v: bool) {
@@ -262,9 +255,13 @@ pub(crate) fn world_jsonl_path() -> Option<String> {
 
 // Shared flag access for a test whose code path reads a flag. Held for as long
 // as the read matters: for graphics init, across the whole `run_init`.
+//
+// The lock is the workspace's one process-global lock rather than a private
+// static, so a flag written here cannot race a test in another crate that
+// reaches these same flags through a different guard.
 #[cfg(test)]
-pub(crate) fn read_access() -> std::sync::RwLockReadGuard<'static, ()> {
-    FLAG_ACCESS.read().unwrap_or_else(|e| e.into_inner())
+pub(crate) fn read_access() -> concinnity_testing::SharedAccess {
+    concinnity_testing::shared()
 }
 
 // Exclusive flag access for a test that writes one. Restores every flag graphics
@@ -274,7 +271,7 @@ pub(crate) fn read_access() -> std::sync::RwLockReadGuard<'static, ()> {
 // so a test holding this must not also take `read_access`.
 #[cfg(test)]
 pub(crate) struct WriteAccess {
-    _guard: std::sync::RwLockWriteGuard<'static, ()>,
+    _guard: concinnity_testing::ExclusiveAccess,
     enabled: bool,
     validation: Option<bool>,
     quality_preset: Option<QualityPreset>,
@@ -286,7 +283,7 @@ pub(crate) struct WriteAccess {
 #[cfg(test)]
 pub(crate) fn write_access() -> WriteAccess {
     WriteAccess {
-        _guard: FLAG_ACCESS.write().unwrap_or_else(|e| e.into_inner()),
+        _guard: concinnity_testing::exclusive(),
         enabled: enabled(),
         validation: validation(),
         quality_preset: quality_preset(),

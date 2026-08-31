@@ -49,8 +49,8 @@ mod tests {
 
     #[test]
     fn state_round_trips_through_the_file() {
-        let dir = std::env::temp_dir().join(format!("cn-behavior-save-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.join("state");
         let store = FileStore::at(&dir);
         assert!(store.read().is_none(), "nothing written yet");
 
@@ -63,6 +63,5 @@ mod tests {
         let back = store.read().expect("state readable");
         assert_eq!(back.vars.get("score"), Some(&BehaviorLiteral::Int(12)));
         assert_eq!(back.fired, vec![(3, 0xfeed)]);
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
