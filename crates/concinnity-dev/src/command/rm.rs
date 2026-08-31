@@ -5,6 +5,6 @@ use concinnity_cook::authoring::world::find_world_jsonl;
 
 /// Delete the asset named `name` from the discovered world.
 pub fn rm(name: &str) -> std::io::Result<()> {
-    let world_path = find_world_jsonl(None)?;
+    let world_path = find_world_jsonl(crate::project::worlds_dir().as_deref(), None)?;
     rm_at_path(&world_path, name)
 }

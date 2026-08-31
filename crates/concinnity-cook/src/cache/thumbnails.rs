@@ -40,14 +40,11 @@ pub struct Thumbnails {
 }
 
 impl Thumbnails {
-    /// Open the installed state root's build segment. `None` when there is no
-    /// state root, when the running binary cannot be identified, or when the
-    /// segment holds no thumbnail set (a deleted `cache/` reads this way).
+    /// Open the anchored build segment. `None` when nothing anchored one, when
+    /// the running binary cannot be identified, or when the segment holds no
+    /// thumbnail set (a deleted `cache/` reads this way).
     pub fn open() -> Option<Self> {
-        Self::open_at(
-            &crate::paths::build_cache_path()?,
-            super::identity::token()?,
-        )
+        Self::open_at(&super::anchored_path()?, super::identity::token()?)
     }
 
     fn open_at(path: &Path, token: u32) -> Option<Self> {

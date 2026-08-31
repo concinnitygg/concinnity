@@ -17,9 +17,6 @@ use concinnity_core::blob::{
 };
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
-// `blob_path` is shared with the read side in `concinnity_host::store`: the
-// build names blob 0 through it, and readers resolve the same layout.
-pub(crate) use concinnity_host::store::blob::blob_path;
 #[cfg(test)]
 pub(crate) use concinnity_host::store::blob::read_cnb;
 
@@ -391,31 +388,49 @@ fn now_iso8601() -> String {
         .expect("time format")
 }
 
-// Shared harness for tests that drive the build's file output. Both writes
-// target process-global locations -- the blobs go under the installed state
-// root, the lock file is written relative to the working directory -- so one
-// guard owns the lock, the state root, and the working directory together.
+// Shared harness for tests that drive the build's file output. The lock file is
+// written relative to the working directory, which is process-global, so the
+// guard owns the exclusive lock and the working directory; the state tree it
+// hands out is a value nothing else can see.
 #[cfg(test)]
 pub(crate) mod test_output {
     use std::path::PathBuf;
 
+    use concinnity_host::store::paths::StateTree;
     use concinnity_testing::GlobalState;
 
-    /// Anchors both output locations at a private tree for the life of the
-    /// guard. The working directory moves too, so `LOCK_PATH` resolves inside
-    /// the tree rather than into the crate's own source directory.
-    pub(crate) struct Output(GlobalState);
+    /// A private tree to build into, with the working directory moved into it
+    /// so `LOCK_PATH` resolves there rather than into the crate's own source
+    /// directory.
+    pub(crate) struct Output {
+        // Held for its Drop: the exclusive lock, the working directory, and the
+        // tree the paths below name.
+        _guard: GlobalState,
+        tree: StateTree,
+    }
 
     impl Output {
         pub(crate) fn new() -> Self {
-            Self(GlobalState::acquire().with_cwd().with_state_dir(
-                |dir| concinnity_host::store::paths::set_state_dir(dir),
-                concinnity_host::store::paths::clear_state_dir,
-            ))
+            let guard = GlobalState::acquire().with_cwd();
+            let tree = StateTree::at(guard.root());
+            Self {
+                _guard: guard,
+                tree,
+            }
+        }
+
+        pub(crate) fn tree(&self) -> &StateTree {
+            &self.tree
         }
 
         pub(crate) fn data_dir(&self) -> PathBuf {
-            self.0.root().join("data")
+            self.tree.data_dir()
+        }
+
+        /// Blob 0 under this tree's `data/`: what a build writes when nothing
+        /// names a file.
+        pub(crate) fn primary(&self) -> PathBuf {
+            concinnity_host::store::blob::primary_in(&self.tree.data_dir())
         }
     }
 }
@@ -444,12 +459,6 @@ mod tests {
         }
     }
 
-    // The default primary blob path: blob 0 under the anchored state dir, which
-    // is what the build writes when nothing names a file.
-    fn primary() -> std::path::PathBuf {
-        std::path::PathBuf::from(blob_path(0).expect("the scoped state dir is installed"))
-    }
-
     // The record streams of a build that only has components and resources.
     fn streams<'a>(defs: &'a [BlobAssetDef], resources: &'a [ResourceRecord]) -> BlobStreams<'a> {
         BlobStreams {
@@ -463,7 +472,7 @@ mod tests {
 
     #[test]
     fn write_blobs_keeps_metadata_in_blob_zero_and_splits_payload_bytes() {
-        let state = Output::new();
+        let output = Output::new();
 
         let defs = vec![
             component_def(3, Some(locator(0, 0, 3))),
@@ -476,8 +485,8 @@ mod tests {
             data_bytes: vec![9, 9],
         }];
         let payloads = vec![vec![1, 2, 3], vec![4, 5, 6, 7]];
-        let data_dir = state.data_dir();
-        let paths = write_blobs(streams(&defs, &resources), &payloads, &primary())
+        let data_dir = output.data_dir();
+        let paths = write_blobs(streams(&defs, &resources), &payloads, &output.primary())
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 2);
@@ -511,7 +520,7 @@ mod tests {
     // so the runtime reads what cook counted without re-deriving it.
     #[test]
     fn write_blobs_ships_the_physics_budget_in_blob_zero() {
-        let _output = Output::new();
+        let output = Output::new();
 
         let defs = vec![component_def(3, None)];
         let budget = PhysicsBudgetRecord {
@@ -529,7 +538,7 @@ mod tests {
                 ..streams(&defs, &[])
             },
             &[],
-            &primary(),
+            &output.primary(),
         )
         .expect("write_blobs")
         .blob_paths;
@@ -537,7 +546,7 @@ mod tests {
         assert_eq!(meta.physics_budget, Some(budget));
 
         // A world with no physics ships no reservation at all.
-        let paths = write_blobs(streams(&defs, &[]), &[], &primary())
+        let paths = write_blobs(streams(&defs, &[]), &[], &output.primary())
             .expect("write_blobs")
             .blob_paths;
         let (meta, _) = read_cnb(&paths[0]).expect("blob 0 parses");
@@ -546,16 +555,16 @@ mod tests {
 
     #[test]
     fn write_blobs_removes_stale_overflow_blobs_from_a_larger_build() {
-        let _output = Output::new();
+        let output = Output::new();
 
         let defs = vec![component_def(3, None)];
         let payloads = vec![vec![1], vec![2], vec![3]];
-        let first = write_blobs(streams(&defs, &[]), &payloads, &primary())
+        let first = write_blobs(streams(&defs, &[]), &payloads, &output.primary())
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(first.len(), 3);
 
-        let second = write_blobs(streams(&defs, &[]), &[vec![1]], &primary())
+        let second = write_blobs(streams(&defs, &[]), &[vec![1]], &output.primary())
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(second.len(), 1);
@@ -565,10 +574,10 @@ mod tests {
 
     #[test]
     fn write_blobs_without_payloads_still_writes_the_primary_blob() {
-        let _output = Output::new();
+        let output = Output::new();
 
         let defs = vec![component_def(5, None)];
-        let paths = write_blobs(streams(&defs, &[]), &[], &primary())
+        let paths = write_blobs(streams(&defs, &[]), &[], &output.primary())
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 1, "a payload-less world still ships blob 0");
@@ -581,10 +590,14 @@ mod tests {
     // belongs) fails the build rather than shipping a partial data set.
     #[test]
     fn write_blobs_surfaces_a_write_failure() {
-        let state = Output::new();
-        fs::create_dir_all(state.data_dir().join("0")).expect("occupy blob 0");
+        let output = Output::new();
+        fs::create_dir_all(output.primary()).expect("occupy blob 0");
 
-        let result = write_blobs(streams(&[component_def(1, None)], &[]), &[], &primary());
+        let result = write_blobs(
+            streams(&[component_def(1, None)], &[]),
+            &[],
+            &output.primary(),
+        );
         assert!(result.is_err(), "an unwritable blob path must fail");
     }
 
@@ -609,13 +622,13 @@ mod tests {
 
     #[test]
     fn write_lock_records_blob_checksums_payload_sizes_and_provenance() {
-        let _output = Output::new();
+        let output = Output::new();
 
         let defs = vec![
             component_def(3, Some(locator(0, 0, 3))),
             component_def(4, None),
         ];
-        let paths = write_blobs(streams(&defs, &[]), &[vec![1, 2, 3]], &primary())
+        let paths = write_blobs(streams(&defs, &[]), &[vec![1, 2, 3]], &output.primary())
             .expect("write_blobs")
             .blob_paths;
         let named: Vec<(&str, &BlobAssetDef)> = vec![("floor", &defs[0]), ("wall", &defs[1])];

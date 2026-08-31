@@ -14,7 +14,7 @@ pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
 
     let loaded = concinnity_cook::prepare_world(
         &content,
-        concinnity_cook::paths::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         crate::cook_platform(),
     )
     .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;

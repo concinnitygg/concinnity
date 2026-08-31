@@ -8,6 +8,7 @@
 // flushed before shutdown.
 
 use crate::config::Settings;
+use concinnity_host::store::paths::StateTree;
 use std::sync::mpsc;
 
 pub(crate) struct SettingsWriter {
@@ -16,8 +17,8 @@ pub(crate) struct SettingsWriter {
 }
 
 impl SettingsWriter {
-    pub(crate) fn spawn() -> Self {
-        Self::with_sink(|cfg| cfg.save())
+    pub(crate) fn spawn(tree: Option<StateTree>) -> Self {
+        Self::with_sink(move |cfg| cfg.save(tree.as_ref()))
     }
 
     // Writer with an injectable persistence sink, so tests never touch the

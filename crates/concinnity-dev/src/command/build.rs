@@ -18,9 +18,13 @@ pub fn build(json_path: Option<&str>) -> std::io::Result<()> {
     let json_path = match json_path {
         Some(p) if std::path::Path::new(p).exists() => p,
         _ => {
-            resolved = find_world_jsonl(None)?;
+            resolved = find_world_jsonl(crate::project::worlds_dir().as_deref(), None)?;
             resolved.as_str()
         }
     };
-    build_from_path(json_path, crate::cook_platform())
+    build_from_path(
+        &crate::project::require()?,
+        json_path,
+        crate::cook_platform(),
+    )
 }

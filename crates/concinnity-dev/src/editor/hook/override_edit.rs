@@ -146,7 +146,7 @@ impl EditorHook {
                 && !concinnity_cook::build_only::preset::load_preset_obj(
                     &prefab_ref,
                     "prefabs",
-                    crate::authoring::assets_root::assets_dir().as_deref(),
+                    crate::project::assets_dir().as_deref(),
                 )
                 .is_null()
             {
@@ -318,7 +318,7 @@ impl EditorHook {
         let preset = concinnity_cook::build_only::preset::load_preset_obj(
             name,
             "prefabs",
-            crate::authoring::assets_root::assets_dir().as_deref(),
+            crate::project::assets_dir().as_deref(),
         );
         if preset.is_null() {
             return Err(format!("no prefab preset named '{name}'"));

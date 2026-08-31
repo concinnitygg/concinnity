@@ -17,7 +17,8 @@ pub(crate) struct Look<'a> {
 // `None` keeps the authored value. Applies a persisted FOV to every Camera3D
 // directly, since no controller state holds it.
 pub(crate) fn apply_persisted(ctx: &mut PipelineContext, look: Look) {
-    let settings = crate::config::Settings::load();
+    let settings =
+        crate::config::Settings::load(ctx.resource::<concinnity_host::store::paths::StateTree>());
     if let Some(s) = settings.controls.mouse_sensitivity {
         *look.mouse_sensitivity = s;
     }

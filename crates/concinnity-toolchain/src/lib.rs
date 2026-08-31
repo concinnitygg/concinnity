@@ -21,7 +21,11 @@
 //! The public entry points emit `cargo::` directives on stdout, which Cargo
 //! attributes to the build script of whichever package called in. That is what
 //! lets an example binary's build script pick up the same NGX link and DLL
-//! bundling the CLI's does, without duplicating any of this logic.
+//! bundling the CLI's does, without duplicating any of this logic. It is also
+//! what a package outside this workspace needs, since the NGX link reaches only
+//! the package that emits it: `setup_graphics_sdks_for_consumer` is the whole
+//! setup behind one call for a build script that has no backend features of its
+//! own to read.
 //!
 //! This file is the thin environment-reading layer: it snapshots everything the
 //! setup needs from the process environment into an `SdkEnv` and prints the
@@ -203,6 +207,54 @@ pub fn setup_graphics_sdks(backend: Option<Backend>) {
     };
     for line in sdks::graphics_sdk_directives(backend, &binary_targets_from_cargo(), &env) {
         println!("{line}");
+    }
+}
+
+/// The whole build-script setup for a package outside this workspace that links
+/// the engine: declares the cfgs, emits the backend cfg, and runs
+/// [`setup_graphics_sdks`], returning the backend it resolved.
+///
+/// A package depending on `concinnity` needs this because the NGX link
+/// directive is scoped to the package that emits it. When the runtime is built
+/// with DLSS available its upscaler compiles into the rlib, and the binary
+/// linking that rlib has to resolve the NGX symbols itself; without this its
+/// link fails on `NVSDK_NGX_*`. It is also what puts the SDK runtime DLLs
+/// beside that binary, where `LoadLibrary` finds them.
+///
+/// One call from the consuming package's `build.rs` is the whole setup:
+///
+/// ```no_run
+/// concinnity_toolchain::setup_graphics_sdks_for_consumer();
+/// ```
+///
+/// The backend is resolved as if `native` were on, which is what `concinnity`'s
+/// own defaults give for the target. A build script cannot see the features its
+/// dependencies were built with -- `CARGO_FEATURE_*` names the calling
+/// package's own -- so a package that took `concinnity`'s `vulkan` feature says
+/// so by carrying a `vulkan` feature of its own; that is the one backend which
+/// differs from `native` on a target that has it.
+///
+/// A missing SDK is reported as a `cargo::warning` naming the root it was
+/// looked for under, and costs that upscaler rather than the build.
+pub fn setup_graphics_sdks_for_consumer() -> Option<Backend> {
+    emit_check_cfgs();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let backend = resolve_backend(&target_os, consumer_features(BackendFeatures::from_cargo()));
+    if let Some(backend) = backend {
+        println!("{}", sdks::backend_cfg_directive(backend));
+    }
+    setup_graphics_sdks(backend);
+    backend
+}
+
+// What a consuming package's backend features mean: `native` on top of whatever
+// it named itself, since a package that names no backend gets `concinnity`'s
+// own default. `native` covers every target, so the backend a name adds over it
+// is Vulkan -- the one a target can have besides the one it renders with.
+pub(crate) fn consumer_features(named: BackendFeatures) -> BackendFeatures {
+    BackendFeatures {
+        native: true,
+        ..named
     }
 }
 
@@ -397,6 +449,40 @@ mod tests {
         let all = features(&["native", "metal", "directx", "vulkan"]);
         for target_os in ["macos", "windows", "linux"] {
             assert_eq!(resolve_backend(target_os, all), Some(Backend::Vk));
+        }
+    }
+
+    #[test]
+    fn a_consumer_naming_no_backend_gets_the_one_its_target_renders_with() {
+        for (target_os, backend) in [
+            ("macos", Backend::Metal),
+            ("windows", Backend::Dx),
+            ("linux", Backend::Vk),
+        ] {
+            assert_eq!(
+                resolve_backend(target_os, consumer_features(features(&[]))),
+                Some(backend)
+            );
+        }
+    }
+
+    #[test]
+    fn a_consumer_naming_vulkan_gets_vulkan() {
+        for target_os in ["macos", "windows", "linux"] {
+            assert_eq!(
+                resolve_backend(target_os, consumer_features(features(&["vulkan"]))),
+                Some(Backend::Vk)
+            );
+        }
+    }
+
+    #[test]
+    fn a_consumer_naming_the_backend_its_target_already_renders_with_changes_nothing() {
+        for (target_os, named) in [("macos", "metal"), ("windows", "directx")] {
+            assert_eq!(
+                resolve_backend(target_os, consumer_features(features(&[named]))),
+                resolve_backend(target_os, consumer_features(features(&[])))
+            );
         }
     }
 

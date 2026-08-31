@@ -1028,7 +1028,7 @@ fn slot_summaries_and_slot_presence() {
     let mut story = two_page_story();
     story.save_key = "q".to_string();
     story.scaffold = scaffold();
-    let mut sys = StorySystem::new(story);
+    let mut sys = StorySystem::new(story, None);
     sys.save_dir = Some(dir.path().to_path_buf());
     sys.ids = StageIds::from_scaffold(&scaffold());
     assert!(!sys.any_slot_save());

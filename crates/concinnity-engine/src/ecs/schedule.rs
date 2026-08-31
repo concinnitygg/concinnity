@@ -28,7 +28,7 @@ pub(crate) fn behavior(world: &World) -> Option<concinnity_core::behavior::Behav
     world
         .query::<crate::components::Behavior>()
         .next()
-        .map(|_| crate::behavior::build())
+        .map(|_| crate::behavior::build(crate::ecs::state_tree(world)))
 }
 
 // SpawnSystem: paired with GraphicsSystem (same gate) -- its churn retires and
@@ -70,7 +70,7 @@ pub(crate) fn graphics(world: &World) -> Option<crate::gfx::graphics_system::Gra
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::graphics_system::GraphicsSystem::new())
+        .map(|_| crate::gfx::graphics_system::GraphicsSystem::new(crate::ecs::state_tree(world)))
 }
 
 // InputSystem: paired with GraphicsSystem (same gate) -- it samples the window
@@ -219,7 +219,7 @@ pub(crate) fn story(world: &World) -> Option<crate::story::StorySystem> {
         .query::<crate::components::Story>()
         .next()
         .cloned()
-        .map(crate::story::StorySystem::new)
+        .map(|story| crate::story::StorySystem::new(story, crate::ecs::state_tree(world)))
 }
 
 // AudioSystem: present whenever the world declares any `AudioEmitter`
@@ -256,7 +256,7 @@ pub(crate) fn audio(world: &World) -> Option<crate::audio::AudioSystem> {
     // The persisted volumes live in the engine's settings store; resolve them
     // here and hand them to the system so the audio crate stays free of the
     // engine's `Settings` type.
-    let audio = crate::config::Settings::load().audio;
+    let audio = crate::config::Settings::load(crate::ecs::state_tree(world)).audio;
     Some(crate::audio::AudioSystem::new(crate::audio::AudioVolumes {
         master: audio.master_volume,
         music: audio.music_volume,

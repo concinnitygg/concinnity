@@ -1,7 +1,7 @@
 // src/crash/write.rs
 //
-// Report emission and retention. Reports land under `paths::crashes_dir()`;
-// each section is written and flushed before the next begins, so a report
+// Report emission and retention. Reports land in the directory `crash::install`
+// was given; each section is written and flushed before the next begins, so a report
 // interrupted mid-write still carries its most valuable sections. The
 // directory is pruned to the newest reports, minidump siblings included.
 
@@ -53,7 +53,7 @@ pub(crate) fn write_report_named(
 // Write `report` under the crashes dir and prune. The common path for report
 // kinds that carry no minidump.
 pub(crate) fn emit(report: &CrashReport) -> Option<PathBuf> {
-    let dir = concinnity_host::store::paths::crashes_dir()?;
+    let dir = super::report_dir()?;
     let stem = unique_stem(&dir, &report.file_stem());
     let path = write_report_named(&dir, &stem, report).ok()?;
     prune(&dir, RETAINED_REPORTS);

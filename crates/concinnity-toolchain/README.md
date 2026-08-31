@@ -20,5 +20,35 @@ attributes to whichever package's build script called in; that is what lets
 an example binary pick up the same SDK setup as the CLI without duplicating
 logic. Metal shader precompilation and source hashing live here too.
 
+## Depending on Concinnity
+
+A package that links `concinnity` needs this crate too, because the NGX link
+directive is scoped to the package that emits it: when the runtime is built
+with DLSS available its upscaler compiles into the rlib, and the binary
+linking that rlib has to resolve the `NVSDK_NGX_*` symbols itself. Add the
+build dependency and one build script:
+
+```toml
+[build-dependencies]
+concinnity-toolchain = "0.19"
+```
+
+```rust
+// build.rs
+fn main() {
+    concinnity_toolchain::setup_graphics_sdks_for_consumer();
+}
+```
+
+That links the NGX import library and stages the SDK runtime DLLs next to
+the executable, where `LoadLibrary` finds them. A missing SDK is reported as
+a `cargo::warning` naming the root it was looked for under, and costs that
+upscaler rather than the build.
+
+The backend is resolved as if `native` were on, matching what `concinnity`'s
+own defaults give for the target. A build script cannot see the features its
+dependencies were built with, so a package that took `concinnity`'s `vulkan`
+feature says so by carrying a `vulkan` feature of its own.
+
 Most users want the [`concinnity`](https://crates.io/crates/concinnity)
 facade crate rather than this one.

@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.19.1"
+version = "0.19.2"
 description = "Asset-driven world engine"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -75,8 +75,8 @@ targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 [features]
 default = ["std", "native"]
-std = ["dep:concinnity-engine"]
-player = ["std", "dep:concinnity-toolchain"]
+std = ["dep:concinnity-engine", "dep:concinnity-toolchain"]
+player = ["std"]
 editor = ["player", "cook", "dep:concinnity-dev", "dep:clap"]
 cook = ["std", "dep:concinnity-cook", "dep:concinnity-shader"]
 native = ["std", "concinnity-engine/native", "concinnity-shader?/native", "concinnity-dev?/native"]

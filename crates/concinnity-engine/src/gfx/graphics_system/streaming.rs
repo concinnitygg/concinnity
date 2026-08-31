@@ -903,7 +903,7 @@ mod tests {
     // its count-only policy.
     fn system_with_backend() -> (Arc<Mutex<MockState>>, GraphicsSystem) {
         let (recorded, backend) = recording_backend();
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         gs.backend = Some(Box::new(backend));
         (recorded, gs)
     }
@@ -964,7 +964,7 @@ mod tests {
         assert!(gs.texture_streamer.is_none(), "no slot to stream");
         assert!(recorded.lock().unwrap().calls.is_empty());
 
-        let mut headless = GraphicsSystem::new();
+        let mut headless = GraphicsSystem::new(None);
         headless.setup_texture_streaming(
             Some(StreamingConfig::default()),
             texture_payloads(1),
@@ -1127,7 +1127,7 @@ mod tests {
         assert!(gs.mesh_streamer.is_none(), "no mesh to stream");
         assert!(recorded.lock().unwrap().calls.is_empty());
 
-        let mut headless = GraphicsSystem::new();
+        let mut headless = GraphicsSystem::new(None);
         headless.setup_mesh_streaming(
             Some(StreamingConfig::default()),
             MeshStreamSetup {
@@ -1279,7 +1279,7 @@ mod tests {
         assert!(gs.chunk_stream.is_none(), "no VoxelWorld declared");
         assert!(recorded.lock().unwrap().calls.is_empty());
 
-        let mut headless = GraphicsSystem::new();
+        let mut headless = GraphicsSystem::new(None);
         headless.setup_voxel_world_streaming(
             Some(VoxelWorld::default()),
             &std::collections::HashMap::new(),

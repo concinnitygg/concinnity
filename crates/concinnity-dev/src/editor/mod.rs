@@ -121,7 +121,7 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
 
     // Bring up a renderable world: build the blobs if needed, load them, and
     // seed an empty world when there is nothing renderable to show.
-    let mut app = App::new();
+    let mut app = crate::project::app();
     boot_world(&mut app, &world_path, world_exists, &entries)?;
 
     // Inject the editor HUD elements before start (this also drops the world's
@@ -158,7 +158,7 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
 fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
     match json_path {
         Some(p) => (p.to_string(), std::path::Path::new(p).exists()),
-        None => match find_world_jsonl(None) {
+        None => match find_world_jsonl(crate::project::worlds_dir().as_deref(), None) {
             Ok(p) => (p, true),
             Err(_) => (WORLD_JSONL.to_string(), false),
         },
@@ -178,8 +178,10 @@ fn boot_world(
     world_exists: bool,
     entries: &[serde_json::Value],
 ) -> std::io::Result<()> {
-    let blobs_present =
-        || concinnity_host::store::paths::data_dir().is_some_and(|d| d.join("0").exists());
+    let blobs_present = || {
+        crate::project::data_dir()
+            .is_some_and(|d| concinnity_host::store::blob::primary_in(&d).exists())
+    };
 
     // Build if the world has content the compiled blobs do not reflect yet.
     if world_exists && !blobs_present() {

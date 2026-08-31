@@ -113,7 +113,11 @@ pub fn add_to_path(
         Ok(())
     })?;
 
-    match build_from_path(&tmp_path, crate::cook_platform()) {
+    match build_from_path(
+        &crate::project::require()?,
+        &tmp_path,
+        crate::cook_platform(),
+    ) {
         Ok(()) => std::fs::rename(&tmp_path, world_path).inspect_err(|_e| {
             let _ = std::fs::remove_file(&tmp_path);
         }),

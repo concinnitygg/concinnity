@@ -32,6 +32,12 @@
 //! write all leave the caller to compile normally, so the cache can never break
 //! or corrupt a build. Deleting `cache/` at any point costs recomputation and
 //! nothing else.
+//!
+//! Which file the segment is is not this module's business: a host [anchors]
+//! the one it resolved from its own state tree. Until one does, every operation
+//! here is a miss and every asset compiles.
+//!
+//! [anchors]: anchor
 
 mod identity;
 mod key;
@@ -39,8 +45,8 @@ mod segment;
 pub mod thumbnails;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 pub(crate) use concinnity_core::blob::CacheEntryKind;
 pub(crate) use key::{bake_key, expand_key, payload_key};
@@ -139,17 +145,45 @@ fn write(loaded: &Loaded) -> bool {
     segment::write(&loaded.path, &loaded.index, &stored, loaded.token)
 }
 
-// The segment for the installed state root, reading its index on the first call.
-// `None` when no host installed a state root, or when the running binary cannot
-// be identified; both turn every operation above into a miss, so payloads are
-// compiled fresh rather than warmed from a segment nothing can invalidate.
+// The segment file this process was told to build against. A poisoned lock is
+// taken anyway: the anchor is one path, so a panic mid-write leaves it either
+// the old value or the new one and never something in between.
+fn anchor_lock() -> MutexGuard<'static, Option<PathBuf>> {
+    static ANCHOR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    ANCHOR
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Point the build cache at `segment` for the rest of the process, or until
+/// another anchor replaces it. A host resolves the path from its own state tree
+/// (`StateTree::build_cache_path`); nothing here knows what one looks like.
+pub fn anchor(segment: &Path) {
+    *anchor_lock() = Some(segment.to_path_buf());
+}
+
+/// Drop the anchor, leaving the build with no segment to warm from.
+pub fn clear_anchor() {
+    *anchor_lock() = None;
+}
+
+// The anchored segment file, if a host named one.
+pub(crate) fn anchored_path() -> Option<PathBuf> {
+    anchor_lock().clone()
+}
+
+// The anchored segment, reading its index on the first call. `None` when
+// nothing anchored one, or when the running binary cannot be identified; both
+// turn every operation above into a miss, so payloads are compiled fresh rather
+// than warmed from a segment nothing can invalidate.
 fn open<'a>(held: &'a mut MutexGuard<'static, Option<Loaded>>) -> Option<&'a mut Loaded> {
-    let path = crate::paths::build_cache_path()?;
+    let path = anchored_path()?;
     let token = identity::token()?;
     if held.as_ref().is_some_and(|loaded| loaded.path != path) {
-        // A host moved the state root after this segment was read (a world's
-        // own `home` overriding the CLI's). What this build produced belongs to
-        // the old root, so write it back there before reading the new one.
+        // A host re-anchored the cache after this segment was read. What this
+        // build produced belongs to the old file, so write it back there before
+        // reading the new one.
         if let Some(previous) = held.take() {
             write(&previous);
         }

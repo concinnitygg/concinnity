@@ -130,6 +130,9 @@ use crate::World;
 pub struct WorldBuilder {
     // Finished world lines, serialized as each asset is added.
     lines: Vec<String>,
+    // The search root a bare `source` filename resolves under, when the
+    // embedder named one.
+    assets_dir: Option<std::path::PathBuf>,
     // Name and type per line, so the declaration order can be inspected
     // without re-reading the lines.
     declared: Vec<(String, &'static str)>,
@@ -144,6 +147,19 @@ pub fn world() -> WorldBuilder {
 }
 
 impl WorldBuilder {
+    /// Resolve bare `source` filenames under `dir`, the way a build resolves
+    /// them under a state tree's `assets/`. Without one only a path that stands
+    /// on its own resolves, since nothing here guesses a root.
+    pub fn assets_in(&mut self, dir: impl Into<std::path::PathBuf>) -> &mut Self {
+        self.assets_dir = Some(dir.into());
+        self
+    }
+
+    /// The asset search root this build resolves against, if one was named.
+    pub fn assets_dir(&self) -> Option<&Path> {
+        self.assets_dir.as_deref()
+    }
+
     /// Declare `value` under `name`. The asset type comes from the value's
     /// own [`Authored`] impl, so it cannot disagree with the fields.
     pub fn add<T: Authored>(&mut self, name: impl Into<String>, value: T) -> &mut Self {
@@ -260,10 +276,10 @@ impl WorldBuilder {
         // before any ShaderStage is compiled.
         concinnity_shader::install();
 
-        // Bare `source` filenames resolve under the installed state root's
-        // `assets/`. An embedder that installed no state root has no tree to
-        // search, so only paths that stand on their own resolve.
-        let assets_dir = concinnity_cook::paths::assets_dir();
+        // Bare `source` filenames resolve under the root the embedder named
+        // (`assets_in`). Without one there is no tree to search, so only paths
+        // that stand on their own resolve.
+        let assets_dir = self.assets_dir.clone();
         // Shaders are cooked for the backend the runtime linked in beside this
         // module consumes, so a world compiled in memory runs in the same
         // process.

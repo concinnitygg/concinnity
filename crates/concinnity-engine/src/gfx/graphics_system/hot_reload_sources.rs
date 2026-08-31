@@ -163,14 +163,14 @@ impl ProceduralMeshSourceMap {
 }
 
 // Resolve a Shader stage's declared source to the on-disk path the watcher
-// subscribes to and the runtime recompile reads, searching the running
-// project's `assets/` the way the build pipeline searches the root it was
-// given. Fills a [`ShaderStageSourceEntry`]'s `resolved_path`.
-pub(crate) fn resolve_runtime_source_path(raw: &str) -> String {
-    concinnity_host::store::source::resolve_source_path(
-        raw,
-        concinnity_host::store::paths::assets_dir().as_deref(),
-    )
+// subscribes to and the runtime recompile reads, searching `assets_dir` the way
+// the build pipeline searches the root it was given. Fills a
+// [`ShaderStageSourceEntry`]'s `resolved_path`.
+pub(crate) fn resolve_runtime_source_path(
+    raw: &str,
+    assets_dir: Option<&std::path::Path>,
+) -> String {
+    concinnity_host::store::source::resolve_source_path(raw, assets_dir)
 }
 
 /// One world-loaded Shader stage reload entry. Captures
@@ -388,11 +388,11 @@ mod tests {
     #[test]
     fn resolve_keeps_paths_with_a_directory_component() {
         // A path that already contains a directory is returned verbatim; the
-        // bare-filename branch consults the installed state root and is left to
-        // integration coverage. The resolution itself is covered in
-        // `concinnity_host::store`, and the build-side variant in concinnity-cook.
+        // bare-filename branch searches the root it was given. The resolution
+        // itself is covered in `concinnity_host::store`, and the build-side
+        // variant in concinnity-cook.
         assert_eq!(
-            resolve_runtime_source_path("shaders/x.metal"),
+            resolve_runtime_source_path("shaders/x.metal", None),
             "shaders/x.metal"
         );
     }

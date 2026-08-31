@@ -12,7 +12,7 @@ fn registration_for(type_str: &str) -> Option<concinnity_cook::authoring::regist
 pub(crate) fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
     match json_path {
         Some(p) if std::path::Path::new(p).exists() => Ok(p.to_string()),
-        _ => find_world_jsonl(None),
+        _ => find_world_jsonl(crate::project::worlds_dir().as_deref(), None),
     }
 }
 
@@ -140,7 +140,7 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
 fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
     let loaded = concinnity_cook::prepare_world(
         content,
-        concinnity_cook::paths::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         crate::cook_platform(),
     )
     .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;

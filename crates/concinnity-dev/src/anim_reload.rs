@@ -29,7 +29,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
     // same character file.
     let mut parsed_cache: HashMap<String, concinnity_cook::import::gltf_source::GltfDoc> =
         HashMap::new();
-    let assets_dir = crate::authoring::assets_root::assets_dir();
+    let assets_dir = crate::project::assets_dir();
     let mut reloaded = 0usize;
     let mut failed = 0usize;
 

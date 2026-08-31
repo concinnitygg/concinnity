@@ -19,21 +19,24 @@ use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cac
 use super::result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};
 use super::scene_refs::resolve_scene_refs;
 
-/// Build the world at `json_path` for `platform` and write its blobs to disk,
-/// against the installed state root: sources resolve under its `assets/` and
-/// the blobs land in its `data/`. The one entry point anchored to the
-/// process-wide state tree; a host that builds against its own directories
-/// calls [`prepare_world`](crate::build_only::prepare_world) +
-/// [`build_compiled`].
-pub fn build_from_path(json_path: &str, platform: Platform) -> std::io::Result<()> {
+/// Build the world at `json_path` for `platform` into `tree` and write its
+/// blobs to disk: sources resolve under the tree's `assets/` and the blobs land
+/// in its `data/`. The whole-tree entry point; a host that builds against
+/// unrelated directories calls
+/// [`prepare_world`](crate::build_only::prepare_world) + [`build_compiled`].
+pub fn build_from_path(
+    tree: &crate::paths::StateTree,
+    json_path: &str,
+    platform: Platform,
+) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
-    let assets_dir = crate::paths::assets_dir();
-    let loaded = crate::build_only::prepare_world(&content, assets_dir.as_deref(), platform)
+    let assets_dir = tree.assets_dir();
+    let loaded = crate::build_only::prepare_world(&content, Some(&assets_dir), platform)
         .map_err(|errs| crate::check::report_validation_errors(&errs))?;
 
-    let result = build_compiled(loaded.assets, assets_dir.as_deref(), None, platform)?;
+    let result = build_compiled(loaded.assets, Some(&assets_dir), None, platform)?;
 
-    let pack_result = write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
+    let pack_result = write_build_outputs(tree, &result, &loaded.injected, &loaded.shadowed)?;
     for (blob_idx, path) in pack_result.blob_paths.iter().enumerate() {
         let payload_bytes = result.payloads.get(blob_idx).map(|b| b.len()).unwrap_or(0);
         println!("Wrote {} ({} payload bytes)", path, payload_bytes);
@@ -78,21 +81,19 @@ pub fn write_blobs_to(
     )
 }
 
-/// Write the blobs and world-lock.json for a compiled world: the shared build
-/// tail used by the CLI and the FFI host. The lock records each asset under its
-/// real name plus every injected default with its full args.
+/// Write the blobs and world-lock.json for a compiled world into `tree`: the
+/// shared build tail used by the CLI and the FFI host. The lock records each
+/// asset under its real name plus every injected default with its full args.
 pub fn write_build_outputs(
+    tree: &crate::paths::StateTree,
     result: &PipelineResult,
     injected: &[crate::build_only::InjectedAsset],
     shadowed: &[crate::build_only::ShadowedAsset],
 ) -> std::io::Result<crate::blob::PackResult> {
-    let primary = crate::blob::blob_path(0).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no project state directory to write blobs into",
-        )
-    })?;
-    let pack_result = write_blobs_to(result, std::path::Path::new(&primary))?;
+    let pack_result = write_blobs_to(
+        result,
+        &concinnity_host::store::blob::primary_in(&tree.data_dir()),
+    )?;
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
@@ -586,16 +587,18 @@ mod tests {
 
     #[test]
     fn build_from_path_missing_world_file_errors() {
-        assert!(build_from_path("/no/such/world.jsonl", Platform::Metal).is_err());
+        let tree = crate::paths::StateTree::at(concinnity_testing::TempTree::new().path());
+        assert!(build_from_path(&tree, "/no/such/world.jsonl", Platform::Metal).is_err());
     }
 
     #[test]
     fn build_from_path_reports_a_malformed_world_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = concinnity_testing::TempTree::new();
         let world = dir.path().join("world.jsonl");
         std::fs::write(&world, "{not json\n").expect("write world");
-        let err =
-            build_from_path(world.to_str().unwrap(), Platform::Metal).expect_err("malformed world");
+        let tree = crate::paths::StateTree::at(dir.path());
+        let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal)
+            .expect_err("malformed world");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
@@ -603,7 +606,7 @@ mod tests {
     // record of what went into them would leave the output unexplainable.
     #[test]
     fn write_build_outputs_fails_when_the_lock_cannot_be_written() {
-        let _output = crate::blob::test_output::Output::new();
+        let output = crate::blob::test_output::Output::new();
         // A directory where the lock file belongs makes the write fail.
         std::fs::create_dir_all(crate::blob::LOCK_PATH).expect("occupy the lock path");
 
@@ -623,7 +626,7 @@ mod tests {
             resource_locks: Vec::new(),
         };
         assert!(
-            write_build_outputs(&result, &[], &[]).is_err(),
+            write_build_outputs(output.tree(), &result, &[], &[]).is_err(),
             "an unwritable lock must fail the build"
         );
     }
@@ -634,9 +637,9 @@ mod tests {
     fn build_from_path_writes_the_blobs_and_the_lock_beside_them() {
         let _shaders = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::compile::shader::install_stub_toolchain();
-        let _output = crate::blob::test_output::Output::new();
+        let output = crate::blob::test_output::Output::new();
 
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = concinnity_testing::TempTree::new();
         let world_path = dir.path().join("world.jsonl");
         std::fs::write(
             &world_path,
@@ -651,7 +654,8 @@ mod tests {
         )
         .expect("write world");
 
-        build_from_path(world_path.to_str().unwrap(), Platform::Metal).expect("build");
+        build_from_path(output.tree(), world_path.to_str().unwrap(), Platform::Metal)
+            .expect("build");
 
         let raw = std::fs::read_to_string(crate::blob::LOCK_PATH).expect("lock written");
         let lock: crate::blob::BlobLock = serde_json::from_str(&raw).expect("lock is valid json");

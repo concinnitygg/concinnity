@@ -20,7 +20,7 @@ use concinnity_core::geometry::payload_joints_to_defs;
 pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result<Vec<u8>, String> {
     let loaded = concinnity_cook::prepare_world(
         content,
-        crate::authoring::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         crate::cook_platform(),
     )
     .map_err(|errs| errs.join("; "))?;
@@ -49,7 +49,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     }
     let result = concinnity_cook::build_compiled(
         assets,
-        crate::authoring::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         None,
         crate::cook_platform(),
     )

@@ -1,5 +1,7 @@
 //! The `App` value: a world plus the loop state that drives it.
 
+use concinnity_host::store::paths::StateTree;
+
 use crate::app::startup_error::StartupError;
 use crate::blob;
 use crate::ecs::{SYSTEMS, StepResult, World};
@@ -17,6 +19,11 @@ pub(crate) enum AppStatus {
 pub struct App {
     status: AppStatus,
     world: World,
+    // Where this app reads and writes, or `None` for an app with no tree: its
+    // world runs, and everything that would touch disk does nothing. Published
+    // to the world at `start` so the systems are told rather than resolving
+    // paths of their own.
+    state: Option<StateTree>,
     shutdown: ShutdownToken,
     // FPS-cap pacer, run before each world step so no system pays the sleep
     // inside its own step time (see `app::pacing`).
@@ -38,10 +45,25 @@ impl App {
         Self {
             status: AppStatus::Created,
             world: World::new(),
+            state: None,
             shutdown: ShutdownToken::new(),
             pacer: Default::default(),
             clock: Default::default(),
         }
+    }
+
+    /// An app that reads and writes under `tree`: its blobs, its settings, its
+    /// saves, and the caches it warms. Without one the app runs a world and
+    /// touches no disk.
+    #[must_use]
+    pub fn in_tree(mut self, tree: StateTree) -> Self {
+        self.state = Some(tree);
+        self
+    }
+
+    /// The state tree this app runs against, if it has one.
+    pub fn state_tree(&self) -> Option<&StateTree> {
+        self.state.as_ref()
     }
 
     /// An app holding an already-built world, ready to start or run.
@@ -55,28 +77,35 @@ impl App {
     /// Overflow payload blobs are its siblings named by index, so a world
     /// written to `data/0` reads `data/1`, `data/2`, ... beside it.
     ///
-    /// Anchors the state tree beside the blob unless a host already installed
-    /// one, so the settings and saves the app writes land with the world it
-    /// read rather than under the directory it was launched from. The world's
-    /// own `AppConfig.home` overrides that at `start`.
+    /// Derives the state tree from the blob's own directory, so the settings
+    /// and saves the app writes land with the world it read rather than under
+    /// the directory it was launched from. A caller with a tree of its own
+    /// builds the app with [`in_tree`](Self::in_tree) instead. The world's own
+    /// `AppConfig.home` overrides either at `start`.
     pub fn from_blob(path: &std::path::Path) -> Result<Self, StartupError> {
-        if concinnity_host::store::paths::state_dir().is_none()
-            && let Some(state) = state_dir_for_blob(path)
-        {
-            concinnity_host::store::paths::set_state_dir(state);
-        }
         let loaded = blob::load_at(path)
             .map_err(|e| StartupError::from_blob_failure(path.to_path_buf(), e))?;
         let mut app = Self::new();
+        app.state = state_dir_for_blob(path).map(StateTree::at);
         app.install(loaded);
         Ok(app)
     }
 
-    /// load assets and blob payload data from the primary blob and
-    /// populate the world. Replaces any previously loaded world
+    /// Load assets and blob payload data from the primary blob under this app's
+    /// state tree, and populate the world. Replaces any previously loaded
+    /// world. `NoStateRoot` when the app has no tree to read from.
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
-        self.install(blob::load()?);
+        let primary = self.primary_blob().ok_or(CnResult::NoStateRoot)?;
+        self.load_blob_from(&primary)?;
         Ok(())
+    }
+
+    /// The primary blob this app reads: blob 0 under its tree's `data/`.
+    /// `None` for an app with no tree.
+    pub fn primary_blob(&self) -> Option<std::path::PathBuf> {
+        self.state
+            .as_ref()
+            .map(|tree| concinnity_host::store::blob::primary_in(&tree.data_dir()))
     }
 
     // `load_blob` against a primary blob file named directly, returning the
@@ -155,6 +184,7 @@ impl App {
             return Err(CnResult::InvalidState);
         }
         self.install_home();
+        self.publish_state_tree();
         self.install_budgets();
         // The world times each system against this; without it the profile's
         // per-system micros read zero.
@@ -167,10 +197,10 @@ impl App {
 
     // Point the runtime-writable state (`settings`, `saves/`, `crashes/`, the
     // shader caches) at the world's `AppConfig.home`. Runs before
-    // `world.start(SYSTEMS)`, which is where the systems that capture a save directory
-    // are built, and before anything reads the settings file. An empty `home`
-    // leaves whatever the host installed, which is what keeps the writability
-    // redirect a shipped player performs for itself in force.
+    // `world.start(SYSTEMS)`, which is where the systems that capture a save
+    // directory are built, and before anything reads the settings file. An
+    // empty `home` leaves the tree the host built, which is what keeps the
+    // writability redirect a shipped player performs for itself in force.
     fn install_home(&mut self) {
         let Some(home) = self
             .world
@@ -181,16 +211,37 @@ impl App {
         else {
             return;
         };
-        let Some(dir) = resolve_home(&home, concinnity_host::store::paths::state_dir().as_deref())
-        else {
+        let Some(tree) = self.state.as_ref() else {
             tracing::warn!(
-                "AppConfig home '{home}' is relative but no state root is installed; \
+                "AppConfig home '{home}' has no state tree to resolve against; \
+                 the app writes nowhere"
+            );
+            return;
+        };
+        let Some(dir) = resolve_home(&home, tree.content_root()) else {
+            tracing::warn!(
+                "AppConfig home '{home}' is relative but the state tree has no root; \
                  leaving writable state where it is"
             );
             return;
         };
         tracing::info!("Writable state: {}", dir.display());
-        concinnity_host::store::paths::set_writable_state_dir(dir);
+        self.state = Some(tree.clone().with_writable(dir));
+    }
+
+    // Hand the state tree to the world, and to the process-wide caches that
+    // outlive any one call. Runs after `install_home`, so what the systems read
+    // is the tree the world asked for, and before `world.start(SYSTEMS)`, which
+    // is where the systems that capture a directory are built.
+    fn publish_state_tree(&mut self) {
+        let Some(tree) = self.state.clone() else {
+            return;
+        };
+        concinnity_host::store::cache::anchor(
+            concinnity_host::store::cache::CacheAnchor::new(tree.runtime_cache_path())
+                .with_bundled(tree.bundled_runtime_cache_path()),
+        );
+        self.world.insert_resource(tree);
     }
 
     // Compute the process thread + memory budgets from the host machine and the
@@ -297,15 +348,15 @@ fn state_dir_for_blob(primary: &std::path::Path) -> Option<std::path::PathBuf> {
 }
 
 // Resolve an authored `home` against the content root: an absolute path is used
-// verbatim, a relative one hangs off the state dir. `None` when a relative path
-// has no state dir to hang off, which leaves the host's own anchor in place
+// verbatim, a relative one hangs off the content root. `None` when a relative
+// path has no root to hang off, which leaves the host's own tree in place
 // rather than resolving against the working directory.
-fn resolve_home(home: &str, state_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+fn resolve_home(home: &str, content_root: &std::path::Path) -> Option<std::path::PathBuf> {
     let home = std::path::Path::new(home);
     if home.is_absolute() {
         return Some(home.to_path_buf());
     }
-    state_dir.map(|state| state.join(home))
+    (!content_root.as_os_str().is_empty()).then(|| content_root.join(home))
 }
 
 #[cfg(test)]
@@ -419,17 +470,14 @@ mod tests {
         };
         let state = std::path::Path::new(root);
 
+        assert_eq!(resolve_home("state", state), Some(state.join("state")));
         assert_eq!(
-            resolve_home("state", Some(state)),
-            Some(state.join("state"))
-        );
-        assert_eq!(
-            resolve_home(absolute, Some(state)),
+            resolve_home(absolute, state),
             Some(std::path::PathBuf::from(absolute))
         );
         // An absolute home needs no content root behind it.
         assert_eq!(
-            resolve_home(absolute, None),
+            resolve_home(absolute, std::path::Path::new("")),
             Some(std::path::PathBuf::from(absolute))
         );
     }
@@ -438,7 +486,53 @@ mod tests {
     // anchored to the working directory, so the host's own choice stands.
     #[test]
     fn a_relative_home_without_a_content_root_resolves_to_nothing() {
-        assert_eq!(resolve_home("state", None), None);
+        assert_eq!(resolve_home("state", std::path::Path::new("")), None);
+    }
+
+    // A world's `home` splits the writable root off the tree the host built,
+    // leaving the content (and the blobs the app reads) where it was.
+    #[test]
+    fn an_app_config_home_moves_only_the_writable_root() {
+        let root = if cfg!(windows) {
+            r"C:\apps\MyGame"
+        } else {
+            "/apps/MyGame"
+        };
+        let mut app = App::new().in_tree(StateTree::at(root));
+        app.world_mut().add_component(AppConfig {
+            home: "state".to_string(),
+            max_memory_mb: 0,
+            job_threads: 0,
+        });
+        app.start().unwrap();
+
+        let tree = app.state_tree().expect("the app kept its tree");
+        assert_eq!(tree.content_root(), std::path::Path::new(root));
+        assert_eq!(
+            tree.saves_dir(),
+            std::path::Path::new(root).join("state").join("saves")
+        );
+        assert_eq!(
+            tree.data_dir(),
+            std::path::Path::new(root).join("data"),
+            "the world's home never moves what a build wrote"
+        );
+        assert_eq!(
+            app.world().resource::<StateTree>(),
+            Some(tree),
+            "the systems are handed the same tree the app resolved"
+        );
+    }
+
+    // An app with no tree touches no disk, and publishes nothing for the
+    // systems to read: a world runs, everything it would persist does nothing.
+    #[test]
+    fn an_app_without_a_tree_publishes_none() {
+        let mut app = App::new();
+        assert_eq!(app.primary_blob(), None);
+        assert_eq!(app.load_blob(), Err(CnResult::NoStateRoot));
+        app.start().unwrap();
+        assert!(app.world().resource::<StateTree>().is_none());
     }
 
     // A blob named directly anchors the state tree beside the world it holds,

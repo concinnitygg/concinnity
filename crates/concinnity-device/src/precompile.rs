@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use concinnity_host::store::cache::{CACHE_BUDGET_BYTES, Segment};
-use concinnity_host::store::paths;
+use concinnity_host::store::paths::StateTree;
 
 use crate::shader_cache::Ensured;
 
@@ -62,7 +62,7 @@ impl Report {
 /// player's own slangc is whatever it is, and a shipped artifact is a function
 /// of its source rather than of what compiled it.
 pub fn precompile_builtin_shaders(state_dir: &Path) -> Report {
-    let path = paths::runtime_cache_in(state_dir);
+    let path = StateTree::at(state_dir).bundled_runtime_cache_path();
     let mut bundle = Segment::read_from(&path);
     let mut report = Report::default();
     #[cfg(backend_dx)]

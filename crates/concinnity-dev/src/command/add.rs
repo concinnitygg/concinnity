@@ -14,7 +14,7 @@ use concinnity_cook::authoring::world::{WORLD_JSONL, find_world_jsonl};
 /// directory; when neither exists and the target is a 3D scene, the world is
 /// scaffolded at the fallback location.
 pub fn add(name: Option<&str>, target: &str, template: Option<&str>) -> std::io::Result<()> {
-    let world_path = match find_world_jsonl(None) {
+    let world_path = match find_world_jsonl(crate::project::worlds_dir().as_deref(), None) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => WORLD_JSONL.to_string(),
         Err(e) => return Err(e),

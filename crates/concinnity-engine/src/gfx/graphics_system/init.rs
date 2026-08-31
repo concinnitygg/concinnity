@@ -1297,6 +1297,7 @@ impl GraphicsSystem {
         let world_default = &world_shaders[0];
         let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
         if crate::app::dev_flags::enabled() {
+            let assets_dir = self.assets_dir();
             let mut capture = |stage_opt: Option<&StageSource>, kind: ShaderKind| {
                 let Some(stage) = stage_opt else {
                     return;
@@ -1304,7 +1305,10 @@ impl GraphicsSystem {
                 let Some(raw) = stage.source_for(crate::platform::current()) else {
                     return;
                 };
-                let resolved = super::hot_reload_sources::resolve_runtime_source_path(&raw);
+                let resolved = super::hot_reload_sources::resolve_runtime_source_path(
+                    &raw,
+                    assets_dir.as_deref(),
+                );
                 shader_stage_source_map.entries.push(
                     super::hot_reload_sources::ShaderStageSourceEntry {
                         kind,
@@ -1541,7 +1545,7 @@ impl GraphicsSystem {
             environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
                 resolved_path: concinnity_host::store::source::resolve_source_path(
                     &info.source,
-                    concinnity_host::store::paths::assets_dir().as_deref(),
+                    self.assets_dir().as_deref(),
                 ),
                 prefilter_face_size: info.prefilter_face_size,
                 irradiance_face_size: info.irradiance_face_size,
@@ -1596,7 +1600,7 @@ impl GraphicsSystem {
             color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
                 resolved_path: concinnity_host::store::source::resolve_source_path(
                     &src,
-                    concinnity_host::store::paths::assets_dir().as_deref(),
+                    self.assets_dir().as_deref(),
                 ),
             });
         }

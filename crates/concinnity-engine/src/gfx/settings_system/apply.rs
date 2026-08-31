@@ -36,8 +36,11 @@ impl SettingsState {
         // settings disk I/O.
         let mut cfg = self.settings_cache.take();
         let mut cfg_dirty = false;
+        let tree = ctx
+            .resource::<concinnity_host::store::paths::StateTree>()
+            .cloned();
         for mut cmd in setting_cmds {
-            let cfg = cfg.get_or_insert_with(crate::config::Settings::load);
+            let cfg = cfg.get_or_insert_with(|| crate::config::Settings::load(tree.as_ref()));
             // A Next/Prev on a slider row steps its value by a twentieth of
             // the range (a focused row's Left/Right), rewriting the op so the
             // SetFraction arm below applies + persists it. The handle's
@@ -846,7 +849,7 @@ impl SettingsState {
         if let Some(cfg) = cfg {
             if cfg_dirty {
                 self.settings_writer
-                    .get_or_insert_with(super::writer::SettingsWriter::spawn)
+                    .get_or_insert_with(|| super::writer::SettingsWriter::spawn(tree.clone()))
                     .save(cfg.clone());
             }
             self.settings_cache = Some(cfg);

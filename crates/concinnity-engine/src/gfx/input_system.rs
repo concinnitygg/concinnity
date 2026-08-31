@@ -134,7 +134,9 @@ impl System for InputSystem {
 
     fn init(&mut self, ctx: &mut PipelineContext) {
         // Persisted settings-menu choices override the engine defaults.
-        let settings = crate::config::Settings::load();
+        let settings = crate::config::Settings::load(
+            ctx.resource::<concinnity_host::store::paths::StateTree>(),
+        );
         self.map = settings.controls.gamepad_map.unwrap_or_default();
         if let Some(dz) = settings.controls.gamepad_deadzone {
             self.deadzone = dz;

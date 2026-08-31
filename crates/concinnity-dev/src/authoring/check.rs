@@ -18,7 +18,7 @@ pub fn check_at_path(world_path: &str) -> std::io::Result<()> {
 pub fn check_from_str(content: &str, label: &str) -> std::io::Result<()> {
     match concinnity_cook::prepare_world(
         content,
-        super::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         crate::cook_platform(),
     ) {
         Ok(loaded) => {

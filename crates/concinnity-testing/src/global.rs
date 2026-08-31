@@ -1,14 +1,13 @@
 //! The one guard over the process-global state a test may touch.
 //!
 //! Cargo runs a binary's tests in parallel threads of one process, so anything
-//! process-wide -- the working directory, the installed state root, the window
-//! policy -- is shared by every test running at that moment. Each of those is
-//! also something a test needs to move.
+//! process-wide -- the working directory, the window policy -- is shared by
+//! every test running at that moment. Each of those is also something a test
+//! needs to move.
 //!
 //! Taking them separately is what goes wrong: one test's chdir lands under
-//! another's relative write, and a state root cleared at the end of one test
-//! leaves the next without one. This guard owns the lock and every move made
-//! under it, and puts all of them back on drop, however the test ends.
+//! another's relative write. This guard owns the lock and every move made under
+//! it, and puts all of them back on drop, however the test ends.
 
 use std::path::{Path, PathBuf};
 
@@ -34,7 +33,6 @@ pub struct GlobalState {
     _access: ExclusiveAccess,
     tree: TempTree,
     previous_cwd: Option<PathBuf>,
-    clear_state_dir: Option<fn()>,
     restore_windows: bool,
 }
 
@@ -50,7 +48,6 @@ impl GlobalState {
             _access: access::exclusive(),
             tree: TempTree::new(),
             previous_cwd: None,
-            clear_state_dir: None,
             restore_windows: false,
         }
     }
@@ -67,24 +64,6 @@ impl GlobalState {
         let previous = std::env::current_dir().expect("the working directory is readable");
         std::env::set_current_dir(self.tree.path()).expect("the tree is entered");
         self.previous_cwd = Some(previous);
-        self
-    }
-
-    /// Point an installed state root at the tree, clearing it on drop.
-    ///
-    /// The root lives in a crate this one does not depend on, so the caller
-    /// passes the pair that installs and clears it:
-    ///
-    /// ```ignore
-    /// GlobalState::acquire().with_state_dir(
-    ///     |path| concinnity_host::store::paths::set_state_dir(path),
-    ///     concinnity_host::store::paths::clear_state_dir,
-    /// )
-    /// ```
-    #[must_use]
-    pub fn with_state_dir(mut self, install: fn(&Path), clear: fn()) -> Self {
-        install(self.tree.path());
-        self.clear_state_dir = Some(clear);
         self
     }
 
@@ -117,9 +96,6 @@ impl Drop for GlobalState {
         if let Some(previous) = self.previous_cwd.take() {
             let _ = std::env::set_current_dir(previous);
         }
-        if let Some(clear) = self.clear_state_dir.take() {
-            clear();
-        }
         if self.restore_windows {
             concinnity_core::window_policy::allow_windows();
         }
@@ -129,7 +105,6 @@ impl Drop for GlobalState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn a_relative_write_lands_in_the_tree_and_the_cwd_comes_back() {
@@ -143,30 +118,6 @@ mod tests {
 
         assert_eq!(std::env::current_dir().expect("cwd"), before);
         assert!(!root.exists(), "the tree went with the guard");
-    }
-
-    static INSTALLED: AtomicUsize = AtomicUsize::new(0);
-    static CLEARED: AtomicUsize = AtomicUsize::new(0);
-
-    #[test]
-    fn a_state_root_is_installed_then_cleared() {
-        INSTALLED.store(0, Ordering::SeqCst);
-        CLEARED.store(0, Ordering::SeqCst);
-
-        {
-            let _state = GlobalState::acquire().with_state_dir(
-                |_| {
-                    INSTALLED.fetch_add(1, Ordering::SeqCst);
-                },
-                || {
-                    CLEARED.fetch_add(1, Ordering::SeqCst);
-                },
-            );
-            assert_eq!(INSTALLED.load(Ordering::SeqCst), 1);
-            assert_eq!(CLEARED.load(Ordering::SeqCst), 0);
-        }
-
-        assert_eq!(CLEARED.load(Ordering::SeqCst), 1);
     }
 
     #[test]

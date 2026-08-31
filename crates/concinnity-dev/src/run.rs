@@ -36,7 +36,7 @@ fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
             std::io::ErrorKind::NotFound,
             format!("world file not found: {p}"),
         )),
-        None => find_world_jsonl(None),
+        None => find_world_jsonl(crate::project::worlds_dir().as_deref(), None),
     }
 }
 
@@ -58,7 +58,7 @@ pub(crate) fn run_interpreted(
     // is authoring I/O in concinnity-cook, which the runtime does not link).
     concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(json_path.to_string()));
 
-    let mut app = App::new();
+    let mut app = crate::project::app();
     *app.world_mut() = crate::build_world_from_path(json_path).map_err(|e| {
         tracing::error!("Could not build world from {json_path}: {e}");
         e

@@ -1,10 +1,10 @@
 //! How a test is allowed to reach this binary's process-global state.
 //!
 //! Cargo runs a binary's tests on parallel threads, so the working directory,
-//! the installed state root, the engine's development flags and the window
-//! policy are shared by every test running at that moment. `concinnity-testing`
-//! puts one reader/writer lock over all of it: readers stay parallel, writers
-//! run alone.
+//! the dev session's open project, the engine's development flags and the
+//! window policy are shared by every test running at that moment.
+//! `concinnity-testing` puts one reader/writer lock over all of it: readers
+//! stay parallel, writers run alone.
 //!
 //! Neither guard is reentrant. Taking two on one thread deadlocks the test, and
 //! a deadlocked test does not fail -- it hangs, which on a coverage run or a
@@ -45,8 +45,12 @@ const SHARED: &[&str] = &["concinnity_testing::shared()", "read_access()"];
 
 // Writes to process-global state. A test reaching one of these without an
 // exclusive guard races every other test in its binary.
+// Opening the dev session's project directly is a write. The dev harness's
+// `isolate_state_dir` is not listed beside it: it opens the same project on
+// every call, so two tests reaching it concurrently install the same value
+// rather than moving state out from under each other.
 const GLOBAL_WRITES: &[&str] = &[
-    "set_state_dir(",
+    "project::open(",
     "set_current_dir(",
     "dev_flags::set_",
     "set_pending_animations(",

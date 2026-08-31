@@ -15,22 +15,23 @@
 //!     that forbid a shape which at runtime would hang rather than fail.
 //!   - [`exclusive`] / [`shared`]: the one reader/writer lock over this
 //!     binary's process-global state. Readers stay parallel; writers run alone.
-//!     [`GlobalState`] is that exclusive guard plus the cwd, state-root and
-//!     window-policy moves, all put back on drop.
-//!   - [`shared_cache_dir`]: the one thing a test may keep between runs, for a
-//!     content-addressed cache that exists to avoid recompiling.
+//!     [`GlobalState`] is that exclusive guard plus the cwd and window-policy
+//!     moves, both put back on drop.
+//!   - [`shared_cache_dir`] / [`shared_state_dir`]: the two roots a suite keeps
+//!     outside any one test -- a content-addressed cache that exists to avoid
+//!     recompiling, and the process-wide state that is emptied once per run.
 
 mod access;
-mod cache_dir;
 mod global;
+mod shared_dirs;
 mod temp;
 
 pub mod fixtures;
 pub mod source;
 
 pub use access::{ExclusiveAccess, SharedAccess, exclusive, shared};
-pub use cache_dir::shared_cache_dir;
 pub use global::GlobalState;
+pub use shared_dirs::{shared_cache_dir, shared_state_dir};
 pub use temp::{TempTree, utf8, write_into};
 
 /// Forbid window creation for the rest of the process.

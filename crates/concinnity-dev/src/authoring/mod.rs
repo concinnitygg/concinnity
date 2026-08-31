@@ -4,7 +4,6 @@
 // bridge, shared by this crate's `command` layer and the editor.
 
 mod add;
-pub(crate) mod assets_root;
 mod build;
 mod check;
 pub(crate) mod name_table;

@@ -35,7 +35,7 @@ fn report_panic(info: &PanicHookInfo<'_>) {
     report.location = info.location().map(ToString::to_string);
     report.backtrace = Some(std::backtrace::Backtrace::force_capture().to_string());
 
-    let Some(dir) = concinnity_host::store::paths::crashes_dir() else {
+    let Some(dir) = super::report_dir() else {
         return;
     };
     let stem = write::unique_stem(&dir, &report.file_stem());

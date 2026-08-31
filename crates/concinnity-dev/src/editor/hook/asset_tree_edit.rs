@@ -56,7 +56,7 @@ impl EditorHook {
         let content = crate::world::write_world_jsonl(entries).map_err(|e| e.to_string())?;
         concinnity_cook::prepare_world(
             &content,
-            crate::authoring::assets_root::assets_dir().as_deref(),
+            crate::project::assets_dir().as_deref(),
             crate::cook_platform(),
         )
         .map_err(|errs| {

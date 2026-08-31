@@ -279,7 +279,7 @@ fn titled_scene(title: &str) -> WorldBuilder {
 // flag is excluded.
 fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
     let _flags = crate::app::dev_flags::read_access();
-    let mut gs = GraphicsSystem::new();
+    let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);
     let mut ctx = world.ctx();
     crate::ecs::decompose::run(&mut ctx);
@@ -291,7 +291,7 @@ fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
 // exclusive and not reentrant, so the caller holds it across init rather than
 // letting init take shared access of its own.
 fn init_graphics_under_flags(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
-    let mut gs = GraphicsSystem::new();
+    let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);
     let mut ctx = world.ctx();
     crate::ecs::decompose::run(&mut ctx);
@@ -1876,7 +1876,7 @@ fn system_trait_delegates_to_init_and_step() {
     let mut world = scene_builder().build();
     let mut gs = GraphicsSystem {
         test_hooks: Some(hooks),
-        ..Default::default()
+        ..GraphicsSystem::new(None)
     };
     {
         let mut ctx = world.ctx();

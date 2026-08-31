@@ -45,8 +45,6 @@ static CN_RUNTIME_PLATFORM: [u8; 25] = *b"cn-runtime-platform:hlsl\0";
 static CN_RUNTIME_PLATFORM: [u8; 25] = *b"cn-runtime-platform:glsl\0";
 
 fn main() -> std::io::Result<()> {
-    concinnity_engine::crash::install();
-
     // Keep the backend stamp in the linked binary (its bytes are what `cn
     // export` scans); taking its address defeats any linker dead-stripping.
     #[cfg(any(backend_metal, backend_dx, backend_vk))]
@@ -54,26 +52,19 @@ fn main() -> std::io::Result<()> {
 
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    let content_dir = state::state_dir_for_exe(exe_dir);
+    let tree = state::tree_for_exe(&exe, exe_dir);
 
-    // Redirect runtime-writable state (`saves/` + `settings`) to a per-user
-    // directory when the content dir cannot be written -- a read-only install
-    // such as Program Files. In the portable case (content dir writable) both
-    // stay beside the data, preserving the single-folder layout. The world's
-    // own `AppConfig.home`, applied once the blob is read, overrides either.
-    if !state::dir_is_writable(&content_dir)
-        && let Some(writable) = state::per_user_state_dir(&state::app_name_from_exe(&exe))
-    {
-        concinnity_engine::set_writable_state_dir(writable);
-    }
+    // Before anything else can fault: a report written from here on lands
+    // beside the app rather than nowhere.
+    concinnity_engine::crash::install(Some(&tree.crashes_dir()));
 
     // One positional argument names the world instead of the bundled `data`.
-    // It moves only what is read: `saves/` and `settings` stay anchored above,
-    // so pointing the player at a blob in a read-only place never relocates a
-    // player's saves.
+    // It moves only what is read: `saves/` and `settings` stay in the tree
+    // resolved above, so pointing the player at a blob in a read-only place
+    // never relocates a player's saves.
     let requested = std::env::args_os()
         .nth(1)
-        .map_or_else(|| content_dir.join("data"), PathBuf::from);
+        .map_or_else(|| tree.data_dir(), PathBuf::from);
     let blob = blob::blob_source(&requested).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -81,7 +72,7 @@ fn main() -> std::io::Result<()> {
         )
     })?;
 
-    concinnity_engine::run_from(&content_dir, blob.as_source())
+    concinnity_engine::run_from(&tree, blob.as_source())
 }
 
 #[cfg(test)]

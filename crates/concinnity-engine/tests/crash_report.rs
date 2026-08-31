@@ -1,6 +1,6 @@
 //! End-to-end panic reporting: a child process (this test binary re-run with
 //! the ignored probe selected) installs the crash hooks and panics; the parent
-//! asserts a complete report lands under the state root's crashes dir.
+//! asserts a complete report lands in the state tree's crashes dir.
 //!
 //! The engine reads no environment of its own, so the parent hands the child a
 //! scratch root through a variable this file owns and the probe installs it.
@@ -8,7 +8,7 @@
 use std::process::Command;
 
 // How the parent tells the spawned probe where to write. Read here and nowhere
-// else: the state root is installed through the engine's own API below.
+// else: the tree is built from it and handed to the engine below.
 const PROBE_ROOT_ENV: &str = "CN_CRASH_PROBE_ROOT";
 
 // An integration test links the engine as an ordinary dependency, so it
@@ -19,10 +19,9 @@ concinnity_core::install_global_allocator!();
 #[test]
 #[ignore = "probe body: spawned by crash_report_lands_for_a_panicking_process"]
 fn panicking_probe() {
-    if let Some(root) = std::env::var_os(PROBE_ROOT_ENV) {
-        concinnity_engine::paths::set_state_dir(root);
-    }
-    concinnity_engine::crash::install();
+    let tree = std::env::var_os(PROBE_ROOT_ENV).map(concinnity_engine::StateTree::at);
+    let crashes = tree.as_ref().map(concinnity_engine::StateTree::crashes_dir);
+    concinnity_engine::crash::install(crashes.as_deref());
     panic!("crash report end to end probe");
 }
 

@@ -1939,7 +1939,7 @@ mod tests {
         };
         crate::build_pipeline_from_str(
             &world,
-            crate::authoring::assets_root::assets_dir().as_deref(),
+            crate::project::assets_dir().as_deref(),
             None,
             crate::cook_platform(),
         )

@@ -24,7 +24,7 @@ pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
 
     let loaded = concinnity_cook::prepare_world(
         content,
-        super::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         crate::cook_platform(),
     )
     .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
@@ -102,7 +102,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 
     let mut result = build_compiled(
         loaded.assets,
-        super::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         None,
         crate::cook_platform(),
     )?;
@@ -239,7 +239,7 @@ pub(crate) fn build_world_str_to_disk_with_progress(
     let loaded = prepare(content)?;
     let result = concinnity_cook::build_compiled_with_progress(
         loaded.assets,
-        super::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         None,
         crate::cook_platform(),
         progress,
@@ -251,7 +251,12 @@ pub(crate) fn build_world_str_to_disk_with_progress(
             total: 0,
         });
     }
-    concinnity_cook::write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
+    concinnity_cook::write_build_outputs(
+        &crate::project::require()?,
+        &result,
+        &loaded.injected,
+        &loaded.shadowed,
+    )?;
     Ok(())
 }
 
@@ -441,11 +446,11 @@ mod tests {
         }
     }
 
-    // Clears the process-global state root on the way out, for the same reason.
-    struct StateDirGuard;
-    impl Drop for StateDirGuard {
+    // Closes the session's project on the way out, for the same reason.
+    struct ProjectGuard;
+    impl Drop for ProjectGuard {
         fn drop(&mut self) {
-            concinnity_host::store::paths::clear_state_dir();
+            crate::project::close();
         }
     }
 
@@ -482,14 +487,14 @@ mod tests {
     #[test]
     fn build_world_to_disk_writes_blobs_and_lock() {
         let _guard = crate::test_support::lock();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = concinnity_testing::TempTree::new();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
         let _cwd = CwdGuard(prev);
-        // The lock file is written relative to the cwd; the blobs go wherever
-        // the state root points, which nothing installs by default.
-        concinnity_host::store::paths::set_state_dir(dir.path());
-        let _state = StateDirGuard;
+        // The lock file is written relative to the cwd; the blobs go into the
+        // project's `data/`, and no project is open by default.
+        crate::project::open(concinnity_host::store::paths::StateTree::at(dir.path()));
+        let _project = ProjectGuard;
 
         std::fs::write(
             "world.jsonl",
@@ -501,10 +506,10 @@ mod tests {
 
         // The primary blob (data/0) and the provenance lock are both written.
         assert!(
-            concinnity_host::store::paths::data_dir()
-                .expect("the test installs a state dir")
-                .join("0")
-                .exists(),
+            concinnity_host::store::blob::primary_in(
+                &crate::project::data_dir().expect("the test opened a project")
+            )
+            .exists(),
             "data/0 blob written"
         );
         assert!(

@@ -48,7 +48,7 @@ pub(super) fn reload_volumetric_fog(
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
         &content,
-        crate::authoring::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -161,7 +161,7 @@ pub(super) fn reload_procedural_meshes(
     // "missing from JSONL" every reload.
     let entries = match concinnity_cook::build_only::expand_world_from_str(
         &content,
-        crate::authoring::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -238,7 +238,7 @@ pub(super) fn reload_procedural_meshes(
         // image (core's compile_mesh_payload links no image decoders).
         let payload = match concinnity_cook::compile::mesh_compile::compile_mesh_payload(
             raw_args,
-            crate::authoring::assets_root::assets_dir().as_deref(),
+            crate::project::assets_dir().as_deref(),
         ) {
             Ok(b) => b,
             Err(e) => {
@@ -395,7 +395,7 @@ pub(super) fn reload_stories(
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
         &content,
-        crate::authoring::assets_root::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {

@@ -70,8 +70,8 @@ pub use registry::SYSTEMS;
 // below, and the queries over them in `world_queries`.
 pub use concinnity_core::ecs::World;
 pub use world_queries::{
-    gpu_profile, memory_budget, memory_drift, renders, streaming_pressure, streaming_stats,
-    systems_and_render_backend, take_render_backend, thread_budget,
+    gpu_profile, memory_budget, memory_drift, renders, state_tree, streaming_pressure,
+    streaming_stats, systems_and_render_backend, take_render_backend, thread_budget,
 };
 
 // The `System` behavior trait + its `StepResult` control signal are renderer-free

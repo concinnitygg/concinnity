@@ -829,7 +829,7 @@ mod tests {
                 },
             );
         }
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(
             snap.models,
@@ -853,7 +853,7 @@ mod tests {
             pose.morph_weights = vec![0.25, 0.75];
             ctx.insert(e, pose);
         }
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         let poses: Vec<(usize, usize)> = snap.poses.iter().map(|(idx, m)| (idx, m.len())).collect();
         assert_eq!(poses, vec![(5, 2)]);
@@ -885,7 +885,7 @@ mod tests {
                 world_hidden: true,
             });
         }
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert!(snap.poses.is_empty(), "menu freezes pose extraction");
         assert!(snap.frame.menu_active);
@@ -934,7 +934,7 @@ mod tests {
                 cam_pos: [7.0, 0.0, 0.0],
             });
         }
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.frame.view, translated(7.0));
         assert_eq!(snap.frame.cam_pos, [7.0, 0.0, 0.0]);
@@ -962,7 +962,7 @@ mod tests {
                 epoch: std::time::Instant::now(),
             });
         }
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert!(
             matches!(snap.scene_ops.first(), Some(SceneOp::SetFade(_))),
@@ -982,7 +982,7 @@ mod tests {
     #[test]
     fn extraction_resolves_menu_override_into_ui_intents() {
         let mut world = ExtractWorld::new();
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.ui.menu_mode, None);
         assert_eq!(snap.ui.camera_capture, None);
@@ -1013,7 +1013,7 @@ mod tests {
             e
         };
         // A shipped runtime: no candidates, so no pick index is published.
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.models, vec![(9, translated(2.0))]);
         assert!(world.resources.get::<crate::ecs::PickIndex>().is_none());
@@ -1088,7 +1088,7 @@ mod tests {
             }
         });
 
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         // Frame 0: the send completes, but its feedback may or may not have
         // landed yet; either way the step continues.
         assert_eq!(gs.run_step(&mut world.ctx()), StepResult::Continue);
@@ -1128,7 +1128,7 @@ mod tests {
             },
         )));
         drop(snapshot_rx);
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         assert_eq!(gs.run_step(&mut world.ctx()), StepResult::Stop);
     }
 

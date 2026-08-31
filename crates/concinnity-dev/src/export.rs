@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_cook::build_from_path;
 use concinnity_cook::build_only::prepare_world;
+use concinnity_cook::paths::StateTree;
 
 use crate::command::resolve_world_path;
 
@@ -75,14 +76,15 @@ pub fn export(
     // Build the world exactly like `cn build` (validates, compiles, writes the
     // blobs + world-lock.json, reuses the build cache).
     let world_path = resolve_world_path(json_path)?;
-    build_from_path(&world_path, crate::cook_platform())?;
+    let tree = crate::project::require()?;
+    build_from_path(&tree, &world_path, crate::cook_platform())?;
 
     // Read the app metadata from the expanded world. The build above already
     // validated it, so this cannot fail on validation; map any error plainly.
     let content = fs::read_to_string(&world_path)?;
     let loaded = prepare_world(
         &content,
-        concinnity_cook::paths::assets_dir().as_deref(),
+        crate::project::assets_dir().as_deref(),
         crate::cook_platform(),
     )
     .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
@@ -90,7 +92,7 @@ pub fn export(
 
     let out_dir = Path::new(out);
     fs::create_dir_all(out_dir)?;
-    let data_dir = concinnity_cook::paths::data_dir().ok_or_else(|| {
+    let data_dir = crate::project::data_dir().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             "no project state directory to read the built blobs from",
@@ -133,7 +135,7 @@ fn export_portable(
     make_executable(&exe_dst)?;
     copy_runtime_sidecars(runtime, runtime_platform, &bundle_dir)?;
 
-    let blobs = copy_blobs(data_dir, &bundle_dir.join("data"))?;
+    let blobs = copy_blobs(data_dir, &StateTree::at(&bundle_dir).data_dir())?;
     // Before archiving, so the warmed cache segment is inside the zip. The
     // player resolves its state root to the bundle folder, so `cache/0` sits
     // beside the exe.
@@ -175,7 +177,7 @@ fn export_macos(
     fs::copy(runtime, &exe_dst)?;
     make_executable(&exe_dst)?;
 
-    let blobs = copy_blobs(data_dir, &resources.join("data"))?;
+    let blobs = copy_blobs(data_dir, &StateTree::at(&resources).data_dir())?;
     // The player resolves its state root to Contents/Resources; a no-op on
     // Metal, whose shaders precompile at build time.
     precompile_shaders(&resources);

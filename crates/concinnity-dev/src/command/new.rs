@@ -49,7 +49,11 @@ fn init_in_dir(dir: &str) -> std::io::Result<()> {
     println!("Created {}", world_path.display());
 
     let world_path_str = world_path.to_str().unwrap_or(WORLD_JSONL);
-    build_from_path(world_path_str, crate::cook_platform())
+    build_from_path(
+        &crate::project::require()?,
+        world_path_str,
+        crate::cook_platform(),
+    )
 }
 
 #[cfg(test)]

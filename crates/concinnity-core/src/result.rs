@@ -27,8 +27,8 @@ pub enum CnResult {
     FileIo,
 
     #[error("No state directory installed")]
-    /// Project state was read before any host anchored the state tree. See
-    /// `concinnity_host::store::paths::set_state_dir`.
+    /// Project state was read by a caller that was handed no state tree. See
+    /// `concinnity_host::store::paths::StateTree`.
     NoStateRoot,
 }
 

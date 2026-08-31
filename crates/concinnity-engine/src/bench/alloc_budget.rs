@@ -138,7 +138,7 @@ fn static_extraction_allocates_nothing() {
             .components
             .insert_typed(entity, RenderHandle { draws: [i].into() });
     }
-    let mut gs = GraphicsSystem::new();
+    let mut gs = GraphicsSystem::new(None);
     let mut snap = RenderSnapshot::default();
     for _ in 0..WARMUP_FRAMES {
         gs.extract(&mut world.ctx(), &mut snap);

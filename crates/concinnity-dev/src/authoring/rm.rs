@@ -48,7 +48,11 @@ pub fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
         ));
     }
 
-    build_from_path(world_path, crate::cook_platform())
+    build_from_path(
+        &crate::project::require()?,
+        world_path,
+        crate::cook_platform(),
+    )
 }
 
 #[cfg(test)]

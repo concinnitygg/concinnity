@@ -83,7 +83,7 @@ fn render_extraction() {
     // column is the boundary's contract: 0 after warmup.
     for (name, count) in [("extract_static/100", SMALL), ("extract_static/20k", LARGE)] {
         let (mut world, _) = draw_world(count);
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let mut snap = RenderSnapshot::default();
         gs.extract(&mut world.ctx(), &mut snap);
         bench(name, count as u64, || {
@@ -96,7 +96,7 @@ fn render_extraction() {
     // measured cost, as in the transforms bench.
     for (name, count) in [("extract_moved/100", SMALL), ("extract_moved/20k", LARGE)] {
         let (mut world, _) = draw_world(count);
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let mut snap = RenderSnapshot::default();
         gs.extract(&mut world.ctx(), &mut snap);
         let mut pass = 0.0f32;
@@ -113,7 +113,7 @@ fn render_extraction() {
     // buffer, the one real copy the snapshot boundary introduced.
     {
         let mut world = pose_world(SMALL);
-        let mut gs = GraphicsSystem::new();
+        let mut gs = GraphicsSystem::new(None);
         let mut snap = RenderSnapshot::default();
         gs.extract(&mut world.ctx(), &mut snap);
         bench(

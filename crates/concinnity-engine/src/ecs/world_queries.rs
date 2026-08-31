@@ -10,6 +10,7 @@ use crate::app::mem_drift::MemoryDrift;
 use crate::ecs::{ActiveRenderBackend, World};
 use crate::gfx::backend::{GpuProfile, RenderBackend};
 use crate::gfx::streaming_system::{StreamingPressure, StreamingState, StreamingStats};
+use concinnity_host::store::paths::StateTree;
 
 /// Whether the world needs a renderer. True when it declares a
 /// `GraphicsConfig` (pre-`start`) or has a constructed `GraphicsSystem`
@@ -56,6 +57,13 @@ pub fn memory_drift(world: &World) -> Option<MemoryDrift> {
 /// not classify the device.
 pub fn gpu_profile(world: &World) -> Option<GpuProfile> {
     world.resource::<GpuProfile>().copied()
+}
+
+/// The state tree `App::start` published: where this world reads and writes.
+/// `None` for a world running against no tree, which is a world that touches no
+/// disk. What every system reads instead of resolving a path of its own.
+pub fn state_tree(world: &World) -> Option<&StateTree> {
+    world.resource::<StateTree>()
 }
 
 /// The process thread budget App published at start. `None` before `App::start`

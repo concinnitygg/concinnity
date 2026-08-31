@@ -17,8 +17,8 @@ concinnity_core::install_global_allocator!();
 
 // The directory a dev project keeps its state in, hidden inside the project so
 // a checkout carries its build state without a stray visible folder. The engine
-// crates have no default: they read whatever root a host installs, so this is
-// the binary's convention and nobody else's.
+// crates have no default: they are handed whatever tree a host builds, so this
+// is the binary's convention and nobody else's.
 const STATE_DIR: &str = ".concinnity";
 
 fn main() -> std::io::Result<()> {
@@ -27,12 +27,14 @@ fn main() -> std::io::Result<()> {
     // Must run before any thread spawns or the Metal framework initialises.
     cli::reexec_with_metal_validation(&parsed);
 
-    // Before the crash hooks, so a report written from here on lands in the
-    // project rather than nowhere.
-    concinnity_cook::paths::set_state_dir(project_state_dir());
-    concinnity_engine::crash::install();
+    // Where this run reads and writes. Resolved before the crash hooks, so a
+    // report written from here on lands in the project rather than nowhere,
+    // and handed to the dev library, which builds and runs against it.
+    let tree = concinnity_engine::StateTree::at(project_state_dir());
+    concinnity_engine::crash::install(Some(&tree.crashes_dir()));
+    concinnity_dev::project::open(tree.clone());
 
-    dispatch::dispatch(&parsed)
+    dispatch::dispatch(&parsed, &tree)
 }
 
 // `.concinnity/` under the directory the command was run from, resolved once so

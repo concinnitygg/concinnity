@@ -43,18 +43,19 @@ fn world_jsonl(props: usize) -> String {
 }
 
 pub(crate) fn benches(bench: &mut Bench) {
-    // Anchor the state tree (holding the payload cache) inside the workspace
-    // target/ dir so bench runs never read or write a real project's build
-    // state. Absolute, because cargo runs bench binaries from the package dir.
-    concinnity_cook::paths::set_state_dir(concat!(
+    // A state tree inside the workspace target/ dir, so bench runs never read
+    // or write a real project's build state. Absolute, because cargo runs bench
+    // binaries from the package dir.
+    let tree = concinnity_cook::paths::StateTree::at(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/target/bench-cook-state"
     ));
+    concinnity_cook::cache::anchor(&tree.build_cache_path());
 
     // The bench worlds are generator-backed: every source they name resolves
-    // without a search, so the compile runs against the same anchored tree the
+    // without a search, so the compile runs against the same tree the payload
     // cache lives in.
-    let assets_dir = concinnity_cook::paths::assets_dir();
+    let assets_dir = tree.assets_dir();
 
     for (n, label) in SIZES {
         let content = world_jsonl(n);
@@ -62,7 +63,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         bench.run(&format!("cook/prepare_world/{label}"), n as u64, || {
             let loaded = prepare_world(
                 &content,
-                assets_dir.as_deref(),
+                Some(&assets_dir),
                 concinnity_engine::platform::current(),
             )
             .expect("bench world validates");
@@ -72,7 +73,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         bench.run(&format!("cook/build/{label}"), n as u64, || {
             let result = build_pipeline_from_str(
                 &content,
-                assets_dir.as_deref(),
+                Some(&assets_dir),
                 None,
                 concinnity_engine::platform::current(),
             )
@@ -84,7 +85,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         // primary payload section, assembled the way the cook's writer does.
         let result = build_pipeline_from_str(
             &content,
-            assets_dir.as_deref(),
+            Some(&assets_dir),
             None,
             concinnity_engine::platform::current(),
         )

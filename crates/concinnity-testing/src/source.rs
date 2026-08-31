@@ -314,10 +314,10 @@ mod tests {
 
     #[test]
     fn comment_lines_are_stripped_from_a_body() {
-        let source = "#[test]\nfn t() {\n    // set_state_dir(x);\n    real();\n}\n";
+        let source = "#[test]\nfn t() {\n    // open_project(x);\n    real();\n}\n";
         let body = &test_bodies(source)[0].text;
 
-        assert!(!body.contains("set_state_dir"));
+        assert!(!body.contains("open_project"));
         assert!(body.contains("real()"));
     }
 }

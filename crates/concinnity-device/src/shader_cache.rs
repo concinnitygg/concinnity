@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn ensure_in_compiles_once_then_finds_the_artifact_present() {
         let tree = concinnity_testing::TempTree::new();
-        let path = concinnity_host::store::paths::runtime_cache_in(&tree.join("cache"));
+        let path = concinnity_host::store::paths::StateTree::at(tree.path()).runtime_cache_path();
         let mut bundle = Segment::read_from(&path);
         let k = key("ensure src", "main", "ps_5_1", 3);
 

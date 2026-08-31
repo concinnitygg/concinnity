@@ -13,7 +13,7 @@ use concinnity_cook::authoring::world::find_world_jsonl;
 pub fn check(json_path: &str) -> std::io::Result<()> {
     let resolved;
     let json_path = if !std::path::Path::new(json_path).exists() {
-        resolved = find_world_jsonl(None)?;
+        resolved = find_world_jsonl(crate::project::worlds_dir().as_deref(), None)?;
         resolved.as_str()
     } else {
         json_path

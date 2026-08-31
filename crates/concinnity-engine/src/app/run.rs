@@ -16,6 +16,7 @@ use crate::app::runloop;
 use crate::app::startup_error::StartupError;
 use crate::app::state::App;
 use crate::result::CnResult;
+use concinnity_host::store::paths::StateTree;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
@@ -80,15 +81,17 @@ pub struct RunOptions {
 }
 
 /// Production entry point (`cn run`). Reads the compiled binary blobs from
-/// data/, written by a prior `cn build`. No debug server, no WebSocket command
-/// channel: a shipped run is neither remotely inspectable nor remotely driven.
-pub fn run(options: RunOptions) -> std::io::Result<()> {
+/// `tree`'s `data/`, written by a prior `cn build`. No debug server, no
+/// WebSocket command channel: a shipped run is neither remotely inspectable nor
+/// remotely driven.
+pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
     init_logging();
 
-    let mut app = App::new();
+    let mut app = App::new().in_tree(tree.clone());
+    let primary = app.primary_blob();
 
     if let Err(e) = app.load_blob() {
-        report_startup_error(match primary_blob_path() {
+        report_startup_error(match primary {
             Some(blob) => StartupError::from_blob_failure(blob, e),
             None => StartupError::NoStateRoot,
         });
@@ -101,12 +104,6 @@ pub fn run(options: RunOptions) -> std::io::Result<()> {
 // A refused start, in the form a process exit status is built from.
 fn start_failure(e: CnResult) -> std::io::Error {
     std::io::Error::other(format!("failed to start app: {e}"))
-}
-
-// The primary blob's path, which is what a load failure is reported against.
-// `None` when nothing anchored the state tree, so there is no path to name.
-fn primary_blob_path() -> Option<std::path::PathBuf> {
-    concinnity_host::store::blob::blob_path(0).map(std::path::PathBuf::from)
 }
 
 // Report a fatal startup failure: always to the log, and on screen as well when
@@ -157,18 +154,18 @@ impl BlobSource<'_> {
     }
 }
 
-/// Production entry point for a shipped app: like `run`, but with the state root
-/// pinned to `state_dir` (the tree beside the executable or inside an app
-/// bundle, holding `saves/` and `settings`) and the world read from `blob`. A
+/// Production entry point for a shipped app: like `run`, but with the world
+/// read from `blob` rather than from `tree`'s own `data/`. The tree (beside the
+/// executable or inside an app bundle) still holds `saves/` and `settings`, so
+/// pointing the player at a blob elsewhere never relocates what it writes. A
 /// missing blob is a hard error rather than a silent no-op -- a packaged app
 /// without its data cannot do anything useful. The concinnity-run binary
 /// calls this.
-pub fn run_from(state_dir: &Path, blob: BlobSource<'_>) -> std::io::Result<()> {
+pub fn run_from(tree: &StateTree, blob: BlobSource<'_>) -> std::io::Result<()> {
     init_logging();
-    concinnity_host::store::paths::set_state_dir(state_dir);
 
     let primary = blob.primary();
-    let mut app = App::new();
+    let mut app = App::new().in_tree(tree.clone());
     let failure = match app.load_blob_from(&primary) {
         Ok(max_blob_index) => blob.check_span(max_blob_index),
         Err(e) => Some(StartupError::from_blob_failure(primary, e)),

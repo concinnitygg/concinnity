@@ -19,46 +19,53 @@ pub use concinnity_core::SCHEMA_VERSION;
 pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
-// Where the blob files live when a host named a primary blob directly, rather
-// than taking the state root's `data/` layout. Holds that file's path; every
-// overflow blob is its sibling named by index.
-fn primary_override() -> &'static Mutex<Option<PathBuf>> {
+// The primary blob this process reads, named by whatever anchored it. Process
+// state because payloads stream off disk long after startup: a locator resolved
+// mid-frame has no caller to carry the layout down from.
+fn anchored_primary() -> &'static Mutex<Option<PathBuf>> {
     static PRIMARY: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     PRIMARY.get_or_init(|| Mutex::new(None))
 }
 
-/// Format a blob file path for a given index. Blob 0 is the primary blob (the
-/// metadata block plus the first payload section); higher indices are overflow
-/// payload blobs, which are always siblings of blob 0. The format crate is
-/// path-agnostic; this layout knowledge stays here.
-///
-/// Blob 0 is `<state dir>/data/0` unless [`load_raw_at`] anchored the layout on
-/// a blob file named directly, in which case that file is blob 0 and its
-/// directory holds the rest. `None` when neither applies: no host installed a
-/// state root and none named a blob, so there is no layout to resolve against.
-pub fn blob_path(index: u32) -> Option<String> {
-    let primary = primary_override().lock().unwrap().clone();
-    resolve_blob_path(
-        primary.as_deref(),
-        super::paths::data_dir().as_deref(),
-        index,
-    )
+// Anchor the process's blob layout on `primary`: that file is blob 0 and its
+// siblings named by index are the overflow payload blobs. Reached only through
+// `load_raw_at`, so a process addresses the blobs it actually opened.
+fn anchor(primary: &Path) {
+    *anchored_primary().lock().unwrap() = Some(primary.to_path_buf());
 }
 
-// Pure resolution split out so the two layouts are unit-testable without the
-// process-global anchor or the process-global state root.
-fn resolve_blob_path(
-    primary: Option<&Path>,
-    data_dir: Option<&Path>,
-    index: u32,
-) -> Option<String> {
-    let path = match primary {
-        Some(p) if index == 0 => p.to_path_buf(),
-        Some(p) => p
+// Blob 0 is the primary blob; every other index names an overflow sibling.
+const PRIMARY_INDEX: u32 = 0;
+
+/// The primary blob inside `data_dir`: blob 0, holding the metadata block plus
+/// the first payload section. What a host opens when it reads a state tree's
+/// `data/`, and what a build writes there.
+pub fn primary_in(data_dir: &Path) -> PathBuf {
+    data_dir.join(PRIMARY_INDEX.to_string())
+}
+
+/// Format a blob file path for a given index. Blob 0 is the primary blob
+/// [`load_raw_at`] opened (the metadata block plus the first payload section);
+/// higher indices are overflow payload blobs, which are always its siblings.
+/// The format crate is path-agnostic; this layout knowledge stays here.
+///
+/// `None` before any load, so there is no layout to resolve against.
+pub fn blob_path(index: u32) -> Option<String> {
+    let primary = anchored_primary().lock().unwrap().clone();
+    resolve_blob_path(primary.as_deref(), index)
+}
+
+// Pure resolution split out so the sibling naming is unit-testable without the
+// process-global anchor.
+fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
+    let primary = primary?;
+    let path = if index == PRIMARY_INDEX {
+        primary.to_path_buf()
+    } else {
+        primary
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
-            .join(index.to_string()),
-        None => data_dir?.join(index.to_string()),
+            .join(index.to_string())
     };
     Some(path.to_string_lossy().into_owned())
 }
@@ -124,24 +131,18 @@ fn report(path: &str, e: BlobError) -> CnResult {
 }
 
 /// Load the blob file at `primary` and the payload store around it, anchoring
-/// the process's blob layout on it: that file is blob 0 and its siblings named
-/// by index are the overflow payload blobs, so a world written to `data/0`
-/// reads `data/1`, `data/2`, ... beside it. The anchor outlives the call
-/// because payloads stream off disk long after startup.
-pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnResult> {
-    *primary_override().lock().unwrap() = Some(primary.to_path_buf());
-    load_raw()
-}
-
-/// Load the primary blob's metadata and the `BlobData` payload store from the
-/// state root's `data/` layout, without resolving defs into runtime `Asset`s
-/// (that resolution depends on the client runtime registry, so it lives in the
-/// client `blob::load` shim).
+/// the process's blob layout on it, so a world written to `data/0` reads
+/// `data/1`, `data/2`, ... beside it. The anchor outlives the call because
+/// payloads stream off disk long after startup: a locator resolved mid-frame
+/// has no caller to carry the layout down from.
 ///
 /// Only blob 0's payload section is read here; overflow blobs (named by the
 /// manifest's `max_blob_index`) start unloaded and `BlobData::read()` pulls
-/// each from disk the first time a locator needs it.
-pub fn load_raw() -> Result<(BlobMeta, BlobData), CnResult> {
+/// each from disk the first time a locator needs it. Defs are not resolved into
+/// runtime `Asset`s: that resolution depends on the client runtime registry, so
+/// it lives in the client `blob::load` shim.
+pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnResult> {
+    anchor(primary);
     load_raw_from(blob_path)
 }
 
@@ -201,11 +202,11 @@ mod tests {
         // the separator is the platform's.
         let primary = Path::new("out").join("blobs").join("0");
         assert_eq!(
-            resolve_blob_path(Some(&primary), None, 0).as_deref(),
+            resolve_blob_path(Some(&primary), 0).as_deref(),
             Some(&*primary.to_string_lossy())
         );
         assert_eq!(
-            resolve_blob_path(Some(&primary), None, 2),
+            resolve_blob_path(Some(&primary), 2),
             Some(
                 Path::new("out")
                     .join("blobs")
@@ -217,27 +218,27 @@ mod tests {
 
         // A bare file name hangs its siblings off the working directory.
         assert_eq!(
-            resolve_blob_path(Some(Path::new("0")), None, 1).as_deref(),
+            resolve_blob_path(Some(Path::new("0")), 1).as_deref(),
             Some("1")
         );
-    }
 
-    #[test]
-    fn without_an_anchor_blobs_sit_under_the_data_dir() {
-        let data = Path::new("/proj").join("data");
+        // A state tree's `data/` is just a primary named `<tree>/data/0`, so
+        // the overflow blobs land beside it the same way.
+        let tree = crate::store::paths::StateTree::at(Path::new("/proj"));
+        let data = tree.data_dir().join("0");
         assert_eq!(
-            resolve_blob_path(None, Some(&data), 3),
-            Some(data.join("3").to_string_lossy().into_owned())
+            resolve_blob_path(Some(&data), 3),
+            Some(tree.data_dir().join("3").to_string_lossy().into_owned())
         );
     }
 
-    // With neither an anchor nor a state root there is no layout to resolve
-    // against, which is what turns a blob read into `NoStateRoot` rather than a
-    // read of some path relative to the working directory.
+    // With nothing anchored there is no layout to resolve against, which is
+    // what turns a blob read into `NoStateRoot` rather than a read of some path
+    // relative to the working directory.
     #[test]
-    fn without_an_anchor_or_a_state_root_there_is_no_path() {
-        assert_eq!(resolve_blob_path(None, None, 0), None);
-        assert_eq!(resolve_blob_path(None, None, 3), None);
+    fn without_an_anchor_there_is_no_path() {
+        assert_eq!(resolve_blob_path(None, 0), None);
+        assert_eq!(resolve_blob_path(None, 3), None);
     }
 
     #[test]

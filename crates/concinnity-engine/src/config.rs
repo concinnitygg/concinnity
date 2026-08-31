@@ -12,6 +12,7 @@
 //
 // Unknown fields are ignored on load so future additions are forwards-compatible.
 
+use concinnity_host::store::paths::StateTree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -283,24 +284,23 @@ pub(crate) struct ControlsSettings {
 }
 
 impl Settings {
-    // Load from the `settings` file (CBOR). When the file is absent, fall back
+    // Load from `tree`'s `settings` file (CBOR). When the file is absent, fall back
     // to migrating any graphics/audio/controls choices from the legacy
     // `config.json` (where they used to live) so an existing user's choices are
     // not silently reset. The migrated values are persisted on the next `save()`
     // (a settings change). Returns defaults when nothing is stored or the file
     // is unreadable.
-    pub(crate) fn load() -> Self {
-        concinnity_host::store::paths::settings_path()
-            .map(|path| Self::load_from(&path))
+    pub(crate) fn load(tree: Option<&StateTree>) -> Self {
+        tree.map(|tree| Self::load_from(&tree.settings_path()))
             .unwrap_or_default()
     }
 
-    // Persist to the `settings` file as CBOR. Creates the state directory as
-    // needed. A host that installed no state root has nowhere to persist to,
-    // which is not an error: the choices apply for the rest of the run.
-    pub(crate) fn save(&self) -> std::io::Result<()> {
-        match concinnity_host::store::paths::settings_path() {
-            Some(path) => self.save_to(&path),
+    // Persist to `tree`'s `settings` file as CBOR. Creates the directory as
+    // needed. An app with no state tree has nowhere to persist to, which is not
+    // an error: the choices apply for the rest of the run.
+    pub(crate) fn save(&self, tree: Option<&StateTree>) -> std::io::Result<()> {
+        match tree {
+            Some(tree) => self.save_to(&tree.settings_path()),
             None => Ok(()),
         }
     }
@@ -457,13 +457,8 @@ mod tests {
             ..Default::default()
         };
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = concinnity_testing::TempTree::new();
         let path = dir.path().join("settings");
-        // The sandbox is somewhere else entirely, never the real settings file.
-        assert_ne!(
-            Some(&path),
-            concinnity_host::store::paths::settings_path().as_ref()
-        );
 
         s.save_to(&path).unwrap();
         // The write landed in the sandbox under the expected file name.
@@ -473,19 +468,26 @@ mod tests {
         assert_eq!(loaded, s);
     }
 
-    // Settings resolve to the `settings` file directly under the state dir,
-    // and to nothing at all when no host installed one.
+    // Settings load and save against the tree they are handed, and an app with
+    // no tree loads defaults and persists nothing rather than guessing a file.
     #[test]
-    fn settings_path_is_under_state_dir() {
-        match concinnity_host::store::paths::settings_path() {
-            Some(p) => {
-                assert_eq!(p.file_name().unwrap(), "settings");
-                assert_eq!(
-                    Some(p),
-                    concinnity_host::store::paths::state_dir().map(|d| d.join("settings"))
-                );
-            }
-            None => assert_eq!(concinnity_host::store::paths::state_dir(), None),
-        }
+    fn settings_follow_the_tree_they_are_given_and_no_tree_writes_nothing() {
+        let dir = concinnity_testing::TempTree::new();
+        let tree = StateTree::at(dir.path());
+
+        let stored = Settings {
+            graphics: GraphicsSettings {
+                vsync: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        stored.save(Some(&tree)).unwrap();
+        assert!(tree.settings_path().exists());
+        assert_eq!(Settings::load(Some(&tree)), stored);
+
+        // No tree: defaults in, nothing out, and no file anywhere.
+        assert_eq!(Settings::load(None), Settings::default());
+        assert!(stored.save(None).is_ok());
     }
 }

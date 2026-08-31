@@ -16,6 +16,8 @@
 //   scene.rs     scene-flow wiring + scene visibility
 //   helpers.rs   shared free functions
 
+use concinnity_host::store::paths::StateTree;
+
 use crate::components::{PostProcessResolve, Window};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
@@ -64,6 +66,9 @@ struct PickCandidate {
 
 /// Drives the render backend: builds it at init, submits a frame per step.
 pub struct GraphicsSystem {
+    // Where this world reads its source assets and writes its settings, or
+    // `None` for a world with no state tree.
+    state: Option<StateTree>,
     window_args: Window,
     clear_color: [f32; 4],
     frames_in_flight: usize,
@@ -418,14 +423,15 @@ impl std::fmt::Debug for GraphicsSystem {
 }
 
 impl GraphicsSystem {
-    /// Fresh renderer driver with no backend yet. Config (frames-in-flight,
-    /// clear color, `max_frames`, shadow-map size) is read from the world's
-    /// `GraphicsConfig` in [`System::init`].
-    pub fn new() -> Self {
+    /// Fresh renderer driver with no backend yet, reading and writing under
+    /// `tree`. Config (frames-in-flight, clear color, `max_frames`, shadow-map
+    /// size) is read from the world's `GraphicsConfig` in [`System::init`].
+    pub fn new(tree: Option<&StateTree>) -> Self {
         // The schema's own defaults, so a world with no GraphicsConfig sees the
         // same values as one that declares an all-default component.
         let gfx = crate::components::GraphicsConfig::default();
         Self {
+            state: tree.cloned(),
             window_args: Default::default(),
             clear_color: gfx.clear_color,
             frames_in_flight: gfx.frames_in_flight as usize,
@@ -522,7 +528,14 @@ impl GraphicsSystem {
         if let Some(hooks) = &self.test_hooks {
             return hooks.settings.clone();
         }
-        crate::config::Settings::load()
+        crate::config::Settings::load(self.state.as_ref())
+    }
+
+    // The `assets/` a bare source filename is searched under: the running
+    // world's own, or nothing for a world with no state tree (which leaves a
+    // bare filename unresolved rather than searched from the cwd).
+    pub(crate) fn assets_dir(&self) -> Option<std::path::PathBuf> {
+        self.state.as_ref().map(StateTree::assets_dir)
     }
 
     // Detect the GPU performance profile for quality auto-config. Probes the
@@ -543,9 +556,9 @@ impl GraphicsSystem {
         if self.test_hooks.is_some() {
             return;
         }
-        let mut s = crate::config::Settings::load();
+        let mut s = crate::config::Settings::load(self.state.as_ref());
         s.graphics.quality_preset = Some(crate::gfx::quality_preset::QualityPreset::Auto);
-        if let Err(e) = s.save() {
+        if let Err(e) = s.save(self.state.as_ref()) {
             tracing::warn!("first-launch quality preset save failed: {e}");
         }
     }
@@ -561,12 +574,6 @@ impl GraphicsSystem {
                 height: self.window_args.height,
                 refresh_hz: 0,
             })
-    }
-}
-
-impl Default for GraphicsSystem {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

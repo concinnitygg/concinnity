@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use concinnity_core::behavior::{BehaviorState, BehaviorStore};
+use concinnity_host::store::paths::StateTree;
 
 #[derive(Debug)]
 pub(crate) struct FileStore {
@@ -12,10 +13,11 @@ pub(crate) struct FileStore {
 }
 
 impl FileStore {
-    // `None` when no host installed a state root: behaviors run, saving does
-    // not.
-    pub(crate) fn new() -> Option<FileStore> {
-        concinnity_host::store::paths::saves_dir().map(|dir| FileStore { dir })
+    // `None` for a world with no state tree: behaviors run, saving does not.
+    pub(crate) fn new(tree: Option<&StateTree>) -> Option<FileStore> {
+        tree.map(|tree| FileStore {
+            dir: tree.saves_dir(),
+        })
     }
 
     #[cfg(test)]

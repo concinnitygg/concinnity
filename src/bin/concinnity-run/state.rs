@@ -3,6 +3,25 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use concinnity_engine::StateTree;
+
+// The state tree this player runs against: the content beside the executable,
+// with the runtime-writable state (`saves/`, `settings`, `crashes/`) redirected
+// to a per-user directory when the content dir cannot be written -- a read-only
+// install such as Program Files. In the portable case (content dir writable)
+// both stay beside the data, preserving the single-folder layout. The world's
+// own `AppConfig.home`, applied once the blob is read, overrides either.
+pub(crate) fn tree_for_exe(exe: &Path, exe_dir: &Path) -> StateTree {
+    let content = state_dir_for_exe(exe_dir);
+    let writable = (!dir_is_writable(&content))
+        .then(|| per_user_state_dir(&app_name_from_exe(exe)))
+        .flatten();
+    match writable {
+        Some(dir) => StateTree::at(content).with_writable(dir),
+        None => StateTree::at(content),
+    }
+}
+
 // Resolve the state root that holds the world's `data` (and, unless redirected,
 // the `saves/` + `settings` written at runtime) from the executable's
 // directory. Inside a macOS `.app` the executable sits at `Contents/MacOS/<exe>`
@@ -121,9 +140,23 @@ mod tests {
         assert_eq!(app_name_from_exe(Path::new("/")), "concinnity");
     }
 
+    // A writable content dir keeps the single-folder layout: everything the
+    // player reads and writes stays beside the executable.
+    #[test]
+    fn a_writable_install_keeps_one_folder() {
+        let tmp = concinnity_testing::TempTree::new();
+        let exe = tmp.path().join("MyGame");
+        let tree = tree_for_exe(&exe, tmp.path());
+
+        assert_eq!(tree.content_root(), tmp.path());
+        assert_eq!(tree.writable_root(), tmp.path());
+        assert_eq!(tree.data_dir(), tmp.path().join("data"));
+        assert_eq!(tree.saves_dir(), tmp.path().join("saves"));
+    }
+
     #[test]
     fn a_writable_dir_probes_true_and_leaves_nothing_behind() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = concinnity_testing::TempTree::new();
         assert!(dir_is_writable(tmp.path()));
         // The probe file is cleaned up.
         assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
@@ -131,7 +164,7 @@ mod tests {
 
     #[test]
     fn a_missing_dir_is_treated_as_writable() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = concinnity_testing::TempTree::new();
         let missing = tmp.path().join("not-created-yet");
         assert!(dir_is_writable(&missing));
     }

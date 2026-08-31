@@ -17,10 +17,10 @@ mod tests;
 use concinnity_core::behavior::BehaviorSystem;
 
 // The behavior system as this host runs it: evaluation on the job pool, state
-// in a file under the save directory when one exists.
-pub(crate) fn build() -> BehaviorSystem {
+// in a file under the world's save directory when it has one.
+pub(crate) fn build(tree: Option<&concinnity_host::store::paths::StateTree>) -> BehaviorSystem {
     let system = BehaviorSystem::new().with_scheduler(Box::new(eval::Pool));
-    match save::FileStore::new() {
+    match save::FileStore::new(tree) {
         Some(store) => system.with_store(Box::new(store)),
         None => system,
     }

@@ -6,9 +6,10 @@
 use crate::cli::{Cli, Commands, DebugClientCommand};
 use concinnity_dev::command;
 use concinnity_dev::debug_client;
+use concinnity_engine::StateTree;
 use concinnity_engine::app::dev_flags;
 
-pub(crate) fn dispatch(cli: &Cli) -> std::io::Result<()> {
+pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
     // Give the cook this build's shader compilers. `cn build` reaches the
     // compile pipeline directly rather than through the authoring API, so
     // installing once here is what covers every subcommand that compiles.
@@ -21,20 +22,23 @@ pub(crate) fn dispatch(cli: &Cli) -> std::io::Result<()> {
         Commands::Run(args) => {
             dev_flags::set_validation(args.validation);
             args.render.arm();
-            concinnity_engine::app::run(concinnity_engine::app::run::RunOptions {
-                mode: if args.serial {
-                    concinnity_engine::app::run::PipelineMode::Serial
-                } else {
-                    concinnity_engine::app::run::PipelineMode::Pipelined
+            concinnity_engine::app::run(
+                tree,
+                concinnity_engine::app::run::RunOptions {
+                    mode: if args.serial {
+                        concinnity_engine::app::run::PipelineMode::Serial
+                    } else {
+                        concinnity_engine::app::run::PipelineMode::Pipelined
+                    },
+                    schedule: if args.serial_schedule {
+                        concinnity_engine::ecs::ScheduleMode::Serial
+                    } else {
+                        concinnity_engine::ecs::ScheduleMode::Parallel
+                    },
+                    screenshot: args.screenshot.clone(),
+                    max_frames: args.frames,
                 },
-                schedule: if args.serial_schedule {
-                    concinnity_engine::ecs::ScheduleMode::Serial
-                } else {
-                    concinnity_engine::ecs::ScheduleMode::Parallel
-                },
-                screenshot: args.screenshot.clone(),
-                max_frames: args.frames,
-            })
+            )
         }
         // A client subcommand talks to an already running server; its absence
         // means start the server (the interpreted run below).

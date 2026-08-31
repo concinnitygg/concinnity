@@ -6,9 +6,10 @@
 //! share it. Left alone this accumulates -- one machine reached 4,375 leftover
 //! directories and 1.6 GB before the rule was written down.
 //!
-//! The exception is a cache, which exists to be kept:
-//! `concinnity_testing::shared_cache_dir` is the one way to ask for that, and it
-//! clears everything but `cache/` once per process.
+//! The exceptions are the two roots a suite keeps outside any one test:
+//! `concinnity_testing::shared_cache_dir` for a content-addressed cache, which
+//! exists to be kept, and `shared_state_dir` for process-wide state, which is
+//! emptied on the first call in a run.
 //!
 //! The other half is reading. A test may read its own package's tree -- the
 //! lint scans in this workspace are built that way, and so is the shader
@@ -29,7 +30,8 @@ use concinnity_testing::source;
 const SELF: &str = "file_access_discipline.rs";
 
 // Building a path under the system temporary directory by hand. The harness's
-// own `TempTree` and `shared_cache_dir` are what a test uses instead.
+// own `TempTree`, `shared_cache_dir` and `shared_state_dir` are what a test
+// uses instead.
 const RAW_TEMP: &str = "env::temp_dir()";
 
 fn workspace_root() -> PathBuf {
@@ -80,7 +82,8 @@ fn no_test_builds_its_own_path_under_the_system_temp_dir() {
         offenders.is_empty(),
         "these tests build their own path under the system temporary directory, \
          which survives the run and is shared with the next one. Use \
-         `concinnity_testing::TempTree`, or `shared_cache_dir` for a cache:\n  {}",
+         `concinnity_testing::TempTree`, or `shared_cache_dir` / \
+         `shared_state_dir` for a root a suite keeps:\n  {}",
         offenders.join("\n  ")
     );
 }

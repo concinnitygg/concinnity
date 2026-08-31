@@ -42,6 +42,9 @@ pub mod command;
 pub mod docs;
 /// Packaging a built world into a distributable bundle.
 pub mod export;
+/// The project a dev session works on: the one state tree its builds, runs, and
+/// editor sessions address, opened by the binary at startup.
+pub mod project;
 
 // Process-global test serialization lock; test builds only.
 #[cfg(test)]

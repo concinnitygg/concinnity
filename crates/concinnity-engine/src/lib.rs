@@ -39,11 +39,11 @@ pub use app::run::{BlobSource, run_from};
 pub use app::run::{PipelineMode, RunOptions, init_logging};
 pub use app::startup_error::StartupError;
 pub use app::state::App;
-// Redirect runtime-writable state (`saves/` + `settings`) before `run_from`
-// when the content dir is read-only. Exported beside `run_from` so the runtime
-// bin's entire entry API lives on this crate.
+// The state tree a host builds and hands down: where the blobs are read from
+// and where saves, settings, crash reports and caches are written. Exported
+// beside `run_from` so the runtime bin's entire entry API lives on this crate.
 pub use concinnity_host::store::paths;
-pub use concinnity_host::store::paths::set_writable_state_dir;
+pub use concinnity_host::store::paths::StateTree;
 
 /// The shader platform this build's rendering backend consumes. The backend is
 /// this crate's own compile-time choice, so the crate that knows it is the one

@@ -1,7 +1,7 @@
 // src/crash/mod.rs
 //
 // Crash reporting: a panic hook, native fault capture, and local report files
-// under the crashes dir (`crashes/` under the state root). Reports
+// under the crashes directory a host names at install. Reports
 // are plain text written section by section, so a partial report still leads
 // with what matters; macOS and Windows also write a minidump beside the
 // report. The directory is pruned to the newest reports after each write.
@@ -21,13 +21,25 @@ mod native;
 
 pub use ring::RingLayer;
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Install the process-wide crash hooks: a panic hook that writes a report
-/// and chains to the previously installed hook, plus (macOS/Windows) a native
-/// fault handler that writes a minidump. Binaries call this first thing at
-/// startup; later calls are no-ops.
-pub fn install() {
+// Where reports land. Process state, and it has to be: a fault handler runs on
+// a compromised stack with no caller to take a path from, so the directory is
+// resolved once, up front, by whoever installs the hooks.
+static REPORT_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Install the process-wide crash hooks writing to `dir`: a panic hook that
+/// writes a report and chains to the previously installed hook, plus
+/// (macOS/Windows) a native fault handler that writes a minidump. Binaries call
+/// this first thing at startup, naming the `crashes/` of the state tree they
+/// resolved; later calls re-point the directory but install nothing twice.
+///
+/// Without a directory (`None`) the hooks still chain and the notes still
+/// accumulate, but nothing is written: an embedder that has chosen no place for
+/// them gets no files.
+pub fn install(dir: Option<&Path>) {
+    *REPORT_DIR.lock().unwrap_or_else(|p| p.into_inner()) = dir.map(Path::to_path_buf);
     hook::install();
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native::install();
@@ -71,6 +83,11 @@ pub(crate) fn report_device_lost(detail: &str) {
     if write::emit(&report).is_none() {
         tracing::warn!("crash report for device loss could not be written");
     }
+}
+
+// The directory reports are written to, or `None` when no host named one.
+pub(crate) fn report_dir() -> Option<PathBuf> {
+    REPORT_DIR.lock().ok()?.clone()
 }
 
 pub(crate) fn notes_snapshot() -> Vec<(String, String)> {
