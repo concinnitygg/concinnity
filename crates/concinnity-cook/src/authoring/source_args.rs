@@ -2,9 +2,10 @@
 //!
 //! A Shader stage / SdfVolume declares its shader source as a single path plus
 //! an optional per-platform map; the build pipeline and the world checks pick
-//! the building backend's entry straight from the raw args JSON. The runtime
-//! selects from the typed struct instead (`StageSourceExt` and the SdfVolume
-//! clamp in concinnity-core), so the runtime tier carries no JSON parsing.
+//! the cooked backend's entry straight from the raw args JSON. The runtime
+//! selects from the typed struct instead (`StageSource::source_for` and the
+//! SdfVolume clamp in concinnity-core), so the runtime tier carries no JSON
+//! parsing.
 
 use concinnity_core::platform::Platform;
 
@@ -30,12 +31,6 @@ pub(crate) fn stage_source_path(args: &serde_json::Value, platform: Platform) ->
     } else {
         None
     }
-}
-
-/// Resolves the shader source filename for the current platform from raw
-/// stage args (a `Shader` stage sub-object or an SdfVolume).
-pub(crate) fn resolve_source_from_args(args: &serde_json::Value) -> Option<String> {
-    stage_source_path(args, Platform::current())
 }
 
 // Resolve an SdfVolume's fragment shader path for `platform` from its raw
@@ -66,12 +61,6 @@ pub(crate) fn sdf_volume_source_path(
     } else {
         None
     }
-}
-
-/// Resolve the raw fragment shader source an SdfVolume declares for the
-/// current build backend.
-pub(crate) fn current_platform_source_arg(args: &serde_json::Value) -> Option<String> {
-    sdf_volume_source_path(args, Platform::current())
 }
 
 #[cfg(test)]

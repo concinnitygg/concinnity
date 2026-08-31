@@ -16,6 +16,12 @@
 pub(crate) use concinnity_cook::authoring::world;
 pub(crate) use concinnity_engine::{app, blob, components, ecs, gfx, jobs, resource};
 
+/// The shader platform `cn` cooks worlds for: the backend the runtime linked
+/// into this same binary consumes, so a world built here plays here.
+pub fn cook_platform() -> concinnity_core::platform::Platform {
+    concinnity_engine::platform::current()
+}
+
 // Authoring / in-memory build. Its exports below are the surface the
 // out-of-tree Swift app's FFI crate embeds; the `cn` binary uses only part of
 // it, so some entry points have no in-workspace caller.

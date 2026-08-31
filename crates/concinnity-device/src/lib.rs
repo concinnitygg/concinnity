@@ -1,7 +1,8 @@
 //! The device backends. The proprietary, hardware-facing renderers - Metal
 //! (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
-//! Win32 window/input layer. Exactly one backend compiles per build (resolved by
-//! build.rs into a single backend_* cfg). Depends on concinnity-core, whose
+//! Win32 window/input layer. At most one backend compiles per build, resolved by
+//! build.rs from the backend features into a single backend_* cfg; a build that
+//! names none compiles no GPU code at all. Depends on concinnity-core, whose
 //! `render` module holds the RenderBackend/SceneControl trait seam these
 //! implement plus the render-prep feeding it; owns no gameplay, ECS-runtime,
 //! audio, or physics. The client drives these through a
@@ -34,8 +35,11 @@ pub(crate) mod gfx {
 // Asset data types, the runtime build helpers, and the mesh/chunk geometry the
 // backends reach by their historical `crate::` paths, plus the shared rayon job
 // pool.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) use concinnity_core::components;
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) use concinnity_core::{bake, geometry};
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) use concinnity_host::thread::jobs;
 
 #[cfg(backend_dx)]
@@ -55,12 +59,14 @@ pub(crate) mod appkit;
 
 // The runtime cache segment both caches below write into, and the checkpoints
 // at which it reaches disk.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod runtime_cache;
 
 // Disk cache for shader binaries compiled after build time: the built-ins the
 // DirectX and Vulkan backends compile at init, and the Metal raymarch
 // libraries assembled from world-authored SdfVolume fragments (the rest of
 // Metal precompiles into the binary via the toolchain crate).
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod shader_cache;
 
 // Scratch directory for the shader compilers that work on files.
@@ -86,8 +92,9 @@ pub(crate) mod pipeline_cache;
 pub mod precompile;
 
 // Test-only probe for the shader compiler the single-source `.slang` shaders
-// need, so the compile checks skip a host without one instead of failing.
-#[cfg(test)]
+// need, so the compile checks skip a host without one instead of failing. Only
+// a backend has shaders to compile.
+#[cfg(all(test, any(backend_metal, backend_dx, backend_vk)))]
 mod slangc_gate;
 
 // Cross-backend drift guard for the shared `GpuObjectData` shader fragments.
@@ -98,8 +105,9 @@ mod object_data_layout;
 
 // Reflection-driven layout guard for the `#[repr(C)]` structs the CPU uploads
 // into the single-source `.slang` shaders: the expected offsets come from
-// slangc, per target, rather than from a hand-written number.
-#[cfg(test)]
+// slangc, per target, rather than from a hand-written number. Reads the source
+// assembly a backend brings with it, so a build with none has nothing to check.
+#[cfg(all(test, any(backend_metal, backend_dx, backend_vk)))]
 mod shader_layout;
 
 // Ownership guard for the explicit backends' resource barriers. Test-only and
@@ -116,6 +124,7 @@ mod barrier_audit;
 mod double_drive_audit;
 
 // Device-memory placement policy shared by the backends' allocators.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod suballoc;
 
 mod factory;

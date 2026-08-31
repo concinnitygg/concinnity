@@ -22,5 +22,5 @@ pub fn build(json_path: Option<&str>) -> std::io::Result<()> {
             resolved.as_str()
         }
     };
-    build_from_path(json_path)
+    build_from_path(json_path, crate::cook_platform())
 }

@@ -104,15 +104,53 @@ impl BinaryTargets {
     }
 }
 
-// Resolve the backend from the target OS and whether the `vulkan` feature is on.
-// macOS defaults to Metal and Windows to DirectX; both opt into Vulkan with the
-// feature. Everything else (Linux) is Vulkan regardless. macOS Vulkan runs over
-// MoltenVK and exists for cross-backend testing, not for shipping.
-pub(crate) fn resolve_backend(target_os: &str, vulkan: bool) -> Backend {
-    match (target_os, vulkan) {
-        ("macos", false) => Backend::Metal,
-        ("windows", false) => Backend::Dx,
-        _ => Backend::Vk,
+/// The backend features a package was built with. `native` names all three and
+/// resolves to the one the target renders with; the other three name a backend
+/// outright.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BackendFeatures {
+    /// Whatever backend the target renders with.
+    pub native: bool,
+    /// Metal, which only macOS has.
+    pub metal: bool,
+    /// DirectX 12, which only Windows has.
+    pub directx: bool,
+    /// Vulkan, which Windows and Linux have, and macOS has over MoltenVK.
+    pub vulkan: bool,
+}
+
+impl BackendFeatures {
+    /// Read the four features from the Cargo-provided environment of whichever
+    /// package's build script is running.
+    pub fn from_cargo() -> Self {
+        Self {
+            native: feature_on("NATIVE"),
+            metal: feature_on("METAL"),
+            directx: feature_on("DIRECTX"),
+            vulkan: feature_on("VULKAN"),
+        }
+    }
+}
+
+fn feature_on(name: &str) -> bool {
+    std::env::var(format!("CARGO_FEATURE_{name}")).is_ok()
+}
+
+// Resolve the backend from the target OS and the backend features. A feature
+// naming a backend the target does not have is inert, so `--features directx`
+// on macOS builds no backend rather than failing; that keeps the features
+// additive, which is what lets `native` name all three at once. Vulkan wins
+// where both apply, so `--all-features` resolves rather than conflicts. macOS
+// Vulkan runs over MoltenVK and exists for cross-backend testing, not for
+// shipping.
+pub(crate) fn resolve_backend(target_os: &str, features: BackendFeatures) -> Option<Backend> {
+    if features.vulkan {
+        return Some(Backend::Vk);
+    }
+    match target_os {
+        "macos" => (features.metal || features.native).then_some(Backend::Metal),
+        "windows" => (features.directx || features.native).then_some(Backend::Dx),
+        _ => features.native.then_some(Backend::Vk),
     }
 }
 
@@ -126,18 +164,22 @@ pub fn emit_check_cfgs() {
 
 /// Resolve the backend from the Cargo-provided environment, emitting nothing.
 /// For a package that needs the backend only to pick its SDK setup and never
-/// gates its own source on one, so has no reason to carry the cfg.
-pub fn backend_from_cargo() -> Backend {
+/// gates its own source on one, so has no reason to carry the cfg. `None` is a
+/// build with no backend: a CPU-only runtime with no GPU code in it.
+pub fn backend_from_cargo() -> Option<Backend> {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let vulkan = std::env::var("CARGO_FEATURE_VULKAN").is_ok();
-    resolve_backend(&target_os, vulkan)
+    resolve_backend(&target_os, BackendFeatures::from_cargo())
 }
 
 /// Resolve the backend from the Cargo-provided environment and emit the
-/// `rustc-cfg` for it, returning the choice so the caller can branch.
-pub fn emit_backend_cfg() -> Backend {
+/// `rustc-cfg` for it, returning the choice so the caller can branch. A build
+/// with no backend emits no cfg; `emit_check_cfgs` still declares all three, so
+/// the source gating on them compiles.
+pub fn emit_backend_cfg() -> Option<Backend> {
     let backend = backend_from_cargo();
-    println!("{}", sdks::backend_cfg_directive(backend));
+    if let Some(backend) = backend {
+        println!("{}", sdks::backend_cfg_directive(backend));
+    }
     backend
 }
 
@@ -149,13 +191,16 @@ pub fn emit_backend_cfg() -> Backend {
 /// kind takes its own linker-argument key and its own directory for the bundled
 /// DLLs, so the setup runs once per kind. A directive both kinds produce --
 /// every cfg, every warning -- is emitted once.
-pub fn setup_graphics_sdks(backend: Backend) {
+pub fn setup_graphics_sdks(backend: Option<Backend>) {
     let env = sdk_env_from_cargo();
     if let Some(dir) = manifest_dir() {
         for path in targets::watched_inputs(&dir) {
             println!("cargo::rerun-if-changed={}", path.display());
         }
     }
+    let Some(backend) = backend else {
+        return;
+    };
     for line in sdks::graphics_sdk_directives(backend, &binary_targets_from_cargo(), &env) {
         println!("{line}");
     }
@@ -283,14 +328,76 @@ fn find_ancestor_with(start: &Path, pred: impl Fn(&Path) -> bool) -> Option<Path
 mod tests {
     use super::*;
 
+    fn features(names: &[&str]) -> BackendFeatures {
+        BackendFeatures {
+            native: names.contains(&"native"),
+            metal: names.contains(&"metal"),
+            directx: names.contains(&"directx"),
+            vulkan: names.contains(&"vulkan"),
+        }
+    }
+
     #[test]
-    fn backend_resolution_covers_every_target() {
-        assert_eq!(resolve_backend("macos", false), Backend::Metal);
-        assert_eq!(resolve_backend("macos", true), Backend::Vk);
-        assert_eq!(resolve_backend("windows", false), Backend::Dx);
-        assert_eq!(resolve_backend("windows", true), Backend::Vk);
-        assert_eq!(resolve_backend("linux", false), Backend::Vk);
-        assert_eq!(resolve_backend("linux", true), Backend::Vk);
+    fn native_resolves_to_what_each_target_renders_with() {
+        assert_eq!(
+            resolve_backend("macos", features(&["native"])),
+            Some(Backend::Metal)
+        );
+        assert_eq!(
+            resolve_backend("windows", features(&["native"])),
+            Some(Backend::Dx)
+        );
+        assert_eq!(
+            resolve_backend("linux", features(&["native"])),
+            Some(Backend::Vk)
+        );
+    }
+
+    #[test]
+    fn a_named_backend_selects_it_where_the_target_has_it() {
+        assert_eq!(
+            resolve_backend("macos", features(&["metal"])),
+            Some(Backend::Metal)
+        );
+        assert_eq!(
+            resolve_backend("windows", features(&["directx"])),
+            Some(Backend::Dx)
+        );
+        assert_eq!(
+            resolve_backend("windows", features(&["vulkan"])),
+            Some(Backend::Vk)
+        );
+        assert_eq!(
+            resolve_backend("macos", features(&["vulkan"])),
+            Some(Backend::Vk)
+        );
+        assert_eq!(
+            resolve_backend("linux", features(&["vulkan"])),
+            Some(Backend::Vk)
+        );
+    }
+
+    #[test]
+    fn a_backend_the_target_does_not_have_is_inert() {
+        assert_eq!(resolve_backend("macos", features(&["directx"])), None);
+        assert_eq!(resolve_backend("windows", features(&["metal"])), None);
+        assert_eq!(resolve_backend("linux", features(&["metal"])), None);
+        assert_eq!(resolve_backend("linux", features(&["directx"])), None);
+    }
+
+    #[test]
+    fn no_backend_feature_resolves_to_no_backend() {
+        for target_os in ["macos", "windows", "linux"] {
+            assert_eq!(resolve_backend(target_os, features(&[])), None);
+        }
+    }
+
+    #[test]
+    fn vulkan_wins_where_more_than_one_backend_applies() {
+        let all = features(&["native", "metal", "directx", "vulkan"]);
+        for target_os in ["macos", "windows", "linux"] {
+            assert_eq!(resolve_backend(target_os, all), Some(Backend::Vk));
+        }
     }
 
     #[test]
@@ -380,8 +487,10 @@ mod tests {
                 assert!(sdks::graphics_sdk_directives(backend, targets, &env).is_empty());
             }
         }
-        setup_graphics_sdks(Backend::Metal);
-        setup_graphics_sdks(Backend::Vk);
+        setup_graphics_sdks(Some(Backend::Metal));
+        setup_graphics_sdks(Some(Backend::Vk));
+        // A build with no backend has no SDK setup to do at all.
+        setup_graphics_sdks(None);
         // The check-cfg list is emitted unconditionally and must not panic.
         emit_check_cfgs();
     }

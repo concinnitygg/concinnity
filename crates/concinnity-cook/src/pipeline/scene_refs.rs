@@ -109,7 +109,13 @@ mod tests {
             r#"{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None).expect("build");
+        let result = build_pipeline_from_str(
+            world,
+            None,
+            None,
+            concinnity_core::platform::Platform::Metal,
+        )
+        .expect("build");
         // pause_menu interned id = 0 (first declared name).
         let btn = result
             .defs
@@ -146,7 +152,13 @@ mod tests {
             r#"{"name":"f","type":"Font","args":{"size_px":16}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None).expect("build");
+        let result = build_pipeline_from_str(
+            world,
+            None,
+            None,
+            concinnity_core::platform::Platform::Metal,
+        )
+        .expect("build");
         // pause_menu interned id = 0; the UI assets intern in declaration order.
         let baked_view = |id: u32, expect: &str| {
             let def = result

@@ -15,6 +15,7 @@
 use crate::app::runloop;
 use crate::app::startup_error::StartupError;
 use crate::app::state::App;
+use crate::result::CnResult;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
@@ -94,7 +95,12 @@ pub fn run(options: RunOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    start_runtime(app, options)
+    start_runtime(app, options).map_err(start_failure)
+}
+
+// A refused start, in the form a process exit status is built from.
+fn start_failure(e: CnResult) -> std::io::Error {
+    std::io::Error::other(format!("failed to start app: {e}"))
 }
 
 // The primary blob's path, which is what a load failure is reported against.
@@ -173,7 +179,7 @@ pub fn run_from(state_dir: &Path, blob: BlobSource<'_>) -> std::io::Result<()> {
         // what happened, not a substitute for failing.
         return Err(std::io::Error::new(error.io_kind(), error.log_line()));
     }
-    start_runtime(app, RunOptions::default())
+    start_runtime(app, RunOptions::default()).map_err(start_failure)
 }
 
 // Startup and loop entry once the App's world is populated. Registers the
@@ -182,7 +188,7 @@ pub fn run_from(state_dir: &Path, blob: BlobSource<'_>) -> std::io::Result<()> {
 // single-threaded world loop) -- until the window closes, a system stops the
 // world, or CTRL+C is received. External callers reach this through
 // `App::run` / `App::run_with`.
-pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Result<()> {
+pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), CnResult> {
     // A host that installed its own subscriber keeps it (`try_init` no-ops),
     // so an embedded app gets logs without wiring any up itself.
     init_logging();
@@ -217,7 +223,7 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Resul
         // Returned rather than exiting the process, so the world's systems
         // (and the GPU resources they hold) still drop on the way out.
         tracing::error!("failed to start app: {e}");
-        return Err(std::io::Error::other(format!("failed to start app: {e}")));
+        return Err(e);
     }
 
     match options.mode {
@@ -319,9 +325,10 @@ mod tests {
         let mut app = App::new();
         app.start().expect("the first start succeeds");
 
-        let err = app
-            .run_with(RunOptions::default())
-            .expect_err("a second start is refused");
-        assert!(err.to_string().contains("failed to start app"), "{err}");
+        assert_eq!(
+            app.run_with(RunOptions::default()),
+            Err(CnResult::InvalidState),
+            "a second start is refused"
+        );
     }
 }

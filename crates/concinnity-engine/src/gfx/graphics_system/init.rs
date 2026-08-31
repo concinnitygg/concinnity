@@ -4,8 +4,8 @@
 use crate::components::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
     Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, RectAreaLight,
-    SdfVolume, Shader, ShaderKind, SkinnedMeshGeometry, SpotLight, StageSource, StageSourceExt,
-    StreamingConfig, TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
+    SdfVolume, Shader, ShaderKind, SkinnedMeshGeometry, SpotLight, StageSource, StreamingConfig,
+    TextLabel, VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
@@ -1301,7 +1301,7 @@ impl GraphicsSystem {
                 let Some(stage) = stage_opt else {
                     return;
                 };
-                let Some(raw) = stage.current_platform_source() else {
+                let Some(raw) = stage.source_for(crate::platform::current()) else {
                     return;
                 };
                 let resolved = super::hot_reload_sources::resolve_runtime_source_path(&raw);
@@ -2650,7 +2650,7 @@ impl GraphicsSystem {
                     None
                 }
             },
-            None => concinnity_device::init_backend(backend_init),
+            None => crate::device::init_backend(backend_init),
         };
         self.backend = built;
 

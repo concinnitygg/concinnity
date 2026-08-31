@@ -1,14 +1,3 @@
-//! Two jobs, both pure functions of this crate's own source.
-//!
-//! Resolves the rendering backend cfg the same way the client crate's build.rs
-//! does. `Platform::current` is the only consumer: it reports which shader
-//! source language the target backend consumes.
-//!
-//!   backend_metal  macOS, default
-//!   backend_dx     Windows, default
-//!   backend_vk     Linux (always), or macOS / Windows with the `vulkan` feature
-//! The choice must stay in lockstep with concinnity-engine/build.rs.
-//!
 //! Generates the linearly-transformed-cosine lookup table the rectangular
 //! area-light shading path samples, by running the fitter in
 //! `src/render/ltc/fit.rs`. The table is pure offline data: it depends only on
@@ -27,24 +16,7 @@ include!("src/render/ltc/size.rs");
 include!("src/render/ltc/fit.rs");
 
 fn main() {
-    emit_backend_cfg();
     generate_ltc_tables();
-}
-
-fn emit_backend_cfg() {
-    println!("cargo::rustc-check-cfg=cfg(backend_metal)");
-    println!("cargo::rustc-check-cfg=cfg(backend_dx)");
-    println!("cargo::rustc-check-cfg=cfg(backend_vk)");
-
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let vulkan = std::env::var("CARGO_FEATURE_VULKAN").is_ok();
-
-    let backend = match (target_os.as_str(), vulkan) {
-        ("macos", false) => "backend_metal",
-        ("windows", false) => "backend_dx",
-        _ => "backend_vk",
-    };
-    println!("cargo::rustc-cfg={backend}");
 }
 
 fn write_f32s(path: std::path::PathBuf, values: impl Iterator<Item = f32>) {

@@ -57,6 +57,7 @@ impl EditorHook {
         concinnity_cook::prepare_world(
             &content,
             crate::authoring::assets_root::assets_dir().as_deref(),
+            crate::cook_platform(),
         )
         .map_err(|errs| {
             errs.first()

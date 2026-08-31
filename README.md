@@ -100,14 +100,16 @@ Check out the [Rust Documentation][docs-link] to explore the crate.
 
 ## Feature Flags
 
-| Feature   | Default | Description                               |
-| --------- | ------- | ----------------------------------------- |
-| `std`     | ✅      | Standard engine features                  |
-| `editor`  |         | The dev CLI and editor (implies `player`) |
-| `player`  |         | The `concinnity-run` player binary        |
-| `directx` |         | DirectX 12 rendering backend (Windows)    |
-| `metal`   |         | Metal rendering backend (Apple platforms) |
-| `vulkan`  |         | Vulkan rendering backend (cross-platform) |
+| Feature   | Default | Description                                       |
+| --------- | ------- | ------------------------------------------------- |
+| `std`     | ✅      | Standard engine features                          |
+| `native`  | ✅      | The render backend the target builds with         |
+| `metal`   |         | Metal rendering backend (Apple platforms)         |
+| `directx` |         | DirectX 12 rendering backend (Windows)            |
+| `vulkan`  |         | Vulkan rendering backend (cross-platform)         |
+| `cook`    |         | Build worlds into blobs in process                |
+| `player`  |         | The `concinnity-run` player binary                |
+| `editor`  |         | The dev CLI and editor (implies `player`, `cook`) |
 
 ## CLI Reference
 

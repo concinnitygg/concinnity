@@ -264,9 +264,14 @@ impl WorldBuilder {
         // `assets/`. An embedder that installed no state root has no tree to
         // search, so only paths that stand on their own resolve.
         let assets_dir = concinnity_cook::paths::assets_dir();
-        let loaded: LoadedWorld = prepare_world(&self.lines.concat(), assets_dir.as_deref())
-            .map_err(|errs| report_validation_errors(&errs))?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), None)
+        // Shaders are cooked for the backend the runtime linked in beside this
+        // module consumes, so a world compiled in memory runs in the same
+        // process.
+        let platform = concinnity_engine::platform::current();
+        let loaded: LoadedWorld =
+            prepare_world(&self.lines.concat(), assets_dir.as_deref(), platform)
+                .map_err(|errs| report_validation_errors(&errs))?;
+        build_compiled(loaded.assets, assets_dir.as_deref(), None, platform)
     }
 }
 

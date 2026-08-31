@@ -7,12 +7,18 @@
 //! against a display, accumulating real elapsed time, and catching a signal are
 //! a windowed host's concerns; a host that has them drives the world itself.
 //!
+//! [`Driver`] is that seam: [`App`] implements it with nothing underneath, and
+//! a host with an operating system implements it over its own loop.
+//!
 //! [`SimTiming`]: crate::ecs::SimTiming
 
 #[cfg(debug_assertions)]
 mod alloc_guard;
+mod driver;
 mod fixed_timestep;
 
+#[cfg(test)]
+mod driver_tests;
 #[cfg(test)]
 mod headless_world_tests;
 #[cfg(test)]
@@ -21,6 +27,8 @@ mod run_tests;
 use crate::ecs::{StepResult, SystemTable, World};
 use crate::result::CnResult;
 use fixed_timestep::FixedTimestep;
+
+pub use driver::Driver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppStatus {

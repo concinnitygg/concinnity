@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "clap",
  "concinnity-cook",
@@ -579,11 +579,12 @@ dependencies = [
  "concinnity-shader",
  "concinnity-toolchain",
  "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "concinnity-cook"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -610,12 +611,12 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "bytemuck",
  "ciborium",
  "fontdue",
- "hashbrown 0.15.5",
+ "hashbrown 0.17.1",
  "libm",
  "postcard",
  "rayon",
@@ -627,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "argon2",
  "async-stream",
@@ -636,7 +637,6 @@ dependencies = [
  "ciborium",
  "concinnity-cook",
  "concinnity-core",
- "concinnity-device",
  "concinnity-engine",
  "concinnity-host",
  "concinnity-shader",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "ash",
  "block2",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "concinnity-core",
  "rayon",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -757,11 +757,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.19.0"
+version = "0.19.1"
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",
@@ -1217,6 +1217,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "fontdue"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1504,7 +1510,7 @@ checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "allocator-api2",
  "equivalent",
- "foldhash",
+ "foldhash 0.1.5",
 ]
 
 [[package]]
@@ -1512,6 +1518,11 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "heck"

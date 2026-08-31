@@ -140,7 +140,13 @@ mod tests {
             r#""scale":[1,1,1]}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None).expect("build");
+        let result = build_pipeline_from_str(
+            world,
+            None,
+            None,
+            concinnity_core::platform::Platform::Metal,
+        )
+        .expect("build");
         let bytes = result
             .resource_payload(ResourceKind::SkinnedMesh, "prism")
             .expect("named payload");

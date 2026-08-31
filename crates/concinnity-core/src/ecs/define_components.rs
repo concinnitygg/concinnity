@@ -26,15 +26,23 @@ macro_rules! __cn_surviving_tag {
 }
 
 // Internal helper. Applies an entry's `validate: <fn>` clamp to a value of the
-// component's own type, or leaves it alone when the entry declares none. The
-// clamps live in `crate::components::validate`, the same ones the authored JSON
-// path runs, so a typed build and a cooked build land on the same component.
+// component's own type, or leaves it alone when the entry declares none. A
+// `validate_for: <fn>` entry names a clamp whose result depends on the shader
+// platform the world is cooked for, so it takes that platform alongside the
+// value. The clamps live in `crate::components::validate`, the same ones the
+// authored JSON path runs, so a typed build and a cooked build land on the
+// same component.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __cn_validate {
-    ($val:expr;) => { $val };
-    ($val:expr; validate: $f:ident $($r:tt)*) => { $crate::components::validate::$f($val) };
-    ($val:expr; $t:tt $($r:tt)*) => { $crate::__cn_validate!($val; $($r)*) };
+    ($val:expr, $p:expr;) => { $val };
+    ($val:expr, $p:expr; validate: $f:ident $($r:tt)*) => {
+        $crate::components::validate::$f($val)
+    };
+    ($val:expr, $p:expr; validate_for: $f:ident $($r:tt)*) => {
+        $crate::components::validate::$f($val, $p)
+    };
+    ($val:expr, $p:expr; $t:tt $($r:tt)*) => { $crate::__cn_validate!($val, $p; $($r)*) };
 }
 
 // Internal helper. Resolves a resource entry's `resource: <Kind>` flag into the
@@ -181,13 +189,15 @@ macro_rules! define_components {
             }
 
             /// Apply the component's registered validation clamps, the ones a
-            /// cooked world's args pass through on their way to the blob. A
-            /// type declaring none is returned unchanged.
-            pub fn validated(self) -> Self {
+            /// cooked world's args pass through on their way to the blob.
+            /// `platform` is the shader platform the world is cooked for; a
+            /// clamp that resolves a per-backend source reads it. A type
+            /// declaring no clamp is returned unchanged.
+            pub fn validated(self, platform: $crate::platform::Platform) -> Self {
                 match self {
                     $(
                         ComponentAsset::$variant(c) => ComponentAsset::$variant(
-                            $crate::__cn_validate!(c; $($meta)*)
+                            $crate::__cn_validate!(c, platform; $($meta)*)
                         ),
                     )+
                 }

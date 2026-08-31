@@ -988,7 +988,7 @@ fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
     setup_graphics_sdks(backend);
-    if backend == Backend::Metal {
+    if backend == Some(Backend::Metal) {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");
         precompile_metal_shaders(
@@ -1000,11 +1000,11 @@ fn main() {
         assert_slang_metal_abi();
         emit_slang_metal_defines();
     }
-    if backend == Backend::Dx {
+    if backend == Some(Backend::Dx) {
         assert_slang_dxil_abi();
         precompile_dxil();
     }
-    if backend == Backend::Vk {
+    if backend == Some(Backend::Vk) {
         precompile_spirv();
     }
     emit_shader_compile_source_hash();

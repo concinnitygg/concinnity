@@ -20,6 +20,7 @@ mod tests {
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "lobby",
+            platform: concinnity_core::platform::Platform::Metal,
             assets_dir: None,
             artifacts_dir: None,
             all_assets: &[],

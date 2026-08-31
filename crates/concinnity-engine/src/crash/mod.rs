@@ -37,6 +37,8 @@ pub fn install() {
     note("backend", "directx");
     #[cfg(backend_vk)]
     note("backend", "vulkan");
+    #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
+    note("backend", "none");
 }
 
 const MAX_NOTES: usize = 16;

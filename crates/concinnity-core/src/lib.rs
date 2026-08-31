@@ -77,6 +77,7 @@ pub mod spawn;
 #[cfg(test)]
 mod test_support;
 
-// The headless driver over a world, named at the crate root because it is the
-// counterpart to `ecs::World` rather than a corner of the module tree.
-pub use app::App;
+// The headless driver over a world and the trait any loop that runs one
+// implements, named at the crate root because they are the counterpart to
+// `ecs::World` rather than a corner of the module tree.
+pub use app::{App, Driver};

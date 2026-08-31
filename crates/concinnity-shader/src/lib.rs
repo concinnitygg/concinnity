@@ -1,8 +1,9 @@
 //! The build-time shader toolchain: the platform compilers that turn a
 //! Shader stage's authored source into the bytecode one backend loads -- Metal
 //! (`xcrun metal` + `xcrun metallib`), DirectX (the Direct3D `Fxc` compiler),
-//! Vulkan (`shaderc`). Exactly one compiles per build, resolved by build.rs into
-//! a single backend_* cfg.
+//! Vulkan (`shaderc`). At most one compiles per build, resolved by build.rs from
+//! the backend features into a single backend_* cfg; a build that names none
+//! registers no compiler.
 //!
 //! This is the build-side twin of concinnity-device: the device crate owns
 //! runtime GPU submission, this one owns build-time shader production. Both are

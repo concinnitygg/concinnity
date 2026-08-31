@@ -52,6 +52,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
     assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
+    platform: concinnity_core::platform::Platform,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
     use crate::resource_handles::{RegisteredType, ResourceAssetCompile};
 
@@ -79,6 +80,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
         };
         let ctx = crate::asset::BuildCtx {
             name: asset.name.as_str(),
+            platform,
             assets_dir,
             artifacts_dir,
             all_assets: &empty,
@@ -182,6 +184,7 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) max_blob_bytes: u64,
     pub(in crate::pipeline) assets_dir: Option<&'a Path>,
     pub(in crate::pipeline) artifacts_dir: Option<&'a str>,
+    pub(in crate::pipeline) platform: concinnity_core::platform::Platform,
     pub(in crate::pipeline) mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     pub(in crate::pipeline) progress: Option<&'a (dyn Fn(BuildProgress) + Sync)>,
 }
@@ -202,6 +205,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         max_blob_bytes,
         assets_dir,
         artifacts_dir,
+        platform,
         mesh_cache,
         progress,
     } = pack_ctx;
@@ -277,6 +281,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
 
                 let ctx = crate::asset::BuildCtx {
                     name: name.as_str(),
+                    platform,
                     assets_dir,
                     artifacts_dir,
                     all_assets: assets,
@@ -324,6 +329,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         let asset = &assets[*asset_idx];
         let ctx = crate::asset::BuildCtx {
             name: asset.name.as_str(),
+            platform,
             assets_dir,
             artifacts_dir,
             all_assets: assets,
@@ -540,7 +546,12 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let probed = probe_mesh_payload_cache(&assets, None, None);
+        let probed = probe_mesh_payload_cache(
+            &assets,
+            None,
+            None,
+            concinnity_core::platform::Platform::Metal,
+        );
 
         let mut names: Vec<&str> = probed.keys().map(|s| s.as_str()).collect();
         names.sort_unstable();
@@ -561,7 +572,12 @@ mod tests {
             wja("tex", "Texture", serde_json::json!({"source": "wall.png"})),
             wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
         ];
-        let probed = probe_mesh_payload_cache(&assets, None, None);
+        let probed = probe_mesh_payload_cache(
+            &assets,
+            None,
+            None,
+            concinnity_core::platform::Platform::Metal,
+        );
         assert_eq!(probed.len(), 1);
         assert!(probed.contains_key("m"));
     }
@@ -569,10 +585,13 @@ mod tests {
     use crate::resource_handles::{RegisteredType, ResourceKind};
 
     fn procedural_mesh_def() -> BlobAssetDef {
-        asset_api::create_asset_def(&AssetRequest {
-            asset_type: "ProceduralMesh".to_string(),
-            args: Some(serde_json::json!({"generator": "box"})),
-        })
+        asset_api::create_asset_def(
+            &AssetRequest {
+                asset_type: "ProceduralMesh".to_string(),
+                args: Some(serde_json::json!({"generator": "box"})),
+            },
+            concinnity_core::platform::Platform::Metal,
+        )
         .expect("ProceduralMesh def")
     }
 
@@ -618,6 +637,7 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
@@ -700,6 +720,7 @@ mod tests {
             &mut named,
             &[],
             PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
@@ -744,6 +765,7 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
@@ -797,6 +819,7 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
@@ -830,16 +853,20 @@ mod tests {
         let assets = vec![wja("day", "Scene", serde_json::json!({}))];
         let mut named = vec![(
             "day".to_string(),
-            asset_api::create_asset_def(&AssetRequest {
-                asset_type: "Scene".to_string(),
-                args: Some(serde_json::json!({})),
-            })
+            asset_api::create_asset_def(
+                &AssetRequest {
+                    asset_type: "Scene".to_string(),
+                    args: Some(serde_json::json!({})),
+                },
+                concinnity_core::platform::Platform::Metal,
+            )
             .expect("Scene def"),
         )];
         let out = compile_and_pack_payloads(
             &mut named,
             &[0],
             PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
@@ -884,6 +911,7 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
@@ -936,6 +964,7 @@ mod tests {
             &mut named,
             &[0, 1],
             PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),

@@ -37,12 +37,19 @@ pub use app::run::{BlobSource, run_from};
 // and drive it with `App::run` / `App::run_with`. Exported flat so the
 // `concinnity` facade crate re-exports these under its own root.
 pub use app::run::{PipelineMode, RunOptions, init_logging};
+pub use app::startup_error::StartupError;
 pub use app::state::App;
 // Redirect runtime-writable state (`saves/` + `settings`) before `run_from`
 // when the content dir is read-only. Exported beside `run_from` so the runtime
 // bin's entire entry API lives on this crate.
 pub use concinnity_host::store::paths;
 pub use concinnity_host::store::paths::set_writable_state_dir;
+
+/// The shader platform this build's rendering backend consumes. The backend is
+/// this crate's own compile-time choice, so the crate that knows it is the one
+/// that states it: the editor and the cook are handed the value rather than
+/// resolving a backend of their own.
+pub mod platform;
 
 // Export-time compilation of the built-in shaders into the cache segment a
 // bundle ships, for backends that compile them at renderer init. Re-exported
@@ -51,6 +58,10 @@ pub use concinnity_host::store::paths::set_writable_state_dir;
 pub use concinnity_device::precompile::{
     Report as ShaderPrecompileReport, precompile_builtin_shaders,
 };
+mod device;
+/// Whether this build links a rendering backend. A build with no backend
+/// feature has none, so the only loop that can run a world is a headless one.
+pub use device::AVAILABLE as HAS_RENDER_BACKEND;
 pub(crate) mod cbor_file;
 pub(crate) mod config;
 /// Crash reporting: panic hook, native fault capture, local report files.

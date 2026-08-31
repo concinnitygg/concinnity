@@ -1,8 +1,8 @@
 //! The Shader asset: the authored schema (Shader, StageSource, ShaderKind, and
 //! the ShaderPayload container), the `Component` impl, and the
-//! `StageSourceExt::current_platform_source` extension the engine init and
-//! hot-reload paths use. The JSON-args source selection and validation live in
-//! concinnity-cook (`authoring::source_args`, `check::shader`).
+//! `StageSource::source_for` selection the engine init and hot-reload paths
+//! use. The JSON-args source selection and validation live in concinnity-cook
+//! (`authoring::source_args`, `check::shader`).
 
 use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
@@ -295,23 +295,15 @@ mod tests {
     }
 }
 
-/// Resolve the source filename for the current build platform from a stage's
-/// declared `source` / `sources`. Mirrors the build-time selection
-/// (concinnity-cook `authoring::source_args`) so the hot-reload subsystem picks the
-/// same per-platform source the build read at compile time. Returns `None` when
-/// no current-platform source is declared (e.g. a stage that only declares `glsl`
-/// running on the Metal backend, which loads the embedded GLSL fallback at init
-/// and has no on-disk file to hot-reload). Exposed as an extension trait because
-/// the schema type is declared above.
-pub trait StageSourceExt {
-    /// The source path declared for the running platform, or `None` when the
-    /// stage declares none.
-    fn current_platform_source(&self) -> Option<String>;
-}
-
-impl StageSourceExt for StageSource {
-    fn current_platform_source(&self) -> Option<String> {
-        let platform = crate::platform::Platform::current();
+impl StageSource {
+    /// Resolve the source filename `platform` selects from this stage's
+    /// declared `source` / `sources`. Mirrors the build-time selection
+    /// (concinnity-cook `authoring::source_args`) so the hot-reload subsystem
+    /// picks the same source the build read. Returns `None` when the stage
+    /// declares nothing for that platform (e.g. a `glsl`-only stage asked for
+    /// Metal, which loads the embedded GLSL fallback at init and has no
+    /// on-disk file to hot-reload).
+    pub fn source_for(&self, platform: crate::platform::Platform) -> Option<String> {
         if let Some(sources) = &self.sources
             && let Some(src) = sources.get(platform.key())
         {
@@ -345,14 +337,10 @@ impl Component for Shader {
     }
 }
 
-/// Returns the platform key used to look up entries in the `sources` map.
-pub fn platform_key() -> &'static str {
-    crate::platform::Platform::current().key()
-}
-
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
+    use crate::platform::Platform;
     use alloc::string::ToString;
 
     #[test]
@@ -364,9 +352,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn current_platform_source_resolves_for_any_backend() {
-        // Declaring every platform source resolves on whichever backend the
-        // test build targets.
+    fn a_sources_map_resolves_for_every_platform() {
         let stage = StageSource {
             sources: Some(
                 [
@@ -379,7 +365,17 @@ mod runtime_tests {
             ),
             ..Default::default()
         };
-        assert!(stage.current_platform_source().is_some());
+        for (platform, expected) in [
+            (Platform::Metal, "v.metal"),
+            (Platform::Hlsl, "v.hlsl"),
+            (Platform::Glsl, "v.glsl"),
+        ] {
+            assert_eq!(
+                stage.source_for(platform),
+                Some(expected.to_string()),
+                "{platform:?} takes its own map entry"
+            );
+        }
     }
 
     #[test]
@@ -388,15 +384,16 @@ mod runtime_tests {
             source: "v.metal".to_string(),
             sources: None,
         };
-        let platform = crate::platform::Platform::current();
         assert_eq!(
-            stage.current_platform_source().is_some(),
-            platform.accepts_ext("metal")
+            stage.source_for(Platform::Metal),
+            Some("v.metal".to_string())
         );
+        assert_eq!(stage.source_for(Platform::Hlsl), None);
+        assert_eq!(stage.source_for(Platform::Glsl), None);
     }
 
     // The map is consulted first; a stage declaring only a bare `source` falls
-    // back to it, but only when the file's extension is one this platform can
+    // back to it, but only when the file's extension is one that platform can
     // actually load. A stage declaring nothing resolves to nothing rather than
     // handing back an empty path.
     #[test]
@@ -406,31 +403,45 @@ mod runtime_tests {
             sources: None,
         };
 
-        assert_eq!(bare("").current_platform_source(), None, "nothing declared");
-
-        // A generic extension is not platform-specific, so it is accepted
-        // whichever backend is running.
         assert_eq!(
-            bare("v.slang").current_platform_source(),
-            Some("v.slang".to_string())
+            bare("").source_for(Platform::Metal),
+            None,
+            "nothing declared"
         );
+
+        // A generic extension is not platform-specific, so every platform
+        // accepts it.
+        for platform in [Platform::Metal, Platform::Hlsl, Platform::Glsl] {
+            assert_eq!(
+                bare("v.slang").source_for(platform),
+                Some("v.slang".to_string())
+            );
+        }
 
         // A source for a different backend's language resolves to nothing.
-        let other = ["metal", "hlsl", "glsl"]
-            .into_iter()
-            .find(|ext| *ext != platform_key())
-            .expect("some other platform exists");
-        assert_eq!(
-            bare(&alloc::format!("v.{other}")).current_platform_source(),
-            None,
-            "a {other} source is not loadable here"
-        );
+        assert_eq!(bare("v.glsl").source_for(Platform::Hlsl), None);
     }
 
+    // The map wins over a bare `source`, even one this platform would accept.
     #[test]
-    fn the_platform_key_is_the_running_backends_own() {
-        assert!(["metal", "hlsl", "glsl"].contains(&platform_key()));
-        assert_eq!(platform_key(), crate::platform::Platform::current().key());
+    fn a_sources_map_entry_wins_over_a_bare_source() {
+        let stage = StageSource {
+            source: "bare.slang".to_string(),
+            sources: Some(
+                [("hlsl".to_string(), "mapped.hlsl".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+        };
+        assert_eq!(
+            stage.source_for(Platform::Hlsl),
+            Some("mapped.hlsl".to_string())
+        );
+        assert_eq!(
+            stage.source_for(Platform::Metal),
+            Some("bare.slang".to_string()),
+            "a platform the map misses falls back to the bare source"
+        );
     }
 
     // Shader keeps a hand-written Component impl rather than the generated

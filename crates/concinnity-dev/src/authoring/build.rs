@@ -22,9 +22,12 @@ pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
     // here costs nothing when the CLI already installed at startup.
     concinnity_shader::install();
 
-    let loaded =
-        concinnity_cook::prepare_world(content, super::assets_root::assets_dir().as_deref())
-            .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
+    let loaded = concinnity_cook::prepare_world(
+        content,
+        super::assets_root::assets_dir().as_deref(),
+        crate::cook_platform(),
+    )
+    .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
 
     Ok(loaded)
 }
@@ -101,6 +104,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         loaded.assets,
         super::assets_root::assets_dir().as_deref(),
         None,
+        crate::cook_platform(),
     )?;
 
     // The material name catalogue, read before the result is taken apart below.
@@ -237,6 +241,7 @@ pub(crate) fn build_world_str_to_disk_with_progress(
         loaded.assets,
         super::assets_root::assets_dir().as_deref(),
         None,
+        crate::cook_platform(),
         progress,
     )?;
     if let Some(p) = progress {

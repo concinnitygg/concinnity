@@ -216,7 +216,6 @@ fn the_baked_camera_matches_the_cooked_one() {
 #[test]
 fn both_worlds_start() {
     for world in [raw_world(), cooked_world()] {
-        let mut app = crate::App::from_world(world);
-        crate::test_support::assert_starts_headless(&mut app);
+        crate::test_support::assert_starts_headless(crate::App::from_world(world));
     }
 }

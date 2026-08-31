@@ -10,6 +10,8 @@ pub mod budget;
 // Fixed-timestep accumulator advanced before each world step.
 pub(crate) mod clock;
 pub mod dev_flags;
+// The windowed loop's implementation of the core driver trait.
+mod driver;
 /// Long-session drift of process memory against the tracked heap.
 pub mod mem_drift;
 pub(crate) mod pacing;
@@ -17,9 +19,9 @@ pub(crate) mod pacing;
 pub(crate) mod pipeline;
 pub mod run;
 pub mod runloop;
-// Classification of fatal startup failures into a log line plus a sentence for
-// the error screen. `pub` so a host binary can report one the same way.
-pub(crate) mod startup_error;
+/// Classification of fatal startup failures into a log line plus a sentence for
+/// the error screen.
+pub mod startup_error;
 /// The `App` value a host constructs, starts, and steps.
 pub mod state;
 /// Host-memory queries backing the memory budget + the live-usage readout.

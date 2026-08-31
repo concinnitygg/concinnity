@@ -53,7 +53,7 @@ pub(crate) fn show(title: &str, message: &str) -> bool {
     crate::app::runloop::activate_app_macos();
 
     let init = BackendInit::minimal(&window, atlases);
-    let Some(mut backend) = concinnity_device::init_backend(init) else {
+    let Some(mut backend) = crate::device::init_backend(init) else {
         tracing::error!("error screen: no render backend; reporting on the console instead");
         return false;
     };

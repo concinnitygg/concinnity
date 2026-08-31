@@ -1,15 +1,11 @@
-//! The shader `Platform` selector: which shader source language the running
-//! backend consumes. Pure (no I/O, cfg-resolved), so it sits in the runtime
-//! foundation rather than the build module -- the engine picks a `Shader` stage's
-//! current-platform source at runtime, and the build pipeline reuses the same
-//! selection at compile time.
+//! The shader `Platform` vocabulary: which shader source language a rendering
+//! backend consumes. The enum is pure data with no ambient resolution of its
+//! own, so it sits in the runtime foundation and every caller states the
+//! platform it means -- the engine names the backend it was built for, and the
+//! build pipeline is told the backend it cooks for.
 
 /// Shader source language families supported by the engine. Each variant
 /// matches one render backend: Metal, HLSL (DirectX), or GLSL (Vulkan).
-///
-/// A given build only ever constructs the variant for its own backend (see
-/// `current`), so the other two read as never-constructed; `key` still matches
-/// all three, so the type stays whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     /// Metal Shading Language, for the Metal backend.
@@ -21,24 +17,6 @@ pub enum Platform {
 }
 
 impl Platform {
-    /// The shader platform the current binary's rendering backend was built
-    /// for. Resolved from the backend cfg (see build.rs), not the target OS, so
-    /// a Windows Vulkan build correctly selects GLSL rather than HLSL.
-    pub fn current() -> Self {
-        #[cfg(backend_metal)]
-        {
-            Platform::Metal
-        }
-        #[cfg(backend_dx)]
-        {
-            Platform::Hlsl
-        }
-        #[cfg(backend_vk)]
-        {
-            Platform::Glsl
-        }
-    }
-
     /// String key used in the `sources` map of a `Shader` stage.
     pub fn key(self) -> &'static str {
         match self {

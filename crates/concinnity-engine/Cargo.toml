@@ -19,14 +19,11 @@ include = [
 ]
 
 [features]
-# Build the macOS or Windows client against the Vulkan backend instead of the
-# default Metal / DirectX one. Linux always uses Vulkan regardless; build.rs
-# resolves the backend cfg from the target and this feature. Windows Vulkan uses
-# the shared native Win32 window layer; macOS Vulkan uses GLFW, as Linux does.
-vulkan = [
-    "concinnity-device/vulkan",
-    "concinnity-core/vulkan",
-]
+default = ["native"]
+native = ["dep:concinnity-device", "concinnity-device/native"]
+metal = ["dep:concinnity-device", "concinnity-device/metal"]
+directx = ["dep:concinnity-device", "concinnity-device/directx"]
+vulkan = ["dep:concinnity-device", "concinnity-device/vulkan"]
 
 # Per-size-class allocation histograms on top of the counters every binary
 # already gets. The allocator itself is installed by linking this crate (see
@@ -38,7 +35,7 @@ alloc-detail = ["concinnity-core/detail"]
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-device = { workspace = true }
+concinnity-device = { workspace = true, optional = true }
 
 ciborium = "0.2"
 gilrs = "0.11.2"

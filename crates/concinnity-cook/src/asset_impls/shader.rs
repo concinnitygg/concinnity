@@ -1,9 +1,9 @@
 // asset_impls/shader.rs
 
 use crate::asset::BuildCtx;
-use crate::authoring::source_args::resolve_source_from_args;
-use concinnity_core::components::shader::platform_key;
+use crate::authoring::source_args::stage_source_path;
 use concinnity_core::components::{Shader, ShaderKind, ShaderPayload};
+use concinnity_core::platform::Platform;
 
 // Resolve a raw per-platform source string to the on-disk path the build will
 // read. A bare filename is looked up recursively under the build's asset search
@@ -66,12 +66,12 @@ fn compile_stage(
     kind: ShaderKind,
     ctx: &BuildCtx<'_>,
 ) -> std::io::Result<Option<Vec<u8>>> {
-    let resolved = resolve_source_from_args(stage_args);
+    let resolved = stage_source_path(stage_args, ctx.platform);
 
-    // On Linux/Vulkan, missing per-platform sources are not fatal: the
-    // Vulkan backend ships inline GLSL for every required stage and
-    // compiles it whenever the payload carries no bytes for that stage.
-    if resolved.is_none() && platform_key() == "glsl" {
+    // On Vulkan, missing per-platform sources are not fatal: the Vulkan
+    // backend ships inline GLSL for every required stage and compiles it
+    // whenever the payload carries no bytes for that stage.
+    if resolved.is_none() && ctx.platform == Platform::Glsl {
         tracing::warn!(
             "Asset '{}': no shader source for platform \"glsl\", falling back to built-in GLSL",
             ctx.name
@@ -85,7 +85,7 @@ fn compile_stage(
             format!(
                 "Compiled asset '{}': no shader source for platform \"{}\"",
                 ctx.name,
-                platform_key()
+                ctx.platform.key()
             ),
         )
     })?;
@@ -147,7 +147,7 @@ impl crate::asset::BuildAsset for Shader {
             let Some(stage_args) = args.get(field) else {
                 continue;
             };
-            let Some(raw) = resolve_source_from_args(stage_args) else {
+            let Some(raw) = stage_source_path(stage_args, ctx.platform) else {
                 continue;
             };
             let path = resolve_source_path_for(&raw, ctx);
@@ -174,18 +174,20 @@ mod tests {
     ) -> BuildCtx<'a> {
         BuildCtx {
             name: "s",
+            platform: Platform::Metal,
             assets_dir,
             artifacts_dir,
             all_assets: &[],
         }
     }
 
-    // A shader whose stages declare a source for the backend this build
-    // targets, so `resolve_source_from_args` selects them on every platform.
+    // A shader whose stages declare a source for the platform the test
+    // contexts cook for.
     fn args(vertex: &str, fragment: &str) -> serde_json::Value {
+        let key = Platform::Metal.key();
         serde_json::json!({
-            "vertex": {"sources": {platform_key(): vertex}},
-            "fragment": {"sources": {platform_key(): fragment}},
+            "vertex": {"sources": {key: vertex}},
+            "fragment": {"sources": {key: fragment}},
         })
     }
 

@@ -24,17 +24,11 @@ include = [
 # shipped build should not pay for on every allocation.
 detail = []
 
-# Selects backend_vk on Windows (via build.rs reading CARGO_FEATURE_VULKAN) so
-# the backend-conditional gfx data layouts and Platform::current() compile for
-# the same backend the client picks. Activates no extra dependency. Inert on
-# Linux (always vk) and macOS (always metal).
-vulkan = []
-
 [dependencies]
 
 bytemuck = { version = "1", default-features = false, features = ["derive"] }
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
-hashbrown = "0.15"
+hashbrown = "0.17.1"
 libm = "0.2"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }

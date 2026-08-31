@@ -19,19 +19,14 @@ include = [
 ]
 
 [features]
-# Mirror the runtime's Vulkan feature so an editor build can target the Vulkan
-# backend; forwards to the runtime, the device backends, the compile pipeline,
-# and core.
-vulkan = [
-    "concinnity-engine/vulkan",
-    "concinnity-device/vulkan",
-    "concinnity-shader/vulkan",
-    "concinnity-core/vulkan",
-]
+default = ["native"]
+native = ["concinnity-engine/native", "concinnity-shader/native"]
+metal = ["concinnity-engine/metal", "concinnity-shader/metal"]
+directx = ["concinnity-engine/directx", "concinnity-shader/directx"]
+vulkan = ["concinnity-engine/vulkan", "concinnity-shader/vulkan"]
 
 [dependencies]
 concinnity-engine = { workspace = true }
-concinnity-device = { workspace = true }
 concinnity-cook = { workspace = true }
 concinnity-shader = { workspace = true }
 concinnity-core = { workspace = true }

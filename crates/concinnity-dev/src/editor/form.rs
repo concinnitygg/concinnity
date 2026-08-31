@@ -698,10 +698,11 @@ pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Resul
     // real.
     if ct.is_resource() {
         let args = Value::Object(args.clone());
-        ct.normalized_args(&args).map_err(|e| e.to_string())?;
-        return concinnity_cook::validate_asset(ty, name, &args);
+        ct.normalized_args(&args, crate::cook_platform())
+            .map_err(|e| e.to_string())?;
+        return concinnity_cook::validate_asset(ty, name, &args, crate::cook_platform());
     }
-    ct.reserialize_args(&Value::Object(args.clone()))
+    ct.reserialize_args(&Value::Object(args.clone()), crate::cook_platform())
         .map(|_| ())
         .map_err(|e| e.to_string())
 }

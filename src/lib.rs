@@ -46,6 +46,9 @@
 //! window. A world without one still runs, with everything but the rendering,
 //! which is how a test or a simulation-only tool drives one:
 //!
+//! [`App::into_headless`] is the other way to that: it runs any world on the
+//! headless loop, including one authored to be seen.
+//!
 //! ```no_run
 //! use concinnity::components::{PhysicsConfig, TriggerVolume};
 //! use concinnity::{App, World};
@@ -81,8 +84,16 @@
 //! importers that read them (glTF, FBX, images, fonts), so an application that
 //! only plays an already-compiled world should leave it off.
 //!
-//! `--features vulkan` selects the Vulkan backend where the platform default is
-//! Metal or DirectX.
+//! `--features metal`, `--features directx` and `--features vulkan` each name
+//! one rendering backend. A backend the target does not have is inert, so a
+//! build can name more than one and get the one that applies; where two do,
+//! Vulkan wins. `native` names all three and is what the default build
+//! carries: Metal on macOS, DirectX on Windows, Vulkan elsewhere.
+//!
+//! `--no-default-features --features std` keeps the operating system and drops
+//! the renderer: no GPU code is in the graph at all, and every world runs on
+//! the headless loop, which is what a simulation-only tool or a build host with
+//! no GPU wants.
 //!
 //! `--features player` builds `concinnity-run`, the standalone binary that plays
 //! a compiled world, and `--features editor` builds both it and the `concinnity`
@@ -91,8 +102,11 @@
 //! neither enabled this crate builds no build dependency at all.
 //!
 //! `--no-default-features` leaves the core `no_std` runtime: the component
-//! vocabulary, a [`World`] to hold it, and a headless [`App`] that steps it,
-//! with no operating system underneath.
+//! vocabulary, a [`World`] to hold it, and the headless loop that steps it,
+//! with no operating system underneath. It is the same loop
+//! [`App::into_headless`] selects on any tier, so what a test runs is what a
+//! `no_std` build runs. [`App::run`] reports the same [`Error`] everywhere,
+//! so what runs a world ports between tiers unchanged.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -107,10 +121,17 @@ extern crate std;
 
 mod app;
 pub mod bake;
+mod driver;
+mod error;
 mod world;
 
 pub use app::App;
+pub use error::Error;
 pub use world::World;
+
+// The status a failed call reports, carried by [`Error`] and returned by the
+// world's own systems.
+pub use concinnity_core::result::CnResult;
 
 // The dense per-kind handles the world's data-entry methods return and a
 // component's reference fields hold.

@@ -6,31 +6,43 @@
 use crate::result::CnResult;
 use std::path::PathBuf;
 
-// Why the runtime could not reach a playable state.
+/// Why the runtime could not reach a playable state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StartupError {
+pub enum StartupError {
     /// No compiled world data where the runtime expected it. The usual causes
     /// are a build that never ran and an installation missing its data folder.
-    MissingData { blob: PathBuf },
+    MissingData {
+        /// The primary blob file that was looked for.
+        blob: PathBuf,
+    },
     /// The data is present but did not load: a truncated file, a schema the
     /// binary no longer understands, or a failed read.
-    UnreadableData { blob: PathBuf, cause: CnResult },
+    UnreadableData {
+        /// The primary blob file that was read.
+        blob: PathBuf,
+        /// What the read reported.
+        cause: CnResult,
+    },
     /// The world was packaged as one self-contained blob file, but it needs
     /// overflow payload blobs, which only the directory layout can hold. Their
     /// siblings would land beside the executable, so this is refused rather
     /// than half-loaded.
-    OverflowUnsupported { blob: PathBuf, needed: u32 },
+    OverflowUnsupported {
+        /// The single blob file the world was read from.
+        blob: PathBuf,
+        /// How many further blobs the world spans.
+        needed: u32,
+    },
     /// Nothing anchored the state tree, so there is nowhere to look for data.
     NoStateRoot,
 }
 
 impl StartupError {
-    // Classify a blob-load failure, distinguishing absent data from data that
-    // is present but unusable, since only the first is the user's to fix.
-    // `blob` is the primary blob's path (`concinnity_host::store::blob::blob_path(0)`),
-    // passed in rather than resolved here so the classification stays a pure
-    // function of its inputs.
-    pub(crate) fn from_blob_failure(blob: PathBuf, cause: CnResult) -> Self {
+    /// Classify a blob-load failure, distinguishing absent data from data that
+    /// is present but unusable, since only the first is the user's to fix.
+    /// `blob` is the primary blob's path, passed in rather than resolved here
+    /// so the classification stays a pure function of its inputs.
+    pub fn from_blob_failure(blob: PathBuf, cause: CnResult) -> Self {
         if blob.exists() {
             StartupError::UnreadableData { blob, cause }
         } else {

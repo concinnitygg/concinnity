@@ -18,14 +18,13 @@ include = [
 ]
 
 [features]
-# Build the macOS or Windows device against the Vulkan backend instead of the
-# default Metal / DirectX one. Linux always uses Vulkan regardless; build.rs
-# resolves the backend cfg from the target and this feature. macOS Vulkan runs
-# over the MoltenVK ICD and is a testing path, not a shipping one.
+default = ["native"]
+native = []
+metal = []
+directx = []
 vulkan = [
     "dep:ash",
     "dep:shaderc",
-    "concinnity-core/vulkan",
 ]
 
 [dependencies]

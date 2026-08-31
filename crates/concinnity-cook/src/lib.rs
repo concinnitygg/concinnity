@@ -53,8 +53,8 @@ pub(crate) use concinnity_host::store::source;
 // CLI, an example harness) works against cook alone, the way a runtime host
 // works against concinnity-engine. `paths` is the state tree cook builds into
 // (anchoring it, locating `data/`, and naming the `assets/` a host passes as a
-// build's search root); `platform` is the backend platform whose shader
-// payloads cook compiles and caches.
+// build's search root); `platform` is the shader-platform vocabulary a host
+// names the backend it cooks for with.
 pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
 

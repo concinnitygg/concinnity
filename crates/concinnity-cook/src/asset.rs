@@ -5,11 +5,14 @@
 //! declared asset and packs the resulting bytes into a blob.
 //!
 //! `BuildCtx` is the build-time context handed to each impl. It lives here
-//! because it is build-only: the runtime never compiles a payload. `Platform`
-//! and the `SourceBacked` trait stay in concinnity-core, since the engine reads
-//! a Shader stage's current-platform source at runtime.
+//! because it is build-only: the runtime never compiles a payload. It carries
+//! the shader `Platform` the build cooks for; the enum itself stays in
+//! concinnity-core, since the engine selects a Shader stage's source with it at
+//! runtime.
 
 use std::path::Path;
+
+use concinnity_core::platform::Platform;
 
 use crate::authoring::world::WorldJsonlAsset;
 use crate::ecs::Component;
@@ -39,6 +42,9 @@ pub(crate) struct BuildCtx<'a> {
     // The asset's declared name (used in error messages and as a key for
     // build-time intermediates such as compiled shader filenames).
     pub name: &'a str,
+    // The shader platform this build cooks for: which per-backend source a
+    // shader-backed asset selects, and which bytecode it compiles to.
+    pub(crate) platform: Platform,
     // The build's asset search root: the tree a bare `source` filename is
     // searched under. `None` leaves bare filenames unresolved.
     pub(crate) assets_dir: Option<&'a Path>,

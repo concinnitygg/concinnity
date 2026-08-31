@@ -1,7 +1,7 @@
 // asset_impls/sdf_volume.rs
 
 use crate::asset::BuildCtx;
-use crate::authoring::source_args::current_platform_source_arg;
+use crate::authoring::source_args::sdf_volume_source_path;
 use concinnity_core::components::SdfVolume;
 
 // Resolve a raw `fragment_shader` arg to an on-disk path, picking the first
@@ -56,12 +56,12 @@ impl crate::asset::BuildAsset for SdfVolume {
         args: &serde_json::Value,
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> std::io::Result<Vec<u8>> {
-        // Only the current backend's shader is required: a volume that
+        // Only the cooked backend's shader is required: a volume that
         // declares an `.hlsl` source (or an `hlsl`-only map) contributes
-        // nothing the Metal build can compile, so it is a hard error here
+        // nothing a Metal build can compile, so it is a hard error here
         // rather than an attempt to read a file the backend never needs.
-        let platform_key = concinnity_core::platform::Platform::current().key();
-        let raw = current_platform_source_arg(args).ok_or_else(|| {
+        let platform_key = ctx.platform.key();
+        let raw = sdf_volume_source_path(args, ctx.platform).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
@@ -96,7 +96,7 @@ impl crate::asset::BuildAsset for SdfVolume {
     // bytes verbatim, so identical bytes yield an identical payload and two
     // backends pointing at one file may correctly share a cache entry.
 
-    // Only the current backend's shader is read. Reporting it alone keeps an
+    // Only the cooked backend's shader is read. Reporting it alone keeps an
     // edit to a sibling backend's shader from invalidating this one, and
     // covers the resolution the cache's generic walk misses: `fragment_shader`
     // is typically a path with a directory component (e.g.
@@ -107,7 +107,7 @@ impl crate::asset::BuildAsset for SdfVolume {
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> crate::asset::SourceFiles {
         use crate::asset::SourceFiles;
-        let Some(raw) = current_platform_source_arg(args) else {
+        let Some(raw) = sdf_volume_source_path(args, ctx.platform) else {
             return SourceFiles::Only(Vec::new());
         };
         SourceFiles::Only(resolve_source_path(&raw, ctx).into_iter().collect())
@@ -118,17 +118,16 @@ impl crate::asset::BuildAsset for SdfVolume {
 mod tests {
     use super::*;
     use crate::asset::{BuildAsset, SourceFiles};
+    use concinnity_core::platform::Platform;
 
-    // A `.metal` source is the one the macOS build selects; on the other
-    // backends the same shape resolves through their own extension.
     fn args(source: &str) -> serde_json::Value {
-        let key = concinnity_core::platform::Platform::current().key();
-        serde_json::json!({"fragment_shaders": {key: source}})
+        serde_json::json!({"fragment_shaders": {Platform::Metal.key(): source}})
     }
 
     fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
         BuildCtx {
             name: "blob",
+            platform: Platform::Metal,
             assets_dir: None,
             artifacts_dir,
             all_assets: &[],

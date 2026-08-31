@@ -427,7 +427,10 @@ mod tests {
         ]));
 
         let bytes = RegisteredType::Prop
-            .reserialize_args(&serde_json::json!({"material": "wood"}))
+            .reserialize_args(
+                &serde_json::json!({"material": "wood"}),
+                concinnity_core::platform::Platform::Metal,
+            )
             .unwrap();
         let prop: crate::components::Prop = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(prop.material, Some(crate::ecs::MaterialHandle(1)));
@@ -435,7 +438,10 @@ mod tests {
         // A name no material declared has no slot to point at, so it falls back
         // to the interned id rather than failing the parse.
         let bytes = RegisteredType::Prop
-            .reserialize_args(&serde_json::json!({"material": "granite"}))
+            .reserialize_args(
+                &serde_json::json!({"material": "granite"}),
+                concinnity_core::platform::Platform::Metal,
+            )
             .unwrap();
         let prop: crate::components::Prop = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(
@@ -533,7 +539,10 @@ mod tests {
         );
 
         let decal_bytes = RegisteredType::Decal
-            .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
+            .reserialize_args(
+                &serde_json::json!({"texture": "tex_b"}),
+                concinnity_core::platform::Platform::Metal,
+            )
             .unwrap();
         let decal: crate::components::Decal = postcard::from_bytes(&decal_bytes).unwrap();
         assert_eq!(decal.texture, Some(TextureHandle(1)));
@@ -542,13 +551,19 @@ mod tests {
         // `texture`) resolves the same declaration-order handle. SkinnedMesh
         // uses the identical `de_opt_texture_handle` deserializer.
         let prop_bytes = RegisteredType::Prop
-            .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
+            .reserialize_args(
+                &serde_json::json!({"texture": "tex_b"}),
+                concinnity_core::platform::Platform::Metal,
+            )
             .unwrap();
         let prop: crate::components::Prop = postcard::from_bytes(&prop_bytes).unwrap();
         assert_eq!(prop.texture, Some(TextureHandle(1)));
 
         let inst_bytes = RegisteredType::InstancedProp
-            .reserialize_args(&serde_json::json!({"texture": "tex_a"}))
+            .reserialize_args(
+                &serde_json::json!({"texture": "tex_a"}),
+                concinnity_core::platform::Platform::Metal,
+            )
             .unwrap();
         let inst: crate::components::InstancedProp = postcard::from_bytes(&inst_bytes).unwrap();
         assert_eq!(inst.texture, Some(TextureHandle(0)));
@@ -581,7 +596,10 @@ mod tests {
         use crate::ecs::AudioClipHandle;
         let clip_field = |ct: RegisteredType, name: &str| -> Option<AudioClipHandle> {
             let bytes = ct
-                .reserialize_args(&serde_json::json!({ "clip": name }))
+                .reserialize_args(
+                    &serde_json::json!({ "clip": name }),
+                    concinnity_core::platform::Platform::Metal,
+                )
                 .unwrap();
             match ct {
                 RegisteredType::AudioEmitter => {

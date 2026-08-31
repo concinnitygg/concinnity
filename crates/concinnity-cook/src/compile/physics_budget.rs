@@ -647,9 +647,13 @@ mod tests {
             r#"{"name":"drop","type":"Spawner","args":{"template":"crate_a"}}"#,
             "\n",
         );
-        let expanded = crate::build_only::prepare_world(world, None)
-            .expect("prepare")
-            .assets;
+        let expanded = crate::build_only::prepare_world(
+            world,
+            None,
+            concinnity_core::platform::Platform::Metal,
+        )
+        .expect("prepare")
+        .assets;
         assert!(
             !expanded
                 .iter()

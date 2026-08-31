@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.19.0"
+version = "0.19.1"
 description = "Asset-driven world engine"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -14,11 +14,11 @@ categories = ["game-engines", "graphics", "rendering::engine"]
 [workspace.dependencies]
 concinnity-cook = { path = "crates/concinnity-cook", version = "0.19" }
 concinnity-core = { path = "crates/concinnity-core", version = "0.19" }
-concinnity-dev = { path = "crates/concinnity-dev", version = "0.19" }
-concinnity-device = { path = "crates/concinnity-device", version = "0.19" }
-concinnity-engine = { path = "crates/concinnity-engine", version = "0.19" }
+concinnity-dev = { path = "crates/concinnity-dev", version = "0.19", default-features = false }
+concinnity-device = { path = "crates/concinnity-device", version = "0.19", default-features = false }
+concinnity-engine = { path = "crates/concinnity-engine", version = "0.19", default-features = false }
 concinnity-host = { path = "crates/concinnity-host", version = "0.19" }
-concinnity-shader = { path = "crates/concinnity-shader", version = "0.19" }
+concinnity-shader = { path = "crates/concinnity-shader", version = "0.19", default-features = false }
 concinnity-slang = { path = "crates/concinnity-slang", version = "0.19" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.19" }
 
@@ -73,11 +73,14 @@ default-target = "x86_64-apple-darwin"
 targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 [features]
-default = ["std"]
+default = ["std", "native"]
 std = ["dep:concinnity-engine"]
 player = ["std", "dep:concinnity-toolchain"]
 editor = ["player", "cook", "dep:concinnity-dev", "dep:clap"]
 cook = ["std", "dep:concinnity-cook", "dep:concinnity-shader"]
+native = ["std", "concinnity-engine/native", "concinnity-shader?/native", "concinnity-dev?/native"]
+metal = ["std", "concinnity-engine/metal", "concinnity-shader?/metal", "concinnity-dev?/metal"]
+directx = ["std", "concinnity-engine/directx", "concinnity-shader?/directx", "concinnity-dev?/directx"]
 vulkan = ["std", "concinnity-engine/vulkan", "concinnity-shader?/vulkan", "concinnity-dev?/vulkan"]
 
 [dependencies]
@@ -87,6 +90,7 @@ concinnity-cook = { workspace = true, optional = true }
 concinnity-shader = { workspace = true, optional = true }
 concinnity-dev = { workspace = true, optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
+thiserror = { version = "2.0.18", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.25.0"

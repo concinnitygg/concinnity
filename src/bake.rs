@@ -131,8 +131,7 @@ mod tests {
         });
 
         assert_eq!((mesh.index(), stone.index()), (0, 0));
-        let mut app = crate::App::from_world(world);
-        crate::test_support::assert_starts_headless(&mut app);
+        crate::test_support::assert_starts_headless(crate::App::from_world(world));
     }
 
     // What cannot be computed is refused with directions, not a wrong payload.

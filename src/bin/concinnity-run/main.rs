@@ -32,6 +32,8 @@ concinnity_core::install_global_allocator!();
 // shader-platform key (`metal` / `hlsl` / `glsl`), matching
 // `concinnity_core::platform::Platform::key`. `main` takes the static's
 // address through a `black_box` so no linker dead-strips it.
+// A build with no backend consumes no shaders, so it carries no stamp and the
+// export treats it the way it treats any unstamped runtime.
 #[cfg(backend_metal)]
 #[used]
 static CN_RUNTIME_PLATFORM: [u8; 26] = *b"cn-runtime-platform:metal\0";
@@ -47,6 +49,7 @@ fn main() -> std::io::Result<()> {
 
     // Keep the backend stamp in the linked binary (its bytes are what `cn
     // export` scans); taking its address defeats any linker dead-stripping.
+    #[cfg(any(backend_metal, backend_dx, backend_vk))]
     std::hint::black_box(&CN_RUNTIME_PLATFORM);
 
     let exe = std::env::current_exe()?;

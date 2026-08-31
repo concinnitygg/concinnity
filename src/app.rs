@@ -1,18 +1,13 @@
 //! The application: a world plus the loop that runs it.
 
+use alloc::boxed::Box;
+
 #[cfg(feature = "std")]
 use std::path::Path;
 
-use crate::World;
+use concinnity_core::Driver;
 
-// The engine's driver where there is an operating system to drive, the
-// headless one where there is not. Both run the world they are handed; what
-// the std one adds is the window, the frame pacing, and the wall clock the
-// simulation follows.
-#[cfg(feature = "std")]
-pub(crate) type Inner = concinnity_engine::App;
-#[cfg(not(feature = "std"))]
-pub(crate) type Inner = concinnity_core::App;
+use crate::{Error, World, driver};
 
 /// A runnable application.
 ///
@@ -24,7 +19,7 @@ pub(crate) type Inner = concinnity_core::App;
 /// App::from_world(World::new()).run().expect("the app runs");
 /// ```
 pub struct App {
-    inner: Inner,
+    inner: Box<dyn Driver>,
 }
 
 impl core::fmt::Debug for App {
@@ -37,7 +32,7 @@ impl App {
     /// An app that runs `world`.
     pub fn from_world(world: World) -> Self {
         Self {
-            inner: Inner::from_world(world.into_inner()),
+            inner: driver::select(world.into_inner()),
         }
     }
 
@@ -52,41 +47,56 @@ impl App {
     /// them under `mygame/`. A world that declares an `AppConfig` with a `home`
     /// chooses the location itself.
     ///
+    /// Loading and running report the same [`Error`], so one `?` carries both.
+    ///
     /// ```no_run
-    /// # use concinnity::App;
-    /// App::from_blob("data/0")
-    ///     .expect("data/0 holds a compiled world")
+    /// # use concinnity::{App, Error};
+    /// # fn main() -> Result<(), Error> {
+    /// App::from_blob("data/0")?.run()
+    /// # }
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn from_blob(path: impl AsRef<Path>) -> Result<Self, Error> {
+        concinnity_engine::App::from_blob(path.as_ref())
+            .map(|app| Self {
+                inner: driver::adopt(app),
+            })
+            .map_err(crate::error::from_startup)
+    }
+
+    /// The same app on the headless loop: the simulation systems stepped on a
+    /// fixed virtual timestep, with no window and no renderer. A world that
+    /// declares a `GraphicsConfig` keeps it and draws nothing, which is what
+    /// lets a test or a simulation-only tool run a world authored to be seen.
+    ///
+    /// The `no_std` build has no other loop to run, so there it changes
+    /// nothing.
+    ///
+    /// ```no_run
+    /// # use concinnity::{App, World};
+    /// App::from_world(World::new())
+    ///     .into_headless()
     ///     .run()
     ///     .expect("the app runs");
     /// ```
-    #[cfg(feature = "std")]
-    pub fn from_blob(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let path = path.as_ref();
-        concinnity_engine::App::from_blob(path)
-            .map(|inner| Self { inner })
-            .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))
+    pub fn into_headless(self) -> Self {
+        Self {
+            inner: driver::headless(self.inner.into_world()),
+        }
     }
 
-    /// Run the app until its window closes, a system stops the world, or the
-    /// process is interrupted.
-    #[cfg(feature = "std")]
-    pub fn run(self) -> std::io::Result<()> {
-        self.inner.run()
-    }
-
-    /// Run the app until a system stops the world or its last system finishes.
+    /// Run the app until its window closes, a system stops the world, its last
+    /// system finishes, or the process is interrupted.
     ///
-    /// The `no_std` build has no window to close and no clock to follow: the
-    /// world steps on a fixed virtual timestep, as fast as the host can step
-    /// it.
-    #[cfg(not(feature = "std"))]
-    pub fn run(mut self) -> Result<(), concinnity_core::result::CnResult> {
-        self.inner.run().map(|_| ())
+    /// A headless run has no window to close and no clock to follow: the world
+    /// steps on a fixed virtual timestep, as fast as the host can step it.
+    pub fn run(self) -> Result<(), Error> {
+        self.inner.run().map_err(Error::from)
     }
 
     #[cfg(test)]
-    pub(crate) fn inner_mut(&mut self) -> &mut Inner {
-        &mut self.inner
+    pub(crate) fn inner_mut(&mut self) -> &mut dyn Driver {
+        &mut *self.inner
     }
 }
 
@@ -115,8 +125,8 @@ mod tests {
             .write_blob(&primary)
             .expect("the world is written");
 
-        let mut app = App::from_blob(&primary).expect("the written blob loads");
-        crate::test_support::assert_starts_headless(&mut app);
+        let app = App::from_blob(&primary).expect("the written blob loads");
+        crate::test_support::assert_starts_headless(app);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -129,6 +139,7 @@ mod tests {
             .join("concinnity-no-such-blob")
             .join("0");
         let err = App::from_blob(&missing).expect_err("nothing to load");
+        assert!(matches!(err, crate::Error::MissingData { .. }), "{err:?}");
         assert!(err.to_string().contains("concinnity-no-such-blob"), "{err}");
     }
 }

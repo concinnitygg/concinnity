@@ -1955,6 +1955,7 @@ mod tests {
             &world,
             crate::authoring::assets_root::assets_dir().as_deref(),
             None,
+            crate::cook_platform(),
         )
         .map(|_| ())
     }

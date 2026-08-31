@@ -1,9 +1,11 @@
 // src/factory.rs
 //
 // The backend factory: route the assembled inputs to the backend selected at
-// compile time. The three backend_* cfgs are mutually exclusive, so exactly one
-// arm compiles. This is the single construction choke point - the client holds
-// only a `Box<dyn RenderBackend>` and never names a concrete backend context.
+// compile time. The three backend_* cfgs are mutually exclusive, so at most one
+// arm compiles; a build with no backend feature compiles none and reports the
+// same "no backend" the callers already handle. This is the single construction
+// choke point - the client holds only a `Box<dyn RenderBackend>` and never names
+// a concrete backend context.
 
 /// Probe a cheap throwaway device handle to classify the GPU, so the auto-config
 /// quality ceiling can influence the render targets / effect pipelines the backend
@@ -22,6 +24,10 @@ pub fn probe_gpu_profile() -> crate::gfx::backend::GpuProfile {
     #[cfg(backend_metal)]
     {
         crate::metal::probe_gpu_profile()
+    }
+    #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
+    {
+        crate::gfx::backend::GpuProfile::UNKNOWN
     }
 }
 
@@ -61,5 +67,11 @@ pub fn init_backend(
                 None
             }
         }
+    }
+
+    #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
+    {
+        let _ = init;
+        None
     }
 }

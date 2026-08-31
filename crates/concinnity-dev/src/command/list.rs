@@ -138,9 +138,12 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
 // Runs the same front half as `cn build` (expansion passes, injection,
 // semantic validation), so the listing is exactly what lands in the blob.
 fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
-    let loaded =
-        concinnity_cook::prepare_world(content, concinnity_cook::paths::assets_dir().as_deref())
-            .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
+    let loaded = concinnity_cook::prepare_world(
+        content,
+        concinnity_cook::paths::assets_dir().as_deref(),
+        crate::cook_platform(),
+    )
+    .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
 
     if loaded.assets.is_empty() {
         println!("{} expands to no assets.", json_path);

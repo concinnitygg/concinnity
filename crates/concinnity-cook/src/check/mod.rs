@@ -30,6 +30,8 @@ pub(crate) mod texture;
 pub(crate) mod voxel_chunk;
 pub(crate) mod voxel_world;
 
+use concinnity_core::platform::Platform;
+
 use crate::authoring::world::WorldJsonlAsset;
 
 /// Print each validation error in CLI form and collapse them into a single
@@ -51,14 +53,15 @@ fn check_authored_asset(
     type_norm: &str,
     name: &str,
     args: &serde_json::Value,
+    platform: Platform,
 ) -> Result<(), String> {
     match type_norm {
         "animationgraph" => animation_graph::check(name, args),
         "behavior" => behavior::check(name, args),
         "variables" => behavior::check_variables(name, args),
-        "shader" => shader::check(name, args),
+        "shader" => shader::check(name, args, platform),
         "prop" => prop::check(name, args),
-        "sdfvolume" | "sdf" => sdf_volume::check(name, args),
+        "sdfvolume" | "sdf" => sdf_volume::check(name, args, platform),
         "voxelchunk" | "chunk" => voxel_chunk::check(name, args),
         "voxelworld" => voxel_world::check(name, args),
         "instancedprop" | "instanced" => instanced_prop::check(name, args),
@@ -90,15 +93,21 @@ pub(crate) fn check_asset(
     type_norm: &str,
     name: &str,
     args: &serde_json::Value,
+    platform: Platform,
 ) -> Result<(), String> {
-    check_authored_asset(type_norm, name, args)?;
+    check_authored_asset(type_norm, name, args, platform)?;
     check_compiled_asset(type_norm, name, args)
 }
 
 /// Run all semantic validation on a fully expanded world. Collects every
 /// problem found (per-asset arg errors, unresolved cross-references, and
 /// graphics-rule violations) so the caller can report them in a single pass.
-pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
+/// `platform` is the shader platform the world is cooked for; the shader-backed
+/// types are checked against it.
+pub(crate) fn check_world(
+    assets: &[WorldJsonlAsset],
+    platform: Platform,
+) -> Result<(), Vec<String>> {
     let mut errors: Vec<String> = Vec::new();
 
     // Names must still be unique after expansion and injection: a duplicate
@@ -129,7 +138,7 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
         let checked = if type_norm == "behavior" {
             behavior::check_with_vars(&asset.name, &asset.args, &declared_vars)
         } else {
-            check_authored_asset(&type_norm, &asset.name, &asset.args)
+            check_authored_asset(&type_norm, &asset.name, &asset.args, platform)
         };
         if let Err(e) = checked {
             errors.push(e);
@@ -178,7 +187,7 @@ mod tests {
                 }),
             ),
         ];
-        assert!(check_world(&assets).is_ok());
+        assert!(check_world(&assets, Platform::Metal).is_ok());
     }
 
     #[test]
@@ -189,7 +198,7 @@ mod tests {
             asset("bad_prop", "Prop", serde_json::json!({})),
             asset("bad_mat", "Material", serde_json::json!({"albedo":"ghost"})),
         ];
-        let errs = check_world(&assets).unwrap_err();
+        let errs = check_world(&assets, Platform::Metal).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("bad_prop")));
         assert!(errs.iter().any(|e| e.contains("ghost")));
     }
@@ -207,7 +216,7 @@ mod tests {
                 serde_json::json!({"generator": "not_a_generator"}),
             ),
         ];
-        let errs = check_world(&assets).unwrap_err();
+        let errs = check_world(&assets, Platform::Metal).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("bad_prop")));
         assert!(errs.iter().any(|e| e.contains("not_a_generator")));
     }
@@ -217,12 +226,12 @@ mod tests {
     fn check_asset_routes_each_type_alias() {
         for alias in ["cubemaptexture", "cubemap"] {
             let args = serde_json::json!({"source": "studio.png"});
-            let err = check_asset(alias, "c", &args).unwrap_err();
+            let err = check_asset(alias, "c", &args, Platform::Metal).unwrap_err();
             assert!(err.contains("Radiance .hdr"), "{alias}: {err}");
         }
         for alias in ["environmentmap", "envmap", "ibl"] {
             let args = serde_json::json!({"generator": "aurora"});
-            let err = check_asset(alias, "e", &args).unwrap_err();
+            let err = check_asset(alias, "e", &args, Platform::Metal).unwrap_err();
             assert!(
                 err.contains("unknown EnvironmentMap generator"),
                 "{alias}: {err}"
@@ -233,17 +242,18 @@ mod tests {
     #[test]
     fn check_asset_runs_both_check_sets() {
         // A pure check arm.
-        assert!(check_asset("prop", "p", &serde_json::json!({})).is_err());
+        assert!(check_asset("prop", "p", &serde_json::json!({}), Platform::Metal).is_err());
         // A compile-backed arm.
         assert!(
             check_asset(
                 "texture",
                 "t",
-                &serde_json::json!({"generator": "not_a_generator"})
+                &serde_json::json!({"generator": "not_a_generator"}),
+                Platform::Metal,
             )
             .is_err()
         );
         // A type neither set knows is fine.
-        assert!(check_asset("window", "w", &serde_json::json!({})).is_ok());
+        assert!(check_asset("window", "w", &serde_json::json!({}), Platform::Metal).is_ok());
     }
 }

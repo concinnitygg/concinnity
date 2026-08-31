@@ -54,7 +54,8 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 // Compute the cache key for one compiled asset. The key folds in the asset
 // schema the baked records encode against, the component discriminant, the args
 // JSON, a hash of every input the compile reads, and -- for assets that compile
-// rather than transport their source -- the active backend's shader platform.
+// rather than transport their source -- the shader platform the build cooks
+// for.
 //
 // The key is content-addressed with no namespacing prefix: an asset that
 // compiles identically on every backend (a mesh, a texture, a font) produces
@@ -83,9 +84,7 @@ pub(crate) fn payload_key(
             .filter_map(|p| file_content_hash(p).map(|h| (p.clone(), h)))
             .collect(),
     };
-    let target = inputs
-        .target_dependent
-        .then(|| concinnity_core::platform::Platform::current().key());
+    let target = inputs.target_dependent.then(|| ctx.platform.key());
     key_from_parts(discriminant, args, &files, target)
 }
 
@@ -234,11 +233,13 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::platform::Platform;
     use serde_json::json;
 
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "test",
+            platform: Platform::Metal,
             assets_dir: None,
             artifacts_dir: None,
             all_assets: &[],
@@ -515,10 +516,18 @@ mod tests {
             sources: SourceFiles::Only(Vec::new()),
             target_dependent: true,
         };
-        let platform = concinnity_core::platform::Platform::current().key();
         assert_eq!(
             payload_key(1, &args, &ctx(), &dependent),
-            key_from_parts(1, &args, &[], Some(platform)),
+            key_from_parts(1, &args, &[], Some(Platform::Metal.key())),
+        );
+        // A cook for another backend keys the same asset separately.
+        let hlsl_ctx = BuildCtx {
+            platform: Platform::Hlsl,
+            ..ctx()
+        };
+        assert_ne!(
+            payload_key(1, &args, &ctx(), &dependent),
+            payload_key(1, &args, &hlsl_ctx, &dependent),
         );
         assert_ne!(
             payload_key(1, &args, &ctx(), &dependent),
@@ -555,6 +564,7 @@ mod tests {
         let artifacts = dir.path().to_str().unwrap().to_string();
         let artifact_ctx = BuildCtx {
             name: "test",
+            platform: Platform::Metal,
             assets_dir: None,
             artifacts_dir: Some(&artifacts),
             all_assets: &[],
@@ -580,6 +590,7 @@ mod tests {
         std::fs::write(nested.join("sky.hdr"), b"radiance").expect("write source");
         let assets_ctx = BuildCtx {
             name: "test",
+            platform: Platform::Metal,
             assets_dir: Some(dir.path()),
             artifacts_dir: None,
             all_assets: &[],
@@ -600,6 +611,7 @@ mod tests {
         let artifacts = dir.path().to_str().unwrap().to_string();
         let artifact_ctx = BuildCtx {
             name: "test",
+            platform: Platform::Metal,
             assets_dir: None,
             artifacts_dir: Some(&artifacts),
             all_assets: &[],
@@ -616,6 +628,7 @@ mod tests {
         let artifacts = dir.path().to_str().unwrap().to_string();
         let artifact_ctx = BuildCtx {
             name: "test",
+            platform: Platform::Metal,
             assets_dir: None,
             artifacts_dir: Some(&artifacts),
             all_assets: &[],

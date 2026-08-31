@@ -113,7 +113,7 @@ pub fn add_to_path(
         Ok(())
     })?;
 
-    match build_from_path(&tmp_path) {
+    match build_from_path(&tmp_path, crate::cook_platform()) {
         Ok(()) => std::fs::rename(&tmp_path, world_path).inspect_err(|_e| {
             let _ = std::fs::remove_file(&tmp_path);
         }),
@@ -418,7 +418,7 @@ fn validated_entry(
         asset_type: asset_type.to_string(),
         args: Some(args.clone()),
     };
-    create_asset_def(&req)
+    create_asset_def(&req, crate::cook_platform())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let resolved_args = normalized_args_value(asset_type, &args);
 
@@ -446,7 +446,8 @@ fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_js
             base.insert(k.clone(), v.clone());
         }
     }
-    ct.normalized_args(&merged).unwrap_or_else(|_| empty())
+    ct.normalized_args(&merged, crate::cook_platform())
+        .unwrap_or_else(|_| empty())
 }
 
 // Build an entry for a build-time (BuildOnly) import asset that expands from
@@ -983,7 +984,7 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
         asset_type: asset_type.to_string(),
         args: Some(args.clone()),
     };
-    create_asset_def(&req)
+    create_asset_def(&req, crate::cook_platform())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let resolved_args = normalized_args_value(asset_type, &args);
 
@@ -1047,7 +1048,7 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
         asset_type: type_str.to_string(),
         args: None,
     };
-    create_asset_def(&req)
+    create_asset_def(&req, crate::cook_platform())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let args = normalized_args_value(type_str, &serde_json::Value::Object(Default::default()));
 
@@ -1438,12 +1439,13 @@ mod tests {
                     .get("args")
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({}));
-                concinnity_cook::validate_asset(ty, name, &args).unwrap_or_else(|e| {
-                    panic!(
-                        "template '{}' entry '{name}' ({ty}) failed to validate: {e}",
-                        t.name
-                    )
-                });
+                concinnity_cook::validate_asset(ty, name, &args, crate::cook_platform())
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "template '{}' entry '{name}' ({ty}) failed to validate: {e}",
+                            t.name
+                        )
+                    });
             }
         }
     }
@@ -1577,8 +1579,13 @@ mod tests {
         std::fs::write(&path, b"radiance").unwrap();
 
         let entry = entry_from_path(path.to_str().unwrap()).unwrap().remove(0);
-        concinnity_cook::validate_asset("EnvironmentMap", "studio", &entry["args"])
-            .expect("a `.hdr` add must produce a cookable EnvironmentMap");
+        concinnity_cook::validate_asset(
+            "EnvironmentMap",
+            "studio",
+            &entry["args"],
+            crate::cook_platform(),
+        )
+        .expect("a `.hdr` add must produce a cookable EnvironmentMap");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -101,7 +101,7 @@ macro_rules! for_each_component {
                 PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, id, validate: joint, refs: [("body_a", "Prop"), ("body_b", "Prop")], consumed },
                 ParticleEmitter   => $crate::components::ParticleEmitter { gen, external, id, useful_blank, validate: particle_emitter, refs: [("texture", "Texture")], consumed },
                 WaterSurface      => $crate::components::WaterSurface { gen, external, id, useful_blank, renders, validate: water_surface, consumed },
-                SdfVolume         => $crate::components::SdfVolume { manual, external, compiled, renders, validate: sdf_volume, consumed },
+                SdfVolume         => $crate::components::SdfVolume { manual, external, compiled, renders, validate_for: sdf_volume, consumed },
                 GlassPanel        => $crate::components::GlassPanel { gen, external, id, useful_blank, validate: glass_panel, consumed },
                 LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
@@ -209,6 +209,10 @@ crate::for_each_component!(define_components);
 //                                  runtime component that survives in its
 //                                  place (world-side only)
 //     validate: <fn>            -- the bake-time validator (world-side only)
+//     validate_for: <fn>        -- the bake-time validator for entries whose
+//                                  clamp depends on the shader platform the
+//                                  world is cooked for; it takes that platform
+//                                  alongside the value (world-side only)
 //     refs: [ ("field", "Type"), ... ] -- the reference fields (world-side only)
 //     args: <Asset>             -- names the asset whose authored schema
 //                                  differs from the component it bakes into;
@@ -262,6 +266,9 @@ macro_rules! cn_impl_components {
     };
     // Authoring-only flags: consumed here, used by the world registry.
     (@munch $variant:ident $ty:path [$($body:tt)*] , validate: $f:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , validate_for: $f:ident $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] , refs: [ $( ($fld:literal, $tgt:literal) ),+ $(,)? ] $($rest:tt)*) => {
@@ -417,14 +424,35 @@ mod tests {
     }
 
     // A type declaring no clamp comes back unchanged; one declaring a clamp is
-    // returned through it.
+    // returned through it, and a `validate_for` entry reads the platform.
     #[test]
     fn validation_runs_only_where_an_entry_declares_a_clamp() {
-        let plain = ComponentAsset::from(Transform::default()).validated();
+        use crate::components::SdfVolume;
+        use crate::platform::Platform;
+
+        let plain = ComponentAsset::from(Transform::default()).validated(Platform::Metal);
         assert_eq!(plain.tag(), ComponentTag::Transform);
 
-        let clamped = ComponentAsset::from(Prop::default()).validated();
+        let clamped = ComponentAsset::from(Prop::default()).validated(Platform::Metal);
         assert_eq!(clamped.tag(), ComponentTag::Prop);
+
+        let volume = SdfVolume {
+            fragment_shaders: Some(
+                [
+                    ("metal".into(), "blob.metal".into()),
+                    ("hlsl".into(), "blob.hlsl".into()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+        let ComponentAsset::SdfVolume(baked) =
+            ComponentAsset::from(volume).validated(Platform::Hlsl)
+        else {
+            panic!("the value keeps its variant through validation");
+        };
+        assert_eq!(baked.fragment_shader, "blob.hlsl");
     }
 
     fn baked(discriminant: u8, args_bytes: Vec<u8>, name: Option<AssetId>) -> BlobAssetDef {

@@ -18,11 +18,15 @@ include = [
 ]
 
 [features]
-vulkan = ["dep:shaderc", "concinnity-device/vulkan"]
+default = ["native"]
+native = ["dep:concinnity-device", "concinnity-device/native"]
+metal = ["dep:concinnity-device", "concinnity-device/metal"]
+directx = []
+vulkan = ["dep:shaderc"]
 
 [dependencies]
 concinnity-cook = { workspace = true }
-concinnity-device = { workspace = true }
+concinnity-device = { workspace = true, optional = true }
 
 tracing = "0.1.44"
 

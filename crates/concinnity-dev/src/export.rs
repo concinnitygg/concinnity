@@ -70,18 +70,22 @@ pub fn export(
     check_target_platform(platform)?;
     let runtime = runtime_binary_path()?;
     let runtime_platform = read_runtime_platform(&runtime)?;
-    verify_runtime_backend(runtime_platform.as_deref())?;
+    verify_runtime_backend(runtime_platform.as_deref(), crate::cook_platform())?;
 
     // Build the world exactly like `cn build` (validates, compiles, writes the
     // blobs + world-lock.json, reuses the build cache).
     let world_path = resolve_world_path(json_path)?;
-    build_from_path(&world_path)?;
+    build_from_path(&world_path, crate::cook_platform())?;
 
     // Read the app metadata from the expanded world. The build above already
     // validated it, so this cannot fail on validation; map any error plainly.
     let content = fs::read_to_string(&world_path)?;
-    let loaded = prepare_world(&content, concinnity_cook::paths::assets_dir().as_deref())
-        .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
+    let loaded = prepare_world(
+        &content,
+        concinnity_cook::paths::assets_dir().as_deref(),
+        crate::cook_platform(),
+    )
+    .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
     let meta = read_app_meta(name, version, &loaded.assets);
 
     let out_dir = Path::new(out);
@@ -409,9 +413,12 @@ fn read_runtime_platform(runtime: &Path) -> io::Result<Option<String>> {
 // otherwise silently ship a SPIR-V player with DXBC blobs (or vice versa) that
 // fails to load every shader at launch. `found` is the player's stamped shader
 // platform (None for an unstamped runtime, already warned about); compare it to
-// ours.
-fn verify_runtime_backend(found: Option<&str>) -> io::Result<()> {
-    let expected = concinnity_cook::platform::Platform::current().key();
+// `cooked`, the shader platform this export's blobs were built for.
+fn verify_runtime_backend(
+    found: Option<&str>,
+    cooked: concinnity_cook::platform::Platform,
+) -> io::Result<()> {
+    let expected = cooked.key();
     match found {
         // Unstamped runtime: cannot verify, so proceed rather than block a
         // possibly-fine export (the missing-stamp warning already printed).
@@ -1238,12 +1245,11 @@ mod tests {
 
     #[test]
     fn verify_runtime_backend_accepts_matching_or_unstamped() {
-        let expected = concinnity_cook::platform::Platform::current().key();
-        verify_runtime_backend(None).unwrap();
-        verify_runtime_backend(Some(expected)).unwrap();
+        let cooked = concinnity_cook::platform::Platform::Metal;
+        verify_runtime_backend(None, cooked).unwrap();
+        verify_runtime_backend(Some(cooked.key()), cooked).unwrap();
 
-        let foreign = if expected == "metal" { "hlsl" } else { "metal" };
-        let err = verify_runtime_backend(Some(foreign)).unwrap_err();
+        let err = verify_runtime_backend(Some("hlsl"), cooked).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("mismatch"), "got: {err}");
     }

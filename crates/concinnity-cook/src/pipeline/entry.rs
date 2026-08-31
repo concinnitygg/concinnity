@@ -4,6 +4,8 @@
 
 use std::path::Path;
 
+use concinnity_core::platform::Platform;
+
 use crate::asset_api::{self, AssetRequest};
 use crate::authoring::world::WorldJsonlAsset;
 use crate::ecs::{BlobAssetDef, asset_id};
@@ -17,18 +19,19 @@ use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cac
 use super::result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};
 use super::scene_refs::resolve_scene_refs;
 
-/// Build the world at `json_path` and write its blobs to disk, against the
-/// installed state root: sources resolve under its `assets/` and the blobs land
-/// in its `data/`. The one entry point anchored to the process-wide state tree;
-/// a host that builds against its own directories calls
-/// [`prepare_world`](crate::build_only::prepare_world) + [`build_compiled`].
-pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
+/// Build the world at `json_path` for `platform` and write its blobs to disk,
+/// against the installed state root: sources resolve under its `assets/` and
+/// the blobs land in its `data/`. The one entry point anchored to the
+/// process-wide state tree; a host that builds against its own directories
+/// calls [`prepare_world`](crate::build_only::prepare_world) +
+/// [`build_compiled`].
+pub fn build_from_path(json_path: &str, platform: Platform) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
     let assets_dir = crate::paths::assets_dir();
-    let loaded = crate::build_only::prepare_world(&content, assets_dir.as_deref())
+    let loaded = crate::build_only::prepare_world(&content, assets_dir.as_deref(), platform)
         .map_err(|errs| crate::check::report_validation_errors(&errs))?;
 
-    let result = build_compiled(loaded.assets, assets_dir.as_deref(), None)?;
+    let result = build_compiled(loaded.assets, assets_dir.as_deref(), None, platform)?;
 
     let pack_result = write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
     for (blob_idx, path) in pack_result.blob_paths.iter().enumerate() {
@@ -126,9 +129,11 @@ pub fn build_pipeline_from_str(
     content: &str,
     assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
+    platform: Platform,
 ) -> std::io::Result<PipelineResult> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir).map_err(errors_to_io)?;
-    build_compiled(loaded.assets, assets_dir, artifacts_dir)
+    let loaded =
+        crate::build_only::prepare_world(content, assets_dir, platform).map_err(errors_to_io)?;
+    build_compiled(loaded.assets, assets_dir, artifacts_dir, platform)
 }
 
 /// A progress report from the compile pipeline: the stage's name and its
@@ -153,8 +158,9 @@ pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
+    platform: Platform,
 ) -> std::io::Result<PipelineResult> {
-    build_compiled_with_progress(assets, assets_dir, artifacts_dir, None)
+    build_compiled_with_progress(assets, assets_dir, artifacts_dir, platform, None)
 }
 
 /// [`build_compiled`] with a progress callback. The callback fires from the
@@ -164,6 +170,7 @@ pub fn build_compiled_with_progress(
     mut assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
     artifacts_dir: Option<&str>,
+    platform: Platform,
     progress: Option<&(dyn Fn(BuildProgress) + Sync)>,
 ) -> std::io::Result<PipelineResult> {
     if let Some(p) = progress {
@@ -181,7 +188,7 @@ pub fn build_compiled_with_progress(
     // means no work). On a miss, the recorded key is used when the compile
     // step stores the freshly produced payload, so the next build's probe
     // can re-use it.
-    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, artifacts_dir);
+    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, artifacts_dir, platform);
 
     // Expand any glTF-sourced SkinnedMesh and Mesh assets into inline geometry
     // before anything else looks at their args. Animations expand after the
@@ -264,7 +271,7 @@ pub fn build_compiled_with_progress(
             asset_type: asset.asset_type.clone(),
             args: Some(asset.args.clone()),
         };
-        let mut def = asset_api::create_asset_def(&req).map_err(|e| {
+        let mut def = asset_api::create_asset_def(&req, platform).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Asset '{}': {}", asset.name, e),
@@ -384,6 +391,7 @@ pub fn build_compiled_with_progress(
             max_blob_bytes: crate::blob::DEFAULT_MAX_BLOB_BYTES,
             assets_dir,
             artifacts_dir,
+            platform,
             mesh_cache: &mesh_cache,
             progress,
         },
@@ -473,7 +481,8 @@ mod tests {
             r#"{"name":"day_crate","type":"Prop","args":{"mesh":"box"}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
 
         // The Prop def's identity is the interned id, not a name string.
         let prop = result
@@ -504,7 +513,8 @@ mod tests {
             r#"{"name":"crate_body","type":"PropBody","args":{"prop_name":"crate_a"}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
 
         assert!(
             !result.names.iter().any(|n| n == "physics_config"),
@@ -530,7 +540,8 @@ mod tests {
             r#"{"name":"defaults","type":"EngineDefaults","args":{"sky":false}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
 
         let index = result
             .names
@@ -556,7 +567,7 @@ mod tests {
             r#"{"name":"pause","type":"Screen","args":{}}"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None).expect("build");
+        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
 
         assert_eq!(result.resource_locks.len(), result.resources.len());
         let font = result
@@ -575,7 +586,7 @@ mod tests {
 
     #[test]
     fn build_from_path_missing_world_file_errors() {
-        assert!(build_from_path("/no/such/world.jsonl").is_err());
+        assert!(build_from_path("/no/such/world.jsonl", Platform::Metal).is_err());
     }
 
     #[test]
@@ -583,7 +594,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let world = dir.path().join("world.jsonl");
         std::fs::write(&world, "{not json\n").expect("write world");
-        let err = build_from_path(world.to_str().unwrap()).expect_err("malformed world");
+        let err =
+            build_from_path(world.to_str().unwrap(), Platform::Metal).expect_err("malformed world");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
@@ -647,7 +659,7 @@ mod tests {
         )
         .expect("write world");
 
-        build_from_path(world_path.to_str().unwrap()).expect("build");
+        build_from_path(world_path.to_str().unwrap(), Platform::Metal).expect("build");
 
         let raw = std::fs::read_to_string(crate::blob::LOCK_PATH).expect("lock written");
         let lock: crate::blob::BlobLock = serde_json::from_str(&raw).expect("lock is valid json");
@@ -677,7 +689,7 @@ mod tests {
 
     #[test]
     fn build_pipeline_from_str_rejects_malformed_jsonl() {
-        let Err(err) = build_pipeline_from_str("{not json\n", None, None) else {
+        let Err(err) = build_pipeline_from_str("{not json\n", None, None, Platform::Metal) else {
             panic!("malformed line must not build");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -686,7 +698,7 @@ mod tests {
     #[test]
     fn build_pipeline_from_str_reports_unknown_asset_types() {
         let world = r#"{"name":"mystery","type":"NotAType","args":{}}"#;
-        let Err(err) = build_pipeline_from_str(world, None, None) else {
+        let Err(err) = build_pipeline_from_str(world, None, None, Platform::Metal) else {
             panic!("unknown type must not build");
         };
         assert!(
@@ -700,7 +712,7 @@ mod tests {
     #[test]
     fn build_compiled_names_the_asset_whose_type_will_not_resolve() {
         let assets = vec![wja("mystery", "NotAType", serde_json::json!({}))];
-        let Err(err) = build_compiled(assets, None, None) else {
+        let Err(err) = build_compiled(assets, None, None, Platform::Metal) else {
             panic!("unknown type must not compile");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -716,7 +728,7 @@ mod tests {
             "ProceduralMesh",
             serde_json::json!({"generator": "not_a_generator"}),
         )];
-        let Err(err) = build_compiled(assets, None, None) else {
+        let Err(err) = build_compiled(assets, None, None, Platform::Metal) else {
             panic!("an uncompilable payload must not build");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -775,7 +787,7 @@ mod tests {
                 }),
             ),
         ];
-        let result = build_compiled(assets, None, None).expect("build");
+        let result = build_compiled(assets, None, None, Platform::Metal).expect("build");
 
         assert_eq!(result.texture_sources.len(), 2);
         assert_eq!(
@@ -856,7 +868,7 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let result = build_compiled(assets, None, None).expect("build");
+        let result = build_compiled(assets, None, None, Platform::Metal).expect("build");
 
         assert_eq!(result.resources.len(), 1);
         let material = &result.resources[0];
@@ -890,7 +902,7 @@ mod tests {
                 serde_json::json!({"path": png, "kind": "png"}),
             ),
         ];
-        let result = build_compiled(assets, None, None).expect("build");
+        let result = build_compiled(assets, None, None, Platform::Metal).expect("build");
 
         assert_eq!(result.names, vec!["model".to_string(), "icon".to_string()]);
         let mesh_payload = result.defs[0]

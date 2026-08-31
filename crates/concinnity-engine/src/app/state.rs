@@ -1,5 +1,6 @@
 //! The `App` value: a world plus the loop state that drives it.
 
+use crate::app::startup_error::StartupError;
 use crate::blob;
 use crate::ecs::{SYSTEMS, StepResult, World};
 use crate::result::CnResult;
@@ -58,14 +59,16 @@ impl App {
     /// one, so the settings and saves the app writes land with the world it
     /// read rather than under the directory it was launched from. The world's
     /// own `AppConfig.home` overrides that at `start`.
-    pub fn from_blob(path: &std::path::Path) -> Result<Self, CnResult> {
+    pub fn from_blob(path: &std::path::Path) -> Result<Self, StartupError> {
         if concinnity_host::store::paths::state_dir().is_none()
             && let Some(state) = state_dir_for_blob(path)
         {
             concinnity_host::store::paths::set_state_dir(state);
         }
+        let loaded = blob::load_at(path)
+            .map_err(|e| StartupError::from_blob_failure(path.to_path_buf(), e))?;
         let mut app = Self::new();
-        app.install(blob::load_at(path)?);
+        app.install(loaded);
         Ok(app)
     }
 
@@ -240,6 +243,11 @@ impl App {
         self.world.insert_resource(memory);
     }
 
+    /// Take the app's world back, so a caller can put it on a different loop.
+    pub fn into_world(self) -> World {
+        self.world
+    }
+
     /// Replace the current world and reset to Created so start() can be called again.
     /// Used to load a new scene at runtime.
     pub fn load_world(&mut self, world: World) {
@@ -265,13 +273,13 @@ impl App {
     }
 
     /// Run this app on the runtime loop with default options, consuming it.
-    pub fn run(self) -> std::io::Result<()> {
+    pub fn run(self) -> Result<(), CnResult> {
         self.run_with(crate::app::run::RunOptions::default())
     }
 
     // Run this app on the runtime loop, consuming it. Drives frames until the
     // window closes, a system stops the world, or CTRL+C is received.
-    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> std::io::Result<()> {
+    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), CnResult> {
         crate::app::run::start_runtime(self, options)
     }
 }
