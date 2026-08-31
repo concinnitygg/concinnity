@@ -437,15 +437,6 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
-    // Restores the previous working directory on drop, so a chdir-in-test does
-    // not leak into other tests (they run in parallel threads of one process).
-    struct CwdGuard(std::path::PathBuf);
-    impl Drop for CwdGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.0);
-        }
-    }
-
     // Closes the session's project on the way out, for the same reason.
     struct ProjectGuard;
     impl Drop for ProjectGuard {
@@ -480,31 +471,32 @@ mod tests {
     }
 
     // build_world_to_disk compiles a world.jsonl and writes the blobs + lock to
-    // the installed state tree, exactly as `cn build` does. Runs under the
-    // process cwd lock in an isolated temp dir so it neither races other tests
-    // nor pollutes the repo. Uses a payload-free world (PhysicsConfig) so it
-    // needs no source files or shader compilation.
+    // the open project's build root, exactly as `cn build` does. Uses a
+    // payload-free world (PhysicsConfig) so it needs no source files or shader
+    // compilation.
     #[test]
     fn build_world_to_disk_writes_blobs_and_lock() {
+        // Opening the session's project is a process-global write.
         let _guard = crate::test_support::lock();
         let dir = concinnity_testing::TempTree::new();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-        let _cwd = CwdGuard(prev);
-        // The lock file is written relative to the cwd; the blobs go into the
-        // project's `data/`, and no project is open by default.
-        crate::project::open(concinnity_host::store::paths::StateTree::at(dir.path()));
+        let build_root = dir.path().join(".concinnity");
+        crate::project::open(
+            concinnity_host::store::paths::StateTree::at(dir.path()).with_build(&build_root),
+        );
         let _project = ProjectGuard;
 
+        let world = dir.path().join("worlds").join("world.jsonl");
+        std::fs::create_dir_all(world.parent().unwrap()).unwrap();
         std::fs::write(
-            "world.jsonl",
+            &world,
             "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
         )
         .unwrap();
 
-        build_world_to_disk("world.jsonl").expect("compile + write should succeed");
+        build_world_to_disk(world.to_str().unwrap()).expect("compile + write should succeed");
 
-        // The primary blob (data/0) and the provenance lock are both written.
+        // The primary blob (data/0) and the provenance lock both land under the
+        // build root, not beside the authored world.
         assert!(
             concinnity_host::store::blob::primary_in(
                 &crate::project::data_dir().expect("the test opened a project")
@@ -513,8 +505,12 @@ mod tests {
             "data/0 blob written"
         );
         assert!(
-            dir.path().join("world-lock.json").exists(),
-            "world-lock.json written"
+            build_root.join("world-lock.json").exists(),
+            "world-lock.json written under the build root"
+        );
+        assert!(
+            !dir.path().join("world-lock.json").exists(),
+            "the lock must not land beside the authored world"
         );
     }
 }

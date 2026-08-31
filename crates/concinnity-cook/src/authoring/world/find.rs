@@ -5,8 +5,8 @@ pub const WORLD_JSONL: &str = "world.jsonl";
 /// If `name` is given, returns `worlds_dir/<name>.jsonl` when it exists. If
 /// `name` is None, returns the most recently modified `.jsonl` there. Falls
 /// back to `world.jsonl` in the current directory and then walks up parent
-/// directories, which is also the whole search when the caller has no
-/// `worlds/` to offer.
+/// directories: the location a project used before worlds moved into
+/// `worlds/`, and the whole search when the caller has no `worlds/` to offer.
 pub fn find_world_jsonl(
     worlds_dir: Option<&std::path::Path>,
     name: Option<&str>,
@@ -56,7 +56,7 @@ pub fn find_world_jsonl(
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     format!(
-                        "no world found: run `cn fetch-world` or create `{}`",
+                        "no world found: run `cn init` or create `worlds/{}`",
                         WORLD_JSONL,
                     ),
                 ));

@@ -5,7 +5,7 @@
 // process that only LOADS prebuilt blobs (`cn build` then `cn editor`) would
 // start with an empty table, leaving every name-keyed feature (picking,
 // billboards, the gizmo) silently dead until the first edit rebuilds the
-// world. world-lock.json records each asset's name with the id the build
+// world. The world lock records each asset's name with the id the build
 // interned it at, so the table can be reinstalled exactly.
 
 use concinnity_cook::blob::BlobLock;
@@ -24,12 +24,12 @@ fn recorded_names(lock: &BlobLock) -> Vec<(u32, String)> {
         .collect()
 }
 
-// Prime the interner from the working directory's world-lock.json. Best
-// effort: a missing or old-format lock leaves the table as it was (the
-// pre-existing degraded behavior), and a table an in-process cook already
-// filled is left alone. Returns how many names were installed.
-pub(crate) fn prime_from_lock_file() -> std::io::Result<usize> {
-    let content = std::fs::read_to_string(concinnity_cook::blob::LOCK_PATH)?;
+// Prime the interner from the lock file at `path`. Best effort: a missing or
+// old-format lock leaves the table as it was (the pre-existing degraded
+// behavior), and a table an in-process cook already filled is left alone.
+// Returns how many names were installed.
+pub(crate) fn prime_from_lock_file(path: &std::path::Path) -> std::io::Result<usize> {
+    let content = std::fs::read_to_string(path)?;
     let lock: BlobLock = serde_json::from_str(&content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let pairs = recorded_names(&lock);
@@ -98,19 +98,18 @@ mod tests {
     // so the name-keyed features are live before the first edit.
     #[test]
     fn priming_from_a_written_lock_installs_every_recorded_name() {
-        let _cwd = crate::test_support::lock_in_temp_cwd();
+        // The interner is process-global, so a test that resets it excludes
+        // every other reader in the binary.
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
         asset_id::reset_interner();
         let lock = lock_with(
             &[("cam", Some(0)), ("floor", Some(2))],
             &[("brick", Some(1))],
         );
-        std::fs::write(
-            concinnity_cook::blob::LOCK_PATH,
-            serde_json::to_string(&lock).unwrap(),
-        )
-        .unwrap();
+        let path = write_lock(dir.path(), &lock);
 
-        assert_eq!(prime_from_lock_file().unwrap(), 3);
+        assert_eq!(prime_from_lock_file(&path).unwrap(), 3);
         assert_eq!(asset_id::intern("cam"), asset_id::AssetId(0));
         assert_eq!(asset_id::intern("brick"), asset_id::AssetId(1));
         assert_eq!(asset_id::intern("floor"), asset_id::AssetId(2));
@@ -120,33 +119,27 @@ mod tests {
     // erroring, leaving the pre-existing degraded boot.
     #[test]
     fn priming_from_an_id_less_lock_installs_nothing() {
-        let _cwd = crate::test_support::lock_in_temp_cwd();
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
         asset_id::reset_interner();
         let lock = lock_with(&[("cam", None)], &[]);
-        std::fs::write(
-            concinnity_cook::blob::LOCK_PATH,
-            serde_json::to_string(&lock).unwrap(),
-        )
-        .unwrap();
+        let path = write_lock(dir.path(), &lock);
 
-        assert_eq!(prime_from_lock_file().unwrap(), 0);
+        assert_eq!(prime_from_lock_file(&path).unwrap(), 0);
     }
 
     // A table an in-process cook already filled is left alone, so priming
     // cannot renumber names the running session is already using.
     #[test]
     fn priming_over_a_filled_table_installs_nothing() {
-        let _cwd = crate::test_support::lock_in_temp_cwd();
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
         asset_id::reset_interner();
         asset_id::intern("already_here");
         let lock = lock_with(&[("cam", Some(0))], &[]);
-        std::fs::write(
-            concinnity_cook::blob::LOCK_PATH,
-            serde_json::to_string(&lock).unwrap(),
-        )
-        .unwrap();
+        let path = write_lock(dir.path(), &lock);
 
-        assert_eq!(prime_from_lock_file().unwrap(), 0);
+        assert_eq!(prime_from_lock_file(&path).unwrap(), 0);
         assert_eq!(asset_id::intern("already_here"), asset_id::AssetId(0));
     }
 
@@ -154,13 +147,22 @@ mod tests {
     // are both reported, so the caller can log rather than boot half-primed.
     #[test]
     fn a_missing_or_corrupt_lock_is_an_error() {
-        let _cwd = crate::test_support::lock_in_temp_cwd();
+        let dir = concinnity_testing::TempTree::new();
+        let path = dir.path().join("world-lock.json");
 
-        let missing = prime_from_lock_file().expect_err("no lock in a fresh dir");
+        let missing = prime_from_lock_file(&path).expect_err("no lock in a fresh dir");
         assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
 
-        std::fs::write(concinnity_cook::blob::LOCK_PATH, "{ not json").unwrap();
-        let corrupt = prime_from_lock_file().expect_err("a corrupt lock");
+        std::fs::write(&path, "{ not json").unwrap();
+        let corrupt = prime_from_lock_file(&path).expect_err("a corrupt lock");
         assert_eq!(corrupt.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // Serialize `lock` into `dir` under the name a build writes, and return
+    // the path.
+    fn write_lock(dir: &std::path::Path, lock: &BlobLock) -> std::path::PathBuf {
+        let path = dir.join("world-lock.json");
+        std::fs::write(&path, serde_json::to_string(lock).unwrap()).unwrap();
+        path
     }
 }

@@ -1,5 +1,5 @@
-// The state tree as a value: a content root, the two roots that may be split
-// away from it, and the layout hanging off all three.
+// The state tree as a value: a content root, the three roots that may be split
+// away from it, and the layout hanging off all four.
 //
 // Every directory and file name the tree is made of is spelled once, here. A
 // caller asks for `saves_dir()` or `build_cache_path()`; that `cache/1` is a
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 // that a build's cache is `cache/1`.
 const ASSETS_DIR: &str = "assets";
 const DATA_DIR: &str = "data";
+const WORLD_LOCK_FILE: &str = "world-lock.json";
 const WORLDS_DIR: &str = "worlds";
 const SAVES_DIR: &str = "saves";
 const PREVIEW_SAVES_DIR: &str = "preview-saves";
@@ -29,21 +30,24 @@ const BUILD_CACHE_SEGMENT: &str = "1";
 /// an embedder from whatever its own layout implies -- and passed down. Library
 /// code is handed one; it never resolves a root for itself.
 ///
-/// Three roots, because the three fall apart on real installs:
+/// Four roots, because the four fall apart on real installs:
 ///
-/// - the **content** root holds what a build produces and reads (`data/`,
-///   `assets/`, `worlds/`),
+/// - the **content** root holds what a person authors (`assets/`, `worlds/`),
+/// - the **build** root holds what a build produces (`data/`, the world lock),
+///   split away when the authored content should stay visible and the output
+///   should not,
 /// - the **writable** root holds what the running application writes
 ///   (`saves/`, `settings`, `crashes/`), split away when the content root is a
 ///   read-only install such as Program Files,
 /// - the **cache** root holds the regenerable segments, split away when the
 ///   caches should outlive (or be shared across) the content beside them.
 ///
-/// An unsplit tree resolves all three at the content root, which is the
-/// single-folder layout a portable install and a dev checkout both use.
+/// An unsplit tree resolves all four at the content root, which is the
+/// single-folder layout a portable install uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateTree {
     content: PathBuf,
+    build: Option<PathBuf>,
     writable: Option<PathBuf>,
     cache: Option<PathBuf>,
 }
@@ -53,9 +57,19 @@ impl StateTree {
     pub fn at<P: Into<PathBuf>>(content: P) -> Self {
         Self {
             content: content.into(),
+            build: None,
             writable: None,
             cache: None,
         }
+    }
+
+    /// Move what a build produces to `dir`, leaving the authored content where
+    /// it is: a dev project keeps `assets/` and `worlds/` in sight and its
+    /// blobs, lock, and caches out of the way.
+    #[must_use]
+    pub fn with_build<P: Into<PathBuf>>(mut self, dir: P) -> Self {
+        self.build = Some(dir.into());
+        self
     }
 
     /// Move the runtime-writable state to `dir`, leaving the content where it
@@ -75,9 +89,14 @@ impl StateTree {
         self
     }
 
-    /// The root holding what a build produces and reads.
+    /// The root holding what a person authors.
     pub fn content_root(&self) -> &Path {
         &self.content
+    }
+
+    /// The root holding what a build produces.
+    pub fn build_root(&self) -> &Path {
+        self.build.as_deref().unwrap_or(&self.content)
     }
 
     /// The root holding what the running application writes.
@@ -85,19 +104,26 @@ impl StateTree {
         self.writable.as_deref().unwrap_or(&self.content)
     }
 
-    /// The state root's `assets/` directory.
+    /// The content root's `assets/` directory, holding authored source files.
     pub fn assets_dir(&self) -> PathBuf {
         self.content.join(ASSETS_DIR)
     }
 
-    /// The state root's `data/` directory.
-    pub fn data_dir(&self) -> PathBuf {
-        self.content.join(DATA_DIR)
-    }
-
-    /// The state root's `worlds/` directory.
+    /// The content root's `worlds/` directory, holding authored worlds.
     pub fn worlds_dir(&self) -> PathBuf {
         self.content.join(WORLDS_DIR)
+    }
+
+    /// The build root's `data/` directory, holding the blobs a build writes
+    /// and a run reads.
+    pub fn data_dir(&self) -> PathBuf {
+        self.build_root().join(DATA_DIR)
+    }
+
+    /// The record a build writes beside its blobs: what went into them, and
+    /// what the build injected that no authored line asked for.
+    pub fn world_lock_path(&self) -> PathBuf {
+        self.build_root().join(WORLD_LOCK_FILE)
     }
 
     /// Directory holding the runtime save files. Created on first write by the
@@ -149,12 +175,15 @@ impl StateTree {
     /// artifacts are backend IR (DXBC / SPIR-V) rather than machine code, one
     /// warmed at package time is valid on any machine.
     ///
-    /// Always resolves against the content root, so it stays readable on a
-    /// read-only install. That is also the only thing separating it from
+    /// Always resolves against the build root, so it ships with the blobs it
+    /// was warmed for and stays readable on a read-only install. That is also
+    /// the only thing separating it from
     /// [`runtime_cache_path`](Self::runtime_cache_path): a bundle the player
     /// can write to has one segment serving both roles.
     pub fn bundled_runtime_cache_path(&self) -> PathBuf {
-        self.content.join(CACHE_DIR).join(RUNTIME_CACHE_SEGMENT)
+        self.build_root()
+            .join(CACHE_DIR)
+            .join(RUNTIME_CACHE_SEGMENT)
     }
 
     /// The segment a build writes: one container holding every payload,
@@ -176,11 +205,11 @@ impl StateTree {
             .unwrap_or_else(|| self.writable_root())
     }
 
-    // Without a cache root the build segment follows the content: a build
+    // Without a cache root the build segment follows the build root: a build
     // writes the `data/` beside it, so a tree it cannot write is a tree it
     // cannot cook into either.
     fn cache_root_for_build(&self) -> &Path {
-        self.cache.as_deref().unwrap_or(&self.content)
+        self.cache.as_deref().unwrap_or_else(|| self.build_root())
     }
 }
 
@@ -196,9 +225,11 @@ mod tests {
         let root = Path::new("/flat");
 
         assert_eq!(tree.content_root(), root);
+        assert_eq!(tree.build_root(), root);
         assert_eq!(tree.writable_root(), root);
         assert_eq!(tree.assets_dir(), root.join("assets"));
         assert_eq!(tree.data_dir(), root.join("data"));
+        assert_eq!(tree.world_lock_path(), root.join("world-lock.json"));
         assert_eq!(tree.worlds_dir(), root.join("worlds"));
         assert_eq!(tree.saves_dir(), root.join("saves"));
         assert_eq!(tree.preview_saves_dir(), root.join("preview-saves"));
@@ -230,6 +261,7 @@ mod tests {
         assert_eq!(tree.runtime_cache_path(), writable.join("cache").join("0"));
 
         assert_eq!(tree.data_dir(), content.join("data"));
+        assert_eq!(tree.world_lock_path(), content.join("world-lock.json"));
         assert_eq!(tree.assets_dir(), content.join("assets"));
         assert_eq!(tree.worlds_dir(), content.join("worlds"));
         assert_eq!(tree.build_cache_path(), content.join("cache").join("1"));
@@ -261,21 +293,63 @@ mod tests {
         assert_eq!(tree.saves_dir(), content.join("saves"));
     }
 
-    // All three split: the case one knob could never express, and the reason
-    // the cache is a root of its own.
+    // All four split: the case one knob could never express, and the reason
+    // each is a root of its own.
     #[test]
-    fn all_three_roots_split_independently() {
+    fn all_four_roots_split_independently() {
         let tree = StateTree::at("/opt/app")
+            .with_build("/opt/app/out")
             .with_writable("/home/u/app")
             .with_cache("/var/cache/app");
 
-        assert_eq!(tree.data_dir(), Path::new("/opt/app/data"));
+        assert_eq!(tree.assets_dir(), Path::new("/opt/app/assets"));
+        assert_eq!(tree.data_dir(), Path::new("/opt/app/out/data"));
         assert_eq!(tree.saves_dir(), Path::new("/home/u/app/saves"));
         assert_eq!(
             tree.runtime_cache_path(),
             Path::new("/var/cache/app/cache/0")
         );
         assert_eq!(tree.build_cache_path(), Path::new("/var/cache/app/cache/1"));
+    }
+
+    // The dev layout: authored content in sight at the project root, every
+    // derived byte under one hidden directory beside it.
+    #[test]
+    fn a_build_root_hides_the_output_and_leaves_the_authored_content_visible() {
+        let project = Path::new("/proj");
+        let hidden = Path::new("/proj/.concinnity");
+        let tree = StateTree::at(project)
+            .with_writable(hidden)
+            .with_build(hidden);
+
+        assert_eq!(tree.assets_dir(), project.join("assets"));
+        assert_eq!(tree.worlds_dir(), project.join("worlds"));
+
+        assert_eq!(tree.data_dir(), hidden.join("data"));
+        assert_eq!(tree.world_lock_path(), hidden.join("world-lock.json"));
+        assert_eq!(tree.settings_path(), hidden.join("settings"));
+        assert_eq!(tree.saves_dir(), hidden.join("saves"));
+        assert_eq!(tree.editor_session_path(), hidden.join("editor"));
+        // Both segments follow without a cache root of their own, which is what
+        // keeps a `cache/` out of the project root.
+        assert_eq!(tree.runtime_cache_path(), hidden.join("cache").join("0"));
+        assert_eq!(tree.build_cache_path(), hidden.join("cache").join("1"));
+        assert_eq!(
+            tree.bundled_runtime_cache_path(),
+            hidden.join("cache").join("0")
+        );
+    }
+
+    // A cache root still outranks the build root for the segment a build
+    // writes: the two splits answer different questions.
+    #[test]
+    fn a_cache_root_outranks_the_build_root() {
+        let tree = StateTree::at("/proj")
+            .with_build("/proj/.concinnity")
+            .with_cache("/var/cache/app");
+
+        assert_eq!(tree.build_cache_path(), Path::new("/var/cache/app/cache/1"));
+        assert_eq!(tree.data_dir(), Path::new("/proj/.concinnity/data"));
     }
 
     // The builders are independent: setting one leaves the others resolving at
@@ -292,6 +366,16 @@ mod tests {
             base.clone().with_writable("/w").build_cache_path(),
             base.build_cache_path(),
             "a writable root leaves the build segment with the content"
+        );
+        assert_eq!(
+            base.clone().with_build("/b").assets_dir(),
+            base.assets_dir(),
+            "a build root leaves the authored content where it is"
+        );
+        assert_eq!(
+            base.clone().with_build("/b").saves_dir(),
+            base.saves_dir(),
+            "a build root leaves the writable state alone"
         );
     }
 }

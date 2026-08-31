@@ -253,22 +253,14 @@ pub(crate) fn world_jsonl_path() -> Option<String> {
     WORLD_JSONL_PATH.lock().unwrap().clone()
 }
 
-// Shared flag access for a test whose code path reads a flag. Held for as long
-// as the read matters: for graphics init, across the whole `run_init`.
-//
-// The lock is the workspace's one process-global lock rather than a private
-// static, so a flag written here cannot race a test in another crate that
-// reaches these same flags through a different guard.
-#[cfg(test)]
-pub(crate) fn read_access() -> concinnity_testing::SharedAccess {
-    concinnity_testing::shared()
-}
-
 // Exclusive flag access for a test that writes one. Restores every flag graphics
 // init reads when it drops, so a panicking test cannot leak one into the rest of
 // the binary. Poison is ignored: the test holding it has already failed, and
-// erroring every later lock buries that failure under a cascade. Not reentrant,
-// so a test holding this must not also take `read_access`.
+// erroring every later lock buries that failure under a cascade.
+//
+// The lock is the workspace's one process-global lock rather than a private
+// static, so a flag written here cannot race a test in another crate that
+// reaches these same flags through a different guard. It is not reentrant.
 #[cfg(test)]
 pub(crate) struct WriteAccess {
     _guard: concinnity_testing::ExclusiveAccess,

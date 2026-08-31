@@ -179,8 +179,10 @@ impl EditorHook {
 }
 
 // The directory imported paths are stored relative to, and where the picker
-// opens: the process's working directory, which is the project root the cook
-// resolves an entry's `source` against.
+// opens: the process's working directory. A stored path carries a directory
+// component, so the cook uses it verbatim and resolves it against that same
+// working directory -- which is where the CLI roots the project, `assets/`
+// included.
 fn project_root() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_default()
 }

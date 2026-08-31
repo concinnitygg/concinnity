@@ -13,10 +13,9 @@
 //!     binary and reads nothing outside its own crate.
 //!   - [`source`]: reading the workspace's own sources, for the guard tests
 //!     that forbid a shape which at runtime would hang rather than fail.
-//!   - [`exclusive`] / [`shared`]: the one reader/writer lock over this
-//!     binary's process-global state. Readers stay parallel; writers run alone.
-//!     [`GlobalState`] is that exclusive guard plus the cwd and window-policy
-//!     moves, both put back on drop.
+//!   - [`exclusive`]: the one lock over this binary's process-global state,
+//!     held alone. [`GlobalState`] is that guard plus the cwd and
+//!     window-policy moves, both put back on drop.
 //!   - [`shared_cache_dir`] / [`shared_state_dir`]: the two roots a suite keeps
 //!     outside any one test -- a content-addressed cache that exists to avoid
 //!     recompiling, and the process-wide state that is emptied once per run.
@@ -29,7 +28,7 @@ mod temp;
 pub mod fixtures;
 pub mod source;
 
-pub use access::{ExclusiveAccess, SharedAccess, exclusive, shared};
+pub use access::{ExclusiveAccess, exclusive};
 pub use global::GlobalState;
 pub use shared_dirs::{shared_cache_dir, shared_state_dir};
 pub use temp::{TempTree, utf8, write_into};

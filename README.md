@@ -119,7 +119,7 @@ Usage: concinnity <COMMAND>
 Commands:
   init     Create a new app in the current directory
   new      Create a new app in a new directory
-  build    Build a world from .concinnity/worlds/ into binary blobs
+  build    Build a world from worlds/ into binary blobs
   run      Run a compiled world
   debug    Run interpreted directly from a world jsonl file
   editor   Edit a compiled world in-engine with a save-back HUD

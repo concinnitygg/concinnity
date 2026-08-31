@@ -73,11 +73,12 @@ const HELLO_WORLD: &str =
     "{\"name\":\"hello_world\",\"type\":\"TextLabel\",\"args\":{\"content\":\"Hello, world!\"}}\n";
 
 // An isolated project for one test: a temp directory the spawned binary runs
-// in, so the `.concinnity/` it anchors to its working directory resolves inside
-// it. Isolation is per-process rather than per-thread, which is what makes
-// these tests safe to run in parallel: the path anchors they steer are
-// process-global, so an in-crate unit test could not do the same without racing
-// every other test in its binary.
+// in, so the project it anchors to its working directory -- authored `worlds/`
+// and `assets/`, derived `.concinnity/` -- resolves inside it. Isolation is
+// per-process rather than per-thread, which is what makes these tests safe to
+// run in parallel: the path anchors they steer are process-global, so an
+// in-crate unit test could not do the same without racing every other test in
+// its binary.
 //
 // A temp root also keeps the discovery fallback honest. `find_world_jsonl` walks
 // up from the working directory looking for a `world.jsonl`, and the repository
@@ -99,7 +100,7 @@ impl Project {
     // A project whose discovered world holds `content`.
     fn with_world(content: &str) -> Self {
         let project = Project::empty();
-        let worlds = project.path().join(".concinnity").join("worlds");
+        let worlds = project.path().join("worlds");
         std::fs::create_dir_all(&worlds).expect("create worlds dir");
         std::fs::write(worlds.join("main.jsonl"), content).expect("write world");
         project
@@ -113,7 +114,6 @@ impl Project {
     // explicit `--file` instead of discovering one.
     fn world_path(&self) -> String {
         self.path()
-            .join(".concinnity")
             .join("worlds")
             .join("main.jsonl")
             .to_string_lossy()
@@ -131,7 +131,7 @@ impl Project {
     // Write a source file into the project's asset root, where a bare `source`
     // filename in the world resolves.
     fn write_asset(&self, name: &str, bytes: &[u8]) {
-        let dir = self.path().join(".concinnity").join("assets");
+        let dir = self.path().join("assets");
         std::fs::create_dir_all(&dir).expect("create assets dir");
         std::fs::write(dir.join(name), bytes).expect("write asset");
     }
@@ -256,7 +256,7 @@ fn debug_screenshot_dead_port_exits_transport() {
     assert!(!shot.exists(), "a failed capture should write no file");
 }
 
-// `cn list` with no --file discovers the world under `.concinnity/worlds/`,
+// `cn list` with no --file discovers the world under `worlds/`,
 // the branch an explicit path never reaches.
 #[test]
 fn list_discovers_the_world_and_prints_the_asset_table() {
@@ -268,6 +268,36 @@ fn list_discovers_the_world_and_prints_the_asset_table() {
     assert!(printed.contains("hello_world"), "got: {printed}");
     assert!(printed.contains("TextLabel"), "got: {printed}");
     assert!(printed.contains("1 asset(s)"), "got: {printed}");
+}
+
+// The legacy location: a `world.jsonl` at the project root, from before worlds
+// moved into `worlds/`. Discovery still finds it, so an existing project keeps
+// working untouched.
+#[test]
+fn list_discovers_a_legacy_world_at_the_project_root() {
+    let project = Project::empty();
+    std::fs::write(project.path().join("world.jsonl"), HELLO_WORLD).expect("write world");
+
+    let out = project.cn(&["list"]);
+    expect_ok(&out, "cn list");
+    assert!(stdout(&out).contains("hello_world"), "{}", stdout(&out));
+}
+
+// With both present, `worlds/` wins: the legacy file is a fallback, not a peer.
+#[test]
+fn a_world_in_worlds_outranks_the_legacy_one() {
+    let project = Project::with_world(HELLO_WORLD);
+    std::fs::write(
+        project.path().join("world.jsonl"),
+        "{\"name\":\"legacy_only\",\"type\":\"Logger\",\"args\":{}}\n",
+    )
+    .expect("write legacy world");
+
+    let out = project.cn(&["list"]);
+    expect_ok(&out, "cn list");
+    let printed = stdout(&out);
+    assert!(printed.contains("hello_world"), "got: {printed}");
+    assert!(!printed.contains("legacy_only"), "got: {printed}");
 }
 
 // The expanded listing runs the build's front half, so it reports the injected
@@ -351,7 +381,8 @@ fn build_compiles_the_discovered_world_and_an_explicit_one() {
 
     let out = project.cn(&["build"]);
     expect_ok(&out, "cn build");
-    // The blobs and the lock file land inside the project, not the developer's tree.
+    // The blobs and the lock file land under the project's hidden state
+    // directory, not beside the authored world and not in the developer's tree.
     assert!(
         project
             .path()
@@ -362,8 +393,16 @@ fn build_compiles_the_discovered_world_and_an_explicit_one() {
         "no blob written"
     );
     assert!(
-        project.path().join("world-lock.json").exists(),
+        project
+            .path()
+            .join(".concinnity")
+            .join("world-lock.json")
+            .exists(),
         "no lock file written"
+    );
+    assert!(
+        !project.path().join("world-lock.json").exists(),
+        "the lock must not land at the project root"
     );
 
     let out = project.cn(&["build", "-f", &project.world_path()]);
@@ -488,6 +527,8 @@ fn export_rejects_a_foreign_platform() {
     );
 }
 
+// A legacy `world.jsonl` at the project root still counts as a scaffolded
+// project, so `cn init` over one leaves it alone.
 #[test]
 fn init_skips_a_directory_that_already_has_a_world() {
     let project = Project::empty();
@@ -508,7 +549,10 @@ fn new_scaffolds_and_builds_a_fresh_project() {
 
     let out = project.cn(&["new", &target_arg]);
     expect_ok(&out, "cn new");
-    assert!(target.join("world.jsonl").exists(), "no starter world");
+    assert!(
+        target.join("worlds").join("world.jsonl").exists(),
+        "no starter world"
+    );
     assert!(stdout(&out).contains("Created"), "{}", stdout(&out));
 }
 
@@ -522,15 +566,19 @@ fn new_accepts_a_pre_existing_empty_directory() {
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
     expect_ok(&out, "cn new into an empty directory");
-    assert!(target.join("world.jsonl").exists(), "no starter world");
+    assert!(
+        target.join("worlds").join("world.jsonl").exists(),
+        "no starter world"
+    );
 }
 
 #[test]
 fn new_refuses_a_directory_that_already_has_a_world() {
     let project = Project::empty();
-    let target = project.path().join("taken");
+    let target = project.path().join("taken").join("worlds");
     std::fs::create_dir_all(&target).expect("create target dir");
     std::fs::write(target.join("world.jsonl"), HELLO_WORLD).expect("write world");
+    let target = target.parent().expect("the project directory");
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
     assert!(!out.status.success(), "an occupied directory should fail");

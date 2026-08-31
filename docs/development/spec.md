@@ -647,16 +647,24 @@ Everything the engine writes for a project lives under one state directory.
 ```
 <state root>/
 ├── data/            compiled blobs (0, 1, 2, ...)          read-only at runtime
+├── world-lock.json  build provenance record (5.3)          cook only
 ├── cache/           regenerable, deletable at any time     see 7.2
 │   ├── 0            runtime cache segment                  runtime-writable
 │   └── 1            build cache segment                    cook only
-├── assets/          fetched source assets                  cook only
+├── assets/          source assets                          authored
 ├── worlds/          named world files                      authored
 ├── saves/           runtime save files                     runtime-writable
 ├── preview-saves/   sandboxed saves for preview sessions   runtime-writable
 ├── crashes/         crash reports and minidumps            runtime-writable
 └── settings         persisted settings (CBOR)              runtime-writable
 ```
+
+The tree has four roots, and a host that keeps them together gets the layout
+above. The **content** root holds what a person authors (`assets/`, `worlds/`);
+the **build** root holds what a build produces (`data/`, `world-lock.json`); the
+**writable** root holds what a run writes (`saves/`, `settings`, `crashes/`);
+the **cache** root holds the regenerable segments. Each of the last three
+defaults to the content root and may be split away on its own.
 
 ### 7.1 Root resolution
 
@@ -669,9 +677,15 @@ scatters state beside whatever directory it was launched from.
 
 Where each host points it:
 
-**Development.** The `concinnity` CLI installs `.concinnity/` under the
-directory the command was run from. That name is the CLI's convention and lives
-in the CLI binary; no library crate knows it.
+**Development.** The `concinnity` CLI roots the project at the directory the
+command was run from, so `assets/` and `worlds/` are visible beside the source
+that authored them, and splits the build and writable roots into `.concinnity/`
+under it, so the blobs, the lock, the caches, the settings and the saves stay
+out of sight. That name is the CLI's convention and lives in the CLI binary; no
+library crate knows it.
+
+A world at the project root named `world.jsonl` is still discovered when
+`worlds/` holds none, which is the layout projects used before worlds moved.
 
 **Shipped.** The player installs the directory beside its own executable (or
 `Contents/Resources` inside a macOS bundle), so `data`, `saves/`, and `settings`

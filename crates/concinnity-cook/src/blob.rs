@@ -22,10 +22,6 @@ pub(crate) use concinnity_host::store::blob::read_cnb;
 
 use serde::{Deserialize, Serialize};
 
-/// The build record written beside the blobs. Provenance metadata, not part of
-/// the .cnb format, so it lives here rather than in concinnity-blob.
-pub const LOCK_PATH: &str = "world-lock.json";
-
 /// Per-blob entry in the lock file
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobEntry {
@@ -318,6 +314,7 @@ impl PayloadPacker {
 
 // Lock file
 pub(crate) fn write_lock(
+    tree: &crate::paths::StateTree,
     named_defs: &[(&str, &BlobAssetDef)],
     resources: &[LockedResource],
     injected: &[crate::build_only::InjectedAsset],
@@ -372,7 +369,11 @@ pub(crate) fn write_lock(
             .collect(),
     };
 
-    fs::write(LOCK_PATH, serde_json::to_string_pretty(&lock)?)
+    let path = tree.world_lock_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string_pretty(&lock)?)
 }
 
 // Helpers
@@ -388,10 +389,9 @@ fn now_iso8601() -> String {
         .expect("time format")
 }
 
-// Shared harness for tests that drive the build's file output. The lock file is
-// written relative to the working directory, which is process-global, so the
-// guard owns the exclusive lock and the working directory; the state tree it
-// hands out is a value nothing else can see.
+// Shared harness for tests that drive the build's file output: a state tree
+// nothing else can see, with the working directory moved into it so a stray
+// relative write cannot reach the crate's own source directory.
 #[cfg(test)]
 pub(crate) mod test_output {
     use std::path::PathBuf;
@@ -399,9 +399,7 @@ pub(crate) mod test_output {
     use concinnity_host::store::paths::StateTree;
     use concinnity_testing::GlobalState;
 
-    /// A private tree to build into, with the working directory moved into it
-    /// so `LOCK_PATH` resolves there rather than into the crate's own source
-    /// directory.
+    /// A private tree to build into, with the working directory moved into it.
     pub(crate) struct Output {
         // Held for its Drop: the exclusive lock, the working directory, and the
         // tree the paths below name.
@@ -425,6 +423,11 @@ pub(crate) mod test_output {
 
         pub(crate) fn data_dir(&self) -> PathBuf {
             self.tree.data_dir()
+        }
+
+        /// The lock file this tree's builds write.
+        pub(crate) fn lock_path(&self) -> PathBuf {
+            self.tree.world_lock_path()
         }
 
         /// Blob 0 under this tree's `data/`: what a build writes when nothing
@@ -654,9 +657,17 @@ mod tests {
             args: serde_json::json!({}),
         }];
 
-        write_lock(&named, &resources, &injected, &shadowed, &paths).expect("write_lock");
+        write_lock(
+            output.tree(),
+            &named,
+            &resources,
+            &injected,
+            &shadowed,
+            &paths,
+        )
+        .expect("write_lock");
         let blob_bytes = fs::read(&paths[0]).expect("blob 0 readable");
-        let written = fs::read_to_string(LOCK_PATH).expect("lock written to the working directory");
+        let written = fs::read_to_string(output.lock_path()).expect("lock written into the tree");
 
         let lock: BlobLock = serde_json::from_str(&written).expect("lock is valid json");
         assert_eq!(lock.engine_version, env!("CARGO_PKG_VERSION"));
@@ -691,11 +702,11 @@ mod tests {
     // records the empty checksum and no payload bytes rather than failing.
     #[test]
     fn write_lock_tolerates_a_missing_blob_file() {
-        let _output = Output::new();
+        let output = Output::new();
 
         let paths = vec!["/no/such/data/0".to_string()];
-        write_lock(&[], &[], &[], &[], &paths).expect("write_lock");
-        let written = fs::read_to_string(LOCK_PATH).expect("lock written");
+        write_lock(output.tree(), &[], &[], &[], &[], &paths).expect("write_lock");
+        let written = fs::read_to_string(output.lock_path()).expect("lock written");
 
         let lock: BlobLock = serde_json::from_str(&written).expect("lock is valid json");
         assert_eq!(lock.blobs[0].payload_bytes, 0);

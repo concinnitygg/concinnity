@@ -8,7 +8,7 @@ fn registration_for(type_str: &str) -> Option<concinnity_cook::authoring::regist
 }
 
 // Resolve the world path the same way every other subcommand does: an explicit
-// existing path wins, otherwise discover from .concinnity/worlds/ or cwd.
+// existing path wins, otherwise discover from worlds/ or cwd.
 pub(crate) fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
     match json_path {
         Some(p) if std::path::Path::new(p).exists() => Ok(p.to_string()),

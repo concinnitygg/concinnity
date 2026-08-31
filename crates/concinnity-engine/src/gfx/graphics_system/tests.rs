@@ -274,11 +274,10 @@ fn titled_scene(title: &str) -> WorldBuilder {
 // then GraphicsSystem init with the injected hooks. A successful init parks
 // the built backend in the world's `ActiveRenderBackend` slot.
 //
-// Init reads the process-global launch flags, so this holds shared access for
-// the whole pass: concurrent inits still overlap, and only a test writing a
-// flag is excluded.
+// Init reads the process-global launch flags, so this holds the one guard over
+// them for the whole pass rather than only across the read.
 fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
-    let _flags = crate::app::dev_flags::read_access();
+    let _flags = concinnity_testing::exclusive();
     let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);
     let mut ctx = world.ctx();
@@ -288,8 +287,8 @@ fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
 }
 
 // `init_graphics` for a test that first WRITES a launch flag. The flag guard is
-// exclusive and not reentrant, so the caller holds it across init rather than
-// letting init take shared access of its own.
+// not reentrant, so the caller holds it across init rather than letting init
+// take one of its own.
 fn init_graphics_under_flags(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
     let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);

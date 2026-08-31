@@ -2020,6 +2020,23 @@ fn write_jsonl_persists_entries_atomically() {
     let _ = std::fs::remove_file(&path);
 }
 
+// A fresh project has no `worlds/` until its first save, so the write creates
+// the directory rather than failing on the rename.
+#[test]
+fn write_jsonl_creates_the_worlds_directory() {
+    let tree = concinnity_testing::TempTree::new();
+    let path = tree.join("worlds").join("world.jsonl");
+
+    let mut h = hook(vec![serde_json::json!({
+        "name": "scene", "type": "GraphicsConfig", "args": {}
+    })]);
+    h.world_path = path.to_str().unwrap().to_string();
+    h.write_jsonl().expect("the write creates its directory");
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(crate::world::parse_world_jsonl(&content).unwrap().len(), 1);
+}
+
 #[test]
 fn scroll_moves_each_regions_offset() {
     let world = world_with_fields();

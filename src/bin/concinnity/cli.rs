@@ -28,7 +28,7 @@ pub(crate) enum Commands {
     #[command(name = "new")]
     New(NewArgs),
 
-    /// Build a world from .concinnity/worlds/ into binary blobs
+    /// Build a world from worlds/ into binary blobs
     #[command(name = "build")]
     Build(BuildArgs),
 
@@ -133,7 +133,7 @@ pub(crate) struct Cli {
 #[derive(Debug, Default, clap::Args)]
 pub(crate) struct RenderArgs {
     /// Force the master graphics-quality preset for this launch, unpersisted
-    // Outranks the settings-menu choice in .concinnity/settings.bin. Only the
+    // Outranks the settings-menu choice in .concinnity/settings. Only the
     // `ultra` ceiling permits ray-traced reflections, so an RT probe that omits
     // this measures a frame with RT clamped off and no log line saying so.
     #[arg(long, value_enum)]
@@ -215,7 +215,7 @@ pub(crate) struct DebugArgs {
     #[command(subcommand)]
     pub client: Option<DebugClientCommand>,
 
-    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
@@ -319,7 +319,7 @@ pub(crate) struct DebugWatchArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct EditorArgs {
-    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
@@ -398,14 +398,14 @@ pub(crate) struct RmArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct TestArgs {
-    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ListArgs {
-    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
@@ -427,7 +427,7 @@ pub(crate) struct ExplainArgs {
     /// The `name` field of the asset to print
     pub name: String,
 
-    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 }
@@ -447,14 +447,14 @@ pub(crate) struct NewArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct BuildArgs {
-    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ExportArgs {
-    /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
+    /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 

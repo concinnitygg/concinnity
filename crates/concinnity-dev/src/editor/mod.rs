@@ -153,16 +153,24 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
 
 // Resolve the world.jsonl the editor edits, and whether it exists yet. An
 // explicit path is taken as-is (present or not, so a brand-new file can be
-// named); with no path, the most-recent world is used, falling back to the
-// default `world.jsonl` name for a fresh, not-yet-saved world.
+// named); with no path, the most-recent world is used, falling back to a
+// `world.jsonl` in the project's `worlds/` for a fresh, not-yet-saved world.
+// The directory need not exist: the first save creates it.
 fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
     match json_path {
         Some(p) => (p.to_string(), std::path::Path::new(p).exists()),
         None => match find_world_jsonl(crate::project::worlds_dir().as_deref(), None) {
             Ok(p) => (p, true),
-            Err(_) => (WORLD_JSONL.to_string(), false),
+            Err(_) => (unsaved_world_path(), false),
         },
     }
+}
+
+// Where the editor puts a world nobody has saved yet.
+fn unsaved_world_path() -> String {
+    crate::project::worlds_dir()
+        .map(|dir| dir.join(WORLD_JSONL).to_string_lossy().into_owned())
+        .unwrap_or_else(|| WORLD_JSONL.to_string())
 }
 
 // Populate `app` with a renderable world for editing:
@@ -200,7 +208,8 @@ fn boot_world(
         // has an empty name table, which kills name-keyed picking until the
         // first edit. Restore it from the lock the build wrote. Best effort: a
         // missing lock only means the pre-existing degraded behavior.
-        match crate::authoring::name_table::prime_from_lock_file() {
+        let lock = crate::project::world_lock_path().unwrap_or_default();
+        match crate::authoring::name_table::prime_from_lock_file(&lock) {
             Ok(n) if n > 0 => tracing::info!("editor: primed {n} asset names from the build lock"),
             Ok(_) => {}
             Err(e) => tracing::warn!("editor: could not prime asset names: {e}"),
@@ -209,7 +218,7 @@ fn boot_world(
         // compiles; a blob boot reconstructs them from the lock + the authored
         // entries so file-backed assets reload here too. Best effort, like the
         // name priming above.
-        match crate::authoring::reload_sources::install_from_lock(app.world_mut(), entries) {
+        match crate::authoring::reload_sources::install_from_lock(app.world_mut(), entries, &lock) {
             Ok(n) if n > 0 => {
                 tracing::info!("editor: recovered {n} hot-reload source(s) from the build lock");
             }
@@ -317,6 +326,21 @@ mod tests {
         assert!(
             !exists,
             "a missing explicit path is reported absent, not an error"
+        );
+    }
+
+    // With no world to discover, the editor opens an unsaved one in the
+    // project's `worlds/`, so the first save lands where a build looks.
+    #[test]
+    fn an_unsaved_world_is_named_inside_the_projects_worlds_directory() {
+        // Reading the session's project; opening one is what the guard covers.
+        let _guard = crate::test_support::lock();
+        crate::test_support::isolate_state_dir();
+
+        let worlds = crate::project::worlds_dir().expect("the harness opened a project");
+        assert_eq!(
+            unsaved_world_path(),
+            worlds.join(WORLD_JSONL).to_string_lossy()
         );
     }
 }

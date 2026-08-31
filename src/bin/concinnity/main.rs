@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 // consumer would inherit it from.
 concinnity_core::install_global_allocator!();
 
-// The directory a dev project keeps its state in, hidden inside the project so
-// a checkout carries its build state without a stray visible folder. The engine
-// crates have no default: they are handed whatever tree a host builds, so this
-// is the binary's convention and nobody else's.
+// The directory a dev project keeps its derived state in, hidden inside the
+// project so a checkout carries its build output without a stray visible
+// folder. What a person authors stays beside it, in sight. The engine crates
+// have no default: they are handed whatever tree a host builds, so this is the
+// binary's convention and nobody else's.
 const STATE_DIR: &str = ".concinnity";
 
 fn main() -> std::io::Result<()> {
@@ -30,22 +31,25 @@ fn main() -> std::io::Result<()> {
     // Where this run reads and writes. Resolved before the crash hooks, so a
     // report written from here on lands in the project rather than nowhere,
     // and handed to the dev library, which builds and runs against it.
-    let tree = concinnity_engine::StateTree::at(project_state_dir());
+    let tree = project_tree();
     concinnity_engine::crash::install(Some(&tree.crashes_dir()));
     concinnity_dev::project::open(tree.clone());
 
     dispatch::dispatch(&parsed, &tree)
 }
 
-// `.concinnity/` under the directory the command was run from, resolved once so
-// every subcommand addresses the same tree. Falls back to the relative name
-// when the working directory cannot be read, which keeps the layout correct
-// for the process that is already sitting in it.
-fn project_state_dir() -> PathBuf {
-    std::env::current_dir().map_or_else(
-        |_| PathBuf::from(STATE_DIR),
-        |cwd| cwd.join(Path::new(STATE_DIR)),
-    )
+// The tree rooted at the directory the command was run from: `assets/` and
+// `worlds/` in sight there, everything a build derives under `.concinnity/`
+// beside them. Resolved once so every subcommand addresses the same tree.
+//
+// Falls back to the working directory as a relative path when it cannot be
+// read, which keeps the layout correct for the process already sitting in it.
+fn project_tree() -> concinnity_engine::StateTree {
+    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let state = root.join(Path::new(STATE_DIR));
+    concinnity_engine::StateTree::at(root)
+        .with_writable(&state)
+        .with_build(state)
 }
 
 #[cfg(test)]
@@ -73,12 +77,37 @@ mod tests {
         drop(core::hint::black_box(held));
     }
 
-    // The project state root is anchored under the working directory, not left
+    // The project's roots are anchored under the working directory, not left
     // relative: every subcommand resolves the same tree however it chdirs.
     #[test]
-    fn the_state_dir_is_anchored_absolutely() {
-        let dir = super::project_state_dir();
-        assert!(dir.ends_with(super::STATE_DIR));
-        assert!(dir.is_absolute(), "{dir:?} should be anchored to the cwd");
+    fn the_project_roots_are_anchored_absolutely() {
+        let tree = super::project_tree();
+        assert!(
+            tree.content_root().is_absolute(),
+            "{:?} should be anchored to the cwd",
+            tree.content_root()
+        );
+        assert!(tree.build_root().ends_with(super::STATE_DIR));
+        assert!(tree.writable_root().ends_with(super::STATE_DIR));
+    }
+
+    // What the CLI's layout is: authored content in sight at the project root,
+    // every derived byte under the one hidden directory.
+    #[test]
+    fn authored_content_is_visible_and_derived_state_is_hidden() {
+        let tree = super::project_tree();
+        let root = tree.content_root();
+
+        assert_eq!(tree.assets_dir(), root.join("assets"));
+        assert_eq!(tree.worlds_dir(), root.join("worlds"));
+
+        let hidden = root.join(super::STATE_DIR);
+        assert_eq!(tree.data_dir(), hidden.join("data"));
+        assert_eq!(tree.world_lock_path(), hidden.join("world-lock.json"));
+        assert_eq!(tree.settings_path(), hidden.join("settings"));
+        assert_eq!(tree.crashes_dir(), hidden.join("crashes"));
+        assert_eq!(tree.editor_session_path(), hidden.join("editor"));
+        assert_eq!(tree.build_cache_path(), hidden.join("cache").join("1"));
+        assert_eq!(tree.runtime_cache_path(), hidden.join("cache").join("0"));
     }
 }

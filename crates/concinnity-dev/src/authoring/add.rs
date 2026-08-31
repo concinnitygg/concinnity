@@ -248,7 +248,7 @@ fn scaffold_to_inject(
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(
-                "no world found at '{}': create one with `cn fetch-world` or `cn new`",
+                "no world found at '{}': create one with `cn init` or `cn new`",
                 world_path
             ),
         ));

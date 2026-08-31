@@ -40,9 +40,8 @@ impl GlobalState {
     /// Take exclusive access and open a private tree. Nothing global has moved
     /// yet.
     ///
-    /// This is [`access::exclusive`] plus a tree, so it excludes every reader
-    /// and every other writer in the binary. A test that only needs to read a
-    /// global should take [`access::shared`] instead and stay parallel.
+    /// This is [`access::exclusive`] plus a tree, so it excludes every other
+    /// holder in the binary.
     pub fn acquire() -> Self {
         Self {
             _access: access::exclusive(),

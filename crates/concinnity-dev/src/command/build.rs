@@ -4,11 +4,11 @@ use concinnity_cook::build_from_path;
 // Compile a world to binary blobs and write world-lock.json.
 // Entry point for the `cn build` CLI subcommand.
 //
-// `world` is an optional world name resolved against .concinnity/worlds/; None
+// `world` is an optional world name resolved against worlds/; None
 // selects the most recently modified world there, falling back to world.jsonl.
 //
 // If `server` and `user` are both provided, any source files missing from
-// .concinnity/assets/ are fetched from the server before compiling.
+// assets/ are fetched from the server before compiling.
 /// Compile a world to binary blobs and write `world-lock.json`.
 ///
 /// `json_path` is used when it names an existing file; otherwise the world is

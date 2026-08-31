@@ -49,13 +49,15 @@ pub fn build_from_path(
         );
     }
 
+    let lock = tree.world_lock_path();
     if !loaded.injected.is_empty() {
         println!(
-            "Injected {} default asset(s) (see world-lock.json)",
-            loaded.injected.len()
+            "Injected {} default asset(s) (see {})",
+            loaded.injected.len(),
+            lock.display()
         );
     }
-    println!("Wrote world-lock.json");
+    println!("Wrote {}", lock.display());
 
     Ok(())
 }
@@ -101,6 +103,7 @@ pub fn write_build_outputs(
         .zip(result.defs.iter())
         .collect();
     crate::blob::write_lock(
+        tree,
         &named_refs,
         &result.resource_locks,
         injected,
@@ -608,7 +611,7 @@ mod tests {
     fn write_build_outputs_fails_when_the_lock_cannot_be_written() {
         let output = crate::blob::test_output::Output::new();
         // A directory where the lock file belongs makes the write fail.
-        std::fs::create_dir_all(crate::blob::LOCK_PATH).expect("occupy the lock path");
+        std::fs::create_dir_all(output.lock_path()).expect("occupy the lock path");
 
         let result = PipelineResult {
             defs: Vec::new(),
@@ -657,7 +660,7 @@ mod tests {
         build_from_path(output.tree(), world_path.to_str().unwrap(), Platform::Metal)
             .expect("build");
 
-        let raw = std::fs::read_to_string(crate::blob::LOCK_PATH).expect("lock written");
+        let raw = std::fs::read_to_string(output.lock_path()).expect("lock written");
         let lock: crate::blob::BlobLock = serde_json::from_str(&raw).expect("lock is valid json");
         assert_eq!(lock.blobs.len(), 1);
 

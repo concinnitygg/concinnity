@@ -3,10 +3,10 @@
 //! Cargo runs a binary's tests on parallel threads, so the working directory,
 //! the dev session's open project, the engine's development flags and the
 //! window policy are shared by every test running at that moment.
-//! `concinnity-testing` puts one reader/writer lock over all of it: readers
-//! stay parallel, writers run alone.
+//! `concinnity-testing` puts one lock over all of it, and a test that reaches
+//! any of it holds that lock and runs alone.
 //!
-//! Neither guard is reentrant. Taking two on one thread deadlocks the test, and
+//! The guard is not reentrant. Taking two on one thread deadlocks the test, and
 //! a deadlocked test does not fail -- it hangs, which on a coverage run or a
 //! constrained container reads as a suite that never finishes. That is the
 //! failure this scan exists to make impossible.
@@ -24,24 +24,20 @@ use concinnity_testing::source::{self, FnBody};
 // report itself.
 const SELF: &str = "global_state_discipline.rs";
 
-// Every spelling of "I hold the one exclusive guard". Taking any two of these
-// live at once on a thread is the deadlock.
+// Every spelling of "I hold the one guard over process-global state". Taking
+// any two of these live at once on a thread is the deadlock.
 //
 // The guards a caller may import and then call bare are matched unqualified, so
-// `write_access()` counts however it was reached. `lock` stays qualified: a
-// bare `lock()` is also how the cook and the host take their own mutexes, which
-// are not this one.
-const EXCLUSIVE: &[&str] = &[
+// `exclusive()` and `write_access()` count however they were reached. `lock`
+// stays qualified: a bare `lock()` is also how the cook and the host take their
+// own mutexes, which are not this one.
+const GUARDS: &[&str] = &[
     "test_support::lock()",
-    "lock_in_temp_cwd()",
     "GlobalState::acquire()",
-    "concinnity_testing::exclusive()",
+    "exclusive()",
     "write_access()",
     "Output::new()",
 ];
-
-// Shared access. Also not reentrant against the exclusive guard.
-const SHARED: &[&str] = &["concinnity_testing::shared()", "read_access()"];
 
 // Writes to process-global state. A test reaching one of these without an
 // exclusive guard races every other test in its binary.
@@ -114,7 +110,7 @@ fn helper_map(text: &str) -> HashMap<String, String> {
 }
 
 #[test]
-fn no_test_takes_the_exclusive_guard_twice() {
+fn no_test_takes_the_guard_twice() {
     let root = workspace_root();
     let mut offenders = Vec::new();
 
@@ -122,7 +118,7 @@ fn no_test_takes_the_exclusive_guard_twice() {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         for body in source::test_bodies(&text) {
-            let taken = guards_held_at_top_level(&body.text, EXCLUSIVE);
+            let taken = guards_held_at_top_level(&body.text, GUARDS);
             if taken > 1 {
                 let rel = path.strip_prefix(&root).unwrap_or(&path);
                 offenders.push(format!(
@@ -137,36 +133,10 @@ fn no_test_takes_the_exclusive_guard_twice() {
 
     assert!(
         offenders.is_empty(),
-        "these tests take the one exclusive guard more than once, which \
-         deadlocks the thread rather than failing it. Take exactly one \
-         (`lock_in_temp_cwd` covers the lock and the working directory \
-         together):\n  {}",
-        offenders.join("\n  ")
-    );
-}
-
-#[test]
-fn no_test_mixes_the_shared_and_exclusive_guards() {
-    let root = workspace_root();
-    let mut offenders = Vec::new();
-
-    for path in rust_sources() {
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        for body in source::test_bodies(&text) {
-            if guards_held_at_top_level(&body.text, EXCLUSIVE) > 0
-                && guards_held_at_top_level(&body.text, SHARED) > 0
-            {
-                let rel = path.strip_prefix(&root).unwrap_or(&path);
-                offenders.push(format!("{}:{} {}", rel.display(), body.line, body.name));
-            }
-        }
-    }
-
-    assert!(
-        offenders.is_empty(),
-        "these tests hold the exclusive guard and then ask for the shared one. \
-         The lock is not reentrant, so this deadlocks:\n  {}",
+        "these tests take the one guard over process-global state more than \
+         once, which deadlocks the thread rather than failing it. Take exactly \
+         one (`GlobalState::acquire().with_cwd()` covers the lock and the \
+         working directory together):\n  {}",
         offenders.join("\n  ")
     );
 }
@@ -211,7 +181,7 @@ fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
 
         for body in source::test_bodies(&text) {
             let reachable = reach(&body, &helpers);
-            if mentions(&reachable, GLOBAL_WRITES) && !mentions(&reachable, EXCLUSIVE) {
+            if mentions(&reachable, GLOBAL_WRITES) && !mentions(&reachable, GUARDS) {
                 let rel = path.strip_prefix(&root).unwrap_or(&path);
                 unguarded.entry(binary.clone()).or_default().push(format!(
                     "{}:{} {}",
@@ -249,14 +219,14 @@ fn the_scan_recognises_two_guards_held_at_once() {
     let bodies = source::test_bodies(offending);
     assert_eq!(bodies.len(), 1);
     assert_eq!(
-        guards_held_at_top_level(&bodies[0].text, EXCLUSIVE),
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
         2,
         "two live guards in one body"
     );
 
     let fixed = offending.replace("    let _guard = crate::test_support::lock();\n", "");
     assert_eq!(
-        guards_held_at_top_level(&source::test_bodies(&fixed)[0].text, EXCLUSIVE),
+        guards_held_at_top_level(&source::test_bodies(&fixed)[0].text, GUARDS),
         1
     );
 }
@@ -271,7 +241,7 @@ fn a_scoped_guard_is_not_counted_as_held() {
 
     assert_eq!(bodies.len(), 1);
     assert_eq!(
-        guards_held_at_top_level(&bodies[0].text, EXCLUSIVE),
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
         1,
         "only the top-level binding is held to the end"
     );
@@ -286,7 +256,7 @@ fn a_malformed_json_fixture_does_not_extend_the_body() {
 
     assert_eq!(bodies.len(), 2);
     assert_eq!(
-        guards_held_at_top_level(&bodies[0].text, EXCLUSIVE),
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
         0,
         "the first test holds nothing: {:?}",
         bodies[0].text
@@ -304,7 +274,7 @@ fn the_scan_sees_a_global_write_through_a_helper() {
         mentions(&reachable, GLOBAL_WRITES),
         "the helper's write is reachable from the test"
     );
-    assert!(!mentions(&reachable, EXCLUSIVE), "and it holds no guard");
+    assert!(!mentions(&reachable, GUARDS), "and it holds no guard");
 }
 
 // Most `write_access()` call sites import it and call it bare, so a needle
@@ -315,9 +285,23 @@ fn the_scan_sees_a_guard_called_without_its_module_path() {
     let bodies = source::test_bodies(bare);
 
     assert_eq!(
-        guards_held_at_top_level(&bodies[0].text, EXCLUSIVE),
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
         2,
         "a bare guard call counts the same as a qualified one"
+    );
+}
+
+// The same guard twice, both unqualified. A list carrying only the qualified
+// spelling counts these as none, and the repeat it would miss is the deadlock.
+#[test]
+fn the_scan_counts_a_guard_repeated_without_its_module_path() {
+    let repeated = "\n#[test]\nfn takes_it_twice() {\n    let first = exclusive();\n    let second = exclusive();\n}\n";
+    let bodies = source::test_bodies(repeated);
+
+    assert_eq!(
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
+        2,
+        "two unqualified calls of one guard are two live guards"
     );
 }
 

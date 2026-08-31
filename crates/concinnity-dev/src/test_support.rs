@@ -1,6 +1,6 @@
 // src/test_support.rs
 //
-// Tests that touch process-global state -- the working directory, the
+// Tests that touch process-global state -- the session's open project, the
 // debug/hot-reload statics, and the engine's development flags -- must not run
 // concurrently, because Cargo runs a binary's tests in parallel threads within
 // one process.
@@ -12,17 +12,6 @@
 pub(crate) fn lock() -> concinnity_testing::ExclusiveAccess {
     prepare();
     concinnity_testing::exclusive()
-}
-
-// Exclusive access with the working directory moved into a temp tree, for a
-// test that writes a cwd-relative path (the build's `world-lock.json`).
-//
-// A test takes this *instead of* `lock`, never as well: both are the one
-// exclusive guard, and taking it twice on a thread deadlocks.
-#[must_use]
-pub(crate) fn lock_in_temp_cwd() -> concinnity_testing::GlobalState {
-    prepare();
-    concinnity_testing::GlobalState::acquire().with_cwd()
 }
 
 // What every guard here sets up before taking the lock.

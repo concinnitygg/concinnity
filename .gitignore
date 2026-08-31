@@ -1,4 +1,6 @@
+/assets/
 /target*/
+/worlds/
 
 /world.jsonl
 world-lock.json

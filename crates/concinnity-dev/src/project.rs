@@ -74,6 +74,11 @@ pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.data_dir())
 }
 
+/// The world lock a build writes and a blob boot reads back.
+pub(crate) fn world_lock_path() -> Option<std::path::PathBuf> {
+    tree().map(|tree| tree.world_lock_path())
+}
+
 /// The `worlds/` a named world is looked up in.
 pub(crate) fn worlds_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.worlds_dir())
@@ -97,6 +102,7 @@ mod tests {
         assert_eq!(tree(), None);
         assert_eq!(assets_dir(), None);
         assert_eq!(data_dir(), None);
+        assert_eq!(world_lock_path(), None);
         assert_eq!(worlds_dir(), None);
         assert_eq!(
             require().unwrap_err().kind(),
@@ -111,6 +117,7 @@ mod tests {
         );
         assert_eq!(assets_dir(), Some(dir.path().join("assets")));
         assert_eq!(data_dir(), Some(dir.path().join("data")));
+        assert_eq!(world_lock_path(), Some(dir.path().join("world-lock.json")));
         assert_eq!(worlds_dir(), Some(dir.path().join("worlds")));
         assert!(require().is_ok());
 

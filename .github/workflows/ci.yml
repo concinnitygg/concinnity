@@ -59,12 +59,14 @@ jobs:
         run: cargo build --locked --all-features --all-targets --workspace
 
       - name: Run Doctests
+        timeout-minutes: 20
         run: cargo test --locked --all-features --doc --workspace
 
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate Coverage Report
+        timeout-minutes: 30
         run: >
           cargo llvm-cov --locked --all-features --workspace
           --lcov --output-path lcov.info

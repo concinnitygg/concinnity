@@ -21,16 +21,17 @@ use crate::resource::{
 };
 use concinnity_cook::authoring::registry::RegisteredType;
 
-// Reconstruct the source catalogues from the working directory's
-// world-lock.json plus the parsed authored entries, and install them as world
-// resources. Best effort: a missing or old-format lock installs nothing (the
-// pre-existing degraded behavior). Returns how many file-backed texture +
-// mesh sources were installed.
+// Reconstruct the source catalogues from the lock file at `path` plus the
+// parsed authored entries, and install them as world resources. Best effort: a
+// missing or old-format lock installs nothing (the pre-existing degraded
+// behavior). Returns how many file-backed texture + mesh sources were
+// installed.
 pub(crate) fn install_from_lock(
     world: &mut World,
     entries: &[serde_json::Value],
+    path: &std::path::Path,
 ) -> std::io::Result<usize> {
-    let content = std::fs::read_to_string(concinnity_cook::blob::LOCK_PATH)?;
+    let content = std::fs::read_to_string(path)?;
     let lock: BlobLock = serde_json::from_str(&content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     Ok(install(world, entries, &lock))
