@@ -41,12 +41,14 @@ const GUARDS: &[&str] = &[
 
 // Writes to process-global state. A test reaching one of these without an
 // exclusive guard races every other test in its binary.
-// Opening the dev session's project directly is a write. The dev harness's
-// `isolate_state_dir` is not listed beside it: it opens the same project on
-// every call, so two tests reaching it concurrently install the same value
-// rather than moving state out from under each other.
+//
+// Opening the dev session's project is a write however it is reached, so the
+// dev harness's `isolate_state_dir` is listed beside `project::open` even
+// though every call installs the same value: what it races is the test that
+// opened a project of its own, whose listing it moves out from under.
 const GLOBAL_WRITES: &[&str] = &[
     "project::open(",
+    "isolate_state_dir(",
     "set_current_dir(",
     "dev_flags::set_",
     "set_pending_animations(",

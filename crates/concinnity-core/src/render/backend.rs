@@ -563,6 +563,18 @@ pub trait RenderBackend: SceneControl + Send {
     fn logical_size(&self) -> (f32, f32) {
         (0.0, 0.0)
     }
+
+    /// Height of the window chrome overlapping the top of the render surface,
+    /// in the logical units `logical_size` reports. Non-zero only where the
+    /// content view runs under a transparent title bar (macOS), which leaves
+    /// the OS window buttons floating over the frame's top-left corner. UI that
+    /// must stay clear of them starts below this; the frame itself still covers
+    /// the whole window.
+    ///
+    /// Default `0.0`: a window whose content already begins below its chrome.
+    fn top_content_inset(&self) -> f32 {
+        0.0
+    }
     /// Per-frame draw-call / object counters. Default no-op so a backend that
     /// tracks none still satisfies the trait; all three shipping backends
     /// override it.
@@ -1418,6 +1430,8 @@ mod tests {
         assert_eq!(backend.gpu_profile().memory_budget_bytes, 0);
         // Diagnostics a backend may leave to the default: zeroed here.
         assert_eq!(backend.logical_size(), (0.0, 0.0));
+        // No chrome over the frame: UI anchored to the top starts at the top.
+        assert_eq!(backend.top_content_inset(), 0.0);
         assert_eq!(backend.render_stats(), RenderStats::default());
         // No window-bounds tracking: the in-engine cursor always draws.
         assert!(!backend.cursor_outside_window());

@@ -721,6 +721,12 @@ impl GlfwWindow {
         (w as f32, h as f32)
     }
 
+    // GLFW window coordinates start below whatever decoration the desktop
+    // draws, so nothing overlaps the top of the frame.
+    pub(crate) fn top_content_inset(&self) -> f32 {
+        0.0
+    }
+
     // Create the presentation surface for this window (GLFW picks the
     // platform's surface extension). `_entry` keeps the signature shared with
     // the Win32 window, which loads VK_KHR_win32_surface through it.

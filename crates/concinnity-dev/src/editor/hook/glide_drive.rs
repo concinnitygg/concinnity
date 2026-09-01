@@ -49,10 +49,8 @@ impl EditorHook {
             return;
         };
         let aspect = if vp[1] > 0.0 { vp[0] / vp[1] } else { 1.0 };
-        let current = CameraPose {
-            position: cam.position,
-            yaw: cam.yaw,
-            pitch: cam.pitch,
+        let Some(current) = camera_pose::read(world) else {
+            return;
         };
         let (center, radius) = framing::bounding_sphere(mn, mx);
         let to = framing::frame_pose(
@@ -92,13 +90,7 @@ impl EditorHook {
         }
         let t = glide.start.elapsed().as_secs_f32() / GLIDE_SECS;
         let pose = framing::lerp_pose(&glide.from, &glide.to, framing::ease(t));
-        if let Some(cam) = world.query_mut::<Camera3D>().next() {
-            cam.position = pose.position;
-            cam.yaw = pose.yaw;
-            cam.pitch = pose.pitch;
-            cam.view_matrix =
-                concinnity_core::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch);
-        }
+        camera_pose::write(world, &pose);
         if t >= 1.0 {
             self.end_glide();
         }

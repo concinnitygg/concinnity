@@ -77,6 +77,24 @@ fn world_at(path: &Path) -> Option<WorldFile> {
     })
 }
 
+// The world a session with none named should open on: the most recently
+// edited one, which is what the start screen preselects and previews.
+pub(crate) fn newest(worlds_dir: Option<&Path>, content_root: Option<&Path>) -> Option<WorldFile> {
+    list(worlds_dir, content_root).into_iter().next()
+}
+
+// Read a world file's authored entries, or the reason it could not be read
+// (shown on the panel's status line). A file that vanished under the listing
+// reads as empty rather than as a failure: the panel stays usable, and the next
+// SAVE writes it back.
+pub(crate) fn read_entries(path: &Path) -> Result<Vec<serde_json::Value>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => crate::world::parse_world_jsonl(&content).map_err(|e| format!("{e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("Open failed: {e}")),
+    }
+}
+
 // Check a typed world name, returning the name to create or the reason it was
 // rejected (shown on the panel's status line). `existing` is every listed
 // world's name; the comparison ignores case, since the filesystems the editor
@@ -191,6 +209,39 @@ mod tests {
         let tree = concinnity_testing::TempTree::new();
         assert!(list(Some(&tree.path().join("absent")), Some(tree.path())).is_empty());
         assert!(list(None, None).is_empty());
+    }
+
+    // What the start screen preselects: the most recently edited world, or
+    // nothing at all in a project with none.
+    #[test]
+    fn newest_is_the_world_a_session_opens_on() {
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.path().join("worlds");
+        assert!(newest(Some(&dir), Some(tree.path())).is_none());
+        std::fs::create_dir_all(&dir).unwrap();
+        touch(&dir.join("old.jsonl"), 1_000);
+        touch(&dir.join("recent.jsonl"), 4_000);
+        assert_eq!(newest(Some(&dir), None).unwrap().name, "recent");
+    }
+
+    // Reading gives back the authored entries, reports a file that will not
+    // parse, and treats an absent file as an empty world.
+    #[test]
+    fn read_entries_parses_reports_and_tolerates_an_absent_file() {
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.path().join("arena.jsonl");
+        std::fs::write(&path, "{\"name\":\"a\",\"type\":\"Prop\",\"args\":{}}").unwrap();
+        let entries = read_entries(&path).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "a");
+
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(read_entries(&path).is_err());
+
+        assert_eq!(
+            read_entries(&tree.path().join("gone.jsonl")),
+            Ok(Vec::new())
+        );
     }
 
     #[test]

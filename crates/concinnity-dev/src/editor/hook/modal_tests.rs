@@ -63,7 +63,7 @@ fn a_button_press_closes_the_dialog_and_a_press_elsewhere_does_not() {
     h.open_modal("Delete the world?", confirm_buttons());
     // A press on the dimmed screen and one on the dialog's own chrome are
     // both swallowed and change nothing: a click-away is not a cancel.
-    let p = modal::panel_rect(VP);
+    let p = modal::panel_rect(VP, false);
     assert!(h.route_modal_click(&click_at(5.0, 5.0), VP, &mut world));
     assert!(h.route_modal_click(&click_at(p[0] + 2.0, p[1] + 2.0), VP, &mut world));
     assert!(h.modal.is_some());

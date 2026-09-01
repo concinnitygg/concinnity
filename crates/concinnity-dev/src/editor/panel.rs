@@ -1952,6 +1952,7 @@ mod tests {
     // Joint, ...) fails here and must not be listed.
     #[test]
     fn add_types_cook_with_default_args() {
+        let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
         for ty in picker_types() {
             let ct = concinnity_cook::authoring::registry::RegisteredType::parse(ty)
@@ -1969,6 +1970,7 @@ mod tests {
     // the registry, not forgotten.
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
+        let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
         use concinnity_cook::authoring::registry::RegisteredType;
         // Types that cook blank but are deliberately NOT offered, each for a reason

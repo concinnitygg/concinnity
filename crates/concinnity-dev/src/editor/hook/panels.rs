@@ -1362,34 +1362,31 @@ impl Panel for WorldsPanel {
     fn is_open(&self, hook: &EditorHook) -> bool {
         hook.worlds_open
     }
-    // Opening re-reads the project's worlds and focuses a cleared name field.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+    // Opening re-reads the project's worlds.
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
         match hook.worlds_open {
             true => hook.worlds_open = false,
-            false => hook.open_worlds_panel(world),
+            false => hook.open_worlds_panel(),
         }
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.worlds_open = false;
-        hook.worlds_focus = false;
+        hook.worlds_menu = None;
     }
-    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
-        worlds::size()
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        hook.worlds_layout().size()
     }
+    // The start screen docks to the window's left edge; the registry hands the
+    // default anchor no hook, so the switcher's is what it asks for and the
+    // start screen re-derives its own (`EditorHook::origin`).
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        worlds::default_origin(vp)
+        worlds::Layout::new(worlds::Mode::Session, vp, 0.0).default_origin()
     }
     fn sprite_ids(&self) -> Vec<AssetId> {
         worlds::all_sprite_ids()
     }
     fn label_ids(&self) -> Vec<AssetId> {
         worlds::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        worlds::all_field_ids()
-            .into_iter()
-            .map(|id| (id, "new world name"))
-            .collect()
     }
     fn press(
         &self,
@@ -1408,21 +1405,11 @@ impl Panel for WorldsPanel {
             None => false,
         }
     }
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        worlds::cursor_over_list(mx, my, o)
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        hook.worlds_layout().cursor_over_list(mx, my, o)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_worlds(delta);
-    }
-    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
-        hook.worlds_keys(world, input);
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let view = hook.make_worlds_view(mouse);

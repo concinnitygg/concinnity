@@ -46,6 +46,21 @@ impl EditorHook {
                 layers.insert(id, layer + OVERLAY_LAYER);
             }
         }
+        // The start screen's shot fade takes the bottom of the reserved band:
+        // over the previewed world (its own screens included), under the
+        // sidebar listing, which has to stay readable across a transition. The
+        // loading cover stands one layer above it, over the same area.
+        if self.cinematic.is_some() {
+            layers.insert(worlds::cinematic::FADE, 0);
+        }
+        if self.loading_preview() {
+            for id in worlds::loading::all_sprite_ids()
+                .into_iter()
+                .chain(worlds::loading::all_label_ids())
+            {
+                layers.insert(id, 1);
+            }
+        }
         for id in hud::all_ids() {
             layers.insert(id, TOP_BAR_LAYER);
         }
@@ -76,6 +91,7 @@ impl EditorHook {
             for id in modal::all_sprite_ids()
                 .into_iter()
                 .chain(modal::all_label_ids())
+                .chain(modal::all_field_ids())
             {
                 layers.insert(id, TOP_BAR_LAYER + 3 * PANEL_LAYER_SPAN);
             }
@@ -95,13 +111,29 @@ impl EditorHook {
         self.selected_type.is_some()
     }
 
+    // Whether panel `key` shows and routes this frame. The start screen is the
+    // whole session while it is up, so every other panel is suppressed rather
+    // than torn down: its state stands, and it comes back the moment a world
+    // is open.
+    pub(super) fn panel_shown(&self, key: PanelKey) -> bool {
+        registry::panel(key).is_open(self) && (!self.start_mode || key == PanelKey::Worlds)
+    }
+
     // A panel's top-left for this frame: the dragged position (or its default
     // anchor), clamped at its current footprint so the whole panel stays on
-    // screen even after a window resize.
+    // screen even after a window resize. The start screen is the one anchor the
+    // registry cannot express -- it docks to the window's left edge, never
+    // drags, and has no top bar under it to clear -- so it is resolved here.
     pub(super) fn origin(&self, key: PanelKey, vp: [f32; 2]) -> [f32; 2] {
-        let p = registry::panel(key);
-        let pos = self.positions[key.index()].unwrap_or_else(|| p.default_origin(vp));
-        widget::clamp_origin(pos, self.effective_size(key), vp, hud::BAR_H)
+        let (anchor, top) = match (self.start_mode, key) {
+            (true, PanelKey::Worlds) => (self.worlds_layout().default_origin(), 0.0),
+            _ => (
+                self.positions[key.index()]
+                    .unwrap_or_else(|| registry::panel(key).default_origin(vp)),
+                hud::BAR_H,
+            ),
+        };
+        widget::clamp_origin(anchor, self.effective_size(key), vp, top)
     }
 
     // A panel's content-derived default size, which is also its minimum: the user
@@ -165,7 +197,7 @@ impl EditorHook {
         let (mx, my) = (mouse[0], mouse[1]);
         for &key in self.panel_order.iter().rev() {
             let p = registry::panel(key);
-            if !p.resizable() || !p.is_open(self) {
+            if !p.resizable() || !self.panel_shown(key) {
                 continue;
             }
             let o = self.origin(key, vp);

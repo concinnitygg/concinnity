@@ -188,6 +188,7 @@ fn every_panel_origin_stays_on_screen() {
 // state that panel defaults to (the Preview panel starts open, the rest closed).
 #[test]
 fn every_view_toggle_opens_and_closes_its_panel() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = injected_world();
     let mut h = hook();
@@ -209,6 +210,7 @@ fn every_view_toggle_opens_and_closes_its_panel() {
 // also takes the edit form with it, and closing Templates the detail panel.
 #[test]
 fn close_shuts_every_open_panel() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = injected_world();
     let mut h = hook();
@@ -225,6 +227,7 @@ fn close_shuts_every_open_panel() {
 // through so the panel behind it (or the 3D viewport) gets the event.
 #[test]
 fn a_press_clear_of_the_footprint_falls_through() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = injected_world();
     let mut h = hook();
@@ -250,6 +253,7 @@ fn a_press_clear_of_the_footprint_falls_through() {
 // underflow: the offsets are unsigned, so an unclamped step would panic here.
 #[test]
 fn scrolling_past_either_end_stays_in_bounds() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = injected_world();
     let mut h = hook();
@@ -272,6 +276,7 @@ fn scrolling_past_either_end_stays_in_bounds() {
 // per-frame draw and the F1 hidden pass agree on the same element set.
 #[test]
 fn draw_shows_chrome_that_hide_takes_back() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = injected_world();
     let mut h = hook();

@@ -2,7 +2,9 @@
 //
 // Tests for the Worlds panel's actions: the listing the hook builds, what
 // opening a world retargets, the naming rules a New has to pass, and the two
-// confirmations (delete, and switching away from unsaved edits).
+// confirmations (delete, and switching away from unsaved edits). The start
+// screen's own behaviour is next door in `worlds_start_tests.rs`, which shares
+// these fixtures.
 
 use super::*;
 use crate::components::TextInput;
@@ -11,7 +13,7 @@ const VP: [f32; 2] = [1280.0, 720.0];
 
 // A project rooted at `dir`, sharing the machine-wide build cache. The caller
 // holds the process lock: this moves the session-wide project.
-fn open_project(dir: &std::path::Path) {
+pub(super) fn open_project(dir: &std::path::Path) {
     crate::project::open(
         concinnity_host::store::paths::StateTree::at(dir).with_cache(
             concinnity_testing::shared_cache_dir("concinnity-dev-tests-cache"),
@@ -19,13 +21,13 @@ fn open_project(dir: &std::path::Path) {
     );
 }
 
-fn entry(name: &str) -> serde_json::Value {
+pub(super) fn entry(name: &str) -> serde_json::Value {
     serde_json::json!({"name": name, "type": "Prop", "args": {}})
 }
 
 // Write a world file with `entries` and pin its mtime, so a listing's order is
 // the one under test rather than whatever the filesystem's resolution gives.
-fn write_world(
+pub(super) fn write_world(
     dir: &std::path::Path,
     name: &str,
     entries: &[serde_json::Value],
@@ -40,15 +42,16 @@ fn write_world(
     path
 }
 
-fn hook_at(path: &std::path::Path, entries: Vec<serde_json::Value>) -> EditorHook {
+pub(super) fn hook_at(path: &std::path::Path, entries: Vec<serde_json::Value>) -> EditorHook {
     let mut h = EditorHook::new(path.to_string_lossy().into_owned(), entries);
     h.refresh_worlds();
     h
 }
 
-fn world_with_name_field() -> World {
+// The naming prompt's field, which is the only place a world is named now.
+pub(super) fn world_with_name_field() -> World {
     let mut world = World::new();
-    for id in worlds::all_field_ids() {
+    for id in modal::all_field_ids() {
         world.add_component(TextInput {
             asset_id: id,
             ..Default::default()
@@ -57,26 +60,22 @@ fn world_with_name_field() -> World {
     world
 }
 
-fn set_name(world: &mut World, text: &str) {
-    for t in world.query_mut::<TextInput>() {
-        if t.asset_id == worlds::NAME_INPUT {
-            t.content = text.to_string();
-        }
-    }
+pub(super) fn set_name(world: &mut World, text: &str) {
+    widget::seed_field(world, modal::NAME_INPUT, text);
 }
 
-fn row_index(h: &EditorHook, name: &str) -> usize {
+pub(super) fn row_index(h: &EditorHook, name: &str) -> usize {
     h.worlds_rows
         .iter()
         .position(|r| r.name == name)
         .unwrap_or_else(|| panic!("{name} is not listed"))
 }
 
-fn names(h: &EditorHook) -> Vec<String> {
+pub(super) fn names(h: &EditorHook) -> Vec<String> {
     h.worlds_rows.iter().map(|r| r.name.clone()).collect()
 }
 
-fn button_index(h: &EditorHook, label: &str) -> usize {
+pub(super) fn button_index(h: &EditorHook, label: &str) -> usize {
     let buttons = &h.modal.as_ref().expect("a dialog is open").buttons;
     buttons
         .iter()
@@ -85,10 +84,11 @@ fn button_index(h: &EditorHook, label: &str) -> usize {
 }
 
 // Press one of the open dialog's buttons.
-fn press_modal(h: &mut EditorHook, world: &mut World, label: &str) {
+pub(super) fn press_modal(h: &mut EditorHook, world: &mut World, label: &str) {
     let i = button_index(h, label);
-    let count = h.modal.as_ref().unwrap().buttons.len();
-    let r = modal::button_rect(modal::panel_rect(VP), count, i);
+    let state = h.modal.as_ref().unwrap();
+    let (count, field) = (state.buttons.len(), state.field);
+    let r = modal::button_rect(modal::panel_rect(VP, field), count, i);
     let input = FrameInput {
         left_click: true,
         mouse_x: r[0] + 2.0,
@@ -199,10 +199,11 @@ fn opening_an_unparseable_world_keeps_the_open_one() {
     crate::test_support::isolate_state_dir();
 }
 
-// New names the file first: it exists, and lists, before anything is authored
-// into it.
+// `+` opens the editor on an empty world straight away, with nothing on disk
+// and nothing named. The first SAVE asks what to call it, and only then does a
+// file appear and list.
 #[test]
-fn new_creates_the_world_file_and_opens_it() {
+fn plus_opens_an_untitled_world_that_the_first_save_names() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
@@ -212,28 +213,33 @@ fn new_creates_the_world_file_and_opens_it() {
     let mut h = hook_at(&arena, vec![entry("crate_a")]);
     h.worlds_open = true;
     let mut world = world_with_name_field();
-    set_name(&mut world, " lobby ");
     h.apply_worlds_action(WorldsAction::New, &mut world);
 
-    let created = worlds_dir.join("lobby.jsonl");
-    assert_eq!(std::fs::read_to_string(&created).unwrap(), "");
-    assert_eq!(h.world_path, created.to_string_lossy());
+    assert!(h.untitled, "the session is on a world with no home yet");
     assert!(h.entries.is_empty() && !h.dirty);
+    assert!(!h.worlds_open, "the panel steps aside for the empty world");
+    assert!(h.modal.is_none(), "nothing is asked until a save");
+    assert_eq!(names(&h), ["arena"], "and nothing is on disk");
+
+    // SAVE asks for the name rather than writing.
+    h.save();
+    assert!(h.naming_world(), "the prompt is up with its field");
+
+    set_name(&mut world, " lobby ");
+    press_modal(&mut h, &mut world, "Save");
+    let created = worlds_dir.join("lobby.jsonl");
+    assert!(created.exists());
+    assert_eq!(h.world_path, created.to_string_lossy());
+    assert!(!h.untitled && !h.dirty);
     assert!(names(&h).contains(&"lobby".to_string()));
-    assert!(!h.worlds_open);
-    assert_eq!(
-        widget::field_text(&world, worlds::NAME_INPUT),
-        "",
-        "the name field is cleared for the next one"
-    );
 
     crate::test_support::isolate_state_dir();
 }
 
-// A name that cannot become a world says so instead of failing silently, and
-// nothing is created or retargeted.
+// A name that cannot become a world brings the prompt back saying why, with the
+// session still untitled and nothing written.
 #[test]
-fn new_rejects_unusable_names_with_a_visible_reason() {
+fn the_name_prompt_reopens_on_a_name_it_cannot_use() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
@@ -242,16 +248,24 @@ fn new_rejects_unusable_names_with_a_visible_reason() {
 
     let mut h = hook_at(&arena, Vec::new());
     let mut world = world_with_name_field();
+    h.apply_worlds_action(WorldsAction::New, &mut world);
+
     for (typed, expect) in [("   ", "name"), ("arena", "exists"), ("a/b", "/")] {
+        h.save();
         set_name(&mut world, typed);
-        h.apply_worlds_action(WorldsAction::New, &mut world);
-        let status = h.worlds_status.as_deref().unwrap_or_default();
+        press_modal(&mut h, &mut world, "Save");
+        let message = h
+            .modal
+            .as_ref()
+            .map(|m| m.message.clone())
+            .unwrap_or_default();
         assert!(
-            status.contains(expect),
-            "'{typed}' was rejected as: {status}"
+            h.naming_world() && message.contains(expect),
+            "'{typed}' was rejected as: {message}"
         );
-        assert_eq!(h.world_path, arena.to_string_lossy());
+        assert!(h.untitled, "'{typed}' left the session untitled");
         assert_eq!(names(&h), ["arena"], "nothing was created");
+        h.modal = None;
     }
 
     crate::test_support::isolate_state_dir();
@@ -428,9 +442,46 @@ fn a_dirty_switch_can_discard_the_edits() {
     crate::test_support::isolate_state_dir();
 }
 
-// Creating a world while the open one is dirty takes the same guard.
+// The triple-dot opens a row's menu, held by path so a refreshed listing cannot
+// slide it onto another world; every other press closes it again.
 #[test]
-fn a_dirty_new_asks_before_creating() {
+fn the_row_menu_opens_on_the_dot_and_closes_on_anything_else() {
+    let _guard = crate::test_support::lock();
+    let dir = concinnity_testing::TempTree::new();
+    open_project(dir.path());
+    let worlds_dir = dir.path().join("worlds");
+    let arena = write_world(&worlds_dir, "arena", &[], 1_000);
+    write_world(&worlds_dir, "lobby", &[], 3_000);
+
+    let mut h = hook_at(&arena, Vec::new());
+    h.worlds_open = true;
+    let mut world = world_with_name_field();
+    let i = row_index(&h, "arena");
+    h.apply_worlds_action(WorldsAction::OpenMenu(i), &mut world);
+    assert_eq!(
+        h.worlds_menu.as_deref(),
+        Some(arena.to_string_lossy().as_ref())
+    );
+    assert_eq!(h.make_worlds_view([0.0, 0.0]).menu, Some(i));
+
+    h.apply_worlds_action(WorldsAction::CloseMenu, &mut world);
+    assert!(h.worlds_menu.is_none());
+
+    // Picking Delete from it closes the menu and raises the confirmation.
+    h.apply_worlds_action(WorldsAction::OpenMenu(i), &mut world);
+    h.apply_worlds_action(WorldsAction::Delete(i), &mut world);
+    assert!(
+        h.worlds_menu.is_none(),
+        "the menu is done once it has picked"
+    );
+    assert!(h.modal.is_some(), "and the delete still asks first");
+
+    crate::test_support::isolate_state_dir();
+}
+
+// `+` while the open world is dirty takes the same guard as any other switch.
+#[test]
+fn a_dirty_plus_asks_before_leaving_the_world() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
@@ -442,20 +493,12 @@ fn a_dirty_new_asks_before_creating() {
     h.mark_changed();
 
     let mut world = world_with_name_field();
-    set_name(&mut world, "lobby");
     h.apply_worlds_action(WorldsAction::New, &mut world);
     assert_eq!(h.modal.as_ref().unwrap().buttons.len(), 3);
-    assert!(
-        !worlds_dir.join("lobby.jsonl").exists(),
-        "nothing is created until the guard clears"
-    );
+    assert!(!h.untitled, "the world is not left until the guard clears");
 
     press_modal(&mut h, &mut world, "Discard");
-    assert!(worlds_dir.join("lobby.jsonl").exists());
-    assert_eq!(
-        h.world_path,
-        worlds_dir.join("lobby.jsonl").to_string_lossy()
-    );
+    assert!(h.untitled && h.entries.is_empty());
 
     crate::test_support::isolate_state_dir();
 }
@@ -486,8 +529,7 @@ fn panel_presses_are_rect_guarded() {
             "({x}, {y}) is off the panel"
         );
     }
-    // Body chrome below the rows is claimed and blurs the name field.
-    h.worlds_focus = true;
+    // Body chrome below the rows is claimed rather than falling through.
     assert!(h.try_panel_press(
         PanelKey::Worlds,
         o[0] + 40.0,
@@ -495,11 +537,10 @@ fn panel_presses_are_rect_guarded() {
         VP,
         &mut world
     ));
-    assert!(!h.worlds_focus);
 
     // A hidden panel claims nothing.
     h.worlds_open = false;
-    let r = worlds::row_rect(o, 0);
+    let r = worlds::Layout::new(worlds::Mode::Session, VP, 0.0).row_rect(o, 0);
     assert!(!h.try_panel_press(PanelKey::Worlds, r[0] + 4.0, r[1] + 4.0, VP, &mut world));
 }
 
@@ -508,9 +549,9 @@ fn panel_presses_are_rect_guarded() {
 #[test]
 fn the_name_field_is_carried_across_a_preview_swap() {
     let mut world = world_with_name_field();
-    widget::seed_field(&mut world, worlds::NAME_INPUT, "half-typed");
+    widget::seed_field(&mut world, modal::NAME_INPUT, "half-typed");
     let snapshot = EditorHook::field_snapshot(&world);
     let mut fresh = world_with_name_field();
     EditorHook::restore_fields(&mut fresh, &snapshot);
-    assert_eq!(widget::field_text(&fresh, worlds::NAME_INPUT), "half-typed");
+    assert_eq!(widget::field_text(&fresh, modal::NAME_INPUT), "half-typed");
 }

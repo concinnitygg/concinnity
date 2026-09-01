@@ -176,6 +176,12 @@ impl EditorHook {
     // refreshed it), so nothing is rebuilt or swapped here. On a write failure
     // the world stays dirty and the next SAVE retries.
     pub(super) fn save(&mut self) {
+        // A world nobody has named has nowhere to go yet: ask first, and let
+        // the dialog's Save come back through here once it has a path.
+        if self.untitled {
+            self.prompt_world_name(None);
+            return;
+        }
         let content = match crate::world::write_world_jsonl(&self.entries) {
             Ok(c) => c,
             Err(e) => {
@@ -224,7 +230,7 @@ impl EditorHook {
             .into_iter()
             .chain(form_panel::all_field_ids())
             .chain(behavior_panel::all_field_ids())
-            .chain(worlds::all_field_ids())
+            .chain(modal::all_field_ids())
             .map(|id| (id, widget::field_text(world, id)))
             .collect()
     }

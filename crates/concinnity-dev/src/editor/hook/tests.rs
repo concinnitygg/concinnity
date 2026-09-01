@@ -260,6 +260,7 @@ fn field_snapshot_carries_typed_text_across_a_reinjection() {
 // now that SAVE only persists.
 #[test]
 fn build_preview_world_renders_from_in_memory_entries() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     // Authored renderable entries (a Room + camera) build a rendering world.
     let h = hook(vec![
@@ -286,6 +287,7 @@ fn build_preview_world_renders_from_in_memory_entries() {
 // live path, so it is proved against a real world rather than a stubbed one.
 #[test]
 fn a_live_edit_reaches_a_really_cooked_world() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut h = hook(vec![
         serde_json::json!({"name":"cam","type":"Camera3D","args":{}}),
@@ -2781,6 +2783,7 @@ fn a_promotable_asset(h: &EditorHook) -> (usize, usize, String) {
 // must not pay for an expansion it never draws.
 #[test]
 fn the_tree_is_cooked_only_while_the_panel_is_up() {
+    let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
     h.panel_open = false;
     assert!(h.tree_stale);
@@ -2804,6 +2807,7 @@ fn the_tree_is_cooked_only_while_the_panel_is_up() {
 // edits rather than once per edit.
 #[test]
 fn an_edit_restales_the_tree() {
+    let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
     h.refresh_tree_if_needed();
     assert!(!h.tree_stale);
@@ -2816,6 +2820,7 @@ fn an_edit_restales_the_tree() {
 
 #[test]
 fn groups_fold_and_unfold() {
+    let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
     let world = world_with_fields();
     h.refresh_tree_if_needed();
@@ -2866,6 +2871,7 @@ fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
 // name, which is what makes it patch the expansion.
 #[test]
 fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
+    let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
     let mut world = world_with_fields();
     h.refresh_tree_if_needed();
@@ -2921,6 +2927,7 @@ fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
 // twice. Clicking it again edits the patch line in place, template-aware.
 #[test]
 fn a_patched_asset_relists_under_its_origin_as_overridden() {
+    let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
     let mut world = world_with_fields();
     h.refresh_tree_if_needed();
@@ -2980,6 +2987,7 @@ fn prefab_hook() -> EditorHook {
 // override menu offers Revert plus Apply with the blast radius spelled out.
 #[test]
 fn an_overridden_field_marks_and_offers_revert_and_apply() {
+    let _guard = crate::test_support::lock();
     let mut h = prefab_hook();
     let mut world = world_with_fields();
     h.open_asset_form("i1_a", &mut world);
@@ -3011,6 +3019,7 @@ fn an_overridden_field_marks_and_offers_revert_and_apply() {
 // else), restoring the pristine instance -- and it is exactly one undo step.
 #[test]
 fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
+    let _guard = crate::test_support::lock();
     let mut h = prefab_hook();
     let mut world = world_with_fields();
     let before = h.entries.len();
@@ -3046,6 +3055,7 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
 // step.
 #[test]
 fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
+    let _guard = crate::test_support::lock();
     let mut h = prefab_hook();
     let mut world = world_with_fields();
     let before = h.entries.len();
@@ -3094,6 +3104,7 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
 // Revert-all deletes the patch line.
 #[test]
 fn the_entity_menu_reverts_all_overrides() {
+    let _guard = crate::test_support::lock();
     let mut h = prefab_hook();
     let mut world = world_with_fields();
     let before = h.entries.len();
@@ -3163,6 +3174,7 @@ fn an_unconditional_expansion_selects_but_does_not_edit() {
 // A world that does not cook reports why instead of showing an empty tree.
 #[test]
 fn a_broken_world_reports_its_error_in_the_status_line() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut h = hook(vec![serde_json::json!({
         "name": "oops", "type": "NotARealAssetType", "args": {}
@@ -3550,6 +3562,7 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
 // knows how (if at all) it can be promoted: an unknown name is selectable only.
 #[test]
 fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     crate::ecs::asset_id::reset_interner();
     let generated = crate::ecs::asset_id::intern("some_generated_asset");
@@ -5251,6 +5264,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
 // frame asserts focus.
 #[test]
 fn tick_opens_the_console_blurred_then_focuses() {
+    let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = world_with_input(FrameInput {
         captured_key: Some(crate::components::InputKey::Backtick),

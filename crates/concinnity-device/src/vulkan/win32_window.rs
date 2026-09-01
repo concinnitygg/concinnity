@@ -156,6 +156,12 @@ impl Win32Window {
         (self.win_state.width as f32, self.win_state.height as f32)
     }
 
+    // Windows draws its caption above the client area, so nothing overlaps the
+    // top of the frame.
+    pub(crate) fn top_content_inset(&self) -> f32 {
+        0.0
+    }
+
     // Create the presentation surface for this window via
     // VK_KHR_win32_surface.
     pub(crate) fn create_surface(

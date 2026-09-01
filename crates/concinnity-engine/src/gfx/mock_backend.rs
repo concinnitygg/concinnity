@@ -167,6 +167,9 @@ pub(crate) struct MockState {
     pub(crate) next_input: RenderInput,
     // Reported logical viewport size.
     pub(crate) logical_size: (f32, f32),
+    // Reported top content inset: the window chrome a real macOS window leaves
+    // over the top of the frame. Set before a step to stand in for it.
+    pub(crate) top_inset: f32,
     // Capabilities reported to init, which uses them to gray out the settings
     // rows the device cannot honour. Set before `init_graphics` to stand in for
     // a device missing a feature.
@@ -185,6 +188,7 @@ impl Default for MockState {
             fail_reload: None,
             next_input: RenderInput::default(),
             logical_size: (1280.0, 720.0),
+            top_inset: 0.0,
             caps: DeviceCapabilities::ALL,
         }
     }
@@ -514,6 +518,10 @@ impl RenderBackend for MockBackend {
 
     fn logical_size(&self) -> (f32, f32) {
         self.state.lock().unwrap().logical_size
+    }
+
+    fn top_content_inset(&self) -> f32 {
+        self.state.lock().unwrap().top_inset
     }
 
     fn capabilities(&self) -> DeviceCapabilities {

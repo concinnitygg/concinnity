@@ -79,6 +79,27 @@ pub(crate) fn editor_hud(world: &mut World) {
     // overlay fallback draw order is insertion order, so they stay under
     // every panel and the top bar even before the per-frame HudLayers publish
     // (the rings draw over the billboards, the gizmo over the rings).
+    // The placeholder rect every element is injected at, until the first
+    // frame's tick lays it out.
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    // The start screen's shot fade goes in first of all: it covers the
+    // previewed world and nothing else, so every editor element that follows
+    // draws over it (the per-frame layer map pins the same order while a
+    // preview's attract camera is running).
+    world.add_component(button_sprite(
+        super::worlds::cinematic::FADE,
+        hidden,
+        [0.0, 0.0, 0.0, 0.0],
+        false,
+    ));
+    // The loading cover goes in with it: it stands over the same area while the
+    // world behind is compiled, above the fade and below everything else.
+    for id in super::worlds::loading::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.0, 0.0, 0.0, 0.0], false));
+    }
+    for id in super::worlds::loading::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
     for s in super::billboards::sprites() {
         world.add_component(s);
     }
@@ -104,7 +125,6 @@ pub(crate) fn editor_hud(world: &mut World) {
         font,
         false,
     ));
-    let hidden = [0.0, 0.0, 0.0, 0.0];
     for key in PanelKey::ALL {
         let p = registry::panel(key);
         for id in p.sprite_ids() {
@@ -149,6 +169,9 @@ pub(crate) fn editor_hud(world: &mut World) {
     }
     for id in super::modal::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
+    }
+    for id in super::modal::all_field_ids() {
+        world.add_component(text_field(id, "world name", font));
     }
 }
 

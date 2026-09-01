@@ -176,6 +176,13 @@ impl AppKitVkWindow {
         self.win.logical_size()
     }
 
+    // The window chrome overlapping the top of the frame, from the same shared
+    // AppKit layer: a title-bar-less macOS window floats its buttons over the
+    // render whichever backend fills it.
+    pub(crate) fn top_content_inset(&self) -> f32 {
+        self.win.top_content_inset()
+    }
+
     // Create the presentation surface from the hosted CAMetalLayer.
     // `_entry` keeps the signature shared with the GLFW / Win32 windows.
     pub(crate) fn create_surface(

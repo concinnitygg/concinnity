@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "clap",
  "concinnity-cook",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "async-stream",
  "bitflags 2.11.1",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "ash",
  "block2",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "concinnity-core",
  "rayon",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "concinnity-testing",
 ]
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.19.6"
+version = "0.19.7"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",

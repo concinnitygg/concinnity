@@ -29,15 +29,21 @@ const CLOSE_INSET: f32 = 4.0;
 // Draw a panel's rounded background surface (the unified chrome tint) framed by
 // the shared hairline border.
 pub(crate) fn place_panel(world: &mut World, id: AssetId, rect: [f32; 4]) {
+    place_panel_tinted(world, id, rect, theme::CHROME_TINT);
+}
+
+// `place_panel` on a surface of its own: the start screen's sidebar stands over
+// the world it previews, so it is drawn as a wash rather than as chrome.
+pub(crate) fn place_panel_tinted(world: &mut World, id: AssetId, rect: [f32; 4], tint: [f32; 4]) {
     if let Some(s) = sprite_mut(world, id) {
         s.x = rect[0];
         s.y = rect[1];
         s.width = rect[2];
         s.height = rect[3];
-        s.tint = theme::CHROME_TINT;
+        s.tint = tint;
         s.corner_radius = theme::PANEL_RADIUS;
         s.border_width = theme::PANEL_BORDER_WIDTH;
-        s.border_color = theme::PANEL_BORDER_TINT;
+        s.border_color = theme::panel_border(tint[3]);
         s.visible = true;
     }
 }
@@ -497,7 +503,7 @@ mod tests {
         assert_eq!(bg.tint, theme::CHROME_TINT);
         assert_eq!(bg.corner_radius, theme::PANEL_RADIUS);
         assert_eq!(bg.border_width, theme::PANEL_BORDER_WIDTH);
-        assert_eq!(bg.border_color, theme::PANEL_BORDER_TINT);
+        assert_eq!(bg.border_color, theme::panel_border(theme::CHROME_TINT[3]));
     }
 
     #[test]

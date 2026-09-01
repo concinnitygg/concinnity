@@ -115,6 +115,9 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // 0xA000 and 0xB000 belong to the toast stack and the confirmation
             // dialog (allocated in their own modules).
             PanelKey::Worlds => 0xC000,
+            // 0xD000 and 0xE000 belong to the start screen's shot fade and its
+            // loading cover (allocated in `worlds/cinematic.rs` and
+            // `worlds/loading.rs`).
         }
 }
 
@@ -308,6 +311,16 @@ mod tests {
         }
         for id in super::super::modal::all_label_ids() {
             claim(id, "confirm dialog labels".to_string());
+        }
+        claim(
+            super::super::worlds::cinematic::FADE,
+            "start screen shot fade".to_string(),
+        );
+        for id in super::super::worlds::loading::all_sprite_ids() {
+            claim(id, "loading cover".to_string());
+        }
+        for id in super::super::worlds::loading::all_label_ids() {
+            claim(id, "loading caption".to_string());
         }
         for key in PanelKey::ALL {
             let p = panel(key);

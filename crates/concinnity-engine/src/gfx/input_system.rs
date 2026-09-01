@@ -51,7 +51,7 @@ impl InputSystem {
 
 // Merge the window's keyboard/mouse snapshot with the gamepad snapshot under
 // the gameplay gate. Pure, so the merge and gating are unit-tested without a
-// backend; the caller fills in the viewport.
+// backend; the caller fills in the window metrics.
 fn compose_frame_input(
     raw: &RenderInput,
     pad: &PadSnapshot,
@@ -83,6 +83,7 @@ fn compose_frame_input(
         // false at the backend while the cursor is captured.
         right_click: raw.right_click,
         viewport: [0.0, 0.0],
+        top_inset: 0.0,
         hud_toggle: raw.hud_toggle,
         // Start mirrors Escape (pause / back), so like `raw.escape` it stays
         // live while a menu is open.
@@ -165,6 +166,9 @@ impl System for InputSystem {
         // Live viewport for UiInputSystem's overlay hit-testing, so a scaled
         // menu's HitRegions map back to the cursor consistently.
         let (vp_w, vp_h) = packet.viewport;
+        // Window chrome overlapping the top of the frame (macOS's transparent
+        // title bar), for UI that must stay clear of the OS window buttons.
+        let top_inset = packet.top_inset;
 
         // The cursor position + window-bounds state for next frame's draw
         // list (`follow_cursor` sprites are positioned a frame after the input
@@ -226,6 +230,7 @@ impl System for InputSystem {
 
         let frame_input = FrameInput {
             viewport: [vp_w, vp_h],
+            top_inset,
             ..compose_frame_input(&raw, &pad, self.map, nav, gameplay)
         };
         // Publish the same snapshot two ways: the resource readers can
@@ -262,6 +267,25 @@ mod tests {
             button,
             pressed: true,
         }
+    }
+
+    // The window-metrics seam: a sampled packet carries whatever chrome the
+    // backend reports over the top of its frame, and a backend reporting none
+    // leaves it at zero (which is every platform but macOS).
+    #[test]
+    fn a_sampled_packet_carries_the_backends_top_content_inset() {
+        use std::sync::{Arc, Mutex};
+        let state = Arc::new(Mutex::new(crate::gfx::mock_backend::MockState::default()));
+        let mut backend = crate::gfx::mock_backend::MockBackend::transplant(state.clone(), None);
+        assert_eq!(
+            crate::gfx::input::InputPacket::sample(&mut backend).top_inset,
+            0.0
+        );
+        state.lock().unwrap().top_inset = 28.0;
+        assert_eq!(
+            crate::gfx::input::InputPacket::sample(&mut backend).top_inset,
+            28.0
+        );
     }
 
     #[test]

@@ -102,6 +102,14 @@ pub struct FrameInput {
     /// window, so menus scale with the window and the cursor still hit-tests
     /// against the scaled controls. `[0.0, 0.0]` before the backend is ready.
     pub viewport: [f32; 2],
+    /// Height of the window chrome overlapping the top of the render surface,
+    /// in the same logical units as [viewport](#structfield.viewport). Non-zero
+    /// only where the window's content runs under a transparent title bar
+    /// (macOS), leaving the OS window buttons floating over the frame's
+    /// top-left corner: UI anchored to the top of the window starts below this
+    /// so it cannot land under them. `0.0` on a window whose content already
+    /// begins below its chrome.
+    pub top_inset: f32,
     /// True for exactly one frame when the HUD-toggle key (F1) is pressed.
     pub hud_toggle: bool,
     /// True for exactly one frame when Escape is pressed while the cursor is

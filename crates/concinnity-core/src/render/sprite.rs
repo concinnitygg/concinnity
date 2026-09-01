@@ -161,19 +161,35 @@ pub fn build_sprite_calls_into(
             if a <= 0.0 {
                 // A transparent fill cannot cover an outer quad (blending
                 // leaves the border colour showing through), so an outline
-                // is four edge strips with nothing inside.
-                ring_geometry(
+                // is a hollow stroke with nothing inside.
+                stroke_geometry(
                     &mut vertices,
                     &mut indices,
                     [x0, y0, x1, y1],
+                    radius,
+                    border,
+                    ba,
+                    border_v,
+                );
+            } else if a < 1.0 {
+                // A translucent fill cannot hide an outer rect drawn under it,
+                // which would read as a panel in the border colour rather than
+                // as the world showing through. The fill takes the whole rect
+                // and the stroke is a hollow ring laid over its edge.
+                rect_geometry(&mut vertices, &mut indices, [x0, y0, x1, y1], radius, a, v);
+                stroke_geometry(
+                    &mut vertices,
+                    &mut indices,
+                    [x0, y0, x1, y1],
+                    radius,
                     border,
                     ba,
                     border_v,
                 );
             } else {
-                // Border stroke: an outer rounded rect in the border colour,
-                // with the tinted fill inset by the stroke width drawn on top
-                // so a ring of the border colour is left showing around it.
+                // Border stroke under an opaque fill: an outer rounded rect in
+                // the border colour, with the fill inset by the stroke width
+                // drawn on top so a ring of the border colour is left showing.
                 rect_geometry(
                     &mut vertices,
                     &mut indices,
@@ -233,6 +249,24 @@ fn rect_geometry(
     }
 }
 
+// Append a border stroke `width` wide inside `rect`, hollow so whatever is
+// under it shows through: a ring following the fill's rounded silhouette, or
+// four straight strips for a square-cornered sprite.
+fn stroke_geometry(
+    vertices: &mut Vec<TextVertex>,
+    indices: &mut Vec<u16>,
+    rect: [f32; 4],
+    radius: f32,
+    width: f32,
+    alpha: f32,
+    v: impl FnMut(f32, f32, f32) -> TextVertex,
+) {
+    match radius > 0.5 {
+        true => rounded_ring_geometry(vertices, indices, rect, radius, width, alpha, v),
+        false => ring_geometry(vertices, indices, rect, width, alpha, v),
+    }
+}
+
 // Append a hollow rectangle as four edge strips `width` wide inside `rect`
 // (`[x0, y0, x1, y1]`): the top and bottom span the full width, the sides
 // fill the gap between them.
@@ -264,18 +298,16 @@ const CORNER_SEGMENTS: usize = 6;
 // silhouette never grows past the authored rect.
 const EDGE_FEATHER: f32 = 1.25;
 
-// Tessellate a rounded rectangle in window space: a solid convex polygon
-// inset one feather width inside the authored boundary, fanned from its first
-// point, plus a fading ring out to the boundary for anti-aliasing. Vertex
-// alpha carries the fade (both sprite modes read per-vertex alpha).
-fn rounded_rect_geometry(
-    vertices: &mut Vec<TextVertex>,
-    indices: &mut Vec<u16>,
+// The corner-arc samples a rounded rectangle's silhouette is drawn from: each
+// entry is a corner centre and a unit offset, so one boundary describes every
+// outline concentric with the authored rect (the feathered edge, the inset the
+// stroke leaves). Insetting the rect and dropping the radius by the same
+// amount leaves the centres where they are, which is what lets a stroke sample
+// this at two radii.
+fn rounded_boundary(
     rect: [f32; 4],
     radius: f32,
-    alpha: f32,
-    mut v: impl FnMut(f32, f32, f32) -> TextVertex,
-) {
+) -> [(f32, f32, f32, f32); 4 * (CORNER_SEGMENTS + 1)] {
     use core::f32::consts::FRAC_PI_2;
     let [x0, y0, x1, y1] = rect;
     // Every corner sweeps the same quarter turn, so the unit offsets are
@@ -305,6 +337,63 @@ fn rounded_rect_geometry(
             boundary[c * (CORNER_SEGMENTS + 1) + i] = (cx, cy, rc, rs);
         }
     }
+    boundary
+}
+
+// Append a rounded rectangle's border stroke: the fill's own silhouette,
+// hollowed out `width` inside it. The outer edge feathers exactly as the
+// fill's does, so the two silhouettes blend as one; the inner edge is the
+// inset rect's own boundary, so a stroke wider than the corner radius keeps
+// its full width along the straight runs.
+fn rounded_ring_geometry(
+    vertices: &mut Vec<TextVertex>,
+    indices: &mut Vec<u16>,
+    rect: [f32; 4],
+    radius: f32,
+    width: f32,
+    alpha: f32,
+    mut v: impl FnMut(f32, f32, f32) -> TextVertex,
+) {
+    let [x0, y0, x1, y1] = rect;
+    let inner_r = (radius - width).max(0.0);
+    let solid_r = (radius - EDGE_FEATHER).max(inner_r);
+    let outer = rounded_boundary(rect, radius);
+    let inner = rounded_boundary([x0 + width, y0 + width, x1 - width, y1 - width], inner_r);
+    let m = outer.len();
+    let base = vertices.len() as u16;
+    vertices.reserve(3 * m);
+    for &(cx, cy, cos, sin) in &outer {
+        vertices.push(v(cx + radius * cos, cy + radius * sin, 0.0));
+    }
+    for &(cx, cy, cos, sin) in &outer {
+        vertices.push(v(cx + solid_r * cos, cy + solid_r * sin, alpha));
+    }
+    for &(cx, cy, cos, sin) in &inner {
+        vertices.push(v(cx + inner_r * cos, cy + inner_r * sin, alpha));
+    }
+    indices.reserve(12 * m);
+    for loop_start in [0, m] {
+        for i in 0..m {
+            let j = (i + 1) % m;
+            let (i, j, m) = ((loop_start + i) as u16, (loop_start + j) as u16, m as u16);
+            indices.extend([i, j, m + j, i, m + j, m + i].map(|k| base + k));
+        }
+    }
+}
+
+// Tessellate a rounded rectangle in window space: a solid convex polygon
+// inset one feather width inside the authored boundary, fanned from its first
+// point, plus a fading ring out to the boundary for anti-aliasing. Vertex
+// alpha carries the fade (both sprite modes read per-vertex alpha).
+fn rounded_rect_geometry(
+    vertices: &mut Vec<TextVertex>,
+    indices: &mut Vec<u16>,
+    rect: [f32; 4],
+    radius: f32,
+    alpha: f32,
+    mut v: impl FnMut(f32, f32, f32) -> TextVertex,
+) {
+    let boundary = rounded_boundary(rect, radius);
     let m = boundary.len();
     let base = vertices.len() as u16;
     let inner_r = (radius - EDGE_FEATHER).max(0.0);
@@ -465,6 +554,95 @@ mod tests {
             &no_layers(),
         );
         assert_eq!(calls[0].vertices.len(), 8);
+    }
+
+    // A translucent panel is a wash over whatever is behind it, so nothing may
+    // be drawn under its fill: the stroke is a hollow ring, not a slab of the
+    // border colour with the fill laid over it.
+    #[test]
+    fn a_translucent_fill_is_not_backed_by_its_border() {
+        let mut panel = sprite(0.0, 0.0, 100.0, 50.0, [0.1, 0.1, 0.12, 0.5]);
+        panel.border_width = 2.0;
+        panel.border_color = [0.3, 0.32, 0.4, 1.0];
+        panel.corner_radius = 8.0;
+        let calls = build_sprite_calls(
+            core::slice::from_ref(&panel),
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
+        assert_eq!(calls.len(), 1);
+        let verts = &calls[0].vertices;
+        // Whatever the stroke covers, it never reaches the middle of the panel.
+        let covered = |x: f32, y: f32, color: [f32; 3]| {
+            calls[0].indices.chunks(3).any(|t| {
+                let p: Vec<[f32; 2]> = t.iter().map(|&i| verts[i as usize].pos).collect();
+                t.iter().all(|&i| verts[i as usize].color == color)
+                    && point_in_triangle([x, y], p[0], p[1], p[2])
+            })
+        };
+        let border = [0.3, 0.32, 0.4];
+        let fill = [0.1, 0.1, 0.12];
+        assert!(covered(50.0, 1.0, border), "the stroke covers the edge");
+        assert!(
+            !covered(50.0, 25.0, border),
+            "and leaves the middle to the wash"
+        );
+        assert!(covered(50.0, 25.0, fill), "which draws there at its alpha");
+        assert!(
+            verts
+                .iter()
+                .filter(|v| v.color == fill)
+                .any(|v| (v.uv[1] - 0.5).abs() < 1e-5),
+            "the wash keeps its own alpha"
+        );
+
+        // The stroke's outer edge feathers to nothing like the fill's does.
+        let border_alphas: Vec<f32> = verts
+            .iter()
+            .filter(|v| v.color == border)
+            .map(|v| v.uv[1])
+            .collect();
+        assert!(border_alphas.contains(&0.0));
+        assert!(border_alphas.iter().any(|&a| (a - 1.0).abs() < 1e-5));
+
+        // A stroke wider than the corner radius keeps its full width.
+        panel.corner_radius = 2.0;
+        panel.border_width = 6.0;
+        let calls = build_sprite_calls(
+            core::slice::from_ref(&panel),
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
+        let verts = &calls[0].vertices;
+        let covered = |x: f32, y: f32, color: [f32; 3]| {
+            calls[0].indices.chunks(3).any(|t| {
+                let p: Vec<[f32; 2]> = t.iter().map(|&i| verts[i as usize].pos).collect();
+                t.iter().all(|&i| verts[i as usize].color == color)
+                    && point_in_triangle([x, y], p[0], p[1], p[2])
+            })
+        };
+        assert!(covered(50.0, 5.9, border));
+        assert!(!covered(50.0, 6.1, border));
+
+        // A square-cornered translucent panel takes the straight-strip stroke.
+        panel.border_width = 2.0;
+        panel.corner_radius = 0.0;
+        let calls = build_sprite_calls(
+            core::slice::from_ref(&panel),
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
+        let verts = &calls[0].vertices;
+        assert_eq!(verts.len(), 4 + 16, "one quad of fill, four edge strips");
     }
 
     fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {

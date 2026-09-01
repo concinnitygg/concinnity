@@ -2148,6 +2148,13 @@ impl VkContext {
         self.window().logical_size()
     }
 
+    // The window chrome overlapping the top of the frame, in the same units.
+    // Non-zero only on the macOS window, whose content view runs under a
+    // transparent title bar.
+    pub(crate) fn top_content_inset(&self) -> f32 {
+        self.window().top_content_inset()
+    }
+
     // Device capability flags for the settings menu. RT reflects whether the
     // ray-query device extensions were enabled at device creation
     // (`rt_capable`).

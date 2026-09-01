@@ -102,6 +102,7 @@ impl RenderBackend for VkContext {
         fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities;
         fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile;
         fn logical_size(&self) -> (f32, f32);
+        fn top_content_inset(&self) -> f32;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
         fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;

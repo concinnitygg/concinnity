@@ -20,10 +20,25 @@ pub(crate) const CONTROL_RADIUS: f32 = 5.0;
 // tint, title bars included (no separate title strip).
 pub(crate) const CHROME_TINT: [f32; 4] = [0.11, 0.11, 0.14, 0.97];
 
+// The start screen's docked sidebar, which stands over the world it previews
+// rather than over a viewport: the same surface let down to a wash, so the
+// preview reads behind the listing and the window's framing is not cropped by
+// the column. Darker than the chrome it derives from, so a caption over a
+// bright scene keeps its contrast.
+pub(crate) const SIDEBAR_TINT: [f32; 4] = [0.07, 0.07, 0.10, 0.55];
+
 // A hairline border framing every floating panel, a step lighter than the
 // chrome surface so the panel reads as a raised edge against the scene behind.
 pub(crate) const PANEL_BORDER_WIDTH: f32 = 1.5;
 pub(crate) const PANEL_BORDER_TINT: [f32; 4] = [0.30, 0.32, 0.40, 1.0];
+
+// The frame belongs to the surface it encloses, so it is drawn at that
+// surface's opacity: a panel let down to a wash is framed by one too, rather
+// than by a solid hairline that would read as a hard edge cut into the world.
+pub(crate) const fn panel_border(surface_alpha: f32) -> [f32; 4] {
+    let [r, g, b, a] = PANEL_BORDER_TINT;
+    [r, g, b, a * surface_alpha]
+}
 
 // Row / option interaction states.
 pub(crate) const HOVER_TINT: [f32; 4] = [0.24, 0.27, 0.36, 0.9];

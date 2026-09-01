@@ -89,6 +89,9 @@ pub struct InputPacket {
     pub cursor_outside_window: bool,
     /// Logical window size, for UI hit-testing and overlay layout.
     pub viewport: (f32, f32),
+    /// Window chrome overlapping the top of the render surface, in the same
+    /// logical units as `viewport` (see `RenderBackend::top_content_inset`).
+    pub top_inset: f32,
 }
 
 impl InputPacket {
@@ -100,6 +103,7 @@ impl InputPacket {
             raw: backend.take_input(),
             cursor_outside_window: backend.cursor_outside_window(),
             viewport: backend.logical_size(),
+            top_inset: backend.top_content_inset(),
         }
     }
 
@@ -124,6 +128,7 @@ impl InputPacket {
         self.raw = raw;
         self.cursor_outside_window = newer.cursor_outside_window;
         self.viewport = newer.viewport;
+        self.top_inset = newer.top_inset;
     }
 }
 
@@ -166,6 +171,7 @@ mod tests {
             },
             cursor_outside_window: true,
             viewport: (100.0, 100.0),
+            top_inset: 0.0,
         };
         pending.merge_from(InputPacket {
             raw: RenderInput {
@@ -178,6 +184,7 @@ mod tests {
             },
             cursor_outside_window: false,
             viewport: (200.0, 150.0),
+            top_inset: 28.0,
         });
         assert!(pending.raw.jump, "the earlier pulse survives");
         assert!(pending.raw.left_click);
@@ -196,6 +203,10 @@ mod tests {
         );
         assert!(!pending.cursor_outside_window);
         assert_eq!(pending.viewport, (200.0, 150.0));
+        assert_eq!(
+            pending.top_inset, 28.0,
+            "the window metrics take the newer value"
+        );
     }
 
     #[test]

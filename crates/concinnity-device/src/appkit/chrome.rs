@@ -41,6 +41,14 @@ pub(crate) fn apply_title_bar(window: &NSWindow, title_bar: bool) {
     set_window_buttons_hidden(window, false);
 }
 
+// Whether the traffic-light buttons are hidden (or absent), so nothing floats
+// over the content's top edge.
+pub(crate) fn window_buttons_hidden(window: &NSWindow) -> bool {
+    window
+        .standardWindowButton(NSWindowButton::CloseButton)
+        .is_none_or(|button| button.isHidden())
+}
+
 // Show or hide the close / minimize / zoom traffic-light buttons.
 pub(crate) fn set_window_buttons_hidden(window: &NSWindow, hidden: bool) {
     for kind in [

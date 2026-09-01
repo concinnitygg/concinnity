@@ -97,6 +97,7 @@ impl RenderBackend for MtlContext {
         fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap);
         fn take_input(&mut self) -> RenderInput;
         fn logical_size(&self) -> (f32, f32);
+        fn top_content_inset(&self) -> f32;
     }
 
     forward! {

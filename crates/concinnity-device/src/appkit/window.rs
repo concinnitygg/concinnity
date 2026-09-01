@@ -20,7 +20,9 @@ use crate::components::{InputKey, WindowMode};
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::keymap::KeyMap;
 
-use super::chrome::{apply_title_bar, set_window_buttons_hidden, windowed_style_mask};
+use super::chrome::{
+    apply_title_bar, set_window_buttons_hidden, window_buttons_hidden, windowed_style_mask,
+};
 use super::display_mode::{self, FullscreenDisplayMode};
 use super::input::{InputState, KeyState, key_from_mac, printable_char};
 
@@ -202,6 +204,25 @@ impl AppKitWindow {
     pub(crate) fn logical_size(&self) -> (f32, f32) {
         let s = self.view.bounds().size;
         (s.width as f32, s.height as f32)
+    }
+
+    // How much of the frame's top edge the window chrome sits over, in the same
+    // points as `logical_size`. A title-bar-less window uses a full-size content
+    // view, so the traffic lights float over the render; `contentLayoutRect` is
+    // the part of that content the chrome leaves clear, and the shortfall is
+    // what UI anchored to the top has to start below. Zero for a window whose
+    // title bar is drawn above its content, for a borderless window whose
+    // buttons are hidden, and in embedded mode, where the host owns the window.
+    pub(crate) fn top_content_inset(&self) -> f32 {
+        let Some(window) = self.window.as_ref() else {
+            return 0.0;
+        };
+        if window_buttons_hidden(window) {
+            return 0.0;
+        }
+        let content_h = window.contentRectForFrameRect(window.frame()).size.height;
+        let laid_out_h = window.contentLayoutRect().size.height;
+        ((content_h - laid_out_h) as f32).max(0.0)
     }
 
     // Whether a window-close event has been seen.

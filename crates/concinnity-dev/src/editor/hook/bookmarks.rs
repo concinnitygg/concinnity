@@ -5,8 +5,6 @@
 // project's editor session store (`editor/session_store.rs`).
 
 use super::*;
-use crate::components::Camera3D;
-use framing::CameraPose;
 
 // The bookmark slot a digit key addresses, if any.
 pub(super) fn slot_for(key: crate::components::InputKey) -> Option<usize> {
@@ -27,14 +25,10 @@ pub(super) fn slot_for(key: crate::components::InputKey) -> Option<usize> {
 
 impl EditorHook {
     pub(super) fn save_bookmark(&mut self, slot: usize, world: &World) {
-        let Some(cam) = world.query::<Camera3D>().next() else {
+        let Some(pose) = camera_pose::read(world) else {
             return;
         };
-        self.bookmarks[slot] = Some(CameraPose {
-            position: cam.position,
-            yaw: cam.yaw,
-            pitch: cam.pitch,
-        });
+        self.bookmarks[slot] = Some(pose);
         let Some(path) = session_store::default_path() else {
             self.console_sink.info(&format!(
                 "camera bookmark {} set for this session",
@@ -62,13 +56,8 @@ impl EditorHook {
         let Some(pose) = self.bookmarks[slot] else {
             return;
         };
-        let Some(cam) = world.query::<Camera3D>().next() else {
+        let Some(from) = camera_pose::read(world) else {
             return;
-        };
-        let from = CameraPose {
-            position: cam.position,
-            yaw: cam.yaw,
-            pitch: cam.pitch,
         };
         self.orbit = None;
         self.start_glide(from, pose);

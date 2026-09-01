@@ -118,14 +118,21 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(world_path.clone()));
 
     // Parse the authored entry list up front so edits patch it directly. A
-    // session opening on the Worlds panel starts with none: the world it edits
-    // is the one picked there.
-    let entries = if !pick_a_world && std::path::Path::new(&world_path).exists() {
+    // session opening on the start screen edits nothing until a world is picked
+    // there, and it boots on nothing: the window comes up on the screen's own
+    // listing, and the project's most recent world is compiled behind it a few
+    // frames later (`hook/worlds_start.rs`). A world that takes seconds to
+    // compile is then waited out on a screen that is up and usable rather than
+    // in front of no window at all.
+    let (entries, previewing) = if pick_a_world {
+        (Vec::new(), start_screen_pick())
+    } else if std::path::Path::new(&world_path).exists() {
         let content = std::fs::read_to_string(&world_path)?;
-        crate::world::parse_world_jsonl(&content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?
+        let entries = crate::world::parse_world_jsonl(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        (entries, None)
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
 
     // Bring up a renderable world by compiling those entries, seeding a render
@@ -145,7 +152,7 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     // applied twice.
     let mut editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);
     if pick_a_world {
-        editor_hook = editor_hook.with_worlds_panel();
+        editor_hook = editor_hook.with_start_screen(previewing);
     }
     let hook: Box<dyn DebugHook> = match debug_port {
         Some(port) => {
@@ -176,8 +183,20 @@ fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
     }
 }
 
+// The world the start screen preselects: the project's most recent one. Only
+// its path -- reading and compiling it is the screen's own work, done once it
+// has a window to show the result in. A project with no worlds preselects
+// nothing, which is what the screen's empty listing already says.
+fn start_screen_pick() -> Option<String> {
+    let world = world_files::newest(
+        crate::project::worlds_dir().as_deref(),
+        crate::project::content_root().as_deref(),
+    )?;
+    Some(world.path.to_string_lossy().into_owned())
+}
+
 // Where the editor puts a world nobody has saved yet.
-fn unsaved_world_path() -> String {
+pub(crate) fn unsaved_world_path() -> String {
     crate::project::worlds_dir()
         .map(|dir| dir.join(WORLD_JSONL).to_string_lossy().into_owned())
         .unwrap_or_else(|| WORLD_JSONL.to_string())

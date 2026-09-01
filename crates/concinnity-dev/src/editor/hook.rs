@@ -70,6 +70,7 @@ use super::view_menu;
 use super::widget::{self, point_in};
 use super::world_files;
 use super::worlds::{self, WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
+use worlds_start::Adopt;
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
@@ -285,6 +286,10 @@ pub(crate) struct EditorHook {
     // Viewport sampled from this frame's input, for the panel presses that
     // resolve without direct input access (framing a palette pick).
     viewport: [f32; 2],
+    // Window chrome floating over the top of the frame, sampled from the same
+    // input. The start screen's docked sidebar starts its content below it so
+    // the OS window buttons never land on a control.
+    top_inset: f32,
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // The Assets panel's body: every asset of the expanded world as one tree
@@ -323,13 +328,42 @@ pub(crate) struct EditorHook {
     // The Worlds panel (`hook/worlds_edit.rs`): shown state, the project's
     // worlds as of the last refresh (the listing changes only when the panel
     // acts on it, so it is not re-read every frame), the row window's scroll,
-    // whether the name field holds keyboard focus, and why the last New was
-    // rejected.
+    // the path of the row whose triple-dot menu is open, and why the last
+    // preview failed.
     worlds_open: bool,
     worlds_rows: Vec<WorldRow>,
     worlds_scroll: usize,
-    worlds_focus: bool,
+    worlds_menu: Option<String>,
     worlds_status: Option<String>,
+    // Whether the session's world has never been named: `+` starts one, the
+    // whole editor comes up on it, and the first SAVE asks what to call it
+    // before anything reaches disk.
+    untitled: bool,
+    // The start screen (`hook/worlds_start.rs`): a session that named no world
+    // on the command line opens on the Worlds panel alone, which owns the
+    // window and previews the picked world behind itself. Set at construction
+    // and cleared for good the first time a world is opened.
+    start_mode: bool,
+    // The path of the start screen's selected row, and of the world its
+    // background preview was compiled from. They part company when the
+    // previewed world is deleted (the background drops back to the seeded
+    // empty scene) or its compile fails. Both `None` outside the start screen,
+    // which has no selection model.
+    worlds_selected: Option<String>,
+    worlds_preview: Option<String>,
+    // The world the start screen picked before it had a window to show it in
+    // (`hook/worlds_start.rs`): held until the screen itself is up and drawn,
+    // then staged like any other preview. `start_drawn` counts the frames the
+    // screen has been laid out for, which is what "up" means here.
+    start_preview: Option<String>,
+    start_drawn: u32,
+    // The start screen's attract camera (`hook/cinematic_drive.rs`): the shot
+    // cycle running over the previewed world, the clock it advances on, and the
+    // pose that world's own camera held before the cycle took it -- put back
+    // the moment the screen hands the session a world.
+    cinematic: Option<worlds::cinematic::Cinematic>,
+    cinematic_clock: Option<std::time::Instant>,
+    cinematic_restore: Option<framing::CameraPose>,
     // The command palette (`hook/palette_edit.rs`): shown state, a one-frame
     // focus blur after the Ctrl+K open, the query mirrored off its field once
     // a frame, the item list built on open with the matches the query keeps,
@@ -599,6 +633,9 @@ mod behavior_keys;
 mod billboard_drive;
 mod bookmarks;
 mod browse;
+mod camera_pose;
+// Named to avoid colliding with the `use super::worlds::cinematic` import.
+mod cinematic_drive;
 // Named to avoid colliding with the `use super::console` module import.
 mod console_edit;
 mod content_drag;
@@ -644,6 +681,9 @@ mod trace_drive;
 mod view_menu_drive;
 // Named to avoid colliding with the `use super::worlds` module import.
 mod worlds_edit;
+mod worlds_start;
+#[cfg(test)]
+mod worlds_start_tests;
 #[cfg(test)]
 mod worlds_tests;
 // Named to avoid colliding with the `use super::story` module import.
@@ -651,6 +691,8 @@ mod story_edit;
 // Named to avoid colliding with the `use super::variables_panel` import.
 #[cfg(test)]
 mod camera_tests;
+#[cfg(test)]
+mod cinematic_tests;
 #[cfg(test)]
 mod console_tests;
 #[cfg(test)]
@@ -755,6 +797,7 @@ impl EditorHook {
             isolate: None,
             shift_held: false,
             viewport: [0.0, 0.0],
+            top_inset: 0.0,
             panel_open: false,
             tree_groups: Vec::new(),
             tree_unfolded: Vec::new(),
@@ -775,8 +818,17 @@ impl EditorHook {
             worlds_open: false,
             worlds_rows: Vec::new(),
             worlds_scroll: 0,
-            worlds_focus: false,
+            worlds_menu: None,
             worlds_status: None,
+            untitled: false,
+            start_mode: false,
+            worlds_selected: None,
+            worlds_preview: None,
+            start_preview: None,
+            start_drawn: 0,
+            cinematic: None,
+            cinematic_clock: None,
+            cinematic_restore: None,
             palette_open: false,
             palette_blur: false,
             palette_query: String::new(),
@@ -846,10 +898,18 @@ impl EditorHook {
         self
     }
 
-    // Open on the Worlds panel: a session started without a world named on the
-    // command line picks one here before it edits anything (see `run_editor`).
-    pub(crate) fn with_worlds_panel(mut self) -> Self {
+    // Open on the start screen: a session started without a world named on the
+    // command line picks one there before it edits anything (see `run_editor`).
+    // `picked` is the project's most recent world, preselected so the user
+    // lands on their last project rather than on a void -- but it is not
+    // compiled yet. The window comes up on the listing alone and the pick is
+    // previewed from there, behind the loading cover, so a world that takes
+    // seconds to compile does not hold the window closed for them.
+    pub(crate) fn with_start_screen(mut self, picked: Option<String>) -> Self {
+        self.start_mode = true;
         self.worlds_open = true;
+        self.worlds_selected = picked.clone();
+        self.start_preview = picked;
         self.refresh_worlds();
         self
     }
@@ -889,7 +949,7 @@ impl EditorHook {
             .iter()
             .rev()
             .copied()
-            .find(|&k| registry::panel(k).is_open(self))
+            .find(|&k| self.panel_shown(k))
     }
 
     fn text_focus_active(&self) -> bool {
@@ -912,7 +972,7 @@ impl EditorHook {
             || self.behavior_picking
             || self.variables_name_focus
             || self.variables_value_focus
-            || self.worlds_focus
+            || self.naming_world()
             || self.palette_open
     }
 }
@@ -943,6 +1003,7 @@ impl DebugHook for EditorHook {
             self.shift_held = input.shift;
             self.ctrl_held = input.ctrl;
             self.viewport = input.viewport;
+            self.top_inset = input.top_inset;
             // Typing into a batching panel's focused field marks its
             // unapplied-edit state (the heading's "*"). Frontmost-gated,
             // because only the frontmost panel's field owns the keyboard.
@@ -978,203 +1039,33 @@ impl DebugHook for EditorHook {
             } else {
                 self.drive_fly(input, world);
             }
-            // F1 (an edge pulse) toggles the whole HUD.
-            if input.hud_toggle {
+            // F1 (an edge pulse) toggles the whole HUD. The start screen
+            // stands outside it: hiding the only panel on screen would leave
+            // the session with nothing to click.
+            if input.hud_toggle && !self.start_mode {
                 self.hud_visible = !self.hud_visible;
             }
             let vp = input.viewport;
             if self.hud_visible && vp[0] > 0.0 {
-                // An active title-bar drag follows the cursor; a fresh press (only
-                // when no drag is running -- the press that starts one must not
-                // also resolve to a control) routes to the bar and the panels.
-                self.drive_drag(input, vp);
-                // An active edge / corner resize follows the cursor the same way.
-                self.drive_resize(input, vp);
-                // A chart pan does too, so the canvas tracks the cursor.
-                self.drive_behavior_pan(input);
-                // An in-flight gizmo drag follows the cursor, cancels on
-                // Escape, and commits on release, before any new press routes.
-                if self.gizmo_drag.is_some() {
-                    self.drive_gizmo_drag(input, vp, world);
-                }
-                // A shape slider drag likewise: follow + live preview,
-                // cancel, or commit once.
-                if self.shape_drag.is_some() {
-                    self.drive_shape_drag(input, world);
-                }
-                // An in-flight marquee likewise: follow, cancel, or select.
-                if self.marquee.is_some() {
-                    self.drive_marquee(input, vp, world);
-                }
-                // An in-flight orbit tumble follows the cursor and ends on
-                // release.
-                if self.orbit.is_some() {
-                    self.drive_orbit(input, world);
-                }
-                // A drag-out placement from the Content panel: ghost follow,
-                // cancel, or commit.
-                if self.content_drag.is_some() {
-                    self.drive_content_drag(input, vp, world);
-                }
-                if input.left_click
-                    && self.drag.is_none()
-                    && self.resize.is_none()
-                    && self.gizmo_drag.is_none()
-                    && self.shape_drag.is_none()
-                    && self.marquee.is_none()
-                    && self.content_drag.is_none()
-                    && self.orbit.is_none()
-                {
-                    // The confirmation dialog swallows every press first.
-                    // Behind it, an open Display or create menu is modal: it
-                    // takes the press (a row acts, anything else dismisses)
-                    // before normal routing. An Alt+press over the viewport
-                    // starts an orbit tumble instead of a pick.
-                    let claimed = self.route_modal_click(input, vp, world)
-                        || self.route_display_menu_click(input, vp)
-                        || self.route_create_menu_click(input, vp)
-                        || self.route_palette_dismiss(input, vp)
-                        || (input.alt && self.try_begin_orbit(input, vp, world));
-                    if !claimed {
-                        self.route_click(input, vp, world);
-                    }
-                }
-                // An unclaimed viewport right press opens the create menu at
-                // the cursor, under the same not-mid-gesture guards; the
-                // confirmation dialog swallows it like every other press.
-                if input.right_click
-                    && self.modal.is_none()
-                    && self.drag.is_none()
-                    && self.resize.is_none()
-                    && self.gizmo_drag.is_none()
-                    && self.shape_drag.is_none()
-                    && self.marquee.is_none()
-                    && self.content_drag.is_none()
-                    && self.orbit.is_none()
-                {
-                    self.open_create_menu(input, vp, world);
-                }
-                // T / R / S pick the gizmo's mode (translate / rotate /
-                // scale), under the same guards as the history shortcuts.
-                if !input.ctrl
-                    && !self.sim.playing()
-                    && !self.text_focus_active()
-                    && self.gizmo_drag.is_none()
-                {
-                    match input.captured_key {
-                        Some(crate::components::InputKey::T) => {
-                            self.gizmo_mode = gizmo::GizmoMode::Translate;
-                        }
-                        Some(crate::components::InputKey::R) => {
-                            self.gizmo_mode = gizmo::GizmoMode::Rotate
-                        }
-                        Some(crate::components::InputKey::S) => {
-                            self.gizmo_mode = gizmo::GizmoMode::Scale
-                        }
-                        // F frames the selection; Shift+F keeps the old fly
-                        // toggle one modifier away.
-                        Some(crate::components::InputKey::F) => {
-                            if input.shift {
-                                self.toggle_fly();
-                            } else {
-                                self.frame_selection(input.viewport, world);
-                            }
-                        }
-                        // H hides the selection; Shift+H isolates it.
-                        Some(crate::components::InputKey::H) => {
-                            if input.shift {
-                                self.toggle_isolate();
-                            } else {
-                                self.hide_selected();
-                            }
-                        }
-                        // 1..9 glide back to a saved camera bookmark.
-                        Some(key) => {
-                            if let Some(slot) = bookmarks::slot_for(key) {
-                                self.recall_bookmark(slot, world);
-                            }
-                        }
-                        None => {}
-                    }
-                }
-                // Backtick toggles the console. The flag cleared here is the
-                // one-frame focus blur a backtick open sets, so the text
-                // system never types that backtick into the command line.
-                self.console_blur = false;
-                self.drive_console_toggle(input, world);
-                // Ctrl+K toggles the palette, with the same one-frame blur.
-                self.palette_blur = false;
-                self.drive_palette_toggle(input, world);
-                // Ctrl+Z / Ctrl+Y step the entry list through the history,
-                // unless the world owns the keyboard (play mode), a text
-                // field does (its own editing keys must win), or a gizmo drag
-                // is mid-flight (its commit has not landed yet). Ctrl+D
-                // duplicates the selection and Ctrl+Down drops it to the
-                // floor, under the same guards; a frontmost Behavior panel
-                // keeps its own Ctrl+D (row duplicate, via frame_keys below).
-                if input.ctrl
-                    && !self.sim.playing()
-                    && !self.text_focus_active()
-                    && self.gizmo_drag.is_none()
-                    && self.shape_drag.is_none()
-                {
-                    match input.captured_key {
-                        Some(crate::components::InputKey::Z) => self.undo(world),
-                        Some(crate::components::InputKey::Y) => self.redo(world),
-                        Some(crate::components::InputKey::D)
-                            if self.frontmost_open_panel() != Some(PanelKey::Behavior) =>
-                        {
-                            self.duplicate_selection();
-                        }
-                        Some(crate::components::InputKey::Down) => {
-                            self.drop_selection_to_floor(world);
-                        }
-                        // Ctrl+H makes everything visible again.
-                        Some(crate::components::InputKey::H) => self.unhide_all(),
-                        // Ctrl+1..9 save the camera pose to a bookmark.
-                        Some(key) => {
-                            if let Some(slot) = bookmarks::slot_for(key) {
-                                self.save_bookmark(slot, world);
-                            }
-                        }
-                        None => {}
-                    }
-                }
-                // The transport shortcuts, live in every state (pausing a
-                // running world is their whole point).
-                self.sim_keys(input);
-                // Per-frame editing keys go to the frontmost open panel.
-                if let Some(key) = self.frontmost_open_panel() {
-                    registry::panel(key).frame_keys(self, world, input);
-                }
-                // Wheel routing: the frontmost scrollable panel under the cursor
-                // takes the wheel. An open confirmation dialog swallows it with
-                // the rest of the pointer. An open value dropdown is modal and
-                // can extend past the form panel, so it scrolls the form from
-                // anywhere while open.
-                if self.modal.is_none() && input.scroll_delta.abs() > 0.5 {
-                    let (mx, my) = (input.mouse_x, input.mouse_y);
-                    let form_shown = registry::panel(PanelKey::Edit).is_open(self);
-                    if form_shown && self.field_dropdown.is_some() {
-                        self.scroll_form(input.scroll_delta, world);
-                    } else {
-                        let front_to_back: Vec<PanelKey> =
-                            self.panel_order.iter().rev().copied().collect();
-                        for key in front_to_back {
-                            let p = registry::panel(key);
-                            if !p.is_open(self) {
-                                continue;
-                            }
-                            let o = self.origin(key, vp);
-                            if p.wheel_over(self, world, mx, my, o) {
-                                p.scroll(self, world, input.scroll_delta);
-                                break;
-                            }
-                        }
-                    }
+                // The start screen owns the whole window while it is up: its
+                // panel is the only thing to route to, and the editor's
+                // shortcuts, menus, and overlays stand down until a world is
+                // open (`hook/worlds_start.rs`).
+                if self.start_mode {
+                    self.drive_start_input(input, vp, world);
+                } else {
+                    self.drive_session_input(input, vp, world);
                 }
             }
         }
+
+        // The pick the screen opened on, once the screen itself has been drawn:
+        // the compile it costs is spent behind a window that is already up.
+        self.drive_start_preview();
+        // The start screen's attract camera, after the frame's routing: a click
+        // that picked another world has already restarted the cycle, so the
+        // pose written here frames the world the sidebar is now previewing.
+        self.drive_cinematic(world);
 
         // Drive the world's cursor / freeze state from the transport: Stopped /
         // Paused (`Some(true)`) free the cursor and freeze the world; Playing
@@ -1218,7 +1109,7 @@ impl DebugHook for EditorHook {
             .map(|l| l.0)
             .unwrap_or_default();
         lines.clear();
-        if self.show_flags.contains(view_menu::ShowFlags::LINES) {
+        if self.show_flags.contains(view_menu::ShowFlags::LINES) && !self.start_mode {
             self.push_axis_lines(world, &mut lines);
             self.push_extent_lines(world, vp, &mut lines);
         }
@@ -1251,7 +1142,7 @@ impl DebugHook for EditorHook {
         // restores the same view). Compound gates live on each panel's
         // `is_open` -- e.g. the edit form shows only while the assets UI is on.
         for p in registry::all() {
-            if shown && p.is_open(self) {
+            if shown && self.panel_shown(p.key()) {
                 let o = self.origin(p.key(), vp);
                 p.draw(self, world, o, mouse);
             } else {
@@ -1262,12 +1153,24 @@ impl DebugHook for EditorHook {
         // selection rings ride the picked assets' projected bounds above
         // them, under the panels (their ids take the default draw layer);
         // the gizmo and the marquee rect draw over both.
-        self.drive_billboards(world, vp, shown && self.show_billboards);
-        self.drive_highlight(world, vp, shown);
-        self.drive_gizmo_draw(world, vp, shown);
-        self.drive_marquee_draw(world, shown);
-        self.drive_create_menu_draw(world, shown, mouse);
-        self.drive_display_menu_draw(world, vp, shown, mouse);
+        // The viewport overlays belong to a session editing a world: the start
+        // screen shows the previewed world plainly, with nothing over it but
+        // the panel, its dialog, and its toasts.
+        let overlays = shown && !self.start_mode;
+        // The start screen's shot fade sits under all of them, covering the
+        // previewed world alone; the loading cover stands over the same area
+        // instead while the world behind it is being compiled.
+        self.drive_cinematic_draw(world, vp, shown);
+        self.drive_loading_draw(world, shown);
+        if shown && self.start_mode {
+            self.start_drawn = self.start_drawn.saturating_add(1);
+        }
+        self.drive_billboards(world, vp, overlays && self.show_billboards);
+        self.drive_highlight(world, vp, overlays);
+        self.drive_gizmo_draw(world, vp, overlays);
+        self.drive_marquee_draw(world, overlays);
+        self.drive_create_menu_draw(world, overlays, mouse);
+        self.drive_display_menu_draw(world, vp, overlays, mouse);
         self.drive_toasts(world, vp, shown, mouse);
         self.drive_modal_draw(world, vp, shown, mouse);
     }
@@ -1292,19 +1195,23 @@ impl DebugHook for EditorHook {
         if !self.refresh_preview(app.world_mut()) {
             return;
         }
-        // A rebuild that measured slow last time announces itself first: its
-        // card needs a drawn-and-presented frame before the stall, so the
-        // rebuild waits two applies (tick draws on the frame between them).
-        // Fast rebuilds (the common case) show nothing and run immediately.
-        if self.last_rebuild_secs > SLOW_REBUILD_SECS {
-            if self.rebuild_op.is_none() {
-                self.rebuild_op = Some(self.notifier.begin_op("Rebuilding preview"));
-                self.rebuild_countdown = 2;
-            }
-            if self.rebuild_countdown > 0 {
-                self.rebuild_countdown -= 1;
-                return;
-            }
+        // Whatever the user waits behind needs a drawn-and-presented frame
+        // before the stall, so the rebuild waits out a countdown (tick draws on
+        // the frames between). A session announces itself with a card once a
+        // rebuild has measured slow; the start screen sets its own countdown
+        // when it stages a preview, since the loading cover is already up and
+        // no card belongs over it. Fast session rebuilds (the common case) show
+        // nothing and run immediately.
+        if !self.start_mode
+            && self.last_rebuild_secs > SLOW_REBUILD_SECS
+            && self.rebuild_op.is_none()
+        {
+            self.rebuild_op = Some(self.notifier.begin_op("Rebuilding preview"));
+            self.rebuild_countdown = 2;
+        }
+        if self.rebuild_countdown > 0 {
+            self.rebuild_countdown -= 1;
+            return;
         }
         self.rebuild_preview = false;
         self.rebuild_required = false;
@@ -1396,10 +1303,13 @@ impl EditorHook {
             Ok(built) => built,
             Err(e) => {
                 tracing::error!("editor: live preview rebuild failed, keeping current world: {e}");
-                self.notifier.error_with(
-                    &format!("Preview rebuild failed: {e}"),
-                    notify::Action::OpenConsole,
-                );
+                match self.start_mode {
+                    true => self.preview_failed(&e.to_string()),
+                    false => self.notifier.error_with(
+                        &format!("Preview rebuild failed: {e}"),
+                        notify::Action::OpenConsole,
+                    ),
+                }
                 return;
             }
         };
