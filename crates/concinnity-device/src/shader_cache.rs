@@ -68,7 +68,7 @@ impl Key<'_> {
             h.update(part.as_bytes());
         }
         h.update(self.options.to_le_bytes());
-        format!("{:x}", h.finalize())
+        hex::encode(h.finalize())
     }
 }
 

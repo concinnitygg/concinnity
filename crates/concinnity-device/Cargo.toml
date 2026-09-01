@@ -33,6 +33,7 @@ concinnity-host = { workspace = true }
 concinnity-slang = { workspace = true }
 
 bytemuck = { version = "1", features = ["derive"] }
+hex = "0.4.3"
 libloading = "0.9.0"
 png = "0.18.1"
 rayon = "1"
@@ -41,15 +42,15 @@ tracing = "0.1.44"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 # Keys the shader binary cache (src/shader_cache.rs): DirectX and Vulkan cache
 # their embedded built-ins, Metal its runtime-assembled raymarch metallibs.
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
 ash = "0.38"
-glfw = "0.61.0"
+glfw = "0.62.0"
 shaderc = { version = "0.10.1", features = ["build-from-source"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D12",

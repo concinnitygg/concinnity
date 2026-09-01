@@ -11,7 +11,7 @@ use concinnity_cook::authoring::registry::build_only::CharacterSchema;
 use concinnity_cook::authoring::registry::build_only::ShapePreset;
 
 use crate::components::{JointProportion, ShapeSlider};
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 // The trailing section for keys and groups the schema does not place.
 pub(crate) const OTHER_SECTION: &str = "Other";
@@ -287,7 +287,7 @@ impl ShapeValues {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         for row in rows {
             let (lo, hi) = random_band(&row.kind);
-            self.set(row, rng.gen_range(lo..=hi), joints);
+            self.set(row, rng.random_range(lo..=hi), joints);
         }
     }
 

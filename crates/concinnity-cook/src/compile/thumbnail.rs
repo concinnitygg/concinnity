@@ -372,11 +372,7 @@ fn key_of(inputs: &[&[u8]]) -> String {
         hasher.update((input.len() as u64).to_le_bytes());
         hasher.update(input);
     }
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex::encode(hasher.finalize())
 }
 
 // Encode one RGBA8 image as a PNG. `None` when the encoder refuses the image,

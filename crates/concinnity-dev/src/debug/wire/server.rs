@@ -344,7 +344,8 @@ fn handle_conn(stream: TcpStream, shared: Arc<Mutex<DebugState>>) -> Result<(), 
         match ws.read().map_err(|e| e.to_string())? {
             Message::Text(text) => {
                 let reply = handle_request(&text, &shared);
-                ws.send(Message::Text(reply)).map_err(|e| e.to_string())?;
+                ws.send(Message::Text(reply.into()))
+                    .map_err(|e| e.to_string())?;
             }
             Message::Ping(payload) => {
                 ws.send(Message::Pong(payload)).map_err(|e| e.to_string())?;

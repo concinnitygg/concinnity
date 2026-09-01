@@ -76,7 +76,7 @@ fn connect(port: u16) -> Result<WsStream, String> {
 fn read_text(ws: &mut WsStream) -> Result<String, String> {
     loop {
         match ws.read() {
-            Ok(Message::Text(text)) => return Ok(text),
+            Ok(Message::Text(text)) => return Ok(text.to_string()),
             // The server never pings, but answer one anyway to be well-behaved.
             Ok(Message::Ping(payload)) => {
                 let _ = ws.send(Message::Pong(payload));

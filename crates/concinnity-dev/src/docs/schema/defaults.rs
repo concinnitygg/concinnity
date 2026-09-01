@@ -44,7 +44,7 @@ pub(super) fn per_struct(file: &syn::File) -> HashMap<String, HashMap<String, St
 fn implements_default(imp: &syn::ItemImpl) -> bool {
     imp.trait_
         .as_ref()
-        .is_some_and(|(_, path, _)| path.segments.last().is_some_and(|s| s.ident == "Default"))
+        .is_some_and(|(path, _)| path.segments.last().is_some_and(|s| s.ident == "Default"))
 }
 
 fn fields_from_stmt(stmt: &syn::Stmt, out: &mut HashMap<String, String>) {

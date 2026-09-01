@@ -380,7 +380,7 @@ pub(crate) fn write_lock(
 pub(crate) fn checksum(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 fn now_iso8601() -> String {

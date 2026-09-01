@@ -354,7 +354,7 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
             desc.Flags.0 as u32,
         ],
     );
-    format!("g{:x}", Truncated(h.finalize()))
+    format!("g{}", truncated(h.finalize()))
 }
 
 // The library name for a compute desc: the kernel bytecode is the identity.
@@ -367,20 +367,13 @@ unsafe fn compute_name(desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC) -> String {
     // SAFETY: the caller guarantees the kernel bytecode pointer and length agree.
     unsafe { hash_bytecode(&mut h, &desc.CS) };
     hash_u32s(&mut h, &[desc.NodeMask, desc.Flags.0 as u32]);
-    format!("c{:x}", Truncated(h.finalize()))
+    format!("c{}", truncated(h.finalize()))
 }
 
 // First 16 digest bytes as lowercase hex: ample collision margin for a few
 // hundred names, half the string churn in the library's name table.
-struct Truncated(sha2::digest::Output<Sha256>);
-
-impl std::fmt::LowerHex for Truncated {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for byte in self.0.iter().take(16) {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
-    }
+fn truncated(digest: sha2::digest::Output<Sha256>) -> String {
+    hex::encode(&digest[..16])
 }
 
 // # Safety

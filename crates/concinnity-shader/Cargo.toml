@@ -37,7 +37,7 @@ shaderc = { version = "0.10.1", features = ["build-from-source"] }
 # Direct3D `Fxc` compiler from the `windows` crate. `shaderc` is optional and
 # activated by the `vulkan` feature for a Vulkan build on Windows.
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D_Fxc",

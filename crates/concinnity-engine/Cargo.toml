@@ -66,7 +66,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Host-memory queries (app/sysmem.rs): GlobalMemoryStatusEx + GetProcessMemoryInfo.
-windows = { version = "0.61", features = [
+windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",

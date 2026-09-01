@@ -29,15 +29,16 @@ tracing = "0.1.44"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 fbxcel = { version = "0.9.0", default-features = false, features = ["tree"] }
 gltf = { version = "1", default-features = false, features = ["utils", "names", "extras"] }
+hex = "0.4.3"
 jpeg-decoder = "0.3"
 kira = "0.12"
 ktx2 = "0.5"
 basisu = "=0.1.0"
-ruzstd = "0.8"
+ruzstd = "0.9.0"
 png = "0.18.1"
 pulldown-cmark = { version = "0.13", default-features = false }
 rayon = "1"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 time = { version = "0.3.47", features = ["formatting", "parsing"] }
 
 [dev-dependencies]

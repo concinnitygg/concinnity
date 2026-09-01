@@ -116,7 +116,7 @@ pub(crate) fn expand_key(
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();
     hasher.update((args_bytes.len() as u64).to_le_bytes());
     hasher.update(&args_bytes);
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 // Key for what a bake derived from geometry its target's payload replaces: the
@@ -166,7 +166,7 @@ fn key_from_parts(
         hasher.update(path.as_bytes());
         hasher.update(content_hash);
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 // Collect (path, content-hash) for every source file the args reference.
