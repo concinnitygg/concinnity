@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "clap",
  "concinnity-cook",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "async-stream",
  "bitflags 2.11.1",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "ash",
  "block2",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "concinnity-core",
  "rayon",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "concinnity-testing",
 ]
@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.19.8"
+version = "0.19.9"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",
@@ -3266,9 +3266,9 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rtrb"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ade083ccbb4bf536df69d1f6432cc23deb7acccff86b183f3923a6fd56a1153"
+checksum = "fae8ee26b0371a29a77d2b2d6b3ae13aa81def6f9bf1b1b92a32d279a5e709b7"
 
 [[package]]
 name = "rustix"
