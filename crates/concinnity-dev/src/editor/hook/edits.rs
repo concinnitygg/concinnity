@@ -170,79 +170,45 @@ impl EditorHook {
     }
 
     // SAVE: persist the working entries to disk. world.jsonl is the source of
-    // truth, so its atomic write is the save -- `dirty` clears on it. The
-    // compiled blobs are a derived cache (boot rebuilds them when missing), so
-    // their recompile runs on the cook worker with a progress card instead of
-    // stalling the frame loop; a blob failure toasts but the world stays
-    // saved. The live preview is already up to date (every edit refreshed it),
-    // so nothing is rebuilt or swapped here. On a write failure the world
-    // stays dirty and the next SAVE retries.
+    // truth and the only thing a save writes -- the compiled blobs under the
+    // build root belong to an explicit build, so a save never cooks and never
+    // stalls behind one. The live preview is already up to date (every edit
+    // refreshed it), so nothing is rebuilt or swapped here. On a write failure
+    // the world stays dirty and the next SAVE retries.
     pub(super) fn save(&mut self) {
-        // A cook is already writing the same blobs; stay dirty and let the
-        // next SAVE retry instead of racing it. The swap also claims the
-        // guard for this save's own blob cook.
-        if self
-            .console_build_running
-            .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
-            tracing::warn!("editor: save deferred, a cook is writing blobs");
-            self.notifier
-                .warning("Save deferred: a cook is writing blobs");
-            return;
-        }
-        let release = |hook: &Self| {
-            hook.console_build_running
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-        };
         let content = match crate::world::write_world_jsonl(&self.entries) {
             Ok(c) => c,
             Err(e) => {
-                release(self);
-                tracing::error!("editor: save failed: {e}");
-                self.notifier
-                    .error_with(&format!("Save failed: {e}"), notify::Action::OpenConsole);
+                self.save_failed(e);
                 return;
             }
         };
         if let Err(e) = self.write_jsonl_content(&content) {
-            release(self);
-            tracing::error!("editor: save failed: {e}");
-            self.notifier
-                .error_with(&format!("Save failed: {e}"), notify::Action::OpenConsole);
+            self.save_failed(e);
             return;
         }
         self.dirty = false;
         self.saved = self.entries.clone();
         tracing::info!("editor: saved {}", self.world_path);
         self.notifier.success(&format!("Saved {}", self.world_path));
-        // The worker releases the guard when it finishes. Success stays quiet
-        // (the save already toasted); only a blob failure surfaces.
-        let sink = self.console_sink.clone();
-        let toasts = self.notifier.clone();
-        self.spawn_cook_worker("Cooking blobs", content, move |outcome, _secs| {
-            if let Err(e) = outcome {
-                sink.error(&format!("save: blob cook failed: {e}"));
-                toasts.error_with(
-                    &format!("Blob cook failed: {e}"),
-                    notify::Action::OpenConsole,
-                );
-            }
-        });
+    }
+
+    // Report a failed SAVE, leaving the world dirty for the next attempt.
+    fn save_failed(&self, e: impl std::fmt::Display) {
+        tracing::error!("editor: save failed: {e}");
+        self.notifier
+            .error_with(&format!("Save failed: {e}"), notify::Action::OpenConsole);
     }
 
     // Build a ready-to-run world from the in-memory entries, without touching disk
-    // (SAVE owns persistence). A GraphicsConfig is seeded when the authored entries
-    // alone would not render, so the preview window never goes blank. The template
+    // (SAVE owns persistence). The same compile the session booted through, so a
+    // rebuild can only differ from boot by the edits since. The template
     // baselines the expansion merged authored patches over come back with it, so a
     // later edit can re-derive one asset's effective args without cooking again.
     pub(super) fn build_preview_world(&self) -> std::io::Result<(World, live::ShadowBaselines)> {
         let jsonl = crate::world::write_world_jsonl(&self.entries)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        let built = match crate::authoring::build_world_and_shadows(&jsonl) {
-            Ok(built) if concinnity_engine::ecs::renders(&built.0) => built,
-            _ => crate::authoring::build_world_and_shadows(&super::seeded_content(&jsonl))?,
-        };
-        let (world, shadowed) = built;
+        let (world, shadowed) = build_renderable(&jsonl)?;
         let baselines = shadowed
             .into_iter()
             .map(|s| (s.name, s.args))
@@ -271,8 +237,7 @@ impl EditorHook {
 
     // Write the working entries to world.jsonl atomically (temp file + rename),
     // so a crash mid-write cannot truncate the user's world. SAVE inlines the
-    // serialization (it reuses the string for the blob cook); this remains the
-    // test seam for the write itself.
+    // serialization; this remains the test seam for the write itself.
     #[cfg(test)]
     pub(super) fn write_jsonl(&self) -> std::io::Result<()> {
         let out = crate::world::write_world_jsonl(&self.entries)
@@ -281,9 +246,8 @@ impl EditorHook {
     }
 
     // The file-write tail of `write_jsonl`, for a caller that already
-    // serialized the entries (SAVE reuses the string for the blob cook). The
-    // directory is created first: a fresh project saves its first world into a
-    // `worlds/` that does not exist yet.
+    // serialized the entries. The directory is created first: a fresh project
+    // saves its first world into a `worlds/` that does not exist yet.
     fn write_jsonl_content(&self, content: &str) -> std::io::Result<()> {
         if let Some(parent) = std::path::Path::new(&self.world_path).parent()
             && !parent.as_os_str().is_empty()

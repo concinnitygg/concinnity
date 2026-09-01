@@ -1,15 +1,15 @@
 // src/editor/inject.rs
 //
 // Runtime injection of the editor HUD elements into an already-compiled world.
-// Runs between `App::load_blob` and `App::start`, so the injected components are
-// indistinguishable from cooked ones -- and none of it is ever written back to
-// the user's world.jsonl or blobs (the SAVE path serializes the authored entry
-// list, not the live world). The elements are plain `Sprite` / `TextLabel` /
-// `TextInput` components at reserved ids; the editor's `DebugHook` tick drives
-// them each frame (see `hud.rs` / `panel.rs`). No editor-specific component or
-// system is involved, so nothing here reaches the shipped runtime. (The two
-// `TextInput` fields do bring in the engine's general text-input system, which
-// is real runtime code, not editor-only.)
+// Runs between the world's in-memory compile and `App::start`, so the injected
+// components are indistinguishable from cooked ones -- and none of it is ever
+// written back to the user's world.jsonl or blobs (the SAVE path serializes the
+// authored entry list, not the live world). The elements are plain `Sprite` /
+// `TextLabel` / `TextInput` components at reserved ids; the editor's
+// `DebugHook` tick drives them each frame (see `hud.rs` / `panel.rs`). No
+// editor-specific component or system is involved, so nothing here reaches the
+// shipped runtime. (The two `TextInput` fields do bring in the engine's general
+// text-input system, which is real runtime code, not editor-only.)
 
 use super::hud;
 use super::registry::{self, PanelKey};
@@ -139,6 +139,15 @@ pub(crate) fn editor_hud(world: &mut World) {
         world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
     for id in super::toast_overlay::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
+    // The confirmation dialog goes in last of all: while open it is
+    // screen-modal and draws over everything, toasts included (its per-frame
+    // layer also pins it there).
+    for id in super::modal::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in super::modal::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
     }
 }

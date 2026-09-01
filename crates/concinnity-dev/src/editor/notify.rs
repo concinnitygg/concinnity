@@ -22,7 +22,6 @@ const FADE: Duration = Duration::from_millis(300);
 pub(crate) enum Level {
     Info,
     Success,
-    Warning,
     Error,
 }
 
@@ -31,7 +30,6 @@ impl Level {
     fn ttl(self) -> Option<Duration> {
         match self {
             Level::Info | Level::Success => Some(Duration::from_secs(4)),
-            Level::Warning => Some(Duration::from_secs(8)),
             Level::Error => None,
         }
     }
@@ -248,9 +246,6 @@ impl Notifier {
     pub(crate) fn success(&self, message: &str) {
         self.push(Level::Success, message);
     }
-    pub(crate) fn warning(&self, message: &str) {
-        self.push(Level::Warning, message);
-    }
     pub(crate) fn error_with(&self, message: &str, action: Action) {
         self.push_with(Level::Error, message, Some(action));
     }
@@ -318,16 +313,6 @@ mod tests {
         assert_eq!(stack.cards.len(), 1);
         assert_eq!(stack.cards[0].level, Level::Error);
         assert_eq!(stack.cards[0].alpha, 1.0, "sticky toasts never fade");
-    }
-
-    #[test]
-    fn warnings_outlive_info() {
-        let now = Instant::now();
-        let mut q = queue_with(&[(Level::Info, "a"), (Level::Warning, "b")], now);
-        let mid = now + Duration::from_secs(6);
-        let stack = q.stack_at(mid);
-        assert_eq!(stack.cards.len(), 1);
-        assert_eq!(stack.cards[0].level, Level::Warning);
     }
 
     #[test]

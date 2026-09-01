@@ -49,13 +49,14 @@ pub(crate) enum Commands {
     #[command(name = "debug")]
     Debug(DebugArgs),
 
-    /// Edit a compiled world in-engine with a save-back HUD
+    /// Edit a world in-engine with a save-back HUD
     //
-    // Reads the compiled blobs (a prior `cn build` is required), overlays the
-    // editor HUD (a SAVE button plus an add-asset button), and persists edits by
-    // recompiling world.jsonl. No WebSocket command channel unless --debug-port
-    // is given (which stands up the same debug server `cn debug` uses, so
-    // `cn debug send` / `screenshot` can drive an editor session).
+    // Compiles world.jsonl in memory (no prior `cn build` needed, and the blobs
+    // one wrote are neither read nor refreshed here), overlays the editor HUD (a
+    // SAVE button plus an add-asset button), and persists edits by writing
+    // world.jsonl. No WebSocket command channel unless --debug-port is given
+    // (which stands up the same debug server `cn debug` uses, so `cn debug send`
+    // / `screenshot` can drive an editor session).
     #[command(name = "editor")]
     Editor(EditorArgs),
 

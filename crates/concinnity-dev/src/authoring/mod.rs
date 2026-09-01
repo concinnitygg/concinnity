@@ -6,8 +6,6 @@
 mod add;
 mod build;
 mod check;
-pub(crate) mod name_table;
-pub(crate) mod reload_sources;
 mod rm;
 mod template_spec;
 

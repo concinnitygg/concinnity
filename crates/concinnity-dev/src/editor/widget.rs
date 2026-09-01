@@ -91,6 +91,26 @@ pub(crate) fn place_left_label(
     }
 }
 
+// Position a center-aligned label with `pos` as its horizontal anchor, setting
+// its text, color, and visibility. A no-op if the label is absent.
+pub(crate) fn place_center_label(
+    world: &mut World,
+    id: AssetId,
+    pos: [f32; 2],
+    content: &str,
+    color: [f32; 3],
+    visible: bool,
+) {
+    if let Some(l) = label_mut(world, id) {
+        l.x = pos[0];
+        l.y = pos[1];
+        l.align = TextAlign::Center;
+        l.color = color;
+        l.visible = visible;
+        l.content = content.to_string();
+    }
+}
+
 // One line of the HUD font at the editor's text scale. The renderer does the
 // real measuring; the editor needs this only to say how many lines a box holds.
 pub(crate) const LINE_H: f32 = theme::TEXT_HALF * 2.0;

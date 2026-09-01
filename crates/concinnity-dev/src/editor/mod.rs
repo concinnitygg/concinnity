@@ -1,10 +1,12 @@
 // src/editor/mod.rs
 //
-// The `cn editor` run path. Unlike `cn debug` (which compiles world.jsonl fully
-// in memory and stands up a WebSocket command channel), the editor reads the
-// already-compiled blobs on startup, overlays an injected editor HUD, and
-// persists edits by recompiling on SAVE. An optional debug port reuses the
-// existing debug server so `cn debug send` / `screenshot` can inspect a session.
+// The `cn editor` run path. Like `cn debug`, the editor compiles world.jsonl in
+// memory: the session boots from the authored entries, not from the blobs a
+// build left under the state tree, so what opens is always what the world file
+// says. It overlays an injected editor HUD and persists edits by writing
+// world.jsonl. The blobs are refreshed only by an explicit build (`cn build`,
+// or the console's cook command). An optional debug port reuses the existing
+// debug server so `cn debug send` / `screenshot` can inspect a session.
 
 mod asset_list;
 mod asset_tree;
@@ -41,6 +43,7 @@ mod lighting_panel;
 mod list_panel;
 mod live;
 mod marquee;
+mod modal;
 pub(crate) mod notify;
 mod orbit;
 mod outlines;
@@ -88,10 +91,9 @@ use hook::EditorHook;
 const SEED_GRAPHICS_CONFIG: &str =
     "{\"name\":\"editor_default_gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}";
 
-/// Editor entry point (`cn editor`). Brings up a renderable world -- building the
-/// blobs first if they are missing, and falling back to an empty in-memory world
-/// when there is nothing to load -- injects the editor HUD, and runs the world
-/// loop driven by the editor hook (plus the debug server when a port is given).
+/// Editor entry point (`cn editor`). Compiles the authored world in memory,
+/// injects the editor HUD, and runs the world loop driven by the editor hook
+/// (plus the debug server when a port is given).
 pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::Result<()> {
     // Instead of the engine's plain `init_logging`: the same stderr formatter
     // plus a layer mirroring this crate's events into the Console panel's log.
@@ -119,10 +121,10 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
         Vec::new()
     };
 
-    // Bring up a renderable world: build the blobs if needed, load them, and
-    // seed an empty world when there is nothing renderable to show.
+    // Bring up a renderable world by compiling those entries, seeding a render
+    // marker when they alone would not render.
     let mut app = crate::project::app();
-    boot_world(&mut app, &world_path, world_exists, &entries)?;
+    boot_world(&mut app, &entries)?;
 
     // Inject the editor HUD elements before start (this also drops the world's
     // DebugHud, whose F1 role the editor takes over); the editor's DebugHook
@@ -173,73 +175,31 @@ fn unsaved_world_path() -> String {
         .unwrap_or_else(|| WORLD_JSONL.to_string())
 }
 
-// Populate `app` with a renderable world for editing:
-//   * build the blobs first if the world has content but has not been compiled
-//     yet (`cn build` as a library call);
-//   * load the compiled blobs when present;
-//   * if there is still nothing renderable (no world file, an authored world
-//     with no render marker, or an empty build), boot a minimal in-memory world
-//     seeded with a GraphicsConfig so the editor still opens a window.
-fn boot_world(
-    app: &mut App,
-    world_path: &str,
-    world_exists: bool,
-    entries: &[serde_json::Value],
-) -> std::io::Result<()> {
-    let blobs_present = || {
-        crate::project::data_dir()
-            .is_some_and(|d| concinnity_host::store::blob::primary_in(&d).exists())
-    };
-
-    // Build if the world has content the compiled blobs do not reflect yet.
-    if world_exists && !blobs_present() {
-        crate::build_world_to_disk(world_path)?;
-    }
-
-    // Load the compiled blobs when they exist; the primary render source.
-    if blobs_present() {
-        app.load_blob().map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to load compiled world data: {e:?}"),
-            )
-        })?;
-        // The blobs carry only interned ids; a boot without an in-process cook
-        // has an empty name table, which kills name-keyed picking until the
-        // first edit. Restore it from the lock the build wrote. Best effort: a
-        // missing lock only means the pre-existing degraded behavior.
-        let lock = crate::project::world_lock_path().unwrap_or_default();
-        match crate::authoring::name_table::prime_from_lock_file(&lock) {
-            Ok(n) if n > 0 => tracing::info!("editor: primed {n} asset names from the build lock"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("editor: could not prime asset names: {e}"),
-        }
-        // The in-memory build installs the hot-reload source catalogues as it
-        // compiles; a blob boot reconstructs them from the lock + the authored
-        // entries so file-backed assets reload here too. Best effort, like the
-        // name priming above.
-        match crate::authoring::reload_sources::install_from_lock(app.world_mut(), entries, &lock) {
-            Ok(n) if n > 0 => {
-                tracing::info!("editor: recovered {n} hot-reload source(s) from the build lock");
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("editor: could not recover hot-reload sources: {e}"),
-        }
-    }
-
-    // Fall back to an in-memory seed when nothing renderable was loaded, so a
-    // window still opens over a black scene.
-    if !concinnity_engine::ecs::renders(app.world()) {
-        let base = if world_exists {
-            std::fs::read_to_string(world_path)?
-        } else {
-            String::new()
-        };
-        let world = crate::build_world_from_str(&seeded_content(&base))?;
-        app.load_world(world);
-    }
-
+// Populate `app` with a renderable world for editing, compiled from the
+// authored entries in memory. Nothing under the build root is read: the blobs
+// there are refreshed only by an explicit build, so they may lag the world file
+// the editor is opening.
+fn boot_world(app: &mut App, entries: &[serde_json::Value]) -> std::io::Result<()> {
+    let jsonl = crate::world::write_world_jsonl(entries)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let (world, _) = build_renderable(&jsonl)?;
+    app.load_world(world);
     Ok(())
+}
+
+// Compile world.jsonl content into a ready-to-run world, plus the template
+// baselines its expansion merged authored patches over. Content that would not
+// render (an empty world, or authored entries with no render marker) is
+// recompiled with a seeded GraphicsConfig, so a session always opens a window.
+// Boot and every live-preview rebuild come through here, so what the editor
+// shows never depends on which of the two produced it.
+fn build_renderable(
+    jsonl: &str,
+) -> std::io::Result<(World, Vec<concinnity_cook::build_only::ShadowedAsset>)> {
+    match crate::authoring::build_world_and_shadows(jsonl) {
+        Ok(built) if concinnity_engine::ecs::renders(&built.0) => Ok(built),
+        _ => crate::authoring::build_world_and_shadows(&seeded_content(jsonl)),
+    }
 }
 
 // Guarantee a render marker: append the seed GraphicsConfig to the authored
@@ -315,6 +275,115 @@ mod tests {
         let parsed = crate::world::parse_world_jsonl(SEED_GRAPHICS_CONFIG).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0]["type"], "GraphicsConfig");
+    }
+
+    // A project whose build root is a `.concinnity/` of its own, as `cn` opens
+    // one, with the machine-wide cache so a boot compiles shaders once.
+    fn open_project(dir: &std::path::Path) -> std::path::PathBuf {
+        let build_root = dir.join(".concinnity");
+        crate::project::open(
+            concinnity_host::store::paths::StateTree::at(dir)
+                .with_build(&build_root)
+                .with_cache(concinnity_testing::shared_cache_dir(
+                    "concinnity-dev-tests-cache",
+                )),
+        );
+        build_root
+    }
+
+    fn entry(name: &str, ty: &str, args: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"name": name, "type": ty, "args": args})
+    }
+
+    // A renderable authored world, plus a label whose content identifies which
+    // compile a booted world came from.
+    fn renderable_entries(label: &str) -> Vec<serde_json::Value> {
+        vec![
+            entry("cam", "Camera3D", serde_json::json!({})),
+            entry("room", "Room", serde_json::json!({})),
+            entry("hint", "TextLabel", serde_json::json!({"content": label})),
+        ]
+    }
+
+    // The content of the booted world's only TextLabel.
+    fn booted_label(app: &App) -> String {
+        app.world()
+            .query::<crate::components::TextLabel>()
+            .next()
+            .expect("the authored label is in the booted world")
+            .content
+            .clone()
+    }
+
+    // Boot compiles the authored entries in memory: the world it brings up is
+    // the one the entry list describes, and no build output is read or written.
+    #[test]
+    fn boot_compiles_the_authored_entries_without_touching_the_build_root() {
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
+        let build_root = open_project(dir.path());
+
+        let mut app = crate::project::app();
+        boot_world(&mut app, &renderable_entries("authored")).expect("the world builds");
+
+        assert!(concinnity_engine::ecs::renders(app.world()));
+        assert_eq!(booted_label(&app), "authored");
+        assert!(
+            !build_root.join("data").exists() && !build_root.join("world-lock.json").exists(),
+            "boot writes no blobs and no lock"
+        );
+
+        crate::test_support::isolate_state_dir();
+    }
+
+    // Blobs a build left behind are ignored: the session shows what the entry
+    // list says even when the compiled output on disk says something else, and
+    // that output is left exactly as the build wrote it.
+    #[test]
+    fn boot_ignores_blobs_that_no_longer_match_the_entries() {
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
+        let build_root = open_project(dir.path());
+
+        // An explicit build, as `cn build` runs it, over the stale world.
+        let world_path = dir.path().join("worlds").join(WORLD_JSONL);
+        std::fs::create_dir_all(world_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &world_path,
+            crate::world::write_world_jsonl(&renderable_entries("stale")).unwrap(),
+        )
+        .unwrap();
+        crate::build_world_to_disk(world_path.to_str().unwrap()).expect("the build writes blobs");
+        let blob = concinnity_host::store::blob::primary_in(&build_root.join("data"));
+        let before = std::fs::read(&blob).expect("the build wrote a primary blob");
+
+        let mut app = crate::project::app();
+        boot_world(&mut app, &renderable_entries("edited")).expect("the world builds");
+
+        assert_eq!(
+            booted_label(&app),
+            "edited",
+            "the entries win over the blobs the last build left"
+        );
+        assert_eq!(
+            std::fs::read(&blob).unwrap(),
+            before,
+            "boot leaves the build output untouched"
+        );
+
+        crate::test_support::isolate_state_dir();
+    }
+
+    // Nothing renderable to compile still opens a window: an empty entry list
+    // boots the seeded render marker.
+    #[test]
+    fn boot_seeds_a_render_marker_for_an_empty_entry_list() {
+        let _guard = crate::test_support::lock();
+        crate::test_support::isolate_state_dir();
+
+        let mut app = crate::project::app();
+        boot_world(&mut app, &[]).expect("an empty world seeds");
+        assert!(concinnity_engine::ecs::renders(app.world()));
     }
 
     // An explicit path is taken verbatim; its existence is reported so a

@@ -694,8 +694,7 @@ pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Resul
     // schema round-trip, then the structural check `cn add` / `cn check` run --
     // but never a payload compile: an EnvironmentMap's convolution costs seconds
     // and would stall the editor on every Apply. A source file that parses but
-    // decodes badly is caught by the preview rebuild and by SAVE, which cook for
-    // real.
+    // decodes badly is caught by the preview rebuild, which cooks for real.
     if ct.is_resource() {
         let args = Value::Object(args.clone());
         ct.normalized_args(&args, crate::cook_platform())

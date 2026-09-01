@@ -70,6 +70,16 @@ impl EditorHook {
                 layers.insert(id, TOP_BAR_LAYER + 2 * PANEL_LAYER_SPAN);
             }
         }
+        // The confirmation dialog is screen-modal while open: routing swallows
+        // every press for it, so it draws above everything -- toasts included.
+        if self.modal.is_some() {
+            for id in modal::all_sprite_ids()
+                .into_iter()
+                .chain(modal::all_label_ids())
+            {
+                layers.insert(id, TOP_BAR_LAYER + 3 * PANEL_LAYER_SPAN);
+            }
+        }
         layers
     }
 
@@ -147,6 +157,11 @@ impl EditorHook {
     // over no such edge. Front-to-back, so a panel's body blocks the panels
     // behind it; the close button keeps priority over a top-corner grab.
     pub(super) fn hover_cursor(&self, vp: [f32; 2], mouse: [f32; 2]) -> CursorShape {
+        // The open confirmation dialog swallows the pointer, so no panel edge
+        // offers a resize grab under it.
+        if self.modal.is_some() {
+            return CursorShape::Default;
+        }
         let (mx, my) = (mouse[0], mouse[1]);
         for &key in self.panel_order.iter().rev() {
             let p = registry::panel(key);

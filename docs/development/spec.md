@@ -104,8 +104,9 @@ under `crates/`.
 `concinnity run` and `concinnity-run` drive the same engine loop. The
 difference is where the state root is anchored and how a missing world is
 reported. `concinnity debug` compiles a world in memory and stands up a
-localhost inspection channel; `concinnity editor` overlays the in-engine editor
-on compiled blobs. Neither of those paths exists in a shipped player.
+localhost inspection channel; `concinnity editor` compiles one the same way and
+overlays the in-engine editor on it. Neither of those paths exists in a shipped
+player.
 
 ### 2.3 Execution phases
 
@@ -1876,9 +1877,10 @@ the blob, since blobs are profile-agnostic.
 ### 15.4 Development sessions
 
 `cn debug` compiles a world in memory and stands up a localhost inspection
-channel; `cn editor` overlays the in-engine editor on compiled blobs, with asset
-hot reload. Neither path exists in a shipped player: a shipped run is neither
-remotely inspectable nor remotely driven.
+channel; `cn editor` compiles one the same way and overlays the in-engine
+editor on it, with asset hot reload. Neither reads the blobs a build wrote:
+those are refreshed only by an explicit build. Neither path exists in a shipped
+player: a shipped run is neither remotely inspectable nor remotely driven.
 
 ---
 

@@ -3287,6 +3287,60 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
     assert_eq!(h.entries.len(), 1, "Ctrl+Y redoes it");
 }
 
+// SAVE writes world.jsonl and nothing else: the compiled blobs belong to an
+// explicit build, so a save leaves the build root as it found it.
+#[test]
+fn save_writes_the_world_file_and_no_build_output() {
+    let _guard = crate::test_support::lock();
+    let dir = concinnity_testing::TempTree::new();
+    let build_root = dir.path().join(".concinnity");
+    crate::project::open(
+        concinnity_host::store::paths::StateTree::at(dir.path()).with_build(&build_root),
+    );
+
+    let world_path = dir.path().join("worlds").join("world.jsonl");
+    let entries = vec![serde_json::json!({"name":"phys","type":"PhysicsConfig","args":{}})];
+    let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), entries.clone());
+    h.entries
+        .push(serde_json::json!({"name":"hint","type":"TextLabel","args":{}}));
+    h.mark_changed();
+    h.save();
+
+    let written = std::fs::read_to_string(&world_path).expect("the world file was created");
+    assert_eq!(
+        crate::world::parse_world_jsonl(&written).unwrap(),
+        h.entries,
+        "the working entries are what landed on disk"
+    );
+    assert!(!h.dirty, "a written save clears the unsaved chip");
+    assert_eq!(h.saved, h.entries, "and re-baselines dirty tracking");
+    assert!(
+        !build_root.exists(),
+        "no blobs, no lock, no build root at all"
+    );
+
+    crate::test_support::isolate_state_dir();
+}
+
+// A save that cannot write leaves the world dirty for the next attempt.
+#[test]
+fn a_failed_save_leaves_the_world_dirty() {
+    let dir = concinnity_testing::TempTree::new();
+    // A path under a file, so `create_dir_all` of the parent fails.
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let world_path = blocker.join("worlds").join("world.jsonl");
+
+    let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), Vec::new());
+    h.entries
+        .push(serde_json::json!({"name":"hint","type":"TextLabel","args":{}}));
+    h.mark_changed();
+    h.save();
+
+    assert!(h.dirty, "the world stays unsaved");
+    assert!(h.saved.is_empty(), "and the saved baseline does not move");
+}
+
 // A successful SAVE re-baselines dirty tracking: undoing past it re-dirties,
 // redoing back to the saved list cleans the chip again.
 #[test]
@@ -3295,7 +3349,7 @@ fn dirty_tracks_the_saved_list_across_history_jumps() {
     let mut h = hook(Vec::new());
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
-    // Stand in for a successful SAVE (persist() would hit disk + the cook).
+    // Stand in for a successful SAVE (which would hit disk).
     h.dirty = false;
     h.saved = h.entries.clone();
 

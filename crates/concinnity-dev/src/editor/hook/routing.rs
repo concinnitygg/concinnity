@@ -96,8 +96,8 @@ impl EditorHook {
             return;
         }
         if let Some(a) = hud::hit_test(mx, my, true, self.hud_state(), vp[0]) {
-            // SAVE only writes to disk now; it neither rebuilds nor re-injects the
-            // world, so an open form is left intact (no blank-field risk).
+            // SAVE only writes world.jsonl; it neither rebuilds nor re-injects
+            // the world, so an open form is left intact (no blank-field risk).
             self.apply_top(a, world);
             self.picker_open = false;
             self.row_menu = None;

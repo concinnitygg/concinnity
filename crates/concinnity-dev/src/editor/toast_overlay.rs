@@ -94,7 +94,6 @@ fn accent_tint(level: Level) -> [f32; 4] {
     match level {
         Level::Info => theme::NOTIFY_INFO,
         Level::Success => theme::NOTIFY_SUCCESS,
-        Level::Warning => theme::NOTIFY_WARNING,
         Level::Error => theme::NOTIFY_ERROR,
     }
 }

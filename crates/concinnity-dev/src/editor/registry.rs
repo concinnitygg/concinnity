@@ -295,6 +295,12 @@ mod tests {
         for id in super::super::toast_overlay::all_label_ids() {
             claim(id, "toast labels".to_string());
         }
+        for id in super::super::modal::all_sprite_ids() {
+            claim(id, "confirm dialog sprites".to_string());
+        }
+        for id in super::super::modal::all_label_ids() {
+            claim(id, "confirm dialog labels".to_string());
+        }
         for key in PanelKey::ALL {
             let p = panel(key);
             for id in p.sprite_ids() {

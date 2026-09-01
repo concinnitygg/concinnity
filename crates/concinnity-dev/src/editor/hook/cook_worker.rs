@@ -1,9 +1,9 @@
 // src/editor/hook/cook_worker.rs
 //
-// EditorHook: the shared blob-cook worker. Both cook triggers (the console's
-// build command and SAVE's blob refresh) compile the serialized entries on a
-// worker thread with an operation card fed by the pipeline's compile progress,
-// on the engine's bounded job pool, under the one-cook-at-a-time guard.
+// EditorHook: the blob-cook worker behind the console's build command. It
+// compiles the serialized entries on a worker thread with an operation card fed
+// by the pipeline's compile progress, on the engine's bounded job pool, under
+// the one-cook-at-a-time guard.
 
 use super::*;
 

@@ -282,7 +282,7 @@ impl EditorHook {
     // The build command ("cook" in user-facing text): compile the in-memory
     // entries and write the blobs on a worker thread, reporting start /
     // finish / errors through the sink so the frame loop never stalls. One
-    // build at a time; SAVE also stands down while one is writing blobs.
+    // build at a time, shared with /export.
     fn console_build(&mut self) {
         if self.console_build_running.swap(true, Ordering::SeqCst) {
             self.console_sink.warn("cook already running");

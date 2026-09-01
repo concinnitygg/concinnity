@@ -48,7 +48,6 @@ pub(crate) const LOG_COMMAND: [f32; 3] = [0.58, 0.72, 0.95];
 // Toast severity accents (the notification stack's edge stripe).
 pub(crate) const NOTIFY_INFO: [f32; 4] = [0.58, 0.72, 0.95, 1.0];
 pub(crate) const NOTIFY_SUCCESS: [f32; 4] = [0.42, 0.72, 0.46, 1.0];
-pub(crate) const NOTIFY_WARNING: [f32; 4] = [0.95, 0.78, 0.45, 1.0];
 pub(crate) const NOTIFY_ERROR: [f32; 4] = [0.90, 0.42, 0.42, 1.0];
 
 // How far a row's hover / selection highlight is inset from the row rect, so

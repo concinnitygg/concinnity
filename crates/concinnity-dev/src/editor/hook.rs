@@ -32,8 +32,8 @@
 // the running world can express it (`editor/live/`), and otherwise recompiles
 // and swaps a fresh world under the live render backend, which is transplanted
 // across as a `PendingBackend` so the OS window is never recreated. SAVE
-// re-serializes the entry list to world.jsonl and recompiles the blobs through
-// the validated cook tail (`build_world_to_disk`).
+// re-serializes the entry list to world.jsonl and stops there: the compiled
+// blobs are refreshed by an explicit build, not by editing.
 
 use super::asset_tree::{self, TreeGroup, TreeRow};
 use super::axes;
@@ -73,6 +73,7 @@ use super::widget::{self, point_in};
 use super::asset_list;
 use super::asset_list::ListRow;
 use super::billboards;
+use super::build_renderable;
 use super::create_menu;
 use super::cursor;
 use super::framing;
@@ -81,11 +82,11 @@ use super::group_transform;
 use super::highlight;
 use super::history::History;
 use super::marquee;
+use super::modal;
 use super::notify;
 use super::orbit;
 use super::outlines;
 use super::resize;
-use super::seeded_content;
 use super::selection::Selection;
 use super::session_store;
 use super::sim;
@@ -143,9 +144,9 @@ pub(crate) struct EditorHook {
     // The entry list the live preview world was built from, and the template
     // baselines that build's expansion merged authored patches over. An edit is
     // applied to the running world by diffing against these; a rebuild re-seeds
-    // both. The baselines are unknown until the first rebuild of the session
-    // (boot loads the world from the compiled blobs, which do not carry them),
-    // and until they are, an edit cannot be applied live.
+    // both. The baselines are seeded on demand (the first edit that could be
+    // applied live expands the list once to find them), and an edit cannot be
+    // applied live until they are.
     world_entries: Vec<serde_json::Value>,
     world_shadows: Option<live::ShadowBaselines>,
     // Whether the Templates panel is shown (toggled from the View panel).
@@ -313,6 +314,10 @@ pub(crate) struct EditorHook {
     content_drag: Option<content_drag::ContentDrag>,
     // The right-click "Create here" menu (`hook/create_menu_drive.rs`), if open.
     create_menu: Option<create_menu_drive::CreateMenu>,
+    // The confirmation dialog (`hook/modal_drive.rs`), if open. Screen-modal:
+    // while open every press and wheel is swallowed before any other routing,
+    // and only one of its buttons closes it.
+    modal: Option<modal_drive::ModalState>,
     // The command palette (`hook/palette_edit.rs`): shown state, a one-frame
     // focus blur after the Ctrl+K open, the query mirrored off its field once
     // a frame, the item list built on open with the matches the query keeps,
@@ -601,6 +606,10 @@ mod hide;
 mod import_edit;
 mod layout;
 mod marquee_drag;
+// Named to avoid colliding with the `use super::modal` module import.
+mod modal_drive;
+#[cfg(test)]
+mod modal_tests;
 mod orbit_drive;
 mod outline_drive;
 // Named to avoid colliding with the `use super::overrides` module import.
@@ -746,6 +755,7 @@ impl EditorHook {
             content_search_focus: false,
             content_drag: None,
             create_menu: None,
+            modal: None,
             palette_open: false,
             palette_blur: false,
             palette_query: String::new(),
@@ -985,11 +995,13 @@ impl DebugHook for EditorHook {
                     && self.content_drag.is_none()
                     && self.orbit.is_none()
                 {
-                    // An open Display or create menu is modal: it takes the
-                    // press (a row acts, anything else dismisses) before
-                    // normal routing. An Alt+press over the viewport starts
-                    // an orbit tumble instead of a pick.
-                    let claimed = self.route_display_menu_click(input, vp)
+                    // The confirmation dialog swallows every press first.
+                    // Behind it, an open Display or create menu is modal: it
+                    // takes the press (a row acts, anything else dismisses)
+                    // before normal routing. An Alt+press over the viewport
+                    // starts an orbit tumble instead of a pick.
+                    let claimed = self.route_modal_click(input, vp, world)
+                        || self.route_display_menu_click(input, vp)
                         || self.route_create_menu_click(input, vp)
                         || self.route_palette_dismiss(input, vp)
                         || (input.alt && self.try_begin_orbit(input, vp, world));
@@ -998,8 +1010,10 @@ impl DebugHook for EditorHook {
                     }
                 }
                 // An unclaimed viewport right press opens the create menu at
-                // the cursor, under the same not-mid-gesture guards.
+                // the cursor, under the same not-mid-gesture guards; the
+                // confirmation dialog swallows it like every other press.
                 if input.right_click
+                    && self.modal.is_none()
                     && self.drag.is_none()
                     && self.resize.is_none()
                     && self.gizmo_drag.is_none()
@@ -1104,10 +1118,11 @@ impl DebugHook for EditorHook {
                     registry::panel(key).frame_keys(self, world, input);
                 }
                 // Wheel routing: the frontmost scrollable panel under the cursor
-                // takes the wheel. An open value dropdown is modal and can extend
-                // past the form panel, so it scrolls the form from anywhere while
-                // open.
-                if input.scroll_delta.abs() > 0.5 {
+                // takes the wheel. An open confirmation dialog swallows it with
+                // the rest of the pointer. An open value dropdown is modal and
+                // can extend past the form panel, so it scrolls the form from
+                // anywhere while open.
+                if self.modal.is_none() && input.scroll_delta.abs() > 0.5 {
                     let (mx, my) = (input.mouse_x, input.mouse_y);
                     let form_shown = registry::panel(PanelKey::Edit).is_open(self);
                     if form_shown && self.field_dropdown.is_some() {
@@ -1224,6 +1239,7 @@ impl DebugHook for EditorHook {
         self.drive_create_menu_draw(world, shown, mouse);
         self.drive_display_menu_draw(world, vp, shown, mouse);
         self.drive_toasts(world, vp, shown, mouse);
+        self.drive_modal_draw(world, vp, shown, mouse);
     }
 
     // Bring the live preview world back in line with the in-memory entries, so
@@ -1322,8 +1338,7 @@ impl EditorHook {
     }
 
     // The template baselines for the running world, expanding its entry list
-    // once to find them if the session has not needed them yet (boot loads the
-    // world from the compiled blobs, which do not record them). Every edit that
+    // once to find them if the session has not needed them yet. Every edit that
     // could move a baseline rebuilds, and a rebuild re-seeds these, so the one
     // expansion holds for the rest of the session. `false` when the list does
     // not expand, which sends the edit to the rebuild that will report why.
