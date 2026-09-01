@@ -45,9 +45,12 @@ pub(crate) enum PanelKey {
     // After TemplateDetail: the palette is a transient launcher overlay, so it
     // starts above everything it can open.
     Palette,
+    // Last of all: a session started with no world named on the command line
+    // opens on this panel, so it has to be the frontmost thing on screen.
+    Worlds,
 }
 
-pub(crate) const PANEL_COUNT: usize = 16;
+pub(crate) const PANEL_COUNT: usize = 17;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -67,6 +70,7 @@ impl PanelKey {
         PanelKey::CharacterShape,
         PanelKey::TemplateDetail,
         PanelKey::Palette,
+        PanelKey::Worlds,
     ];
 
     pub(crate) fn index(self) -> usize {
@@ -108,6 +112,9 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // (allocated in their own modules).
             PanelKey::Palette => 0x8000,
             PanelKey::CharacterShape => 0x9000,
+            // 0xA000 and 0xB000 belong to the toast stack and the confirmation
+            // dialog (allocated in their own modules).
+            PanelKey::Worlds => 0xC000,
         }
 }
 
@@ -212,6 +219,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::CharacterShapePanel,
     &panels::TemplateDetailPanel,
     &panels::PalettePanel,
+    &panels::WorldsPanel,
 ];
 
 pub(crate) fn panel(key: PanelKey) -> &'static dyn Panel {
@@ -333,7 +341,8 @@ mod tests {
                 "Behavior",
                 "Variables",
                 "Content",
-                "Character Shape"
+                "Character Shape",
+                "Worlds"
             ]
         );
     }

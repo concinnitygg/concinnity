@@ -56,6 +56,16 @@ pub(crate) fn save(path: &Path, store: &SessionStore) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
 
+// Drop a world's entry: a deleted world file leaves nothing for its bookmarks
+// to point at. A store with no such entry is left alone.
+pub(crate) fn forget(path: &Path, key: &str) -> std::io::Result<()> {
+    let mut store = load(path);
+    if store.worlds.remove(key).is_none() {
+        return Ok(());
+    }
+    save(path, &store)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +96,28 @@ mod tests {
         assert!(load(&tree.join("absent")).worlds.is_empty());
         let bad = tree.write("editor", b"not cbor");
         assert!(load(&bad).worlds.is_empty());
+    }
+
+    // Forgetting a deleted world drops only its entry; the rest of the store
+    // stands, and a world that was never in it costs no write.
+    #[test]
+    fn forget_drops_one_worlds_entry() {
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("editor");
+        let mut store = SessionStore::default();
+        store.worlds.insert("arena".into(), WorldSession::default());
+        store.worlds.insert("keep".into(), WorldSession::default());
+        save(&path, &store).unwrap();
+
+        forget(&path, "arena").unwrap();
+        let back = load(&path);
+        assert!(!back.worlds.contains_key("arena"));
+        assert!(back.worlds.contains_key("keep"));
+
+        forget(&path, "never-there").unwrap();
+        assert_eq!(load(&path).worlds.len(), 1);
+        // No store on disk at all is not an error either.
+        forget(&tree.join("absent"), "arena").unwrap();
     }
 
     #[test]

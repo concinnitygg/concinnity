@@ -929,10 +929,11 @@ fn edit_panel_drags_by_its_title_bar() {
 fn focusing_a_panel_moves_it_to_the_front() {
     let mut h = hook(Vec::new());
     let panels = h.panel_order.len();
-    // Default order matches the injected draw order: the palette frontmost,
-    // the Template detail just under it (over the Templates list it spawns
-    // from).
-    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Palette));
+    // Default order matches the injected draw order: the Worlds panel
+    // frontmost (a session that opens on it must see it over everything), the
+    // palette under it, then the Template detail (over the Templates list it
+    // spawns from).
+    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Worlds));
     h.focus_panel(PanelKey::Assets);
     assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Assets));
     assert_eq!(h.panel_order.len(), panels, "no duplicates");

@@ -16,13 +16,6 @@ pub(super) struct ModalState {
 
 impl EditorHook {
     // Open the dialog. Buttons past the widget's pool are dropped.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "lifts once editor code outside tests opens a dialog"
-        )
-    )]
     pub(super) fn open_modal(&mut self, message: &str, mut buttons: Vec<modal::Button>) {
         buttons.truncate(modal::MAX_BUTTONS);
         self.modal = Some(ModalState {
@@ -52,9 +45,10 @@ impl EditorHook {
         true
     }
 
-    fn run_modal_action(&mut self, action: modal::Action, _world: &mut World) {
+    fn run_modal_action(&mut self, action: modal::Action, world: &mut World) {
         match action {
             modal::Action::Dismiss => {}
+            modal::Action::Worlds(confirm) => self.apply_worlds_confirm(confirm, world),
         }
     }
 

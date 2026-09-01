@@ -68,6 +68,8 @@ use super::variables_panel::{self, VariablesAction, VariablesView};
 use super::view::{self, ViewAction};
 use super::view_menu;
 use super::widget::{self, point_in};
+use super::world_files;
+use super::worlds::{self, WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
 // Re-exported for the hook's submodules (they reach these editor-level items as
 // `super::asset_list` / `super::seeded_content`).
 use super::asset_list;
@@ -318,6 +320,16 @@ pub(crate) struct EditorHook {
     // while open every press and wheel is swallowed before any other routing,
     // and only one of its buttons closes it.
     modal: Option<modal_drive::ModalState>,
+    // The Worlds panel (`hook/worlds_edit.rs`): shown state, the project's
+    // worlds as of the last refresh (the listing changes only when the panel
+    // acts on it, so it is not re-read every frame), the row window's scroll,
+    // whether the name field holds keyboard focus, and why the last New was
+    // rejected.
+    worlds_open: bool,
+    worlds_rows: Vec<WorldRow>,
+    worlds_scroll: usize,
+    worlds_focus: bool,
+    worlds_status: Option<String>,
     // The command palette (`hook/palette_edit.rs`): shown state, a one-frame
     // focus blur after the Ctrl+K open, the query mirrored off its field once
     // a frame, the item list built on open with the matches the query keeps,
@@ -630,6 +642,10 @@ mod select_edit;
 mod sim_control;
 mod trace_drive;
 mod view_menu_drive;
+// Named to avoid colliding with the `use super::worlds` module import.
+mod worlds_edit;
+#[cfg(test)]
+mod worlds_tests;
 // Named to avoid colliding with the `use super::story` module import.
 mod story_edit;
 // Named to avoid colliding with the `use super::variables_panel` import.
@@ -756,6 +772,11 @@ impl EditorHook {
             content_drag: None,
             create_menu: None,
             modal: None,
+            worlds_open: false,
+            worlds_rows: Vec::new(),
+            worlds_scroll: 0,
+            worlds_focus: false,
+            worlds_status: None,
             palette_open: false,
             palette_blur: false,
             palette_query: String::new(),
@@ -825,6 +846,14 @@ impl EditorHook {
         self
     }
 
+    // Open on the Worlds panel: a session started without a world named on the
+    // command line picks one here before it edits anything (see `run_editor`).
+    pub(crate) fn with_worlds_panel(mut self) -> Self {
+        self.worlds_open = true;
+        self.refresh_worlds();
+        self
+    }
+
     // A clone of the toast queue handle, for the sibling hooks (the debug
     // server's hot-reload passes report through it).
     pub(crate) fn notifier(&self) -> notify::Notifier {
@@ -883,6 +912,7 @@ impl EditorHook {
             || self.behavior_picking
             || self.variables_name_focus
             || self.variables_value_focus
+            || self.worlds_focus
             || self.palette_open
     }
 }

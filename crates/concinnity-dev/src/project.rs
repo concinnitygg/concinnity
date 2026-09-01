@@ -74,6 +74,13 @@ pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.data_dir())
 }
 
+/// The project root authored content sits directly under: `worlds/` and
+/// `assets/` are inside it, and a project that predates `worlds/` keeps its
+/// `world.jsonl` beside them.
+pub(crate) fn content_root() -> Option<std::path::PathBuf> {
+    tree().map(|tree| tree.content_root().to_path_buf())
+}
+
 /// The `worlds/` a named world is looked up in.
 pub(crate) fn worlds_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.worlds_dir())

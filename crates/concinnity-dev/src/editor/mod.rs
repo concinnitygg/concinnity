@@ -7,6 +7,10 @@
 // world.jsonl. The blobs are refreshed only by an explicit build (`cn build`,
 // or the console's cook command). An optional debug port reuses the existing
 // debug server so `cn debug send` / `screenshot` can inspect a session.
+//
+// `cn editor -f <world>` opens that world. With no world named the session
+// opens an empty scene under the Worlds panel (`editor/worlds.rs`), which
+// lists the project's worlds and opens, creates, or deletes one.
 
 mod asset_list;
 mod asset_tree;
@@ -73,11 +77,13 @@ mod view_menu;
 mod visibility;
 mod widget;
 mod widget_slider;
+mod world_files;
+mod worlds;
 
 use crate::app::state::App;
 use crate::debug_hook::DebugHook;
 use crate::ecs::World;
-use crate::world::{WORLD_JSONL, find_world_jsonl};
+use crate::world::WORLD_JSONL;
 use concinnity_engine::shutdown::ShutdownToken;
 use hook::EditorHook;
 
@@ -102,18 +108,19 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     console::install_tracing(console_sink.clone());
 
     // Resolve the edit target -- the world.jsonl where readable names live and
-    // where SAVE writes. A missing file is not an error: the editor opens an
-    // empty world and creates the file on the first SAVE.
-    let (world_path, world_exists) = resolve_edit_target(json_path);
+    // where SAVE writes -- and whether the session opens on the Worlds panel
+    // instead of a world.
+    let (world_path, pick_a_world) = resolve_edit_target(json_path);
 
     // Hand the resolved path to the engine so the hot-reload watcher
     // subscribes to this world.jsonl. The engine no longer discovers it;
     // world.jsonl lookup is authoring I/O in concinnity-cook.
     concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(world_path.clone()));
 
-    // Parse the authored entry list up front so edits patch it directly (empty
-    // when the file does not exist yet).
-    let entries = if world_exists {
+    // Parse the authored entry list up front so edits patch it directly. A
+    // session opening on the Worlds panel starts with none: the world it edits
+    // is the one picked there.
+    let entries = if !pick_a_world && std::path::Path::new(&world_path).exists() {
         let content = std::fs::read_to_string(&world_path)?;
         crate::world::parse_world_jsonl(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?
@@ -136,7 +143,10 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     // command reaches its flag), without one the driver runs as its own hook.
     // Either way the session holds exactly one driver, so a reload is never
     // applied twice.
-    let editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);
+    let mut editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);
+    if pick_a_world {
+        editor_hook = editor_hook.with_worlds_panel();
+    }
     let hook: Box<dyn DebugHook> = match debug_port {
         Some(port) => {
             let server =
@@ -153,18 +163,16 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     crate::run::start_app(app, Some(hook))
 }
 
-// Resolve the world.jsonl the editor edits, and whether it exists yet. An
-// explicit path is taken as-is (present or not, so a brand-new file can be
-// named); with no path, the most-recent world is used, falling back to a
-// `world.jsonl` in the project's `worlds/` for a fresh, not-yet-saved world.
-// The directory need not exist: the first save creates it.
+// Resolve the world the editor opens on, and whether it opens on the Worlds
+// panel rather than on that world. An explicit path is taken as-is (present or
+// not, so a brand-new file can be named) and loads straight away. With no path
+// the session opens an empty scene and the Worlds panel, which picks the world
+// to work on; the path stands in until it does, so a SAVE before any pick
+// still lands in the project's `worlds/`.
 fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
     match json_path {
-        Some(p) => (p.to_string(), std::path::Path::new(p).exists()),
-        None => match find_world_jsonl(crate::project::worlds_dir().as_deref(), None) {
-            Ok(p) => (p, true),
-            Err(_) => (unsaved_world_path(), false),
-        },
+        Some(p) => (p.to_string(), false),
+        None => (unsaved_world_path(), true),
     }
 }
 
@@ -386,16 +394,26 @@ mod tests {
         assert!(concinnity_engine::ecs::renders(app.world()));
     }
 
-    // An explicit path is taken verbatim; its existence is reported so a
-    // brand-new (not-yet-saved) file boots as an empty world rather than erroring.
+    // An explicit path is taken verbatim and loads directly, panel closed --
+    // including one that does not exist yet, which boots as an empty world
+    // rather than erroring.
     #[test]
     fn resolve_edit_target_honors_an_explicit_path() {
-        let (path, exists) = resolve_edit_target(Some("/no/such/cn-editor-world.jsonl"));
+        let (path, pick) = resolve_edit_target(Some("/no/such/cn-editor-world.jsonl"));
         assert_eq!(path, "/no/such/cn-editor-world.jsonl");
-        assert!(
-            !exists,
-            "a missing explicit path is reported absent, not an error"
-        );
+        assert!(!pick, "a named world loads instead of the Worlds panel");
+    }
+
+    // With no world named, the session opens on the Worlds panel instead of
+    // guessing which of the project's worlds the user meant.
+    #[test]
+    fn resolve_edit_target_without_a_path_opens_the_worlds_panel() {
+        let _guard = crate::test_support::lock();
+        crate::test_support::isolate_state_dir();
+
+        let (path, pick) = resolve_edit_target(None);
+        assert!(pick, "no named world opens the Worlds panel");
+        assert_eq!(path, unsaved_world_path());
     }
 
     // With no world to discover, the editor opens an unsaved one in the

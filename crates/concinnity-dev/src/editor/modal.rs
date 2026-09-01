@@ -56,14 +56,9 @@ pub(crate) struct Button {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Action {
     // Close without acting (a Cancel / No button).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "lifts once editor code outside tests opens a dialog"
-        )
-    )]
     Dismiss,
+    // A Worlds-panel decision the dialog was guarding.
+    Worlds(super::worlds::WorldsConfirm),
 }
 
 pub(crate) fn size() -> [f32; 2] {
