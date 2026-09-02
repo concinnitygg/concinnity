@@ -221,6 +221,7 @@ impl MtlContext {
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
+            sky_rot: self.view.sky_rot,
         };
 
         // While the world is hidden behind an opaque menu, the pass stops at the
@@ -336,6 +337,7 @@ impl MtlContext {
             // A probe capture is always lit, whatever the viewport shows.
             shade_mode: 0.0,
             _end_pad: 0.0,
+            sky_rot: self.view.sky_rot,
         };
 
         // Planar / probe re-render: the main camera's cluster grid does not match
@@ -442,6 +444,7 @@ impl MtlContext {
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
+            sky_rot: self.view.sky_rot,
         };
         self.bind_main_pass_shared(&encoder, &view_uniforms);
         // Main2 is the same main camera as phase 1, so it reads the clusters too.

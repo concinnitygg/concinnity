@@ -49,6 +49,16 @@ cbuffer ViewBlock : register(b1)
     // color before lighting.
     float shade_mode;
     float _ep1;
+    // Rows of the rotation from world space into the environment cubemaps'
+    // baked frame; identity when the sky does not turn.
+    float4 sky_rot[3];
+}
+
+// A world direction in the environment cubemaps' own frame; every sky tap goes
+// through it, so the skybox and the image-based lighting turn together.
+float3 sky_dir(float3 d)
+{
+    return float3(dot(sky_rot[0].xyz, d), dot(sky_rot[1].xyz, d), dot(sky_rot[2].xyz, d));
 }
 
 cbuffer ShadowBlock : register(b3)
@@ -468,7 +478,8 @@ float4 main(PsIn p) : SV_TARGET
     if (p.color.b > 1.5) {
         float3 view_dir = normalize(p.world_pos - cam_pos);
         if (ibl_enabled) {
-            return float4(prefilter_cube.SampleLevel(cube_sampler, view_dir, 0.0).rgb, 1.0);
+            return float4(
+                prefilter_cube.SampleLevel(cube_sampler, sky_dir(view_dir), 0.0).rgb, 1.0);
         }
         float t = max(0.0, view_dir.y);
         return float4(lerp(SKY_HORIZON, SKY_ZENITH, t), 1.0);
@@ -653,7 +664,7 @@ float4 main(PsIn p) : SV_TARGET
     if (ibl_enabled) {
         float3 F_ibl       = fresnel_schlick(NdV, F0);
         float3 kd_ibl      = (1.0 - F_ibl) * (1.0 - metallic);
-        float3 irradiance  = irradiance_cube.Sample(cube_sampler, N).rgb;
+        float3 irradiance  = irradiance_cube.Sample(cube_sampler, sky_dir(N)).rgb;
         float3 diffuse_ibl = kd_ibl * albedo * irradiance / PI;
 
         float3 R = reflect(-V, N);
@@ -663,7 +674,7 @@ float4 main(PsIn p) : SV_TARGET
         // sparkle on near mirrors; flat close-up pixels have a near-zero
         // footprint, so they keep the plain roughness mip.
         float  lod = roughness * (prefilter_mip_count - 1.0);
-        float3 prefiltered  = prefilter_cube.SampleBias(cube_sampler, R, lod).rgb;
+        float3 prefiltered  = prefilter_cube.SampleBias(cube_sampler, sky_dir(R), lod).rgb;
         float3 specular_ibl = prefiltered * (F0 * ab.x + ab.y);
 
         ambient = diffuse_ibl + specular_ibl;

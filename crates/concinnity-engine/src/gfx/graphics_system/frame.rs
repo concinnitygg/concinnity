@@ -489,6 +489,26 @@ impl GraphicsSystem {
             .copied()
             .unwrap_or_default();
 
+        // The sky's rotation this tick, published by SkyRotationSystem earlier in
+        // the schedule. It reaches the GPU twice: as the rows every cubemap
+        // sample is taken through, and as the directions the directional lights
+        // are carried to, so the light and the sky it comes from agree. Carried
+        // only when the sky has moved, so a still world hands the backend
+        // nothing to install.
+        let sky = ctx
+            .resource::<concinnity_core::sky::SkyOrientation>()
+            .copied();
+        let mut directional = None;
+        if let Some(sky) = sky
+            && self.pushed_sky_angle != Some(sky.angle_deg)
+        {
+            self.pushed_sky_angle = Some(sky.angle_deg);
+            directional = Some(crate::gfx::lighting_preview::lights_under_sky(
+                ctx.query::<crate::components::DirectionalLight>(),
+                &sky,
+            ));
+        }
+
         snap.frame = FrameScalars {
             elapsed,
             fov_y_radians,
@@ -500,6 +520,10 @@ impl GraphicsSystem {
             show: view.show,
             world_hidden: overlay.world_hidden,
             menu_active,
+            sky_rot: sky
+                .map(|s| s.sample_rows())
+                .unwrap_or(concinnity_core::sky::SkyOrientation::IDENTITY_ROWS),
+            directional,
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.
@@ -788,6 +812,41 @@ mod tests {
         let mut snap = RenderSnapshot::default();
         gs.extract(&mut world.ctx(), &mut snap);
         snap
+    }
+
+    // The sky reaches the frame twice: as the rows every cubemap sample is
+    // taken through, and as the rotated directional set the frame carries.
+    #[test]
+    fn extraction_carries_the_sky_into_the_frame_and_the_lights() {
+        use concinnity_core::sky::SkyOrientation;
+
+        let mut world = ExtractWorld::new();
+        {
+            let mut ctx = world.ctx();
+            ctx.components.push(
+                crate::components::DirectionalLight {
+                    direction: [0.0, 0.0, 1.0],
+                    ..Default::default()
+                }
+                .into(),
+            );
+            ctx.insert_resource(SkyOrientation::new([1.0, 0.0, 0.0], 90.0));
+        }
+        let mut gs = GraphicsSystem::new(None);
+        let snap = extract_once(&mut gs, &mut world);
+
+        assert_ne!(snap.frame.sky_rot, SkyOrientation::IDENTITY_ROWS);
+        match snap.frame.directional.map(|set| set.as_slice().to_vec()) {
+            Some(lights) if lights.len() == 1 => assert!(
+                lights[0].direction[1] > 0.99,
+                "a quarter turn puts it overhead: {lights:?}"
+            ),
+            other => panic!("expected the turned set, got {other:?}"),
+        }
+
+        // The sky has not moved since, so nothing is restated.
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(snap.frame.directional, None);
     }
 
     fn translated(x: f32) -> [[f32; 4]; 4] {

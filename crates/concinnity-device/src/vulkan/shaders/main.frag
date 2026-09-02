@@ -21,7 +21,17 @@ layout(std140, set = 0, binding = 0) uniform ViewBlock {
     // 1.0 while the unlit view mode is active: the surface returns its base
     // color before lighting.
     float shade_mode; float _ep1;
+    // Rows of the rotation from world space into the environment cubemaps'
+    // baked frame; identity when the sky does not turn.
+    vec4 sky_rot[3];
 } view;
+
+// A world direction in the environment cubemaps' own frame; every sky tap goes
+// through it, so the skybox and the image-based lighting turn together.
+vec3 sky_dir(vec3 d) {
+    return vec3(dot(view.sky_rot[0].xyz, d), dot(view.sky_rot[1].xyz, d),
+                dot(view.sky_rot[2].xyz, d));
+}
 
 // std140 LightUniforms: two vec4s per light keeps each light at 32 bytes,
 // matching the Rust struct (direction[3]+intensity+color[3]+_pad = 32 bytes).
@@ -450,7 +460,7 @@ void main() {
         vec3 view_dir = normalize(frag_world_pos - cam_pos);
         vec3 sky;
         if (ibl_enabled) {
-            sky = textureLod(prefilter_cube, view_dir, 0.0).rgb;
+            sky = textureLod(prefilter_cube, sky_dir(view_dir), 0.0).rgb;
         } else {
             float t = max(0.0, view_dir.y);
             sky = mix(SKY_HORIZON, SKY_ZENITH, t);
@@ -651,7 +661,7 @@ void main() {
     if (ibl_enabled) {
         vec3 F_ibl       = fresnel_schlick(NdV, F0);
         vec3 kd_ibl      = (1.0 - F_ibl) * (1.0 - push.metallic);
-        vec3 irradiance  = texture(irradiance_cube, N).rgb;
+        vec3 irradiance  = texture(irradiance_cube, sky_dir(N)).rgb;
         vec3 diffuse_ibl = kd_ibl * albedo * irradiance / PI;
 
         vec3 R = reflect(-V, N);
@@ -661,7 +671,7 @@ void main() {
         // environment into sparkle on near mirrors; flat close-up pixels have a
         // near-zero footprint, so they keep the plain roughness mip.
         float lod = roughness * (view.prefilter_mip_count - 1.0);
-        vec3 prefiltered  = texture(prefilter_cube, R, lod).rgb;
+        vec3 prefiltered  = texture(prefilter_cube, sky_dir(R), lod).rgb;
         vec3 specular_ibl = prefiltered * (F0 * ab.x + ab.y);
 
         ambient = diffuse_ibl + specular_ibl;

@@ -7,12 +7,41 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::components::VertexData;
 use crate::geometry::{Vert, compute_tangents};
 use crate::math::sqrt;
+use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalise};
 
 // Tangent-bearing vertex form the payload serialiser packs:
 // position, normal, tangent, color, uv.
 type VertT = ([f32; 3], [f32; 3], [f32; 3], [f32; 3], [f32; 2]);
+
+/// Derive the generator-form vertices of raw `Mesh` geometry: each vertex
+/// takes the normalised sum of the face normals of the triangles that share
+/// it, so a vertex the triangles of one flat face own is flat-shaded and one
+/// shared across a curve is smooth. A triangle that indexes past the vertex
+/// list is an error.
+pub fn vertices_from_data(data: &[VertexData], indices: &[u16]) -> Result<Vec<Vert>, String> {
+    let mut normals = alloc::vec![[0.0f32; 3]; data.len()];
+    for (t, tri) in indices.chunks_exact(3).enumerate() {
+        let [ia, ib, ic] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+        if ia >= data.len() || ib >= data.len() || ic >= data.len() {
+            return Err(format!(
+                "triangle {t} indexes past the {} vertices",
+                data.len()
+            ));
+        }
+        let n = vec3_face_normal(data[ia].pos, data[ib].pos, data[ic].pos);
+        vec3_add(&mut normals[ia], n);
+        vec3_add(&mut normals[ib], n);
+        vec3_add(&mut normals[ic], n);
+    }
+    Ok(data
+        .iter()
+        .zip(normals)
+        .map(|(v, n)| (v.pos, vec3_normalise(n), v.color, v.uv))
+        .collect())
+}
 
 /// Bake generated geometry into a packed binary mesh payload.
 ///
@@ -143,6 +172,40 @@ mod tests {
         let (verts, indices) = build_box([0.5, 0.5, 0.5]);
         let err = finish_mesh_payload(verts, indices, 3, &[10.0]).unwrap_err();
         assert!(err.contains("lod_distances"), "error was: {err}");
+    }
+
+    #[test]
+    fn raw_vertices_take_the_normals_of_the_triangles_that_share_them() {
+        let vd = |pos: [f32; 3]| VertexData {
+            pos,
+            color: [1.0; 3],
+            uv: [0.0; 2],
+        };
+        // Two triangles sharing the edge 0-1, one facing +Z and one +Y, so the
+        // shared vertices average and the others stay flat.
+        let data = [
+            vd([0.0, 0.0, 0.0]),
+            vd([1.0, 0.0, 0.0]),
+            vd([0.0, 1.0, 0.0]),
+            vd([0.0, 0.0, -1.0]),
+        ];
+        let verts = vertices_from_data(&data, &[0, 1, 2, 0, 1, 3]).unwrap();
+        assert_eq!(verts[2].1, [0.0, 0.0, 1.0]);
+        assert_eq!(verts[3].1, [0.0, 1.0, 0.0]);
+        let shared = verts[0].1;
+        assert!((shared[1] - shared[2]).abs() < 1e-6 && shared[1] > 0.7);
+        assert_eq!(verts[1].2, [1.0; 3]);
+    }
+
+    #[test]
+    fn a_triangle_past_the_vertex_list_is_an_error() {
+        let vd = VertexData {
+            pos: [0.0; 3],
+            color: [1.0; 3],
+            uv: [0.0; 2],
+        };
+        let err = vertices_from_data(&[vd.clone(), vd.clone(), vd], &[0, 1, 3]).unwrap_err();
+        assert!(err.contains("triangle 0"), "{err}");
     }
 
     #[test]

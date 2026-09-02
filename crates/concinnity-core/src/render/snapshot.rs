@@ -35,6 +35,13 @@ pub struct FrameScalars {
     pub world_hidden: bool,
     /// `true` while any world-pausing screen is open.
     pub menu_active: bool,
+    /// Rows of the sky's inverse rotation, uploaded into every pass that
+    /// samples the environment cubemaps (`SkyOrientation::sample_rows`).
+    pub sky_rot: [[f32; 4]; 3],
+    /// The directional lights to install before the draw, already carried by
+    /// the sky's rotation. `None` leaves the backend's current set alone, which
+    /// is every frame of a world whose sky does not turn.
+    pub directional: Option<crate::render::lights::DirectionalLightSet>,
 }
 
 impl Default for FrameScalars {
@@ -50,6 +57,8 @@ impl Default for FrameScalars {
             show: ShowFlags::default(),
             world_hidden: false,
             menu_active: false,
+            sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
+            directional: None,
         }
     }
 }

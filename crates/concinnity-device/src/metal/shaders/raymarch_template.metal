@@ -140,7 +140,7 @@ fragment RaymarchFragOut raymarch_fragment(
     float3 view_dir = -ray_dir;
     float3 color = shadeAmbientIbl(
         surf, normal, view_dir,
-        view.prefilter_mip_count,
+        view.prefilter_mip_count, skyRows(view),
         irradiance_cube, prefilter_cube, cube_samp
     );
     if (lights.num_directional > 0) {

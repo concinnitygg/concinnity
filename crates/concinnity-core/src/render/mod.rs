@@ -22,6 +22,7 @@ pub mod display_mode;
 pub mod draw_slot;
 pub mod error;
 pub mod feedback;
+pub mod frame_dirty;
 pub mod fullscreen;
 pub mod hdr_output;
 pub mod input;

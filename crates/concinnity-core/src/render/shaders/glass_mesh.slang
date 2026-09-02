@@ -43,7 +43,7 @@
 {RT_TYPES}
 
 // Per-frame view shared by every transparent draw. Layout matches
-// `TransparentView` (160 B); identical to glass.slang's copy.
+// `TransparentView` (240 B); identical to glass.slang's copy.
 struct TransparentView
 {
     float4x4 vp;       // world -> clip (jittered when TAA is on)
@@ -52,7 +52,20 @@ struct TransparentView
     float2 viewport;   // attachment dimensions in pixels
     float time;        // seconds since startup
     float prefilter_mip_count;
+    // Rows of the rotation from world space into the sky cube's baked frame;
+    // identity when the sky does not turn.
+    float4 sky_rot[3];
+    // Direction toward the scene's sun (the first directional light) and that
+    // light's colour times its intensity; both zero when the world declares no
+    // directional light, which the water glint reads as no sun.
+    float4 sun_dir;
+    float4 sun_color;
 };
+
+// A world direction in the sky cube's own frame; every sky tap goes through it.
+#define SKY_DIR(d) float3(dot(view.sky_rot[0].xyz, (d)), \
+                          dot(view.sky_rot[1].xyz, (d)), \
+                          dot(view.sky_rot[2].xyz, (d)))
 
 // Per-mesh tunables. Layout matches `GlassMeshParams` (96 B); `model` is first
 // so its 16-byte alignment is satisfied at offset 0.
@@ -91,7 +104,7 @@ SamplerState cube_sampler : register(s2);
 float4 scene_sample(float2 uv) { return scene_color.Sample(post_samp, uv); }
 float3 prefilter_level(float3 dir, float lod)
 {
-    return prefilter_cube.SampleLevel(cube_sampler, dir, lod).rgb;
+    return prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), lod).rgb;
 }
 
 #else
@@ -113,7 +126,7 @@ float3 prefilter_level(float3 dir, float lod)
 [[vk::binding(5, 2)]] SamplerCube<float4> prefilter_cube;
 
 float4 scene_sample(float2 uv) { return scene_color.Sample(uv); }
-float3 prefilter_level(float3 dir, float lod) { return prefilter_cube.SampleLevel(dir, lod).rgb; }
+float3 prefilter_level(float3 dir, float lod) { return prefilter_cube.SampleLevel(SKY_DIR(dir), lod).rgb; }
 
 #endif
 

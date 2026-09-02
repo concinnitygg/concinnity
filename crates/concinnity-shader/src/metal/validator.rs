@@ -87,6 +87,9 @@ mod tests {
             float _pad;
             packed_float3 cam_pos;
             float prefilter_mip_count;
+            float shade_mode;
+            float _end_pad;
+            float4 sky_rot[3];
         };
         struct VIn { float3 pos [[attribute(0)]]; };
         vertex float4 vertex_main(VIn in [[stage_in]],
@@ -97,7 +100,7 @@ mod tests {
     "#;
 
     // The same shader with `float3 cam_pos` (16-byte aligned) instead of
-    // packed_float3: grows the struct stride past the engine's 160 bytes, so the
+    // packed_float3: grows the struct stride past the engine's 208 bytes, so the
     // size check rejects it (the float3-vs-[f32;3] class of bug).
     const BAD_SIZE_VERTEX: &str = r#"
         #include <metal_stdlib>
@@ -109,6 +112,9 @@ mod tests {
             float _pad;
             float3 cam_pos;
             float prefilter_mip_count;
+            float shade_mode;
+            float _end_pad;
+            float4 sky_rot[3];
         };
         struct VIn { float3 pos [[attribute(0)]]; };
         vertex float4 vertex_main(VIn in [[stage_in]],

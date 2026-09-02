@@ -22,6 +22,9 @@ struct RtParams
     float4 sun_dir;    // xyz: world unit direction toward the sun (= L)
     float4 sun_color;  // xyz: sun radiance
     float4x4 inv_view; // camera-to-world
+    // Rows of the rotation from world space into the sky cube's baked frame;
+    // identity when the sky does not turn.
+    float4 sky_rot[3];
 };
 
 // One traced instance's geometry range + material, indexed by the hit's

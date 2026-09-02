@@ -34,12 +34,6 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
     WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
 };
 
-// Wave-normal screen-space distortion scale for the planar reflection sample.
-// Small: the planar reflection is a flat-plane render, so the wave normal only
-// perturbs the lookup a little to fake ripple displacement. Mirrors
-// `metal::water::PLANAR_DISTORTION`.
-const PLANAR_DISTORTION: f32 = 0.03;
-
 // The shader-side wave lane for one authored wave. Pure; unit tested.
 fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
     WaterWaveGpu {
@@ -48,10 +42,10 @@ fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
     }
 }
 
-// Build the per-surface `WaterParams` from an authored surface. `planar` is
-// `[1.0, PLANAR_DISTORTION, 0, 0]` when the surface has a planar reflection slot
-// and zeroed otherwise, which is what selects the sharp mirror render over the
-// probe / sky cube. Pure; unit tested. Mirrors `metal::water::water_params_from`.
+// Build the per-surface `WaterParams` from an authored surface. `planar` is the
+// mirror lane with its ripple offset scaled by the surface's roughness when the
+// surface has a planar reflection slot, and zeroed otherwise, which is what
+// selects the sharp mirror render over the probe / sky cube. Pure; unit tested. Mirrors `metal::water::water_params_from`.
 fn water_params_from(surface: &WaterSurface, planar: bool) -> WaterParams {
     let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
     for (slot, src) in waves.iter_mut().zip(surface.waves.iter()) {
@@ -80,11 +74,7 @@ fn water_params_from(surface: &WaterSurface, planar: bool) -> WaterParams {
         wave_count: surface.waves.len().min(MAX_WATER_WAVES) as u32,
         _pad: 0.0,
         waves,
-        planar: if planar {
-            [1.0, PLANAR_DISTORTION, 0.0, 0.0]
-        } else {
-            [0.0; 4]
-        },
+        planar: WaterParams::planar_lane(surface.roughness, planar),
     }
 }
 
@@ -349,7 +339,8 @@ mod tests {
         assert_eq!(p.roughness, 0.08);
         assert_eq!(p.refraction_strength, 0.05);
         assert_eq!(p.wave_count, 2);
-        assert_eq!(p.planar, [1.0, PLANAR_DISTORTION, 0.0, 0.0]);
+        assert_eq!(p.planar, WaterParams::planar_lane(0.08, true));
+        assert!(p.planar[0] > 0.5 && p.planar[1] > 0.0);
         // A slotless surface keeps the probe / sky path.
         assert_eq!(water_params_from(&surface, false).planar, [0.0; 4]);
     }

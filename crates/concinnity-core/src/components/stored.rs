@@ -50,6 +50,7 @@ pub use super::screen::{Screen, ScreenInput};
 pub use super::scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use super::sdf_volume::SdfVolume;
 pub use super::shader::{Shader, ShaderKind, ShaderPayload, StageSource};
+pub use super::sky_rotation::SkyRotation;
 pub use super::spot_light::SpotLight;
 pub use super::sprite::{Sprite, SpriteFit};
 pub use super::stat_hud::StatHud;

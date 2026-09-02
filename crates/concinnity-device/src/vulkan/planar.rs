@@ -316,12 +316,14 @@ pub(in crate::vulkan) struct PlanarGlobalSet {
 }
 
 // The shared lighting + environment bindings every planar global set carries: the
-// light + shadow UBOs (buffer + size), the shadow map, the IBL irradiance +
+// light + shadow UBO rings (+ their size), the shadow map, the IBL irradiance +
 // prefilter cubes (+ their sampler), and the SSAO white fallback (+ its sampler).
-// All Copy vk handles, shared unchanged across every (plane, frame) global set.
+// Everything but the two rings is shared unchanged across every (plane, frame)
+// global set.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarLightingBindings<'a> {
-    pub(in crate::vulkan) light_ubo: vk::Buffer,
+    // Per-frame-in-flight LightUniforms ring, indexed like `shadow_ubos`.
+    pub(in crate::vulkan) light_ubos: &'a [PooledBuffer],
     pub(in crate::vulkan) light_size: u64,
     // Per-scene local-light SSBO (global set 0 binding 9) + its byte size; the
     // shared static buffer, bound unchanged into every planar global set.
@@ -390,7 +392,7 @@ impl PlanarReflectionSet {
             height,
         } = config;
         let PlanarLightingBindings {
-            light_ubo,
+            light_ubos,
             light_size,
             local_light_buffer,
             local_light_size,
@@ -528,7 +530,7 @@ impl PlanarReflectionSet {
             .collect();
         for (i, &set) in global_sets.iter().enumerate() {
             let view_info = buf_info(view_bufs[i].buffer(), view_size);
-            let light_info = buf_info(light_ubo, light_size);
+            let light_info = buf_info(light_ubos[i % frames].buffer(), light_size);
             let shadow_info = buf_info(shadow_ubos[i % frames].buffer(), shadow_size);
             let probeset_info = buf_info(probeset_buf.buffer(), probeset_size);
             let shadow_img = img_info(shadow_map_view, shadow_sampler);
@@ -914,6 +916,7 @@ impl VkContext {
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
                 _end_pad: 0.0,
+                sky_rot: self.view.sky_rot,
             };
             let ring = slot * set.frames + frame_idx;
             set.view_bufs[ring].write_val(0, &view);

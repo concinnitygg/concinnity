@@ -28,7 +28,12 @@ use alloc::string::String;
 /// pixelates a 4K-source sky, 1024 sharpens it further at 4× the size.
 ///
 /// **Built-in generators:** `sky` produces a procedural blue sky with a soft
-/// sun, useful when no source file is available.
+/// sun, and `stars` a near-black night sky of scattered points, the brightest
+/// of them above 1.0 radiance so bloom catches them, darker below the
+/// horizon. Both are useful when no source file is available. The
+/// sky is drawn at the resolution `prefilter_face_size` sets, so a starfield
+/// wants the largest of them, 1024; below that each point is magnified into a
+/// blob.
 ///
 /// The sky mesh that displays the map (a skybox
 /// [ProceduralMesh](#proceduralmesh) plus its [Material](#material) and
@@ -54,7 +59,8 @@ pub struct EnvironmentMap {
     /// panorama-sphere `.glb` / `.gltf` -- relative to the project root.
     /// Mutually exclusive with `generator`.
     pub source: String,
-    /// Built-in source name (e.g. "sky"). Mutually exclusive with `source`.
+    /// Built-in source name, `sky` or `stars`. Mutually exclusive with
+    /// `source`.
     pub generator: String,
     /// Face size of the reflection/sky cubemap, in pixels. Higher is sharper
     /// but larger.

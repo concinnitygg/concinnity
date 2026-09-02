@@ -10,9 +10,7 @@ pub(crate) fn compile_file_payload(path: &str, kind: &FileKind) -> Result<Vec<u8
             let source = std::fs::read_to_string(path)
                 .map_err(|e| format!("failed to read '{}': {}", path, e))?;
             let (vertices, indices) = crate::import::wavefront::parse_obj(&source)?;
-            Ok(crate::compile::geometry::compile_mesh_from_vertex_data(
-                &vertices, &indices,
-            ))
+            crate::compile::geometry::compile_mesh_from_vertex_data(&vertices, &indices)
         }
         other => Err(format!(
             "File kind '{:?}' does not produce a compiled payload",

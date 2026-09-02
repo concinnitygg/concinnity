@@ -20,7 +20,9 @@ use crate::ecs::{ActiveRenderQueues, World};
 use crate::gfx::render_config as resolve;
 use crate::gfx::settings_system::{SettingsSlot, SettingsState};
 use crate::gfx::volumetric_fog::FogSettings;
+use concinnity_core::render::lights::DirectionalLightSet;
 use concinnity_core::render::ops::RenderOps;
+use concinnity_core::sky::SkyOrientation;
 
 /// The `GraphicsConfig` fields this module can apply to a running world. The
 /// rest (shadow map resolution, frames in flight, the sampler's anisotropy)
@@ -82,6 +84,20 @@ pub fn apply_directional_lights(world: &mut World, lights: &[DirectionalLight]) 
         ops.record(move |backend| backend.update_directional_lights(&lights));
     })
     .is_some()
+}
+
+/// Every authored direction carried by the sky's current rotation. A
+/// directional light is at infinity by definition, so it rides the celestial
+/// sphere and turns with it. Returned inline so the per-frame extraction that
+/// calls it under a turning sky allocates nothing.
+pub fn lights_under_sky<'a>(
+    lights: impl Iterator<Item = &'a DirectionalLight>,
+    sky: &SkyOrientation,
+) -> DirectionalLightSet {
+    DirectionalLightSet::collect(lights.map(|light| DirectionalLight {
+        direction: sky.rotate(light.direction),
+        ..*light
+    }))
 }
 
 /// Replace the running world's volumetric fog, or disable the pass with `None`.
@@ -318,6 +334,37 @@ mod tests {
                 sun.intensity
             )])]
         );
+    }
+
+    // A turned sky carries every directional light with it, so the light and
+    // whatever body is hung on the same rotation keep agreeing.
+    #[test]
+    fn the_sky_carries_the_directional_lights_round() {
+        let authored = DirectionalLight {
+            direction: [0.0, 0.0, 1.0],
+            ..Default::default()
+        };
+        let sky = SkyOrientation::new([1.0, 0.0, 0.0], 90.0);
+        let turned = lights_under_sky(std::iter::once(&authored), &sky);
+        let turned = turned.as_slice();
+        assert_eq!(turned.len(), 1);
+        let d = turned[0].direction;
+        assert!(d[1] > 0.99, "a quarter turn puts it overhead: {d:?}");
+        assert_eq!(turned[0].color, authored.color);
+        assert_eq!(turned[0].intensity, authored.intensity);
+    }
+
+    // A still sky leaves the authored set exactly as it was.
+    #[test]
+    fn an_unturned_sky_leaves_the_lights_alone() {
+        let authored = DirectionalLight {
+            direction: [0.35, 0.55, 1.0],
+            ..Default::default()
+        };
+        let same = lights_under_sky(std::iter::once(&authored), &SkyOrientation::default());
+        for k in 0..3 {
+            assert!((same.as_slice()[0].direction[k] - authored.direction[k]).abs() < 1e-6);
+        }
     }
 
     // The live shadow knobs push; the authored baselines move with them so a

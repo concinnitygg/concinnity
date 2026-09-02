@@ -605,9 +605,8 @@ pub(super) struct AreaLightState {
 // `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
 // settings are cached so the per-frame encoder can build its `FogParams`
 // without re-resolving the asset. `sun_dir` / `sun_color` mirror the first
-// directional light: LightUniforms is uploaded rather than pushed each frame on
-// DirectX, so both are cached here and re-derived by
-// `update_directional_lights`.
+// directional light, cached on the CPU so the encoder never reads back the
+// light CBV; `update_directional_lights` re-derives both.
 pub(super) struct FogState {
     pub resources: Option<FogResources>,
     pub settings: Option<crate::gfx::volumetric_fog::FogSettings>,
@@ -616,36 +615,54 @@ pub(super) struct FogState {
 }
 
 // The main-pass constant buffers, grouped off the flat `DxContext`. Mirrors
-// Vulkan's `VkUniforms` (which carries view + light; DirectX keeps the shadow
-// CBV alongside them, matching how all three are triple-buffered together). The
-// view + shadow buffers are per-frame, persistently mapped; the light buffer is
-// uploaded once at init. The COM resources auto-release on drop; only the
+// Vulkan's `VkUniforms`. The view, light and shadow buffers are all per-frame
+// and persistently mapped. The COM resources auto-release on drop; only the
 // persistent mappings need an explicit `unmap`.
 pub(super) struct DxUniforms {
     pub view_ubo_resources: Vec<PooledBuffer>,
     pub view_ubo_ptrs: Vec<*mut u8>,
-    pub light_ubo: PooledBuffer,
+    // Per-frame-in-flight `LightUniforms` CBV ring. Every pass that binds the
+    // light block (main, transparent, raymarch, planar) takes the frame's own
+    // GPU address, so a live light change never has to drain the queue.
+    pub light_ubo_resources: Vec<PooledBuffer>,
+    pub light_ubo_ptrs: Vec<*mut u8>,
+    // Which slots of the light ring still need this frame's values.
+    pub light_dirty: std::cell::Cell<concinnity_core::render::frame_dirty::FrameDirty>,
     // Per-scene local-light storage buffer bound as a root SRV by the main
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
     pub local_light_buffer: PooledBuffer,
-    // CPU-side copy of the values in `light_ubo`, kept so a live Ambient-slider
-    // change can mutate `ambient_intensity` and re-upload. The light buffer is a
-    // single (not per-frame) UPLOAD resource, so `set_ambient_intensity`
-    // `wait_idle`s before the rewrite to avoid racing an in-flight read; ambient
-    // changes only on a slider drag, so the stall is rare.
+    // The values the light ring carries. A live Ambient-slider or
+    // directional-light change mutates this and re-arms `light_dirty`;
+    // `record_frame` writes the frame's own slot, so no in-flight read is raced.
     pub light_uniforms: crate::gfx::render_types::LightUniforms,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
 }
 
 impl DxUniforms {
-    // Unmap the persistent view + shadow CBV mappings. Called from
+    // Re-arm every light-ring slot after a change to `light_uniforms`.
+    pub(super) fn mark_lights_dirty(&self) {
+        let mut dirty = self.light_dirty.get();
+        dirty.mark_all();
+        self.light_dirty.set(dirty);
+    }
+
+    // Whether `frame`'s light CBV still needs this frame's values, clearing it.
+    pub(super) fn take_light_dirty(&self, frame: usize) -> bool {
+        let mut dirty = self.light_dirty.get();
+        let pending = dirty.take(frame);
+        self.light_dirty.set(dirty);
+        pending
+    }
+
+    // Unmap the persistent view + light + shadow CBV mappings. Called from
     // `DxContext::drop`; the COM resources themselves auto-release.
     pub(super) fn unmap(&self) {
         for res in self
             .view_ubo_resources
             .iter()
+            .chain(self.light_ubo_resources.iter())
             .chain(self.shadow_ubo_resources.iter())
         {
             // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
@@ -876,6 +893,9 @@ pub(super) struct ViewState {
     // normalization.
     pub far: f32,
     pub matrix: [[f32; 4]; 4],
+    // Rows of the sky's inverse rotation, uploaded into every uniform block
+    // whose pass samples the environment cubemaps.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 // Scene-captured reflection probes and the staggered bake that fills them.
@@ -1387,6 +1407,7 @@ impl DxContext {
             world_hidden,
             view_mode,
             show,
+            sky_rot,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
@@ -1394,6 +1415,7 @@ impl DxContext {
         self.view.mode = view_mode;
         self.view.show = show;
         self.view.far = far;
+        self.view.sky_rot = sky_rot;
         // D3D12 fill mode is pipeline state, so the wireframe view needs its own
         // main-pass PSOs; built here on the first wireframe frame so the `&self`
         // pass encoders can just read them.
@@ -2325,34 +2347,22 @@ impl DxContext {
     }
 
     // Set the live ambient (IBL) light scale (the Ambient slider). It lives in
-    // `LightUniforms`, uploaded to a single (not per-frame) constant buffer, so
-    // unlike `update_post_process` (root constants) it cannot just stash a value:
-    // it mutates the CPU-side copy and re-uploads the buffer. Because the buffer
-    // is shared across frames-in-flight, the GPU is drained first so the rewrite
-    // never races an in-flight read; ambient changes only on a slider drag, so
-    // the stall is rare. Edge-triggered: a no-op when the value is unchanged
-    // (e.g. an init push with no persisted override), so a steady scene never
-    // stalls.
+    // `LightUniforms`, which rides a per-frame-in-flight CBV ring, so this
+    // mutates the CPU-side copy and re-arms every slot; `record_frame` writes
+    // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
+    // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         if self.uniforms.light_uniforms.ambient_intensity == value {
             return;
         }
         self.uniforms.light_uniforms.ambient_intensity = value;
-        self.wait_idle();
-        if let Err(e) = super::draw::upload_light_uniforms(
-            &self.uniforms.light_ubo,
-            &self.uniforms.light_uniforms,
-        ) {
-            tracing::warn!("set_ambient_intensity: re-upload light uniforms failed: {e}");
-        }
+        self.uniforms.mark_lights_dirty();
     }
 
-    // Replace the live directional lights. `LightUniforms` lives in a single
-    // shared constant buffer rather than root constants, so the rewrite
-    // re-uploads it behind a drain, like `set_ambient_intensity`. The cascade
-    // shadow direction and the fog sun were derived from the first light at
-    // init, so both are re-derived here. Edge-triggered: an unchanged set never
-    // stalls.
+    // Replace the live directional lights. The cascade shadow direction and the
+    // fog sun are derived from the first light on the CPU, so both are
+    // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
+    // changed one only re-arms the light CBV ring.
     pub(crate) fn update_directional_lights(
         &mut self,
         lights: &[crate::components::DirectionalLight],
@@ -2367,13 +2377,7 @@ impl DxContext {
         self.shadow.light_dir = crate::gfx::lights::sun_direction(&self.uniforms.light_uniforms);
         self.fog.sun_dir = self.shadow.light_dir;
         self.fog.sun_color = crate::gfx::lights::sun_color(&self.uniforms.light_uniforms);
-        self.wait_idle();
-        if let Err(e) = super::draw::upload_light_uniforms(
-            &self.uniforms.light_ubo,
-            &self.uniforms.light_uniforms,
-        ) {
-            tracing::warn!("update_directional_lights: re-upload light uniforms failed: {e}");
-        }
+        self.uniforms.mark_lights_dirty();
     }
 
     // Set the live shadow cascade re-render cadence. The per-frame cascade split

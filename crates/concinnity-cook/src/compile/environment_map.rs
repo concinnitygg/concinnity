@@ -36,6 +36,7 @@ use serde::Deserialize;
 
 use crate::codec::hdr::HdrImage;
 use concinnity_core::bake::environment_map::source::generate_sky_equirect;
+use concinnity_core::bake::environment_map::stars::generate_stars_equirect;
 use concinnity_core::components::EnvironmentMap;
 use concinnity_host::thread::jobs;
 use std::path::Path;
@@ -65,7 +66,7 @@ fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
             }
         }
         (true, false) => match params.generator.as_str() {
-            "sky" => {}
+            "sky" | "stars" => {}
             other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
         },
     }
@@ -118,6 +119,7 @@ pub(crate) fn compile_environment_map_payload(
     } else {
         match params.generator.as_str() {
             "sky" => generate_sky_equirect(),
+            "stars" => generate_stars_equirect(),
             other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
         }
     };

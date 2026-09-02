@@ -627,6 +627,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
             inv_view_rot,
             self.cam_pos,
             self.ctx.env_map.prefilter_mip_count as f32,
+            self.ctx.view.sky_rot,
         );
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges

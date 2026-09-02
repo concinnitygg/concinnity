@@ -50,7 +50,17 @@ struct ViewUniforms
     // 1.0 while the unlit view mode is active: the surface returns its base
     // color before lighting.
     float shade_mode; float _ep1;
+    // Rows of the rotation from world space into the environment cubemaps'
+    // baked frame; identity when the sky does not turn.
+    float4 sky_rot[3];
 };
+
+// A world direction in the environment cubemaps' own frame. Every sky tap goes
+// through this, so the sky, the ambient fill and the reflections turn together.
+// Defined as a macro because VIEW is a per-backend binding named below.
+#define SKY_DIR(d) float3(dot(VIEW.sky_rot[0].xyz, (d)), \
+                          dot(VIEW.sky_rot[1].xyz, (d)), \
+                          dot(VIEW.sky_rot[2].xyz, (d)))
 
 {OBJECT_COMMON}
 
@@ -255,15 +265,15 @@ float2 ssao_size()
 }
 float3 irradiance_sample(float3 n)
 {
-    return tex.irradiance_cube.Sample(samps.cube_sampler, n).rgb;
+    return tex.irradiance_cube.Sample(samps.cube_sampler, SKY_DIR(n)).rgb;
 }
 float3 prefilter_sample_level0(float3 dir)
 {
-    return tex.prefilter_cube.SampleLevel(samps.cube_sampler, dir, 0.0).rgb;
+    return tex.prefilter_cube.SampleLevel(samps.cube_sampler, SKY_DIR(dir), 0.0).rgb;
 }
 float3 prefilter_sample_bias(float3 dir, float lod)
 {
-    return tex.prefilter_cube.SampleBias(samps.cube_sampler, dir, lod).rgb;
+    return tex.prefilter_cube.SampleBias(samps.cube_sampler, SKY_DIR(dir), lod).rgb;
 }
 float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
 {
@@ -370,15 +380,15 @@ float2 ssao_size()
 }
 float3 irradiance_sample(float3 n)
 {
-    return irradiance_cube.Sample(cube_sampler, n).rgb;
+    return irradiance_cube.Sample(cube_sampler, SKY_DIR(n)).rgb;
 }
 float3 prefilter_sample_level0(float3 dir)
 {
-    return prefilter_cube.SampleLevel(cube_sampler, dir, 0.0).rgb;
+    return prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), 0.0).rgb;
 }
 float3 prefilter_sample_bias(float3 dir, float lod)
 {
-    return prefilter_cube.SampleBias(cube_sampler, dir, lod).rgb;
+    return prefilter_cube.SampleBias(cube_sampler, SKY_DIR(dir), lod).rgb;
 }
 float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
 {
@@ -577,15 +587,15 @@ float2 ssao_size()
 
 float3 irradiance_sample(float3 n)
 {
-    return scene.irradiance_cube.Sample(n).rgb;
+    return scene.irradiance_cube.Sample(SKY_DIR(n)).rgb;
 }
 float3 prefilter_sample_level0(float3 dir)
 {
-    return scene.prefilter_cube.SampleLevel(dir, 0.0).rgb;
+    return scene.prefilter_cube.SampleLevel(SKY_DIR(dir), 0.0).rgb;
 }
 float3 prefilter_sample_bias(float3 dir, float lod)
 {
-    return scene.prefilter_cube.SampleBias(dir, lod).rgb;
+    return scene.prefilter_cube.SampleBias(SKY_DIR(dir), lod).rgb;
 }
 float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
 {

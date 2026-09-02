@@ -46,7 +46,7 @@ pub struct CullParams {
     pub _pad: [u32; 2],
 }
 
-/// The raymarch pass per-frame `RaymarchView` cbuffer (b0, 160 bytes; aligned to
+/// The raymarch pass per-frame `RaymarchView` cbuffer (b0, 208 bytes; aligned to
 /// 256 for the D3D12 cbuffer). Mirrors the Metal `RaymarchView`.
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -65,6 +65,10 @@ pub struct RaymarchView {
     pub time: f32,
     /// IBL cubemap mip count; 0 when there is no IBL.
     pub prefilter_mip_count: f32,
+    /// Rows of the rotation taking a world-space direction into the environment
+    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a volume's
+    /// image-based ambient turns with the sky. One `float4` per row.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 /// The per-volume `SdfVolumeUniforms` cbuffer (b1, 176 bytes; aligned to 256 in
@@ -117,10 +121,10 @@ mod tests {
 
     // RaymarchView must match the `RaymarchView` cbuffer (b0) in
     // raymarch_helpers.hlsl: two column-major float4x4 then the packed
-    // cam_pos/pad/viewport/time/prefilter scalars (160 B total).
+    // cam_pos/pad/viewport/time/prefilter scalars, then the sky rows (208 B).
     #[test]
     fn raymarch_view_layout_matches_hlsl() {
-        assert_eq!(size_of::<RaymarchView>(), 160);
+        assert_eq!(size_of::<RaymarchView>(), 208);
         assert_eq!(offset_of!(RaymarchView, vp), 0);
         assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
         assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
@@ -128,6 +132,8 @@ mod tests {
         assert_eq!(offset_of!(RaymarchView, viewport), 144);
         assert_eq!(offset_of!(RaymarchView, time), 152);
         assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
+        assert_eq!(offset_of!(RaymarchView, sky_rot), 160);
+        assert_eq!(size_of::<RaymarchView>() % 16, 0);
     }
 
     // RaymarchVolumeUniforms must match the `SdfVolumeUniforms` cbuffer (b1):

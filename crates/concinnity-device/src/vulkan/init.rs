@@ -1028,11 +1028,19 @@ impl VkContext {
             )?);
         }
 
-        let light_ubo = alloc.create_buffer(
-            light_ubo_size,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        // Per-frame-in-flight `LightUniforms` UBO ring, persistently mapped. One
+        // slot per frame so a live directional-light or ambient change can be
+        // written on the CPU without draining the queue: a turning sky rewrites
+        // the set every frame, and a single shared buffer would stall on every
+        // one of them.
+        let mut light_ubo_buffers = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            light_ubo_buffers.push(alloc.create_buffer(
+                light_ubo_size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?);
+        }
         // Per-frame-in-flight `ShadowUniforms` UBO ring, persistently mapped.
         // One slot per frame so writing this frame's cascade VPs cannot land in
         // memory an in-flight frame is still sampling: under `Hybrid` a far
@@ -1067,7 +1075,9 @@ impl VkContext {
         for ubo in &shadow_ubos {
             upload_shadow_uniforms(ubo, &shadow_uniforms);
         }
-        upload_light_uniforms(&light_ubo, &light_uniforms);
+        for ubo in &light_ubo_buffers {
+            upload_light_uniforms(ubo, &light_uniforms);
+        }
         // Empty scene keeps the 1-element placeholder (nothing copied in).
         upload_static_records(&local_light_buffer, &local_lights);
 
@@ -1938,7 +1948,7 @@ impl VkContext {
                 .offset(0)
                 .range(view_ubo_size);
             let light_info = vk::DescriptorBufferInfo::default()
-                .buffer(light_ubo.buffer())
+                .buffer(light_ubo_buffers[i].buffer())
                 .offset(0)
                 .range(light_ubo_size);
             let shadow_info = vk::DescriptorBufferInfo::default()
@@ -3544,7 +3554,7 @@ impl VkContext {
                 prefilter_view: env_map.prefilter.view,
                 cube_sampler: cube_sampler.handle(),
                 linear_sampler: linear_sampler.handle(),
-                light_ubo: light_ubo.buffer(),
+                light_ubos: &light_ubo_buffers,
                 shadow_ubos: &shadow_ubos,
                 shadow_render_pass: shadow_render_pass.handle(),
             },
@@ -3612,7 +3622,7 @@ impl VkContext {
                     probe_cube_count,
                 },
                 crate::vulkan::planar::PlanarLightingBindings {
-                    light_ubo: light_ubo.buffer(),
+                    light_ubos: &light_ubo_buffers,
                     light_size: light_ubo_size,
                     local_light_buffer: local_light_buffer.buffer(),
                     local_light_size: local_light_buffer_size,
@@ -4147,7 +4157,8 @@ impl VkContext {
             uniforms: VkUniforms {
                 view_ubo_buffers,
                 probe_set_ubo_buffers,
-                light_ubo,
+                light_ubo_buffers,
+                light_dirty: concinnity_core::render::frame_dirty::FrameDirty::new(frames),
                 local_light_buffer,
                 local_light_size: local_light_buffer_size,
                 light_uniforms,
@@ -4193,6 +4204,7 @@ impl VkContext {
                 show: Default::default(),
                 far: 1.0,
                 matrix: IDENTITY,
+                sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
             },
             wireframe: Default::default(),
             prefilter_mip_count: env_map.prefilter_mip_count,

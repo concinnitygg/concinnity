@@ -67,6 +67,12 @@ pub struct FrameParams<'a> {
     pub view_mode: crate::gfx::view_modes::ViewMode,
     /// Feature passes to run this frame.
     pub show: crate::gfx::view_modes::ShowFlags,
+    /// Rows of the rotation taking a world-space direction into the environment
+    /// cubemaps' baked frame (`SkyOrientation::sample_rows`). The backend holds
+    /// it for the frame and uploads it into every uniform block whose pass
+    /// samples the sky, so the sky, the IBL and the reflections turn together.
+    /// Identity in a world with no `SkyRotation`.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 /// One streamed chunk's geometry plus placement, supplied to

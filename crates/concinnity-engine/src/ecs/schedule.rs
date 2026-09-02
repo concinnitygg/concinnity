@@ -20,6 +20,17 @@ pub(crate) fn overlay(world: &World) -> Option<crate::gfx::overlay::OverlaySyste
         .map(|_| crate::gfx::overlay::OverlaySystem::new())
 }
 
+// SkyRotationSystem: present whenever the world declares a `SkyRotation`.
+// Scheduled ahead of the transform propagation and the draw list inside
+// GraphicsSystem, so the orientation the pivot, the lights and the cubemap
+// samples read is this tick's.
+pub(crate) fn sky_rotation(world: &World) -> Option<concinnity_core::sky::SkyRotationSystem> {
+    world
+        .query::<crate::components::SkyRotation>()
+        .next()
+        .map(concinnity_core::sky::SkyRotationSystem::new)
+}
+
 // BehaviorSystem: present whenever the world declares any `Behavior`.
 // Scheduled before SpawnSystem / SettingsSystem / StorySystem / AudioSystem so
 // the requests its firing bodies emit are drained the same tick. Built with

@@ -24,7 +24,14 @@ pub fn referenced_names(asset: &WorldJsonlAsset) -> Vec<String> {
         .map(|t| (t.as_str(), t.ref_fields()))
         .filter(|(ty, _)| norm(ty) == type_norm)
         .flat_map(|(_, refs)| refs.iter());
+    // A field declaring several targets is still one reference, so the name is
+    // taken once per distinct field.
+    let mut seen: Vec<&str> = Vec::new();
     for &(field, _target) in flat_refs {
+        if seen.contains(&field) {
+            continue;
+        }
+        seen.push(field);
         if let Some(name) = asset
             .args
             .get(field)

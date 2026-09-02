@@ -6,7 +6,9 @@ mod rotation;
 mod scalar;
 pub mod vec3;
 
-pub use rotation::{Quat, euler_yxz_deg_from_quat, quat_from_euler_yxz_deg, quat_normalize};
+pub use rotation::{
+    Quat, euler_yxz_deg_from_quat, quat_from_axis_angle, quat_from_euler_yxz_deg, quat_normalize,
+};
 
 pub use scalar::{
     acos, asin, atan2, ceil, cos, exp, exp2, floor, fract, hypot, ln, log2, mul_add, powf, powi,

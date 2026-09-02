@@ -92,6 +92,13 @@ pub(crate) fn submit(
         }
     }
 
+    // The frame's directional lights, when the sky turned this frame. Carried
+    // on the snapshot rather than recorded as an op so a turning sky allocates
+    // nothing per frame; the backends early-out on an unchanged set.
+    if let Some(set) = snap.frame.directional {
+        backend.update_directional_lights(set.as_slice());
+    }
+
     // On Metal, pump_ns_events runs inside draw_frame, so update_view is
     // called first so any key/mouse events that arrived since the last tick
     // are in InputState before InputSystem's take_input() (scheduled right
@@ -109,6 +116,7 @@ pub(crate) fn submit(
         world_hidden: snap.frame.world_hidden,
         view_mode: snap.frame.view_mode,
         show: snap.frame.show,
+        sky_rot: snap.frame.sky_rot,
     }) {
         Ok(()) => policy.frame_succeeded(),
         Err(e) => {
@@ -146,5 +154,48 @@ pub(crate) fn submit(
         memory_pressure,
         replay,
         device_lost: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::DirectionalLight;
+    use crate::gfx::mock_backend::{Call, recording_backend};
+    use concinnity_core::render::lights::DirectionalLightSet;
+
+    fn pushed_lights(directional: Option<DirectionalLightSet>) -> Vec<Call> {
+        let (state, mut backend) = recording_backend();
+        let mut snap = RenderSnapshot::default();
+        snap.frame.directional = directional;
+        submit(&mut FramePolicy::default(), &mut snap, &mut backend);
+        let calls = state.lock().unwrap().calls.clone();
+        calls
+            .into_iter()
+            .filter(|c| matches!(c, Call::UpdateDirectionalLights(_)))
+            .collect()
+    }
+
+    #[test]
+    fn a_frame_carrying_no_lights_leaves_the_backend_set_alone() {
+        assert!(pushed_lights(None).is_empty());
+    }
+
+    #[test]
+    fn a_frame_carrying_lights_installs_them_before_the_draw() {
+        let sun = DirectionalLight {
+            direction: [0.0, 1.0, 0.0],
+            color: [1.0, 0.5, 0.25],
+            intensity: 2.0,
+        };
+        let pushed = pushed_lights(Some(DirectionalLightSet::collect(core::iter::once(sun))));
+        assert_eq!(
+            pushed,
+            vec![Call::UpdateDirectionalLights(vec![(
+                sun.direction,
+                sun.color,
+                sun.intensity
+            )])]
+        );
     }
 }

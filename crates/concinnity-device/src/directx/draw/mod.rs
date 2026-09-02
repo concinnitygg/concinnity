@@ -151,6 +151,16 @@ impl DxContext {
         }
         let shadow_ubo_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
 
+        // Light uniforms for this frame. Written only into slots a live edit
+        // (directional set / ambient scale) has re-armed, so a steady world
+        // writes nothing after the ring has caught up.
+        if self.uniforms.take_light_dirty(frame_idx) {
+            upload_light_uniforms(
+                self.uniforms.light_ubo_ptrs[frame_idx],
+                &self.uniforms.light_uniforms,
+            );
+        }
+
         // Reflection-probe set (parallax boxes + live count) into this frame's ring
         // CBV; the bindless main pass binds it at root param [11]. A ring (one CBV per
         // frame) so this write never races a prior frame's in-flight GPU read.
@@ -406,6 +416,7 @@ impl DxContext {
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
+            sky_rot: self.view.sky_rot,
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
@@ -438,7 +449,7 @@ impl DxContext {
 
         let (view_gva, light_gva, local_lights_gva) = (
             com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),
-            com::gpu_va(&self.uniforms.light_ubo),
+            com::gpu_va(&self.uniforms.light_ubo_resources[frame_idx]),
             com::gpu_va(&self.uniforms.local_light_buffer),
         );
 
@@ -555,27 +566,18 @@ impl DxContext {
     }
 }
 
-// Upload LightUniforms to the shared light constant buffer.
-pub(super) fn upload_light_uniforms(
-    light_ubo: &ID3D12Resource,
-    lu: &LightUniforms,
-) -> Result<(), String> {
-    let size = std::mem::size_of::<LightUniforms>();
-    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
-    // receives the mapping.
-    unsafe { light_ubo.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("map light ubo: {e}"))?;
+// Write LightUniforms into one persistently-mapped slot of the per-frame light
+// CBV ring. The slot belongs to a frame whose fence the caller already waited.
+pub(super) fn upload_light_uniforms(slot: *mut u8, lu: &LightUniforms) {
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
-    // is a separate allocation, so the ranges cannot overlap.
+    // is a separate live value, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
             lu as *const LightUniforms as *const u8,
-            ptr as *mut u8,
-            size,
+            slot,
+            std::mem::size_of::<LightUniforms>(),
         );
-        light_ubo.Unmap(0, None);
     }
-    Ok(())
 }
 
 // Root parameter indices for the spot shadow binds, which differ per root

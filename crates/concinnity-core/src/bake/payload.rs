@@ -14,9 +14,10 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::bake::environment_map::RowScheduler;
-use crate::bake::environment_map::source::{bake_payload, generate_sky_equirect};
-use crate::bake::mesh::finish_mesh_payload;
-use crate::components::{EnvironmentMap, Font, Material, ProceduralMesh, validate};
+use crate::bake::environment_map::source::{HdrImage, bake_payload, generate_sky_equirect};
+use crate::bake::environment_map::stars::generate_stars_equirect;
+use crate::bake::mesh::{finish_mesh_payload, vertices_from_data};
+use crate::components::{EnvironmentMap, Font, Material, Mesh, ProceduralMesh, validate};
 use crate::geometry::{
     Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_skybox,
     build_sphere, build_terrain, water_grid,
@@ -94,6 +95,33 @@ pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<Vec<u8>, String> {
     finish_mesh_payload(vertices, indices, mesh.lod_levels, &mesh.lod_distances)
 }
 
+/// Bake a raw `Mesh`'s vertices and indices into its blob payload. Normals
+/// and tangents are derived here; a `source` naming a file needs an importer.
+pub fn mesh(mesh: &Mesh) -> Result<Vec<u8>, String> {
+    if !mesh.source.is_empty() {
+        return Err(
+            "a Mesh with a `source` reads a model file; compile it with the cook module"
+                .to_string(),
+        );
+    }
+    if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+        return Err("a Mesh needs `vertices` and `indices`".to_string());
+    }
+    if !mesh.indices.len().is_multiple_of(3) {
+        return Err(alloc::format!(
+            "a Mesh's indices come in triangles; {} is not a multiple of 3",
+            mesh.indices.len()
+        ));
+    }
+    let vertices = vertices_from_data(&mesh.vertices, &mesh.indices)?;
+    finish_mesh_payload(
+        vertices,
+        mesh.indices.clone(),
+        mesh.lod_levels,
+        &mesh.lod_distances,
+    )
+}
+
 /// Bake an `EnvironmentMap`'s IBL cubemaps into its blob payload, spreading
 /// each convolution's rows over `rows`.
 pub fn environment_map<S: RowScheduler>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
@@ -104,14 +132,15 @@ pub fn environment_map<S: RowScheduler>(map: &EnvironmentMap, rows: &S) -> Resul
                 .to_string(),
         );
     }
-    match map.generator.as_str() {
-        "sky" => {}
+    let generate: fn() -> HdrImage = match map.generator.as_str() {
+        "sky" => generate_sky_equirect,
+        "stars" => generate_stars_equirect,
         "" => return Err("an EnvironmentMap needs a `source` or a `generator`".to_string()),
         other => return Err(alloc::format!("unknown EnvironmentMap generator '{other}'")),
-    }
+    };
     crate::bake::environment_map::check_sizes(map)?;
     Ok(bake_payload(
-        &generate_sky_equirect(),
+        &generate(),
         map.prefilter_face_size,
         map.irradiance_face_size,
         map.prefilter_samples,
@@ -200,6 +229,54 @@ mod tests {
             let err = procedural_mesh(&m).expect_err("not bakeable");
             assert!(err.contains(needle), "{err}");
         }
+    }
+
+    fn triangle() -> Mesh {
+        let vd = |pos: [f32; 3], uv: [f32; 2]| crate::components::VertexData {
+            pos,
+            color: [1.0; 3],
+            uv,
+        };
+        Mesh {
+            vertices: alloc::vec![
+                vd([0.0, 0.0, 0.0], [0.0, 0.0]),
+                vd([1.0, 0.0, 0.0], [1.0, 0.0]),
+                vd([0.0, 1.0, 0.0], [0.0, 1.0]),
+            ],
+            indices: alloc::vec![0, 1, 2],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn raw_geometry_bakes_with_derived_normals() {
+        let payload = super::mesh(&triangle()).expect("a triangle bakes");
+        let (verts, indices) = mesh_payload::deserialise(&payload).expect("the payload reads back");
+        assert_eq!(indices, alloc::vec![0, 1, 2]);
+        assert!(verts.iter().all(|v| (v.normal[2] - 1.0).abs() < 1e-5));
+    }
+
+    #[test]
+    fn raw_geometry_reports_what_it_cannot_bake() {
+        let sourced = Mesh {
+            source: "chair.glb".into(),
+            ..Default::default()
+        };
+        let err = super::mesh(&sourced).expect_err("a file source");
+        assert!(err.contains("cook module"), "{err}");
+
+        let err = super::mesh(&Mesh::default()).expect_err("nothing to bake");
+        assert!(err.contains("needs `vertices` and `indices`"), "{err}");
+
+        let mut ragged = triangle();
+        ragged.indices.push(0);
+        let err = super::mesh(&ragged).expect_err("a partial triangle");
+        assert!(err.contains("multiple of 3"), "{err}");
+
+        let mut past = triangle();
+        past.indices[2] = 7;
+        let err = super::mesh(&past).expect_err("an index past the list");
+        assert!(err.contains("indexes past"), "{err}");
     }
 
     #[test]

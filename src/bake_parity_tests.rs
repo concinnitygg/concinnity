@@ -112,10 +112,9 @@ fn mesh_payload(world: &mut World) -> Vec<u8> {
             .inner()
             .resource::<concinnity_core::resource::RuntimeMeshPayloads>()
             .expect("the runtime payload store")
-            .0
-            .get(&mesh.asset_id)
+            .get(mesh.asset_id)
             .expect("the mesh's payload")
-            .clone(),
+            .to_vec(),
     }
 }
 

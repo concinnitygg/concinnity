@@ -2067,11 +2067,13 @@ impl GraphicsSystem {
         let instanced_props = ctx.drain::<crate::components::InstancedProp>();
 
         // Entities to render, in Prop-column order, so each gets a RenderHandle +
-        // GlobalTransform attached below. Enumerated through the Transform column
-        // (the decomposition gives every prop a Transform in Prop order); the Prop
-        // column itself was drained by the decomposition pass at load.
+        // GlobalTransform attached below. Enumerated through the PropInstance
+        // marker the decomposition leaves on each prop, in Prop order; the Prop
+        // column itself was drained by the decomposition pass at load. The
+        // Transform column is not the enumeration: a SkyRotation pivot carries
+        // one without being anything to draw.
         let prop_entities: Vec<crate::ecs::Entity> = ctx
-            .query_with_entity::<crate::components::Transform>()
+            .query_with_entity::<crate::components::PropInstance>()
             .map(|(entity, _)| entity)
             .collect();
 

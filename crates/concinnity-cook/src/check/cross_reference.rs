@@ -87,7 +87,10 @@ fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
             if *list_norm != type_norm {
                 continue;
             }
-            for &(field, target) in refs.iter() {
+            // A field may declare several targets (a Prop's `parent` is another
+            // Prop or the SkyRotation pivot); resolving in any one of them is
+            // enough, so the field is checked once against the union.
+            for field in fields_of(refs) {
                 let Some(referenced) = asset
                     .args
                     .get(field)
@@ -96,14 +99,45 @@ fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
                 else {
                     continue;
                 };
-                if !scopes[target].contains(referenced) {
-                    errors.push(format!(
-                        "{} '{}': {} '{}' not found, add a {} asset with that name",
-                        ty_name, asset.name, field, referenced, target
-                    ));
+                let targets: Vec<&str> = refs
+                    .iter()
+                    .filter(|(name, _)| *name == field)
+                    .map(|(_, target)| *target)
+                    .collect();
+                if targets.iter().any(|t| scopes[t].contains(referenced)) {
+                    continue;
                 }
+                errors.push(format!(
+                    "{} '{}': {} '{}' not found, add {} asset with that name",
+                    ty_name,
+                    asset.name,
+                    field,
+                    referenced,
+                    one_of(&targets)
+                ));
             }
         }
+    }
+}
+
+// The distinct field names in a `refs:` list, in declaration order.
+fn fields_of(refs: &'static [(&'static str, &'static str)]) -> Vec<&'static str> {
+    let mut fields: Vec<&'static str> = Vec::new();
+    for &(field, _) in refs {
+        if !fields.contains(&field) {
+            fields.push(field);
+        }
+    }
+    fields
+}
+
+// "a Prop", or "a Prop or a SkyRotation" for a field with several targets.
+fn one_of(targets: &[&str]) -> String {
+    let named: Vec<String> = targets.iter().map(|t| format!("a {t}")).collect();
+    match named.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
     }
 }
 
@@ -620,6 +654,45 @@ mod tests {
             ),
         ];
         assert!(validate_cross_references(&assets).is_ok());
+    }
+
+    // `parent` declares two targets: a prop may hang off another prop or off
+    // the celestial-sphere pivot, and resolving in either is enough.
+    #[test]
+    fn prop_parented_to_the_sky_rotation_passes() {
+        let assets = vec![
+            asset(
+                "box",
+                "ProceduralMesh",
+                serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
+            ),
+            asset("sky", "SkyRotation", serde_json::json!({"axis":[1,0,0]})),
+            asset(
+                "moon",
+                "Prop",
+                serde_json::json!({"mesh":"box","parent":"sky"}),
+            ),
+        ];
+        assert!(validate_cross_references(&assets).is_ok());
+    }
+
+    // A `parent` that resolves to neither target names both in the failure.
+    #[test]
+    fn a_multi_target_ref_failure_names_every_target() {
+        let assets = vec![
+            asset(
+                "box",
+                "ProceduralMesh",
+                serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
+            ),
+            asset(
+                "moon",
+                "Prop",
+                serde_json::json!({"mesh":"box","parent":"nothing"}),
+            ),
+        ];
+        let text = err_text(&assets);
+        assert!(text.contains("a Prop or a SkyRotation"), "{text}");
     }
 
     #[test]

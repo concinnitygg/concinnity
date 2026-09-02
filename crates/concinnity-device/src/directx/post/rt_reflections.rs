@@ -474,6 +474,7 @@ impl DxContext {
             sun_dir: self.fog.sun_dir,
             sun_color: self.fog.sun_color,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            sky_rot: self.view.sky_rot,
         });
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges

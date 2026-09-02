@@ -26,7 +26,16 @@ cbuffer RaymarchView : register(b0) {
   float2 view_viewport;
   float view_time;
   float view_prefilter_mip_count;
+  // Rows of the rotation from world space into the environment cubemaps'
+  // baked frame; identity when the sky does not turn.
+  float4 view_sky_rot[3];
 };
+
+// A world direction in the environment cubemaps' own frame.
+float3 raymarchSkyDir(float3 d) {
+  return float3(dot(view_sky_rot[0].xyz, d), dot(view_sky_rot[1].xyz, d),
+                dot(view_sky_rot[2].xyz, d));
+}
 
 struct SdfParams {
   float4
@@ -362,12 +371,13 @@ float3 shadeAmbientIbl(SdfSurface s, float3 normal, float3 view_dir,
     float3 F_ibl = raymarchFresnelSchlick(NdV, F0);
     float3 kd_ibl = (1.0 - F_ibl) * (1.0 - s.metallic);
 
-    float3 irradiance = irradiance_cube.SampleLevel(cube_samp, normal, 0.0).rgb;
+    float3 irradiance =
+        irradiance_cube.SampleLevel(cube_samp, raymarchSkyDir(normal), 0.0).rgb;
     float3 diffuse_ibl = kd_ibl * s.albedo * irradiance / 3.14159265;
 
     float3 R = reflect(-view_dir, normal);
     float lod = s.roughness * (prefilter_mip_count - 1.0);
-    float3 prefiltered = prefilter_cube.SampleLevel(cube_samp, R, lod).rgb;
+    float3 prefiltered = prefilter_cube.SampleLevel(cube_samp, raymarchSkyDir(R), lod).rgb;
     float2 ab = raymarchEnvBrdfApprox(NdV, s.roughness);
     float3 specular_ibl = prefiltered * (F0 * ab.x + ab.y);
 

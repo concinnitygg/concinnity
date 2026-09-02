@@ -23,7 +23,7 @@ pub fn append_mesh(ctx: &mut PipelineContext, id: AssetId, payload: Vec<u8>) -> 
         ctx.insert_resource(RuntimeMeshPayloads::default());
     }
     if let Some(payloads) = ctx.resource_mut::<RuntimeMeshPayloads>() {
-        payloads.0.insert(id, payload);
+        payloads.push(id, payload);
     }
     MeshHandle(handle as u32)
 }
@@ -77,7 +77,7 @@ fn build_assigned(ctx: &PipelineContext) -> usize {
 // before it.
 fn runtime_count(ctx: &PipelineContext) -> usize {
     ctx.resource::<RuntimeMeshPayloads>()
-        .map_or(0, |p| p.0.len())
+        .map_or(0, RuntimeMeshPayloads::len)
 }
 
 #[cfg(test)]
@@ -112,6 +112,6 @@ mod tests {
         let payloads = ctx
             .resource::<RuntimeMeshPayloads>()
             .expect("the payload store exists");
-        assert_eq!(payloads.0.len(), 2);
+        assert_eq!(payloads.len(), 2);
     }
 }

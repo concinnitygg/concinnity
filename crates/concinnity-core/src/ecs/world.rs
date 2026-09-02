@@ -110,6 +110,34 @@ impl Default for World {
 
 // The next minted id, drawn from the world's shared counter so ids handed out
 // before start and by the completion pass never collide.
+/// A mesh value a world takes a baked geometry payload for, through
+/// [`World::add_mesh`].
+///
+/// A [`ProceduralMesh`](crate::components::ProceduralMesh) stays in the world
+/// as the record of what was generated; a raw [`Mesh`](crate::components::Mesh)
+/// is nothing but its geometry once baked, so only the payload is kept.
+pub trait BakedMesh: sealed::Sealed {
+    #[doc(hidden)]
+    fn install(self, ctx: &mut PipelineContext, id: AssetId);
+}
+
+impl BakedMesh for crate::components::ProceduralMesh {
+    fn install(mut self, ctx: &mut PipelineContext, id: AssetId) {
+        self.asset_id = id;
+        ctx.push(self);
+    }
+}
+
+impl BakedMesh for crate::components::Mesh {
+    fn install(self, _ctx: &mut PipelineContext, _id: AssetId) {}
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for crate::components::ProceduralMesh {}
+    impl Sealed for crate::components::Mesh {}
+}
+
 fn mint_id(ctx: &mut PipelineContext) -> AssetId {
     if ctx.resource::<MintedIds>().is_none() {
         ctx.insert_resource(MintedIds::default());
@@ -171,15 +199,11 @@ impl World {
     /// The world names the mesh itself (from the minted range) and holds the
     /// payload directly, so no compiled blob is involved; handles count up in
     /// call order, after any the build assigned.
-    pub fn add_mesh(
-        &mut self,
-        mut mesh: crate::components::ProceduralMesh,
-        payload: Vec<u8>,
-    ) -> MeshHandle {
+    pub fn add_mesh<M: BakedMesh>(&mut self, mesh: M, payload: Vec<u8>) -> MeshHandle {
         let mut ctx = self.context();
-        mesh.asset_id = mint_id(&mut ctx);
-        let handle = crate::resource::append_mesh(&mut ctx, mesh.asset_id, payload);
-        ctx.push(mesh);
+        let id = mint_id(&mut ctx);
+        let handle = crate::resource::append_mesh(&mut ctx, id, payload);
+        mesh.install(&mut ctx, id);
         handle
     }
 

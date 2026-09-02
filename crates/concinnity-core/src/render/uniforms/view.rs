@@ -43,6 +43,13 @@ pub struct ViewUniforms {
     /// End-padding: the shader rounds the block up to a multiple of float4x4's
     /// 16-byte alignment, so the upload rounds explicitly to match.
     pub _end_pad: f32,
+    /// Rows of the rotation that takes a world-space direction into the
+    /// environment cubemaps' baked frame: the inverse of the sky's current
+    /// rotation (`SkyOrientation::sample_rows`), identity when the world
+    /// declares no `SkyRotation`. Every cubemap sample helper applies it, so
+    /// the sky, the ambient fill and the glossy reflections turn together.
+    /// One `float4` per row; `w` is unused.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 /// Per-frame view inputs to the unified G-buffer pre-pass. The jittered current
@@ -77,4 +84,46 @@ pub struct GBufferModel {
     pub cur_model: [[f32; 4]; 4],
     /// The previous frame's model matrix, for velocity.
     pub prev_model: [[f32; 4]; 4],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    // The published binding contract for a world-authored Metal shader: every
+    // offset here is a byte position that shader reads through. `sky_rot`
+    // lands past the block's own end padding, so nothing before it moved.
+    #[test]
+    fn view_uniforms_layout_matches_msl() {
+        assert_eq!(size_of::<ViewUniforms>(), 208);
+        assert_eq!(offset_of!(ViewUniforms, vp), 0);
+        assert_eq!(offset_of!(ViewUniforms, view), 64);
+        assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
+        assert_eq!(offset_of!(ViewUniforms, reflections_enabled), 132);
+        assert_eq!(offset_of!(ViewUniforms, cam_pos), 136);
+        assert_eq!(offset_of!(ViewUniforms, prefilter_mip_count), 148);
+        assert_eq!(offset_of!(ViewUniforms, shade_mode), 152);
+        assert_eq!(offset_of!(ViewUniforms, _end_pad), 156);
+        // A float4 array is 16-byte aligned on every target.
+        assert_eq!(offset_of!(ViewUniforms, sky_rot), 160);
+        assert_eq!(size_of::<ViewUniforms>() % 16, 0);
+    }
+
+    // Four float4x4s, all naturally aligned.
+    #[test]
+    fn gbuffer_view_layout_matches_the_shader() {
+        assert_eq!(size_of::<GBufferView>(), 256);
+        assert_eq!(offset_of!(GBufferView, jittered_vp), 0);
+        assert_eq!(offset_of!(GBufferView, cur_vp), 64);
+        assert_eq!(offset_of!(GBufferView, prev_vp), 128);
+        assert_eq!(offset_of!(GBufferView, view), 192);
+    }
+
+    #[test]
+    fn gbuffer_model_layout_matches_the_shader() {
+        assert_eq!(size_of::<GBufferModel>(), 128);
+        assert_eq!(offset_of!(GBufferModel, cur_model), 0);
+        assert_eq!(offset_of!(GBufferModel, prev_model), 64);
+    }
 }

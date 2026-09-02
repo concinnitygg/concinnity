@@ -52,7 +52,7 @@
 #endif
 
 // Per-frame view shared by every transparent draw. Layout matches
-// `TransparentView` / the TransparentViewBlock UBO (160 B).
+// `TransparentView` / the TransparentViewBlock UBO (240 B).
 struct TransparentView
 {
     float4x4 vp;       // world -> clip (jittered when TAA is on)
@@ -63,7 +63,20 @@ struct TransparentView
     // Mips in the sky prefilter cube; 0 = no EnvironmentMap bound, and the
     // reflection keeps the white rim where no probe covers.
     float prefilter_mip_count;
+    // Rows of the rotation from world space into the sky cube's baked frame;
+    // identity when the sky does not turn.
+    float4 sky_rot[3];
+    // Direction toward the scene's sun (the first directional light) and that
+    // light's colour times its intensity; both zero when the world declares no
+    // directional light, which the water glint reads as no sun.
+    float4 sun_dir;
+    float4 sun_color;
 };
+
+// A world direction in the sky cube's own frame; every sky tap goes through it.
+#define SKY_DIR(d) float3(dot(view.sky_rot[0].xyz, (d)), \
+                          dot(view.sky_rot[1].xyz, (d)), \
+                          dot(view.sky_rot[2].xyz, (d)))
 
 // Per-pane tunables. Layout matches `GlassParams` / the GlassParamsBlock UBO
 // (64 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
@@ -103,7 +116,7 @@ float4 scene_sample(float2 uv) { return scene_color.Sample(post_samp, uv); }
 float4 planar_sample(float2 uv) { return planar_reflection.Sample(post_samp, uv); }
 float3 prefilter_level(float3 dir, float lod)
 {
-    return prefilter_cube.SampleLevel(cube_sampler, dir, lod).rgb;
+    return prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), lod).rgb;
 }
 
 #else
@@ -126,7 +139,7 @@ float3 prefilter_level(float3 dir, float lod)
 [[vk::binding(5, 2)]] SamplerCube<float4> prefilter_cube;
 
 float4 scene_sample(float2 uv) { return scene_color.Sample(uv); }
-float3 prefilter_level(float3 dir, float lod) { return prefilter_cube.SampleLevel(dir, lod).rgb; }
+float3 prefilter_level(float3 dir, float lod) { return prefilter_cube.SampleLevel(SKY_DIR(dir), lod).rgb; }
 
 #endif
 

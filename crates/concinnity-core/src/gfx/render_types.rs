@@ -712,7 +712,7 @@ pub struct SsaoParams {
 /// project a view-space ray point back to a screen UV, and the data the resolve
 /// needs to sample the IBL prefilter cubemap as a fallback. Pushed verbatim to
 /// the SSR resolve fragment shader, so the layout must stay in sync with the
-/// `SsrParams` struct there. 96 bytes.
+/// `SsrParams` struct there. 144 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsrParams {
@@ -740,6 +740,10 @@ pub struct SsrParams {
     /// surface position a reflection probe box-projects against. Backends that only
     /// sample the cube use the 3x3 (the `r_world` direction) and ignore translation.
     pub inv_view: [[f32; 4]; 4],
+    /// Rows of the rotation taking a world-space direction into the environment
+    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so the resolve's
+    /// sky fallback turns with the main pass. One `float4` per row; `w` unused.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 /// Per-frame uniform for the screen-space global-illumination (SSGI) gather +
@@ -779,7 +783,7 @@ pub struct SsgiParams {
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
 /// direction + colour the hit-shading uses. Pushed verbatim to the RT kernel,
-/// so the layout must stay in sync with the `RtParams` struct there. 144 bytes,
+/// so the layout must stay in sync with the `RtParams` struct there. 192 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -812,6 +816,10 @@ pub struct RtParams {
     /// matrix). Lifts the view-space reconstructed position + normal into the
     /// world space the acceleration structure is built in.
     pub inv_view: [[f32; 4]; 4],
+    /// Rows of the rotation taking a world-space direction into the environment
+    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a missed ray
+    /// lands on the same sky the main pass shows. One `float4` per row.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 /// One entry of the ray-tracing geometry table, indexed by the intersector's
@@ -1781,6 +1789,44 @@ mod tests {
     fn an_out_of_range_albedo_clamps_into_the_real_textures() {
         assert_eq!(albedo_pool_index(9, 4), 3);
         assert_eq!(albedo_pool_index(0, 0), 0);
+    }
+
+    // The SSR resolve's push block. `sky_rot` is a float4 array, so it needs
+    // the 16-byte boundary the matrix ahead of it already lands on.
+    #[test]
+    fn ssr_params_layout_matches_shaders() {
+        assert_eq!(size_of::<SsrParams>(), 144);
+        assert_eq!(offset_of!(SsrParams, intensity), 0);
+        assert_eq!(offset_of!(SsrParams, max_distance), 4);
+        assert_eq!(offset_of!(SsrParams, tan_half_fov_y), 8);
+        assert_eq!(offset_of!(SsrParams, aspect), 12);
+        assert_eq!(offset_of!(SsrParams, stride), 16);
+        assert_eq!(offset_of!(SsrParams, thickness), 20);
+        assert_eq!(offset_of!(SsrParams, prefilter_mip_count), 24);
+        assert_eq!(offset_of!(SsrParams, _pad), 28);
+        assert_eq!(offset_of!(SsrParams, inv_view), 32);
+        assert_eq!(offset_of!(SsrParams, sky_rot), 96);
+        assert_eq!(size_of::<SsrParams>() % 16, 0);
+    }
+
+    // The RT kernel's parameter block, with every vec3 padded to a float4.
+    #[test]
+    fn rt_params_layout_matches_shaders() {
+        assert_eq!(size_of::<RtParams>(), 192);
+        assert_eq!(offset_of!(RtParams, intensity), 0);
+        assert_eq!(offset_of!(RtParams, max_distance), 4);
+        assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
+        assert_eq!(offset_of!(RtParams, aspect), 12);
+        assert_eq!(offset_of!(RtParams, prefilter_mip_count), 16);
+        assert_eq!(offset_of!(RtParams, _pad0), 20);
+        assert_eq!(offset_of!(RtParams, _pad1), 24);
+        assert_eq!(offset_of!(RtParams, _pad2), 28);
+        assert_eq!(offset_of!(RtParams, cam_pos), 32);
+        assert_eq!(offset_of!(RtParams, sun_dir), 48);
+        assert_eq!(offset_of!(RtParams, sun_color), 64);
+        assert_eq!(offset_of!(RtParams, inv_view), 80);
+        assert_eq!(offset_of!(RtParams, sky_rot), 144);
+        assert_eq!(size_of::<RtParams>() % 16, 0);
     }
 
     #[test]

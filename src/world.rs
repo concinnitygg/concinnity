@@ -2,8 +2,8 @@
 
 use alloc::vec::Vec;
 
-use concinnity_core::components::{Material, ProceduralMesh};
-use concinnity_core::ecs::RuntimeComponent;
+use concinnity_core::components::Material;
+use concinnity_core::ecs::{BakedMesh, RuntimeComponent};
 
 use crate::{EnvironmentMapHandle, MaterialHandle, MeshHandle};
 
@@ -60,10 +60,12 @@ impl World {
     /// Add a mesh with its baked geometry payload, returning the handle a
     /// [`Prop`](crate::components::Prop) references it by.
     ///
-    /// The payload comes from [`bake::procedural_mesh`](crate::bake::procedural_mesh)
-    /// (or, through the `cook` module, from a compiled world). Handles count up
-    /// in the order meshes are added.
-    pub fn add_mesh(&mut self, mesh: ProceduralMesh, payload: Vec<u8>) -> MeshHandle {
+    /// The mesh is a [`ProceduralMesh`](crate::components::ProceduralMesh)
+    /// with the payload [`bake::procedural_mesh`](crate::bake::procedural_mesh)
+    /// generated for it, or a raw [`bake::Mesh`](crate::bake::Mesh) with the
+    /// payload [`bake::mesh`](crate::bake::mesh) packed from its vertices.
+    /// Handles count up in the order meshes are added.
+    pub fn add_mesh<M: BakedMesh>(&mut self, mesh: M, payload: Vec<u8>) -> MeshHandle {
         self.inner.add_mesh(mesh, payload)
     }
 

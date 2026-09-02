@@ -106,7 +106,19 @@ struct ViewUniforms {
     // 1.0 while the unlit view mode is active: shade_surface returns the base
     // color before lighting.
     float shade_mode;
+    float _end_pad;
+    // Rows of the rotation from world space into the environment cubemaps'
+    // baked frame; identity when the sky does not turn.
+    float4 sky_rot[3];
 };
+
+// A world direction in the environment cubemaps' own frame. Every sky tap goes
+// through it, so the skybox and the image-based lighting turn together.
+inline float3 sky_dir(constant ViewUniforms &view, float3 d) {
+    return float3(dot(view.sky_rot[0].xyz, d),
+                  dot(view.sky_rot[1].xyz, d),
+                  dot(view.sky_rot[2].xyz, d));
+}
 
 // Reflection-probe parallax box (buffer(6)). Matches metal::uniforms::ProbeUniforms.
 // box_min.w is the enabled flag (0 = no baked probe / parallax off). When on, the
@@ -970,7 +982,8 @@ static float4 shade_surface(
         if (ibl_enabled) {
             // Mip 0 of the prefilter cube is the unfiltered source, use it
             // for the skybox so the sky matches the environment driving IBL.
-            return float4(prefilter_cube.sample(cube_sampler, view_dir, level(0.0)).rgb, 1.0);
+            return float4(
+                prefilter_cube.sample(cube_sampler, sky_dir(view, view_dir), level(0.0)).rgb, 1.0);
         }
         float t = max(0.0, view_dir.y);
         return float4(mix(SKY_HORIZON, SKY_ZENITH, t), 1.0);
@@ -1280,7 +1293,7 @@ static float4 shade_surface(
     if (ibl_enabled) {
         float3 F_ibl     = fresnel_schlick(NdV, F0);
         float3 kd_ibl    = (1.0 - F_ibl) * (1.0 - metallic);
-        float3 irradiance = irradiance_cube.sample(cube_sampler, N).rgb;
+        float3 irradiance = irradiance_cube.sample(cube_sampler, sky_dir(view, N)).rgb;
         float3 diffuse_ibl = kd_ibl * albedo * irradiance / PI;
 
         float3 R = reflect(-V, N);

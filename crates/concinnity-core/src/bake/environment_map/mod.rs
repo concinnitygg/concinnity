@@ -39,6 +39,7 @@
 pub mod bake;
 pub mod schedule;
 pub mod source;
+pub mod stars;
 
 use crate::decode::{ByteReader, checked_product};
 use alloc::format;

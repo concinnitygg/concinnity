@@ -33,6 +33,18 @@ fn about_axis(axis: usize, angle_rad: f32) -> Quat {
     q
 }
 
+/// The rotation quaternion for `angle_rad` about `axis`, which need not be
+/// normalised. An axis too short to have a direction yields the identity.
+pub fn quat_from_axis_angle(axis: [f32; 3], angle_rad: f32) -> Quat {
+    let len = sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+    if len < 1e-12 {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
+    let (s, c) = sin_cos(angle_rad * 0.5);
+    let k = s / len;
+    [axis[0] * k, axis[1] * k, axis[2] * k, c]
+}
+
 /// A rotation quaternion scaled to unit length, or the identity when `q` is too
 /// short to have a direction.
 pub fn quat_normalize(q: Quat) -> Quat {
@@ -92,6 +104,16 @@ mod tests {
 
     fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < tol)
+    }
+
+    // The axis-angle quaternion agrees with the canonical single-axis one, and
+    // a zero axis has no direction to turn about.
+    #[test]
+    fn axis_angle_matches_the_canonical_axis_rotation() {
+        let want = about_axis(1, 0.7);
+        let got = quat_from_axis_angle([0.0, 3.0, 0.0], 0.7);
+        assert!((0..4).all(|i| (got[i] - want[i]).abs() < 1e-6), "{got:?}");
+        assert_eq!(quat_from_axis_angle([0.0; 3], 1.0), [0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]

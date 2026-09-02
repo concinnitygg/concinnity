@@ -26,7 +26,12 @@ the on-screen sky sharpness. 512 is the default balance: 256 visibly
 pixelates a 4K-source sky, 1024 sharpens it further at 4× the size.
 
 **Built-in generators:** `sky` produces a procedural blue sky with a soft
-sun, useful when no source file is available.
+sun, and `stars` a near-black night sky of scattered points, the brightest
+of them above 1.0 radiance so bloom catches them, darker below the
+horizon. Both are useful when no source file is available. The
+sky is drawn at the resolution `prefilter_face_size` sets, so a starfield
+wants the largest of them, 1024; below that each point is magnified into a
+blob.
 
 The sky mesh that displays the map (a skybox
 [ProceduralMesh](ProceduralMesh.md) plus its [Material](Material.md) and
@@ -38,7 +43,7 @@ background left to `clear_color` or your own geometry.
 ## Parameters
 
 - `source`: A string. Path to the source equirectangular panorama -- a Radiance `.hdr`, or a panorama-sphere `.glb` / `.gltf` -- relative to the project root. Mutually exclusive with `generator`.
-- `generator`: A string. Built-in source name (e.g. "sky"). Mutually exclusive with `source`.
+- `generator`: A string. Built-in source name, `sky` or `stars`. Mutually exclusive with `source`.
 - `prefilter_face_size`: An integer. Face size of the reflection/sky cubemap, in pixels. Higher is sharper but larger. Defaults to `512`.
 - `irradiance_face_size`: An integer. Face size of the diffuse ambient cubemap, in pixels. Defaults to `8`.
 - `prefilter_samples`: An integer. Number of samples used to filter each reflection texel. Higher reduces noise at the cost of build time. Defaults to `1024`.

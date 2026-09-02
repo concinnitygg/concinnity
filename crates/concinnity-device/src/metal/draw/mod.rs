@@ -85,6 +85,7 @@ impl MtlContext {
             world_hidden,
             view_mode,
             show,
+            sky_rot,
         } = params;
         let mtm = objc2::MainThreadMarker::new()
             .ok_or("draw_frame must be called from the main thread")?;
@@ -92,6 +93,7 @@ impl MtlContext {
         // the composite's channel visualization + depth normalization).
         self.view.mode = view_mode;
         self.view.far = far;
+        self.view.sky_rot = sky_rot;
 
         // Reset this frame's render stats; the draw counters below accumulate
         // into `diagnostics.frame_stats`, and `render_stats()` reports them (plus the GPU
@@ -488,6 +490,7 @@ impl MtlContext {
                 inv_view_rot,
                 cam_pos,
                 prefilter_mip_count,
+                sky_rot,
             )
         });
         let ssgi_params = self
@@ -525,6 +528,7 @@ impl MtlContext {
                         sun_dir: sun.direction,
                         sun_color,
                         prefilter_mip_count,
+                        sky_rot,
                     })
                 });
         let fog_params = self.fog.settings.map(|fog| {

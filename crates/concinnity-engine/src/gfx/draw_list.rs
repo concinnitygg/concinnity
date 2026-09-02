@@ -284,9 +284,10 @@ pub(crate) fn load_mesh_geometry(
     // querying ProceduralMesh for the live heightfield args. Same precedent as
     // the audio-clip residency the graphics init leaves resident for AudioSystem:
     // leave the component in place so a later init step can still read it.
-    // A generator the world baked for itself at start carries no locator; those
-    // are the trailing `MeshBlock::Runtime` block, loaded after the compiled
-    // ones so a handle the build assigned keeps its index.
+    // A generator the world baked for itself at start carries no locator: its
+    // payload is in the runtime store with the rest of the trailing
+    // `MeshBlock::Runtime` block, loaded after the compiled ones so a handle
+    // the build assigned keeps its index.
     let (proc_meshes, baked_meshes): (Vec<ProceduralMesh>, Vec<ProceduralMesh>) = ctx
         .query::<ProceduralMesh>()
         .cloned()
@@ -295,6 +296,15 @@ pub(crate) fn load_mesh_geometry(
         .resource::<concinnity_core::resource::RuntimeMeshPayloads>()
         .cloned()
         .unwrap_or_default();
+    for mesh in &baked_meshes {
+        if baked_payloads.get(mesh.asset_id).is_none() {
+            tracing::error!(
+                "GraphicsSystem: ProceduralMesh {} was baked at start but left no payload",
+                mesh.asset_id
+            );
+            return None;
+        }
+    }
     let voxel_chunks = ctx.drain::<VoxelChunk>();
     let file_assets = ctx.drain::<File>();
     let file_meshes: Vec<&File> = file_assets
@@ -304,7 +314,7 @@ pub(crate) fn load_mesh_geometry(
 
     if mesh_table.is_empty()
         && proc_meshes.is_empty()
-        && baked_meshes.is_empty()
+        && baked_payloads.is_empty()
         && voxel_chunks.is_empty()
         && file_meshes.is_empty()
     {
@@ -473,18 +483,11 @@ pub(crate) fn load_mesh_geometry(
     load_meshes!("File", file_meshes);
 
     // The world's own block: geometry baked at start, whose payload bytes are
-    // already in memory rather than behind a locator.
-    for mesh in &baked_meshes {
-        let Some(bytes) = baked_payloads.get(mesh.asset_id) else {
-            tracing::error!(
-                "GraphicsSystem: ProceduralMesh {} was baked at start but left no payload",
-                mesh.asset_id
-            );
-            return None;
-        };
+    // already in memory rather than behind a locator, in install order.
+    for (id, bytes) in baked_payloads.iter() {
         match crate::gfx::mesh_payload::deserialise_with_lods(bytes) {
             Ok((verts, idxs, alternates)) => {
-                component_mesh_handles.insert(mesh.asset_id, geometry.len());
+                component_mesh_handles.insert(id, geometry.len());
                 geometry.push(LoadedMesh {
                     vertices: verts,
                     indices: idxs,
@@ -494,10 +497,7 @@ pub(crate) fn load_mesh_geometry(
                 });
             }
             Err(e) => {
-                tracing::error!(
-                    "GraphicsSystem: malformed baked ProceduralMesh payload: {}",
-                    e
-                );
+                tracing::error!("GraphicsSystem: malformed baked mesh payload {}: {}", id, e);
                 return None;
             }
         }
@@ -1943,7 +1943,7 @@ mod tests {
         });
         let mut world = b.seal().with_mesh_table(vec![Some(compiled)]);
         let mut payloads = concinnity_core::resource::RuntimeMeshPayloads::default();
-        payloads.0.insert(AssetId(3), tri_payload());
+        payloads.push(AssetId(3), tri_payload());
         world.resources.insert(payloads);
         let mut ctx = world.ctx();
 

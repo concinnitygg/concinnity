@@ -4,15 +4,17 @@
 // after the SSR resolve and before TAA), alongside `glass.slang`. Where a glass
 // pane is a flat quad the vertex stage only projects, a water surface is a
 // tessellated XZ grid (see geometry::water_grid) the vertex stage displaces by a
-// sum of Gerstner waves, taking the world-space normal from the analytic
-// derivatives of that sum. The fragment stage then composites, in order:
+// sum of Gerstner waves. The fragment stage takes the world-space normal from
+// the analytic derivatives of that same sum at its own rest position, so a
+// coarse grid shades as finely as a dense one, then composites, in order:
 //
 //   * Refraction - the pre-transparent scene snapshot at a normal-perturbed
 //                  screen UV, so the seabed bends under the waves.
 //   * Tint       - shallow to deep by the water-column thickness the main depth
 //                  gives, an exponential falloff over `depth_falloff`.
 //   * Foam       - a soft band where the seabed is just below the surface.
-//   * Reflection - see below.
+//   * Reflection - see below, plus a GGX specular lobe for the scene's sun off
+//                  the same wave normal.
 //   * Fresnel    - Schlick with a water-vs-air F0 of 0.02, shaped by
 //                  `fresnel_power`.
 //
@@ -71,7 +73,7 @@ static const uint MAX_WATER_WAVES = 4u;
 #endif
 
 // Per-frame view shared by every transparent draw. Layout matches
-// `TransparentView` / the TransparentViewBlock UBO (160 B). The same
+// `TransparentView` / the TransparentViewBlock UBO (240 B). The same
 // declaration glass.slang carries -- one host block feeds both.
 struct TransparentView
 {
@@ -83,7 +85,20 @@ struct TransparentView
     // Mips in the sky prefilter cube; 0 = no EnvironmentMap bound, and the
     // reflection falls through to the sky gradient.
     float prefilter_mip_count;
+    // Rows of the rotation from world space into the sky cube's baked frame;
+    // identity when the sky does not turn.
+    float4 sky_rot[3];
+    // Direction toward the scene's sun (the first directional light) and that
+    // light's colour times its intensity; both zero when the world declares no
+    // directional light, which the water glint reads as no sun.
+    float4 sun_dir;
+    float4 sun_color;
 };
+
+// A world direction in the sky cube's own frame; every sky tap goes through it.
+#define SKY_DIR(d) float3(dot(view.sky_rot[0].xyz, (d)), \
+                          dot(view.sky_rot[1].xyz, (d)), \
+                          dot(view.sky_rot[2].xyz, (d)))
 
 // One Gerstner wave, packed into two float4 lanes so the CPU `[f32; 4]` pair is
 // byte-identical on every target. Matches `WaterWaveGpu` (32 B).
@@ -143,7 +158,7 @@ float4 scene_sample(float2 uv) { return scene_color.Sample(post_samp, uv); }
 float4 planar_sample(float2 uv) { return planar_reflection.Sample(post_samp, uv); }
 float3 prefilter_level(float3 dir, float lod)
 {
-    return prefilter_cube.SampleLevel(cube_sampler, dir, lod).rgb;
+    return prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), lod).rgb;
 }
 
 #else
@@ -166,7 +181,7 @@ float3 prefilter_level(float3 dir, float lod)
 [[vk::binding(5, 2)]] SamplerCube<float4> prefilter_cube;
 
 float4 scene_sample(float2 uv) { return scene_color.Sample(uv); }
-float3 prefilter_level(float3 dir, float lod) { return prefilter_cube.SampleLevel(dir, lod).rgb; }
+float3 prefilter_level(float3 dir, float lod) { return prefilter_cube.SampleLevel(SKY_DIR(dir), lod).rgb; }
 
 #endif
 
@@ -309,7 +324,10 @@ struct WaterVertexIn
 struct WaterVertexOut
 {
     [[vk::location(0)]] float3 world_pos : TEXCOORD0;
-    [[vk::location(1)]] float3 world_normal : TEXCOORD1;
+    // The flat-rest XZ the vertex was displaced from; the fragment evaluates
+    // the wave normal there itself, so the grid's density sets only the
+    // silhouette of the displacement, never the shading.
+    [[vk::location(1)]] float2 rest_xz : TEXCOORD1;
     float4 position : SV_Position;
 };
 
@@ -379,7 +397,7 @@ WaterVertexOut water_vertex(WaterVertexIn v)
 
     WaterVertexOut o;
     o.world_pos = p.pos;
-    o.world_normal = p.normal;
+    o.rest_xz = rest_xz;
     o.position = mul(view.vp, float4(p.pos, 1.0));
     return o;
 }
@@ -424,7 +442,7 @@ struct WaterSurfacePoint
 WaterSurfacePoint water_surface(WaterVertexOut i)
 {
     WaterSurfacePoint s;
-    s.normal = normalize(i.world_normal);
+    s.normal = gerstner_displace(i.rest_xz, view.time).normal;
 
     float2 vp_dim = max(view.viewport, float2(1.0));
     s.frag_uv = i.position.xy / vp_dim;
@@ -499,16 +517,52 @@ float3 water_environment(float3 world_pos, float3 r)
     return lerp(float3(0.55, 0.62, 0.7), float3(0.25, 0.45, 0.7), horizon);
 }
 
+// The sun's specular lobe off this fragment's wave normal: GGX with a
+// height-correlated Smith visibility term and the water-vs-air F0, driven by the
+// first directional light the view block carries. A high sun draws a compact
+// disc; a low one spreads the same lobe into a path running toward the camera,
+// since the wave slopes that mirror it span more of the surface. Zero when the
+// world declares no directional light, whose `sun_color` is zero.
+float3 water_sun_glint(float3 normal, float3 view_dir)
+{
+    float n_dot_l = dot(normal, view.sun_dir.xyz);
+    if (n_dot_l <= 0.0)
+    {
+        return float3(0.0);
+    }
+    float3 h = normalize(view.sun_dir.xyz + view_dir);
+    float n_dot_v = max(dot(normal, view_dir), 1e-4);
+    float n_dot_h = saturate(dot(normal, h));
+    float v_dot_h = saturate(dot(view_dir, h));
+
+    float alpha = max(params.roughness, 0.02);
+    alpha *= alpha;
+    float a2 = alpha * alpha;
+    float denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+    float d = a2 / max(3.14159265358979 * denom * denom, 1e-6);
+
+    float lambda_v = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - a2) + a2);
+    float lambda_l = n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - a2) + a2);
+    float vis = 0.5 / max(lambda_v + lambda_l, 1e-6);
+
+    float f = 0.02 + 0.98 * pow(1.0 - v_dot_h, 5.0);
+    return view.sun_color.rgb * (d * vis * f * n_dot_l);
+}
+
 // Schlick Fresnel mix of the reflection over everything below the waterline.
 // F0 = 0.02 is the water-vs-air value; `fresnel_power` shapes the falloff, so a
 // low power keeps the reflection strong head-on instead of only at grazing.
+// The sun's glint is added after that mix: its lobe carries its own Fresnel
+// term, which is what strengthens it toward grazing angles, so weighting it by
+// the surface Fresnel as well would count that twice.
 // Alpha 1: water fully covers what it drew over, and the pipeline's straight
 // alpha blend leaves the composited colour as-is.
 float4 water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflection)
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
-    return float4(lerp(s.below, reflection, fresnel), 1.0);
+    float3 colour = lerp(s.below, reflection, fresnel) + water_sun_glint(s.normal, view_dir);
+    return float4(colour, 1.0);
 }
 
 // True where nearer opaque geometry occludes the surface. The transparent pass

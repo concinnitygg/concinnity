@@ -1259,7 +1259,7 @@ impl DxContext {
             );
         }
         let view_gva = com::gpu_va(&rm.view_cbuffers[frame_idx]);
-        let light_gva = com::gpu_va(&self.uniforms.light_ubo);
+        let light_gva = com::gpu_va(&self.uniforms.light_ubo_resources[frame_idx]);
         let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
 
         // State entering this pass (post-Main, post-AutoExposure):
@@ -1484,7 +1484,7 @@ impl DxContext {
             );
         }
         let view_gva = com::gpu_va(&rm.view_cbuffers[frame_idx]);
-        let light_gva = com::gpu_va(&self.uniforms.light_ubo);
+        let light_gva = com::gpu_va(&self.uniforms.light_ubo_resources[frame_idx]);
 
         let sm = self.shadow.map_size;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
@@ -1570,9 +1570,9 @@ impl DxContext {
 }
 
 // Silence the unused-import warning when no `SdfVolume` ships in a build.
-// `LightUniforms` is referenced only through the cbuffer GVA we read
-// from `self.uniforms.light_ubo`, but the type is part of the encode_raymarch
-// contract surface for future readers.
+// `LightUniforms` is referenced only through the cbuffer GVA we read from
+// `self.uniforms.light_ubo_resources`, but the type is part of the
+// encode_raymarch contract surface for future readers.
 const _LIGHT_LAYOUT_REF: usize = std::mem::size_of::<LightUniforms>();
 
 // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the

@@ -18,7 +18,7 @@
 
 {POST_COMMON}
 
-// Layout matches `SsrParams` in render_types.rs (96 B).
+// Layout matches `SsrParams` in render_types.rs (144 B).
 struct SsrParams
 {
     float intensity;
@@ -36,7 +36,16 @@ struct SsrParams
     // cubemap is sampled with, and its translation column lets the resolve
     // rebuild the world-space surface position a probe box-projects against.
     float4x4 inv_view;
+    // Rows of the rotation from world space into the sky cube's baked frame;
+    // identity when the sky does not turn.
+    float4 sky_rot[3];
 };
+
+// A world direction in the sky cube's own frame; the sky fallback goes through
+// it so a resolved reflection matches the sky the main pass shows.
+#define SKY_DIR(d) float3(dot(params.sky_rot[0].xyz, (d)), \
+                          dot(params.sky_rot[1].xyz, (d)), \
+                          dot(params.sky_rot[2].xyz, (d)))
 
 {PROBE_TYPES}
 
@@ -163,7 +172,7 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
         }
         else
         {
-            env = prefilter.SampleLevel(r_world, lod).rgb;
+            env = prefilter.SampleLevel(SKY_DIR(r_world), lod).rgb;
         }
     }
 

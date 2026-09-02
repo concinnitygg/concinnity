@@ -328,6 +328,9 @@ pub struct GraphicsSystem {
     // (`transform_propagation::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
     transform_cache: crate::gfx::transform_propagation::TransformCache,
+    // The sky angle the directional-light set was last carried at. `None` until
+    // the first frame, so a world whose sky never turns carries it exactly once.
+    pushed_sky_angle: Option<f32>,
     // Last-pushed model matrix per draw slot / skinned instance: a static
     // slot costs a compare instead of a snapshot entry, and each family
     // crosses the backend trait once per frame.
@@ -511,6 +514,7 @@ impl GraphicsSystem {
             texture_cap: 96,
             texture_budget: 4,
             transform_cache: crate::gfx::transform_propagation::TransformCache::default(),
+            pushed_sky_angle: None,
             model_push: model_push::ModelPushCache::default(),
             skinned_model_push: model_push::ModelPushCache::default(),
             snapshot: crate::gfx::snapshot::RenderSnapshot::default(),

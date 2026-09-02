@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::components::{
     BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
-    Pickup, Prop, PropBody, PropInstance, SceneMember, Transform,
+    Pickup, Prop, PropBody, PropInstance, SceneMember, SkyRotation, Transform,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
@@ -38,7 +38,13 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
         .query_with_entity::<Prop>()
         .map(|(entity, prop)| (entity, prop.clone()))
         .collect();
-    if props.is_empty() {
+    // The celestial-sphere pivot is not a Prop (a behavior scoped to "Prop"
+    // would drive it), but a Prop may hang off it, so it is nameable here.
+    let pivots: Vec<(Entity, AssetId)> = ctx
+        .query_with_entity::<SkyRotation>()
+        .map(|(entity, sky)| (entity, sky.asset_id))
+        .collect();
+    if props.is_empty() && pivots.is_empty() {
         return;
     }
 
@@ -49,6 +55,9 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
     let mut by_name: BTreeMap<AssetId, Entity> = BTreeMap::new();
     for (entity, prop) in &props {
         by_name.insert(prop.asset_id, *entity);
+    }
+    for (entity, name) in &pivots {
+        by_name.insert(*name, *entity);
     }
 
     // Per-entity components. A Prop's `model` takes precedence over `mesh`,
@@ -165,6 +174,37 @@ mod tests {
             asset_id: AssetId(id),
             ..Default::default()
         }
+    }
+
+    // A prop may orbit the celestial-sphere pivot, which is not itself a Prop:
+    // the name index has to carry it for the parent edge to resolve.
+    #[test]
+    fn a_prop_parents_onto_the_sky_rotation_pivot() {
+        use crate::components::{Parent, SkyRotation};
+
+        let mut world = World::new();
+        world.add_component(SkyRotation {
+            asset_id: AssetId(7),
+            ..Default::default()
+        });
+        let mut moon = prop(2);
+        moon.parent = Some(AssetId(7));
+        world.add_component(moon);
+        world.start(SYSTEMS).unwrap();
+
+        let ctx = world.context();
+        let pivot = ctx
+            .resource::<EntityByName>()
+            .expect("the index is published")
+            .0
+            .get(&AssetId(7))
+            .copied()
+            .expect("the pivot is nameable");
+        let (_, parent) = ctx
+            .query_with_entity::<Parent>()
+            .next()
+            .expect("the prop gained a parent edge");
+        assert_eq!(parent.0, pivot);
     }
 
     #[test]

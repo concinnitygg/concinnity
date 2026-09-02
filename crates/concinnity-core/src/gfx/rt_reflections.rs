@@ -61,6 +61,9 @@ pub struct RtParamsInputs {
     pub sun_color: [f32; 3],
     /// IBL cubemap mip count; 0 when there is no IBL fallback.
     pub prefilter_mip_count: f32,
+    /// Rows of the sky's inverse rotation, so a missed ray samples the same
+    /// oriented sky the main pass shows. Identity when the sky does not turn.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 impl RtReflectionSettings {
@@ -83,6 +86,7 @@ impl RtReflectionSettings {
             sun_dir,
             sun_color,
             prefilter_mip_count,
+            sky_rot,
         } = inputs;
         let inv_view = camera_to_world(inv_view_rot, cam_pos);
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
@@ -99,6 +103,7 @@ impl RtReflectionSettings {
             sun_dir: [sun_dir[0], sun_dir[1], sun_dir[2], 0.0],
             sun_color: [sun_color[0], sun_color[1], sun_color[2], 0.0],
             inv_view,
+            sky_rot,
         }
     }
 }
@@ -108,6 +113,7 @@ mod tests {
     use super::*;
     use crate::gfx::camera::MIN_ASPECT;
     use crate::gfx::transform::IDENTITY;
+    use crate::sky::SkyOrientation;
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {
@@ -138,6 +144,7 @@ mod tests {
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0, 0.9, 0.8],
             prefilter_mip_count: 6.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
         });
         assert_eq!(p.intensity, 0.8);
         assert_eq!(p.max_distance, 40.0);
@@ -163,6 +170,7 @@ mod tests {
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0, 1.0, 1.0],
             prefilter_mip_count: 6.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
         });
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.
@@ -180,6 +188,7 @@ mod tests {
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0, 1.0, 1.0],
             prefilter_mip_count: 0.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
         });
         assert!(p.aspect >= MIN_ASPECT);
     }

@@ -142,6 +142,7 @@ fn view_uniforms_layout() -> ExpectedStruct {
             field!(ViewUniforms, elapsed),
             field!(ViewUniforms, cam_pos),
             field!(ViewUniforms, prefilter_mip_count),
+            field!(ViewUniforms, sky_rot),
         ],
     }
 }

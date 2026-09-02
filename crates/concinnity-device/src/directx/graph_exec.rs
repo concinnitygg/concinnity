@@ -859,6 +859,7 @@ impl DxContext {
             viewport: [params.width as f32, params.height as f32],
             time: params.elapsed,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            sky_rot: self.view.sky_rot,
         }
     }
 
@@ -871,6 +872,7 @@ impl DxContext {
         params: &GraphFrameParams<'_>,
     ) -> super::transparent::TransparentView {
         let inv_vp = mat4_inverse(params.vp_mat);
+        let (sun_dir, sun_color) = crate::gfx::lights::glint_sun(&self.uniforms.light_uniforms);
         super::transparent::TransparentView {
             vp: params.vp_mat,
             inv_vp,
@@ -878,6 +880,9 @@ impl DxContext {
             viewport: [params.width as f32, params.height as f32],
             time: params.elapsed,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            sky_rot: self.view.sky_rot,
+            sun_dir,
+            sun_color,
         }
     }
 

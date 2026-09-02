@@ -91,7 +91,7 @@ pub struct VelocityUniforms {
 }
 
 /// Per-frame view inputs the raymarch pass binds at buffer(0). Layout matches
-/// `RaymarchView` in `shaders/raymarch_helpers.metal`. 160 bytes.
+/// `RaymarchView` in `shaders/raymarch_helpers.metal`. 208 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct RaymarchView {
@@ -111,6 +111,10 @@ pub struct RaymarchView {
     /// Mirrors `ViewUniforms.prefilter_mip_count` from the Main pass: same
     /// semantics, same gate.
     pub prefilter_mip_count: f32,
+    /// Rows of the rotation taking a world-space direction into the environment
+    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a volume's
+    /// image-based ambient turns with the sky. One `float4` per row.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 /// Per-volume uniforms uploaded at buffer(1). Layout matches `SdfVolumeUniforms`
@@ -215,13 +219,15 @@ mod tests {
         // packed_float3 cam_pos (+ pad), float2 viewport, then two scalars.
         // The Rust `cam_pos: [f32; 4]` covers the same 16 bytes (xyz + pad)
         // as the MSL `packed_float3 cam_pos; float _pad0;`.
-        assert_eq!(size_of::<RaymarchView>(), 160);
+        assert_eq!(size_of::<RaymarchView>(), 208);
         assert_eq!(offset_of!(RaymarchView, vp), 0);
         assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
         assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
         assert_eq!(offset_of!(RaymarchView, viewport), 144);
         assert_eq!(offset_of!(RaymarchView, time), 152);
         assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
+        assert_eq!(offset_of!(RaymarchView, sky_rot), 160);
+        assert_eq!(size_of::<RaymarchView>() % 16, 0);
         assert_eq!(size_of::<RaymarchView>() % 16, 0);
     }
 

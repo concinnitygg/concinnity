@@ -60,6 +60,7 @@
 - [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.
 - [Shader](Shader.md) - Declares a custom shader program: the vertex and fragment stages, plus the optional GPU-instanced vertex stage.
 - [SkinnedMesh](SkinnedMesh.md) - A skeletally animated mesh placed directly in the world.
+- [SkyRotation](SkyRotation.md) - Turns the whole celestial sphere: the sky, the image-based lighting it casts, every [DirectionalLight](DirectionalLight.md), and any [Prop](Prop.md) hung on it.
 - [Slider](Slider.md) - A settings row that sets a continuous value by dragging a handle along a track.
 - [Spawner](Spawner.md) - Periodically instantiates copies of an existing placement at this entity's position.
 - [SpotLight](SpotLight.md) - A cone-shaped local light: a point light restricted to the cone around `direction`, with a soft edge between `inner_angle` and `outer_angle`.

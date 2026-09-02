@@ -649,12 +649,11 @@ impl VkCommands {
 }
 
 // The main-pass view + light uniform buffers, grouped off the flat `VkContext`
-// field soup. `view_ubo_*` is one host-mapped buffer per frame-in-flight (the
-// per-frame `ViewUniforms` write in `record_frame`); `light_ubo` is a single
-// buffer uploaded once at init and bound into the object descriptor sets. NOTE
-// the field names collide with the per-pass resource structs (decal / glass /
-// raymarch / particle / gbuffer each own their own `view_ubo_*`), so accesses
-// are always anchored on the `self.<field>` form, never a bare leading-dot.
+// field soup. `view_ubo_*` and `light_ubo_*` are one host-mapped buffer per
+// frame-in-flight, written by `record_frame`. NOTE the field names collide with
+// the per-pass resource structs (decal / glass / raymarch / particle / gbuffer
+// each own their own `view_ubo_*`), so accesses are always anchored on the
+// `self.<field>` form, never a bare leading-dot.
 pub(super) struct VkUniforms {
     // Per-frame-in-flight `ViewUniforms` UBO (camera + IBL params), persistently
     // mapped. `record_frame` memcpys this frame's view into its slot.
@@ -664,32 +663,33 @@ pub(super) struct VkUniforms {
     // `record_frame` memcpys `self.probe.set` into this frame's slot each
     // frame; it stays `EMPTY` (count 0 = sky reflection) until a probe bakes.
     pub(super) probe_set_ubo_buffers: Vec<PooledBuffer>,
-    // Single `LightUniforms` UBO, uploaded once at init and bound into every
-    // object descriptor set.
-    pub(super) light_ubo: PooledBuffer,
+    // Per-frame-in-flight `LightUniforms` UBO, persistently mapped. Every pass
+    // that reads the light block binds this frame's slot: the global set, the
+    // planar mirror sets, and the raymarch view sets are all built per frame
+    // against the same ring.
+    pub(super) light_ubo_buffers: Vec<PooledBuffer>,
+    // Which slots of `light_ubo_buffers` still need this frame's values.
+    pub(super) light_dirty: concinnity_core::render::frame_dirty::FrameDirty,
     // Single per-scene local-light storage buffer (SSBO), uploaded once at init
-    // and bound at global set 0 binding 9. Static like `light_ubo` (never
-    // rewritten per-frame).
+    // and bound at global set 0 binding 9. Static (never rewritten per-frame).
     pub(super) local_light_buffer: PooledBuffer,
     // Byte size of `local_light_buffer`, kept so passes that rebind the global
     // set from `ctx` (probe bake) can set the SSBO descriptor range without the
     // original `local_lights` slice.
     pub(super) local_light_size: u64,
-    // CPU-side copy of the values in `light_ubo`, kept so a live Ambient-slider
-    // or directional-light change can mutate it and re-upload. The light UBO is
-    // a single (not per-frame) buffer, so the setters `wait_idle` before the
-    // rewrite to avoid racing an in-flight read; both change only on an
-    // authoring edit, so the stall is rare.
+    // The values the ring carries. A live Ambient-slider or directional-light
+    // change mutates this and re-arms `light_dirty`; `record_frame` writes the
+    // frame's own slot, so no in-flight read is ever raced.
     pub(super) light_uniforms: crate::gfx::render_types::LightUniforms,
 }
 
 impl VkUniforms {
-    // Drop the per-frame view UBOs, the light UBO, and the local-light SSBO
-    // (they retire through the allocator).
+    // Drop the per-frame view + light UBOs and the local-light SSBO (they
+    // retire through the allocator).
     pub(super) fn destroy(&mut self) {
         self.view_ubo_buffers.clear();
         self.probe_set_ubo_buffers.clear();
-        self.light_ubo = PooledBuffer::null();
+        self.light_ubo_buffers.clear();
         self.local_light_buffer = PooledBuffer::null();
     }
 }
@@ -709,9 +709,9 @@ pub(super) struct DecalState {
 // `VolumetricFog` asset; with none it and `settings` both stay `None` and the
 // fog pass is skipped entirely. The settings are cached so the per-frame
 // encoder can build its `FogParams` without re-resolving the asset. `sun_dir` /
-// `sun_color` mirror the first directional light: the Vulkan backend uploads
-// `LightUniforms` rather than pushing it each frame, so both are cached here
-// and re-derived by `update_directional_lights`.
+// `sun_color` mirror the first directional light, cached on the CPU so the
+// per-frame fog encoder never reads back the light UBO; `update_directional_lights`
+// re-derives both.
 pub(super) struct FogState {
     pub resources: Option<crate::vulkan::fog::FogResources>,
     pub settings: Option<crate::gfx::volumetric_fog::FogSettings>,
@@ -916,6 +916,9 @@ pub(super) struct ViewState {
     // normalization.
     pub far: f32,
     pub matrix: [[f32; 4]; 4],
+    // Rows of the sky's inverse rotation, uploaded into every uniform block
+    // whose pass samples the environment cubemaps.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 // Scene-captured reflection probes and the staggered bake that fills them,
@@ -1440,6 +1443,7 @@ impl VkContext {
             world_hidden,
             view_mode,
             show,
+            sky_rot,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
@@ -1447,6 +1451,7 @@ impl VkContext {
         self.view.mode = view_mode;
         self.view.show = show;
         self.view.far = far;
+        self.view.sky_rot = sky_rot;
         // Vulkan polygon mode is pipeline state, so the wireframe view needs its
         // own main-pass pipelines; built here on the first wireframe frame.
         self.ensure_wireframe_pipelines();
@@ -2024,27 +2029,22 @@ impl VkContext {
     }
 
     // Set the live ambient (IBL) light scale (the Ambient slider). It lives in
-    // `LightUniforms`, uploaded to a single (not per-frame) UBO, so unlike
-    // `update_post_process` (push constants) it mutates the CPU-side copy and
-    // re-uploads the buffer. Because the buffer is shared across frames-in-flight,
-    // the device is drained first so the rewrite never races an in-flight read;
-    // ambient changes only on a slider drag, so the stall is rare. Edge-triggered:
-    // a no-op when the value is unchanged (e.g. an init push with no persisted
-    // override).
+    // `LightUniforms`, which rides a per-frame-in-flight UBO ring, so this
+    // mutates the CPU-side copy and re-arms every slot; `record_frame` writes
+    // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
+    // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         if self.uniforms.light_uniforms.ambient_intensity == value {
             return;
         }
         self.uniforms.light_uniforms.ambient_intensity = value;
-        self.wait_idle();
-        super::draw::upload_light_uniforms(&self.uniforms.light_ubo, &self.uniforms.light_uniforms);
+        self.uniforms.light_dirty.mark_all();
     }
 
-    // Replace the live directional lights. `LightUniforms` is uploaded to a
-    // single shared UBO rather than pushed per frame, so the rewrite re-uploads
-    // it behind a drain, like `set_ambient_intensity`. The cascade shadow
-    // direction and the fog sun were derived from the first light at init, so
-    // both are re-derived here. Edge-triggered: an unchanged set never stalls.
+    // Replace the live directional lights. The cascade shadow direction and the
+    // fog sun are derived from the first light on the CPU, so both are
+    // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
+    // changed one only re-arms the light UBO ring.
     pub(crate) fn update_directional_lights(
         &mut self,
         lights: &[crate::components::DirectionalLight],
@@ -2059,8 +2059,7 @@ impl VkContext {
         self.shadow.light_dir = crate::gfx::lights::sun_direction(&self.uniforms.light_uniforms);
         self.fog.sun_dir = self.shadow.light_dir;
         self.fog.sun_color = crate::gfx::lights::sun_color(&self.uniforms.light_uniforms);
-        self.wait_idle();
-        super::draw::upload_light_uniforms(&self.uniforms.light_ubo, &self.uniforms.light_uniforms);
+        self.uniforms.light_dirty.mark_all();
     }
 
     // Set the live shadow cascade re-render cadence. The per-frame cascade split

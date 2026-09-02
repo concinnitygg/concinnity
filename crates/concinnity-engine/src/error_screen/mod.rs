@@ -101,6 +101,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
             world_hidden: true,
             view_mode: Default::default(),
             show: Default::default(),
+            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
         }) {
             // The screen cannot report its own failure to draw; the log is all
             // that is left, and staying in the loop would spin on it.

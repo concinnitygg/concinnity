@@ -954,8 +954,8 @@ pub(in crate::vulkan) struct RaymarchTargetConfig {
 
 // Shared engine resources bound into the view sets (and the shadow view sets):
 // the CSM shadow map, the IBL cubes + samplers, the scene-snapshot sampler, the
-// light + shadow UBOs, and the depth-only shadow render pass the shadow-caster
-// pipelines target.
+// light + shadow UBO rings, and the depth-only shadow render pass the
+// shadow-caster pipelines target.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
@@ -964,7 +964,8 @@ pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
     pub(in crate::vulkan) prefilter_view: vk::ImageView,
     pub(in crate::vulkan) cube_sampler: vk::Sampler,
     pub(in crate::vulkan) linear_sampler: vk::Sampler,
-    pub(in crate::vulkan) light_ubo: vk::Buffer,
+    // Per-frame-in-flight LightUniforms ring, indexed by frame slot.
+    pub(in crate::vulkan) light_ubos: &'a [PooledBuffer],
     // Per-frame-in-flight ShadowUniforms ring, indexed by frame slot.
     pub(in crate::vulkan) shadow_ubos: &'a [PooledBuffer],
     pub(in crate::vulkan) shadow_render_pass: vk::RenderPass,
@@ -1003,7 +1004,7 @@ impl RaymarchResources {
             prefilter_view,
             cube_sampler,
             linear_sampler,
-            light_ubo,
+            light_ubos,
             shadow_ubos,
             shadow_render_pass,
         } = bindings;
@@ -1082,7 +1083,7 @@ impl RaymarchResources {
                 set,
                 RaymarchViewSetBuffers {
                     view_ubo: view_ubos[i].buffer(),
-                    light_ubo,
+                    light_ubo: light_ubos[i].buffer(),
                     shadow_ubo: shadow_ubos[i].buffer(),
                 },
                 RaymarchViewSetTextures {
@@ -1135,7 +1136,7 @@ impl RaymarchResources {
                     device,
                     set,
                     shadow_view_ubos[i].buffer(),
-                    light_ubo,
+                    light_ubos[i].buffer(),
                     shadow_ubos[i].buffer(),
                 );
             }
@@ -1363,6 +1364,7 @@ impl VkContext {
             ],
             time,
             prefilter_mip_count: self.prefilter_mip_count as f32,
+            sky_rot: self.view.sky_rot,
         }
     }
 
@@ -1390,6 +1392,7 @@ impl VkContext {
             viewport: [0.0, 0.0],
             time: elapsed,
             prefilter_mip_count: 0.0,
+            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
         };
         ubo.write_val(0, &view);
     }

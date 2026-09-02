@@ -22,7 +22,21 @@ struct RaymarchView {
     /// EnvironmentMap bound" → IBL helpers fall back to the hand-tuned
     /// hemispheric ambient.
     float prefilter_mip_count;
+    /// Rows of the rotation from world space into the environment cubemaps'
+    /// baked frame; identity when the sky does not turn.
+    float4 sky_rot[3];
 };
+
+/// The rows of `RaymarchView.sky_rot`, packed as the columns of a float3x3 so
+/// they can be passed by value. `m[i]` reads back row `i`.
+inline float3x3 skyRows(constant RaymarchView &view) {
+    return float3x3(view.sky_rot[0].xyz, view.sky_rot[1].xyz, view.sky_rot[2].xyz);
+}
+
+/// A world direction in the environment cubemaps' own frame.
+inline float3 raymarchSkyDir(float3x3 sky_rows, float3 d) {
+    return float3(dot(sky_rows[0], d), dot(sky_rows[1], d), dot(sky_rows[2], d));
+}
 
 // Fixed-size parameter block the user shader interprets. 32 scalar
 // floats - access via `params.vals[i]` (i in 0..32). 4-byte aligned in
@@ -390,6 +404,7 @@ inline float3 shadeAmbientIbl(
     float3 normal,
     float3 view_dir,
     float prefilter_mip_count,
+    float3x3 sky_rows,
     texturecube<float> irradiance_cube,
     texturecube<float> prefilter_cube,
     sampler cube_samp
@@ -402,13 +417,13 @@ inline float3 shadeAmbientIbl(
     float3 F_ibl = raymarchFresnelSchlick(NdV, F0);
     float3 kd_ibl = (1.0 - F_ibl) * (1.0 - s.metallic);
 
-    float3 irradiance = irradiance_cube.sample(cube_samp, normal).rgb;
+    float3 irradiance = irradiance_cube.sample(cube_samp, raymarchSkyDir(sky_rows, normal)).rgb;
     float3 diffuse_ibl = kd_ibl * s.albedo * irradiance / 3.14159265;
 
     float3 R = reflect(-view_dir, normal);
     float lod = s.roughness * (prefilter_mip_count - 1.0);
     float3 prefiltered =
-        prefilter_cube.sample(cube_samp, R, level(lod)).rgb;
+        prefilter_cube.sample(cube_samp, raymarchSkyDir(sky_rows, R), level(lod)).rgb;
     float2 ab = raymarchEnvBrdfApprox(NdV, s.roughness);
     float3 specular_ibl = prefiltered * (F0 * ab.x + ab.y);
 

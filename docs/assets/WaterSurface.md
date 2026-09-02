@@ -24,6 +24,6 @@ animated waves.
 - `foam_width_metres`: A float. Width of the shoreline foam band, in metres. Defaults to `0.30`.
 - `foam_intensity`: A float. Strength of the shoreline foam, in [0, 1]. Defaults to `0.8`.
 - `fresnel_power`: A float. Sharpness of the grazing-angle reflection. Higher confines reflections to steeper viewing angles. Defaults to `5.0`.
-- `roughness`: A float. Surface roughness in [0, 1]. Higher gives blurrier reflections. Defaults to `0.05`.
+- `roughness`: A float. Surface roughness in [0, 1]. Higher gives blurrier reflections, and pushes a mirrored reflection further off its line with each wave: a near-mirror surface keeps its reflection almost still. Defaults to `0.05`.
 - `refraction_strength`: A float. How strongly the surface bends the view of what's beneath it. Defaults to `0.15`.
 - `visible`: A boolean. When false the surface is skipped each frame. Defaults to `true`.

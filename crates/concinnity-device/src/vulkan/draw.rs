@@ -626,8 +626,19 @@ impl VkContext {
             prefilter_mip_count: self.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
+            sky_rot: self.view.sky_rot,
         };
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
+
+        // Light uniforms for this frame. Written only into slots a live edit
+        // (directional set / ambient scale) has re-armed, so a steady world
+        // writes nothing after the ring has caught up.
+        if self.uniforms.light_dirty.take(frame_idx) {
+            upload_light_uniforms(
+                &self.uniforms.light_ubo_buffers[frame_idx],
+                &self.uniforms.light_uniforms,
+            );
+        }
 
         // Reflection-probe set (global set 0 binding 7): EMPTY (count 0 = sky
         // reflection) until a probe bakes, so the forward shader keeps the sky
@@ -809,7 +820,9 @@ pub(super) fn upload_shadow_uniforms(ubo: &super::allocator::PooledBuffer, su: &
     ubo.write_val(0, su);
 }
 
-// Helper: upload LightUniforms to the shared light UBO.
+// Helper: write LightUniforms into one persistently-mapped slot of the
+// per-frame-in-flight ring. The slot belongs to a frame whose fence the caller
+// already waited.
 pub(super) fn upload_light_uniforms(
     light_ubo: &super::allocator::PooledBuffer,
     lu: &LightUniforms,

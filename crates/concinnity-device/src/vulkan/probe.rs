@@ -403,6 +403,7 @@ impl VkContext {
                 // A probe capture is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
                 _end_pad: 0.0,
+                sky_rot: self.view.sky_rot,
             };
             bake.view_bufs[face].write_val(0, &view);
         }

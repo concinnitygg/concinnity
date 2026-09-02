@@ -13,6 +13,7 @@ use crate::gfx::render_types::{
     LIGHT_KIND_SPOT, LightUniforms, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,
     PointLightData, SpotShadowData,
 };
+use crate::math::vec3::{length, scale};
 use crate::render::area_light;
 use crate::render::spot_shadow;
 use alloc::vec::Vec;
@@ -126,6 +127,44 @@ const ZERO_PT: PointLightData = PointLightData {
     intensity: 0.0,
 };
 
+/// A frame's directional lights, held inline at the shader's capacity so a
+/// frame can carry them without allocating. Extras past
+/// [`MAX_DIRECTIONAL_LIGHTS`] are dropped, exactly as
+/// [`directional_light_data`] drops them.
+///
+/// ```rust
+/// # use concinnity_core::components::DirectionalLight;
+/// # use concinnity_core::render::lights::DirectionalLightSet;
+/// let sun = DirectionalLight::default();
+/// let set = DirectionalLightSet::collect(core::iter::once(sun));
+/// assert_eq!(set.as_slice().len(), 1);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DirectionalLightSet {
+    lights: [DirectionalLight; MAX_DIRECTIONAL_LIGHTS],
+    count: usize,
+}
+
+impl DirectionalLightSet {
+    /// The first [`MAX_DIRECTIONAL_LIGHTS`] of `lights`.
+    pub fn collect(lights: impl Iterator<Item = DirectionalLight>) -> Self {
+        let mut set = Self {
+            lights: [DirectionalLight::ZERO; MAX_DIRECTIONAL_LIGHTS],
+            count: 0,
+        };
+        for light in lights.take(MAX_DIRECTIONAL_LIGHTS) {
+            set.lights[set.count] = light;
+            set.count += 1;
+        }
+        set
+    }
+
+    /// The live lights, in packing order.
+    pub fn as_slice(&self) -> &[DirectionalLight] {
+        &self.lights[..self.count]
+    }
+}
+
 /// The `LightUniforms` directional slots and their count for `lights`, padded
 /// with zeroed entries. Shared by the init-time build below and the live
 /// [`crate::render::backend::RenderBackend::update_directional_lights`] seam, so a sun
@@ -170,6 +209,33 @@ pub fn sun_color(uniforms: &LightUniforms) -> [f32; 3] {
     } else {
         [1.0, 1.0, 1.0]
     }
+}
+
+/// The `sun_dir` / `sun_color` lanes the transparent pass carries for its
+/// specular glint: the unit direction toward the first directional light and
+/// that light's intensity-weighted colour. Both lanes are zero when the world
+/// declares no directional light, or when the one it declares has no direction,
+/// so the glint disappears rather than falling back to the neutral sun
+/// [`sun_color`] hands the fog.
+pub fn glint_sun(uniforms: &LightUniforms) -> ([f32; 4], [f32; 4]) {
+    if uniforms.num_directional <= 0 {
+        return ([0.0; 4], [0.0; 4]);
+    }
+    let light = &uniforms.directional[0];
+    let len = length(light.direction);
+    if len < 1e-6 {
+        return ([0.0; 4], [0.0; 4]);
+    }
+    let dir = scale(light.direction, 1.0 / len);
+    (
+        [dir[0], dir[1], dir[2], 0.0],
+        [
+            light.color[0] * light.intensity,
+            light.color[1] * light.intensity,
+            light.color[2] * light.intensity,
+            0.0,
+        ],
+    )
 }
 
 /// `local_lights` is the buffer `build_light_data` produced; its length is the
@@ -592,5 +658,33 @@ mod tests {
             LightUniforms::DEFAULT.directional[0].direction
         );
         assert_eq!(sun_color(&u), [1.0, 1.0, 1.0]);
+    }
+
+    // The glint lanes normalise the authored direction, so the shader can dot
+    // them against a wave normal without normalising per fragment, and weight
+    // the colour by intensity the way the fog sun does.
+    #[test]
+    fn the_glint_lanes_carry_a_unit_direction_and_a_weighted_colour() {
+        let u = uniforms(vec![dir([0.0, 3.0, 4.0], [0.5, 1.0, 0.75], 8.0)], vec![]);
+        let (sun_dir, sun_color) = glint_sun(&u);
+        assert_eq!(sun_dir, [0.0, 0.6, 0.8, 0.0]);
+        assert_eq!(sun_color, [4.0, 8.0, 6.0, 0.0]);
+    }
+
+    // Unlike the fog sun, a world with no directional light glints not at all:
+    // a neutral fallback would draw a white sun path on water under a starfield.
+    #[test]
+    fn a_world_with_no_directional_light_glints_not_at_all() {
+        let u = uniforms(vec![], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
+        assert_eq!(glint_sun(&u), ([0.0; 4], [0.0; 4]));
+    }
+
+    // A light authored with no direction has no lobe to place, so it carries
+    // nothing rather than dividing by its own zero length.
+    #[test]
+    fn a_directionless_light_glints_not_at_all() {
+        let u = uniforms(vec![dir([0.0; 3], [1.0; 3], 5.0)], vec![]);
+        assert_eq!(u.num_directional, 1);
+        assert_eq!(glint_sun(&u), ([0.0; 4], [0.0; 4]));
     }
 }

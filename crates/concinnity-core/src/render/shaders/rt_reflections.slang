@@ -41,6 +41,12 @@
 
 {RT_TYPES}
 
+// A world direction in the sky cube's own frame; every sky tap goes through it,
+// so a missed ray lands on the same oriented sky the main pass shows.
+#define SKY_DIR(d) float3(dot(rt_params.sky_rot[0].xyz, (d)), \
+                          dot(rt_params.sky_rot[1].xyz, (d)), \
+                          dot(rt_params.sky_rot[2].xyz, (d)))
+
 // ---- Resource bindings ----
 
 #ifdef DXIL_ABI
@@ -69,7 +75,7 @@ uint skinned_index_word(uint w) { return sidx.Load(w * 4u); }
 float4 screen_sample(Texture2D<float4> t, float2 uv) { return t.Sample(screen_sampler, uv); }
 float3 prefilter_level(float3 dir, float lod)
 {
-    return prefilter.SampleLevel(cube_sampler, dir, lod).rgb;
+    return prefilter.SampleLevel(cube_sampler, SKY_DIR(dir), lod).rgb;
 }
 
 #else
@@ -101,7 +107,7 @@ uint index_at(uint o) { return indices[o]; }
 uint skinned_index_word(uint w) { return sidx[w]; }
 
 float4 screen_sample(Sampler2D<float4> t, float2 uv) { return t.Sample(uv); }
-float3 prefilter_level(float3 dir, float lod) { return prefilter.SampleLevel(dir, lod).rgb; }
+float3 prefilter_level(float3 dir, float lod) { return prefilter.SampleLevel(SKY_DIR(dir), lod).rgb; }
 
 #endif
 

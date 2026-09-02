@@ -15,8 +15,9 @@ use crate::vulkan::slang_builtins::SlangCompile;
 // Uniform and push-constant layouts are designed to match the #[repr(C)] Rust
 // structs in gfx::render_types byte-for-byte under std140/std430 rules:
 //
-//  - ViewUniforms (160 bytes, std140 UBO): mat4 vp, mat4 view, float elapsed,
-//    float _pad0, then cam_pos as 3 individual floats + 3 pad floats.
+//  - ViewUniforms (208 bytes, std140 UBO): mat4 vp, mat4 view, float elapsed,
+//    float _pad0, cam_pos as 3 individual floats + 3 pad floats, then the sky
+//    rotation as vec4 sky_rot[3].
 //  - LightUniforms (400 bytes, std140 UBO): DirLight and PointLight each
 //    represented as two vec4s so their size is 32 bytes (matching Rust [f32;3]+f32).
 //  - ShadowUniforms (272 bytes, std140 UBO): mat4 light_vps[4] (256) +

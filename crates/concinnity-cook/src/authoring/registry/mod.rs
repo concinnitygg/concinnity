@@ -1078,6 +1078,7 @@ mod tests {
                 "Variables",
                 "LoadingOverlay",
                 "EngineDefaults",
+                "SkyRotation",
             ]
         );
         assert_eq!(

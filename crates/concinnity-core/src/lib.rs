@@ -73,6 +73,7 @@ pub mod platform;
 pub mod render;
 pub mod resource;
 pub mod result;
+pub mod sky;
 pub mod spawn;
 #[cfg(test)]
 mod test_support;

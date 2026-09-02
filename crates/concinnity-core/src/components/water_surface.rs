@@ -90,7 +90,9 @@ pub struct WaterSurface {
     /// Sharpness of the grazing-angle reflection. Higher confines reflections to
     /// steeper viewing angles.
     pub fresnel_power: f32,
-    /// Surface roughness in [0, 1]. Higher gives blurrier reflections.
+    /// Surface roughness in [0, 1]. Higher gives blurrier reflections, and
+    /// pushes a mirrored reflection further off its line with each wave: a
+    /// near-mirror surface keeps its reflection almost still.
     pub roughness: f32,
     /// How strongly the surface bends the view of what's beneath it.
     pub refraction_strength: f32,

@@ -17,7 +17,7 @@ mod room;
 mod skybox;
 mod terrain;
 
-use concinnity_core::bake::mesh::bounding_sphere_radius;
+use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
 use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
 use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalise};
 
@@ -163,41 +163,19 @@ fn heightfield_collider_grid(verts: &[Vert]) -> Result<(usize, Vec<f32>), String
 // Compile typed vertex and index data into a packed binary mesh payload.
 //
 // Normals are computed from triangle geometry; tangents from UV gradients.
-// Shared by the inline Mesh path and file-backed mesh formats (e.g. OBJ).
+// Shared by file-backed mesh formats (e.g. OBJ).
 pub(crate) fn compile_mesh_from_vertex_data(
     vertex_data: &[crate::components::VertexData],
     indices: &[u16],
-) -> Vec<u8> {
-    let mut normals: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_data.len()];
-    let tris = indices.len() / 3;
-    for t in 0..tris {
-        let ia = indices[t * 3] as usize;
-        let ib = indices[t * 3 + 1] as usize;
-        let ic = indices[t * 3 + 2] as usize;
-        if ia >= vertex_data.len() || ib >= vertex_data.len() || ic >= vertex_data.len() {
-            continue;
-        }
-        let n = vec3_face_normal(
-            vertex_data[ia].pos,
-            vertex_data[ib].pos,
-            vertex_data[ic].pos,
-        );
-        vec3_add(&mut normals[ia], n);
-        vec3_add(&mut normals[ib], n);
-        vec3_add(&mut normals[ic], n);
-    }
-    let vertices: Vec<Vert> = vertex_data
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (v.pos, vec3_normalise(normals[i]), v.color, v.uv))
-        .collect();
+) -> Result<Vec<u8>, String> {
+    let vertices = vertices_from_data(vertex_data, indices)?;
     let tangents = compute_tangents(&vertices, indices);
     let verts5: Vec<_> = vertices
         .into_iter()
         .zip(tangents)
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
-    crate::gfx::mesh_payload::serialise(&verts5, indices)
+    Ok(crate::gfx::mesh_payload::serialise(&verts5, indices))
 }
 
 // The level-of-detail request of a skinned mesh: `levels` includes LOD0 (so
@@ -527,27 +505,11 @@ fn build_inline(args: &serde_json::Value) -> Result<(Vec<Vert>, Vec<u16>), Strin
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut normals: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; parsed.len()];
-    let tris = indices.len() / 3;
-    for t in 0..tris {
-        let ia = indices[t * 3] as usize;
-        let ib = indices[t * 3 + 1] as usize;
-        let ic = indices[t * 3 + 2] as usize;
-        if ia >= parsed.len() || ib >= parsed.len() || ic >= parsed.len() {
-            return Err(format!("index out of range in triangle {t}"));
-        }
-        let n = vec3_face_normal(parsed[ia].0, parsed[ib].0, parsed[ic].0);
-        vec3_add(&mut normals[ia], n);
-        vec3_add(&mut normals[ib], n);
-        vec3_add(&mut normals[ic], n);
-    }
-
-    let vertices = parsed
+    let data: Vec<crate::components::VertexData> = parsed
         .into_iter()
-        .enumerate()
-        .map(|(i, (pos, color, uv))| (pos, vec3_normalise(normals[i]), color, uv))
+        .map(|(pos, color, uv)| crate::components::VertexData { pos, color, uv })
         .collect();
-
+    let vertices = vertices_from_data(&data, &indices)?;
     Ok((vertices, indices))
 }
 
@@ -1069,17 +1031,14 @@ mod tests {
             vd([1.0, 0.0, 0.0], [1.0, 0.0]),
             vd([0.0, 1.0, 0.0], [0.0, 1.0]),
         ];
-        let payload = compile_mesh_from_vertex_data(&verts, &[0, 1, 2]);
+        let payload = compile_mesh_from_vertex_data(&verts, &[0, 1, 2]).unwrap();
         let (out, indices) = deserialise(&payload).unwrap();
         assert_eq!(indices, vec![0, 1, 2]);
         assert!(out.iter().all(|v| (v.normal[2] - 1.0).abs() < 1e-5));
 
-        // Out-of-range indices are skipped rather than failing the compile.
-        let payload = compile_mesh_from_vertex_data(&verts, &[0, 1, 9]);
-        let (out, _) = deserialise(&payload).unwrap();
-        assert_eq!(out.len(), 3);
-        // No triangle touched the vertices, so normals fall back to +Y.
-        assert!(out.iter().all(|v| v.normal == [0.0, 1.0, 0.0]));
+        // An index past the vertex list fails the compile.
+        let err = compile_mesh_from_vertex_data(&verts, &[0, 1, 9]).unwrap_err();
+        assert!(err.contains("indexes past"), "{err}");
     }
 
     fn joint(name: &str) -> SkeletonJoint {

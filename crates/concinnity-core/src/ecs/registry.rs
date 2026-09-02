@@ -70,7 +70,7 @@ macro_rules! for_each_component {
                 Shader            => $crate::components::Shader { manual, external, compiled, consumed },
                 Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
-                Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("texture", "Texture"), ("scene", "Scene"), ("parent", "Prop")], consumed: PropInstance },
+                Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("texture", "Texture"), ("scene", "Scene"), ("parent", "Prop"), ("parent", "SkyRotation")], consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
                 PropBody          => $crate::components::PropBody { gen, external, consumed },
                 Room              => $crate::components::Room { manual, external, compiled, useful_blank, args: Room, refs: [("texture", "Texture"), ("wall_texture", "Texture"), ("floor_texture", "Texture"), ("ceiling_texture", "Texture")], consumed },
@@ -143,6 +143,7 @@ macro_rules! for_each_component {
                 AudioOcclusionProbe => $crate::components::AudioOcclusionProbe { runtime },
                 CharacterShape    => $crate::components::CharacterShape { gen, external, id, refs: [("target", "SkinnedMesh")] },
                 EngineDefaults    => $crate::components::EngineDefaults { gen, external, singleton, consumed },
+                SkyRotation       => $crate::components::SkyRotation { gen, external, singleton, id, validate: sky_rotation },
             },
 
             // Resource: declared in a world and compiled into the blob's

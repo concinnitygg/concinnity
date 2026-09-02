@@ -139,7 +139,7 @@ pub use payload_store::{NoPayloads, PayloadStore};
 pub use built_system::BuiltSystem;
 pub use headless::HEADLESS_SYSTEMS;
 pub use system_entry::{CompleteWorld, SystemEntry, SystemTable};
-pub use world::{ScratchStats, World};
+pub use world::{BakedMesh, ScratchStats, World};
 
 // The host-installed monotonic clock the step loop times systems with.
 pub use clock::Clock;

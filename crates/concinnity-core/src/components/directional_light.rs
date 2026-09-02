@@ -14,7 +14,7 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DirectionalLight {
     /// Direction pointing toward the light source. Does not need to be
@@ -24,6 +24,15 @@ pub struct DirectionalLight {
     pub color: [f32; 3],
     /// Intensity multiplier applied to the colour.
     pub intensity: f32,
+}
+
+impl DirectionalLight {
+    /// A light contributing nothing, used to pad a fixed-size set.
+    pub const ZERO: Self = Self {
+        direction: [0.0; 3],
+        color: [0.0; 3],
+        intensity: 0.0,
+    };
 }
 
 impl Default for DirectionalLight {

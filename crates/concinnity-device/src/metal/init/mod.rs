@@ -1239,6 +1239,7 @@ impl MtlContext {
                 mode: Default::default(),
                 far: 1.0,
                 matrix: IDENTITY,
+                sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
             },
             geometry_less,
             allocator,

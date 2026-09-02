@@ -73,7 +73,7 @@ impl SsrSettings {
     /// world camera position (together the rigid camera-to-world transform), and
     /// `prefilter_mip_count` the IBL prefilter cubemap mip count (0 = no IBL); the
     /// resolve uses these to sample the cubemap (or a reflection probe) as a
-    /// reflection fallback.
+    /// reflection fallback, through the sky's inverse rotation `sky_rot`.
     pub fn params(
         &self,
         fov_y_radians: f32,
@@ -81,6 +81,7 @@ impl SsrSettings {
         inv_view_rot: [[f32; 4]; 4],
         cam_pos: [f32; 3],
         prefilter_mip_count: f32,
+        sky_rot: [[f32; 4]; 3],
     ) -> SsrParams {
         let stride = self.max_distance / MARCH_STEPS;
         // The resolve rebuilds the world-space surface position the reflection
@@ -97,6 +98,7 @@ impl SsrSettings {
             prefilter_mip_count,
             _pad: 0.0,
             inv_view,
+            sky_rot,
         }
     }
 }
@@ -106,6 +108,7 @@ mod tests {
     use super::*;
     use crate::gfx::camera::MIN_ASPECT;
     use crate::gfx::transform::IDENTITY;
+    use crate::sky::SkyOrientation;
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {
@@ -128,7 +131,14 @@ mod tests {
     #[test]
     fn params_derive_stride_and_thickness_from_distance() {
         let s = SsrSettings::resolve(0.7, 48.0);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, IDENTITY, [0.0; 3], 6.0);
+        let p = s.params(
+            core::f32::consts::FRAC_PI_2,
+            1.6,
+            IDENTITY,
+            [0.0; 3],
+            6.0,
+            SkyOrientation::IDENTITY_ROWS,
+        );
         // 48 units over 48 steps -> a 1-unit stride.
         assert!((p.stride - 1.0).abs() < 1.0e-5);
         assert!((p.thickness - THICKNESS_SCALE).abs() < 1.0e-5);
@@ -140,14 +150,28 @@ mod tests {
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = SsrSettings::resolve(0.7, 40.0);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0, IDENTITY, [0.0; 3], 0.0);
+        let p = s.params(
+            core::f32::consts::FRAC_PI_2,
+            0.0,
+            IDENTITY,
+            [0.0; 3],
+            0.0,
+            SkyOrientation::IDENTITY_ROWS,
+        );
         assert!(p.aspect >= MIN_ASPECT);
     }
 
     #[test]
     fn params_pass_through_ibl_fallback_inputs() {
         let s = SsrSettings::resolve(0.7, 40.0);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, IDENTITY, [0.0; 3], 7.0);
+        let p = s.params(
+            core::f32::consts::FRAC_PI_2,
+            1.6,
+            IDENTITY,
+            [0.0; 3],
+            7.0,
+            SkyOrientation::IDENTITY_ROWS,
+        );
         assert_eq!(p.prefilter_mip_count, 7.0);
         // Identity rotation + a zero camera position leaves the matrix identity.
         assert_eq!(p.inv_view, IDENTITY);
@@ -165,6 +189,7 @@ mod tests {
             IDENTITY,
             [3.0, 4.0, 5.0],
             6.0,
+            SkyOrientation::IDENTITY_ROWS,
         );
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.

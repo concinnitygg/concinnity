@@ -321,6 +321,9 @@ mod tests {
             float _pad;
             packed_float3 cam_pos;
             float prefilter_mip_count;
+            float shade_mode;
+            float _end_pad;
+            float4 sky_rot[3];
         };
         struct VIn { float3 pos [[attribute(0)]]; };
         vertex float4 vertex_main(VIn in [[stage_in]],
@@ -332,7 +335,7 @@ mod tests {
 
     // The same shader but with `float3 cam_pos` (16-byte aligned, size 16)
     // instead of packed_float3: exactly the float3-vs-[f32;3] class of bug. It
-    // grows the struct's stride past the engine's 160 bytes, so the size check
+    // grows the struct's stride past the engine's 208 bytes, so the size check
     // catches it (the `RtGeomEntry` failure mode).
     const BAD_SIZE_VERTEX: &str = r#"
         #include <metal_stdlib>
@@ -344,6 +347,9 @@ mod tests {
             float _pad;
             float3 cam_pos;
             float prefilter_mip_count;
+            float shade_mode;
+            float _end_pad;
+            float4 sky_rot[3];
         };
         struct VIn { float3 pos [[attribute(0)]]; };
         vertex float4 vertex_main(VIn in [[stage_in]],
@@ -366,6 +372,9 @@ mod tests {
             float _pad;
             packed_float3 cam_pos;
             float prefilter_mip_count;
+            float shade_mode;
+            float _end_pad;
+            float4 sky_rot[3];
         };
         struct VIn { float3 pos [[attribute(0)]]; };
         vertex float4 vertex_main(VIn in [[stage_in]],
@@ -392,7 +401,7 @@ mod tests {
             return;
         }
         // The float3-vs-packed bug grows the struct stride; caught by the size
-        // check (MSL `float3` is 16 bytes, pushing ViewUniforms past 160).
+        // check (MSL `float3` is 16 bytes, pushing ViewUniforms past 208).
         match validate_metal_shader_layout(BAD_SIZE_VERTEX, "vertex") {
             Err(ShaderLayoutIssue::Mismatch(msg)) => {
                 assert!(

@@ -73,6 +73,7 @@ pub(in crate::shader_layout) fn ssr() -> Vec<Case> {
         prefilter_mip_count,
         _pad,
         inv_view,
+        sky_rot,
     }))]
 }
 

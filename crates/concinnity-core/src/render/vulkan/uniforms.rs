@@ -105,7 +105,7 @@ pub struct GbModelPush {
 pub const GBUFFER_PREPASS_PUSH_BYTES: u32 = 144;
 
 /// The raymarch pass per-frame view UBO (raymarch_helpers.glsl
-/// `RaymarchViewBlock`, std140, 160 bytes). Mirrors the DirectX / Metal
+/// `RaymarchViewBlock`, std140, 208 bytes). Mirrors the DirectX / Metal
 /// `RaymarchView`.
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -124,6 +124,10 @@ pub struct RaymarchView {
     pub time: f32,
     /// IBL cubemap mip count; 0 when there is no IBL.
     pub prefilter_mip_count: f32,
+    /// Rows of the rotation taking a world-space direction into the environment
+    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a volume's
+    /// image-based ambient turns with the sky. One `float4` per row.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 /// The per-volume SDF raymarch UBO (`SdfVolumeBlock`, std140, 176 bytes). Mirrors
@@ -197,16 +201,18 @@ mod tests {
         assert_eq!(offset_of!(CullHizParams, hiz_enabled), 76);
     }
 
-    // The GLSL `RaymarchViewBlock` std140 layout is 160 bytes.
+    // The GLSL `RaymarchViewBlock` std140 layout is 208 bytes.
     #[test]
     fn raymarch_view_layout_matches_glsl() {
-        assert_eq!(size_of::<RaymarchView>(), 160);
+        assert_eq!(size_of::<RaymarchView>(), 208);
         assert_eq!(offset_of!(RaymarchView, vp), 0);
         assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
         assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
         assert_eq!(offset_of!(RaymarchView, viewport), 144);
         assert_eq!(offset_of!(RaymarchView, time), 152);
         assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
+        assert_eq!(offset_of!(RaymarchView, sky_rot), 160);
+        assert_eq!(size_of::<RaymarchView>() % 16, 0);
     }
 
     // The GLSL `SdfVolumeBlock` std140 layout is 176 bytes.

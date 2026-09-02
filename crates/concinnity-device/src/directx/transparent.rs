@@ -315,7 +315,7 @@ pub(in crate::directx) struct TransparentResources {
     water: Option<TransparentProducer>,
     glass_mesh: Option<GlassMeshProducer>,
 
-    // Per-frame view UBO (single 160-byte block), persistently mapped.
+    // Per-frame view UBO (single 240-byte block), persistently mapped.
     view_ubo_resources: Vec<PooledBuffer>,
     view_ubo_ptrs: Vec<*mut u8>,
 
@@ -1278,6 +1278,7 @@ impl DxContext {
                 sun_dir: self.fog.sun_dir,
                 sun_color: self.fog.sun_color,
                 prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+                sky_rot: self.view.sky_rot,
             });
             // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
             // that init sized for this payload, and the source is a separate live value, so the

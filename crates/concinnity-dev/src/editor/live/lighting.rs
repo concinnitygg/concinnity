@@ -226,7 +226,7 @@ mod tests {
             color: [0.2, 0.4, 0.6],
             intensity: 5.0,
         };
-        commit_sun(&mut world, entity, edited.clone());
+        commit_sun(&mut world, entity, edited);
         let held = world
             .query::<DirectionalLight>()
             .next()

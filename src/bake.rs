@@ -52,13 +52,15 @@ use alloc::vec::Vec;
 
 /// The bakeable types that [`components`](crate::components) does not carry.
 ///
-/// `EnvironmentMap`, `Font` and `Material` are resources: a compiled world
-/// reaches each by handle, so a value that uses one holds the handle its
+/// `EnvironmentMap`, `Font`, `Material` and `Mesh` are resources: a compiled
+/// world reaches each by handle, so a value that uses one holds the handle its
 /// `World::add_*` method returned rather than the value itself. `Camera3D` is
 /// the authored form of the component of the same name, which [`camera`]
 /// bakes. The `cook` module carries these same types under its own namespace,
 /// along with the ones that need an importer.
-pub use concinnity_core::components::cook::{Camera3D, EnvironmentMap, Font, Material};
+pub use concinnity_core::components::cook::{
+    Camera3D, EnvironmentMap, Font, Material, Mesh, VertexData,
+};
 
 use concinnity_core::components::{self, ProceduralMesh};
 
@@ -66,6 +68,14 @@ use concinnity_core::components::{self, ProceduralMesh};
 /// [`World::add_mesh`](crate::World::add_mesh).
 pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<Vec<u8>, String> {
     concinnity_core::bake::payload::procedural_mesh(mesh)
+}
+
+/// Bake a raw [`Mesh`]'s vertices and indices into its geometry payload, for
+/// [`World::add_mesh`](crate::World::add_mesh). Normals and tangents are
+/// derived from the triangles; a `source` naming a model file needs the cook
+/// module's importer.
+pub fn mesh(mesh: &Mesh) -> Result<Vec<u8>, String> {
+    concinnity_core::bake::payload::mesh(mesh)
 }
 
 /// Convolve an [`EnvironmentMap`]'s generator into its image-based-lighting
@@ -134,6 +144,36 @@ mod tests {
         crate::test_support::assert_starts_headless(crate::App::from_world(world));
     }
 
+    // Raw geometry takes the same path as a generator's: bake, hand over, run.
+    #[test]
+    fn raw_geometry_reaches_a_world_that_starts() {
+        let vertex = |pos: [f32; 3]| VertexData {
+            pos,
+            color: [1.0; 3],
+            uv: [0.0; 2],
+        };
+        let triangle = Mesh {
+            vertices: alloc::vec![
+                vertex([0.0, 0.0, 0.0]),
+                vertex([1.0, 0.0, 0.0]),
+                vertex([0.0, 1.0, 0.0]),
+            ],
+            indices: alloc::vec![0, 1, 2],
+            ..Default::default()
+        };
+        let payload = mesh(&triangle).expect("the triangle bakes");
+
+        let mut world = crate::World::new();
+        let handle = world.add_mesh(triangle, payload);
+        world.add_component(components::Prop {
+            mesh: Some(handle),
+            ..Default::default()
+        });
+
+        assert_eq!(handle.index(), 0);
+        crate::test_support::assert_starts_headless(crate::App::from_world(world));
+    }
+
     // What cannot be computed is refused with directions, not a wrong payload.
     #[test]
     fn a_file_backed_value_is_refused_toward_the_cook() {
@@ -149,6 +189,13 @@ mod tests {
             ..Default::default()
         })
         .expect_err("a file-backed face");
+        assert!(err.contains("cook"), "{err}");
+
+        let err = mesh(&Mesh {
+            source: "chair.glb".into(),
+            ..Default::default()
+        })
+        .expect_err("a file-backed mesh");
         assert!(err.contains("cook"), "{err}");
     }
 

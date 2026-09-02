@@ -153,11 +153,6 @@ fn water_params_from(surface: &WaterSurface) -> WaterParams {
     }
 }
 
-// Wave-normal screen-space distortion scale for the planar reflection sample.
-// Small: the planar reflection is a flat-plane render, so the wave normal only
-// perturbs the lookup a little to fake ripple displacement.
-const PLANAR_DISTORTION: f32 = 0.03;
-
 // The shader-side wave lane for one authored wave. Pure; unit tested.
 fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
     WaterWaveGpu {
@@ -239,7 +234,7 @@ impl MtlContext {
                     .planar_slot
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
-                params.planar = [1.0, PLANAR_DISTORTION, 0.0, 0.0];
+                params.planar = WaterParams::planar_lane(surface.params.roughness, true);
                 fragment_textures.push((11, targets.resolve.clone()));
             }
             let c = surface.centre;

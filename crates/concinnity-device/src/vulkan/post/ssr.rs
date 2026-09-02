@@ -692,6 +692,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
             inv_view_rot,
             self.cam_pos,
             self.ctx.prefilter_mip_count as f32,
+            self.ctx.view.sky_rot,
         );
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.

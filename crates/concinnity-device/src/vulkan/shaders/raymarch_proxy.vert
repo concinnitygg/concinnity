@@ -20,6 +20,7 @@ layout(std140, set = 0, binding = 0) uniform RaymarchViewBlock {
     vec2 view_viewport;
     float view_time;
     float view_prefilter_mip_count;
+    vec4 view_sky_rot[3];
 } rmview;
 
 layout(std140, set = 1, binding = 0) uniform SdfVolumeBlock {

@@ -11,8 +11,8 @@ use alloc::string::{String, ToString};
 use crate::components::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, MAX_WATER_WAVES,
     Material, ParticleEmitter, PhysicsJoint, PhysicsJointKind, PointLight, Prop, RectAreaLight,
-    ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SpotLight, SpotLightGeometry,
-    VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
+    ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight,
+    SpotLightGeometry, VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 use crate::math::sqrt;
 use crate::platform::Platform;
@@ -116,6 +116,17 @@ pub fn rect_area_light(mut args: RectAreaLight) -> RectAreaLight {
 /// Clamp a `DirectionalLight`'s authored fields into their valid ranges.
 pub fn directional_light(mut args: DirectionalLight) -> DirectionalLight {
     args.intensity = args.intensity.max(0.0);
+    args
+}
+
+/// Replace a `SkyRotation`'s degenerate axis with the default pole: an axis
+/// with no direction would leave the sky in a fixed orientation whatever the
+/// rate said.
+pub fn sky_rotation(mut args: SkyRotation) -> SkyRotation {
+    let [x, y, z] = args.axis;
+    if sqrt(x * x + y * y + z * z) < 1e-6 {
+        args.axis = SkyRotation::default().axis;
+    }
     args
 }
 

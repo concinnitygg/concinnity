@@ -4,7 +4,7 @@
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
-/// `shaders/glass.slang` and `shaders/water.slang`. 160 bytes.
+/// `shaders/glass.slang` and `shaders/water.slang`. 240 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TransparentView {
@@ -23,6 +23,17 @@ pub struct TransparentView {
     /// where the glass reflection falls back to a white rim. Per-frame state, so
     /// it rides the shared view rather than a per-draw params block.
     pub prefilter_mip_count: f32,
+    /// Rows of the rotation taking a world-space direction into the environment
+    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so this pass's
+    /// sky taps turn with the main one. One `float4` per row; `w` is unused.
+    pub sky_rot: [[f32; 4]; 3],
+    /// `[x, y, z, _]`: unit direction toward the scene's sun, the first
+    /// directional light. Zero when the world declares none.
+    pub sun_dir: [f32; 4],
+    /// `[r, g, b, _]`: that light's colour times its intensity, which the water
+    /// glint scales by. Zero when the world declares no directional light, and
+    /// the shader draws no glint.
+    pub sun_color: [f32; 4],
 }
 
 /// Per-panel tunables for a `GlassPanel`, uploaded once per panel per frame.
@@ -125,9 +136,31 @@ pub struct WaterParams {
     /// 0.5` selects the sharp planar reflection (the scene re-rendered mirrored
     /// across this surface's rest plane, sampled at screen UV) over the probe /
     /// sky cube; `distortion` scales the wave-normal ripple offset of that
-    /// lookup. 0 when planar is off (RT on, no planar slot, or the plane
-    /// overflowed the budget), keeping the probe / sky path.
+    /// lookup, see [`WaterParams::planar_lane`]. 0 when planar is off (RT on,
+    /// no planar slot, or the plane overflowed the budget), keeping the probe /
+    /// sky path.
     pub planar: [f32; 4],
+}
+
+// How far the mirror lookup is pushed per unit of wave slope, per unit of the
+// surface's authored roughness, and the ceiling a very rough surface stops at.
+// The planar target is a flat-plane render, so the offset only fakes the
+// ripple; a near-mirror surface barely moves it, a choppy one moves it more.
+const PLANAR_DISTORTION_PER_ROUGHNESS: f32 = 0.6;
+const PLANAR_DISTORTION_MAX: f32 = 0.06;
+
+impl WaterParams {
+    /// The `planar` lane for a surface of `roughness`: the mirror selected
+    /// with its ripple offset scaled by the roughness when `mirrored`, else
+    /// zeroed so the shader keeps the probe / sky path.
+    pub fn planar_lane(roughness: f32, mirrored: bool) -> [f32; 4] {
+        if !mirrored {
+            return [0.0; 4];
+        }
+        let distortion =
+            (roughness.max(0.0) * PLANAR_DISTORTION_PER_ROUGHNESS).min(PLANAR_DISTORTION_MAX);
+        [1.0, distortion, 0.0, 0.0]
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +182,58 @@ mod tests {
         assert_eq!(offset_of!(GlassMeshParams, fresnel_power), 88);
         assert_eq!(offset_of!(GlassMeshParams, prefilter_mip_count), 92);
         assert_eq!(size_of::<GlassMeshParams>() % 16, 0);
+    }
+
+    // The per-frame block every transparent draw shares. `sky_rot` is a float4
+    // array, so it needs the 16-byte boundary the scalars ahead of it land on.
+    #[test]
+    fn transparent_view_layout_matches_shader() {
+        assert_eq!(size_of::<TransparentView>(), 240);
+        assert_eq!(offset_of!(TransparentView, vp), 0);
+        assert_eq!(offset_of!(TransparentView, inv_vp), 64);
+        assert_eq!(offset_of!(TransparentView, camera_pos), 128);
+        assert_eq!(offset_of!(TransparentView, viewport), 144);
+        assert_eq!(offset_of!(TransparentView, time), 152);
+        assert_eq!(offset_of!(TransparentView, prefilter_mip_count), 156);
+        assert_eq!(offset_of!(TransparentView, sky_rot), 160);
+        assert_eq!(offset_of!(TransparentView, sun_dir), 208);
+        assert_eq!(offset_of!(TransparentView, sun_color), 224);
+        assert_eq!(size_of::<TransparentView>() % 16, 0);
+    }
+
+    // The ripple offset follows the surface's roughness: a mirror barely moves
+    // its lookup, a rough surface moves it up to the ceiling, and a surface
+    // with no mirror slot carries nothing.
+    #[test]
+    fn the_planar_lane_scales_the_ripple_offset_by_roughness() {
+        assert_eq!(WaterParams::planar_lane(0.0, true), [1.0, 0.0, 0.0, 0.0]);
+        let default_roughness = WaterParams::planar_lane(0.05, true);
+        assert!(
+            (default_roughness[1] - 0.03).abs() < 1e-6,
+            "{default_roughness:?}"
+        );
+        let mirror = WaterParams::planar_lane(0.01, true)[1];
+        let rough = WaterParams::planar_lane(0.2, true)[1];
+        assert!(mirror < default_roughness[1] && default_roughness[1] < rough);
+        assert_eq!(
+            WaterParams::planar_lane(1.0, true)[1],
+            PLANAR_DISTORTION_MAX
+        );
+        assert_eq!(WaterParams::planar_lane(-1.0, true)[1], 0.0);
+        assert_eq!(WaterParams::planar_lane(0.5, false), [0.0; 4]);
+    }
+
+    // Two float4s and four scalars, in one 16-byte-aligned block.
+    #[test]
+    fn glass_params_layout_matches_shader() {
+        assert_eq!(size_of::<GlassParams>(), 64);
+        assert_eq!(offset_of!(GlassParams, centre), 0);
+        assert_eq!(offset_of!(GlassParams, normal), 16);
+        assert_eq!(offset_of!(GlassParams, tint), 32);
+        assert_eq!(offset_of!(GlassParams, opacity), 48);
+        assert_eq!(offset_of!(GlassParams, refraction_strength), 52);
+        assert_eq!(offset_of!(GlassParams, fresnel_power), 56);
+        assert_eq!(offset_of!(GlassParams, planar), 60);
     }
 
     // `waves` is an array of float4-carrying structs, so the shader aligns it to

@@ -445,10 +445,11 @@ impl DxContext {
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
                 _end_pad: 0.0,
+                sky_rot: self.view.sky_rot,
             };
             let ring = slot * FRAMES + params.frame_idx;
             // SAFETY: `ring < planes.len() * FRAMES`; the CBV is 256 bytes and
-            // `ViewUniforms` is 160. The slot is this frame's own, written before
+            // `ViewUniforms` is 208. The slot is this frame's own, written before
             // the GPU reads it later on this cmd list.
             unsafe {
                 std::ptr::copy_nonoverlapping(

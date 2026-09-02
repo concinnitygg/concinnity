@@ -34,6 +34,9 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             viewport,
             time,
             prefilter_mip_count,
+            sky_rot,
+            sun_dir,
+            sun_color,
         })),
         everywhere(mirror!(GlassParams => "GlassParams" {
             centre,
@@ -62,6 +65,9 @@ pub(in crate::shader_layout) fn glass_mesh() -> Vec<Case> {
             viewport,
             time,
             prefilter_mip_count,
+            sky_rot,
+            sun_dir,
+            sun_color,
         })),
         everywhere(mirror!(GlassMeshParams => "GlassMeshParams" {
             model,
@@ -83,6 +89,9 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             viewport,
             time,
             prefilter_mip_count,
+            sky_rot,
+            sun_dir,
+            sun_color,
         })),
         everywhere(mirror!(WaterWaveGpu => "WaterWave" { dir_amp_wave, speed_steep_pad, })),
         everywhere(mirror!(WaterParams => "WaterParams" {
@@ -120,6 +129,7 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
                 sun_dir,
                 sun_color,
                 inv_view,
+                sky_rot,
             }),
         ),
         on(

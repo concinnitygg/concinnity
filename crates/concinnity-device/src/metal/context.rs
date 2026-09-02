@@ -171,6 +171,9 @@ pub(super) struct ViewState {
     // normalization.
     pub far: f32,
     pub matrix: [[f32; 4]; 4],
+    // Rows of the sky's inverse rotation, uploaded into every uniform block
+    // whose pass samples the environment cubemaps.
+    pub sky_rot: [[f32; 4]; 3],
 }
 
 // Scene-captured reflection probes: each surface's specular reflection samples

@@ -398,6 +398,7 @@ impl MtlContext {
             ],
             time: params.elapsed,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            sky_rot: self.view.sky_rot,
         }
     }
 
@@ -724,6 +725,8 @@ impl MtlContext {
                     "graph executor: Transparent pass requires scene_pre_taa but none was supplied",
                 )?;
                 let inv_vp = params.inv_vp;
+                let (sun_dir, sun_color) =
+                    concinnity_core::render::lights::glint_sun(&self.light_uniforms);
                 let view = concinnity_core::render::uniforms::TransparentView {
                     vp: params.vp,
                     inv_vp,
@@ -734,6 +737,9 @@ impl MtlContext {
                     ],
                     time: params.elapsed,
                     prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+                    sky_rot: self.view.sky_rot,
+                    sun_dir,
+                    sun_color,
                 };
                 // Planar reflection: re-render the scene mirrored across each
                 // distinct reflector plane into its planar target (reusing this

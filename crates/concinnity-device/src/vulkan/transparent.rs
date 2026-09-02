@@ -1879,6 +1879,7 @@ impl VkContext {
         cam_pos: [f32; 3],
         time: f32,
     ) -> TransparentView {
+        let (sun_dir, sun_color) = crate::gfx::lights::glint_sun(&self.uniforms.light_uniforms);
         TransparentView {
             vp,
             inv_vp: mat4_inverse(vp),
@@ -1889,6 +1890,9 @@ impl VkContext {
             ],
             time,
             prefilter_mip_count: self.prefilter_mip_count as f32,
+            sky_rot: self.view.sky_rot,
+            sun_dir,
+            sun_color,
         }
     }
 
@@ -1982,6 +1986,7 @@ impl VkContext {
                 sun_dir: self.fog.sun_dir,
                 sun_color: self.fog.sun_color,
                 prefilter_mip_count: self.prefilter_mip_count as f32,
+                sky_rot: self.view.sky_rot,
             });
             rt.params_buffers[frame_idx].write_val(0, &params);
         }

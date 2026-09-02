@@ -47,6 +47,9 @@ cbuffer ViewBlock : register(b1)
     // 1.0 while the unlit view mode is active; read by the fragment stage.
     float shade_mode;
     float _ep1;
+    // Rows of the rotation from world space into the environment cubemaps'
+    // baked frame; identity when the sky does not turn.
+    float4 sky_rot[3];
 }
 
 cbuffer ShadowBlock : register(b3)

@@ -14,10 +14,18 @@
 use alloc::boxed::Box;
 
 use crate::behavior::BehaviorSystem;
-use crate::components::{Behavior, PhysicsConfig, PropBody, RigidBody, TriggerVolume};
+use crate::components::{Behavior, PhysicsConfig, PropBody, RigidBody, SkyRotation, TriggerVolume};
 use crate::ecs::{System, SystemEntry, SystemTable, World};
 use crate::physics::PhysicsSystem;
 use crate::resource::SkinnedMeshTable;
+use crate::sky::SkyRotationSystem;
+
+// SkyRotationSystem: present whenever the world declares a `SkyRotation`. Runs
+// ahead of everything that reads the sky's orientation.
+fn sky_rotation(world: &World) -> Option<Box<dyn System>> {
+    let rotation = world.query::<SkyRotation>().next()?;
+    Some(Box::new(SkyRotationSystem::new(rotation)))
+}
 
 // BehaviorSystem: present whenever the world declares any `Behavior`. Runs
 // serially and persists nothing; a host lends it a thread pool and a state
@@ -54,6 +62,13 @@ fn physics(world: &World) -> Option<Box<dyn System>> {
 /// order. What [`App`](crate::App) starts a headless world against.
 pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
     entries: &[
+        SystemEntry {
+            name: "SkyRotationSystem",
+            present_when: "the world declares a SkyRotation",
+            gate: sky_rotation,
+            after: &[],
+            before: &[],
+        },
         SystemEntry {
             name: "BehaviorSystem",
             present_when: "the world declares any Behavior",
@@ -121,6 +136,19 @@ mod tests {
     fn an_empty_world_gates_no_systems() {
         let world = World::new();
         assert!(world.system_manifest(HEADLESS_SYSTEMS).is_empty());
+    }
+
+    // A declared SkyRotation gates the sky in, ahead of every system that
+    // reads the orientation it publishes.
+    #[test]
+    fn a_sky_rotation_gates_the_sky_system_first() {
+        let mut world = World::new();
+        world.add_component(SkyRotation::default());
+        world.add_component(Behavior::default());
+        assert_eq!(
+            world.system_manifest(HEADLESS_SYSTEMS),
+            ["SkyRotationSystem", "BehaviorSystem"]
+        );
     }
 
     // A declared Behavior is what puts the system in the table's manifest.

@@ -19,6 +19,9 @@ layout(std140, set = 0, binding = 0) uniform ViewBlock {
     // 1.0 while the unlit view mode is active: the surface returns its base
     // color before lighting.
     float shade_mode; float _ep1;
+    // Rows of the rotation from world space into the environment cubemaps'
+    // baked frame; identity when the sky does not turn.
+    vec4 sky_rot[3];
 } view;
 
 layout(std140, set = 0, binding = 2) uniform ShadowBlock {

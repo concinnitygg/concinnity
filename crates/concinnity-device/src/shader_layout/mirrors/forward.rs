@@ -25,6 +25,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             prefilter_mip_count,
             shade_mode,
             [_end_pad] => ["_ep1"],
+            sky_rot,
         })),
         everywhere(mirror!(LightUniforms => "LightUniforms" {
             [directional] => ["dir"],

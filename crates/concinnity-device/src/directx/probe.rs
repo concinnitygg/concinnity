@@ -94,7 +94,7 @@ pub(in crate::directx) struct RenderingBake {
     _dsv_heap: ID3D12DescriptorHeap,
     rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    // Per-face: a 160-byte ViewUniforms CBV (kept mapped) + its GVA.
+    // Per-face: a 208-byte ViewUniforms CBV (kept mapped) + its GVA.
     _view_cbvs: Vec<PooledBuffer>,
     view_gvas: Vec<u64>,
     // Per-capture light + shadow snapshots (so the six faces share one consistent
@@ -466,7 +466,7 @@ impl DxContext {
 
         // Snapshot the frame's light + shadow uniforms into bake-owned CBVs so all six
         // faces share one temporally-consistent lighting set, and so the capture does
-        // not read `light_ubo` / `shadow_ubo[frame]` while `record_frame` (which runs
+        // not read `light_ubo[frame]` / `shadow_ubo[frame]` while `record_frame` (which runs
         // after this) overwrites them on the same frame -- a CPU/GPU race on a mapped
         // buffer. The capture's lighting is the env live when it started.
         // SAFETY: `LightUniforms` is `#[repr(C)]` with explicit pad fields and no implicit padding
@@ -513,6 +513,7 @@ impl DxContext {
                 // A probe capture is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
                 _end_pad: 0.0,
+                sky_rot: self.view.sky_rot,
             };
             let cbv = create_buffer(
                 alloc,
@@ -525,7 +526,7 @@ impl DxContext {
             // local that receives the mapping.
             unsafe { cbv.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("probe: map view cbv: {e}"))?;
-            // SAFETY: the buffer is 256 bytes; ViewUniforms is 160.
+            // SAFETY: the buffer is 256 bytes; ViewUniforms is 208.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &view as *const super::draw::ViewUniforms as *const u8,

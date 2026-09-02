@@ -13,6 +13,9 @@
 // Each edge's rationale:
 //   * Overlay first: publishes the menu state (`MenuActive`) that gates
 //     simulation, input, and the draw this same tick.
+//   * SkyRotation before Graphics: the orientation it publishes is what the
+//     frame's transform propagation, directional-light push and cubemap
+//     samples are taken at.
 //   * Behavior before Spawn/Settings/Story/Audio: the requests its firing
 //     rules emit (spawn/despawn, scene, story, audio) drain the same tick.
 //   * Spawn/Settings/Streaming before Graphics: despawns leave the transform
@@ -54,6 +57,12 @@ crate::define_systems! {
         present_when: "the world declares a GraphicsConfig",
         after: [],
         before: [BehaviorSystem, SpawnSystem, GraphicsSystem, InputSystem, PhysicsSystem, AnimationSystem],
+    },
+    SkyRotationSystem => concinnity_core::sky::SkyRotationSystem {
+        gate: schedule::sky_rotation,
+        present_when: "the world declares a SkyRotation",
+        after: [OverlaySystem],
+        before: [GraphicsSystem],
     },
     BehaviorSystem => concinnity_core::behavior::BehaviorSystem {
         gate: schedule::behavior,

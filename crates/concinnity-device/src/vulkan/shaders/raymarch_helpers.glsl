@@ -27,6 +27,9 @@ layout(std140, set = 0, binding = 0) uniform RaymarchViewBlock {
     vec2 view_viewport;
     float view_time;
     float view_prefilter_mip_count;
+    // Rows of the rotation from world space into the environment cubemaps'
+    // baked frame; identity when the sky does not turn.
+    vec4 view_sky_rot[3];
 } rmview;
 
 struct SdfParams { vec4 vals[8]; };
@@ -309,6 +312,12 @@ vec3 raymarchFresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+// A world direction in the environment cubemaps' own frame.
+vec3 raymarchSkyDir(vec3 d) {
+    return vec3(dot(rmview.view_sky_rot[0].xyz, d), dot(rmview.view_sky_rot[1].xyz, d),
+                dot(rmview.view_sky_rot[2].xyz, d));
+}
+
 vec3 shadeAmbientIbl(SdfSurface s, vec3 normal, vec3 view_dir, float prefilter_mip_count) {
     if (prefilter_mip_count <= 0.5) {
         return shadeAmbient(s, normal);
@@ -318,12 +327,12 @@ vec3 shadeAmbientIbl(SdfSurface s, vec3 normal, vec3 view_dir, float prefilter_m
     vec3 F_ibl = raymarchFresnelSchlick(NdV, F0);
     vec3 kd_ibl = (1.0 - F_ibl) * (1.0 - s.metallic);
 
-    vec3 irradiance = textureLod(irradiance_cube, normal, 0.0).rgb;
+    vec3 irradiance = textureLod(irradiance_cube, raymarchSkyDir(normal), 0.0).rgb;
     vec3 diffuse_ibl = kd_ibl * s.albedo * irradiance / 3.14159265;
 
     vec3 R = reflect(-view_dir, normal);
     float lod = s.roughness * (prefilter_mip_count - 1.0);
-    vec3 prefiltered = textureLod(prefilter_cube, R, lod).rgb;
+    vec3 prefiltered = textureLod(prefilter_cube, raymarchSkyDir(R), lod).rgb;
     vec2 ab = raymarchEnvBrdfApprox(NdV, s.roughness);
     vec3 specular_ibl = prefiltered * (F0 * ab.x + ab.y);
 
