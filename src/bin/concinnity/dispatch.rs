@@ -87,6 +87,7 @@ pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             &args.format,
             args.dmg,
         ),
+        Commands::Mcp(args) => concinnity_dev::run_mcp(args.port),
         Commands::Version => command::version(),
     }
 }

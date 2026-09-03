@@ -104,6 +104,14 @@ pub(crate) enum Commands {
     #[command(name = "export")]
     Export(ExportArgs),
 
+    /// Serve the debug protocol to an MCP client over stdio
+    //
+    // A child process an MCP client spawns, not a listener: it speaks JSON-RPC
+    // over stdin/stdout and forwards each tool call to a running app's debug
+    // server, so an agent drives the same verbs `cn debug send` does.
+    #[command(name = "mcp")]
+    Mcp(McpArgs),
+
     /// Print the version
     #[command(name = "version")]
     Version,
@@ -259,6 +267,13 @@ pub(crate) enum DebugClientCommand {
     /// Poll a read-only snapshot and print it until Ctrl-C
     #[command(name = "watch")]
     Watch(DebugWatchArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct McpArgs {
+    /// Debug server port
+    #[arg(long, default_value_t = 8777)]
+    pub(crate) port: u16,
 }
 
 #[derive(Debug, clap::Args)]

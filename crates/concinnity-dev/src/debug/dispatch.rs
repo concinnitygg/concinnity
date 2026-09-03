@@ -349,7 +349,14 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
             drop(state);
             return handle_story(text);
         }
-        other => return error_reply(&format!("unknown cmd '{other}'")),
+        // The catalog is the verb table, so an unknown verb answers with what
+        // the server does accept.
+        other => {
+            return error_reply(&format!(
+                "unknown cmd '{other}' (known: {})",
+                super::catalog::verb_list()
+            ));
+        }
     };
 
     body.to_string()
@@ -532,7 +539,11 @@ mod tests {
     fn unknown_cmd_is_rejected() {
         let r = reply(r#"{"cmd":"bogus"}"#, DebugState::default());
         assert_eq!(r["ok"], false);
-        assert!(r["error"].as_str().unwrap().contains("unknown cmd"));
+        // The reply lists what the server does accept, so `cn debug send` with a
+        // typo names the right verb without a round trip through the docs.
+        let error = r["error"].as_str().unwrap();
+        assert!(error.contains("unknown cmd"));
+        assert!(error.contains("camera-get"), "{error}");
     }
 
     #[test]

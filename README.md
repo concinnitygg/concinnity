@@ -130,6 +130,7 @@ Commands:
   docs     Regenerate the asset reference pages under docs/assets
   test     Validate a world without building
   export   Package a built world into a distributable app
+  mcp      Serve the debug protocol to an MCP client over stdio
   version  Print the version
   help     Print this message or the help of the given subcommand(s)
 

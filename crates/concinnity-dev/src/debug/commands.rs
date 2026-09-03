@@ -803,6 +803,34 @@ pub(super) fn handle_camera_stop() -> String {
     )
 }
 
+// Parse a payload with the same request struct the live handler uses, without
+// enqueueing anything, so `super::catalog`'s schemas can be checked against the
+// real serde shapes.
+#[cfg(test)]
+pub(super) fn parse_probe(cmd: &str, text: &str) -> Result<(), String> {
+    fn probe<T: serde::de::DeserializeOwned>(cmd: &str, text: &str) -> Result<(), String> {
+        parse_request::<T>(cmd, text).map(|_| ())
+    }
+    match cmd {
+        "decal-add" => probe::<DecalAddRequest>(cmd, text),
+        "decal-remove" | "emitter-remove" => probe::<IdRequest>(cmd, text),
+        "emitter-add" => probe::<EmitterAddRequest>(cmd, text),
+        "anim-crossfade" => probe::<AnimCrossfadeRequest>(cmd, text),
+        "anim-param" => probe::<AnimParamRequest>(cmd, text),
+        "anim-state" => probe::<AnimStateRequest>(cmd, text),
+        "screenshot" => probe::<ScreenshotRequest>(cmd, text),
+        "camera-set" => probe::<CameraSetRequest>(cmd, text),
+        "camera-move" => probe::<CameraMoveRequest>(cmd, text),
+        "quality-set" => probe::<QualitySetRequest>(cmd, text),
+        "rebind" => probe::<RebindRequest>(cmd, text),
+        "despawn" => probe::<DespawnCmdRequest>(cmd, text),
+        "reparent" => probe::<ReparentCmdRequest>(cmd, text),
+        "spawn" => probe::<SpawnCmdRequest>(cmd, text),
+        "story" => probe::<StoryCmdRequest>(cmd, text),
+        other => Err(format!("{other}: no request struct")),
+    }
+}
+
 pub(super) fn error_reply(msg: &str) -> String {
     serde_json::json!({ "ok": false, "error": msg }).to_string()
 }

@@ -11,6 +11,10 @@
 // `crate::debug_hook`). `DebugServer::tick` snapshots the live world into
 // shared state; the server thread answers client queries from that snapshot.
 //
+// `self::catalog` is the authoritative verb table: every command's description,
+// whether it reads or mutates, and a JSON Schema for its parameters. An unknown
+// verb is answered with the names it holds.
+//
 // Protocol, each WS text frame is one JSON request:
 //   client → server:  {"cmd":"state"} {"cmd":"assets"} {"cmd":"names"}
 //                      {"cmd":"streaming"} {"cmd":"profile"} {"cmd":"ping"}
@@ -96,6 +100,7 @@
 
 // Submodules (all binary-only):
 //   wire      WS transport (server accept loop + client); coverage-excluded
+//   catalog   the verb table: description, access, and parameter schema per verb
 //   dispatch  the socket-free `handle_request` command dispatcher (testable)
 //   state     the shared world-snapshot data model (testable)
 //   protocol  socket-free client helpers: payload validation + watch targets
@@ -107,6 +112,7 @@
 // (and, for the server, a live engine). It is excluded from coverage like the
 // per-backend GPU directories; the logic it wraps lives in `dispatch` /
 // `state` / `protocol`, which are unit-tested without a running process.
+pub(crate) mod catalog;
 mod commands;
 mod dispatch;
 pub(crate) mod hot_reload;

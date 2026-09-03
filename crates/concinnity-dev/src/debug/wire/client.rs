@@ -102,8 +102,9 @@ fn map_read_error(e: tungstenite::Error) -> String {
     format!("read failed: {e}")
 }
 
-// Send one JSON request and return the parsed reply.
-fn request(port: u16, payload: &str) -> Result<Value, String> {
+// Send one JSON request and return the server's reply text verbatim. The MCP
+// bridge forwards the reply as-is, so it takes this rather than the parsed form.
+pub(crate) fn request_text(port: u16, payload: &str) -> Result<String, String> {
     let mut ws = connect(port)?;
     ws.send(Message::text(payload))
         .map_err(|e| format!("failed to send request: {e}"))?;
@@ -111,6 +112,12 @@ fn request(port: u16, payload: &str) -> Result<Value, String> {
     // Best-effort clean close so the server logs a tidy disconnect.
     let _ = ws.close(None);
     let _ = ws.flush();
+    Ok(reply)
+}
+
+// Send one JSON request and return the parsed reply.
+fn request(port: u16, payload: &str) -> Result<Value, String> {
+    let reply = request_text(port, payload)?;
     serde_json::from_str(&reply).map_err(|e| format!("malformed reply from server: {e}"))
 }
 
