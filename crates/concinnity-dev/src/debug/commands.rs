@@ -1,6 +1,6 @@
 // src/debug/commands.rs
 //
-// Runtime spawn / crossfade WebSocket command handlers (`decal-add`,
+// Runtime spawn / crossfade command handlers (`decal-add`,
 // `emitter-add`, `anim-crossfade`, …) plus their request-body structs and the
 // shared `error_reply` helper. Each parses its JSON body, enqueues onto the
 // matching process-wide queue (`super::runtime_spawn` /

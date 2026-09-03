@@ -763,24 +763,6 @@ mod tests {
     }
 
     #[test]
-    fn watch_targets_are_read_only_commands() {
-        use super::super::protocol::WatchTarget;
-        for target in [
-            WatchTarget::Camera,
-            WatchTarget::State,
-            WatchTarget::Streaming,
-            WatchTarget::Profile,
-        ] {
-            let command = find(target.cmd()).expect("watch target is a catalogued verb");
-            assert!(
-                command.access.is_read_only(),
-                "{} polls a mutating command",
-                command.name
-            );
-        }
-    }
-
-    #[test]
     fn lookup_and_listing_cover_the_table() {
         assert!(find("ping").is_some());
         assert!(find("nope").is_none());

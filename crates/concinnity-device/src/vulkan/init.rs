@@ -3880,7 +3880,7 @@ impl VkContext {
 
         // Shader hot-reload: spawn a filesystem watcher over
         // `vulkan/shaders/` only under `cn debug`. The shared atomic flag
-        // is also handed to the debug WebSocket server elsewhere so the
+        // is also handed to the debug server elsewhere so the
         // `reload-shaders` command converges on the same trigger path.
         let (shader_reload_pending, shader_watcher) = if hot_reload {
             let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

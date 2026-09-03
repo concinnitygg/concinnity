@@ -383,12 +383,6 @@ impl Behavior {
         self.visit(&mut |n| matches!(n, BehaviorNode::Save))
     }
 
-    /// Whether the behavior runs against individual entities rather than the
-    /// world as a whole.
-    pub fn is_scoped(&self) -> bool {
-        !self.scope.is_empty()
-    }
-
     // True when any node in the body, at any nesting depth, satisfies `pred`.
     fn visit(&self, pred: &mut impl FnMut(&BehaviorNode) -> bool) -> bool {
         fn walk(nodes: &[BehaviorNode], pred: &mut impl FnMut(&BehaviorNode) -> bool) -> bool {
@@ -490,7 +484,7 @@ mod tests {
     #[test]
     fn defaults_are_world_scoped_and_empty() {
         let b = Behavior::default();
-        assert!(!b.is_scoped());
+        assert!(b.scope.is_empty());
         assert!(b.body.is_empty());
         assert_eq!(b.on, BehaviorSource::Start);
         assert!(!b.plays_sound());
@@ -514,7 +508,6 @@ mod tests {
         let b = parse(
             r#"{"on":"tick","scope":["Prop"],"locals":[{"name":"speed","value":{"float":3.0}}]}"#,
         );
-        assert!(b.is_scoped());
         assert_eq!(b.scope, ["Prop"]);
         assert_eq!(b.locals.len(), 1);
         assert_eq!(b.locals[0].name, "speed");

@@ -4,7 +4,7 @@
 //! drain its own commands without contending with GraphicsSystem's decal /
 //! particle queue.
 //!
-//! The debug WebSocket server (binary-only, off the engine thread) pushes
+//! The debug server (binary-only, off the engine thread) pushes
 //! commands here; the editor's per-frame debug drive drains them via
 //! `AnimationSystem::apply_runtime_commands` every frame -- including while a
 //! menu pauses playback, so a blocked WS client always gets its reply. Each

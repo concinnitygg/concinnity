@@ -1,6 +1,6 @@
 //! End-to-end tests that drive the built `concinnity` binary through the paths
-//! that never touch the renderer: `--help`, a missing subcommand, the `cn debug`
-//! client commands pointed at a dead server, and every authoring subcommand
+//! that never touch the renderer: `--help`, a missing subcommand, `cn mcp`
+//! pointed at a dead debug port, and every authoring subcommand
 //! (`build` / `add` / `rm` / `list` / `explain` / `test` / `docs` / `export` /
 //! `init` / `new`). They exercise `fn main()` and the command dispatch (which the
 //! in-crate unit tests cannot, since those never run the binary), plus the
@@ -12,16 +12,16 @@
 //! Only the non-engine paths are driven here; `cn run` and a bare `cn debug`
 //! stand up a renderer + window and are verified by screenshot probes instead.
 
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 // Path to the freshly built binary, provided by Cargo to integration tests.
 const BIN: &str = env!("CARGO_BIN_EXE_concinnity");
 
-// Candidate localhost ports for the "server is not running" tests. They sit
+// Candidate localhost ports for the "no app is running" test. They sit
 // below every platform's ephemeral range (Linux from 32768, macOS/Windows from
 // 49152), which `bind(:0)` never allocates, so no concurrent test can occupy
 // one -- avoiding the race in the older bind-an-ephemeral-port-then-drop-it
@@ -44,7 +44,7 @@ fn find_dead_port() -> Option<String> {
 // listening. A connect that instead times out (a dropped SYN with no RST, as
 // some firewalled loopback stacks do) returns false: the port is unused but not
 // promptly refused, so it is not a usable dead port and the caller skips rather
-// than wait out the client's multi-second connect timeout on every test.
+// than wait out the bridge's multi-second connect timeout.
 fn connect_refused(port: u16) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
@@ -207,53 +207,51 @@ fn missing_subcommand_is_a_usage_error() {
     );
 }
 
-#[test]
-fn debug_send_invalid_json_exits_transport() {
-    // Validation fails before any socket work, so the port is never used (any
-    // value works; a dead port is not required, so this never skips).
-    let port = DEAD_PORT_CANDIDATES[0].to_string();
-    let out = run(&["debug", "send", "{not json", "--port", &port]);
-    assert_eq!(out.status.code(), Some(3));
+// Drive `cn mcp` over stdin, one JSON-RPC message per line, and collect the
+// lines it answered with.
+fn mcp_session(port: &str, messages: &[&str]) -> String {
+    let mut child = Command::new(BIN)
+        .args(["mcp", "--port", port])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn cn mcp");
+    {
+        let stdin = child.stdin.as_mut().expect("piped stdin");
+        for message in messages {
+            writeln!(stdin, "{message}").expect("write one message");
+        }
+    }
+    let out = child.wait_with_output().expect("cn mcp exits on EOF");
+    String::from_utf8_lossy(&out.stdout).to_string()
 }
 
+// `cn mcp` answers the catalog methods itself, so a client connects and lists
+// the tools with no app running; only a call needs one, and an app that is not
+// there is a failed tool result naming the commands that start one, never a
+// dead session.
 #[test]
-fn debug_send_dead_port_exits_transport() {
+fn mcp_serves_the_catalog_with_no_app_running() {
     let Some(port) = find_dead_port() else {
-        return skip_no_dead_port("debug_send_dead_port_exits_transport");
+        return skip_no_dead_port("mcp_serves_the_catalog_with_no_app_running");
     };
-    let out = run(&["debug", "send", r#"{"cmd":"state"}"#, "--port", &port]);
-    assert_eq!(out.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot connect"));
-}
-
-#[test]
-fn debug_watch_dead_port_exits_transport_on_first_poll() {
-    let Some(port) = find_dead_port() else {
-        return skip_no_dead_port("debug_watch_dead_port_exits_transport_on_first_poll");
-    };
-    let out = run(&["debug", "watch", "camera", "--port", &port]);
-    assert_eq!(out.status.code(), Some(3));
-}
-
-// The capture never happens, so no PNG is written; the point is that the
-// screenshot client fails on the transport like its siblings rather than
-// creating an empty file at the requested path.
-#[test]
-fn debug_screenshot_dead_port_exits_transport() {
-    let Some(port) = find_dead_port() else {
-        return skip_no_dead_port("debug_screenshot_dead_port_exits_transport");
-    };
-    let project = Project::empty();
-    let shot = project.path().join("frame.png");
-    let out = run(&[
-        "debug",
-        "screenshot",
-        &shot.to_string_lossy(),
-        "--port",
+    let session = mcp_session(
         &port,
-    ]);
-    assert_eq!(out.status.code(), Some(3));
-    assert!(!shot.exists(), "a failed capture should write no file");
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping"}}"#,
+        ],
+    );
+
+    let lines: Vec<&str> = session.lines().collect();
+    assert_eq!(lines.len(), 3, "a notification is not answered: {session}");
+    assert!(lines[0].contains(r#""serverInfo""#), "{}", lines[0]);
+    assert!(lines[1].contains(r#""name":"ping""#), "{}", lines[1]);
+    assert!(lines[2].contains(r#""isError":true"#), "{}", lines[2]);
+    assert!(lines[2].contains("cn debug"), "{}", lines[2]);
 }
 
 // `cn list` with no --file discovers the world under `worlds/`,

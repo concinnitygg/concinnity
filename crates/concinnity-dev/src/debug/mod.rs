@@ -5,7 +5,7 @@
 // `cn-client` binary and excluded from `libconcinnity`: `cargo build --lib`
 // never sees it.
 //
-// `cn-client debug` starts a localhost WebSocket server. The engine
+// `cn debug` starts a localhost MCP server (see `crate::mcp`). The engine
 // stays debug-agnostic: the only coupling is the `DebugHook` trait, which the
 // run loop invokes once per frame on the main thread (see
 // `crate::debug_hook`). `DebugServer::tick` snapshots the live world into
@@ -15,21 +15,23 @@
 // whether it reads or mutates, and a JSON Schema for its parameters. An unknown
 // verb is answered with the names it holds.
 //
-// Protocol, each WS text frame is one JSON request:
-//   client → server:  {"cmd":"state"} {"cmd":"assets"} {"cmd":"names"}
-//                      {"cmd":"streaming"} {"cmd":"profile"} {"cmd":"ping"}
-//                      {"cmd":"reload-shaders"} {"cmd":"reload-assets"}
-//                      {"cmd":"shutdown"} {"cmd":"camera-get"}
-//                      {"cmd":"camera-set","position":[x,y,z],"yaw":Y,"pitch":P,
-//                         "fov_y_degrees":F}
-//                      {"cmd":"camera-move","forward":F,"right":R,"up":U,
-//                         "yaw":Y,"pitch":P,"frames":N} {"cmd":"camera-stop"}
-//                      {"cmd":"decal-add", ...} {"cmd":"decal-remove","id":N}
-//                      {"cmd":"emitter-add", ...} {"cmd":"emitter-remove","id":N}
-//                      {"cmd":"anim-crossfade","target":"hero",
-//                         "weights":[0,1,0],"duration_secs":0.5}
-//                      {"cmd":"story","action":"start|advance|choose","option":N}
-//   server → client:  {"ok":true,...}  |  {"ok":false,"error":"..."}
+// Every verb is one MCP tool, called by name with its parameters as the tool
+// arguments. Below the tool surface the dispatcher takes one JSON request per
+// call, which is the shape each verb is written against:
+//   request:  {"cmd":"state"} {"cmd":"assets"} {"cmd":"names"}
+//             {"cmd":"streaming"} {"cmd":"profile"} {"cmd":"ping"}
+//             {"cmd":"reload-shaders"} {"cmd":"reload-assets"}
+//             {"cmd":"shutdown"} {"cmd":"camera-get"}
+//             {"cmd":"camera-set","position":[x,y,z],"yaw":Y,"pitch":P,
+//                "fov_y_degrees":F}
+//             {"cmd":"camera-move","forward":F,"right":R,"up":U,
+//                "yaw":Y,"pitch":P,"frames":N} {"cmd":"camera-stop"}
+//             {"cmd":"decal-add", ...} {"cmd":"decal-remove","id":N}
+//             {"cmd":"emitter-add", ...} {"cmd":"emitter-remove","id":N}
+//             {"cmd":"anim-crossfade","target":"hero",
+//                "weights":[0,1,0],"duration_secs":0.5}
+//             {"cmd":"story","action":"start|advance|choose","option":N}
+//   reply:    {"ok":true,...}  |  {"ok":false,"error":"..."}
 //
 // `anim-crossfade` re-weights the clip bucket for one SkinnedMesh (looked
 // up by asset name) and ramps the live blend toward the new weights over
@@ -63,7 +65,7 @@
 // sustained motion and temporal passes (TAA, SSGI, motion blur) accumulate.
 // `frames == 0` holds the motion until a `camera-stop` clears it. The reply
 // fires when the motion is accepted (a `Camera3D` exists), not when it
-// finishes, so a long move never outlasts the WS timeout. Take a `screenshot`
+// finishes, so a long move never outlasts the call timeout. Take a `screenshot`
 // while a move is in flight to capture a mid-motion frame. `camera-stop` clears
 // any in-progress motion.
 //
@@ -99,29 +101,25 @@
 // instead of leaving the window open.
 
 // Submodules (all binary-only):
-//   wire      WS transport (server accept loop + client); coverage-excluded
+//   wire      the listener: accept loop + connection threads; coverage-excluded
 //   catalog   the verb table: description, access, and parameter schema per verb
 //   dispatch  the socket-free `handle_request` command dispatcher (testable)
 //   state     the shared world-snapshot data model (testable)
-//   protocol  socket-free client helpers: payload validation + watch targets
 //   commands  spawn / crossfade command handlers + request bodies
 //   hot_reload  asset / shader / world.jsonl reload machinery
 //   runtime_spawn  decal / emitter / screenshot spawn queue + dispatch
 //
 // The `wire` submodule holds everything that can only run against a live socket
-// (and, for the server, a live engine). It is excluded from coverage like the
-// per-backend GPU directories; the logic it wraps lives in `dispatch` /
-// `state` / `protocol`, which are unit-tested without a running process.
+// and a live engine. It is excluded from coverage like the per-backend GPU
+// directories; the logic it wraps lives in `dispatch` / `state` and in
+// `crate::mcp`, which are unit-tested without a running process.
 pub(crate) mod catalog;
 mod commands;
-mod dispatch;
+pub(crate) mod dispatch;
 pub(crate) mod hot_reload;
 mod memory;
-mod protocol;
 mod runtime_spawn;
-mod state;
+pub(crate) mod state;
 mod wire;
 
-pub use protocol::WatchTarget;
 pub(crate) use wire::DebugServer;
-pub use wire::client;

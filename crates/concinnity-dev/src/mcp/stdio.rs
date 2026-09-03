@@ -8,12 +8,12 @@
 
 use std::io::{BufRead, Write};
 
-use super::server::Server;
+use super::server::{Executor, Server};
 
 /// Serve until `input` reaches EOF.
 pub(super) fn serve<E, R, W>(server: &Server<E>, input: R, output: &mut W) -> std::io::Result<()>
 where
-    E: Fn(&str) -> Result<String, String>,
+    E: Executor,
     R: BufRead,
     W: Write,
 {
@@ -34,12 +34,21 @@ where
 mod tests {
     use std::io::Cursor;
 
-    use serde_json::Value;
+    use serde_json::{Map, Value};
 
     use super::*;
 
+    // Nothing here reaches a call, so the executor only has to exist.
+    struct Never;
+
+    impl Executor for Never {
+        fn call(&self, _name: &str, _arguments: &Map<String, Value>) -> Value {
+            unreachable!("these messages never reach a tools/call")
+        }
+    }
+
     fn transcript(input: &str) -> Vec<Value> {
-        let server = Server::new(|_: &str| Ok(r#"{"ok":true}"#.to_string()));
+        let server = Server::new(Never);
         let mut output = Vec::new();
         serve(&server, Cursor::new(input.to_string()), &mut output).expect("stdio serve");
         String::from_utf8(output)

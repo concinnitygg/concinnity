@@ -27,8 +27,8 @@ pub fn cook_platform() -> concinnity_core::platform::Platform {
 // it, so some entry points have no in-workspace caller.
 mod authoring;
 
-// The in-engine editor HUD, the localhost debug server, the MCP bridge over
-// it, the interpreted run loop, and animation clip hot-reload.
+// The in-engine editor HUD, the localhost debug server, the MCP transport it
+// speaks, the interpreted run loop, and animation clip hot-reload.
 mod anim_reload;
 mod debug;
 mod debug_hook;
@@ -53,9 +53,8 @@ mod test_support;
 
 // Dev-session entry points, consumed by the `concinnity` binary: the debug
 // server + interpreted run (`cn debug`), the in-engine editor (`cn editor`),
-// the debug-server WebSocket client (`cn debug send/screenshot/...`), and the
-// MCP stdio bridge that serves that same protocol to an agent (`cn mcp`).
-pub use debug::{WatchTarget, client as debug_client};
+// and the MCP stdio bridge that forwards an agent's tool calls to a running
+// app (`cn mcp`).
 pub use editor::run_editor;
 pub use mcp::run as run_mcp;
 pub use run::run_debug;

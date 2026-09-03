@@ -6,7 +6,7 @@
 // says. It overlays an injected editor HUD and persists edits by writing
 // world.jsonl. The blobs are refreshed only by an explicit build (`cn build`,
 // or the console's cook command). An optional debug port reuses the existing
-// debug server so `cn debug send` / `screenshot` can inspect a session.
+// debug server so an MCP client can inspect and drive a session.
 //
 // `cn editor -f <world>` opens that world. With no world named the session
 // opens an empty scene under the Worlds panel (`editor/worlds.rs`), which

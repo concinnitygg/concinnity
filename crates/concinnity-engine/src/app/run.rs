@@ -7,7 +7,7 @@
 //! process its callbacks on the main thread each tick. On all other platforms
 //! a tight Rust loop is used, which is what VulkanRenderer expects.
 //!
-//! This is the `cn run` path only: no debug server, no WebSocket command
+//! This is the `cn run` path only: no debug server, no remote command
 //! channel, no in-memory rebuild. A shipped run is neither remotely inspectable
 //! nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
 //! the command channel lives in the editor crate.
@@ -82,7 +82,7 @@ pub struct RunOptions {
 
 /// Production entry point (`cn run`). Reads the compiled binary blobs from
 /// `tree`'s `data/`, written by a prior `cn build`. No debug server, no
-/// WebSocket command channel: a shipped run is neither remotely inspectable nor
+/// command channel: a shipped run is neither remotely inspectable nor
 /// remotely driven.
 pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
     init_logging();

@@ -2025,7 +2025,7 @@ impl DxContext {
 
     // Shared atomic clone of the shader-reload flag, or `None` when the
     // context was built without hot-reload. Surfaced through the
-    // `RenderBackend` trait so the debug WebSocket server's
+    // `RenderBackend` trait so the debug server's
     // `reload-shaders` command can flip it from a non-render thread.
     pub(crate) fn shader_reload_pending(
         &self,

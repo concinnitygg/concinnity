@@ -3,7 +3,7 @@
 // Per-frame drive of the asset / shader / world.jsonl hot-reload passes,
 // shared by every dev session. A plain `cn editor` runs the driver as its own
 // per-frame hook; `cn debug` (and `cn editor --debug-port`) drive it from
-// inside `DebugServer::tick`, which layers the WebSocket-only concerns
+// inside `DebugServer::tick`, which layers the debug-server-only concerns
 // (runtime spawn commands, camera motion) around it. Each session constructs
 // exactly one driver, so a reload is never applied twice.
 

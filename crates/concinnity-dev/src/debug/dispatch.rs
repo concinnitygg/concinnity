@@ -3,9 +3,10 @@
 // The query-command dispatcher. `handle_request` takes one raw JSON request and
 // the shared world snapshot and returns the JSON reply string. It is socket-free
 // (`&str` in, `String` out over a `DebugState`), so the whole command surface is
-// unit-testable against a hand-built snapshot without a live engine or a real
-// WebSocket. The connection loop that feeds it lives in `super::wire::server`;
-// the spawn / crossfade command handlers live in `super::commands`.
+// unit-testable against a hand-built snapshot without a live engine or a live
+// socket. Each MCP tool call reaches it through `crate::mcp::AppServer`, which
+// the connection loop in `super::wire::server` feeds; the spawn / crossfade
+// command handlers live in `super::commands`.
 
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +25,7 @@ struct Request {
 }
 
 // Dispatch one request against the shared snapshot and return a JSON reply.
-pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> String {
+pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> String {
     let cmd = match serde_json::from_str::<Request>(text) {
         Ok(r) => r.cmd,
         Err(e) => return error_reply(&format!("malformed request: {e}")),
@@ -539,7 +540,7 @@ mod tests {
     fn unknown_cmd_is_rejected() {
         let r = reply(r#"{"cmd":"bogus"}"#, DebugState::default());
         assert_eq!(r["ok"], false);
-        // The reply lists what the server does accept, so `cn debug send` with a
+        // The reply lists what the server does accept, so a call naming a
         // typo names the right verb without a round trip through the docs.
         let error = r["error"].as_str().unwrap();
         assert!(error.contains("unknown cmd"));

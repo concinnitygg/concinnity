@@ -5,7 +5,7 @@
 // event for a known shader-source extension, flips a shared
 // `Arc<AtomicBool>`. The main thread polls that flag at the top of
 // `draw_frame` and calls `VkContext::reload_shaders` when it is set. The
-// same flag is also set by the `reload-shaders` debug WebSocket command, so
+// same flag is also set by the `reload-shaders` debug command, so
 // the two trigger paths converge.
 //
 // Entirely a dev-loop concern, only constructed when `VkContext::new` is

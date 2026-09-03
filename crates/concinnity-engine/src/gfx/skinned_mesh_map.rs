@@ -4,7 +4,7 @@
 // `AnimationParams.target`, `GroundProbes.target`, `CameraProbe.target`) is keyed by
 // the mesh's dense `SkinnedMeshHandle`, matching the authored references
 // (`Animation.target`, `AnimationGraph.target`, `FollowController.target`) directly.
-// The one consumer that still starts from a NAME is the debug WebSocket's
+// The one consumer that still starts from a NAME is the debug protocol's
 // animation commands (`anim-crossfade` / `anim-param` / `anim-state`), which
 // resolve the user-typed name to its interned id: this index, published by
 // GraphicsSystem from the baked SkinnedMesh data (which carries each mesh's

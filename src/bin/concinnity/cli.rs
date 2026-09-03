@@ -4,7 +4,6 @@
 //
 // Parsing only. What each command does lives in concinnity-dev; `dispatch`
 // is the one file that joins the two.
-use concinnity_dev::WatchTarget;
 use concinnity_engine::app::dev_flags;
 use concinnity_engine::app::dev_flags::{QualityPreset, RtDynamicMode};
 
@@ -34,9 +33,9 @@ pub(crate) enum Commands {
 
     /// Run a compiled world
     //
-    // Production path: no debug server and no WebSocket command channel.
-    // A shipped run is neither remotely inspectable nor remotely driven:
-    // use `cn debug` for that.
+    // Production path: no debug server and no command channel. A shipped run
+    // is neither remotely inspectable nor remotely driven: use `cn debug` for
+    // that.
     #[command(name = "run")]
     Run(RunArgs),
 
@@ -45,7 +44,8 @@ pub(crate) enum Commands {
     // Compiles the world in memory (no prior `cn build` needed) and stands
     // up the localhost debug server.
     // This is the development run, and the path the agentic loop / a host UI
-    // use when they need to read or drive runtime state over a WebSocket.
+    // use when they need to read or drive runtime state: the port it opens
+    // serves MCP.
     #[command(name = "debug")]
     Debug(DebugArgs),
 
@@ -54,9 +54,9 @@ pub(crate) enum Commands {
     // Compiles world.jsonl in memory (no prior `cn build` needed, and the blobs
     // one wrote are neither read nor refreshed here), overlays the editor HUD (a
     // SAVE button plus an add-asset button), and persists edits by writing
-    // world.jsonl. No WebSocket command channel unless --debug-port is given
-    // (which stands up the same debug server `cn debug` uses, so `cn debug send`
-    // / `screenshot` can drive an editor session).
+    // world.jsonl. No command channel unless --debug-port is given (which
+    // stands up the same MCP debug server `cn debug` uses, so an agent can
+    // drive an editor session).
     #[command(name = "editor")]
     Editor(EditorArgs),
 
@@ -108,7 +108,7 @@ pub(crate) enum Commands {
     //
     // A child process an MCP client spawns, not a listener: it speaks JSON-RPC
     // over stdin/stdout and forwards each tool call to a running app's debug
-    // server, so an agent drives the same verbs `cn debug send` does.
+    // port, which serves the same protocol to any client that posts to it.
     #[command(name = "mcp")]
     Mcp(McpArgs),
 
@@ -217,13 +217,6 @@ impl From<RtDynamicArg> for RtDynamicMode {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct DebugArgs {
-    /// Query or drive a running `cn debug` server instead of starting one
-    // When present, `cn debug` acts as a client: it connects to an already
-    // running server's localhost WebSocket. When absent, `cn debug` starts the
-    // server (the interpreted run below).
-    #[command(subcommand)]
-    pub client: Option<DebugClientCommand>,
-
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
@@ -251,86 +244,11 @@ pub(crate) struct DebugArgs {
     pub(crate) render: RenderArgs,
 }
 
-// Client-side `cn debug` subcommands. Each connects to a running server's
-// localhost WebSocket, sends one request, and prints the reply; the transport
-// lives in `debug::client` (re-exported from `debug::wire`).
-#[derive(Subcommand, Debug)]
-pub(crate) enum DebugClientCommand {
-    /// Send one raw JSON command and print the reply
-    #[command(name = "send")]
-    Send(DebugSendArgs),
-
-    /// Capture the last presented frame to a PNG
-    #[command(name = "screenshot")]
-    Screenshot(DebugScreenshotArgs),
-
-    /// Poll a read-only snapshot and print it until Ctrl-C
-    #[command(name = "watch")]
-    Watch(DebugWatchArgs),
-}
-
 #[derive(Debug, clap::Args)]
 pub(crate) struct McpArgs {
     /// Debug server port
     #[arg(long, default_value_t = 8777)]
     pub(crate) port: u16,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct DebugSendArgs {
-    /// Raw JSON object including its own "cmd" field
-    // e.g. '{"cmd":"state"}' or '{"cmd":"emitter-remove","id":0}'
-    pub json: String,
-
-    /// Debug server port
-    #[arg(long, default_value_t = 8777)]
-    pub port: u16,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct DebugScreenshotArgs {
-    /// Output PNG path (resolved to absolute)
-    pub path: String,
-
-    /// Debug server port
-    #[arg(long, default_value_t = 8777)]
-    pub port: u16,
-}
-
-// The argv face of the library's `WatchTarget`: the value-enum derive lives
-// here so concinnity-dev carries no clap dependency.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub(crate) enum WatchTargetArg {
-    Camera,
-    State,
-    Streaming,
-    Profile,
-}
-
-impl From<WatchTargetArg> for WatchTarget {
-    fn from(t: WatchTargetArg) -> Self {
-        match t {
-            WatchTargetArg::Camera => WatchTarget::Camera,
-            WatchTargetArg::State => WatchTarget::State,
-            WatchTargetArg::Streaming => WatchTarget::Streaming,
-            WatchTargetArg::Profile => WatchTarget::Profile,
-        }
-    }
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct DebugWatchArgs {
-    /// Which read-only snapshot to poll
-    #[arg(value_enum, default_value = "camera")]
-    pub target: WatchTargetArg,
-
-    // Milliseconds between polls
-    #[arg(long, default_value_t = 500)]
-    pub(crate) interval: u64,
-
-    /// Debug server port
-    #[arg(long, default_value_t = 8777)]
-    pub port: u16,
 }
 
 #[derive(Debug, clap::Args)]
@@ -340,8 +258,8 @@ pub(crate) struct EditorArgs {
     pub file: Option<String>,
 
     // Start the localhost debug server on this port alongside the editor
-    // Absent leaves the editor without a WebSocket channel; present makes an
-    // editor session inspectable/drivable (e.g. `cn debug send`, `screenshot`).
+    // Absent leaves the editor without a command channel; present makes an
+    // editor session inspectable and drivable by any MCP client.
     #[arg(long)]
     pub(crate) debug_port: Option<u16>,
 
@@ -517,11 +435,11 @@ pub(crate) struct ExportArgs {
 pub(crate) fn reexec_with_metal_validation(cli: &Cli) {
     use std::os::unix::process::CommandExt;
 
-    // Only the rendering commands create a Metal context. A `cn debug` client
+    // Only the rendering commands create a Metal context; every other
     // subcommand starts no renderer, so it needs no validation re-exec.
     let requested = match &cli.command {
         Commands::Run(args) => args.validation,
-        Commands::Debug(args) if args.client.is_none() => args.validation,
+        Commands::Debug(args) => args.validation,
         Commands::Editor(args) => args.validation,
         _ => return,
     };
@@ -652,71 +570,38 @@ mod tests {
     }
 
     #[test]
-    fn debug_without_subcommand_starts_the_server() {
+    fn debug_starts_the_server_on_the_named_world() {
         let cli = Cli::try_parse_from(["concinnity", "debug", "-f", "world.jsonl"]).unwrap();
         let Commands::Debug(a) = cli.command else {
             panic!("expected debug");
         };
-        assert!(a.client.is_none());
         assert_eq!(a.file.as_deref(), Some("world.jsonl"));
+        assert!(a.debug_port.is_none());
     }
 
     #[test]
-    fn debug_send_parses_json_with_default_port() {
-        let cli =
-            Cli::try_parse_from(["concinnity", "debug", "send", r#"{"cmd":"state"}"#]).unwrap();
-        let Commands::Debug(a) = cli.command else {
-            panic!("expected debug");
-        };
-        let Some(DebugClientCommand::Send(s)) = a.client else {
-            panic!("expected send");
-        };
-        assert_eq!(s.json, r#"{"cmd":"state"}"#);
-        assert_eq!(s.port, 8777);
+    fn debug_takes_no_subcommand() {
+        for argv in [
+            ["concinnity", "debug", "send"],
+            ["concinnity", "debug", "screenshot"],
+            ["concinnity", "debug", "watch"],
+        ] {
+            assert!(Cli::try_parse_from(argv).is_err(), "{argv:?}");
+        }
     }
 
     #[test]
-    fn debug_screenshot_parses_path() {
-        let cli = Cli::try_parse_from(["concinnity", "debug", "screenshot", "out.png"]).unwrap();
-        let Commands::Debug(a) = cli.command else {
-            panic!("expected debug");
+    fn mcp_defaults_to_the_debug_port() {
+        let cli = Cli::try_parse_from(["concinnity", "mcp"]).unwrap();
+        let Commands::Mcp(a) = cli.command else {
+            panic!("expected mcp");
         };
-        let Some(DebugClientCommand::Screenshot(s)) = a.client else {
-            panic!("expected screenshot");
+        assert_eq!(a.port, 8777);
+        let cli = Cli::try_parse_from(["concinnity", "mcp", "--port", "9001"]).unwrap();
+        let Commands::Mcp(a) = cli.command else {
+            panic!("expected mcp");
         };
-        assert_eq!(s.path, "out.png");
-        assert_eq!(s.port, 8777);
-    }
-
-    #[test]
-    fn debug_watch_defaults_to_camera() {
-        let cli = Cli::try_parse_from(["concinnity", "debug", "watch"]).unwrap();
-        let Commands::Debug(a) = cli.command else {
-            panic!("expected debug");
-        };
-        let Some(DebugClientCommand::Watch(w)) = a.client else {
-            panic!("expected watch");
-        };
-        assert!(matches!(w.target, WatchTargetArg::Camera));
-        assert_eq!(w.interval, 500);
-        assert_eq!(w.port, 8777);
-    }
-
-    #[test]
-    fn debug_watch_accepts_named_target() {
-        let cli = Cli::try_parse_from(["concinnity", "debug", "watch", "streaming"]).unwrap();
-        let Commands::Debug(a) = cli.command else {
-            panic!("expected debug");
-        };
-        let Some(DebugClientCommand::Watch(w)) = a.client else {
-            panic!("expected watch");
-        };
-        assert!(matches!(w.target, WatchTargetArg::Streaming));
-    }
-
-    #[test]
-    fn debug_watch_rejects_unknown_target() {
-        assert!(Cli::try_parse_from(["concinnity", "debug", "watch", "nonsense"]).is_err());
+        assert_eq!(a.port, 9001);
     }
 
     #[test]
@@ -744,42 +629,6 @@ mod tests {
     #[test]
     fn missing_subcommand_is_an_error() {
         assert!(Cli::try_parse_from(["concinnity"]).is_err());
-    }
-
-    // The argv enum exists only so concinnity-dev carries no clap dependency,
-    // which makes this conversion the seam between the two. It is applied in the
-    // dispatch, so cover every variant here rather than through a running
-    // `cn debug watch`.
-    #[test]
-    fn watch_target_arg_converts_every_variant() {
-        assert!(matches!(
-            WatchTarget::from(WatchTargetArg::Camera),
-            WatchTarget::Camera
-        ));
-        assert!(matches!(
-            WatchTarget::from(WatchTargetArg::State),
-            WatchTarget::State
-        ));
-        assert!(matches!(
-            WatchTarget::from(WatchTargetArg::Streaming),
-            WatchTarget::Streaming
-        ));
-        assert!(matches!(
-            WatchTarget::from(WatchTargetArg::Profile),
-            WatchTarget::Profile
-        ));
-    }
-
-    #[test]
-    fn every_watch_target_name_parses() {
-        for name in ["camera", "state", "streaming", "profile"] {
-            let cli = Cli::try_parse_from(["concinnity", "debug", "watch", name])
-                .unwrap_or_else(|e| panic!("{name} should parse: {e}"));
-            let Commands::Debug(a) = cli.command else {
-                panic!("expected debug");
-            };
-            assert!(matches!(a.client, Some(DebugClientCommand::Watch(_))));
-        }
     }
 
     #[test]
@@ -980,7 +829,6 @@ mod tests {
         let Commands::Debug(a) = cli.command else {
             panic!("expected debug");
         };
-        assert!(a.client.is_none());
         assert_eq!(a.debug_port, Some(9100));
         assert_eq!(a.validation, Some(true));
     }
@@ -999,11 +847,9 @@ mod tests {
         ] {
             reexec_with_metal_validation(&Cli::try_parse_from(args).unwrap());
         }
-        // A `cn debug` client subcommand stands up no renderer, so it returns at
-        // the match rather than reaching the request check.
-        reexec_with_metal_validation(
-            &Cli::try_parse_from(["concinnity", "debug", "screenshot", "out.png"]).unwrap(),
-        );
+        // An authoring subcommand stands up no renderer, so it returns at the
+        // match rather than reaching the request check.
         reexec_with_metal_validation(&Cli::try_parse_from(["concinnity", "list"]).unwrap());
+        reexec_with_metal_validation(&Cli::try_parse_from(["concinnity", "mcp"]).unwrap());
     }
 }

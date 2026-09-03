@@ -1,9 +1,11 @@
 // src/debug/wire/server.rs
 //
-// The localhost WebSocket debug server: `DebugServer` (the `DebugHook` the run
-// loop ticks), the accept / per-connection threads, and the per-frame drive of
-// the WS runtime commands plus the owned hot-reload driver. The shared
-// snapshot lives in `super::super::state`; the query-command dispatcher is
+// The localhost debug listener: `DebugServer` (the `DebugHook` the run loop
+// ticks), the accept / per-connection threads, and the per-frame drive of the
+// runtime commands plus the owned hot-reload driver. Each connection is handed
+// to `crate::mcp::AppServer`, which parses the HTTP request and answers the
+// MCP message it carried. The shared snapshot lives in `super::super::state`;
+// the query-command dispatcher `AppServer` runs each call against is
 // `super::super::dispatch::handle_request`; spawn / crossfade command handlers
 // live in `super::super::commands`.
 
@@ -11,16 +13,20 @@ use crate::debug_hook::DebugHook;
 use crate::ecs::World;
 use crate::gfx::animation::AnimationSystem;
 use crate::gfx::graphics_system::GraphicsSystem;
+use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use concinnity_engine::shutdown::ShutdownToken;
 
-use tokio_tungstenite::tungstenite::{Message, accept};
-
-use crate::debug::dispatch::handle_request;
 use crate::debug::state::{AssetEntry, CameraSnapshot, DebugState};
 use crate::debug::{hot_reload, runtime_spawn};
+use crate::mcp::AppServer;
+
+// Bound each connection's reads so a client that opens a socket and stalls
+// mid-request releases its thread instead of holding it for the session.
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 // How often `tick` rebuilds the asset/system snapshot (in frames). The frame
 // counter still advances every tick; only the heavier lists are throttled.
@@ -32,7 +38,7 @@ pub(crate) struct DebugServer {
     shared: Arc<Mutex<DebugState>>,
     frame: u64,
     // The asset / shader / world.jsonl reload drive. The server owns the
-    // session's one driver so the WS `reload-assets` command can reach its
+    // session's one driver so the `reload-assets` command can reach its
     // pending flag; the drive itself is shared with the plain `cn editor`
     // path (see `crate::debug::hot_reload::HotReloadDriver`).
     reload: hot_reload::HotReloadDriver,
@@ -43,7 +49,7 @@ pub(crate) struct DebugServer {
 }
 
 impl DebugServer {
-    // Bind a localhost WebSocket server on `port` and spawn its accept thread.
+    // Bind the localhost MCP endpoint on `port` and spawn its accept thread.
     // Binds `127.0.0.1` only: the debug surface is never exposed off-box.
     pub(crate) fn start(port: u16) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
@@ -54,7 +60,7 @@ impl DebugServer {
             .name("debug-server".to_string())
             .spawn(move || serve(listener, shared_for_thread))?;
 
-        tracing::info!("debug server listening on ws://127.0.0.1:{port}");
+        tracing::info!("debug server listening on http://127.0.0.1:{port}/mcp");
         Ok(Self {
             shared,
             frame: 0,
@@ -72,7 +78,7 @@ impl DebugServer {
 }
 
 impl DebugServer {
-    // Apply the debug WS runtime commands once per frame: decal / emitter
+    // Apply the debug runtime commands once per frame: decal / emitter
     // spawn against the backend, plus the deferred ECS-side commands and the
     // per-frame camera-move advance. The asset / shader / world.jsonl reload
     // passes live on `self.reload`, driven separately by `tick`.
@@ -191,7 +197,7 @@ impl DebugHook for DebugServer {
     fn tick(&mut self, world: &mut World) {
         self.frame += 1;
 
-        // The WS runtime commands, then the asset / shader / world.jsonl
+        // The runtime commands, then the asset / shader / world.jsonl
         // reload passes. Both run only from this hook, so a `cn run` (no
         // debug hook) never touches them.
         self.drive_runtime_commands(world);
@@ -318,9 +324,12 @@ impl DebugHook for DebugServer {
 }
 
 // Accept loop. Each client is handled on its own thread so a slow or stuck
-// client never blocks another. Errors are logged and dropped: a debug client
-// disconnecting is routine, not a fault.
+// client never blocks another, and both threads are detached: the listener
+// blocks in `accept` for the life of the process, which exits out from under
+// it. Errors are logged and dropped: a debug client disconnecting is routine,
+// not a fault.
 fn serve(listener: TcpListener, shared: Arc<Mutex<DebugState>>) {
+    let server = Arc::new(AppServer::new(shared));
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -329,29 +338,20 @@ fn serve(listener: TcpListener, shared: Arc<Mutex<DebugState>>) {
                 continue;
             }
         };
-        let shared = Arc::clone(&shared);
+        let server = Arc::clone(&server);
         std::thread::spawn(move || {
-            if let Err(e) = handle_conn(stream, shared) {
+            if let Err(e) = handle_conn(stream, &server) {
                 tracing::debug!("debug client closed: {e}");
             }
         });
     }
 }
 
-fn handle_conn(stream: TcpStream, shared: Arc<Mutex<DebugState>>) -> Result<(), String> {
-    let mut ws = accept(stream).map_err(|e| e.to_string())?;
-    loop {
-        match ws.read().map_err(|e| e.to_string())? {
-            Message::Text(text) => {
-                let reply = handle_request(&text, &shared);
-                ws.send(Message::Text(reply.into()))
-                    .map_err(|e| e.to_string())?;
-            }
-            Message::Ping(payload) => {
-                ws.send(Message::Pong(payload)).map_err(|e| e.to_string())?;
-            }
-            Message::Close(_) => return Ok(()),
-            _ => {}
-        }
-    }
+// One request, one response, then the connection closes with the stream.
+fn handle_conn(stream: TcpStream, server: &AppServer) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
+    stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
+    let mut input = BufReader::new(stream.try_clone()?);
+    let mut output = stream;
+    server.serve(&mut input, &mut output)
 }

@@ -171,25 +171,6 @@ fn load_raw_from(
     Ok((meta, blob_data))
 }
 
-/// Number of Texture resource records in the primary blob's metadata, read
-/// without loading any payload. This is the compiled world's texture-table
-/// length; `cn export` uses it to precompile the built-in shaders whose bindless
-/// texture pool is sized per world.
-pub fn texture_resource_count() -> Result<usize, CnResult> {
-    let (meta, _) = read_cnb(&blob_path(0).ok_or(CnResult::NoStateRoot)?)?;
-    let tag = concinnity_core::ecs::ResourceKind::Texture as u8;
-    Ok(meta
-        .resources
-        .iter()
-        .filter(|r| r.resource_kind == tag)
-        .count())
-}
-
-/// Load defs without resolving (for callers that apply overlays first)
-pub fn load_defs() -> Result<Vec<BlobAssetDef>, CnResult> {
-    read_cnb(&blob_path(0).ok_or(CnResult::NoStateRoot)?).map(|(meta, _)| meta.defs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

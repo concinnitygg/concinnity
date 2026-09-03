@@ -12,7 +12,7 @@ use super::errors_to_io;
 
 /// Validate a single asset's type and generator without running the full build
 /// pipeline. Called by the server on each world_add so the LLM gets per-asset
-/// feedback without waiting for a WebSocket round-trip.
+/// feedback without waiting for a debug-server round-trip.
 ///
 /// Checks:
 ///

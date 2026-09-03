@@ -2113,7 +2113,7 @@ impl VkContext {
     }
 
     // Public accessor for the shared shader-reload flag. Cloning the `Arc`
-    // lets the debug WebSocket server flip it from a non-render thread.
+    // lets the debug server flip it from a non-render thread.
     // `None` outside `cn debug`. Mirrors `DxContext::shader_reload_pending`.
     pub(crate) fn shader_reload_pending(
         &self,

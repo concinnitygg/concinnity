@@ -1,10 +1,13 @@
 //! The MCP server core: the methods this server answers, and what each answers
 //! with.
 //!
-//! The executor is injected rather than opened here, so the whole protocol is
-//! exercised in tests without a socket. `super::bridge` supplies the real one.
+//! `initialize`, `tools/list` and `ping` are answered from the verb catalog
+//! alone, so both ends serve them locally. Only `tools/call` needs the running
+//! world, and that is the one thing the injected executor carries out: the app
+//! runs it against its own snapshot, the stdio bridge forwards it. The
+//! injection is also what makes the whole protocol testable without a socket.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::jsonrpc::{self, INVALID_PARAMS, Incoming, METHOD_NOT_FOUND};
 use super::tools;
@@ -22,20 +25,27 @@ const SERVER_NAME: &str = "concinnity";
 /// A method failure: the JSON-RPC code and the message to report.
 type Failure = (i64, String);
 
-/// The protocol state machine. `execute` sends one debug-protocol request and
-/// returns the server's raw reply, or a transport failure to report as one.
+/// How one `tools/call` is carried out, once the server has checked that the
+/// verb exists and its arguments are an object.
+pub(super) trait Executor {
+    /// The `tools/call` result for a catalogued verb, failures included: a
+    /// rejected command is an error result, never a protocol error.
+    fn call(&self, name: &str, arguments: &Map<String, Value>) -> Value;
+}
+
+/// The protocol state machine.
 pub(super) struct Server<E> {
     execute: E,
 }
 
-impl<E: Fn(&str) -> Result<String, String>> Server<E> {
+impl<E: Executor> Server<E> {
     pub(super) fn new(execute: E) -> Self {
         Self { execute }
     }
 
-    /// Answer one incoming line, or `None` when the sender expects no reply.
-    pub(super) fn handle(&self, line: &str) -> Option<Value> {
-        match jsonrpc::parse(line) {
+    /// Answer one message, or `None` when the sender expects no reply.
+    pub(super) fn handle(&self, message: &str) -> Option<Value> {
+        match jsonrpc::parse(message) {
             Incoming::Call { id, method, params } => Some(match self.answer(&method, &params) {
                 Ok(result) => jsonrpc::result(&id, result),
                 Err((code, message)) => jsonrpc::error(&id, code, &message),
@@ -64,15 +74,8 @@ impl<E: Fn(&str) -> Result<String, String>> Server<E> {
             return Err((INVALID_PARAMS, format!("unknown tool: {name}")));
         }
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-        let payload = tools::payload(name, &arguments).map_err(|e| (INVALID_PARAMS, e))?;
-
-        Ok(match (self.execute)(&payload) {
-            Ok(reply) => {
-                let failed = !reply_ok(&reply);
-                tool_result(&reply, failed)
-            }
-            Err(message) => tool_result(&message, true),
-        })
+        let arguments = tools::arguments(&arguments).map_err(|e| (INVALID_PARAMS, e))?;
+        Ok(self.execute.call(name, &arguments))
     }
 }
 
@@ -88,64 +91,53 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-// A reply the engine accepted carries `"ok": true`; anything else, an
-// unparseable reply included, is reported to the client as a failed call.
-fn reply_ok(reply: &str) -> bool {
-    serde_json::from_str::<Value>(reply)
-        .ok()
-        .and_then(|v| v.get("ok").and_then(Value::as_bool))
-        .unwrap_or(false)
-}
-
-fn tool_result(text: &str, is_error: bool) -> Value {
-    json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": is_error,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
 
     use super::*;
 
-    // A server whose executor records every payload it is handed and answers
-    // with `reply`, so a test can assert what reached the wire without one.
+    // An executor that records every call it is handed and answers with a
+    // fixed result, so a test can assert what reached it without a transport.
     struct Fake {
-        sent: RefCell<Vec<String>>,
-        reply: Result<String, String>,
+        seen: RefCell<Vec<Value>>,
+        result: Value,
     }
 
     impl Fake {
-        fn answering(reply: &str) -> Self {
+        fn answering(result: Value) -> Self {
             Self {
-                sent: RefCell::new(Vec::new()),
-                reply: Ok(reply.to_string()),
+                seen: RefCell::new(Vec::new()),
+                result,
             }
-        }
-
-        fn failing(error: &str) -> Self {
-            Self {
-                sent: RefCell::new(Vec::new()),
-                reply: Err(error.to_string()),
-            }
-        }
-
-        fn server(&self) -> Server<impl Fn(&str) -> Result<String, String> + '_> {
-            Server::new(move |payload: &str| {
-                self.sent.borrow_mut().push(payload.to_string());
-                self.reply.clone()
-            })
         }
     }
 
-    fn ok_server() -> Server<impl Fn(&str) -> Result<String, String>> {
-        Server::new(|_: &str| Ok(r#"{"ok":true}"#.to_string()))
+    impl Executor for &Fake {
+        fn call(&self, name: &str, arguments: &Map<String, Value>) -> Value {
+            self.seen.borrow_mut().push(json!({
+                "name": name,
+                "arguments": Value::Object(arguments.clone()),
+            }));
+            self.result.clone()
+        }
     }
 
-    fn answer(server: &Server<impl Fn(&str) -> Result<String, String>>, line: &str) -> Value {
-        server.handle(line).expect("a call is always answered")
+    // A server whose calls all succeed, for the paths a call never reaches.
+    struct Always;
+
+    impl Executor for Always {
+        fn call(&self, _name: &str, _arguments: &Map<String, Value>) -> Value {
+            tools::text_result(r#"{"ok":true}"#, false)
+        }
+    }
+
+    fn ok_server() -> Server<Always> {
+        Server::new(Always)
+    }
+
+    fn answer<E: Executor>(server: &Server<E>, message: &str) -> Value {
+        server.handle(message).expect("a call is always answered")
     }
 
     #[test]
@@ -215,16 +207,17 @@ mod tests {
 
     #[test]
     fn a_tool_call_forwards_the_verb_and_its_arguments() {
-        let fake = Fake::answering(r#"{"ok":true,"id":4}"#);
+        let fake = Fake::answering(tools::text_result(r#"{"ok":true,"id":4}"#, false));
         let reply = answer(
-            &fake.server(),
+            &Server::new(&fake),
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"decal-remove","arguments":{"id":4}}}"#,
         );
 
-        let sent: Value = serde_json::from_str(&fake.sent.borrow()[0]).unwrap();
-        assert_eq!(sent, json!({ "cmd": "decal-remove", "id": 4 }));
+        assert_eq!(
+            fake.seen.borrow()[0],
+            json!({ "name": "decal-remove", "arguments": { "id": 4 } })
+        );
         assert_eq!(reply["result"]["isError"], json!(false));
-        assert_eq!(reply["result"]["content"][0]["type"], "text");
         assert_eq!(
             reply["result"]["content"][0]["text"],
             r#"{"ok":true,"id":4}"#
@@ -232,67 +225,39 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_call_without_arguments_sends_the_bare_verb() {
-        let fake = Fake::answering(r#"{"ok":true,"pong":true}"#);
+    fn a_tool_call_without_arguments_carries_an_empty_object() {
+        let fake = Fake::answering(tools::text_result(r#"{"ok":true}"#, false));
         answer(
-            &fake.server(),
+            &Server::new(&fake),
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ping"}}"#,
         );
-        assert_eq!(fake.sent.borrow()[0], r#"{"cmd":"ping"}"#);
+        assert_eq!(
+            fake.seen.borrow()[0],
+            json!({ "name": "ping", "arguments": {} })
+        );
     }
 
     #[test]
-    fn a_rejected_command_is_an_error_result_not_a_protocol_error() {
-        let fake = Fake::answering(r#"{"ok":false,"error":"no camera"}"#);
+    fn an_executor_failure_is_an_error_result_not_a_protocol_error() {
+        let fake = Fake::answering(tools::text_result("cannot connect", true));
         let reply = answer(
-            &fake.server(),
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"camera-get"}}"#,
+            &Server::new(&fake),
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"state"}}"#,
         );
         assert!(reply.get("error").is_none());
         assert_eq!(reply["result"]["isError"], json!(true));
-        assert!(
-            reply["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("no camera")
-        );
-    }
-
-    #[test]
-    fn a_transport_failure_is_an_error_result_carrying_its_message() {
-        let fake = Fake::failing("cannot connect to ws://127.0.0.1:8777");
-        let reply = answer(
-            &fake.server(),
-            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"state"}}"#,
-        );
-        assert_eq!(reply["result"]["isError"], json!(true));
-        assert!(
-            reply["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("cannot connect")
-        );
-    }
-
-    #[test]
-    fn an_unparseable_reply_is_reported_as_a_failed_call() {
-        let fake = Fake::answering("not json");
-        let reply = answer(
-            &fake.server(),
-            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"state"}}"#,
-        );
-        assert_eq!(reply["result"]["isError"], json!(true));
+        assert_eq!(reply["result"]["content"][0]["text"], "cannot connect");
     }
 
     #[test]
     fn an_unknown_tool_never_reaches_the_executor() {
-        let fake = Fake::answering(r#"{"ok":true}"#);
+        let fake = Fake::answering(tools::text_result(r#"{"ok":true}"#, false));
         let reply = answer(
-            &fake.server(),
+            &Server::new(&fake),
             r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"launch"}}"#,
         );
         assert_eq!(reply["error"]["code"], json!(INVALID_PARAMS));
-        assert!(fake.sent.borrow().is_empty());
+        assert!(fake.seen.borrow().is_empty());
     }
 
     #[test]
@@ -317,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_lines_answer_only_when_there_is_an_id() {
+    fn unreadable_messages_answer_only_when_there_is_an_id() {
         assert!(ok_server().handle("{not json at all").is_some());
         assert!(ok_server().handle(r#"{"jsonrpc":"2.0"}"#).is_none());
     }

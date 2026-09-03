@@ -3,9 +3,8 @@
 // logic worth testing belongs on the other side of it, where `tests/cli.rs`
 // and the library's own tests can reach it.
 
-use crate::cli::{Cli, Commands, DebugClientCommand};
+use crate::cli::{Cli, Commands};
 use concinnity_dev::command;
-use concinnity_dev::debug_client;
 use concinnity_engine::StateTree;
 use concinnity_engine::app::dev_flags;
 
@@ -40,22 +39,13 @@ pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
                 },
             )
         }
-        // A client subcommand talks to an already running server; its absence
-        // means start the server (the interpreted run below).
-        Commands::Debug(args) => match &args.client {
-            Some(DebugClientCommand::Send(a)) => debug_client::send(a.port, &a.json),
-            Some(DebugClientCommand::Screenshot(a)) => debug_client::screenshot(a.port, &a.path),
-            Some(DebugClientCommand::Watch(a)) => {
-                debug_client::watch(a.port, a.target.into(), a.interval)
-            }
-            None => {
-                dev_flags::set_enabled(true);
-                dev_flags::set_validation(args.validation);
-                args.render.arm();
-                let port = args.debug_port.unwrap_or(8777);
-                concinnity_dev::run_debug(args.file.as_deref(), port)
-            }
-        },
+        Commands::Debug(args) => {
+            dev_flags::set_enabled(true);
+            dev_flags::set_validation(args.validation);
+            args.render.arm();
+            let port = args.debug_port.unwrap_or(8777);
+            concinnity_dev::run_debug(args.file.as_deref(), port)
+        }
         Commands::Editor(args) => {
             dev_flags::set_validation(args.validation);
             args.render.arm();
@@ -63,7 +53,7 @@ pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             // `cn debug` host sets (above) so init captures hot-reload
             // sources and the backend takes its disk-first shader path.
             // Asset + shader hot-reload then works in every editor session;
-            // a debug port only adds the WS probe surface on top.
+            // a debug port only adds the MCP probe surface on top.
             dev_flags::set_enabled(true);
             concinnity_dev::run_editor(args.file.as_deref(), args.debug_port)
         }

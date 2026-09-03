@@ -6,7 +6,7 @@
 // shader source, flips a shared `Arc<AtomicBool>`. The main thread
 // polls that flag at the top of `draw_frame` and calls
 // `DxContext::reload_shaders` when it's set. Same flag is also set by the
-// `reload-shaders` debug WebSocket command, so the two trigger paths converge.
+// `reload-shaders` debug command, so the two trigger paths converge.
 //
 // Entirely a dev-loop concern; only constructed when `DxContext::new` is
 // called with `hot_reload = true`. Production `cn run` never instantiates it.

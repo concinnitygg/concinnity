@@ -25,24 +25,38 @@ fn descriptor(command: &Command) -> Value {
     tool
 }
 
-/// The debug-protocol request one tool call forwards.
-pub(super) fn payload(name: &str, arguments: &Value) -> Result<String, String> {
-    let mut body = match arguments {
-        Value::Null => Map::new(),
-        Value::Object(map) => map.clone(),
-        _ => return Err("arguments must be an object".to_string()),
-    };
+/// The arguments one call carries, rejecting any shape a verb body cannot take.
+pub(super) fn arguments(value: &Value) -> Result<Map<String, Value>, String> {
+    match value {
+        Value::Null => Ok(Map::new()),
+        Value::Object(map) => Ok(map.clone()),
+        _ => Err("arguments must be an object".to_string()),
+    }
+}
+
+/// The debug-protocol request one tool call carries.
+pub(super) fn payload(name: &str, arguments: &Map<String, Value>) -> String {
+    let mut body = arguments.clone();
     // Written last so an argument named "cmd" cannot redirect the call.
     body.insert("cmd".to_string(), Value::String(name.to_string()));
-    Ok(Value::Object(body).to_string())
+    Value::Object(body).to_string()
+}
+
+/// A tool result carrying one text block.
+pub(super) fn text_result(text: &str, is_error: bool) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": is_error,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn payload_value(name: &str, arguments: &Value) -> Value {
-        serde_json::from_str(&payload(name, arguments).expect("valid arguments")).unwrap()
+    fn payload_value(name: &str, args: &Value) -> Value {
+        let args = arguments(args).expect("valid arguments");
+        serde_json::from_str(&payload(name, &args)).unwrap()
     }
 
     #[test]
@@ -87,7 +101,16 @@ mod tests {
 
     #[test]
     fn non_object_arguments_are_rejected() {
-        assert!(payload("ping", &json!([1, 2])).is_err());
-        assert!(payload("ping", &json!("state")).is_err());
+        assert!(arguments(&json!([1, 2])).is_err());
+        assert!(arguments(&json!("state")).is_err());
+    }
+
+    #[test]
+    fn a_text_result_carries_one_block_and_its_error_flag() {
+        let ok = text_result("hello", false);
+        assert_eq!(ok["content"][0]["type"], "text");
+        assert_eq!(ok["content"][0]["text"], "hello");
+        assert_eq!(ok["isError"], json!(false));
+        assert_eq!(text_result("nope", true)["isError"], json!(true));
     }
 }

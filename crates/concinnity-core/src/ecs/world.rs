@@ -353,12 +353,6 @@ impl World {
         &self.profile
     }
 
-    /// Mutable view of the frame profile, for the frame loop that rotates its
-    /// buffers and stamps the frame's totals around each step.
-    pub fn profile_mut(&mut self) -> &mut FrameProfile {
-        &mut self.profile
-    }
-
     /// What the frame scratch cost and whether it was big enough, for the
     /// `memory` query and the Health panel. `peak` is what sizes the reserve.
     pub fn scratch_stats(&self) -> ScratchStats {
