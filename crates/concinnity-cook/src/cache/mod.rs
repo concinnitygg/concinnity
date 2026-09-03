@@ -1,5 +1,5 @@
 //! The build cache: what a cook produced for its own later runs, all of it in
-//! `cache/1`.
+//! the one segment a host anchors.
 //!
 //! Some assets are expensive to compile -- the EnvironmentMap IBL convolution
 //! alone is hundreds of millions of float ops per build -- and a scene import
@@ -14,6 +14,9 @@
 //! One file per writer role is the rule the layout is built on. A build writes
 //! this segment and nothing else, the running application writes its own, so a
 //! cook against a live editor never touches the file that editor is writing.
+//! Two builds may still share this one, and the segment survives that: an index
+//! reads from the file it indexed, so the loser of a race loses entries rather
+//! than publishing the wrong bytes under the right key.
 //!
 //! The file is touched at the two moments the design allows and no others: the
 //! index is read when the first lookup needs it, and the segment is replaced by

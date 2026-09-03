@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn a_set_round_trips_through_a_segment() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("cache").join("1");
+        let path = dir.path().join("segment");
         write_set(
             &path,
             &[("aa", &[1, 2, 3]), ("bb", &[4])],

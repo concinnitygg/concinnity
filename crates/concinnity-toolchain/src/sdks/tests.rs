@@ -23,13 +23,13 @@ fn env_in(dir: &Path) -> SdkEnv {
     SdkEnv {
         target_os: "windows".to_string(),
         out_dir: Some(profile(dir).join("build").join("pkg-0123abcd").join("out")),
-        workspace_root: None,
-        agility_root: dir.join("agility"),
-        fidelityfx_root: dir.join("ffx"),
-        xess_root: dir.join("xess"),
-        streamline_root: dir.join("streamline"),
+        agility_root: Some(dir.join("agility")),
+        fidelityfx_root: Some(dir.join("ffx")),
+        fidelityfx_vk_root: Some(dir.join("ffx-vk")),
+        xess_root: Some(dir.join("xess")),
+        streamline_root: Some(dir.join("streamline")),
         dxc_root: None,
-        windows_sdk_bin: dir.join("winkits"),
+        windows_sdk_bin: Some(dir.join("winkits")),
         agility_enabled: true,
         ffx_enabled: true,
         xess_enabled: true,
@@ -75,6 +75,15 @@ fn install_ffx_dx(dir: &Path) {
 fn install_ffx_vk_sdk(dir: &Path, bytes: &[u8]) {
     touch_with(
         &dir.join("ffx").join("bin").join("amd_fidelityfx_vk.dll"),
+        bytes,
+    );
+}
+
+// The runtime `vendor.py build fidelityfx-vk` leaves behind, which carries the
+// shader fix the SDK's own copy does not.
+fn install_ffx_vk_rebuilt(dir: &Path, bytes: &[u8]) {
+    touch_with(
+        &dir.join("ffx-vk").join("bin").join("amd_fidelityfx_vk.dll"),
         bytes,
     );
 }
@@ -159,7 +168,7 @@ fn agility_bundles_dlls_and_emits_exports() {
         &out,
         "cargo::rerun-if-env-changed=CN_ENABLE_AGILITY_SDK"
     ));
-    assert!(has(&out, "cargo::rerun-if-env-changed=AGILITY_SDK_ROOT"));
+    assert!(has(&out, "cargo::rerun-if-env-changed=CN_AGILITY_SDK"));
     assert!(has(&out, "/EXPORT:D3D12SDKVersion,DATA"));
     assert!(has(&out, "/EXPORT:D3D12SDKPath,DATA"));
     assert!(out.contains(&"cargo::rustc-cfg=agility_sdk_configured".to_string()));
@@ -202,7 +211,7 @@ fn agility_missing_warns_only_when_bundling() {
         quiet,
         vec![
             "cargo::rerun-if-env-changed=CN_ENABLE_AGILITY_SDK".to_string(),
-            "cargo::rerun-if-env-changed=AGILITY_SDK_ROOT".to_string(),
+            "cargo::rerun-if-env-changed=CN_AGILITY_SDK".to_string(),
         ]
     );
 }
@@ -302,54 +311,44 @@ fn ffx_dx_missing_or_opted_out_emits_no_cfg() {
     fidelityfx_dx_directives(&disabled_env, BinaryTargets::Bins, &mut disabled);
     assert!(has(&disabled, "CN_ENABLE_FFX_FSR3=0"));
     assert!(!has(&disabled, "ffx_sdk_bundled"));
-    assert!(!has(&disabled, "FIDELITYFX_SDK_ROOT"));
+    assert!(!has(&disabled, "CN_FIDELITYFX_SDK"));
 }
 
+// The stock SDK ships a VK runtime of its own, so the rebuilt one is only
+// reached by being preferred over it, not by being the sole candidate.
 #[test]
-fn ffx_vk_prefers_the_vendored_dll() {
+fn ffx_vk_prefers_the_rebuilt_dll() {
     let tmp = TempDir::new().unwrap();
-    let ws = tmp.path().join("ws");
-    let vendored = ws
-        .join("crates")
-        .join("concinnity-engine")
-        .join("third_party")
-        .join("ffx")
-        .join("amd_fidelityfx_vk.dll");
-    touch_with(&vendored, b"vendored");
+    install_ffx_vk_rebuilt(tmp.path(), b"rebuilt");
     install_ffx_vk_sdk(tmp.path(), b"stock sdk");
-    let env = SdkEnv {
-        workspace_root: Some(ws),
-        ..env_in(tmp.path())
-    };
+    let env = env_in(tmp.path());
 
     let mut out = Vec::new();
     fidelityfx_vk_directives(&env, BinaryTargets::Bins, &mut out);
 
     let dst = profile(tmp.path()).join("amd_fidelityfx_vk.dll");
-    assert_eq!(fs::read(&dst).unwrap(), b"vendored");
+    assert_eq!(fs::read(&dst).unwrap(), b"rebuilt");
     assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
-    assert!(has(&out, &vendored_str(&env)));
-}
-
-// The rerun-if-changed directive must point at the vendored source path.
-fn vendored_str(env: &SdkEnv) -> String {
-    env.workspace_root
-        .as_ref()
-        .unwrap()
-        .join("crates")
-        .join("concinnity-engine")
-        .join("third_party")
-        .join("ffx")
-        .join("amd_fidelityfx_vk.dll")
-        .display()
-        .to_string()
+    // The rerun-if-changed directive must name the source it copied.
+    assert!(has(
+        &out,
+        &tmp.path()
+            .join("ffx-vk")
+            .join("bin")
+            .join("amd_fidelityfx_vk.dll")
+            .display()
+            .to_string()
+    ));
 }
 
 #[test]
 fn ffx_vk_falls_back_to_the_sdk_root() {
     let tmp = TempDir::new().unwrap();
     install_ffx_vk_sdk(tmp.path(), b"stock sdk");
-    let env = env_in(tmp.path());
+    let env = SdkEnv {
+        fidelityfx_vk_root: None,
+        ..env_in(tmp.path())
+    };
 
     let mut out = Vec::new();
     fidelityfx_vk_directives(&env, BinaryTargets::Bins, &mut out);
@@ -405,7 +404,7 @@ fn xess_missing_or_opted_out_emits_no_cfg() {
     let mut disabled = Vec::new();
     xess_directives(&disabled_env, BinaryTargets::Bins, &mut disabled);
     assert!(has(&disabled, "CN_ENABLE_XESS=0"));
-    assert!(!has(&disabled, "XESS_SDK_ROOT"));
+    assert!(!has(&disabled, "CN_XESS_SDK"));
 }
 
 #[test]
@@ -478,7 +477,7 @@ fn dlss_opt_out_skips_the_probe() {
     dlss_directives(&env, BinaryTargets::Bins, &mut out);
     assert!(has(&out, "CN_ENABLE_DLSS=0"));
     assert!(!has(&out, "cargo::rustc-link-arg="));
-    assert!(!has(&out, "STREAMLINE_SDK_ROOT"));
+    assert!(!has(&out, "CN_STREAMLINE_SDK"));
 }
 
 #[test]
@@ -573,7 +572,7 @@ fn dxc_not_found_or_opted_out_warns_without_cfg() {
     let mut disabled = Vec::new();
     dxc_directives(&disabled_env, BinaryTargets::Bins, &mut disabled);
     assert!(has(&disabled, "CN_ENABLE_DXC=0"));
-    assert!(!has(&disabled, "DXC_SDK_ROOT"));
+    assert!(!has(&disabled, "CN_DXC_SDK"));
 }
 
 #[test]

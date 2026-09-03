@@ -570,7 +570,8 @@ impl SlangLib {
                 entries: self.entries,
                 target: slang::SlangTarget::Metallib,
             };
-            slang::compile(&job, &crate::compiler_work::dir())
+            let work = crate::compiler_work::dir()?;
+            slang::compile(&job, work.path())
         })?;
         load_library(device, &bytes)
             .map_err(|e| format!("{}: metallib load failed: {e}", self.name))

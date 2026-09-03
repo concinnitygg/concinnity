@@ -6,8 +6,10 @@
 # Declaring rgba16f matches the view exactly:
 # https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/161
 #
-# scripts/setup_ffx_vk_dll.ps1 applies this change directly (regex on the line
-# below) rather than via `patch`/`git apply`, so it survives minor line drift.
+# `vendor.py build fidelityfx-vk` applies this change directly (regex on the
+# line below) rather than via `patch`/`git apply`, so it survives line drift.
+# It is recorded here because SDK v2 dropped Vulkan and deleted this file, so
+# v1.1.4 is the last release the fix applies to.
 --- a/sdk/include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h
 +++ b/sdk/include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h
 @@ -398,1 +398,1 @@

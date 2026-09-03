@@ -22,13 +22,16 @@ mod tests;
 pub(crate) struct SdkEnv {
     pub(crate) target_os: String,
     pub(crate) out_dir: Option<PathBuf>,
-    pub(crate) workspace_root: Option<PathBuf>,
-    pub(crate) agility_root: PathBuf,
-    pub(crate) fidelityfx_root: PathBuf,
-    pub(crate) xess_root: PathBuf,
-    pub(crate) streamline_root: PathBuf,
+    // `None` where neither the variable nor `vendor/` named a root. There is no
+    // fall back to a guessed install path: every one of these unpacks wherever
+    // its user put it, so a hardcoded location was only ever right by accident.
+    pub(crate) agility_root: Option<PathBuf>,
+    pub(crate) fidelityfx_root: Option<PathBuf>,
+    pub(crate) fidelityfx_vk_root: Option<PathBuf>,
+    pub(crate) xess_root: Option<PathBuf>,
+    pub(crate) streamline_root: Option<PathBuf>,
     pub(crate) dxc_root: Option<PathBuf>,
-    pub(crate) windows_sdk_bin: PathBuf,
+    pub(crate) windows_sdk_bin: Option<PathBuf>,
     pub(crate) agility_enabled: bool,
     pub(crate) ffx_enabled: bool,
     pub(crate) xess_enabled: bool,
@@ -117,33 +120,58 @@ fn directives_for_kind(backend: Backend, targets: BinaryTargets, env: &SdkEnv) -
 // The DLL copy and the exports are only emitted when bundling for a final
 // binary; the `agility_sdk_configured` cfg is emitted whenever the opt-in found
 // the SDK, so the runtime FSR3 gate matches what the binary actually carries.
+// A file inside an SDK, when a root resolved at all. Split from the existence
+// check so an unresolved root and a root missing the file are one branch: both
+// mean the SDK is unusable, and the warning says which it was.
+fn sdk_file(root: Option<&PathBuf>, parts: &[&str]) -> Option<PathBuf> {
+    let mut path = root?.clone();
+    path.extend(parts);
+    path.exists().then_some(path)
+}
+
+// Why an SDK is unusable, in the terms whoever has to fix it needs: the path
+// that was searched, or that nothing named one.
+fn missing_sdk(sdk: &str, var: &str, root: Option<&PathBuf>, parts: &[&str]) -> String {
+    match root {
+        Some(root) => {
+            let mut path = root.clone();
+            path.extend(parts);
+            format!("{sdk} not found at {}", path.display())
+        }
+        None => format!("{sdk} not vendored and {var} is not set"),
+    }
+}
+
 fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_AGILITY_SDK"));
     if !env.agility_enabled {
         return;
     }
-    out.push(rerun_env("AGILITY_SDK_ROOT"));
+    out.push(rerun_env("CN_AGILITY_SDK"));
 
-    let sdk_bin = env
-        .agility_root
-        .join("build")
-        .join("native")
-        .join("bin")
-        .join("x64");
-    let core_dll = sdk_bin.join("D3D12Core.dll");
-
-    if !core_dll.exists() {
+    const AGILITY_CORE: &[&str] = &["build", "native", "bin", "x64", "D3D12Core.dll"];
+    let Some(core_dll) = sdk_file(env.agility_root.as_ref(), AGILITY_CORE) else {
         if targets.bundles() {
             out.push(warning(&format!(
-                "CN_ENABLE_AGILITY_SDK is set but the Agility SDK is not at {} - \
-                 set AGILITY_SDK_ROOT or install the `microsoft.direct3d.d3d12` \
-                 NuGet package. FidelityFX FSR3 will be unavailable (the binary \
+                "CN_ENABLE_AGILITY_SDK is set but the {} - vendor it or set \
+                 CN_AGILITY_SDK. FidelityFX FSR3 will be unavailable (the binary \
                  falls back to the OS-bundled D3D12 runtime).",
-                sdk_bin.display()
+                missing_sdk(
+                    "Agility SDK",
+                    "CN_AGILITY_SDK",
+                    env.agility_root.as_ref(),
+                    AGILITY_CORE
+                )
             )));
         }
         return;
-    }
+    };
+    // The directory the runtime DLLs are copied from, which the file above
+    // proves exists.
+    let sdk_bin = core_dll
+        .parent()
+        .expect("a file has a parent")
+        .to_path_buf();
 
     if targets.bundles() {
         // `D3D12SDKPath = ".\\D3D12\\"` resolves relative to the .exe, so the
@@ -202,23 +230,24 @@ fn fidelityfx_dx_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<
         }
         return;
     }
-    out.push(rerun_env("FIDELITYFX_SDK_ROOT"));
+    out.push(rerun_env("CN_FIDELITYFX_SDK"));
 
-    let dll_src = env
-        .fidelityfx_root
-        .join("bin")
-        .join("amd_fidelityfx_dx12.dll");
-    if !dll_src.exists() {
+    const FFX_DX: &[&str] = &["bin", "amd_fidelityfx_dx12.dll"];
+    let Some(dll_src) = sdk_file(env.fidelityfx_root.as_ref(), FFX_DX) else {
         if targets.bundles() {
             out.push(warning(&format!(
-                "FidelityFX SDK not found at {} - set FIDELITYFX_SDK_ROOT \
-                 or install the SDK. Temporal upscaling will be unavailable unless \
-                 amd_fidelityfx_dx12.dll is on PATH at runtime.",
-                dll_src.display()
+                "{} - vendor it or set CN_FIDELITYFX_SDK. Temporal upscaling will \
+                 be unavailable unless amd_fidelityfx_dx12.dll is on PATH at runtime.",
+                missing_sdk(
+                    "FidelityFX SDK",
+                    "CN_FIDELITYFX_SDK",
+                    env.fidelityfx_root.as_ref(),
+                    FFX_DX
+                )
             )));
         }
         return;
-    }
+    };
 
     if targets.bundles()
         && !copy_next_to_exe(env, targets, &dll_src, "amd_fidelityfx_dx12.dll", out)
@@ -228,9 +257,9 @@ fn fidelityfx_dx_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<
     out.push(rustc_cfg("ffx_sdk_bundled"));
 }
 
-// AMD FidelityFX Vulkan upscaler runtime. Prefers the in-repo patched DLL under
-// `crates/concinnity-engine/third_party/ffx/` (carries the FSR3 rw_luma_history
-// format fix), falling back to the stock SDK copy.
+// AMD FidelityFX Vulkan upscaler runtime. Prefers the rebuilt DLL under
+// `vendor/fidelityfx-vk-*` (carries the FSR3 rw_luma_history format fix),
+// falling back to the stock SDK copy, which warns every dispatch.
 fn fidelityfx_vk_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_FFX_FSR3"));
     if !env.ffx_enabled {
@@ -243,37 +272,31 @@ fn fidelityfx_vk_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<
         }
         return;
     }
-    out.push(rerun_env("FIDELITYFX_SDK_ROOT"));
+    out.push(rerun_env("CN_FIDELITYFX_SDK"));
 
-    // The vendored DLL lives at a fixed location relative to the workspace
-    // root, so this works no matter which package's build script called in.
-    let vendored = env.workspace_root.as_ref().map(|root| {
-        root.join("crates")
-            .join("concinnity-engine")
-            .join("third_party")
-            .join("ffx")
-            .join("amd_fidelityfx_vk.dll")
-    });
-    let sdk_dll = env
-        .fidelityfx_root
-        .join("bin")
-        .join("amd_fidelityfx_vk.dll");
-
-    let dll_src = match vendored {
-        Some(v) if v.exists() => v,
-        _ => sdk_dll,
-    };
-    if !dll_src.exists() {
+    // Both roots hold the runtime at the same place, so the rebuilt copy is
+    // reached by preferring its root rather than by naming a second path.
+    const FFX_VK: &[&str] = &["bin", "amd_fidelityfx_vk.dll"];
+    let dll_src = sdk_file(env.fidelityfx_vk_root.as_ref(), FFX_VK)
+        .or_else(|| sdk_file(env.fidelityfx_root.as_ref(), FFX_VK));
+    let Some(dll_src) = dll_src else {
         if targets.bundles() {
             out.push(warning(&format!(
-                "FidelityFX VK runtime not found ({}). Set FIDELITYFX_SDK_ROOT, \
-                 run scripts/setup_ffx_vk_dll.ps1, or put amd_fidelityfx_vk.dll on PATH at \
-                 runtime; Vulkan temporal upscaling will fall back to native resolution.",
-                dll_src.display()
+                "FidelityFX VK runtime not found: nothing built by \
+                 `vendor.py build fidelityfx-vk`, and {}. Build the patched \
+                 runtime, vendor the SDK, set CN_FIDELITYFX_SDK, or put \
+                 amd_fidelityfx_vk.dll on PATH at runtime; Vulkan temporal \
+                 upscaling will fall back to native resolution.",
+                missing_sdk(
+                    "the SDK's own copy is",
+                    "CN_FIDELITYFX_SDK",
+                    env.fidelityfx_root.as_ref(),
+                    FFX_VK
+                )
             )));
         }
         return;
-    }
+    };
 
     if targets.bundles() && !copy_next_to_exe(env, targets, &dll_src, "amd_fidelityfx_vk.dll", out)
     {
@@ -295,20 +318,19 @@ fn xess_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) 
         }
         return;
     }
-    out.push(rerun_env("XESS_SDK_ROOT"));
+    out.push(rerun_env("CN_XESS_SDK"));
 
-    let dll_src = env.xess_root.join("bin").join("libxess.dll");
-    if !dll_src.exists() {
+    const XESS_DLL: &[&str] = &["bin", "libxess.dll"];
+    let Some(dll_src) = sdk_file(env.xess_root.as_ref(), XESS_DLL) else {
         if targets.bundles() {
             out.push(warning(&format!(
-                "XeSS SDK not found at {} - set XESS_SDK_ROOT or install \
-                 the SDK. The XeSS upscaler backend will be unavailable unless \
-                 libxess.dll is on PATH at runtime.",
-                dll_src.display()
+                "{} - vendor it or set CN_XESS_SDK. The XeSS upscaler backend will \
+                 be unavailable unless libxess.dll is on PATH at runtime.",
+                missing_sdk("XeSS SDK", "CN_XESS_SDK", env.xess_root.as_ref(), XESS_DLL)
             )));
         }
         return;
-    }
+    };
 
     if targets.bundles() && !copy_next_to_exe(env, targets, &dll_src, "libxess.dll", out) {
         return;
@@ -331,25 +353,30 @@ fn dlss_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) 
         }
         return;
     }
-    out.push(rerun_env("STREAMLINE_SDK_ROOT"));
+    out.push(rerun_env("CN_STREAMLINE_SDK"));
 
-    let ngx_lib = env
-        .streamline_root
-        .join("external")
-        .join("ngx-sdk")
-        .join("lib")
-        .join("Windows_x86_64")
-        .join("nvsdk_ngx_d.lib");
-    if !ngx_lib.exists() {
+    const NGX_LIB: &[&str] = &[
+        "external",
+        "ngx-sdk",
+        "lib",
+        "Windows_x86_64",
+        "nvsdk_ngx_d.lib",
+    ];
+    let Some(ngx_lib) = sdk_file(env.streamline_root.as_ref(), NGX_LIB) else {
         if targets.bundles() {
             out.push(warning(&format!(
-                "NGX import lib not found at {} - set STREAMLINE_SDK_ROOT. \
-                 The DLSS upscaler backend will be unavailable.",
-                ngx_lib.display()
+                "{} - vendor it or set CN_STREAMLINE_SDK. The DLSS upscaler \
+                 backend will be unavailable.",
+                missing_sdk(
+                    "NGX import lib",
+                    "CN_STREAMLINE_SDK",
+                    env.streamline_root.as_ref(),
+                    NGX_LIB
+                )
             )));
         }
         return;
-    }
+    };
 
     // Pass the NGX static import lib straight to the linker for the final
     // artifact (a build-script `rustc-link-lib` does not reliably propagate, and
@@ -360,19 +387,19 @@ fn dlss_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) 
     out.push(rustc_cfg("ngx_sdk_bundled"));
 
     if targets.bundles() {
-        let dll_src = env
-            .streamline_root
-            .join("bin")
-            .join("x64")
-            .join("nvngx_dlss.dll");
-        if !dll_src.exists() {
+        const NGX_DLL: &[&str] = &["bin", "x64", "nvngx_dlss.dll"];
+        let Some(dll_src) = sdk_file(env.streamline_root.as_ref(), NGX_DLL) else {
             out.push(warning(&format!(
-                "NGX feature DLL not found at {} - DLSS will fail to \
-                 create its feature at runtime.",
-                dll_src.display()
+                "{} - DLSS will fail to create its feature at runtime.",
+                missing_sdk(
+                    "NGX feature DLL",
+                    "CN_STREAMLINE_SDK",
+                    env.streamline_root.as_ref(),
+                    NGX_DLL
+                )
             )));
             return;
-        }
+        };
         copy_next_to_exe(env, targets, &dll_src, "nvngx_dlss.dll", out);
     }
 }
@@ -390,11 +417,11 @@ fn dxc_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
         ));
         return;
     }
-    out.push(rerun_env("DXC_SDK_ROOT"));
+    out.push(rerun_env("CN_DXC_SDK"));
 
     let Some(dxc_dir) = find_dxc_dir(env) else {
         out.push(warning(
-            "dxcompiler.dll + dxil.dll not found - set DXC_SDK_ROOT \
+            "dxcompiler.dll + dxil.dll not found - set CN_DXC_SDK \
              to a directory containing them, or install the Windows SDK. Hardware \
              ray-traced reflections will be unavailable (the renderer falls back \
              to SSR).",
@@ -494,7 +521,7 @@ fn profile_dir_from_out_dir(out_dir: &Path) -> Option<&Path> {
 }
 
 // Locate a directory holding both `dxcompiler.dll` and `dxil.dll`: the
-// `DXC_SDK_ROOT` override, else the highest-versioned Windows SDK `x64` bin
+// `CN_DXC_SDK` override, else the highest-versioned Windows SDK `x64` bin
 // that carries both.
 fn find_dxc_dir(env: &SdkEnv) -> Option<PathBuf> {
     let has_both = |d: &Path| d.join("dxcompiler.dll").exists() && d.join("dxil.dll").exists();
@@ -506,7 +533,7 @@ fn find_dxc_dir(env: &SdkEnv) -> Option<PathBuf> {
     }
 
     let versions = sorted_version_dirs(
-        std::fs::read_dir(&env.windows_sdk_bin)
+        std::fs::read_dir(env.windows_sdk_bin.as_ref()?)
             .ok()?
             .flatten()
             .map(|e| e.path())

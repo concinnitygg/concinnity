@@ -97,8 +97,8 @@ pub(super) fn layouts(
         entries: &[program.entry],
         target: target.slang_target(program.profile),
     };
-    let work_dir = std::env::temp_dir().join("cn_shader_layout");
-    let json = slang::reflect(&job, &work_dir)
+    let work = crate::compiler_work::dir()?;
+    let json = slang::reflect(&job, work.path())
         .map_err(|e| format!("{} ({}): {e}", program.entry, target.label()))?;
     reflect::structs(&json)
 }

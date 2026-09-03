@@ -20,13 +20,22 @@
 //! produce byte-identical artifacts or the content-addressed cache serves one
 //! path's bytes to the other, so the flag list exists exactly once.
 //!
-//! slangc resolves from PATH first, then `$VULKAN_SDK/bin`, taking the first
-//! candidate that meets `MIN_SLANGC`. A host without it degrades the same way a
-//! missing Metal toolchain does: the build script emits a stub lookup and the
-//! renderer falls back to compiling at startup, which then needs slangc at
-//! runtime and reports a clear error when it is absent or too old.
+//! slangc resolves from `$CN_SLANG_SDK`, then `slang/` beside the running
+//! executable, then the workspace's vendored releases, then PATH, then
+//! `$VULKAN_SDK/bin`, taking the first candidate that meets `MIN_SLANGC` (see
+//! `locate`). What an install or a checkout shipped for itself beats PATH,
+//! because those are the only sources either one pins: two machines with
+//! different releases on PATH compile the same source to different bytes, and
+//! while the caches key on `compiler_id` and so never serve one's output to the
+//! other, the artifacts a build ships still depend on whoever built it. A host
+//! without any of them degrades the same way a missing
+//! Metal toolchain does: the build script emits a stub lookup and the renderer
+//! falls back to compiling at startup, which then needs slangc at runtime and
+//! reports a clear error when it is absent or too old.
 
 include!(concat!(env!("OUT_DIR"), "/source_hash.rs"));
+
+mod locate;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -149,20 +158,12 @@ pub fn compiler_id() -> &'static str {
     })
 }
 
-// Locate slangc: PATH first, then `$VULKAN_SDK/bin`, taking the first that
-// meets `MIN_SLANGC`. A candidate that does not qualify is kept only to name it
-// in the error, so an old slangc earlier on PATH does not shadow a newer SDK.
+// Take the first candidate `locate` offers that meets `MIN_SLANGC`. One that
+// does not qualify is kept only to name it in the error, so an old slangc
+// earlier in the order does not shadow a newer one behind it.
 fn probe_slangc() -> Result<Slangc, String> {
-    let mut candidates = vec![PathBuf::from("slangc")];
-    if let Ok(sdk) = std::env::var("VULKAN_SDK") {
-        let exe = if cfg!(windows) {
-            "slangc.exe"
-        } else {
-            "slangc"
-        };
-        candidates.push(Path::new(&sdk).join("bin").join(exe));
-    }
     let mut unusable: Option<Unusable> = None;
+    let candidates = locate::slangc_candidates();
     for path in candidates {
         let Some(version) = query_version(&path) else {
             continue;
@@ -335,13 +336,18 @@ fn command_args(job: &SlangJob<'_>) -> Vec<String> {
 // packages have shipped well behind them, so naming the SDK first there sends a
 // reader to an install that cannot satisfy the floor. The Slang release page
 // works on every platform, so it leads.
+//
+// `CN_SLANG_SDK` is named alongside it because it is the one candidate ahead
+// of both, and the only one that works the same wherever this crate was built
+// from.
 fn where_to_get_slangc() -> String {
     format!(
         "Install a Slang release {}.{} or newer \
-         (https://github.com/shader-slang/slang/releases) and put its `slangc` \
-         first on PATH.{}",
+         (https://github.com/shader-slang/slang/releases) and either put its \
+         `slangc` first on PATH or point {} at it.{}",
         MIN_SLANGC.0,
         MIN_SLANGC.1,
+        locate::ROOT_VAR,
         if cfg!(windows) {
             " The Vulkan SDK (https://vulkan.lunarg.com) bundles one under \
              $VULKAN_SDK/bin that is also searched."
@@ -443,29 +449,12 @@ mod tests {
         assert!(message.contains("/opt/vk/bin/slangc"), "{message}");
     }
 
-    // Every diagnostic has to name a source that can actually satisfy the
-    // floor. The Vulkan SDK cannot on Linux, so the Slang release page is what
-    // each of them leads with.
+    // Every diagnostic a consumer sees has to name a source that can actually
+    // satisfy the floor. The Vulkan SDK cannot on Linux, so the Slang release
+    // page is what each of them leads with.
     #[test]
     fn every_diagnostic_points_at_a_release_that_meets_the_floor() {
-        let unreadable = Unusable {
-            found: Slangc {
-                path: PathBuf::from("slangc"),
-                version: "package-tag".to_string(),
-            },
-            why: Rejected::Unreadable,
-        };
-        for message in [
-            missing_slangc_message(),
-            unusable_message(&unreadable),
-            unusable_message(&Unusable {
-                found: Slangc {
-                    path: PathBuf::from("slangc"),
-                    version: "2025.7.1".to_string(),
-                },
-                why: Rejected::Older,
-            }),
-        ] {
+        for message in diagnostics() {
             assert!(
                 message.contains("github.com/shader-slang/slang/releases"),
                 "{message}"
@@ -475,6 +464,31 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    // PATH is only the third candidate, so a host that cannot put a compiler
+    // there -- or has one it must not disturb -- needs the override named too.
+    #[test]
+    fn every_diagnostic_names_the_override() {
+        for message in diagnostics() {
+            assert!(message.contains(locate::ROOT_VAR), "{message}");
+        }
+    }
+
+    // Every message that carries a "where to get one".
+    fn diagnostics() -> Vec<String> {
+        let unusable = |version: &str, why| Unusable {
+            found: Slangc {
+                path: PathBuf::from("slangc"),
+                version: version.to_string(),
+            },
+            why,
+        };
+        vec![
+            missing_slangc_message(),
+            unusable_message(&unusable("package-tag", Rejected::Unreadable)),
+            unusable_message(&unusable("2025.7.1", Rejected::Older)),
+        ]
     }
 
     // The floor exists to reject the releases that miscompile the engine's

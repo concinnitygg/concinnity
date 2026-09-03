@@ -39,6 +39,7 @@ mod sdks;
 mod slang_artifacts;
 mod source_hash;
 mod targets;
+mod vendored;
 mod version_stamp;
 
 pub use metal_shaders::{SlangLibSpec, precompile_metal_shaders};
@@ -300,11 +301,18 @@ pub fn hash_sources(roots: &[PathBuf]) -> u32 {
 }
 
 // Default SDK install roots, used when the matching env var is unset.
-const DEFAULT_AGILITY_SDK_ROOT: &str = "C:\\microsoft.direct3d.d3d12.1.619.3";
-const DEFAULT_FIDELITYFX_SDK_ROOT: &str = "C:\\FidelityFX-SDK-v1.1.4";
-const DEFAULT_XESS_SDK_ROOT: &str = "C:\\XeSS_SDK_3.0.1";
-const DEFAULT_STREAMLINE_SDK_ROOT: &str = "C:\\streamline-sdk-v2.11.1";
-const DEFAULT_WINDOWS_SDK_BIN: &str = "C:\\Program Files (x86)\\Windows Kits\\10\\bin";
+// The Windows SDK's tool directory, under whichever Program Files the OS
+// reports. Windows always sets the variable, and off Windows there is no
+// Windows SDK to find, so an absent one is not a fallback but an answer.
+fn windows_sdk_bin() -> Option<PathBuf> {
+    let program_files = std::env::var("ProgramFiles(x86)").ok()?;
+    Some(
+        Path::new(&program_files)
+            .join("Windows Kits")
+            .join("10")
+            .join("bin"),
+    )
+}
 
 // Whether an opt-in variable's value asks for the feature, for the one SDK that
 // is off by default. Bundling Agility links `D3D12SDKVersion` / `D3D12SDKPath`
@@ -324,10 +332,9 @@ fn opted_in(value: Option<&str>) -> bool {
 // the returned struct.
 fn sdk_env_from_cargo() -> SdkEnv {
     let var = |name: &str| std::env::var(name).ok();
-    let root = |name: &str, default: &str| {
-        var(name)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(default))
+    let workspace = workspace_root();
+    let root = |name: &str, component: &str| {
+        sdk_root(var(name), vendored::newest(workspace.as_deref(), component))
     };
     // The `LoadLibrary`-at-runtime SDKs default to ON and are opted out of with
     // `<VAR>=0`: an absent DLL costs the feature and nothing else.
@@ -337,19 +344,35 @@ fn sdk_env_from_cargo() -> SdkEnv {
     SdkEnv {
         target_os: var("CARGO_CFG_TARGET_OS").unwrap_or_default(),
         out_dir: var("OUT_DIR").map(PathBuf::from),
-        workspace_root: workspace_root(),
-        agility_root: root("AGILITY_SDK_ROOT", DEFAULT_AGILITY_SDK_ROOT),
-        fidelityfx_root: root("FIDELITYFX_SDK_ROOT", DEFAULT_FIDELITYFX_SDK_ROOT),
-        xess_root: root("XESS_SDK_ROOT", DEFAULT_XESS_SDK_ROOT),
-        streamline_root: root("STREAMLINE_SDK_ROOT", DEFAULT_STREAMLINE_SDK_ROOT),
-        dxc_root: var("DXC_SDK_ROOT").map(PathBuf::from),
-        windows_sdk_bin: PathBuf::from(DEFAULT_WINDOWS_SDK_BIN),
+        agility_root: root("CN_AGILITY_SDK", "agility"),
+        fidelityfx_root: root("CN_FIDELITYFX_SDK", "fidelityfx"),
+        // No variable of its own: the patched runtime is built by
+        // `vendor.py build fidelityfx-vk` and exists nowhere else, so a root to
+        // point at would name a directory only that command produces. An
+        // explicit `CN_FIDELITYFX_SDK` still supplies the stock DLL it falls
+        // back to.
+        fidelityfx_vk_root: vendored::newest(workspace.as_deref(), "fidelityfx-vk"),
+        xess_root: root("CN_XESS_SDK", "xess"),
+        streamline_root: root("CN_STREAMLINE_SDK", "streamline"),
+        dxc_root: var("CN_DXC_SDK").map(PathBuf::from),
+        windows_sdk_bin: windows_sdk_bin(),
         agility_enabled: opted_in("CN_ENABLE_AGILITY_SDK"),
         ffx_enabled: enabled("CN_ENABLE_FFX_FSR3"),
         xess_enabled: enabled("CN_ENABLE_XESS"),
         dlss_enabled: enabled("CN_ENABLE_DLSS"),
         dxc_enabled: enabled("CN_ENABLE_DXC"),
     }
+}
+
+// Where an SDK is: the explicit variable, else whatever `vendor/` holds. There
+// is no third guess -- each of these unpacks wherever its user put it, so a
+// hardcoded install path was only ever right by accident, and being wrong it
+// reported a location nobody had rather than that nothing was found. The
+// variable leads because an explicit answer beats a discovered one, including
+// when it is wrong: a mistyped path fails instead of silently resolving
+// elsewhere.
+fn sdk_root(explicit: Option<String>, vendored: Option<PathBuf>) -> Option<PathBuf> {
+    explicit.map(PathBuf::from).or(vendored)
 }
 
 // Locate the workspace root by walking up from the caller's manifest until a
@@ -528,9 +551,30 @@ mod tests {
                 assert!(flag, "{var} should default on");
             }
         }
-        // Roots fall back to the hardcoded defaults when unset.
-        if std::env::var("XESS_SDK_ROOT").is_err() {
-            assert_eq!(env.xess_root, PathBuf::from(DEFAULT_XESS_SDK_ROOT));
+    }
+
+    // The order is the contract, and it is not observable from a snapshot: a
+    // host that has vendored the SDK resolves it there with nothing set, which
+    // is correct and which asserting the default would call a failure.
+    #[test]
+    fn an_sdk_root_prefers_the_variable_then_vendor_then_nothing() {
+        let vendored = PathBuf::from("/checkout/vendor/xess-3.0.1-windows-x86_64");
+        let cases = [
+            (Some("/explicit"), Some(vendored.clone()), Some("/explicit")),
+            (Some("/explicit"), None, Some("/explicit")),
+            (
+                None,
+                Some(vendored.clone()),
+                Some("/checkout/vendor/xess-3.0.1-windows-x86_64"),
+            ),
+            // Nothing named a root, which is an answer rather than a reason to
+            // guess: the warning then says the SDK is not vendored and the
+            // variable is unset, not that it was missing from a path nobody has.
+            (None, None, None),
+        ];
+        for (explicit, found, want) in cases {
+            let got = sdk_root(explicit.map(str::to_string), found.clone());
+            assert_eq!(got, want.map(PathBuf::from), "{explicit:?} + {found:?}");
         }
     }
 

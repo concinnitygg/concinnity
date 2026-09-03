@@ -26,6 +26,7 @@ vulkan = ["dep:shaderc"]
 
 [dependencies]
 concinnity-cook = { workspace = true }
+concinnity-host = { workspace = true }
 concinnity-device = { workspace = true, optional = true }
 
 tracing = "0.1.44"

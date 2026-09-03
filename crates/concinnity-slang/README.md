@@ -19,9 +19,12 @@ the renderer's content-addressed shader cache key it.
 - Sits below `concinnity-toolchain` (which is build-script-only and never
   linked into a shipped binary), holds no policy, and depends on nothing
   but std; a compile is a subprocess, not a linked compiler.
-- `slangc` resolves from `PATH`, then `$VULKAN_SDK/bin`. A host without it
-  degrades gracefully: the build emits a stub and the renderer compiles at
-  startup, reporting a clear error if `slangc` is absent or too old.
+- `slangc` resolves from `$CN_SLANG_SDK`, then `slang/` beside the running
+  executable, then the engine checkout's vendored releases, then `PATH`, then
+  `$VULKAN_SDK/bin`; a copy built from the registry has neither of the middle
+  two and starts at `PATH`. A host without any of them degrades gracefully: the
+  build emits a stub and the renderer compiles at startup, reporting a clear
+  error if `slangc` is absent or too old.
 
 Most users want the [`concinnity`](https://crates.io/crates/concinnity)
 facade crate rather than this one.

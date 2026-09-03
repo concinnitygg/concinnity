@@ -17,8 +17,8 @@
 //!     held alone. [`GlobalState`] is that guard plus the cwd and
 //!     window-policy moves, both put back on drop.
 //!   - [`shared_cache_dir`] / [`shared_state_dir`]: the two roots a suite keeps
-//!     outside any one test -- a content-addressed cache that exists to avoid
-//!     recompiling, and the process-wide state that is emptied once per run.
+//!     outside any one test -- a content-addressed cache shared by every
+//!     process, and the state a process empties and keeps to itself.
 
 mod access;
 mod global;

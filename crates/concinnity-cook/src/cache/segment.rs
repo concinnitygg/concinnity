@@ -1,5 +1,5 @@
-// The build segment on disk: `cache/1`, read once at the start of a build and
-// replaced once at the end of it.
+// The build segment on disk, read once at the start of a build and replaced
+// once at the end of it.
 //
 // The runtime segment holds its entries in memory whole, which its 64 MB budget
 // makes reasonable. A build cache carries no such ceiling -- one world's meshes
@@ -9,13 +9,24 @@
 // entries a build produced are held in memory, everything the previous segment
 // held is copied through from it, and neither is ever materialized whole.
 //
-// Every function here takes the path, so the machinery is exercised without the
-// process-global state root; `super` resolves which file a build means.
+// An index is a set of byte offsets, so it addresses the file it was read from
+// and no other. A second process replacing that file between the read and the
+// use is routine -- an editor and a build share a cache root -- and the offsets
+// then land somewhere else in a file of the same name. So the file is opened
+// once, when the index is read, and every span the index serves comes from that
+// handle: a lookup, and the carry-through a write does. A replaced segment
+// costs the entries the other process added, never the wrong bytes under the
+// right key.
+//
+// Which file the segment is arrives as an argument and is never resolved here,
+// so the machinery is exercised without the process-global state root and no
+// name a state tree chose appears in this module.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use concinnity_core::blob::{
     CacheEntry, CacheEntryKind, CacheMeta, HEADER_SIZE, encode_cnb_prefix, parse_cnb,
@@ -29,28 +40,29 @@ struct Span {
     len: u64,
 }
 
-/// A build segment's index, and the file it addresses.
+/// A build segment's index, and the open file those offsets address.
 ///
-/// Immutable once read, which is what lets a parallel compile share one of
-/// these without a lock: a lookup is a hash lookup plus a read of the one entry
-/// it wants.
+/// Immutable once read, so a parallel compile shares one of these: a lookup is
+/// a hash lookup plus a read of the one entry it wants. The handle carries a
+/// cursor the readers have to take turns on, which is the price of every span
+/// coming from the file the offsets were read from.
 pub(super) struct Index {
-    path: PathBuf,
+    file: Option<Mutex<File>>,
     payload_start: u64,
     entries: HashMap<(CacheEntryKind, String), Span>,
 }
 
 impl Index {
-    /// Read `path`'s header and index. An absent, unreadable, foreign, or
-    /// differently stamped file reads as an empty index: whatever it held is
-    /// recompiled, and the next write replaces it.
+    /// Read `path`'s header and index, holding the file open. An absent,
+    /// unreadable, foreign, or differently stamped file reads as an empty
+    /// index: whatever it held is recompiled, and the next write replaces it.
     pub(super) fn read(path: &Path, token: u32) -> Self {
-        read_index(path, token).unwrap_or_else(|| Self::empty(path))
+        read_index(path, token).unwrap_or_else(Self::empty)
     }
 
-    fn empty(path: &Path) -> Self {
+    fn empty() -> Self {
         Self {
-            path: path.to_path_buf(),
+            file: None,
             payload_start: 0,
             entries: HashMap::new(),
         }
@@ -60,7 +72,20 @@ impl Index {
     /// holds no such entry, or when the read fails.
     pub(super) fn get(&self, kind: CacheEntryKind, key: &str) -> Option<Vec<u8>> {
         let span = *self.entries.get(&(kind, key.to_owned()))?;
-        read_span(&self.path, self.payload_start, span).ok()
+        let mut file = self.handle()?;
+        read_span(&mut file, self.payload_start, span).ok()
+    }
+
+    // The indexed file, for the length of one read. A poisoned lock is taken
+    // anyway: a panic mid-read leaves a cursor, not a corrupt file, and every
+    // read seeks before it starts.
+    fn handle(&self) -> Option<MutexGuard<'_, File>> {
+        Some(
+            self.file
+                .as_ref()?
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// Whether the segment holds an entry under `key`, without reading it.
@@ -96,7 +121,7 @@ fn read_index(path: &Path, token: u32) -> Option<Index> {
     let (meta, _) = parse_cnb::<CacheMeta>(token, &prefix).ok()?;
 
     Some(Index {
-        path: path.to_path_buf(),
+        file: Some(Mutex::new(file)),
         payload_start,
         entries: meta
             .entries
@@ -116,9 +141,8 @@ fn read_index(path: &Path, token: u32) -> Option<Index> {
 }
 
 // One entry's bytes, seeking straight to it rather than reading what surrounds
-// it. Opened per read, so a parallel compile shares no file cursor.
-fn read_span(path: &Path, payload_start: u64, span: Span) -> io::Result<Vec<u8>> {
-    let mut file = File::open(path)?;
+// it.
+fn read_span(file: &mut File, payload_start: u64, span: Span) -> io::Result<Vec<u8>> {
     file.seek(SeekFrom::Start(payload_start + span.offset))?;
     let mut bytes = vec![0u8; usize::try_from(span.len).map_err(io::Error::other)?];
     file.read_exact(&mut bytes)?;
@@ -130,7 +154,8 @@ fn read_span(path: &Path, payload_start: u64, span: Span) -> io::Result<Vec<u8>>
 ///
 /// An entry `stored` names replaces the one the index holds under that key;
 /// everything else is carried through, since a cache the next build wants is
-/// not only what this one touched.
+/// not only what this one touched. Carried bytes come from the file `index` was
+/// read from, which need not be the one at `path` any more.
 pub(super) fn write(
     path: &Path,
     index: &Index,
@@ -145,19 +170,18 @@ pub(super) fn write(
     let Ok(prefix) = encode_cnb_prefix(token, &meta) else {
         return false;
     };
+    let mut carried_from = index.handle();
     concinnity_host::store::atomic::replace(path, |out| {
         out.write_all(&prefix)?;
-        let mut previous = None;
         for planned in &plan {
             match &planned.source {
                 Source::Stored(bytes) => out.write_all(bytes)?,
                 Source::Carried(span) => {
-                    let file = match &mut previous {
-                        Some(file) => file,
-                        slot => slot.insert(File::open(&index.path)?),
-                    };
+                    let file = carried_from
+                        .as_mut()
+                        .ok_or_else(|| io::Error::other("the indexed segment is not open"))?;
                     file.seek(SeekFrom::Start(index.payload_start + span.offset))?;
-                    io::copy(&mut Read::by_ref(file).take(span.len), out)?;
+                    io::copy(&mut Read::by_ref(&mut **file).take(span.len), out)?;
                 }
             }
         }
@@ -218,14 +242,18 @@ fn plan<'a>(index: &Index, stored: &[(CacheEntryKind, &'a str, &'a [u8])]) -> Ve
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     const PAYLOAD: CacheEntryKind = CacheEntryKind::Payload;
     const EXPANSION: CacheEntryKind = CacheEntryKind::Expansion;
     const TOKEN: u32 = 0xC0FFEE;
 
+    // Any path will do: which file a build's segment is belongs to the state
+    // tree that resolved it, not to this module.
     fn segment_path(dir: &tempfile::TempDir) -> PathBuf {
-        dir.path().join("cache").join("1")
+        dir.path().join("segment")
     }
 
     // Write `items` into a fresh segment, the shape every test below starts from.
@@ -319,7 +347,39 @@ mod tests {
         assert_eq!(std::fs::read(&two).unwrap(), std::fs::read(&three).unwrap());
     }
 
-    // Deleting `cache/` at any point costs recomputation and nothing else, so
+    // An index is a set of offsets into one file. Another process replacing
+    // that file moves every offset in it, so an index that then read by name
+    // would answer with whichever entry now sits where its own used to -- the
+    // right key over the wrong bytes, published as a cache hit.
+    #[test]
+    fn a_segment_replaced_under_a_held_index_still_reads_its_own_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = segment_path(&dir);
+        written(&path, &[(PAYLOAD, "aa", &[1])]);
+
+        // What one build holds while it works.
+        let held = Index::read(&path, TOKEN);
+
+        // What another writes in the meantime, putting a longer entry first.
+        written(&path, &[(PAYLOAD, "zz", &[9; 500]), (PAYLOAD, "aa", &[1])]);
+
+        assert_eq!(
+            held.get(PAYLOAD, "aa"),
+            Some(vec![1]),
+            "a lookup reads what it indexed"
+        );
+
+        assert!(write(&path, &held, &[(PAYLOAD, "bb", &[2])], TOKEN));
+        let after = Index::read(&path, TOKEN);
+        assert_eq!(
+            after.get(PAYLOAD, "aa"),
+            Some(vec![1]),
+            "a carried entry is its own bytes"
+        );
+        assert_eq!(after.get(PAYLOAD, "bb"), Some(vec![2]));
+    }
+
+    // Deleting the segment at any point costs recomputation and nothing else, so
     // an absent segment reads as an empty index and the next write recreates
     // the file and the directory under it.
     #[test]
@@ -329,7 +389,7 @@ mod tests {
         assert_eq!(Index::read(&path, TOKEN).get(PAYLOAD, "cafe"), None);
 
         written(&path, &[(PAYLOAD, "cafe", &[1])]);
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::remove_file(&path).unwrap();
         assert_eq!(Index::read(&path, TOKEN).get(PAYLOAD, "cafe"), None);
         written(&path, &[(PAYLOAD, "cafe", &[1])]);
         assert_eq!(

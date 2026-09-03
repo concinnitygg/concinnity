@@ -19,7 +19,6 @@
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 
 use super::{StreamPlanner, StreamState};
@@ -189,20 +188,13 @@ pub(crate) fn write_mesh_scratch(
     Ok(DiskMeshSource { path, locators })
 }
 
-// A process-unique scratch-file path in the OS temp directory.
+// A scratch-file path for one disk-backed source.
 //
 // Each call returns a distinct path so a world rebuild's new source does not
-// collide with the old one's file (the old [`DiskMeshSource`] removes its own
-// file on drop).
+// collide with the old one's file. Unguarded on purpose: [`DiskMeshSource`]
+// owns the file and removes it on drop, which outlives this call.
 pub(crate) fn default_scratch_path() -> String {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir()
-        .join(format!(
-            "cn_mesh_scratch_{}_{}.bin",
-            std::process::id(),
-            seq
-        ))
+    concinnity_host::scratch::path("mesh-stream.bin")
         .to_string_lossy()
         .into_owned()
 }

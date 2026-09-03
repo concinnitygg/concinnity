@@ -109,7 +109,8 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<V
         entries: &[program.entry],
         target: slang::SlangTarget::Spirv,
     };
-    slang::compile(&job, &crate::compiler_work::dir())
+    let work = crate::compiler_work::dir()?;
+    slang::compile(&job, work.path())
 }
 
 #[cfg(test)]

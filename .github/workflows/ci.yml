@@ -65,10 +65,16 @@ jobs:
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Install cargo-nextest
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-nextest
+          locked: true
+
       - name: Generate Coverage Report
         timeout-minutes: 30
         run: >
-          cargo llvm-cov --locked --all-features --workspace
+          cargo llvm-cov nextest --locked --all-features --workspace
           --lcov --output-path lcov.info
           --ignore-filename-regex 'concinnity-device/|/wire/'
 

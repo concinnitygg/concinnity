@@ -402,7 +402,7 @@ impl FsrUpscaler {
                 } else {
                     tracing::warn!(
                         "FidelityFX FSR (Vulkan): amd_fidelityfx_vk.dll not found (build.rs did \
-                         not bundle it; set FIDELITYFX_SDK_ROOT or put the DLL on PATH). \
+                         not bundle it; set CN_FIDELITYFX_SDK or put the DLL on PATH). \
                          Trying the next backend."
                     );
                 }

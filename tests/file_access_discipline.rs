@@ -1,15 +1,20 @@
-//! Where a test is allowed to read and write files.
+//! Where code is allowed to read and write files.
 //!
-//! A test writes into a directory that deletes itself, and nowhere else. A path
-//! built by hand under the system temporary directory is not that: it survives
-//! the run, it is the same path on the next one, and two runs of the same test
-//! share it. Left alone this accumulates -- one machine reached 4,375 leftover
-//! directories and 1.6 GB before the rule was written down.
+//! A path picked by hand under the system temporary directory survives the run,
+//! is the same path on the next one, and is shared with every other process on
+//! the machine. Two runs then collide: one resets a directory the other is
+//! part-way through writing, and whatever a failure leaves behind is inherited
+//! rather than cleaned. Left alone it also accumulates -- one machine reached
+//! 4,375 leftover directories and 1.6 GB before the rule was written down.
 //!
-//! The exceptions are the two roots a suite keeps outside any one test:
-//! `concinnity_testing::shared_cache_dir` for a content-addressed cache, which
-//! exists to be kept, and `shared_state_dir` for process-wide state, which is
-//! emptied on the first call in a run.
+//! So exactly two modules name that directory, and each owns a kind of root:
+//! `concinnity_host::scratch` hands out the ephemeral paths an external tool is
+//! given, unique per call and removed when their guard drops;
+//! `concinnity_testing::shared_dirs` owns the roots a suite keeps between runs,
+//! the content-addressed cache and the per-process state. Everything else asks
+//! one of them. This is a whole-workspace rule, not a test-only one: the shape
+//! goes wrong the same way in a shipped tool, where it is a user's two
+//! concurrent runs rather than two test processes.
 //!
 //! The other half is reading. A test may read its own package's tree -- the
 //! lint scans in this workspace are built that way, and so is the shader
@@ -29,10 +34,21 @@ use concinnity_testing::source;
 // itself.
 const SELF: &str = "file_access_discipline.rs";
 
-// Building a path under the system temporary directory by hand. The harness's
-// own `TempTree`, `shared_cache_dir` and `shared_state_dir` are what a test
-// uses instead.
+// Naming the system temporary directory at all.
 const RAW_TEMP: &str = "env::temp_dir()";
+
+// The two modules that own a root under it, by workspace-relative path. Both
+// are the implementation of an exception, so both name the directory.
+const TEMP_DIR_OWNERS: [&str; 2] = [
+    "crates/concinnity-host/src/scratch.rs",
+    "crates/concinnity-testing/src/shared_dirs.rs",
+];
+
+// Whether `path` is one of those, spelled with either separator.
+fn owns_a_temp_root(path: &Path) -> bool {
+    let text = path.to_string_lossy().replace('\\', "/");
+    TEMP_DIR_OWNERS.iter().any(|owner| text.ends_with(owner))
+}
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
@@ -46,44 +62,34 @@ fn rust_sources() -> Vec<PathBuf> {
     )
 }
 
-// Production code may name the system temporary directory: a shader compile
-// writes its intermediates there, and a mesh stream needs scratch space. The
-// rule is about tests, so only `#[cfg(test)]` code is scanned -- and the tests
-// that assert *about* that production behaviour name the directory too, which
-// is why the check is for a test that BUILDS a path rather than one that
-// mentions the call.
-fn builds_a_temp_path(body: &str) -> bool {
-    body.lines()
-        .any(|line| line.contains(RAW_TEMP) && (line.contains(".join(") || line.contains("let ")))
-}
-
 #[test]
-fn no_test_builds_its_own_path_under_the_system_temp_dir() {
+fn only_the_two_root_owners_name_the_system_temp_dir() {
     let root = workspace_root();
     let mut offenders = Vec::new();
 
     for path in rust_sources() {
-        // The harness implements the exception, so it names the directory.
-        if path.to_string_lossy().contains("concinnity-testing") {
+        if owns_a_temp_root(&path) {
             continue;
         }
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
-        for body in source::test_bodies(&text) {
-            if builds_a_temp_path(&body.text) {
+        for (number, line) in text.lines().enumerate() {
+            if line.contains(RAW_TEMP) {
                 let rel = path.strip_prefix(&root).unwrap_or(&path);
-                offenders.push(format!("{}:{} {}", rel.display(), body.line, body.name));
+                offenders.push(format!("{}:{}", rel.display(), number + 1));
             }
         }
     }
 
     assert!(
         offenders.is_empty(),
-        "these tests build their own path under the system temporary directory, \
-         which survives the run and is shared with the next one. Use \
-         `concinnity_testing::TempTree`, or `shared_cache_dir` / \
-         `shared_state_dir` for a root a suite keeps:\n  {}",
+        "these name the system temporary directory, which only the two root \
+         owners may do. For a path an external tool is handed, take \
+         `concinnity_host::scratch::Scratch`, which is unique per call and \
+         removes itself; for a root a suite keeps, take \
+         `concinnity_testing::shared_cache_dir` / `shared_state_dir`; for a \
+         test's own files, take `concinnity_testing::TempTree`:\n  {}",
         offenders.join("\n  ")
     );
 }
@@ -91,32 +97,26 @@ fn no_test_builds_its_own_path_under_the_system_temp_dir() {
 // The scan is only worth as much as its ability to see the shape it forbids.
 #[test]
 fn the_scan_recognises_a_hand_built_temp_path() {
-    let offending =
-        "\n#[test]\nfn leaks() {\n    let dir = std::env::temp_dir().join(\"cn-thing\");\n}\n";
-    let bodies = source::test_bodies(offending);
+    let offending = "let dir = std::env::temp_dir().join(\"cn-thing\");";
 
-    assert_eq!(bodies.len(), 1);
-    assert!(builds_a_temp_path(&bodies[0].text));
-
-    let fixed = offending.replace(
-        "std::env::temp_dir().join(\"cn-thing\")",
-        "concinnity_testing::TempTree::new()",
-    );
-    assert!(!builds_a_temp_path(&source::test_bodies(&fixed)[0].text));
+    assert!(offending.contains(RAW_TEMP));
+    assert!(!"let dir = concinnity_host::scratch::path(\"thing\");".contains(RAW_TEMP));
 }
 
-// A test may assert *about* the production code that uses the temporary
-// directory without building a path of its own.
+// The owners are recognised by where they are, so a file that merely sounds
+// like one is still scanned.
 #[test]
-fn the_scan_allows_asserting_on_the_directory() {
-    let asserting =
-        "\n#[test]\nfn stays_in_temp() {\n    assert!(a.starts_with(std::env::temp_dir()));\n}\n";
-    let bodies = source::test_bodies(asserting);
-
-    assert!(
-        !builds_a_temp_path(&bodies[0].text),
-        "naming the directory is not building a path in it"
-    );
+fn the_scan_spares_the_owners_and_nothing_else() {
+    assert!(owns_a_temp_root(Path::new(
+        "/w/crates/concinnity-host/src/scratch.rs"
+    )));
+    assert!(owns_a_temp_root(Path::new(
+        "\\w\\crates\\concinnity-testing\\src\\shared_dirs.rs"
+    )));
+    assert!(!owns_a_temp_root(Path::new(
+        "/w/crates/other/src/scratch.rs"
+    )));
+    assert!(!owns_a_temp_root(Path::new("/w/src/shared_dirs.rs")));
 }
 
 // A path built from this package's own directory, walked upward out of it.

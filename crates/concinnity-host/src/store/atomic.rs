@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn a_write_replaces_the_file_and_creates_its_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("cache").join("1");
+        let path = dir.path().join("nested").join("file");
 
         assert!(replace(&path, |out| out.write_all(b"first")));
         assert_eq!(fs::read(&path).unwrap(), b"first");
@@ -93,7 +93,7 @@ mod tests {
         let blocker = dir.path().join("blocker");
         fs::write(&blocker, b"a file, not a directory").unwrap();
 
-        let path = blocker.join("cache").join("1");
+        let path = blocker.join("nested").join("file");
         assert!(!replace(&path, |out| out.write_all(b"bytes")));
         assert!(!path.exists());
     }

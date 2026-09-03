@@ -241,7 +241,7 @@ impl XessUpscaler {
             None => {
                 tracing::warn!(
                     "XeSS: libxess.dll not found (build.rs did not bundle it; set \
-                     XESS_SDK_ROOT or put the DLL on PATH). Trying the next upscaler."
+                     CN_XESS_SDK or put the DLL on PATH). Trying the next upscaler."
                 );
                 return Ok(None);
             }

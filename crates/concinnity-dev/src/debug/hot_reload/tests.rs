@@ -86,11 +86,9 @@ fn state_with_only_environment_map_still_spawns_a_watcher() {
     // still be set up so `.hdr` saves trigger reloads. The state stores the
     // EnvironmentMapSource verbatim for the reload helper to consult.
     let env_map = EnvironmentMapSource {
-        resolved_path: format!(
-            "{}/asset_hot_reload_envmap_only_{}.hdr",
-            std::env::temp_dir().display(),
-            std::process::id()
-        ),
+        resolved_path: concinnity_host::scratch::path("asset_hot_reload_envmap_only.hdr")
+            .to_string_lossy()
+            .into_owned(),
         prefilter_face_size: 64,
         irradiance_face_size: 16,
         prefilter_samples: 64,
@@ -170,7 +168,9 @@ fn mesh_source_map_skips_bare_filenames_in_watch_dirs() {
 fn state_with_only_meshes_still_spawns_a_watcher() {
     let mut meshes = MeshSourceMap::new();
     meshes.entries.push(MeshSourceEntry {
-        source: format!("{}/dummy.glb", std::env::temp_dir().display()),
+        source: concinnity_host::scratch::path("dummy.glb")
+            .to_string_lossy()
+            .into_owned(),
         primitive_index: 0,
         lod_levels: 1,
         lod_distances: Vec::new(),
@@ -214,7 +214,9 @@ fn skinned_mesh_source_map_collects_unique_parent_dirs() {
 fn state_with_only_skinned_still_spawns_a_watcher() {
     let mut skinned = SkinnedMeshSourceMap::new();
     skinned.entries.push(SkinnedMeshSourceEntry {
-        source: format!("{}/skinned.glb", std::env::temp_dir().display()),
+        source: concinnity_host::scratch::path("skinned.glb")
+            .to_string_lossy()
+            .into_owned(),
         skin_index: 0,
         skinned_index: 0,
         vertex_base: 0,
@@ -234,11 +236,9 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
 fn state_with_only_world_jsonl_still_spawns_a_watcher() {
     // World-only worlds (no Texture/LUT/EnvMap/Mesh/Skinned) still want
     // their world.jsonl watched so Prop transform edits propagate.
-    let world_path = format!(
-        "{}/world_only_{}.jsonl",
-        std::env::temp_dir().display(),
-        std::process::id()
-    );
+    let world_path = concinnity_host::scratch::path("world_only.jsonl")
+        .to_string_lossy()
+        .into_owned();
     let state = AssetHotReloadState::from_sources(HotReloadSources {
         world_jsonl_path: Some(world_path.clone()),
         ..Default::default()
@@ -485,11 +485,9 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     // need to keep the watcher alive: their trigger is the `PENDING_WORLD`
     // flag flipped from the world.jsonl watcher. Without a world_jsonl_path
     // there is nothing to subscribe to, so we declare one here.
-    let world_path = format!(
-        "{}/asset_hot_reload_proc_only_world_{}.jsonl",
-        std::env::temp_dir().display(),
-        std::process::id()
-    );
+    let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl")
+        .to_string_lossy()
+        .into_owned();
     let mut proc = ProceduralMeshSourceMap::new();
     proc.entries.push(ProceduralMeshSourceEntry {
         name: "box_mesh".to_string(),
@@ -663,11 +661,9 @@ fn state_with_only_shader_stages_still_spawns_a_watcher() {
     let mut stages = ShaderStageSourceMap::new();
     stages.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
-        resolved_path: format!(
-            "{}/asset_hot_reload_shader_only_{}.metal",
-            std::env::temp_dir().display(),
-            std::process::id()
-        ),
+        resolved_path: concinnity_host::scratch::path("asset_hot_reload_shader_only.metal")
+            .to_string_lossy()
+            .into_owned(),
     });
     let state = AssetHotReloadState::from_sources(HotReloadSources {
         shader_stages: stages,

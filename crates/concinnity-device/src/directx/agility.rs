@@ -25,7 +25,7 @@
 //
 // The version must match the Agility NuGet package the build script bundles:
 // the directory name is `microsoft.direct3d.d3d12.1.<VERSION>.<PATCH>`, so
-// `microsoft.direct3d.d3d12.1.619.3` is 619. `DEFAULT_AGILITY_SDK_ROOT` in
+// `microsoft.direct3d.d3d12.1.619.3` is 619. `DEFAULT_CN_AGILITY_SDK` in
 // concinnity-toolchain names the tree these bytes have to agree with.
 
 // `pub` even though nothing in the crate names them: the visibility is what

@@ -21,6 +21,7 @@ use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_cook::build_from_path;
 use concinnity_cook::build_only::prepare_world;
 use concinnity_cook::paths::StateTree;
+use concinnity_host::scratch;
 
 use crate::command::resolve_world_path;
 
@@ -699,15 +700,17 @@ fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result<String> {
             format!("AppConfig icon not found: {}", src.display()),
         ));
     }
-    let iconset = std::env::temp_dir().join(format!("cn-export-{slug}.iconset"));
-    reset_dir(&iconset)?;
-
+    // `iconutil` reads the ladder back out of a directory, and takes the whole
+    // tree with it when this returns however it returns.
+    let iconset = scratch::Scratch::dir(&format!("{slug}.iconset"))?;
     // The standard iconset ladder: each size at 1x and 2x.
     for size in [16u32, 32, 128, 256, 512] {
         for scale in [1u32, 2] {
             let px = size * scale;
             let suffix = if scale == 2 { "@2x" } else { "" };
-            let dst = iconset.join(format!("icon_{size}x{size}{suffix}.png"));
+            let dst = iconset
+                .path()
+                .join(format!("icon_{size}x{size}{suffix}.png"));
             run_tool(
                 "sips",
                 &[
@@ -729,12 +732,11 @@ fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result<String> {
         &[
             "-c",
             "icns",
-            &iconset.to_string_lossy(),
+            &iconset.path().to_string_lossy(),
             "-o",
             &icns_path.to_string_lossy(),
         ],
     )?;
-    let _ = fs::remove_dir_all(&iconset);
     Ok(icns_name)
 }
 
@@ -744,23 +746,20 @@ fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result<String> {
 const DEFAULT_ICON_PNG: &[u8] = include_bytes!("../assets/default-icon.png");
 
 // Build `<resources>/<slug>.icns` from the bundled default icon. Writes the
-// embedded PNG to a temp file so it flows through the same sips/iconutil
-// pipeline as a user-supplied icon, then removes it.
+// embedded PNG to a scratch file so it flows through the same sips/iconutil
+// pipeline as a user-supplied icon.
 fn build_default_icns(resources: &Path, slug: &str) -> io::Result<String> {
-    let tmp = std::env::temp_dir().join(format!("cn-default-icon-{slug}.png"));
-    fs::write(&tmp, DEFAULT_ICON_PNG)?;
-    let result = build_icns(&tmp, resources, slug);
-    let _ = fs::remove_file(&tmp);
-    result
+    let src = scratch::Scratch::file(&format!("{slug}-default-icon.png"));
+    fs::write(src.path(), DEFAULT_ICON_PNG)?;
+    build_icns(src.path(), resources, slug)
 }
 
 // Wrap a `.app` in a compressed `.dmg` via `hdiutil`. The `.app` is staged into
 // its own folder first so it lands at the disk image's root (hdiutil's
 // -srcfolder makes the folder the volume root).
 fn build_dmg(app_dir: &Path, slug: &str, volume_name: &str, dmg_path: &Path) -> io::Result<()> {
-    let staging = std::env::temp_dir().join(format!("cn-export-{slug}-dmg"));
-    reset_dir(&staging)?;
-    copy_tree(app_dir, &staging.join(format!("{slug}.app")))?;
+    let staging = scratch::Scratch::dir(&format!("{slug}-dmg"))?;
+    copy_tree(app_dir, &staging.path().join(format!("{slug}.app")))?;
 
     if dmg_path.exists() {
         fs::remove_file(dmg_path)?;
@@ -772,14 +771,13 @@ fn build_dmg(app_dir: &Path, slug: &str, volume_name: &str, dmg_path: &Path) -> 
             "-volname",
             volume_name,
             "-srcfolder",
-            &staging.to_string_lossy(),
+            &staging.path().to_string_lossy(),
             "-ov",
             "-format",
             "UDZO",
             &dmg_path.to_string_lossy(),
         ],
     )?;
-    let _ = fs::remove_dir_all(&staging);
     Ok(())
 }
 

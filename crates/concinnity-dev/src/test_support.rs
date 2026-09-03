@@ -27,11 +27,14 @@ fn prepare() {
 // Open a project away from the working directory, with the caches on a root of
 // their own.
 //
-// The cache root persists, so a shader that has not changed is compiled once
-// for the machine rather than once per test. The content and writable roots are
-// a separate stable directory emptied once per process: the blobs, the editor's
-// session store, the saves and the settings are state, not cache, and a run
-// that inherited them would assert against what the last one left.
+// The cache root persists and is shared, so a shader that has not changed is
+// compiled once for the machine rather than once per test. The content and
+// writable roots are this process's own directory, emptied when it first asks:
+// the blobs, the editor's session store, the saves and the settings are state,
+// not cache, and a test that inherited them would assert against what another
+// left. Per process rather than per machine because the guard below is per
+// process, so under a runner that gives each test one -- `cargo nextest` --
+// nothing here excludes the test in the process beside it.
 pub(crate) fn isolate_state_dir() {
     crate::project::open(
         concinnity_host::store::paths::StateTree::at(concinnity_testing::shared_state_dir(

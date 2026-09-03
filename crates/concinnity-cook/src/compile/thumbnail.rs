@@ -7,7 +7,7 @@
 //!
 //! The rendering here is pure -- `collect` decides what a bake produces and
 //! answers reuse through a caller-supplied lookup -- and `bake_thumbnails` is
-//! the thin half that puts the result into `cache/1`
+//! the thin half that puts the result into the build cache
 //! (`crate::cache::thumbnails`).
 
 use crate::pipeline::PipelineResult;

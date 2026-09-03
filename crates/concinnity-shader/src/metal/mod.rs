@@ -5,6 +5,7 @@
 mod validator;
 
 use concinnity_cook::compile::shader::{ShaderCompileArgs, ShaderToolchain, set_shader_toolchain};
+use concinnity_host::scratch::Scratch;
 
 pub(crate) fn install() {
     set_shader_toolchain(Box::new(MetalToolchain));
@@ -27,42 +28,27 @@ impl ShaderToolchain for MetalToolchain {
     }
 }
 
-// A unique temp-file stem for a shader compile's transient artifacts (`.air` /
-// `.metallib` / `.spv`). Keying on the process id plus a per-process counter makes
-// it unique across concurrent compiles in the same process (parallel builds, the
-// test suite) and across separate processes, so they never collide on one path; and
-// rooting it in the OS temp dir keeps the working directory untouched.
-fn transient_stem(asset_name: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
-        "cn-shader-{}-{}-{}",
-        asset_name,
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ))
-}
-
 fn compile_metal(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
     use std::fs;
     use std::io::Write;
     use std::process::Stdio;
 
-    // Transient intermediates go to a UNIQUE path in the OS temp dir (not a shared
-    // the state root's `data/<name>`): parallel compiles of
-    // the same shader -- concurrent builds, or the test suite cooking several worlds
-    // at once -- must not race on one path (one removing the file mid-read of
-    // another), and a cook must not read or write the working directory.
-    let stem = transient_stem(&args.asset_name);
-    let air_path = format!("{}.air", stem.display());
-    let lib_path = format!("{}.metallib", stem.display());
+    // Transient intermediates go to scratch paths of their own: parallel
+    // compiles of one shader -- concurrent builds, or the test suite cooking
+    // several worlds at once -- must not race on one path, and a cook must not
+    // read or write the working directory. Each removes itself, so the error
+    // paths below carry no cleanup.
+    let air = Scratch::file(&format!("{}.air", args.asset_name));
+    let lib = Scratch::file(&format!("{}.metallib", args.asset_name));
 
     // Feed the source to `xcrun metal` over stdin (`-x metal` selects the
     // language since stdin has no extension, `-` is the stdin input) so no
     // shader source file is written to disk. The .air and .metallib it emits
     // are intermediate artifacts, removed once read.
     let mut metal = std::process::Command::new("xcrun")
-        .args(["metal", "-x", "metal", "-c", "-", "-o", &air_path])
+        .args(["metal", "-x", "metal", "-c", "-"])
+        .arg("-o")
+        .arg(air.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -75,7 +61,6 @@ fn compile_metal(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std:
     let metal_output = metal.wait_with_output()?;
 
     if !metal_output.status.success() {
-        let _ = fs::remove_file(&air_path);
         return Err(std::io::Error::other(format!(
             "xcrun metal failed for '{}':\n--- stdout ---\n{}\n--- stderr ---\n{}",
             args.asset_name,
@@ -85,13 +70,13 @@ fn compile_metal(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std:
     }
 
     let lib_output = std::process::Command::new("xcrun")
-        .args(["metallib", &air_path, "-o", &lib_path])
+        .arg("metallib")
+        .arg(air.path())
+        .arg("-o")
+        .arg(lib.path())
         .output()?;
 
-    let _ = fs::remove_file(&air_path);
-
     if !lib_output.status.success() {
-        let _ = fs::remove_file(&lib_path);
         return Err(std::io::Error::other(format!(
             "xcrun metallib failed for '{}':\n--- stdout ---\n{}\n--- stderr ---\n{}",
             args.asset_name,
@@ -100,22 +85,18 @@ fn compile_metal(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std:
         )));
     }
 
-    let bytes = fs::read(&lib_path).map_err(|e| {
+    fs::read(lib.path()).map_err(|e| {
         std::io::Error::new(
             e.kind(),
-            format!("Failed to read metallib '{}': {}", lib_path, e),
+            format!("Failed to read metallib '{}': {}", lib.path().display(), e),
         )
-    })?;
-
-    let _ = fs::remove_file(&lib_path);
-
-    Ok(bytes)
+    })
 }
 
 fn compile_glsl(args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
-    // A unique temp path (see `transient_stem`): keeps parallel compiles from racing
-    // on a shared file and leaves the working directory untouched.
-    let out_path = format!("{}.spv", transient_stem(&args.asset_name).display());
+    // Its own scratch path, removed with the guard: parallel compiles must not
+    // race on one file, and the working directory stays untouched.
+    let out = Scratch::file(&format!("{}.spv", args.asset_name));
 
     let output = std::process::Command::new("glslc")
         .args([
@@ -123,13 +104,12 @@ fn compile_glsl(args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
             "-fshader-stage",
             &args.kind,
             &args.source_path,
-            "-o",
-            &out_path,
         ])
+        .arg("-o")
+        .arg(out.path())
         .output()?;
 
     if !output.status.success() {
-        let _ = std::fs::remove_file(&out_path);
         return Err(std::io::Error::other(format!(
             "glslc failed for '{}':\n--- stdout ---\n{}\n--- stderr ---\n{}",
             args.asset_name,
@@ -138,16 +118,12 @@ fn compile_glsl(args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
         )));
     }
 
-    let bytes = std::fs::read(&out_path).map_err(|e| {
+    std::fs::read(out.path()).map_err(|e| {
         std::io::Error::new(
             e.kind(),
-            format!("failed to read SPIR-V '{}': {}", out_path, e),
+            format!("failed to read SPIR-V '{}': {}", out.path().display(), e),
         )
-    })?;
-
-    let _ = std::fs::remove_file(&out_path);
-
-    Ok(bytes)
+    })
 }
 
 #[cfg(test)]
@@ -161,14 +137,6 @@ mod tests {
             kind: "fragment".to_string(),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn a_transient_stem_is_unique_per_call_and_lives_in_the_temp_dir() {
-        let a = transient_stem("asset");
-        let b = transient_stem("asset");
-        assert_ne!(a, b, "two compiles of one asset must not share a path");
-        assert!(a.starts_with(std::env::temp_dir()));
     }
 
     // The Metal compiler ships with the Xcode command line tools. A machine
@@ -210,15 +178,23 @@ mod tests {
         if !metal_compiler_available() {
             return;
         }
+        // Where a scratch path lives, without naming the temporary directory:
+        // `file_access_discipline` leaves that to `concinnity_host::scratch`.
+        let probe = Scratch::file("probe");
+        let root = probe
+            .path()
+            .parent()
+            .expect("scratch has a parent")
+            .to_path_buf();
         let leaked = || {
-            std::fs::read_dir(std::env::temp_dir())
+            std::fs::read_dir(&root)
                 .into_iter()
                 .flatten()
                 .flatten()
                 .filter(|e| {
                     e.file_name()
                         .to_string_lossy()
-                        .starts_with(&format!("cn-shader-cleanup-{}-", std::process::id()))
+                        .starts_with(&format!("cn-{}-", std::process::id()))
                 })
                 .count()
         };

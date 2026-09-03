@@ -441,7 +441,7 @@ impl FsrUpscaler {
                 "FidelityFX FSR3: skipping FFX init: this binary does not bundle \
                  Microsoft's Agility SDK, which FFX needs. Rebuild with \
                  CN_ENABLE_AGILITY_SDK=1 (and the `microsoft.direct3d.d3d12` NuGet \
-                 package installed, or AGILITY_SDK_ROOT pointing at it); the \
+                 package installed, or CN_AGILITY_SDK pointing at it); the \
                  resulting binary then only runs with its `D3D12/` directory \
                  beside it. Rendering at native resolution."
             );
@@ -460,7 +460,7 @@ impl FsrUpscaler {
                 } else {
                     tracing::warn!(
                         "FidelityFX FSR3: amd_fidelityfx_dx12.dll not found (build.rs \
-                         did not bundle it; set FIDELITYFX_SDK_ROOT or put the DLL on \
+                         did not bundle it; set CN_FIDELITYFX_SDK or put the DLL on \
                          PATH). Falling back to native-resolution rendering."
                     );
                 }

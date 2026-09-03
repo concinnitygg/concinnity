@@ -4,10 +4,12 @@
 // transient scratch rather than cache -- nothing here survives a compile, and
 // nothing here belongs in the project's state tree.
 
-use std::path::PathBuf;
-
-// Shared by every compile in the process; the scratch names inside carry the
-// pid, so two applications on one checkout do not collide.
-pub(crate) fn dir() -> PathBuf {
-    std::env::temp_dir().join("concinnity-shader-work")
+// One compile's working directory, removed when the returned value drops.
+//
+// A directory of its own per compile rather than one shared by the process:
+// slangc names its own outputs, and a run that fails part-way leaves them for
+// the guard rather than for the next compile to trip over.
+pub(crate) fn dir() -> Result<concinnity_host::scratch::Scratch, String> {
+    concinnity_host::scratch::Scratch::dir("slang")
+        .map_err(|e| format!("create the shader compiler's work directory: {e}"))
 }

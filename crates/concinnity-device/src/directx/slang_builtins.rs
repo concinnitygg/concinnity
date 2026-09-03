@@ -83,7 +83,8 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<V
         entries: &[program.entry],
         target: program.target(),
     };
-    slang::compile(&job, &crate::compiler_work::dir())
+    let work = crate::compiler_work::dir()?;
+    slang::compile(&job, work.path())
 }
 
 // Compile every declared program into `bundle`, reusing local cache artifacts
