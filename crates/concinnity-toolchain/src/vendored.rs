@@ -4,8 +4,8 @@
 //! unpacked exactly as its vendor ships it, so the paths the SDK setup joins
 //! onto a root are the same whether the root came from here, from the
 //! environment, or from a hand install. Resolution prefers an explicit
-//! `CN_<VENDOR>_SDK` over anything found here, and falls back past here to the
-//! default install path.
+//! `CN_<VENDOR>_SDK` over anything found here, and finds nothing past here:
+//! there is no guessed install path to fall back to.
 //!
 //! The scan is its own module rather than shared with `concinnity-slang`'s: that
 //! one carries a compiler's version floor and a PATH fallback, neither of which

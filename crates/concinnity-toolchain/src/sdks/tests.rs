@@ -79,8 +79,8 @@ fn install_ffx_vk_sdk(dir: &Path, bytes: &[u8]) {
     );
 }
 
-// The runtime `vendor.py build fidelityfx-vk` leaves behind, which carries the
-// shader fix the SDK's own copy does not.
+// The rebuilt runtime vendored beside the SDK, which carries the shader fix
+// the SDK's own copy does not.
 fn install_ffx_vk_rebuilt(dir: &Path, bytes: &[u8]) {
     touch_with(
         &dir.join("ffx-vk").join("bin").join("amd_fidelityfx_vk.dll"),

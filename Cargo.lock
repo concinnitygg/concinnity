@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "clap",
  "concinnity-cook",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-stream",
  "bitflags 2.11.1",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "ash",
  "block2",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "concinnity-core",
  "rayon",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "concinnity-testing",
 ]
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",
@@ -3602,9 +3602,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
 
 [[package]]
 name = "stable_deref_trait"

@@ -346,11 +346,10 @@ fn sdk_env_from_cargo() -> SdkEnv {
         out_dir: var("OUT_DIR").map(PathBuf::from),
         agility_root: root("CN_AGILITY_SDK", "agility"),
         fidelityfx_root: root("CN_FIDELITYFX_SDK", "fidelityfx"),
-        // No variable of its own: the patched runtime is built by
-        // `vendor.py build fidelityfx-vk` and exists nowhere else, so a root to
-        // point at would name a directory only that command produces. An
-        // explicit `CN_FIDELITYFX_SDK` still supplies the stock DLL it falls
-        // back to.
+        // No variable of its own: the patched runtime is rebuilt into
+        // `vendor/` and exists nowhere else, so a root to point at would name a
+        // directory only that rebuild produces. An explicit `CN_FIDELITYFX_SDK`
+        // still supplies the stock DLL it falls back to.
         fidelityfx_vk_root: vendored::newest(workspace.as_deref(), "fidelityfx-vk"),
         xess_root: root("CN_XESS_SDK", "xess"),
         streamline_root: root("CN_STREAMLINE_SDK", "streamline"),

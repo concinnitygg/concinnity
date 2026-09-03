@@ -262,10 +262,10 @@ The DirectX backend can use vendor temporal upscalers (AMD FidelityFX FSR 3,
 Intel XeSS, NVIDIA DLSS) and Microsoft's DirectX 12 Agility SDK. These are all
 **optional**: if an SDK is not present the build script prints a warning, skips
 it, and the renderer falls back to native-resolution rendering. Install one and
-point the build at it with the matching environment variable. The variables and
-their defaults are listed under
+point the build at it with the matching environment variable. The variables are
+listed under
 [Third-party environment variables](#third-party-environment-variables); on a
-machine with the default install paths, none of them need setting.
+machine that vendored them, none of them need setting.
 
 **The Agility SDK is the exception and is off by default**, because bundling it
 decides where the finished executable can run (see below). Ask for it with:

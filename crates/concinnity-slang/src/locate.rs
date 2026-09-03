@@ -28,7 +28,7 @@ pub(crate) const EXE: &str = if cfg!(windows) {
 include!(concat!(env!("OUT_DIR"), "/workspace_root.rs"));
 
 /// The environment variable naming a Slang install, matching the
-/// `<VENDOR>_SDK_ROOT` shape the graphics SDKs use.
+/// `CN_<VENDOR>_SDK` shape the graphics SDKs use.
 pub(crate) const ROOT_VAR: &str = "CN_SLANG_SDK";
 
 /// The directory an install puts its Slang release in, beside the binaries.

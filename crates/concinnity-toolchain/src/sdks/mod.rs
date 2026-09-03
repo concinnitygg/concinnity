@@ -108,18 +108,6 @@ fn directives_for_kind(backend: Backend, targets: BinaryTargets, env: &SdkEnv) -
     out
 }
 
-// Microsoft's Agility SDK D3D12 runtime, bundled only when the build asks for
-// it with `CN_ENABLE_AGILITY_SDK=1`. Unlike the four `LoadLibrary` SDKs around
-// it, bundling this one binds the executable to the `D3D12/` directory staged
-// beside it -- `d3d12.dll` reads the linked exports before any engine code runs
-// and fails device creation outright when the directory is absent -- so it is
-// off unless the artifact is being built to travel with that directory. Nothing
-// is warned about when it is off: that is the ordinary build, and the FSR3
-// upscaler reports its own loss when something actually asks for it.
-//
-// The DLL copy and the exports are only emitted when bundling for a final
-// binary; the `agility_sdk_configured` cfg is emitted whenever the opt-in found
-// the SDK, so the runtime FSR3 gate matches what the binary actually carries.
 // A file inside an SDK, when a root resolved at all. Split from the existence
 // check so an unresolved root and a root missing the file are one branch: both
 // mean the SDK is unusable, and the warning says which it was.
@@ -142,6 +130,18 @@ fn missing_sdk(sdk: &str, var: &str, root: Option<&PathBuf>, parts: &[&str]) -> 
     }
 }
 
+// Microsoft's Agility SDK D3D12 runtime, bundled only when the build asks for
+// it with `CN_ENABLE_AGILITY_SDK=1`. Unlike the four `LoadLibrary` SDKs around
+// it, bundling this one binds the executable to the `D3D12/` directory staged
+// beside it -- `d3d12.dll` reads the linked exports before any engine code runs
+// and fails device creation outright when the directory is absent -- so it is
+// off unless the artifact is being built to travel with that directory. Nothing
+// is warned about when it is off: that is the ordinary build, and the FSR3
+// upscaler reports its own loss when something actually asks for it.
+//
+// The DLL copy and the exports are only emitted when bundling for a final
+// binary; the `agility_sdk_configured` cfg is emitted whenever the opt-in found
+// the SDK, so the runtime FSR3 gate matches what the binary actually carries.
 fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_AGILITY_SDK"));
     if !env.agility_enabled {
@@ -282,11 +282,11 @@ fn fidelityfx_vk_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<
     let Some(dll_src) = dll_src else {
         if targets.bundles() {
             out.push(warning(&format!(
-                "FidelityFX VK runtime not found: nothing built by \
-                 `vendor.py build fidelityfx-vk`, and {}. Build the patched \
-                 runtime, vendor the SDK, set CN_FIDELITYFX_SDK, or put \
-                 amd_fidelityfx_vk.dll on PATH at runtime; Vulkan temporal \
-                 upscaling will fall back to native resolution.",
+                "FidelityFX VK runtime not found: no rebuilt runtime under \
+                 vendor/fidelityfx-vk-*, and {}. Vendor the patched runtime or \
+                 the SDK, set CN_FIDELITYFX_SDK, or put amd_fidelityfx_vk.dll on \
+                 PATH at runtime; Vulkan temporal upscaling will fall back to \
+                 native resolution.",
                 missing_sdk(
                     "the SDK's own copy is",
                     "CN_FIDELITYFX_SDK",
