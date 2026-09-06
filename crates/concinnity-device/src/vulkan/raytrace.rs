@@ -23,10 +23,11 @@
 //
 // Every resource those two per-frame paths write lives in a ring rather than
 // being allocated fresh: `skinned_ring` is one slot per frame in flight, keyed on
-// `frame_idx`, and `static_ring` advances a cursor one slot per dynamic-transform
-// rebuild. Each slot OWNS its resources for the accel's lifetime and rebuilds
-// them in place, growing them only on demand, so a steady scene allocates nothing
-// after warm-up. `RtAccelData`'s `live_*` fields are plain handle copies of
+// `frame_idx`, `static_ring` advances a cursor one slot per dynamic-transform
+// rebuild, and the build scratch every path records over is one slot per frame in
+// flight too (see `ScratchRing`). Each slot OWNS its resources for the accel's
+// lifetime and rebuilds them in place, growing them only on demand, so a steady
+// scene allocates nothing after warm-up. `RtAccelData`'s `live_*` fields are plain handle copies of
 // whichever slot last built -- Vulkan has no refcount, so the ownership split has
 // to be explicit. Nothing rotates between slots: a slot handing its buffer to the
 // next one would make every handle-keyed cache (`SkinPipeline::wired`) miss on
@@ -131,6 +132,101 @@ fn align_up(value: u64, align: u64) -> u64 {
     } else {
         (value + align - 1) & !(align - 1)
     }
+}
+
+// The byte size a build scratch buffer needs to serve a build requiring
+// `required` bytes: the requirement plus the offset alignment, so the aligned
+// device address inside the buffer still leaves room for it.
+fn scratch_capacity(required: u64, align: u64) -> u64 {
+    required + align
+}
+
+// One frame's acceleration-structure build scratch. `addr` is the buffer's
+// device address pre-aligned to `minAccelerationStructureScratchOffsetAlignment`.
+struct ScratchSlot {
+    // Owns the memory the builds write; nothing reads it afterwards.
+    _pooled: PooledBuffer,
+    addr: u64,
+    capacity: u64,
+}
+
+impl ScratchSlot {
+    fn fits(&self, required: u64, align: u64) -> bool {
+        scratch_capacity(required, align) <= self.capacity
+    }
+}
+
+// The build scratch as a per-frame ring: one buffer per frame in flight, indexed
+// by `frame_idx`. Scratch is written by the build that names it and read by
+// nothing afterwards, so it only has to outlive the frame that recorded it, and
+// the in-flight fence retires a slot's previous writer before the next frame
+// reaches it. One shared buffer cannot promise that -- frame N's build writes the
+// same bytes frame N-1's build is still working in, which is a write-after-write
+// race the validation layer reports once per frame.
+struct ScratchRing {
+    slots: Vec<ScratchSlot>,
+}
+
+impl ScratchRing {
+    // Allocate `frames` slots, each covering a build requiring `required` bytes.
+    fn new(
+        alloc: &DeviceAllocator,
+        device: &VkDevice,
+        frames: usize,
+        required: u64,
+        align: u64,
+    ) -> Result<Self, String> {
+        let mut slots = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            slots.push(alloc_scratch(alloc, device, required, align)?);
+        }
+        Ok(Self { slots })
+    }
+
+    // The address this frame's builds record over.
+    fn addr(&self, frame_idx: usize) -> u64 {
+        self.slots[frame_idx].addr
+    }
+
+    // Ensure this frame's slot covers a build requiring `required` bytes, then
+    // hand back its address. A replaced buffer is dropped in place: the allocator
+    // withholds its range and handle for `frames_in_flight + 1` ticks, which
+    // outlasts both the builds this frame already recorded against it and any
+    // still in flight.
+    fn ensure(
+        &mut self,
+        alloc: &DeviceAllocator,
+        device: &VkDevice,
+        frame_idx: usize,
+        required: u64,
+        align: u64,
+    ) -> Result<u64, String> {
+        if !self.slots[frame_idx].fits(required, align) {
+            self.slots[frame_idx] = alloc_scratch(alloc, device, required, align)?;
+        }
+        Ok(self.slots[frame_idx].addr)
+    }
+}
+
+// Allocate one scratch slot covering a build requiring `required` bytes.
+fn alloc_scratch(
+    alloc: &DeviceAllocator,
+    device: &VkDevice,
+    required: u64,
+    align: u64,
+) -> Result<ScratchSlot, String> {
+    let capacity = scratch_capacity(required, align);
+    let pooled = alloc.create_buffer(
+        capacity,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    )?;
+    let addr = align_up(buffer_address(device, pooled.buffer()), align);
+    Ok(ScratchSlot {
+        _pooled: pooled,
+        addr,
+        capacity,
+    })
 }
 
 // A device-local buffer holding an acceleration structure plus its handle.
@@ -499,17 +595,17 @@ pub(super) struct RtAccelData {
     // `live_tlas`; `live_geom_size` is its byte size.
     live_geom: vk::Buffer,
     live_geom_size: vk::DeviceSize,
-    // Scratch sized for the largest of every BLAS build and the TLAS build;
-    // reused by the per-frame TLAS rebuild (the instance count is fixed). Its
-    // device address is pre-aligned to the scratch-offset alignment. The skinned
-    // rebuild grows it (retiring the old) when a skinned BLAS + TLAS build needs
-    // more; `scratch_capacity` is the buffer's byte size.
-    scratch: PooledBuffer,
-    scratch_addr: u64,
-    scratch_capacity: u64,
+    // Build scratch, one slot per frame in flight (see `ScratchRing`). Sized at
+    // init for the largest of every BLAS build and the TLAS build; a rebuild
+    // whose builds need more replaces the slot it records over.
+    scratch: ScratchRing,
     // Size the TLAS prebuild reported; the static rebuild recycles the ring slot's
     // TLAS at this size (the static instance count is fixed).
     tlas_size: u64,
+    // Scratch that TLAS build needs, kept with it so the static rebuild sizes
+    // the ring slot it records over: a topology refresh grows only its own
+    // frame's slot.
+    tlas_scratch: u64,
     instance_count: u32,
     // Frames-in-flight depth; a retired structure is freed this many frames
     // after the rebuild that displaced it (by then its frame's fence has
@@ -894,7 +990,7 @@ fn create_device_buffer(
 
 // Build the `rt_skin` compute pipeline: a 3-storage-buffer descriptor set layout
 // (set 0: src skinned verts, joint palette, deformed output) + a 16-byte
-// `SkinParams` push constant. Returns `Err` when shaderc is unavailable or the
+// `SkinParams` push constant. Returns `Err` when the compiler is unavailable or the
 // kernel fails to compile; the caller then leaves the skin pipeline absent and
 // skinned geometry is omitted from the BVH (the RT pass still runs for static
 // geometry). Per-(frame, object) descriptor sets are allocated lazily on the
@@ -976,10 +1072,11 @@ pub(super) fn build_skin_pipeline(
     })
 }
 
-// A global acceleration-structure-build memory barrier: orders one build's
-// writes before the next build reads/writes (shared scratch reuse + TLAS reading
-// the just-built BLAS). Mirrors the DXR UAV barrier between builds.
-fn build_barrier(device: &VkDevice, cmd: vk::CommandBuffer) {
+// A global acceleration-structure-build memory barrier: orders one build's writes
+// before whatever `dst_stages` names next reads or writes them -- the scratch
+// slot the next build rewrites and the BLAS the TLAS build reads. Mirrors the
+// DXR UAV barrier between builds.
+fn build_barrier(device: &VkDevice, cmd: vk::CommandBuffer, dst_stages: vk::PipelineStageFlags) {
     let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
         .dst_access_mask(
@@ -992,7 +1089,7 @@ fn build_barrier(device: &VkDevice, cmd: vk::CommandBuffer) {
         device.cmd_pipeline_barrier(
             cmd,
             vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
-            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+            dst_stages,
             vk::DependencyFlags::empty(),
             std::slice::from_ref(&barrier),
             &[],
@@ -1000,6 +1097,20 @@ fn build_barrier(device: &VkDevice, cmd: vk::CommandBuffer) {
         );
     }
 }
+
+// The dst stages between two builds: the scratch slot they share is rewritten by
+// the next build, and a TLAS build reads the BLAS just built.
+const BUILD_TO_BUILD: vk::PipelineStageFlags =
+    vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR;
+
+// The dst stages that close a recorded build sequence: this frame's trace reads
+// the structures in the fragment shader, and any sequence recorded after this one
+// on the same command buffer writes the same scratch slot (a topology refresh is
+// followed by the skinned rebuild on the same frame).
+const BUILD_TO_TRACE: vk::PipelineStageFlags = vk::PipelineStageFlags::from_raw(
+    vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR.as_raw()
+        | vk::PipelineStageFlags::FRAGMENT_SHADER.as_raw(),
+);
 
 // Query the device's minimum scratch-offset alignment for AS builds.
 fn scratch_alignment(instance: &ash::Instance, pd: vk::PhysicalDevice) -> u64 {
@@ -1212,7 +1323,7 @@ pub(super) fn build_rt_accel(
         "RT geometry table",
     )?;
 
-    // Size + allocate the TLAS + the shared scratch (>= the largest BLAS/TLAS).
+    // Size + allocate the TLAS + the scratch ring (>= the largest BLAS/TLAS).
     let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer.buffer));
     let tlas_build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
         .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
@@ -1237,19 +1348,15 @@ pub(super) fn build_rt_accel(
         vk::AccelerationStructureTypeKHR::TOP_LEVEL,
     )?;
 
-    // Scratch sized to the largest build + the offset alignment so the aligned
-    // device address still leaves room for the largest scratch requirement.
+    // One scratch slot per frame in flight, each sized to the largest build. This
+    // one-shot build is fence-waited before the first frame records, so it can
+    // take slot 0.
     let align = scratch_alignment(instance, pd);
-    let scratch_capacity = max_scratch + align;
-    let scratch = alloc.create_buffer(
-        scratch_capacity,
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
-    let scratch_addr = align_up(buffer_address(device, scratch.buffer()), align);
+    let scratch = ScratchRing::new(alloc, device, frames_in_flight.max(1), max_scratch, align)?;
+    let scratch_addr = scratch.addr(0);
 
-    // Record every BLAS build (build-barrier-serialised over the shared scratch),
-    // then the TLAS build, on a one-shot command buffer; fence-wait so the BVH is
+    // Record every BLAS build (build-barrier-serialised over the one scratch slot
+    // they share), then the TLAS build, on a one-shot command buffer; fence-wait so the BVH is
     // ready before the first trace.
     super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
         for (slot, p) in params.iter().enumerate() {
@@ -1277,7 +1384,7 @@ pub(super) fn build_rt_accel(
                     &[std::slice::from_ref(&range)],
                 );
             }
-            build_barrier(device, cmd);
+            build_barrier(device, cmd, BUILD_TO_BUILD);
         }
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer.buffer));
         let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
@@ -1358,9 +1465,8 @@ pub(super) fn build_rt_accel(
         live_geom,
         live_geom_size,
         scratch,
-        scratch_addr,
-        scratch_capacity,
         tlas_size: tlas_sizes.acceleration_structure_size,
+        tlas_scratch: tlas_sizes.build_scratch_size,
         instance_count,
         frames_in_flight: (frames_in_flight.max(1)) as u64,
         object_indices,
@@ -1413,6 +1519,17 @@ pub(in crate::vulkan) struct RtDynamicInputs<'a> {
     // Per-frame joint palettes + the shared skinned buffers; `None` skips the
     // skinned path (the static path runs).
     pub skinned: Option<SkinnedRtInputs<'a>>,
+}
+
+// What one incremental topology refresh needs beyond the device context, the
+// command buffer and the draw list: the BVH membership rule, which per-frame
+// scratch slot its builds record over, and the update counter its orphaned BLAS
+// are retired against.
+#[derive(Clone, Copy)]
+struct TopologyRefresh {
+    exclude_seethrough: bool,
+    frame_idx: usize,
+    now: u64,
 }
 
 impl RtAccelData {
@@ -1496,9 +1613,12 @@ impl RtAccelData {
         // the static TLAS FIRST (before the transform path re-reads `object_indices`).
         // The refresh always rebuilds a static TLAS; on the skinned path
         // `rebuild_skinned` below then overlays the skinned tail on top.
-        if topology_dirty
-            && let Err(e) = self.refresh_topology(ctx, cmd, draw_objects, exclude_seethrough, now)
-        {
+        let refresh = TopologyRefresh {
+            exclude_seethrough,
+            frame_idx,
+            now,
+        };
+        if topology_dirty && let Err(e) = self.refresh_topology(ctx, cmd, draw_objects, refresh) {
             tracing::warn!("RT topology refresh failed (keeping live BVH): {e}");
         }
 
@@ -1551,7 +1671,7 @@ impl RtAccelData {
             return;
         }
 
-        if let Err(e) = self.rebuild_tlas(ctx, cmd, draw_objects, scratch) {
+        if let Err(e) = self.rebuild_tlas(ctx, cmd, draw_objects, frame_idx, scratch) {
             tracing::warn!("RT dynamic TLAS rebuild failed (keeping live BVH): {e}");
         }
     }
@@ -1583,15 +1703,14 @@ impl RtAccelData {
     // before this frame's trace by submission. The orphaned BLAS go through
     // `retire` (freed once the frames-in-flight fence retires the frames whose
     // in-flight trace could still reach them through the not-yet-replaced TLAS);
-    // the shared scratch is grown (retiring the old) when this refresh's builds
-    // need more than the current capacity.
+    // this frame's scratch slot is replaced when this refresh's builds need more
+    // than its current capacity.
     fn refresh_topology(
         &mut self,
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
-        exclude_seethrough: bool,
-        now: u64,
+        req: TopologyRefresh,
     ) -> Result<(), String> {
         // Advance to the next ring slot and take it out, which sidesteps the
         // `&mut self` borrow while the refresh reads the rest of the accel. It is
@@ -1600,8 +1719,7 @@ impl RtAccelData {
         self.static_cursor = next_slot(self.static_cursor, self.static_ring.len());
         let cursor = self.static_cursor;
         let mut slot = std::mem::take(&mut self.static_ring[cursor]);
-        let result =
-            self.refresh_topology_into(ctx, cmd, draw_objects, exclude_seethrough, now, &mut slot);
+        let result = self.refresh_topology_into(ctx, cmd, draw_objects, req, &mut slot);
         self.static_ring[cursor] = slot;
         result
     }
@@ -1611,10 +1729,14 @@ impl RtAccelData {
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
-        exclude_seethrough: bool,
-        now: u64,
+        req: TopologyRefresh,
         slot: &mut StaticFrameRing,
     ) -> Result<(), String> {
+        let TopologyRefresh {
+            exclude_seethrough,
+            frame_idx,
+            now,
+        } = req;
         let RtDeviceCtx {
             alloc,
             instance,
@@ -1788,12 +1910,11 @@ impl RtAccelData {
         }
         max_scratch = max_scratch.max(tlas_sizes.build_scratch_size);
 
-        // Ensure the shared scratch covers every fresh BLAS build + this TLAS.
+        // Ensure this frame's scratch slot covers every fresh BLAS build + this TLAS.
         let align = scratch_alignment(instance, pd);
-        if max_scratch + align > self.scratch_capacity {
-            self.grow_scratch(alloc, device, max_scratch, align)?;
-        }
-        let scratch_addr = self.scratch_addr;
+        let scratch_addr = self
+            .scratch
+            .ensure(alloc, device, frame_idx, max_scratch, align)?;
         ensure_accel(
             &mut slot.tlas,
             alloc,
@@ -1804,8 +1925,8 @@ impl RtAccelData {
         )?;
         let tlas = slot.tlas.as_ref().expect("TLAS sized above").accel;
 
-        // Record the fresh draw-BLAS builds (build-barrier-serialised over the shared
-        // scratch), then the TLAS build, on `cmd`. Infallible from here on.
+        // Record the fresh draw-BLAS builds (build-barrier-serialised over the one
+        // scratch slot they share), then the TLAS build, on `cmd`. Infallible from here on.
         for (p, j) in &fresh_params {
             let geo = blas_geometry(p, self.ibuf_addr);
             let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
@@ -1832,7 +1953,7 @@ impl RtAccelData {
                     &[std::slice::from_ref(&range)],
                 );
             }
-            build_barrier(device, cmd);
+            build_barrier(device, cmd, BUILD_TO_BUILD);
         }
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
         let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
@@ -1857,19 +1978,8 @@ impl RtAccelData {
                 std::slice::from_ref(&bi),
                 &[std::slice::from_ref(&range)],
             );
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
-                .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
         }
+        build_barrier(device, cmd, BUILD_TO_TRACE);
 
         // --- Commit (infallible): move the reused BLAS out of the live `self.blas`,
         // assemble the new head, retire the orphans, and publish this slot's
@@ -1916,6 +2026,7 @@ impl RtAccelData {
         self.draw_blas_sigs = new_sigs;
         self.cluster_instances = rebaked_clusters;
         self.tlas_size = tlas_sizes.acceleration_structure_size;
+        self.tlas_scratch = tlas_sizes.build_scratch_size;
         self.instance_count = instance_count;
         self.has_skinned = false;
         // The TLAS just built references no skinned BLAS, so no ring slot's refit
@@ -1942,6 +2053,7 @@ impl RtAccelData {
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
+        frame_idx: usize,
         scratch: &mut RtUpdateScratch,
     ) -> Result<(), String> {
         // Advance to the next ring slot and take it out (see `refresh_topology`);
@@ -1949,7 +2061,7 @@ impl RtAccelData {
         self.static_cursor = next_slot(self.static_cursor, self.static_ring.len());
         let cursor = self.static_cursor;
         let mut slot = std::mem::take(&mut self.static_ring[cursor]);
-        let result = self.rebuild_tlas_into(ctx, cmd, draw_objects, scratch, &mut slot);
+        let result = self.rebuild_tlas_into(ctx, cmd, draw_objects, frame_idx, scratch, &mut slot);
         self.static_ring[cursor] = slot;
         result
     }
@@ -1959,14 +2071,15 @@ impl RtAccelData {
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
+        frame_idx: usize,
         scratch: &mut RtUpdateScratch,
         slot: &mut StaticFrameRing,
     ) -> Result<(), String> {
         let RtDeviceCtx {
             alloc,
             device,
-            instance: _,
-            pd: _,
+            instance,
+            pd,
         } = ctx;
         let RtUpdateScratch {
             models,
@@ -2030,6 +2143,12 @@ impl RtAccelData {
             .expect("instance buffer written above")
             .buffer;
         let tlas = slot.tlas.as_ref().expect("TLAS sized above").accel;
+        // This frame's scratch slot was sized at init; a topology refresh that
+        // raised the instance count grew only the slot it recorded over.
+        let align = scratch_alignment(instance, pd);
+        let scratch_addr =
+            self.scratch
+                .ensure(alloc, device, frame_idx, self.tlas_scratch, align)?;
 
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
         let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
@@ -2039,7 +2158,7 @@ impl RtAccelData {
             .geometries(std::slice::from_ref(&tlas_geo));
         bi.dst_acceleration_structure = tlas;
         bi.scratch_data = vk::DeviceOrHostAddressKHR {
-            device_address: self.scratch_addr,
+            device_address: scratch_addr,
         };
         let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
             .primitive_count(self.instance_count)
@@ -2054,20 +2173,8 @@ impl RtAccelData {
                 std::slice::from_ref(&bi),
                 &[std::slice::from_ref(&range)],
             );
-            // Order the build before this frame's trace reads the TLAS.
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
-                .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
         }
+        build_barrier(device, cmd, BUILD_TO_TRACE);
 
         // Publish this slot's structures as the live BVH; the slot keeps owning
         // them until the cursor comes back around a full ring cycle later (by then
@@ -2377,7 +2484,7 @@ impl RtAccelData {
 
         // Size each skinned BLAS, rebuilding this slot's own BLAS in place when it
         // still fits (else growing); track the largest scratch either a full build
-        // or an update needs, since both run over the shared scratch and which of
+        // or an update needs, since both run over the one scratch slot and which of
         // the two this frame takes is only settled below. A (re)created structure
         // holds no tree, so it forces a full build.
         let mut max_scratch: u64 = 0;
@@ -2520,21 +2627,20 @@ impl RtAccelData {
         )?;
         let tlas = slot.tlas.as_ref().expect("TLAS sized above").accel;
 
-        // The shared scratch was sized for the static build; the skinned BLAS +
-        // this frame's TLAS may need more. Grow it (retire the old) if so.
+        // The scratch was sized for the static build; the skinned BLAS + this
+        // frame's TLAS may need more, so re-size this frame's slot if so.
         let align = scratch_alignment(instance, pd);
-        if max_scratch + align > self.scratch_size() {
-            self.grow_scratch(alloc, device, max_scratch, align)?;
-        }
-        let scratch_addr = self.scratch_addr;
+        let scratch_addr = self
+            .scratch
+            .ensure(alloc, device, frame_idx, max_scratch, align)?;
 
         // Settle build-or-update last, once every fallible step above has passed:
         // recording a build the command buffer never gets would leave the slot
         // claiming a tree a later update could not continue.
         let update = slot.refit.plan(shapes, storage_changed);
 
-        // Record the skinned BLAS updates (build-barrier-serialised over the shared
-        // scratch), then the TLAS build, on `cmd`. A `Build` writes the structure
+        // Record the skinned BLAS updates (build-barrier-serialised over the one
+        // scratch slot they share), then the TLAS build, on `cmd`. A `Build` writes the structure
         // from scratch; a `Refit` names it as its own source, which the spec defines
         // as an in-place update.
         for (si, p) in skinned_params.iter().enumerate() {
@@ -2561,7 +2667,7 @@ impl RtAccelData {
                     &[std::slice::from_ref(&range)],
                 );
             }
-            build_barrier(device, cmd);
+            build_barrier(device, cmd, BUILD_TO_BUILD);
         }
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
         let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
@@ -2586,20 +2692,8 @@ impl RtAccelData {
                 std::slice::from_ref(&bi),
                 &[std::slice::from_ref(&range)],
             );
-            // Order the TLAS build before this frame's trace reads it.
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
-                .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
         }
+        build_barrier(device, cmd, BUILD_TO_TRACE);
 
         // Publish this slot's resources as the live BVH. The slot keeps owning
         // everything it just built into, so the handles it hands out are the same
@@ -2623,37 +2717,6 @@ impl RtAccelData {
         self.has_skinned = true;
         self.cached_models.clear();
         self.cached_models.extend_from_slice(models);
-        Ok(())
-    }
-
-    // Current scratch buffer byte size (queried lazily; the scratch was sized
-    // `max_scratch + align` at the build that allocated it).
-    fn scratch_size(&self) -> u64 {
-        self.scratch_capacity
-    }
-
-    // Grow the shared scratch buffer to cover `required + align` bytes and retire
-    // the old (a prior frame's build may still read it). Re-aligns the cached
-    // scratch device address.
-    fn grow_scratch(
-        &mut self,
-        alloc: &DeviceAllocator,
-        device: &VkDevice,
-        required: u64,
-        align: u64,
-    ) -> Result<(), String> {
-        let new_capacity = required + align;
-        let buffer = alloc.create_buffer(
-            new_capacity,
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-        let addr = align_up(buffer_address(device, buffer.buffer()), align);
-        // The replaced scratch retires through the allocator once no in-flight
-        // build can reference it.
-        self.scratch = buffer;
-        self.scratch_addr = addr;
-        self.scratch_capacity = new_capacity;
         Ok(())
     }
 
@@ -3167,6 +3230,36 @@ mod tests {
             unsafe { d.acceleration_structure_reference.device_handle },
             0xDEAD_BEEF
         );
+    }
+
+    #[test]
+    fn scratch_capacity_leaves_room_for_the_aligned_address() {
+        // The slot is sized so an address aligned up from anywhere inside the
+        // buffer still has `required` bytes ahead of it.
+        assert_eq!(scratch_capacity(1000, 256), 1256);
+        // A device reporting no alignment requirement asks for the bare size.
+        assert_eq!(scratch_capacity(1000, 1), 1001);
+    }
+
+    // A slot with no backing memory, for the sizing rule alone.
+    fn sized_slot(capacity: u64) -> ScratchSlot {
+        ScratchSlot {
+            _pooled: PooledBuffer::null(),
+            addr: 0,
+            capacity,
+        }
+    }
+
+    #[test]
+    fn scratch_slot_is_replaced_only_when_the_build_outgrows_it() {
+        let slot = sized_slot(scratch_capacity(1000, 256));
+        // The build it was sized for, and a smaller one, reuse it.
+        assert!(slot.fits(1000, 256));
+        assert!(slot.fits(1, 256));
+        // One byte more, or the same build on a device wanting more alignment
+        // headroom, does not.
+        assert!(!slot.fits(1001, 256));
+        assert!(!slot.fits(1000, 512));
     }
 
     #[test]

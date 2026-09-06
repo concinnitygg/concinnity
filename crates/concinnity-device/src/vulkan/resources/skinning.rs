@@ -12,10 +12,7 @@ use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::*;
 
 use super::super::context::*;
-use super::super::pipeline::{
-    MeshPipelineTargets, compile_skinned_shaders, create_skinned_pipeline,
-    create_skinned_shadow_pipeline,
-};
+use super::super::pipeline::{compile_skinned_shadow_shader, create_skinned_shadow_pipeline};
 use super::{alloc_descriptor_sets, create_descriptor_set_layout};
 
 impl VkContext {
@@ -25,7 +22,6 @@ impl VkContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        frag_bytes: &[u8],
     ) -> Result<(), String> {
         if draw_objects.is_empty() || vertices.is_empty() || indices.is_empty() {
             return Ok(());
@@ -34,8 +30,7 @@ impl VkContext {
         let frames = self.frames_in_flight.max(1);
         let n = draw_objects.len();
 
-        let (skinned_vs, skinned_shadow_vs, frag_spv) =
-            compile_skinned_shaders(self.hot_reload.enabled, frag_bytes)?;
+        let skinned_shadow_vs = compile_skinned_shadow_shader(self.hot_reload.enabled)?;
 
         let joint_set_layout = create_descriptor_set_layout(
             &self.device,
@@ -44,34 +39,6 @@ impl VkContext {
                 vk::DescriptorType::STORAGE_BUFFER,
                 vk::ShaderStageFlags::VERTEX,
             )],
-        )?;
-
-        let main_pc = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-            .offset(0)
-            .size(112);
-        let main_set_layouts = [
-            self.descriptors.global_set_layout.handle(),
-            self.descriptors.object_set_layout.handle(),
-            joint_set_layout.handle(),
-        ];
-        let skinned_pipeline_layout = self
-            .device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&main_set_layouts)
-                    .push_constant_ranges(std::slice::from_ref(&main_pc)),
-            )
-            .map_err(|e| format!("skinned pipeline layout: {e}"))?;
-        let skinned_pipeline = create_skinned_pipeline(
-            &self.device,
-            MeshPipelineTargets {
-                render_pass: self.main_render_pass.handle(),
-                layout: skinned_pipeline_layout.handle(),
-                vert_spv: &skinned_vs,
-                frag_spv: &frag_spv,
-            },
-            self.msaa_samples,
         )?;
 
         let (skinned_shadow_pipeline, skinned_shadow_pipeline_layout) =
@@ -139,52 +106,17 @@ impl VkContext {
         self.write_geometry_region(skinned_vbuf.buffer(), 0, vtx_bytes)?;
         self.write_geometry_region(skinned_ibuf.buffer(), 0, idx_bytes)?;
 
-        let pool_sizes = [
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count((n * 2) as u32),
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count((n * frames) as u32),
-        ];
+        let pool_sizes = [vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count((n * frames) as u32)];
         let pool = self
             .device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets((n + n * frames) as u32)
+                    .max_sets((n * frames) as u32)
                     .pool_sizes(&pool_sizes),
             )
             .map_err(|e| format!("skinned descriptor pool: {e}"))?;
-
-        let object_layouts: Vec<_> = (0..n)
-            .map(|_| self.descriptors.object_set_layout.handle())
-            .collect();
-        let object_sets = alloc_descriptor_sets(&self.device, pool.handle(), &object_layouts)?;
-        for (&set, obj) in object_sets.iter().zip(draw_objects.iter()) {
-            let albedo_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(self.albedo_pool_view(obj.texture_slot))
-                .sampler(self.linear_sampler.handle());
-            let nm_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(self.normal_pool_view(obj.normal_map_slot))
-                .sampler(self.linear_sampler.handle());
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&albedo_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&nm_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { self.device.update_descriptor_sets(&writes, &[]) };
-        }
 
         // Per-(frame, object) joint storage buffers seeded with identity
         // matrices so any not-yet-overwritten slot reads as identity.
@@ -232,21 +164,14 @@ impl VkContext {
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
 
-        // A skinned pipeline just came live, so let the next wireframe frame
-        // build its twin.
-        self.invalidate_wireframe_pipelines();
-        self.skinned.pipeline = Some(skinned_pipeline);
-        self.skinned.pipeline_layout = Some(skinned_pipeline_layout);
         self.shadow.skinned_pipeline = skinned_shadow_pipeline;
         self.shadow.skinned_pipeline_layout = skinned_shadow_pipeline_layout;
-        let joint_set_layout_handle = joint_set_layout.handle();
         self.skinned.joint_set_layout = Some(joint_set_layout);
         self.skinned.descriptor_pool = Some(pool);
         self.skinned.vertex_buffer = skinned_vbuf;
         self.skinned.vertex_buffer_bytes = vtx_bytes.len() as u64;
         self.skinned.index_buffer = skinned_ibuf;
         self.skinned.index_buffer_bytes = idx_bytes.len() as u64;
-        self.skinned.object_sets = object_sets;
         self.skinned.joint_buffers = joint_buffers;
         self.skinned.joint_sets = joint_sets;
         self.skinned.draw_objects = draw_objects;
@@ -259,30 +184,13 @@ impl VkContext {
         self.skinned.morph_weights = vec![Vec::new(); n];
         self.skinned.morph_weight_buffers = Vec::new();
 
-        // GPU-driven main-pass skinning fold: when the bindless cull path is active,
-        // build the `rt_skin` compute pipeline + per-frame deformed-vertex buffers +
-        // their descriptor sets, and set `self.draw.n_skinned` (which engages the fold so
-        // `cull_count()` reserves the skinned tail). A build failure leaves it 0 and
-        // the legacy skinned main pass runs. Mirrors the DirectX `upload_skinned`.
-        //
-        // The gate counts the objects being uploaded here: `cull_count()` reads
-        // `draw.n_skinned`, which only `build_main_skin` sets, so consulting it
-        // alone would leave a world whose only geometry is skinned on the legacy
-        // pass forever -- and that pass does not morph (rt_skin is the only
-        // Vulkan shader that reads morph targets).
-        if self.cull.bindless_pipeline.is_some()
-            && self.cull_count() + self.skinned.draw_objects.len() > 0
-            && let Err(e) = self.build_main_skin(vertices.len())
-        {
-            tracing::warn!(
-                "skinned: main-pass skin fold build failed ({e}); skinned meshes \
-                 use the legacy main pass"
-            );
-        }
-
-        if let Some(gb) = self.gbuffer.as_mut() {
-            gb.ensure_skinned_gbuffer_pso(&self.device, joint_set_layout_handle)?;
-        }
+        // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline +
+        // per-frame deformed-vertex buffers + their descriptor sets, and set
+        // `self.draw.n_skinned` so `cull_count()` covers the skinned tail. Every
+        // skinned draw rides the GPU-driven pass, so a build failure is a
+        // startup error, as on Metal. Mirrors the DirectX `upload_skinned`.
+        self.build_main_skin(vertices.len())
+            .map_err(|e| format!("skinned: main-pass skin fold build failed: {e}"))?;
         Ok(())
     }
 
@@ -437,8 +345,8 @@ impl VkContext {
 
     // Push the model-to-world matrices of the given skinned objects, one
     // `(skinned index, matrix)` entry per moved instance. The per-frame cull
-    // records and the legacy skinned draw both read `obj.model` directly, so
-    // this only writes the fields. Out-of-range indices have no effect.
+    // records read `obj.model` directly, so this only writes the fields.
+    // Out-of-range indices have no effect.
     pub(crate) fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(skinned_index, model) in updates {
             if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index as usize) {

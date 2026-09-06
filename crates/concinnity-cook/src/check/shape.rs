@@ -246,10 +246,7 @@ mod tests {
             asset(
                 "scene_shader",
                 "Shader",
-                serde_json::json!({
-                    "vertex": {"sources": {"metal": "x.metal"}},
-                    "fragment": {"sources": {"metal": "x.metal"}}
-                }),
+                serde_json::json!({"fragment": "x.slang"}),
             ),
         ]
     }
@@ -396,14 +393,7 @@ mod tests {
     }
 
     fn shader(name: &str) -> WorldJsonlAsset {
-        asset(
-            name,
-            "Shader",
-            serde_json::json!({
-                "vertex": {"sources": {"metal": "x.metal"}},
-                "fragment": {"sources": {"metal": "x.metal"}}
-            }),
-        )
+        asset(name, "Shader", serde_json::json!({"fragment": "x.slang"}))
     }
 
     #[test]

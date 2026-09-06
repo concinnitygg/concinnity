@@ -27,12 +27,10 @@ pub(crate) struct MaterialEntry {
 /// `texture_count` entries. `Err` names the reference that points past the
 /// pool, which cook validated and so marks a corrupt build.
 pub(crate) fn of(mat: &Material, texture_count: usize) -> Result<MaterialEntry, &'static str> {
-    // Unset fallbacks differ per field. Albedo and the primary normal map
-    // select a reserved fallback entry through a sentinel no real handle can
-    // collide with; `normal_secondary` names the flat-normal entry
-    // (`texture_count`) directly. Slot 0 stays the sentinel the shader gates on
-    // for the emissive and ORM maps, which keeps their scalar value, and for
-    // `albedo_secondary`, whose terrain-blend consumer no shader implements yet.
+    // Unset fallbacks differ per field. Albedo and the normal map select a
+    // reserved fallback entry through a sentinel no real handle can collide
+    // with. Slot 0 stays the sentinel the shader gates on for the emissive and
+    // ORM maps, which keeps their scalar value.
     let slot_of = |field: &'static str, handle: Option<TextureHandle>, unset: usize| {
         let Some(handle) = handle else {
             return Ok(unset);
@@ -45,8 +43,6 @@ pub(crate) fn of(mat: &Material, texture_count: usize) -> Result<MaterialEntry, 
     };
     let albedo_slot = slot_of("albedo", mat.albedo, NO_ALBEDO_SLOT)?;
     let normal_map_slot = slot_of("normal_map", mat.normal_map, NO_NORMAL_MAP_SLOT)?;
-    let albedo_secondary_slot = slot_of("albedo_secondary", mat.albedo_secondary, 0)?;
-    let normal_secondary_slot = slot_of("normal_secondary", mat.normal_secondary, texture_count)?;
     let emissive_map_slot = slot_of("emissive_map", mat.emissive_map, 0)?;
     let orm_map_slot = slot_of("orm_map", mat.orm_map, 0)?;
     Ok(MaterialEntry {
@@ -55,18 +51,14 @@ pub(crate) fn of(mat: &Material, texture_count: usize) -> Result<MaterialEntry, 
         uniforms: MaterialUniforms {
             roughness: mat.roughness,
             metallic: mat.metallic,
-            macro_variation: mat.macro_variation,
-            terrain_blend: mat.terrain_blend,
-            tint: mat.tint,
-            _pad2: 0.0,
-            emissive: mat.emissive_factor,
-            secondary_blend_sharpness: mat.secondary_blend_sharpness,
-            albedo_secondary_index: albedo_secondary_slot as u32,
-            normal_secondary_index: normal_secondary_slot as u32,
-            emissive_map_index: emissive_map_slot as u32,
-            orm_map_index: orm_map_slot as u32,
             alpha_cutoff: mat.alpha_cutoff,
             opacity: mat.opacity,
+            tint: mat.tint,
+            _pad0: 0.0,
+            emissive: mat.emissive_factor,
+            _pad1: 0.0,
+            emissive_map_index: emissive_map_slot as u32,
+            orm_map_index: orm_map_slot as u32,
             transparent: u32::from(mat.transparent),
             see_through: u32::from(mat.see_through),
         },
@@ -119,14 +111,12 @@ mod tests {
     }
 
     // An unset reference takes its field's own fallback: the two sentinels for
-    // albedo and the primary normal map, the flat-normal entry past the pool
-    // for the secondary normal, and slot 0 for the maps the shader gates on.
+    // albedo and the normal map, and slot 0 for the maps the shader gates on.
     #[test]
     fn unset_references_take_their_fallbacks() {
         let entry = of(&material(), 4).expect("bakes");
         assert_eq!(entry.albedo_slot, NO_ALBEDO_SLOT);
         assert_eq!(entry.normal_map_slot, NO_NORMAL_MAP_SLOT);
-        assert_eq!(entry.uniforms.normal_secondary_index, 4);
         assert_eq!(entry.uniforms.emissive_map_index, 0);
         assert_eq!(entry.uniforms.orm_map_index, 0);
         assert_eq!(entry.uniforms.roughness, 0.25);

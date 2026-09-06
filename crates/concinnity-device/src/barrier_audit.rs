@@ -114,7 +114,9 @@ const AUDITS: &[BackendAudit] = &[
                 2,
                 Reason::OutOfFrame,
             ),
-            ("raytrace.rs", "cmd_pipeline_barrier", 6, Reason::OutOfFrame),
+            // One shared `build_barrier` for every acceleration-structure build
+            // sequence, plus the two around the skin dispatch.
+            ("raytrace.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
             (
                 "screenshot.rs",
                 "cmd_pipeline_barrier",

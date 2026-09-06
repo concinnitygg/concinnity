@@ -193,14 +193,10 @@ impl DxContext {
     // / downsample / upsample), GPU-cull compute, auto-exposure (build +
     // average), projected-decal, transparent (glass + water), volumetric-fog, the
     // unified G-buffer pre-pass (static / instanced / skinned), SSAO (kernel,
-    // blur), SSR (resolve), TAA (resolve), and the bindless main pipeline when
-    // it is live. The world-loaded
-    // main / shadow / instanced pipelines (`main_pso`, `shadow_pso`,
-    // `main_instanced_pso`) and the skinned-main / skinned-shadow PSOs
-    // are out of scope here; their fragment payload comes from the
-    // world's Shader library and is reloaded through a separate
-    // `update_world_shader_pipelines` path (not yet implemented on
-    // DirectX).
+    // blur), SSR (resolve), TAA (resolve), and bucket 0 of the GPU-driven main
+    // pass when it is live (rebuilt from the world default Shader's pair where
+    // the world declares one). The shadow and skinned-shadow PSOs are out of
+    // scope here.
     pub(super) fn reload_shaders(&mut self) -> Result<(), String> {
         if !self.hot_reload.enabled {
             return Ok(());
@@ -279,25 +275,16 @@ impl DxContext {
             ),
         )?;
 
-        // Bindless main + cull (when the world drives the built-in shader).
+        // Bucket 0 of the GPU-driven main pass, from the engine's freshly
+        // compiled pair; a world default Shader's own pair is spliced into the
+        // same templates, so it is rebuilt against them too.
         let bindless_main_pso = rebuild_if_live!(
             self.cull.main_bindless_root_sig.is_some() && self.cull.main_bindless_pso.is_some(),
             {
-                let (bvs, bps) = super::init::pipelines::compile_main_bindless_shaders(hr)?;
-                super::context::dump_on_err(
-                    info_queue,
-                    super::init::pipelines::create_main_pso(
-                        device,
-                        self.cull
-                            .main_bindless_root_sig
-                            .as_ref()
-                            .expect("bindless root signature is live alongside its PSO"),
-                        &bvs,
-                        &bps,
-                        super::texture::HDR_FORMAT,
-                        self.hdr.msaa_samples,
-                    ),
-                )
+                let (vs, ps) = super::init::pipelines::compile_main_bindless_shaders(hr)?;
+                let engine_pair = super::init::pipelines::BindlessMainShaders { vs, ps };
+                let pso = self.build_world_main_pso(self.world_shader.as_ref(), &engine_pair)?;
+                Ok::<_, String>((pso, engine_pair))
             }
         );
         let cull_pso = rebuild_if_live!(
@@ -524,17 +511,6 @@ impl DxContext {
             )
         );
 
-        // Unified G-buffer pre-pass (built when any screen-space consumer is on).
-        let gbuffer_rebuilt = rebuild_if_live!(
-            self.gbuffer.is_some(),
-            super::post::gbuffer::rebuild_gbuffer_pipelines(
-                device,
-                self.gbuffer.as_ref().expect("G-buffer resources are live"),
-                hr,
-                info_queue
-            )
-        );
-
         // SSGI (only when PostProcessConfig.indirect_lighting == ssgi).
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
@@ -594,8 +570,9 @@ impl DxContext {
         self.bloom.pso_prefilter = bloom_prefilter;
         self.bloom.pso_downsample = bloom_downsample;
         self.bloom.pso_upsample = bloom_upsample;
-        if let Some(p) = bindless_main_pso {
+        if let Some((p, engine_pair)) = bindless_main_pso {
             self.cull.main_bindless_pso = Some(p);
+            self.bindless_main_shaders = engine_pair;
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
@@ -636,15 +613,6 @@ impl DxContext {
         }
         if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
             swap_ssr_pipelines(ssr, rebuilt);
-        }
-        if let (Some(rebuilt), Some(gbuffer)) = (gbuffer_rebuilt, self.gbuffer.as_mut()) {
-            gbuffer.pso = rebuilt.pso;
-            if let Some(p) = rebuilt.instanced_pso {
-                gbuffer.instanced_pso = Some(p);
-            }
-            if let Some(p) = rebuilt.skinned_pso {
-                gbuffer.skinned_pso = Some(p);
-            }
         }
         if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
             super::post::ssgi::swap_ssgi_pipelines(ssgi, rebuilt);

@@ -958,7 +958,7 @@ impl VkContext {
         let device = &self.device;
         let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
         // SAFETY: `CullParams` is `repr(C)` and matches the push-constant block
-        // cull.comp declares (pinned by the layout test in `core::render`).
+        // cull.slang declares (pinned by the layout test in `core::render`).
         let push = unsafe {
             std::slice::from_raw_parts(
                 &params as *const CullParams as *const u8,
@@ -1806,7 +1806,11 @@ mod tests {
                 std::mem::size_of::<CullParams>(),
             )
         };
-        assert_eq!(bytes.len(), 120, "cull.comp's push_constant block is 120 B");
+        assert_eq!(
+            bytes.len(),
+            120,
+            "cull.slang's push_constant block is 120 B"
+        );
         // The two routing fields live in the last 8 bytes: the exact span a
         // 112-byte push left undefined.
         assert_eq!(

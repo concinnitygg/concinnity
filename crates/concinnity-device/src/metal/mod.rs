@@ -22,7 +22,6 @@ mod graph_exec;
 mod hiz;
 mod hot_reload;
 mod init;
-mod instanced;
 mod light_cull;
 mod lights;
 mod line;
@@ -43,7 +42,6 @@ mod resources;
 mod rt_ring;
 mod scoped_encoder;
 mod screenshot;
-mod shader_reflect;
 mod slang_shaders;
 mod streaming;
 mod text_upload;
@@ -56,10 +54,7 @@ mod world_shaders;
 
 // GPU-free host-side pieces live in core's `render` module (compiled
 // unconditionally so their unit tests count toward coverage); re-exported here
-// so the backend keeps its `super::uniforms` / `crate::metal::shader_layout`
-// paths. The `shader_layout` re-export is `pub` so the out-of-tree Swift app's
-// FFI crate can drive `validate_stage` against the engine layouts.
-pub use concinnity_core::render::metal::shader_layout;
+// so the backend keeps its `super::uniforms` path.
 pub(crate) use concinnity_core::render::metal::uniforms;
 
 // `set_preview_view` / `set_embedded_pump_events` are the play-in-view
@@ -68,8 +63,3 @@ pub(crate) use concinnity_core::render::metal::uniforms;
 pub(crate) use context::MtlContext;
 pub use context::{set_embedded_pump_events, set_preview_view};
 pub(crate) use gpu_profile::probe_gpu_profile;
-// Build-time Metal shader-layout reflection, driven by the cook pipeline through
-// the thin `ShaderBuildValidator` bridge in concinnity-dev.
-pub use shader_reflect::{
-    ShaderLayoutIssue, metal_device_available, metal_source_defines, validate_metal_shader_layout,
-};

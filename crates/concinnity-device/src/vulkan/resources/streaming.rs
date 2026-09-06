@@ -13,19 +13,16 @@ use crate::gfx::render_types::*;
 
 use super::super::context::*;
 use super::super::texture;
-use super::alloc_descriptor_sets;
 
 impl VkContext {
     // Grow the shared vertex/index buffers by a headroom region for streamed
-    // `VoxelWorld` chunks, seed the chunk sub-allocators with it, and build
-    // the shared chunk (albedo, normal) descriptor set from the world's chunk
-    // material.
+    // `VoxelWorld` chunks and seed the chunk sub-allocators with it. The chunk
+    // material's texture slots ride each chunk's cull record, so no descriptor
+    // is baked here.
     pub(crate) fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-        texture_slot: usize,
-        normal_map_slot: usize,
     ) -> crate::gfx::error::RenderResult<()> {
         self.wait_idle();
         let old_v = self.geometry.vertex_buffer_bytes;
@@ -85,55 +82,6 @@ impl VkContext {
             .idx_alloc
             .free(old_i, chunk_idx_bytes as u64, 0);
 
-        let pool_sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(2)];
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .max_sets(1)
-            .pool_sizes(&pool_sizes);
-        let pool = self
-            .device
-            .create_descriptor_pool(&pool_info)
-            .map_err(|e| format!("chunk descriptor pool: {e}"))?;
-        let set = alloc_descriptor_sets(
-            &self.device,
-            pool.handle(),
-            &[self.descriptors.object_set_layout.handle()],
-        )?
-        .into_iter()
-        .next()
-        .ok_or("chunk descriptor set: allocation returned none")?;
-        let tex_slot = texture_slot.min(self.textures.len().saturating_sub(1));
-        self.chunk_stream.texture_slot = Some(tex_slot);
-        // The normal map is a texture in the shared pool at its own handle (or
-        // `NO_NORMAL_MAP_SLOT`); store it as authored so a streamed swap of that
-        // texture re-points this binding.
-        self.chunk_stream.normal_map_slot = Some(normal_map_slot);
-        let albedo_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(self.textures[tex_slot].view)
-            .sampler(self.linear_sampler.handle());
-        let nm_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(self.normal_pool_view(normal_map_slot))
-            .sampler(self.linear_sampler.handle());
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&albedo_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&nm_info)),
-        ];
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe { self.device.update_descriptor_sets(&writes, &[]) };
-        self.chunk_stream.descriptor_pool = Some(pool);
-        self.chunk_stream.object_set = Some(set);
         Ok(())
     }
 
@@ -218,10 +166,7 @@ impl VkContext {
             shader_bucket: 0,
         };
 
-        // Write at the engine-allocated destination slot. A slot recycled from
-        // a culled static prop is not yet in `draw.always`;
-        // `ensure_always_draw` adds it, while one recycled from another chunk /
-        // clone already is.
+        // Write at the engine-allocated destination slot.
         let draw_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
@@ -234,11 +179,9 @@ impl VkContext {
                     "appended draw slot must match the draw-object count"
                 );
                 self.draw.objects.push(obj);
-                self.draw.always_member.push(false);
                 slot
             }
         };
-        self.ensure_always_draw(draw_idx);
         // Seed the streamed-chunk previous transform onto the unified G-buffer's
         // velocity bookkeeping so a chunk that streams in does not ghost from
         // IDENTITY on its first frame.

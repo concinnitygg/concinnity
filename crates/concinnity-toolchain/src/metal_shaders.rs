@@ -1,9 +1,8 @@
 // Build-time precompilation of the engine's static Metal shaders.
 //
 // The device crate's build script hands this module its own `.metal` shader
-// directory, the names that must stay source-only (runtime-assembled
-// templates), and the shared fragments spliced into shaders at a marker. Every
-// other `.metal` file is assembled into OUT_DIR and compiled to a `.metallib`
+// directory and the names that must stay source-only (runtime-assembled
+// templates). Every other `.metal` file is compiled to a `.metallib`
 // with the same `xcrun metal` + `xcrun metallib` pair the cook's shader
 // toolchain uses, and a lookup function mapping shader name to embedded bytes
 // is generated there too.
@@ -40,15 +39,11 @@ pub struct SlangLibSpec {
 
 /// Precompile every eligible `.metal` under `shaders_dir`, plus every `.slang`
 /// spec in `slang_libs`, into OUT_DIR and generate `engine_metallibs.rs` there.
-/// `fragments` pairs a source marker with the file under `shaders_dir` that
-/// replaces it, matching the substitution the renderer applies when it compiles
-/// the same shader from source. Panics if the Metal toolchain is present but a
-/// shader fails to compile: a broken shader must fail the build, not surface at
-/// renderer init.
+/// Panics if the Metal toolchain is present but a shader fails to compile: a
+/// broken shader must fail the build, not surface at renderer init.
 pub fn precompile_metal_shaders(
     shaders_dir: &Path,
     source_only: &[&str],
-    fragments: &[(&str, &str)],
     slang_libs: &[SlangLibSpec],
 ) {
     println!("cargo:rerun-if-changed={}", shaders_dir.display());
@@ -65,8 +60,6 @@ pub fn precompile_metal_shaders(
         return;
     }
 
-    let fragments = read_fragments(shaders_dir, fragments);
-
     let lib_dir = out_dir.join("engine_shaders");
     std::fs::create_dir_all(&lib_dir).expect("create engine_shaders dir");
     let mut entries = Vec::with_capacity(shaders.len() + slang_libs.len());
@@ -76,31 +69,13 @@ pub fn precompile_metal_shaders(
             .and_then(|n| n.to_str())
             .expect("utf8 shader filename")
             .to_string();
-        let source = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let assembled = lib_dir.join(&name);
-        std::fs::write(&assembled, assemble(&source, &fragments))
-            .unwrap_or_else(|e| panic!("write {}: {e}", assembled.display()));
         let lib_path = lib_dir.join(&name).with_extension("metallib");
-        compile_metallib(&assembled, &lib_path);
+        compile_metallib(path, &lib_path);
         entries.push((name, lib_path));
     }
     entries.extend(precompile_slang_libs(slang_libs, &lib_dir));
     std::fs::write(&generated, metallib_lookup_source(&entries))
         .expect("write engine_metallibs.rs");
-}
-
-// Load each `(marker, file)` pair's replacement text from `dir`.
-fn read_fragments<'a>(dir: &Path, fragments: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, String)> {
-    fragments
-        .iter()
-        .map(|(marker, file)| {
-            let path = dir.join(file);
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("read fragment {}: {e}", path.display()));
-            (*marker, text)
-        })
-        .collect()
 }
 
 // Compile each single-source spec to a metallib via slangc. With slangc absent
@@ -143,15 +118,6 @@ fn precompile_slang_libs(specs: &[SlangLibSpec], lib_dir: &Path) -> Vec<(String,
             (spec.name.to_string(), lib_path)
         })
         .collect()
-}
-
-// Replace every fragment marker in `source`. Kept pure for unit testing.
-fn assemble(source: &str, fragments: &[(&str, String)]) -> String {
-    let mut out = source.to_string();
-    for (marker, text) in fragments {
-        out = out.replace(marker, text);
-    }
-    out
 }
 
 // Every `.metal` in the directory except the runtime-assembled template
@@ -270,33 +236,6 @@ mod tests {
         assert!(src.contains("fn embedded_metallib"));
         assert!(src.contains("None"));
         assert!(!src.contains("include_bytes!"));
-    }
-
-    #[test]
-    fn assemble_substitutes_every_marker() {
-        let fragments = vec![
-            (
-                "{OBJECT_DATA}",
-                "struct GpuObjectData { float4x4 model; };".to_string(),
-            ),
-            ("{OTHER}", "// other".to_string()),
-        ];
-        let out = assemble("head\n{OBJECT_DATA}\nmid\n{OTHER}\ntail\n", &fragments);
-        assert!(out.contains("struct GpuObjectData"));
-        assert!(out.contains("// other"));
-        assert!(!out.contains("{OBJECT_DATA}"));
-        assert!(!out.contains("{OTHER}"));
-        assert!(out.starts_with("head\n") && out.ends_with("tail\n"));
-    }
-
-    #[test]
-    fn assemble_replaces_every_occurrence_and_leaves_markerless_source_alone() {
-        let fragments = vec![("{OBJECT_DATA}", "RECORD".to_string())];
-        assert_eq!(
-            assemble("{OBJECT_DATA} a {OBJECT_DATA}", &fragments),
-            "RECORD a RECORD"
-        );
-        assert_eq!(assemble("no markers", &fragments), "no markers");
     }
 
     #[test]

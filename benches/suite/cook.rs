@@ -61,12 +61,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         let content = world_jsonl(n);
 
         bench.run(&format!("cook/prepare_world/{label}"), n as u64, || {
-            let loaded = prepare_world(
-                &content,
-                Some(&assets_dir),
-                concinnity_engine::platform::current(),
-            )
-            .expect("bench world validates");
+            let loaded = prepare_world(&content, Some(&assets_dir)).expect("bench world validates");
             loaded.assets.len()
         });
 

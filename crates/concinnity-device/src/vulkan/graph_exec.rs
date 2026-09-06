@@ -350,9 +350,8 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 // Per-frame params the executor threads into each pass's `encode_*`
 // method. The set grows as more passes migrate; Composite needs the
 // swapchain image index + text calls, Shadow needs neither (it reads
-// per-frame state straight off `&self`), Main needs the BVH-culled
-// visible set + frustum + camera position. New fields land here when
-// a pass that needs them migrates.
+// per-frame state straight off `&self`), Cull needs the frustum + camera
+// position. New fields land here when a pass that needs them migrates.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
@@ -366,16 +365,11 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // and skips every draw (the masked graph drops all other world passes), so
     // nothing of the world renders behind the menu.
     pub world_hidden: bool,
-    // CPU visibility list (BVH-culled cullables + draw.always fallback).
-    // Consumed by Main's legacy + instanced fallback passes and the
-    // unified G-buffer pre-pass.
-    pub visible: &'a [u32],
-    // Camera frustum used to cull instanced clusters during Main's
-    // per-cluster draw loop, and by the G-buffer pre-pass for the same
-    // reason.
+    // Camera frustum, culling the cull dispatch's records and the decal and
+    // planar-reflection passes' own per-object lists.
     pub frustum: &'a Frustum,
-    // Camera world-space position used for per-cluster distance-cull
-    // during Main's instanced sub-pass and the G-buffer pre-pass.
+    // Camera world-space position, for the same passes' distance culls and LOD
+    // picks.
     pub cam_pos: [f32; 3],
     // Jittered view-projection matrix (with TAA Halton jitter when
     // TAA is on). Consumed by the G-buffer pre-pass to rasterise the
@@ -436,7 +430,7 @@ impl VkContext {
         // the fan-out, so every instanced pass (Main + the unified G-buffer
         // pre-pass + Shadow) reads a consistent partition while recording on
         // worker threads. Inert when no clusters are declared.
-        self.prepare_instanced_clusters(params.frame_idx, params.cam_pos);
+        self.prepare_instanced_clusters(params.cam_pos);
 
         // Composite stays on the main thread (it writes the swapchain image
         // and allocates + drops transient text buffers through the RefCell
@@ -912,14 +906,7 @@ impl VkContext {
                 self.encode_spot_shadow_pass(cmd, params.frame_idx, params.cam_pos);
             }
             PassId::Main => {
-                self.encode_main_pass(
-                    cmd,
-                    params.frame_idx,
-                    params.visible,
-                    params.frustum,
-                    params.cam_pos,
-                    params.world_hidden,
-                );
+                self.encode_main_pass(cmd, params.frame_idx, params.world_hidden);
             }
             PassId::Composite => {
                 self.encode_composite_and_text(
@@ -1053,10 +1040,7 @@ impl VkContext {
                     GbufferPrepassView {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
-                        cam_pos: params.cam_pos,
-                        frustum: params.frustum,
                     },
-                    params.visible,
                     velocity_active,
                 );
             }

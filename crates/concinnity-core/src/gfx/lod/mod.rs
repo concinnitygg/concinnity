@@ -7,9 +7,12 @@
 //! every backend runs per object, per frame.
 
 mod decimate;
+mod instances;
 mod select;
 
 pub use decimate::{decimate_by_qem, default_distance_for_level, target_tri_count_for_level};
+pub use instances::{any_cluster_has_lod, for_each_instance_lod};
 pub use select::{
-    bounds_finite, camera_distance, pick_lod_level, pick_lod_slice, skinned_camera_distance,
+    bounds_finite, camera_distance, instance_camera_distance, pick_lod_level, pick_lod_slice,
+    skinned_camera_distance,
 };

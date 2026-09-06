@@ -1,11 +1,10 @@
 // src/metal/draw/spot_shadow.rs
 //
 // Spot shadow pass: one depth-only render per shadow-casting spot light into its
-// slice of `spot_shadow.map`. Structurally the cascade pass with a different
-// projection source -- each slice reuses the same depth-only shadow pipeline and
-// the same static / instanced / skinned caster sub-encoders, driven by a
-// `ShadowPassBinding` whose uniforms hold that spot's light-space matrix in slot
-// 0 rather than the CSM cascade set.
+// slice of `spot_shadow.map`, plus the per-draw caster body it is the only
+// caller of. The shadow ICB the bindless cull fills is laid out per CSM cascade,
+// so it has no slots for these slices; the casters are walked on the CPU here,
+// once per slice, through the same depth-only pipelines the cascade pass binds.
 //
 // Local lights are static, so the matrices are built once at init and only the
 // depth contents refresh here. `spot_shadow.render_mask` (from
@@ -16,14 +15,28 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer as _, MTLLoadAction, MTLRenderPassDescriptor, MTLStoreAction,
+    MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLIndexType, MTLLoadAction,
+    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
 };
 
 use crate::gfx::render_types::{ShadowPassPush, ShadowUniforms, SpotShadowData};
+use crate::gfx::shadow_bias;
 use crate::metal::context::MtlContext;
+use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
+use crate::metal::uniforms::ModelUniforms;
 
-use super::shadow::ShadowPassBinding;
+// A spot slice's matrix always lands in slot 0 of its one-matrix
+// `ShadowUniforms`, so the shadow VS's cascade index is constant here.
+const SPOT_SLICE_IDX: u32 = 0;
+
+// The per-slice state every caster sub-encoder binds before drawing. The static
+// and instanced casters take the depth-only shadow pipeline; the skinned ones
+// swap in the skinned variant against the same uniforms.
+struct SpotSliceBinding<'a> {
+    pipeline: &'a ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>,
+    uniforms: &'a ShadowUniforms,
+}
 
 impl MtlContext {
     // Choose which spot shadow slices to re-render this frame and advance the
@@ -103,28 +116,203 @@ impl MtlContext {
             );
 
             let uniforms = self.spot_slice_uniforms(slice);
-            let bind = ShadowPassBinding {
+            let bind = SpotSliceBinding {
                 pipeline: &shadow_pipeline,
                 uniforms: &uniforms,
-                // The shadow VS indexes `light_vps` by this; the spot slice's
-                // matrix lives in slot 0.
-                push: ShadowPassPush {
-                    cascade_idx: 0,
-                    _pad: [0; 3],
-                },
-                slope_bias: 1.0,
             };
-
-            // Spot casters go through the legacy CPU sub-encoders: the shadow
-            // ICB the bindless cull fills is laid out per CSM cascade, so it has
-            // no slots for these slices.
-            total_draws += self.encode_shadow_static_into(&enc, &bind, cam_pos);
-            total_draws += self.encode_shadow_instanced_into(&enc, &bind, cam_pos);
-            total_draws +=
-                self.encode_shadow_skinned_into(&enc, &bind, cam_pos, skinned_joint_bufs);
+            total_draws += self.encode_spot_casters(&enc, &bind, cam_pos, skinned_joint_bufs);
         }
 
         Ok(total_draws)
+    }
+
+    // Every caster in the scene, drawn into the slice `enc` targets: static
+    // objects, then each cluster's instances, then the skinned meshes.
+    fn encode_spot_casters(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+        bind: &SpotSliceBinding,
+        cam_pos: [f32; 3],
+        skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
+    ) -> u32 {
+        self.encode_spot_static_into(enc, bind, cam_pos)
+            + self.encode_spot_instanced_into(enc, bind, cam_pos)
+            + self.encode_spot_skinned_into(enc, bind, cam_pos, skinned_joint_bufs)
+    }
+
+    // Apply the bindings every caster sub-path needs (shadow pipeline, depth
+    // state, ShadowUniforms at vertex buffer 0, the slice index at vertex buffer
+    // 7, and the shared vertex buffer at binding 1).
+    fn bind_spot_slice(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+        bind: &SpotSliceBinding,
+    ) {
+        enc.set_pipeline(bind.pipeline);
+        enc.set_depth_stencil(&self.depth_state);
+        enc.setDepthBias_slopeScale_clamp(
+            shadow_bias::RASTER_CONSTANT,
+            shadow_bias::RASTER_SLOPE,
+            shadow_bias::RASTER_CLAMP,
+        );
+        enc.set_vertex_value(bind.uniforms, 0);
+        enc.set_vertex_value(
+            &ShadowPassPush {
+                cascade_idx: SPOT_SLICE_IDX,
+                _pad: [0; 3],
+            },
+            7,
+        );
+        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
+    }
+
+    // Encode the static-geometry caster draws.
+    fn encode_spot_static_into(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+        bind: &SpotSliceBinding,
+        cam_pos: [f32; 3],
+    ) -> u32 {
+        enc.pushDebugGroup(&objc2_foundation::NSString::from_str("spot shadow static"));
+        self.bind_spot_slice(enc, bind);
+
+        let mut draw_calls: u32 = 0;
+        for obj in &self.draw.objects {
+            if !obj.visible || !obj.resident {
+                continue;
+            }
+            let model_uniforms = ModelUniforms { model: obj.model };
+            enc.set_vertex_value(&model_uniforms, 2);
+            // Pick the LOD by camera distance -- the shadow pass uses the
+            // same slice the main pass will, so silhouettes track when the
+            // runtime swaps to a coarser LOD.
+            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let (index_offset, index_count) = obj.active_lod(d);
+            let index_byte_offset = index_offset * std::mem::size_of::<u32>();
+            // SAFETY: `index_byte_offset` and `index_count` come from `active_lod`, which returns a
+            // range inside this object's own slice of `self.index_buffer`, and `base_vertex` is
+            // that object's own base.
+            unsafe {
+                enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
+                    MTLPrimitiveType::Triangle,
+                    index_count,
+                    MTLIndexType::UInt32,
+                    &self.index_buffer,
+                    index_byte_offset,
+                    1,
+                    obj.base_vertex as isize,
+                    0,
+                );
+            }
+            draw_calls += 1;
+        }
+        enc.popDebugGroup();
+        draw_calls
+    }
+
+    // Encode caster draws for instanced clusters by iterating per-instance using
+    // the (non-instanced) shadow pipeline. Cheap to ship and visually identical
+    // to an instanced shadow shader. Off-screen instances can still cast shadows
+    // onto visible surfaces, so no cluster-level cull here.
+    fn encode_spot_instanced_into(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+        bind: &SpotSliceBinding,
+        cam_pos: [f32; 3],
+    ) -> u32 {
+        if self.instanced.clusters.is_empty() {
+            return 0;
+        }
+        enc.pushDebugGroup(&objc2_foundation::NSString::from_str(
+            "spot shadow instanced",
+        ));
+        self.bind_spot_slice(enc, bind);
+
+        let mut draw_calls: u32 = 0;
+        for cluster in &self.instanced.clusters {
+            // Shadows only read each bucket's matrices (per-instance vertex
+            // bytes), so borrow them: no LOD-bucket clone, which otherwise
+            // recurred once per slice.
+            cluster.for_each_lod_bucket(cam_pos, |index_offset, index_count, instances| {
+                let index_byte_offset = index_offset * std::mem::size_of::<u32>();
+                for &model in instances {
+                    let model_uniforms = ModelUniforms { model };
+                    enc.set_vertex_value(&model_uniforms, 2);
+                    // SAFETY: the index range comes from `active_lod` on this object's own slice of
+                    // `self.index_buffer`.
+                    unsafe {
+                        enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                            MTLPrimitiveType::Triangle,
+                            index_count,
+                            MTLIndexType::UInt32,
+                            &self.index_buffer,
+                            index_byte_offset,
+                        );
+                    }
+                    draw_calls += 1;
+                }
+            });
+        }
+        enc.popDebugGroup();
+        draw_calls
+    }
+
+    // Encode caster draws for skinned meshes (deformed depth, drawn last in the
+    // slice).
+    fn encode_spot_skinned_into(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+        bind: &SpotSliceBinding,
+        cam_pos: [f32; 3],
+        skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
+    ) -> u32 {
+        let mut draw_calls: u32 = 0;
+        let (Some(skinned_shadow_ps), Some(svb), Some(sib)) = (
+            &self.skinned.shadow_pipeline_state,
+            &self.skinned.vertex_buffer,
+            &self.skinned.index_buffer,
+        ) else {
+            return draw_calls;
+        };
+        if self.skinned.draw_objects.is_empty() {
+            return draw_calls;
+        }
+        enc.pushDebugGroup(&objc2_foundation::NSString::from_str("spot shadow skinned"));
+        // The skinned path needs the same uniforms and depth state as the others
+        // but its own pipeline, so it binds the shared state with the skinned
+        // pipeline swapped in.
+        self.bind_spot_slice(
+            enc,
+            &SpotSliceBinding {
+                pipeline: skinned_shadow_ps,
+                uniforms: bind.uniforms,
+            },
+        );
+        enc.set_vertex_buffer(svb, 0, 1);
+        for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+            if !obj.visible {
+                continue;
+            }
+            let model_uniforms = ModelUniforms { model: obj.model };
+            let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+            let (index_offset, index_count) = obj.active_lod(d);
+            let index_byte_offset = index_offset * std::mem::size_of::<u32>();
+            enc.set_vertex_value(&model_uniforms, 2);
+            enc.set_vertex_buffer(&skinned_joint_bufs[i], 0, 8);
+            // SAFETY: the index range is this object's own slice of the skinned index buffer.
+            unsafe {
+                enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                    MTLPrimitiveType::Triangle,
+                    index_count,
+                    MTLIndexType::UInt32,
+                    sib,
+                    index_byte_offset,
+                );
+            }
+            draw_calls += 1;
+        }
+        enc.popDebugGroup();
+        draw_calls
     }
 
     // A one-matrix `ShadowUniforms` carrying `slice`'s light-space projection in
@@ -133,7 +321,7 @@ impl MtlContext {
     fn spot_slice_uniforms(&self, slice: u32) -> ShadowUniforms {
         let data = self.spot_shadow_data(slice);
         let mut uniforms = crate::gfx::csm::empty_shadow_uniforms();
-        uniforms.light_vps[0] = data.light_vp;
+        uniforms.light_vps[SPOT_SLICE_IDX as usize] = data.light_vp;
         uniforms.active_cascades = 1;
         uniforms
     }

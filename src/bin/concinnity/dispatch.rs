@@ -9,11 +9,6 @@ use concinnity_engine::StateTree;
 use concinnity_engine::app::dev_flags;
 
 pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
-    // Give the cook this build's shader compilers. `cn build` reaches the
-    // compile pipeline directly rather than through the authoring API, so
-    // installing once here is what covers every subcommand that compiles.
-    concinnity_shader::install();
-
     match &cli.command {
         Commands::Init => command::init(),
         Commands::New(args) => command::new(&args.path),

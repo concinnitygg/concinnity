@@ -18,13 +18,9 @@ use super::context::MtlContext;
 use super::init::effects::{
     EffectDimensions, EffectFlags, EffectSettings, QualityEffectsBundle, build_quality_effects,
 };
-use super::init::pipelines::make_vertex_descriptor;
-use super::post::build_gbuffer_prepass_pipeline;
 use super::raytrace::{
     RtGpu, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel, raytracing_supported,
 };
-use super::resources::skinning::make_skinned_vertex_descriptor;
-use super::slang_shaders;
 
 impl MtlContext {
     // Turn display sync (vsync) on or off at runtime via the view's backing
@@ -128,7 +124,6 @@ impl MtlContext {
         let upscaling_active = self.upscale.scaler.is_some();
         let taa_effective = q.taa && !upscaling_active;
         let needs_velocity = taa_effective || upscaling_active;
-        let has_instanced = self.instanced.pipeline_state.is_some();
         // Output dimensions come from the live bloom chain, which was built at
         // them; the rebuilt pool sizes `bloom_top` off the same pair, so the new
         // top mip drops back into the chain unchanged below.
@@ -141,7 +136,6 @@ impl MtlContext {
 
         let bundle = match build_quality_effects(
             &self.allocator,
-            &make_vertex_descriptor(),
             dims,
             EffectSettings {
                 ssao: &q.ssao,
@@ -155,7 +149,6 @@ impl MtlContext {
             EffectFlags {
                 taa_enabled: taa_effective,
                 needs_velocity,
-                has_instanced,
                 hot_reload: self.hot_reload.enabled,
             },
         ) {
@@ -172,7 +165,7 @@ impl MtlContext {
             ssao,
             transient_pool,
             ssr,
-            mut gbuffer,
+            gbuffer,
             ssgi,
             rt_pipeline,
             rt_pipeline_textured,
@@ -183,23 +176,6 @@ impl MtlContext {
             auto_exposure_state,
             auto_exposure_bias_ev,
         } = bundle;
-
-        // Re-attach the 80-byte skinned G-buffer pre-pass pipeline when the world
-        // has skinned meshes and the G-buffer is now built (`build_quality_effects`
-        // leaves it `None`, like the init path, which fills it in `upload_skinned`).
-        if gbuffer.targets.is_some() && self.skinned.vertex_buffer.is_some() {
-            match build_gbuffer_prepass_pipeline(
-                &self.device,
-                &make_skinned_vertex_descriptor(),
-                &slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
-                self.hot_reload.enabled,
-            ) {
-                Ok(p) => gbuffer.skinned_pipeline = Some(p),
-                Err(e) => {
-                    tracing::error!("apply_quality_settings: skinned G-buffer pipeline: {e}")
-                }
-            }
-        }
 
         // Swap the screen-space feature state in. The old `Retained` targets drop
         // here; any in-flight command buffer still referencing them holds its own

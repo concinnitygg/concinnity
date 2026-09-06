@@ -38,40 +38,35 @@ use crate::components::SdfVolume;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{LightUniforms, ShadowUniforms};
 
+use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::platform::Platform;
+use concinnity_core::render::slang_programs::raymarch::{self, Family};
+use concinnity_slang::SlangTarget;
+
 use super::context::{HDR_FORMAT, VkContext};
-use super::pipeline::{compile_glsl, shader_source, spv_module};
+use super::pipeline::spv_module;
 use super::render_pass::create_main_render_pass_two_pass;
 use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
 };
 
-// Engine-shipped GLSL: the helpers + opaque template the per-volume user
-// fragment shader is sandwiched between. The standalone proxy vertex shaders
-// are declared in `super::builtins`.
-const RAYMARCH_HELPERS_GLSL: &str = include_str!("shaders/raymarch_helpers.glsl");
-const RAYMARCH_TEMPLATE_GLSL: &str = include_str!("shaders/raymarch_template.glsl");
-
-// Volumetric template: appended after the helpers + the user's `sampleVolume`
-// for `volumetric` volumes (participating media). Marches the bounding box and
-// integrates Beer-Lambert transmittance instead of sphere-tracing a surface.
-const RAYMARCH_VOLUMETRIC_TEMPLATE_GLSL: &str =
-    include_str!("shaders/raymarch_volumetric_template.glsl");
-
-// Depth-only shadow fragment template appended after the helpers + the user's
-// `map` / `shade`.
-const RAYMARCH_SHADOW_TEMPLATE_GLSL: &str = include_str!("shaders/raymarch_shadow_template.glsl");
-
 // 36 indices for the unit-cube proxy: front faces are culled so each pixel
 // inside the bounding box gets exactly one back-face fragment.
 const CUBE_INDEX_COUNT: u32 = 36;
 
-// `RaymarchView` (per-frame view UBO) and `RaymarchVolumeUniforms` (per-volume
-// SDF UBO) are GPU-free layout structs that live in `core::render`;
-// re-export them so `crate::vulkan::raymarch::{RaymarchView,RaymarchVolumeUniforms}`
-// are unchanged for the encode + `volume_uniforms_from` paths.
-pub(in crate::vulkan) use crate::vulkan::uniforms::RaymarchView;
-pub(in crate::vulkan) use crate::vulkan::uniforms::RaymarchVolumeUniforms;
+// One declaration for all three backends, in `core::render::uniforms`.
+// Re-exported so `crate::vulkan::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
+// stay the paths the encode and `volume_uniforms_from` sites use.
+pub(in crate::vulkan) use concinnity_core::render::uniforms::{
+    RaymarchView, RaymarchVolumeUniforms,
+};
+
+// Which cascade a shadow-caster draw targets, pushed to both stages. The whole
+// 16-byte block is declared, not just the live `u32`: the shared source spells
+// it out to the padding the other two hosts allocate, and a range narrower than
+// what the shader declares is a validation finding.
+use concinnity_core::render::uniforms::RaymarchShadowCascade;
 
 pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
@@ -91,7 +86,10 @@ pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUn
 // UBO (uploaded once at init), its descriptor set, and the visibility flag the
 // encoder + `any_visible` read.
 struct RaymarchVolumeRecord {
-    pipeline: vk::Pipeline,
+    // Owned, not a raw handle: the record outlives the local the pipeline was
+    // built into, so storing the bare `vk::Pipeline` destroyed it at the end of
+    // the loop iteration and left every draw binding a dangling one.
+    pipeline: OwnedPipeline,
     // Depth-only shadow-caster pipeline. `Some` when the asset's `cast_shadows`
     // is set; the shadow encoder iterates only the volumes where this is `Some`
     // and `visible`. Targets `shadow_render_pass`.
@@ -153,102 +151,43 @@ pub(in crate::vulkan) struct RaymarchResources {
     volumes: Vec<RaymarchVolumeRecord>,
 }
 
-// Push constant for the shadow-caster pipeline: which CSM cascade this draw
-// targets, selecting `light_vps[cascade_idx]` in the proxy vertex + the fragment
-// reprojection. Matches the `ShadowCascade` push block in the shadow shaders.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct ShadowCascadePush {
-    cascade_idx: u32,
-}
-
-// Assemble the per-volume fragment source: engine helpers, then the user's
-// `map` / `shade`, then the opaque template's `main`. The single `#version`
-// lives at the top of the helpers; the user source + template must not declare
-// their own. Mirrors the DirectX `wrap_user_source` (helpers -> user ->
-// template), adapted for GLSL's separate vertex/fragment compilation.
-fn wrap_user_fragment(user_source: &str, hot_reload: bool) -> String {
-    let helpers = shader_source(hot_reload, "raymarch_helpers.glsl", RAYMARCH_HELPERS_GLSL);
-    let template = shader_source(hot_reload, "raymarch_template.glsl", RAYMARCH_TEMPLATE_GLSL);
-    format!(
-        "{helpers}\n// === user SdfVolume fragment shader ===\n{user_source}\n// === engine raymarch template ===\n{template}\n"
-    )
-}
-
-// Compile the proxy vertex shader + the assembled per-volume fragment shader to
-// SPIR-V. Returns `(vertex_spv, fragment_spv)`.
-fn compile_raymarch_shaders(
-    user_source: &str,
+// The SPIR-V for one family of a volume's field, as (vertex, fragment).
+//
+// The cook compiled these; each entry is its own module here, which is what a
+// Vulkan pipeline binds and what a DXIL container is on the other host. A
+// template edit makes the stored artifacts miss and both entries compile.
+fn family_spirv(
+    programs: &SdfPrograms,
+    family: Family,
     hot_reload: bool,
+    label: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert =
-        super::builtins::RAYMARCH_PROXY_VERT.compile(&super::builtins::Ctx::plain(hot_reload))?;
-    let frag_src = wrap_user_fragment(user_source, hot_reload);
-    let frag = compile_glsl(
-        &frag_src,
-        shaderc::ShaderKind::Fragment,
-        "raymarch_fragment",
+    let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
+    let spirv = |entry: &str| -> Result<Vec<u8>, String> {
+        crate::raymarch_source::artifact(
+            programs,
+            &crate::raymarch_source::Request {
+                family,
+                platform: Platform::Glsl,
+                entries: &[entry],
+                target: SlangTarget::Spirv,
+                hot_reload,
+                label,
+            },
+        )
+        .map(|bytes| bytes.into_owned())
+    };
+    let vert = spirv(
+        stages
+            .next()
+            .expect("a family declares a vertex entry")
+            .entry,
     )?;
-    Ok((vert, frag))
-}
-
-// Assemble the per-volume fragment source for a volumetric volume: engine
-// helpers, then the user's `sampleVolume`, then the volumetric template's
-// `main`. glslang prunes the unreachable surface helpers (`sdfNormal`,
-// `coneRaymarch`) and their forward-declared `map` calls, so the volumetric
-// author needs no surface stubs. Mirrors the DirectX `wrap_user_source_volumetric`.
-fn wrap_user_fragment_volumetric(user_source: &str, hot_reload: bool) -> String {
-    let helpers = shader_source(hot_reload, "raymarch_helpers.glsl", RAYMARCH_HELPERS_GLSL);
-    let template = shader_source(
-        hot_reload,
-        "raymarch_volumetric_template.glsl",
-        RAYMARCH_VOLUMETRIC_TEMPLATE_GLSL,
-    );
-    format!(
-        "{helpers}\n// === user SdfVolume fragment shader (volumetric) ===\n{user_source}\n// === engine raymarch volumetric template ===\n{template}\n"
-    )
-}
-
-// Compile the proxy vertex shader (shared with the surface pass) + the assembled
-// volumetric fragment shader to SPIR-V. Returns `(vertex_spv, fragment_spv)`.
-fn compile_raymarch_volumetric_shaders(
-    user_source: &str,
-    hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert =
-        super::builtins::RAYMARCH_PROXY_VERT.compile(&super::builtins::Ctx::plain(hot_reload))?;
-    let frag_src = wrap_user_fragment_volumetric(user_source, hot_reload);
-    let frag = compile_glsl(
-        &frag_src,
-        shaderc::ShaderKind::Fragment,
-        "raymarch_volumetric_fragment",
-    )?;
-    Ok((vert, frag))
-}
-
-// Assemble + compile the depth-only shadow-caster shaders: the standalone shadow
-// proxy vertex + the (helpers + user + shadow template) fragment. spirv-opt DCEs
-// the unused `shade` / IBL / scene-colour bindings, so the compiled fragment
-// references only the view / lights / shadow UBOs.
-fn compile_raymarch_shadow_shaders(
-    user_source: &str,
-    hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vert = super::builtins::RAYMARCH_SHADOW_PROXY_VERT
-        .compile(&super::builtins::Ctx::plain(hot_reload))?;
-    let helpers = shader_source(hot_reload, "raymarch_helpers.glsl", RAYMARCH_HELPERS_GLSL);
-    let template = shader_source(
-        hot_reload,
-        "raymarch_shadow_template.glsl",
-        RAYMARCH_SHADOW_TEMPLATE_GLSL,
-    );
-    let frag_src = format!(
-        "{helpers}\n// === user SdfVolume fragment shader ===\n{user_source}\n// === engine raymarch shadow template ===\n{template}\n"
-    );
-    let frag = compile_glsl(
-        &frag_src,
-        shaderc::ShaderKind::Fragment,
-        "raymarch_shadow_fragment",
+    let frag = spirv(
+        stages
+            .next()
+            .expect("a family declares a fragment entry")
+            .entry,
     )?;
     Ok((vert, frag))
 }
@@ -1008,24 +947,10 @@ impl RaymarchResources {
             shadow_ubos,
             shadow_render_pass,
         } = bindings;
-        // Filter `.glsl` volumes; Metal/DirectX-first SDFs get dropped with a
-        // warning so the rest of the world keeps rendering.
-        let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes
-            .iter()
-            .filter(|(v, _, label)| {
-                if v.fragment_shader.to_ascii_lowercase().ends_with(".glsl") {
-                    true
-                } else {
-                    tracing::warn!(
-                        "SdfVolume '{}': fragment shader '{}' is not .glsl; skipping on \
-                         Vulkan (the rest of the world still renders)",
-                        label,
-                        v.fragment_shader
-                    );
-                    false
-                }
-            })
-            .collect();
+        // Every volume is this backend's: one distance field serves all three,
+        // so there is no per-backend source to select between and nothing to
+        // filter out. This used to drop anything not named `.glsl`.
+        let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes.iter().collect();
         if active.is_empty() {
             return Ok(None);
         }
@@ -1112,7 +1037,7 @@ impl RaymarchResources {
             let push = vk::PushConstantRange::default()
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
                 .offset(0)
-                .size(std::mem::size_of::<ShadowCascadePush>() as u32);
+                .size(std::mem::size_of::<RaymarchShadowCascade>() as u32);
             let info = vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&push));
@@ -1145,18 +1070,14 @@ impl RaymarchResources {
         // Build per-volume records. A compile error in an active volume is a
         // developer-time bug, so it aborts init (unlike the .glsl filter above).
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
-        for (vol, bytes, label) in &active {
-            let user_source = std::str::from_utf8(bytes).map_err(|e| {
-                format!("SdfVolume '{label}': fragment shader payload is not valid UTF-8: {e}")
-            })?;
-            // Volumetric volumes (participating media) author `sampleVolume` and
-            // render alpha-blended without a depth write; surface volumes author
-            // `map` / `shade` and sphere-trace an opaque surface. The asset's
-            // `volumetric` flag selects which template + pipeline state is built.
+        for (vol, payload, label) in &active {
+            let programs = crate::raymarch_source::decode(payload, label)?;
+            // A medium authors `sampleVolume` and renders alpha-blended without a
+            // depth write; a surface volume authors `map` and `shade` and
+            // sphere-traces an opaque surface. The asset's flag selects which.
             let pipeline = if vol.volumetric {
                 let (vert_spv, frag_spv) =
-                    compile_raymarch_volumetric_shaders(user_source, hot_reload)
-                        .map_err(|e| format!("SdfVolume '{label}' (volumetric): {e}"))?;
+                    family_spirv(&programs, Family::Volumetric, hot_reload, label)?;
                 create_volumetric_pipeline(
                     device,
                     render_pass.handle(),
@@ -1166,8 +1087,8 @@ impl RaymarchResources {
                     &frag_spv,
                 )?
             } else {
-                let (vert_spv, frag_spv) = compile_raymarch_shaders(user_source, hot_reload)
-                    .map_err(|e| format!("SdfVolume '{label}': {e}"))?;
+                let (vert_spv, frag_spv) =
+                    family_spirv(&programs, Family::Surface, hot_reload, label)?;
                 create_pipeline(
                     device,
                     render_pass.handle(),
@@ -1178,13 +1099,10 @@ impl RaymarchResources {
                 )?
             };
 
-            // Depth-only shadow-caster pipeline when the asset opts in. The
-            // shadow template is engine-shipped, so the only realistic compile
-            // failure is a user `map` that already failed for the main pipeline.
+            // Depth-only shadow caster when the asset opts in.
             let shadow_pipeline = if vol.cast_shadows {
                 let (sh_vert, sh_frag) =
-                    compile_raymarch_shadow_shaders(user_source, hot_reload)
-                        .map_err(|e| format!("SdfVolume '{label}' (shadow): {e}"))?;
+                    family_spirv(&programs, Family::Shadow, hot_reload, label)?;
                 Some(create_shadow_pipeline(
                     device,
                     shadow_render_pass,
@@ -1211,7 +1129,7 @@ impl RaymarchResources {
             write_volume_set(device, volume_set, volume_ubo.buffer());
 
             volumes.push(RaymarchVolumeRecord {
-                pipeline: pipeline.handle(),
+                pipeline,
                 shadow_pipeline,
                 _volume_ubo: volume_ubo,
                 volume_set,
@@ -1356,8 +1274,7 @@ impl VkContext {
         RaymarchView {
             vp,
             inv_vp: mat4_inverse(vp),
-            cam_pos,
-            _pad0: 0.0,
+            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
             viewport: [
                 self.render_extent.width as f32,
                 self.render_extent.height as f32,
@@ -1387,8 +1304,7 @@ impl VkContext {
         let view = RaymarchView {
             vp: [[0.0; 4]; 4],
             inv_vp: [[0.0; 4]; 4],
-            cam_pos: [0.0; 3],
-            _pad0: 0.0,
+            cam_pos: [0.0; 4],
             viewport: [0.0, 0.0],
             time: elapsed,
             prefilter_mip_count: 0.0,
@@ -1417,8 +1333,9 @@ impl VkContext {
             return;
         }
         let device = &self.device;
-        let push = ShadowCascadePush {
+        let push = RaymarchShadowCascade {
             cascade_idx: cascade_idx as u32,
+            _pad: [0; 3],
         };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -1439,8 +1356,8 @@ impl VkContext {
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
-                    &push as *const ShadowCascadePush as *const u8,
-                    std::mem::size_of::<ShadowCascadePush>(),
+                    &push as *const RaymarchShadowCascade as *const u8,
+                    std::mem::size_of::<RaymarchShadowCascade>(),
                 ),
             );
             for vol in &rm.volumes {
@@ -1679,7 +1596,11 @@ impl VkContext {
                 if !vol.visible {
                     continue;
                 }
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, vol.pipeline);
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    vol.pipeline.handle(),
+                );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -1694,134 +1615,5 @@ impl VkContext {
             device.cmd_end_render_pass(cmd);
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Representative user shaders, inlined so the compile guards are
-    // self-contained (no dependency on any file outside this crate). The
-    // helpers prepended ahead of these (`sdSphere`, `sdTorus`, `sdfParamValue`,
-    // `SdfSurface`, `VolumeSample`, ...) are declared in raymarch_helpers.glsl.
-
-    // Surface volume: a sphere smooth-unioned with a spinning torus, shaded as
-    // chrome. Defines the V1 `map` + `shade` pair.
-    const DEMO_SURFACE_GLSL: &str = r#"
-float map(vec3 p, SdfParams params, float time) {
-    float speed = sdfParamValue(params, 5u);
-    float angle = time * speed;
-    float s = sin(angle);
-    float c = cos(angle);
-    vec3 rp = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
-    float d_sphere = sdSphere(rp, sdfParamValue(params, 6u));
-    float d_torus = sdTorus(rp, vec2(sdfParamValue(params, 7u), sdfParamValue(params, 8u)));
-    float k = max(sdfParamValue(params, 9u), 1e-3);
-    return opSmoothUnion(d_sphere, d_torus, k);
-}
-
-SdfSurface shade(vec3 p, vec3 normal, SdfParams params, float time, vec2 frag_uv) {
-    SdfSurface s;
-    s.albedo = vec3(sdfParamValue(params, 0u), sdfParamValue(params, 1u), sdfParamValue(params, 2u));
-    s.roughness = clamp(sdfParamValue(params, 3u), 0.02, 1.0);
-    s.metallic = clamp(sdfParamValue(params, 4u), 0.0, 1.0);
-    s.emissive = vec3(0.0);
-    s.transmitted = vec3(0.0);
-    return s;
-}
-"#;
-
-    // Volumetric volume: a drifting fbm cloud. Defines `sampleVolume` instead
-    // of `map` / `shade`.
-    const DEMO_VOLUMETRIC_GLSL: &str = r#"
-float cloud_hash(vec3 p) {
-    vec3 q = fract(p * 0.1031);
-    q += dot(q, q.yzx + 19.19);
-    return fract((q.x + q.y) * q.z);
-}
-
-float cloud_noise(vec3 p) {
-    vec3 i = floor(p);
-    vec3 f = fract(p);
-    vec3 u = f * f * (3.0 - 2.0 * f);
-
-    float n000 = cloud_hash(i + vec3(0.0, 0.0, 0.0));
-    float n100 = cloud_hash(i + vec3(1.0, 0.0, 0.0));
-    float n010 = cloud_hash(i + vec3(0.0, 1.0, 0.0));
-    float n110 = cloud_hash(i + vec3(1.0, 1.0, 0.0));
-    float n001 = cloud_hash(i + vec3(0.0, 0.0, 1.0));
-    float n101 = cloud_hash(i + vec3(1.0, 0.0, 1.0));
-    float n011 = cloud_hash(i + vec3(0.0, 1.0, 1.0));
-    float n111 = cloud_hash(i + vec3(1.0, 1.0, 1.0));
-
-    float nx00 = mix(n000, n100, u.x);
-    float nx10 = mix(n010, n110, u.x);
-    float nx0 = mix(nx00, nx10, u.y);
-    float nx01 = mix(n001, n101, u.x);
-    float nx11 = mix(n011, n111, u.x);
-    float nx1 = mix(nx01, nx11, u.y);
-    return mix(nx0, nx1, u.z);
-}
-
-float cloud_fbm(vec3 p) {
-    float v = 0.0;
-    float amp = 0.5;
-    float freq = 1.0;
-    for (int i = 0; i < 4; ++i) {
-        v += amp * cloud_noise(p * freq);
-        freq *= 2.0;
-        amp *= 0.5;
-    }
-    return v;
-}
-
-VolumeSample sampleVolume(vec3 p, SdfParams params, float time) {
-    float cloud_scale = max(sdfParamValue(params, 0u), 0.01);
-    vec3 flow = vec3(sdfParamValue(params, 1u), sdfParamValue(params, 2u), sdfParamValue(params, 3u));
-    float base_density = sdfParamValue(params, 4u);
-    float albedo = sdfParamValue(params, 5u);
-
-    vec3 sample_pos = (p + flow * time) / cloud_scale;
-    float n = cloud_fbm(sample_pos);
-    float density = max(0.0, n - 0.45) * 2.0 * base_density;
-
-    VolumeSample vs;
-    vs.density = density;
-    vs.scattering = vec3(albedo, albedo, albedo);
-    vs.emission = vec3(0.0, 0.0, 0.0);
-    return vs;
-}
-"#;
-
-    // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
-    // structs in `concinnity_core::render::vulkan::uniforms`.
-
-    // Compile the proxy vertex + the assembled fragment (helpers + the demo
-    // chrome-blob user shader + template) so a GLSL regression fails the suite
-    // without a GPU. Mirrors the fog `fog_shaders_compile` guard.
-    #[test]
-    fn raymarch_shaders_compile() {
-        super::compile_raymarch_shaders(DEMO_SURFACE_GLSL, false)
-            .expect("raymarch shaders compile");
-    }
-
-    // Compile the depth-only shadow-caster shaders (proxy vertex + helpers +
-    // demo user shader + shadow template) so a GLSL regression in the shadow
-    // path fails the suite without a GPU.
-    #[test]
-    fn raymarch_shadow_shaders_compile() {
-        super::compile_raymarch_shadow_shaders(DEMO_SURFACE_GLSL, false)
-            .expect("raymarch shadow shaders compile");
-    }
-
-    // Compile the volumetric shaders (proxy vertex + helpers + the demo cloud
-    // `sampleVolume` shader + volumetric template). Guards both the GLSL
-    // volumetric template and the assumption that glslang prunes the unused
-    // surface helpers (`map` / `shade` are forward-declared but never defined by
-    // a volumetric author), which would otherwise fail with a missing-body link
-    // error. Fails the suite without a GPU on any regression.
-    #[test]
-    fn raymarch_volumetric_shaders_compile() {
-        super::compile_raymarch_volumetric_shaders(DEMO_VOLUMETRIC_GLSL, false)
-            .expect("raymarch volumetric shaders compile");
     }
 }

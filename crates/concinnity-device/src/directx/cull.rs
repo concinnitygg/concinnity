@@ -18,10 +18,10 @@
 
 use windows::Win32::Graphics::Direct3D12::*;
 
-use crate::directx::builtins;
 use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins::{self, SlangCompile as _};
 use crate::directx::texture::transition_barrier;
 
 // DWORD count of the cull kernel's `CullParams` cbuffer: `float4 planes[6]`
@@ -45,20 +45,20 @@ pub(in crate::directx) use crate::directx::uniforms::CullParams;
 
 // Compile the phase-1 GPU-cull compute kernel (`main`) to DXBC.
 pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    builtins::CULL.compile(hot_reload)
+    slang_builtins::CULL.compile(hot_reload)
 }
 
 // Compile the phase-2 GPU-cull compute kernel (`main_phase2`) for two-pass
 // occlusion. Same source / root signature as phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_phase2(hot_reload: bool) -> Result<Vec<u8>, String> {
-    builtins::CULL_PHASE2.compile(hot_reload)
+    slang_builtins::CULL_PHASE2.compile(hot_reload)
 }
 
 // Compile the GPU-driven shadow cull kernel (`main_shadow`): light-frustum only
 // (no Hi-Z, no distance cull, no status write). Same source / root signature as
 // phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> Result<Vec<u8>, String> {
-    builtins::CULL_SHADOW.compile(hot_reload)
+    slang_builtins::CULL_SHADOW.compile(hot_reload)
 }
 
 // Root signature for the GPU-cull compute kernel: a `CullParams` root-constant
@@ -223,32 +223,77 @@ pub(in crate::directx) fn create_cull_command_signature(
 impl DxContext {
     // Total records the GPU-driven cull + bindless main pass processes: the
     // build-time static objects, the instanced-cluster instances folded in after
-    // them, then the skinned objects (`draw.n_objects + draw.n_instances + draw.n_skinned`). The
+    // them, the runtime reserve (streamed chunks and spawned clones), then the
+    // skinned objects. The
     // cull dispatch + the `GpuObjectData` / `GpuDrawArgs` / indirect buffers all
     // count this; the main pass then draws the static+instance prefix and the
     // skinned tail with two `ExecuteIndirect` calls. With no instanced props /
     // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
     // equal to the static `draw.n_objects`.
     pub(in crate::directx) fn cull_count(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk + self.draw.n_skinned
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime + self.draw.n_skinned
     }
 
-    // Buffer index of the first streamed-chunk record. The chunk reserve is
-    // `[chunk_record_base(), skinned_record_base())`; resident chunks are packed
-    // into the front of it each frame and the unused tail is disabled. Chunks ride
-    // the static + instance prefix `ExecuteIndirect` (their geometry already lives
-    // in the shared VB/IB), so this is just the instance tail.
-    pub(in crate::directx) fn chunk_record_base(&self) -> usize {
+    // Buffer index of the first runtime record. The runtime reserve is
+    // `[runtime_record_base(), skinned_record_base())`, and holds both kinds of
+    // object that appear after init: streamed `VoxelWorld` chunks and spawned
+    // clones. Resident ones are packed into the front of it each frame and the
+    // unused tail is disabled. Both ride the static + instance prefix
+    // `ExecuteIndirect` (their geometry already lives in the shared VB/IB), so
+    // this is just the instance tail.
+    pub(in crate::directx) fn runtime_record_base(&self) -> usize {
         self.draw.n_objects + self.draw.n_instances
     }
 
-    // Buffer index of the first skinned record. The static + instance + chunk
+    // Buffer index of the first skinned record. The static + instance + runtime
     // prefix the first `ExecuteIndirect` draws ends here; the skinned tail
     // `[skinned_record_base(), cull_count())` is the second `ExecuteIndirect` (over
-    // the per-frame deformed VB). The chunk reserve sits inside the prefix, so the
-    // skinned base is past it.
+    // the per-frame deformed VB). The runtime reserve sits inside the prefix, so
+    // the skinned base is past it.
     pub(in crate::directx) fn skinned_record_base(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime
+    }
+
+    // Walk every resident runtime draw object -- the tail past `draw.n_objects`,
+    // which is streamed `VoxelWorld` chunks and runtime clones alike -- invoking
+    // `emit` with the record's reserve index `k` (0-based, into
+    // `[runtime_record_base() + k]`), the object's draw index, and the
+    // `DrawObject`. Both kinds already
+    // have their geometry in the shared VB/IB (a clone reuses its template's
+    // slice), so both fold into the static + instance prefix indirect draw as
+    // plain records carrying their own `base_vertex` and pool indices.
+    //
+    // Non-resident slots are skipped: chunks and clones share the draw-slot free
+    // list, so a retired one leaves a gap in this tail, and counting gaps toward
+    // `k` could push a live record past `draw.n_runtime` and silently drop it.
+    // Only resident objects consume a reserve index, bounded by the streaming
+    // window plus the clone cap (<= `draw.n_runtime`). Returns the number
+    // emitted, so the caller can disable the unused reserve tail.
+    pub(in crate::directx) fn for_each_runtime_record<F>(&self, mut emit: F) -> usize
+    where
+        F: FnMut(usize, usize, &crate::gfx::render_types::DrawObject),
+    {
+        if self.draw.n_runtime == 0 {
+            return 0;
+        }
+        let mut k = 0;
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .enumerate()
+            .skip(self.draw.n_objects)
+        {
+            if !obj.resident {
+                continue;
+            }
+            if k >= self.draw.n_runtime {
+                break;
+            }
+            emit(k, i, obj);
+            k += 1;
+        }
+        k
     }
 
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -318,36 +363,47 @@ impl DxContext {
             }
         }
 
-        // Streamed chunks: one draw-arg each in the reserved region at
-        // `[chunk_record_base() + k]`. Chunk geometry lives in the shared VB/IB, so
-        // the args carry the chunk's own `base_vertex` + index slice and the chunk
-        // rides the static + instance prefix `ExecuteIndirect`. Chunks are
-        // non-cullable (NaN AABB -> `cullable()` false), so a resident chunk draws
-        // unconditionally; a freed slot's `resident` clear disables it. The unused
-        // reserve tail is disabled (ENABLED clear -> the cull kernel emits a no-op
-        // and never reads its stale object record).
-        let chunk_base = self.chunk_record_base();
-        let n_resident_chunks = self.for_each_chunk_record(|k, obj| {
-            // Chunks have no LOD alternates; `active_lod(0.0)` returns the base
-            // slice (and avoids a NaN camera distance from the chunk's NaN AABB).
-            let (index_offset, index_count) = obj.active_lod(0.0);
+        // Runtime objects -- streamed chunks and spawned clones -- one draw-arg
+        // each in the reserved region at `[runtime_record_base() + k]`. Their
+        // geometry lives in the shared VB/IB, so the args carry the object's own
+        // `base_vertex` + index slice and it rides the static + instance prefix
+        // `ExecuteIndirect`. Both kinds are non-cullable (NaN AABB ->
+        // `cullable()` false, because the init-time BVH cannot refit to admit
+        // them), so a resident one draws unconditionally; a freed slot's
+        // `resident` clear disables it. The unused reserve tail is disabled
+        // (ENABLED clear -> the cull kernel emits a no-op and never reads its
+        // stale object record).
+        let runtime_base = self.runtime_record_base();
+        let n_resident_runtime = self.for_each_runtime_record(|k, _, obj| {
+            // `camera_distance` falls back to the model translation for a
+            // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
+            // carry no alternates and land on LOD0 either way; a clone inherits
+            // its template's.
+            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let (index_offset, index_count) = obj.active_lod(d);
+            // A clone copies its template's material, so a see-through one
+            // leaves the opaque pass the way the static loop's does.
+            let opaque_visible =
+                obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
             let rec = GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
-                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable()),
+                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
+                    | draw_args_bucket_bits(obj.shader_bucket),
             };
-            // SAFETY: the chunk reserve is `[chunk_base, chunk_base + draw.n_chunk)` and
-            // `for_each_chunk_record` caps `k < draw.n_chunk`, so the write is in range.
+            // SAFETY: the reserve is `[runtime_base, runtime_base + draw.n_runtime)`
+            // and `for_each_runtime_record` caps `k < draw.n_runtime`, so the
+            // write is in range.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuDrawArgs as *const u8,
-                    ptr.add((chunk_base + k) * stride),
+                    ptr.add((runtime_base + k) * stride),
                     stride,
                 );
             }
         });
-        // Disable the unused chunk reserve tail so vacated / never-used slots draw
+        // Disable the unused reserve tail so vacated / never-used slots draw
         // nothing (the cull kernel skips `objects[i]` for an ENABLED-clear record).
         let disabled = GpuDrawArgs {
             index_count: 0,
@@ -355,12 +411,12 @@ impl DxContext {
             base_vertex: 0,
             flags: 0,
         };
-        for k in n_resident_chunks..self.draw.n_chunk {
-            // SAFETY: `k < draw.n_chunk`, so `chunk_base + k < skinned_record_base()`.
+        for k in n_resident_runtime..self.draw.n_runtime {
+            // SAFETY: `k < draw.n_runtime`, so `runtime_base + k < skinned_record_base()`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &disabled as *const GpuDrawArgs as *const u8,
-                    ptr.add((chunk_base + k) * stride),
+                    ptr.add((runtime_base + k) * stride),
                     stride,
                 );
             }
@@ -401,6 +457,38 @@ impl DxContext {
                     stride,
                 );
             }
+        }
+
+        // Instance tail: overwrite each instance's record with its active LOD
+        // slice, for the clusters that declare alternates. The init-time fill
+        // wrote every cluster's base slice into every frame's buffer, so this
+        // is a no-op for a world without alternates and touches only the
+        // instances of the clusters that have them.
+        if self.instanced.any_lod {
+            let instance_base = self.draw.n_objects;
+            crate::gfx::lod::for_each_instance_lod(
+                &self.instanced.clusters,
+                cam_pos,
+                |record, index_offset, index_count| {
+                    let rec = GpuDrawArgs {
+                        index_count: index_count as u32,
+                        index_offset: index_offset as u32,
+                        base_vertex: 0,
+                        flags: draw_args_flags(true, true, true),
+                    };
+                    // SAFETY: the buffers reserved `n_instances` records past
+                    // `draw.n_objects` at init and `for_each_instance_lod`
+                    // visits each of those records at most once, so
+                    // `instance_base + record` is in range.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            &rec as *const GpuDrawArgs as *const u8,
+                            ptr.add((instance_base + record) * stride),
+                            stride,
+                        );
+                    }
+                },
+            );
         }
     }
 

@@ -45,7 +45,7 @@ impl SlangCompile for SlangProgram {
             );
             defines.push(("MAX_PROBES", probes.as_str()));
         }
-        crate::slang_source::assemble(ctx.hot_reload, self.file, &defines)
+        crate::slang_source::assemble(ctx.hot_reload, self.file, &defines, &[])
     }
 
     // The shader-cache key for `source`. Shared by the runtime compile path
@@ -226,7 +226,7 @@ mod tests {
         use crate::gfx::render_types::{CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER};
         for src in [
             concinnity_core::render::shaders::LIGHT_CULL,
-            concinnity_core::render::shaders::MAIN_BINDLESS,
+            concinnity_core::render::shaders::MAIN_SHADING,
         ] {
             assert!(src.contains(&format!(
                 "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"

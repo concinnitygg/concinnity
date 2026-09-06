@@ -44,24 +44,26 @@ impl VkContext {
     // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
     // equal to the static `n_objects`. Mirrors `directx/cull.rs::cull_count`.
     pub(in crate::vulkan) fn cull_count(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk + self.draw.n_skinned
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime + self.draw.n_skinned
     }
 
-    // Buffer index of the first streamed-chunk record. The chunk reserve is
-    // `[chunk_record_base(), skinned_record_base())`; resident chunks pack into the
-    // front each frame and the unused tail is disabled. Chunks ride the
-    // static+instance prefix indirect draw (their geometry lives in the shared
-    // VB/IB), so this is just the instance tail. Mirrors `directx/cull.rs`.
-    pub(in crate::vulkan) fn chunk_record_base(&self) -> usize {
+    // Buffer index of the first runtime record. The runtime reserve is
+    // `[runtime_record_base(), skinned_record_base())`, and holds both kinds of
+    // object that appear after init: streamed `VoxelWorld` chunks and spawned
+    // clones. Resident ones pack into the front each frame and the unused tail
+    // is disabled. Both ride the static+instance prefix indirect draw (their
+    // geometry lives in the shared VB/IB), so this is just the instance tail.
+    // Mirrors `directx/cull.rs`.
+    pub(in crate::vulkan) fn runtime_record_base(&self) -> usize {
         self.draw.n_objects + self.draw.n_instances
     }
 
-    // Buffer index of the first skinned record: the static + instance + chunk
+    // Buffer index of the first skinned record: the static + instance + runtime
     // prefix the first indirect draw covers ends here, and the skinned tail
     // `[skinned_record_base(), cull_count())` is the second indirect draw. The
-    // chunk reserve sits inside the prefix, so the skinned base is past it.
+    // runtime reserve sits inside the prefix, so the skinned base is past it.
     pub(in crate::vulkan) fn skinned_record_base(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime
     }
 
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -78,25 +80,26 @@ impl VkContext {
             * INDIRECT_COMMAND_STRIDE as vk::DeviceSize
     }
 
-    // Walk the resident streamed-chunk draw objects -- the build-time-geometry tail
-    // past `draw.n_objects` that are NOT runtime clones -- invoking `emit` with the
-    // chunk's reserve index `k` (into `[chunk_record_base() + k]`) + the DrawObject.
-    // Chunk geometry already lives in the shared VB/IB, so chunks fold into the
-    // static+instance prefix indirect draw as plain records (with their own
-    // `base_vertex` + flat-pool material). Runtime clones (in `clone.slot_by_draw_idx`)
-    // are skipped -- they keep the legacy per-object path. Non-resident slots are
-    // skipped too: chunks and clones now share the draw-slot free list, so a retired
-    // clone leaves a non-resident gap in this tail (no longer in
-    // `clone.slot_by_draw_idx`); counting those gaps toward `k` could push a live
-    // chunk past `n_chunk` and silently drop it. Only resident chunks consume a
-    // reserve index, bounded by the streaming window (<= `n_chunk`). Returns the
-    // number of chunk records emitted (so the caller can disable the unused reserve
-    // tail). Mirrors `directx/draw_iter.rs`.
-    pub(in crate::vulkan) fn for_each_chunk_record<F>(&self, mut emit: F) -> usize
+    // Walk every resident runtime draw object -- the tail past `draw.n_objects`,
+    // which is streamed `VoxelWorld` chunks and spawned clones alike -- invoking
+    // `emit` with the record's reserve index `k` (into
+    // `[runtime_record_base() + k]`), the object's draw index, and the
+    // `DrawObject`. Both kinds already
+    // have their geometry in the shared VB/IB (a clone reuses its template's
+    // slice), so both fold into the static+instance prefix indirect draw as plain
+    // records carrying their own `base_vertex` and pool indices.
+    //
+    // Non-resident slots are skipped: chunks and clones share the draw-slot free
+    // list, so a retired one leaves a gap in this tail, and counting gaps toward
+    // `k` could push a live record past `n_runtime` and silently drop it. Only
+    // resident objects consume a reserve index, bounded by the streaming window
+    // plus the clone cap (<= `n_runtime`). Returns the number emitted, so the
+    // caller can disable the unused reserve tail. Mirrors `directx/cull.rs`.
+    pub(in crate::vulkan) fn for_each_runtime_record<F>(&self, mut emit: F) -> usize
     where
-        F: FnMut(usize, &crate::gfx::render_types::DrawObject),
+        F: FnMut(usize, usize, &crate::gfx::render_types::DrawObject),
     {
-        if self.draw.n_chunk == 0 {
+        if self.draw.n_runtime == 0 {
             return 0;
         }
         let mut k = 0;
@@ -107,16 +110,13 @@ impl VkContext {
             .enumerate()
             .skip(self.draw.n_objects)
         {
-            if self.clone.slot_by_draw_idx.contains_key(&i) {
-                continue; // runtime clone -> legacy per-object path
-            }
             if !obj.resident {
-                continue; // retired chunk / clone gap -- not a live chunk
+                continue;
             }
-            if k >= self.draw.n_chunk {
+            if k >= self.draw.n_runtime {
                 break;
             }
-            emit(k, obj);
+            emit(k, i, obj);
             k += 1;
         }
         k

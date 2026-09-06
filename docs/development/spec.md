@@ -366,16 +366,16 @@ now:
 | Colour LUT                | `.cube` parse into a 3D lookup payload.                                                                              |
 | Font                      | Glyph atlas rasterisation with real metrics.                                                                         |
 | Audio clip                | Decode and re-encode into the runtime clip payload.                                                                  |
-| Shader                    | Backend-native compilation (see below).                                                                              |
+| Shader                    | Slang compilation of the world's hooks into the engine's main-pass programs (see below).                             |
 | Voxel chunk / SDF volume  | Palette resolution, volume bake.                                                                                     |
 
-**Shader compilation** is delegated through a registered toolchain seam. The
-cook declares the seam; the binary registers the compiler for the backend it was
-built for (Metal via `xcrun metal`/`metallib`, DirectX via the Windows SDK HLSL
-compilers, Vulkan via `shaderc`). This is why the cook itself carries no backend
-cfgs and no native GPU dependencies: it must run on cook hosts with no GPU. A
-binary that cooks worlds must register a toolchain or every shader stage fails
-with a clear error.
+**Shader compilation** runs `slangc` on the cook host. A `Shader` is one or
+two `.slang` files defining hooks (`shade`, and optionally `transform`) that
+the engine's own main-pass entries call; the cook splices them into the
+engine's templates and compiles every entry the target backend consumes,
+storing what slangc emitted (MSL text, a DXIL container, or SPIR-V) in the
+world. A player needs no shader compiler. The cook carries no backend cfgs and
+no native GPU dependencies: it must run on cook hosts with no GPU.
 
 **Scene partition.** Content reachable only from one scene is grouped into that
 scene's `SceneGroup`. Content shared between scenes, or used outside any scene,
@@ -1501,7 +1501,7 @@ What genuinely differs between backends:
 
 | Concern                    | Metal                                       | DirectX 12                                          | Vulkan                                              |
 | -------------------------- | ------------------------------------------- | --------------------------------------------------- | --------------------------------------------------- |
-| Shader source language     | MSL                                         | HLSL                                                | GLSL to SPIR-V                                      |
+| Shader artifact            | MSL text, compiled at load                  | DXIL                                                | SPIR-V                                              |
 | Built-in shader production | Precompiled into the binary at compile time | Compiled at renderer init, cached to disk           | Compiled at renderer init, cached to disk           |
 | Driver pipeline cache      | Not needed (OS maintains a per-app cache)   | D3D12 pipeline library, persisted per adapter       | `VkPipelineCache`, persisted per adapter            |
 | Graph barriers             | Mostly implicit; hazards handled by the GPU | Explicit resource barriers emitted from graph state | Explicit pipeline barriers emitted from graph state |

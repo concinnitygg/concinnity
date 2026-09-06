@@ -47,7 +47,8 @@ const MAIN_DEFINES: &[(&str, &str)] = &[
 
 // The SSR resolve reads the reflection-probe array, so it bakes in the same
 // probe count the main pass does.
-const PROBE_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8")];
+const PROBES: (&str, &str) = ("MAX_PROBES", "8");
+const PROBE_DEFINES: &[(&str, &str)] = &[PROBES];
 
 pub(super) static MAIN_BINDLESS_VERT: SlangLib = SlangLib {
     name: "main_bindless_vert.slang",
@@ -60,6 +61,26 @@ pub(super) static MAIN_BINDLESS_FRAG: SlangLib = SlangLib {
     file: "main_bindless.slang",
     entries: &["fragment_main_bindless"],
     defines: MAIN_DEFINES,
+};
+// The draw cull's decision half. Each variant writes only `cull_status`; the
+// hand-written `cull_encode.metal` turns that into the indirect command buffer.
+pub(super) static CULL_PHASE1: SlangLib = SlangLib {
+    name: "cull_phase1.slang",
+    file: "cull.slang",
+    entries: &["cull_kernel"],
+    defines: &[("METAL_BINDINGS", "1")],
+};
+pub(super) static CULL_PHASE2: SlangLib = SlangLib {
+    name: "cull_phase2.slang",
+    file: "cull.slang",
+    entries: &["cull_kernel"],
+    defines: &[("CULL_PHASE2", "1"), ("METAL_BINDINGS", "1")],
+};
+pub(super) static CULL_SHADOW: SlangLib = SlangLib {
+    name: "cull_shadow.slang",
+    file: "cull.slang",
+    entries: &["cull_kernel"],
+    defines: &[("SHADOW_CULL", "1"), ("METAL_BINDINGS", "1")],
 };
 pub(super) static LIGHT_CULL: SlangLib = SlangLib {
     name: "light_cull.slang",
@@ -112,46 +133,18 @@ pub(super) static PROBE_GGX: SlangLib = SlangLib {
 // The G-buffer pre-pass and shadow families. Every entry compiles on its own so
 // it declares only the resources it binds, and `METAL_BINDINGS` selects the
 // constant shape this host writes (see the file headers).
-const GB_STATIC: &[(&str, &str)] = &[("GB_STATIC", "1"), ("METAL_BINDINGS", "1")];
-const GB_INSTANCED: &[(&str, &str)] = &[("GB_INSTANCED", "1"), ("METAL_BINDINGS", "1")];
-const GB_SKINNED: &[(&str, &str)] = &[("GB_SKINNED", "1"), ("METAL_BINDINGS", "1")];
 const GB_BINDLESS: &[(&str, &str)] = &[("GB_BINDLESS", "1"), ("METAL_BINDINGS", "1")];
-const GB_FRAGMENT: &[(&str, &str)] = &[("GB_FRAGMENT", "1"), ("METAL_BINDINGS", "1")];
 const GB_FRAGMENT_BINDLESS: &[(&str, &str)] =
     &[("GB_FRAGMENT_BINDLESS", "1"), ("METAL_BINDINGS", "1")];
 const SHADOW_STATIC: &[(&str, &str)] = &[("SHADOW_STATIC", "1"), ("METAL_BINDINGS", "1")];
 const SHADOW_SKINNED: &[(&str, &str)] = &[("SHADOW_SKINNED", "1"), ("METAL_BINDINGS", "1")];
 const SHADOW_BINDLESS: &[(&str, &str)] = &[("SHADOW_BINDLESS", "1"), ("METAL_BINDINGS", "1")];
 
-pub(super) static GBUFFER_PREPASS_VERT: SlangLib = SlangLib {
-    name: "gbuffer_prepass_vert.slang",
-    file: "gbuffer_prepass.slang",
-    entries: &["gbuffer_prepass_vertex"],
-    defines: GB_STATIC,
-};
-pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: SlangLib = SlangLib {
-    name: "gbuffer_prepass_vert_instanced.slang",
-    file: "gbuffer_prepass.slang",
-    entries: &["gbuffer_prepass_vertex_instanced"],
-    defines: GB_INSTANCED,
-};
-pub(super) static GBUFFER_PREPASS_VERT_SKINNED: SlangLib = SlangLib {
-    name: "gbuffer_prepass_vert_skinned.slang",
-    file: "gbuffer_prepass.slang",
-    entries: &["gbuffer_prepass_vertex_skinned"],
-    defines: GB_SKINNED,
-};
 pub(super) static GBUFFER_PREPASS_VERT_BINDLESS: SlangLib = SlangLib {
     name: "gbuffer_prepass_vert_bindless.slang",
     file: "gbuffer_prepass.slang",
     entries: &["gbuffer_prepass_vertex_bindless"],
     defines: GB_BINDLESS,
-};
-pub(super) static GBUFFER_PREPASS_FRAG: SlangLib = SlangLib {
-    name: "gbuffer_prepass_frag.slang",
-    file: "gbuffer_prepass.slang",
-    entries: &["gbuffer_prepass_fragment"],
-    defines: GB_FRAGMENT,
 };
 pub(super) static GBUFFER_PREPASS_FRAG_BINDLESS: SlangLib = SlangLib {
     name: "gbuffer_prepass_frag_bindless.slang",
@@ -478,6 +471,9 @@ pub(super) static WATER_FRAG_RT_TEXTURED: SlangLib = SlangLib {
 pub(super) static ALL: &[&SlangLib] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
+    &CULL_PHASE1,
+    &CULL_PHASE2,
+    &CULL_SHADOW,
     &LIGHT_CULL,
     &RT_SKIN,
     &HIZ_INIT_MSAA,
@@ -485,11 +481,7 @@ pub(super) static ALL: &[&SlangLib] = &[
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,
     &PROBE_GGX,
-    &GBUFFER_PREPASS_VERT,
-    &GBUFFER_PREPASS_VERT_INSTANCED,
-    &GBUFFER_PREPASS_VERT_SKINNED,
     &GBUFFER_PREPASS_VERT_BINDLESS,
-    &GBUFFER_PREPASS_FRAG,
     &GBUFFER_PREPASS_FRAG_BINDLESS,
     &SHADOW_VERT,
     &SHADOW_VERT_SKINNED,
@@ -539,7 +531,7 @@ impl SlangLib {
     // The exact source text this variant compiles, assembled the way every
     // backend assembles it.
     fn source(&self, hot_reload: bool) -> String {
-        crate::slang_source::assemble(hot_reload, self.file, self.defines)
+        crate::slang_source::assemble(hot_reload, self.file, self.defines, &[])
     }
 
     // Produce this variant's MTLLibrary. Fast path: the metallib the build
@@ -640,7 +632,7 @@ mod tests {
             for hot_reload in [false, true] {
                 let src = lib.source(hot_reload);
                 assert!(!src.trim().is_empty(), "{}: empty source", lib.name);
-                for marker in ["{POST_COMMON}", "{OBJECT_COMMON}", "{PARTICLE_TYPES}"] {
+                for (marker, _) in concinnity_core::render::slang_source::FRAGMENTS {
                     assert!(
                         !src.contains(marker),
                         "{}: unspliced fragment marker {marker}",
@@ -670,8 +662,8 @@ mod tests {
         );
         for (name, src) in [
             (
-                "main_bindless.slang",
-                concinnity_core::render::shaders::MAIN_BINDLESS,
+                "main_shading.slang",
+                concinnity_core::render::shaders::MAIN_SHADING,
             ),
             ("ssr.slang", concinnity_core::render::shaders::SSR),
             (

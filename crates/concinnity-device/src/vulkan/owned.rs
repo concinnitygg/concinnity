@@ -148,6 +148,7 @@ struct DeviceInner {
     _entry: ash::Entry,
     queue: Mutex<RetireQueue>,
     debug: DebugMessenger,
+    depth_bias_clamp: bool,
 }
 
 // The validation messenger, and the budget its callback reads.
@@ -257,6 +258,7 @@ impl VkDevice {
         raw: ash::Device,
         frames_in_flight: usize,
         debug: DebugMessenger,
+        depth_bias_clamp: bool,
     ) -> Self {
         Self {
             inner: Arc::new(DeviceInner {
@@ -265,7 +267,18 @@ impl VkDevice {
                 _entry: entry,
                 queue: Mutex::new(RetireQueue::new(frames_in_flight)),
                 debug,
+                depth_bias_clamp,
             }),
+        }
+    }
+
+    // Whether `depthBiasClamp` was enabled. The shadow pipelines bind the
+    // convention's clamp when it was, and render unclamped when it was not.
+    pub(in crate::vulkan) fn depth_bias_clamp(&self) -> f32 {
+        if self.inner.depth_bias_clamp {
+            crate::gfx::shadow_bias::RASTER_CLAMP
+        } else {
+            0.0
         }
     }
 

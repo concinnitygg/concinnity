@@ -1,24 +1,23 @@
 // src/directx/init/pipelines.rs
 //
 // Core render-pipeline construction extracted from DxContext::new:
-//   * Shader compilation (`compile_shaders`, `compile_main_bindless_shaders`),
-//     from the built-in program declarations in `directx/builtins.rs`.
-//   * Root-signature + PSO builders for the main pass, the GPU-cull bindless
-//     variant, the GPU-instanced main pass, and the depth-only shadow pass.
+//   * Shader compilation (`compile_all_shaders`, `compile_main_bindless_shaders`),
+//     from the program declarations in `directx/slang_builtins.rs`.
+//   * Root-signature + PSO builders for the GPU-driven main pass, its shader
+//     buckets, and the depth-only shadow pass.
 //   * High-level `build_main_pipelines`/`build_shadow_pipeline`/etc.
 //     orchestration helpers consumed by init/mod.rs.
 //
 // Mirrors src/metal/init/pipelines.rs (the same set of pipelines built at
 // init time). Text + composite pipelines live in `directx/pipeline.rs`;
 // bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
-// in `directx/cull.rs`; the skinned-mesh pipelines (built lazily once a
-// `SkinnedMesh` is uploaded) live in `directx/resources.rs`.
+// in `directx/cull.rs`; the skinned shadow pipeline (built lazily once a
+// `SkinnedMesh` is uploaded) lives in `directx/resources.rs`.
 
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins;
 use crate::directx::com;
 use crate::directx::context::{FRAMES, align256, dump_on_err};
 use crate::directx::cull::{
@@ -34,72 +33,51 @@ use crate::directx::pipeline::{
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_buffer, create_uav_buffer};
+use crate::gfx::shadow_bias;
 
 // Shader compilation
 
 pub(super) struct CompiledShaders {
-    pub main_vs: Vec<u8>,
-    pub main_ps: Vec<u8>,
     pub shadow_vs: Option<Vec<u8>>,
-    pub main_vs_instanced: Option<Vec<u8>>,
     pub text_vs: Vec<u8>,
     pub text_ps: Vec<u8>,
 }
 
-// Compile every shader stage the init path needs. `vert_bytes`, `frag_bytes`,
-// `vert_instanced_bytes`, and `shadow_bytes` are pre-compiled DXBC overrides
-// when non-empty (matching the metallib override model on Metal). `shadow_vs`
-// is `None` when no shadow shader is configured.
-pub(super) fn compile_all_shaders(
-    vert_bytes: &[u8],
-    frag_bytes: &[u8],
-    shadow_bytes: &[u8],
-    vert_instanced_bytes: &[u8],
-    need_instanced: bool,
+// The world Shader's program for `entry`, as a DXIL container: the cook's
+// artifact when the engine template still matches, else a compile here. The
+// DXIL pool is unbounded, so no pool size reaches the text.
+pub(in crate::directx) fn world_entry(
+    world: &concinnity_core::components::ShaderPrograms,
+    entry: &str,
     hot_reload: bool,
-) -> Result<CompiledShaders, String> {
-    let main_vs = if !vert_bytes.is_empty() {
-        vert_bytes.to_vec()
-    } else {
-        builtins::MAIN_VERT.compile(hot_reload)?
+) -> Result<Vec<u8>, String> {
+    let req = crate::surface_source::Request {
+        platform: concinnity_core::platform::Platform::Hlsl,
+        pool_size: 0,
+        probe_count: concinnity_core::render::uniforms::MAX_PROBES,
+        hot_reload,
     };
-    let main_ps = if !frag_bytes.is_empty() {
-        frag_bytes.to_vec()
-    } else {
-        builtins::MAIN_FRAG.compile(hot_reload)?
-    };
-    // The shadow vertex shader is engine-internal: a real DXBC override (>4
-    // bytes) is used verbatim, otherwise (empty / stub) the baked
-    // `slang_builtins::SHADOW_VERT` is compiled. Whether the shadow pass runs is
-    // gated by `effective_shadow_size` at the call site, not by an empty
-    // override here.
-    let shadow_vs = if shadow_bytes.len() > 4 {
-        Some(shadow_bytes.to_vec())
-    } else {
-        Some(slang_builtins::SHADOW_VERT.compile(hot_reload)?)
-    };
-    let main_vs_instanced = if !vert_instanced_bytes.is_empty() {
-        Some(vert_instanced_bytes.to_vec())
-    } else if need_instanced {
-        Some(builtins::MAIN_VERT_INSTANCED.compile(hot_reload)?)
-    } else {
-        None
-    };
+    crate::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
+}
+
+// Compile the engine-internal stages the init path needs outside the
+// GPU-driven main pass.
+pub(super) fn compile_all_shaders(hot_reload: bool) -> Result<CompiledShaders, String> {
+    // Whether the shadow pass runs is gated by `effective_shadow_size` at the
+    // call site.
+    let shadow_vs = Some(slang_builtins::SHADOW_VERT.compile(hot_reload)?);
     let (text_vs, text_ps) = compile_text_shaders(hot_reload)?;
     Ok(CompiledShaders {
-        main_vs,
-        main_ps,
         shadow_vs,
-        main_vs_instanced,
         text_vs,
         text_ps,
     })
 }
 
-// Compile the bindless static-pass shaders (bindless static pass). Always built
-// from the single-source `.slang` pair; the bindless path only ever drives the
-// built-in shader, and worlds that supply a custom main shader either keep the
-// legacy pipeline or bring their own bucket PSO.
+// Compile the engine's bindless static-pass pair. A bucket whose Shader is the
+// world's compiles the same file through `world_entry` instead; the engine's
+// pair is the program for every bucket that declares none and the source of
+// the Wireframe twin.
 pub(in crate::directx) fn compile_main_bindless_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
@@ -117,276 +95,13 @@ pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result
 
 // Root signature builders
 
-fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
-    // Descriptor ranges for tables.
-    // [4] table layout (SRVs at heap slots 0..3 inclusive):
-    //   range 1: shadow_map_array at t0    (heap slot 0)
-    //   range 2: irradiance + prefilter cubes at t5..t6 (heap slots 1..2)
-    // Both ranges use APPEND so the runtime places them back-to-back from the
-    // table base; matches the heap layout in context.rs.
-    let shadow_srv_ranges = [
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 1,
-            BaseShaderRegister: 0, // t0
-            RegisterSpace: 0,
-            OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-        },
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 2,
-            BaseShaderRegister: 5, // t5..t6
-            RegisterSpace: 0,
-            OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-        },
-    ];
-    let object_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 2,
-        BaseShaderRegister: 1, // t1..t2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let shadow_sampler_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // s0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [7] table covers linear repeat sampler (s1) + cube sampler (s2)
-    // contiguous in the sampler heap.
-    let linear_cube_sampler_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 2,
-        BaseShaderRegister: 1, // s1..s2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [8] table: SSAO occlusion SRV at t4 (or a 1x1 white fallback so the
-    // shader's ambient *= ssao_tex.r is a pass-through when SSAO is off).
-    let ssao_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 4, // t4
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [13] table: spot shadow depth array at t10 (a 1x1 fallback array when the
-    // world has no shadow-casting spot).
-    let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 10, // t10
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [15] table: the two area-light LTC tables at t12..t13, contiguous in the
-    // heap so one range covers both.
-    let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 2,
-        BaseShaderRegister: 12, // t12..t13
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-
-    let params = [
-        // [0] Root constants: model mat4 + material = 28 DWORDs at b0
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 28,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [1] Root CBV: view UBO at b1
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [2] Root CBV: light UBO at b2
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [3] Root CBV: shadow UBO at b3
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 3,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [4] Descriptor table: shadow map array (t0) + IBL cubes (t5..t6)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: shadow_srv_ranges.len() as u32,
-                    pDescriptorRanges: shadow_srv_ranges.as_ptr(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [5] Descriptor table: albedo + normal SRVs (t1..t2)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &object_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [6] Descriptor table: shadow comparison sampler (s0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &shadow_sampler_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [7] Descriptor table: linear repeat (s1) + cube sampler (s2)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &linear_cube_sampler_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [8] Descriptor table: SSAO occlusion SRV (t4)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ssao_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [9] Root SRV: per-scene StructuredBuffer<GpuLight> at t7 (matches
-        // main_frag.hlsl; t3 is the instanced/skinned VS matrix SRV in the
-        // shared instanced root signature, so the lights sit at t7).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 7,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [10] Root CBV: ClusterParams at b4 (clustered lighting).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 4,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [11] Root SRV: per-cluster light-index lists at t8.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 8,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [12] Root SRV: per-slice StructuredBuffer<SpotShadowData> at t9.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 9,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [13] table: spot shadow depth array at t10. A texture cannot be a root
-        // descriptor, so unlike the buffer above it needs a table.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &spot_shadow_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [14] Root SRV: per-scene StructuredBuffer<AreaLightData> at t11.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 11,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [15] table: the area-light LTC tables at t12..t13.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ltc_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-
-    serialize_and_create_root_sig(device, &params, "main root sig")
-}
-
-// Root signature for the bindless static main pass (bindless static pass).
+// Root signature for the GPU-driven main pass, shared by every shader bucket.
 //
-// Differs from `create_main_root_signature`: slot [0] is a single-DWORD root
-// constant carrying just the per-draw object id (D3D12 `SV_InstanceID` does
-// not include `StartInstanceLocation`, so the id rides a root constant); slot
-// [5] is the unbounded bindless `Texture2D` pool (`t0, space1`) instead of the
-// per-object albedo/normal table; slot [8] is a root SRV at `t3` carrying the
-// per-frame `StructuredBuffer<GpuObjectData>`. The per-object descriptor table
-// is gone; that was the per-draw binding the compute-driven cull
-// needed removed.
+// Slot [0] is a single-DWORD root constant carrying the per-draw object id
+// (D3D12 `SV_InstanceID` does not include `StartInstanceLocation`, so the id
+// rides a root constant); slot [5] is the unbounded bindless `Texture2D` pool
+// (`t0, space1`); slot [8] is a root SRV at `t3` carrying the per-frame
+// `StructuredBuffer<GpuObjectData>`.
 fn create_main_bindless_root_signature(
     device: &ID3D12Device,
 ) -> Result<ID3D12RootSignature, String> {
@@ -431,8 +146,7 @@ fn create_main_bindless_root_signature(
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // [9] table: SSAO occlusion SRV at t4 (same convention as the legacy
-    // main root sig; the same bindless fragment shader samples it).
+    // [9] table: SSAO occlusion SRV at t4.
     let ssao_srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -688,271 +402,6 @@ fn create_main_bindless_root_signature(
     serialize_and_create_root_sig(device, &params, "main bindless root sig")
 }
 
-// Same as the main root signature but with one extra root SRV at slot [8]
-// (t3) carrying per-instance world matrices. Used by the GPU-instanced PSO
-// and also the skinned PSO (whose root SRV at the same slot carries joint
-// matrices instead).
-pub(in crate::directx) fn create_main_instanced_root_signature(
-    device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
-    let shadow_srv_ranges = [
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 1,
-            BaseShaderRegister: 0, // t0 shadow_map_array
-            RegisterSpace: 0,
-            OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-        },
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 2,
-            BaseShaderRegister: 5, // t5..t6 IBL cubes
-            RegisterSpace: 0,
-            OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-        },
-    ];
-    let object_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 2,
-        BaseShaderRegister: 1,
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let shadow_sampler_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0,
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let linear_cube_sampler_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 2,
-        BaseShaderRegister: 1, // s1..s2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [9] table: SSAO occlusion SRV at t4 (matches main + bindless layout).
-    let ssao_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 4, // t4
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [14] table: spot shadow depth array at t10 (matches the main layout).
-    let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 10, // t10
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [16] table: the area-light LTC tables at t12..t13 (matches the main layout).
-    let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 2,
-        BaseShaderRegister: 12, // t12..t13
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-
-    let params = [
-        // [0] Root constants at b0 (same as main; model field is ignored by VS)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 28,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [1] Root CBV: view UBO at b1
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [2] Root CBV: light UBO at b2
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [3] Root CBV: shadow UBO at b3
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 3,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [4] Descriptor table: shadow array (t0) + IBL cubes (t5..t6)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: shadow_srv_ranges.len() as u32,
-                    pDescriptorRanges: shadow_srv_ranges.as_ptr(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [5] Descriptor table: albedo + normal SRVs (t1..t2)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &object_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [6] Descriptor table: shadow comparison sampler (s0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &shadow_sampler_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [7] Descriptor table: linear repeat (s1) + cube sampler (s2)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &linear_cube_sampler_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [8] Root SRV: per-instance world matrices (t3, VS-only)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 3,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [9] Descriptor table: SSAO occlusion SRV (t4)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ssao_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [10] Root SRV: per-scene StructuredBuffer<GpuLight> at t7 (PS). The VS
-        // matrix / joint SRV holds t3, so the local lights sit at t7 to match
-        // main_frag.hlsl and the static main root signature.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 7,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [11] Root CBV: ClusterParams at b4 (clustered lighting).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 4,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [12] Root SRV: per-cluster light-index lists at t8.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 8,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [13] Root SRV: per-slice StructuredBuffer<SpotShadowData> at t9.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 9,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [14] table: spot shadow depth array at t10.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &spot_shadow_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [15] Root SRV: per-scene StructuredBuffer<AreaLightData> at t11.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 11,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [16] table: the area-light LTC tables at t12..t13.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ltc_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-
-    serialize_and_create_root_sig(device, &params, "main instanced root sig")
-}
-
 pub(in crate::directx) fn create_shadow_root_signature(
     device: &ID3D12Device,
 ) -> Result<ID3D12RootSignature, String> {
@@ -1050,8 +499,8 @@ pub(in crate::directx) fn create_shadow_bindless_root_signature(
 
 // PSO builders
 
-// PSO for the main (static + instanced + bindless) pass. The instanced
-// pipeline reuses this with the appropriate VS + root sig.
+// PSO for the GPU-driven main pass: one per shader bucket, all against the
+// bindless root signature.
 pub(in crate::directx) fn create_main_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -1072,8 +521,8 @@ pub(in crate::directx) fn create_main_pso(
 }
 
 // The Wireframe view mode's variant of `create_main_pso`. D3D12 fill mode is
-// pipeline state (unlike Metal's encoder flag), so the mode needs its own PSO
-// per main-pass pipeline; see [`super::super::wireframe`].
+// pipeline state (unlike Metal's encoder flag), so the mode needs its own PSO;
+// see [`super::super::wireframe`].
 pub(in crate::directx) fn create_main_pso_wireframe(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -1200,9 +649,9 @@ pub(in crate::directx) fn create_shadow_pso(
             // procedural meshes cast shadows correctly.
             CullMode: D3D12_CULL_MODE_NONE,
             FrontCounterClockwise: true.into(),
-            DepthBias: 1,
-            DepthBiasClamp: 0.01,
-            SlopeScaledDepthBias: 1.0,
+            DepthBias: shadow_bias::RASTER_CONSTANT as i32,
+            DepthBiasClamp: shadow_bias::RASTER_CLAMP,
+            SlopeScaledDepthBias: shadow_bias::RASTER_SLOPE,
             DepthClipEnable: true.into(),
             ..Default::default()
         },
@@ -1229,8 +678,9 @@ pub(in crate::directx) fn create_shadow_pso(
 
 // The engine's own compiled bindless main-pass stages, kept past init so a
 // shader bucket that resolves to the engine default can build its pipeline
-// without recompiling the HLSL. Recompiling cost ~140 ms per bucket install,
-// which is the whole point of warming a pipeline behind a loading screen.
+// without recompiling, and so the Wireframe twin has its source. Recompiling
+// cost ~140 ms per bucket install, which is the whole point of warming a
+// pipeline behind a loading screen.
 pub(in crate::directx) struct BindlessMainShaders {
     pub vs: Vec<u8>,
     pub ps: Vec<u8>,
@@ -1240,21 +690,24 @@ pub(in crate::directx) struct BindlessMainShaders {
 // `DrawObject::shader_bucket` value (1-based; bucket 0 is the world default
 // program) and names the bucket in error messages.
 //
-// Empty `vert` bytes mean the world declared no Shader for this bucket, so the
+// A bucket with no programs is one the world declared no Shader for, so the
 // engine's own bindless program renders it.
 pub(in crate::directx) fn build_bucket_pipeline(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
-    bindless_root_sig: &ID3D12RootSignature,
+    targets: BucketPipelineTargets<'_>,
     bucket: usize,
-    shader: crate::gfx::backend_init::ShaderBytes<'_>,
-    msaa_samples: u32,
-    engine_default: &BindlessMainShaders,
+    shader: crate::gfx::backend_init::WorldShader<'_>,
 ) -> Result<ID3D12PipelineState, String> {
-    let (vs, ps) = if shader.vert.is_empty() {
-        (engine_default.vs.as_slice(), engine_default.ps.as_slice())
-    } else {
-        (shader.vert, shader.frag)
+    let (vs, ps) = match shader.programs {
+        Some(programs) => (
+            world_entry(programs, "vertex_main_bindless", targets.hot_reload)?,
+            world_entry(programs, "fragment_main_bindless", targets.hot_reload)?,
+        ),
+        None => (
+            targets.engine_default.vs.clone(),
+            targets.engine_default.ps.clone(),
+        ),
     };
     if vs.is_empty() || ps.is_empty() {
         return Err(format!(
@@ -1263,9 +716,27 @@ pub(in crate::directx) fn build_bucket_pipeline(
     }
     dump_on_err(
         info_queue,
-        create_main_pso(device, bindless_root_sig, vs, ps, HDR_FORMAT, msaa_samples),
+        create_main_pso(
+            device,
+            targets.root_sig,
+            &vs,
+            &ps,
+            HDR_FORMAT,
+            targets.msaa_samples,
+        ),
     )
     .map_err(|e| format!("shader bucket {bucket}: {e}"))
+}
+
+// What every bucket pipeline shares: the bindless root signature it binds
+// against, the sample count, and the engine's own pair for a bucket with no
+// programs.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct BucketPipelineTargets<'a> {
+    pub root_sig: &'a ID3D12RootSignature,
+    pub msaa_samples: u32,
+    pub engine_default: &'a BindlessMainShaders,
+    pub hot_reload: bool,
 }
 
 // Build the per-bucket pipeline table from the world's material-referenced
@@ -1275,10 +746,8 @@ pub(in crate::directx) fn build_bucket_pipeline(
 fn build_world_pipeline_table(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
-    bindless_root_sig: &ID3D12RootSignature,
-    bucket_shaders: &[crate::gfx::backend_init::ShaderBytes<'_>],
-    msaa_samples: u32,
-    engine_default: &BindlessMainShaders,
+    targets: BucketPipelineTargets<'_>,
+    bucket_shaders: &[crate::gfx::backend_init::WorldShader<'_>],
 ) -> Result<Vec<Option<ID3D12PipelineState>>, String> {
     let mut table = Vec::with_capacity(bucket_shaders.len());
     for (i, shader) in bucket_shaders.iter().enumerate() {
@@ -1290,13 +759,7 @@ fn build_world_pipeline_table(
             continue;
         }
         table.push(Some(build_bucket_pipeline(
-            device,
-            info_queue,
-            bindless_root_sig,
-            bucket,
-            *shader,
-            msaa_samples,
-            engine_default,
+            device, info_queue, targets, bucket, *shader,
         )?));
     }
     Ok(table)
@@ -1305,8 +768,9 @@ fn build_world_pipeline_table(
 // Init-time orchestration
 
 pub(super) struct MainPipelines {
-    pub main_root_sig: ID3D12RootSignature,
-    pub main_pso: ID3D12PipelineState,
+    // The GPU-driven main pass's root signature and bucket 0's PSO: the world
+    // default Shader's pair where the world declares one, the engine's pair
+    // otherwise.
     pub main_bindless_root_sig: Option<ID3D12RootSignature>,
     pub main_bindless_pso: Option<ID3D12PipelineState>,
     // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`.
@@ -1315,8 +779,7 @@ pub(super) struct MainPipelines {
     // Commands reserved per bucket region in the indirect buffers.
     pub bucket_stride: usize,
     // The engine's compiled bindless main-pass stages, retained for the buckets a
-    // scene warms mid-session. Empty when the world authored its own main shader
-    // (there is no bindless path to warm into).
+    // scene warms mid-session and for the Wireframe twin.
     pub bindless_main_shaders: BindlessMainShaders,
     pub object_buffer_resources: Vec<PooledBuffer>,
     pub object_buffer_ptrs: Vec<*mut u8>,
@@ -1361,30 +824,15 @@ pub(super) struct MainPipelines {
     pub prev_model_buffer_ptrs: Vec<*mut u8>,
 }
 
-// Build the main static pass + (when the world ships no custom main shader)
-// the bindless variant and GPU-cull compute pipeline. Allocates the per-frame
-// `StructuredBuffer<GpuObjectData>` / `StructuredBuffer<GpuDrawArgs>` upload
-// buffers and the per-frame indirect-command UAV buffers that the cull kernel
-// writes into.
-//
-// The bindless + cull infrastructure is only built when
-// `vert_bytes`+`frag_bytes` are empty (built-in shader path) AND
-// `n_objects > 0`. Otherwise the corresponding fields are `None` / empty.
-// Compiled + optional override shader bytes for the main pass pipelines.
+// The world's Shaders, one per bucket (`BackendInit::shaders`): entry 0 is the
+// world default that drives bucket 0 (`programs: None` for the engine's own),
+// entries 1.. are the material-referenced buckets. Each gets its own
+// GPU-driven main-pass pipeline; an entry flagged `deferred` is a bucket whose
+// Shader belongs to a scene that has not pinned, and is installed later by
+// `install_world_shader`.
 #[derive(Clone, Copy)]
 pub(super) struct MainPipelineShaders<'a> {
-    // Built-in compiled main pass shaders.
-    pub shaders: &'a CompiledShaders,
-    // Precompiled DXBC override for a custom vertex shader (empty = use built-in).
-    pub vert_bytes: &'a [u8],
-    // Precompiled DXBC override for a custom fragment shader (empty = use built-in).
-    pub frag_bytes: &'a [u8],
-    // The world's material-referenced shaders (`BackendInit::shaders[1..]`), one
-    // per shader bucket past the default. Each gets its own bindless main-pass
-    // pipeline; an entry flagged `deferred` is a bucket whose Shader belongs to
-    // a scene that has not pinned, and is installed later by
-    // `install_world_shader`.
-    pub bucket_shaders: &'a [crate::gfx::backend_init::ShaderBytes<'a>],
+    pub world_shaders: &'a [crate::gfx::backend_init::WorldShader<'a>],
 }
 
 // Record counts + MSAA that size the GPU-driven bindless pass's cull / object /
@@ -1416,6 +864,11 @@ pub(super) struct MainPipelineFeatures {
     pub hot_reload: bool,
 }
 
+// Build the GPU-driven main pass (root signature, bucket PSOs, GPU-cull compute
+// pipeline). Allocates the per-frame `StructuredBuffer<GpuObjectData>` /
+// `StructuredBuffer<GpuDrawArgs>` upload buffers and the per-frame
+// indirect-command UAV buffers that the cull kernel writes into, all only when
+// the world has anything to drive (`n_cull > 0`).
 pub(super) fn build_main_pipelines(
     alloc: &DeviceAllocator,
     info_queue: Option<&ID3D12InfoQueue>,
@@ -1424,12 +877,12 @@ pub(super) fn build_main_pipelines(
     features: MainPipelineFeatures,
 ) -> Result<MainPipelines, String> {
     let device = alloc.device();
-    let MainPipelineShaders {
-        shaders,
-        vert_bytes,
-        frag_bytes,
-        bucket_shaders,
-    } = pipeline_shaders;
+    let MainPipelineShaders { world_shaders } = pipeline_shaders;
+    let world_default = world_shaders
+        .first()
+        .copied()
+        .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
+    let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
     let MainPipelineConfig {
         n_objects,
         n_instances,
@@ -1444,76 +897,50 @@ pub(super) fn build_main_pipelines(
         hot_reload,
     } = features;
     // Merged record count: static build-time objects, the instanced-cluster
-    // instances, the streamed-chunk reserve, then the skinned objects. The
-    // per-frame static fills write only the first `n_objects`; the instance records
-    // are written once at init; chunk records + skinned records are written each
-    // frame into their reserved regions.
-    let n_cull = n_objects + n_instances + n_chunk_max + n_skinned;
-    let main_root_sig = dump_on_err(info_queue, create_main_root_signature(device))?;
-    let main_pso = dump_on_err(
-        info_queue,
-        create_main_pso(
-            device,
-            &main_root_sig,
-            &shaders.main_vs,
-            &shaders.main_ps,
-            HDR_FORMAT,
-            msaa_samples,
-        ),
-    )?;
-
-    // Bindless static main pass (bindless static pass). Built only when no custom
-    // main shader was supplied; a world with its own shader keeps the legacy
-    // per-draw pipeline.
-    let main_is_builtin = vert_bytes.is_empty() && frag_bytes.is_empty();
-    let mut bindless_main_shaders = BindlessMainShaders {
-        vs: Vec::new(),
-        ps: Vec::new(),
+    // instances, the runtime reserve, then the skinned objects. The per-frame
+    // static fills write only the first `n_objects`; the instance records are
+    // written once at init; runtime and skinned records are written each frame
+    // into their reserved regions. `n_chunk_max` sizes the streamed-chunk window
+    // and `clone_reserve` the spawned-clone one; both live in the single
+    // runtime reserve between the instances and the skinned tail (see
+    // `DrawState::n_runtime`).
+    let n_cull = n_objects
+        + n_instances
+        + n_chunk_max
+        + crate::gfx::render_types::clone_reserve(n_objects)
+        + n_skinned;
+    // The GPU-driven main pass. The engine's pair is compiled regardless of the
+    // world default: it is the program for every bucket that declares no Shader
+    // and the source of the Wireframe twin. Bucket 0 takes the world default's
+    // pair where the world declares one.
+    let (bvs, bps) = compile_main_bindless_shaders(hot_reload)?;
+    let bindless_main_shaders = BindlessMainShaders { vs: bvs, ps: bps };
+    let brs = dump_on_err(info_queue, create_main_bindless_root_signature(device))?;
+    let targets = BucketPipelineTargets {
+        root_sig: &brs,
+        msaa_samples,
+        engine_default: &bindless_main_shaders,
+        hot_reload,
     };
-    let (main_bindless_root_sig, main_bindless_pso) = if main_is_builtin {
-        let (bvs, bps) = compile_main_bindless_shaders(hot_reload)?;
-        let brs = dump_on_err(info_queue, create_main_bindless_root_signature(device))?;
-        let bpso = dump_on_err(
-            info_queue,
-            create_main_pso(device, &brs, &bvs, &bps, HDR_FORMAT, msaa_samples),
-        )?;
-        bindless_main_shaders = BindlessMainShaders { vs: bvs, ps: bps };
-        (Some(brs), Some(bpso))
-    } else {
-        (None, None)
-    };
+    let main_pso = build_bucket_pipeline(device, info_queue, targets, 0, world_default)?;
 
-    // Material-referenced shaders (ShaderHandle 1..) each get their own bindless
+    // Material-referenced shaders (ShaderHandle 1..) each get their own
     // main-pass pipeline, so their draws route into their own region of the
-    // GPU-culled command buffer. They exist only on the bindless path: a world
-    // with a legacy per-draw main shader carries no bucket routing at all.
-    let world_pipelines = match main_bindless_root_sig.as_ref() {
-        Some(brs) if !bucket_shaders.is_empty() => {
-            let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
-            if bucket_shaders.len() + 1 > max {
-                return Err(format!(
-                    "world declares {} Shaders but at most {max} can be routed",
-                    bucket_shaders.len() + 1
-                ));
-            }
-            build_world_pipeline_table(
-                device,
-                info_queue,
-                brs,
-                bucket_shaders,
-                msaa_samples,
-                &bindless_main_shaders,
-            )?
+    // GPU-culled command buffer.
+    let world_pipelines = if bucket_shaders.is_empty() {
+        Vec::new()
+    } else {
+        let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
+        if bucket_shaders.len() + 1 > max {
+            return Err(format!(
+                "world declares {} Shaders but at most {max} can be routed",
+                bucket_shaders.len() + 1
+            ));
         }
-        _ if !bucket_shaders.is_empty() => {
-            return Err(
-                "material-referenced world shaders need the bindless main pass, which a \
-                 world-authored main shader disables"
-                    .to_string(),
-            );
-        }
-        _ => Vec::new(),
+        build_world_pipeline_table(device, info_queue, targets, bucket_shaders)?
     };
+    let main_bindless_root_sig = Some(brs);
+    let main_bindless_pso = Some(main_pso);
     let bucket_count = 1 + world_pipelines.len();
 
     // Per-frame StructuredBuffer<GpuObjectData> upload buffers. Allocated only
@@ -1722,8 +1149,6 @@ pub(super) fn build_main_pipelines(
     }
 
     Ok(MainPipelines {
-        main_root_sig,
-        main_pso,
         main_bindless_root_sig,
         main_bindless_pso,
         world_pipelines,
@@ -1763,25 +1188,6 @@ pub(super) fn build_shadow_pipeline(
         let sr = dump_on_err(info_queue, create_shadow_root_signature(device))?;
         let sp = dump_on_err(info_queue, create_shadow_pso(device, &sr, svs))?;
         Ok((Some(sr), Some(sp)))
-    } else {
-        Ok((None, None))
-    }
-}
-
-pub(super) fn build_main_instanced_pipeline(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    instanced_vs: Option<&[u8]>,
-    main_ps: &[u8],
-    msaa_samples: u32,
-) -> Result<(Option<ID3D12RootSignature>, Option<ID3D12PipelineState>), String> {
-    if let Some(ivs) = instanced_vs {
-        let irs = dump_on_err(info_queue, create_main_instanced_root_signature(device))?;
-        let ips = dump_on_err(
-            info_queue,
-            create_main_pso(device, &irs, ivs, main_ps, HDR_FORMAT, msaa_samples),
-        )?;
-        Ok((Some(irs), Some(ips)))
     } else {
         Ok((None, None))
     }

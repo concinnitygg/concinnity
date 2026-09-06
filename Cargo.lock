@@ -550,14 +550,13 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "clap",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-dev",
  "concinnity-engine",
- "concinnity-shader",
  "concinnity-testing",
  "concinnity-toolchain",
  "tempfile",
@@ -566,12 +565,13 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "basisu",
  "bytemuck",
  "concinnity-core",
  "concinnity-host",
+ "concinnity-slang",
  "concinnity-testing",
  "fbxcel",
  "gltf",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "async-stream",
  "bitflags 2.11.1",
@@ -623,7 +623,6 @@ dependencies = [
  "concinnity-core",
  "concinnity-engine",
  "concinnity-host",
- "concinnity-shader",
  "concinnity-testing",
  "concinnity-toolchain",
  "ctrlc",
@@ -652,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "ash",
  "block2",
@@ -677,17 +676,17 @@ dependencies = [
  "objc2-metal-kit",
  "objc2-quartz-core",
  "png",
+ "postcard",
  "rayon",
  "serde_json",
  "sha2",
- "shaderc",
  "tracing",
  "windows",
 ]
 
 [[package]]
 name = "concinnity-engine"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -716,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "concinnity-core",
  "rayon",
@@ -727,23 +726,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "concinnity-shader"
-version = "0.19.14"
-dependencies = [
- "concinnity-cook",
- "concinnity-device",
- "concinnity-host",
- "concinnity-testing",
- "concinnity-toolchain",
- "shaderc",
- "tempfile",
- "tracing",
- "windows",
-]
-
-[[package]]
 name = "concinnity-slang"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "concinnity-testing",
 ]
@@ -759,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.19.14"
+version = "0.19.15"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",
@@ -1856,15 +1840,6 @@ checksum = "3c8469b4a23b962c1396b9b451dda50ef5b283e8dd309d69033475fa9b334324"
 dependencies = [
  "libc",
  "pkg-config",
-]
-
-[[package]]
-name = "link-cplusplus"
-version = "1.0.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f78c730aaa7d0b9336a299029ea49f9ee53b0ed06e9202e8cb7db9bae7b8c82"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -2988,12 +2963,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3582f63211428f83597b51b2ddb88e2a91a9d52d12831f9d08f5e624e8977422"
 
 [[package]]
-name = "roxmltree"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
-
-[[package]]
 name = "rtrb"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3178,29 +3147,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
-]
-
-[[package]]
-name = "shaderc"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ab2a6e36d1c1e2320c87e2b806a3e7b0dffaa67b82c14a39dad6cf7637208ae"
-dependencies = [
- "libc",
- "shaderc-sys",
-]
-
-[[package]]
-name = "shaderc-sys"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdceb85b2c6d2c27b95ffe2d341063dfded0aca8046f7f60c544bbeaeaf8bcae"
-dependencies = [
- "cmake",
- "libc",
- "link-cplusplus",
- "pkg-config",
- "roxmltree",
 ]
 
 [[package]]

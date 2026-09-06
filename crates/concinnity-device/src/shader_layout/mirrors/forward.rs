@@ -14,8 +14,7 @@ use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
 pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
     let mut cases = vec![
-        // The Rust field names are the world-shader contract the Metal
-        // validator checks; the shader spells the same bytes its own way.
+        // The shader spells the same bytes under its own names.
         everywhere(mirror!(ViewUniforms => "ViewUniforms" {
             vp,
             [view] => ["view_mat"],
@@ -67,16 +66,10 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [emissive, metallic] => ["emissive_metallic"],
             albedo_index,
             normal_index,
-            macro_variation,
-            terrain_blend,
-            [bb_min, cull_distance] => ["bb_min_cull_distance"],
-            [bb_max, secondary_blend_sharpness] => ["bb_max_blend_sharpness"],
-            albedo_secondary_index,
-            normal_secondary_index,
             emissive_map_index,
             orm_map_index,
-            alpha_cutoff,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            [bb_min, cull_distance] => ["bb_min_cull_distance"],
+            [bb_max, alpha_cutoff] => ["bb_max_alpha_cutoff"],
         })),
     ];
     cases.extend(light_cull());

@@ -2,31 +2,22 @@
 //
 // Main pass (off-screen HDR + 4x MSAA). Renders the visible scene into the
 // HDR colour + depth attachments, multisample-resolving to `hdr_resolve`.
-// Has three geometry paths:
 //
-//   * Bindless static path: GPU-driven, issued through `cull_icb` in a single
-//     executeCommandsInBuffer. Used when the world's fragment shader provides
-//     `fragment_main_bindless` (main.metal) and the static draw list is
-//     non-empty -- `object_buffer` / `bindless_tex_args` are `Some` in that
-//     case.
-//   * Legacy static path: per-draw bindings, walks the `visible` list. Used
-//     by shaders without a bindless entry point (custom shaders).
-//   * Instanced clusters + skinned meshes: drawn after the static path, with
-//     their own pipelines rebound.
+// One geometry path: the GPU-driven bindless pass, issued through the cull's
+// indirect command buffers. Static objects, folded instances and the folded
+// skinned tail are all cull records, so the encode is one prefix range per
+// shader bucket plus the skinned tail. `object_buffer` / `bindless_tex_args`
+// are `Some` exactly when the world has something to draw.
 //
-// The three sub-paths are encoded in fixed (static, instanced, skinned)
-// order on a single `MTLRenderCommandEncoder`. Two `MTLParallelRenderCommandEncoder`
-// attempts (one full-fat with parallel encoders on every shadow cascade,
-// one scoped to just this main pass with 3 sub-encoders + no pass-timing)
-// both tripped G14X (M2/M3 Pro/Max class) into an abort inside
-// `IOGPUMetalCommandBufferStorageAllocResourceAtIndex`: the crash window
-// scaled with parallel-encoder usage rate (~20 s with shadow split, ~90 s
-// with main-only) but never went away. The mechanism appears fundamentally
-// incompatible with our usage on this hardware / macOS 26.4 combo.
-// The per-path helpers below stay split out so a future CPU-parallel
-// strategy (per-pass command buffers committed through events, or
-// data-parallel draw-record prep) can plug in without re-deriving the
-// dispatch shape.
+// The pass is encoded on a single `MTLRenderCommandEncoder`. Two
+// `MTLParallelRenderCommandEncoder` attempts (one full-fat with parallel
+// encoders on every shadow cascade, one scoped to just this main pass with 3
+// sub-encoders + no pass-timing) both tripped G14X (M2/M3 Pro/Max class) into
+// an abort inside `IOGPUMetalCommandBufferStorageAllocResourceAtIndex`: the
+// crash window scaled with parallel-encoder usage rate (~20 s with shadow
+// split, ~90 s with main-only) but never went away. The mechanism appears
+// fundamentally incompatible with our usage on this hardware / macOS 26.4
+// combo.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
@@ -39,7 +30,6 @@ use objc2_metal::{
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::uniforms::ModelUniforms;
 use concinnity_core::render::uniforms::ViewUniforms;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
@@ -54,27 +44,18 @@ pub(in crate::metal) struct MainPassCamera {
     pub cam_pos: [f32; 3],
 }
 
-// The GPU-driven buffers the bindless static path consumes. All three are `Some`
-// together exactly when the bindless cull path is active; the legacy per-draw
-// path leaves them `None` and walks the CPU `visible` list. `counts` is the
-// record set those buffers were built for, which the indirect-draw ranges
-// address; it is the live draw list for a frame pass and an earlier snapshot for
-// the reflection-probe bake.
+// The GPU-driven buffers the main pass consumes. `object_buffer` and
+// `bindless_tex_args` are `Some` together exactly when the cull path ran this
+// frame; a world with nothing to draw leaves them `None` and the pass stops at
+// its clear. `counts` is the record set those buffers were built for, which the
+// indirect-draw ranges address; it is the live draw list for a frame pass and an
+// earlier snapshot for the reflection-probe bake.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct GpuFrameBuffers<'a> {
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub counts: crate::metal::context::DrawRecordCounts,
-}
-
-// The scene draw inputs the main pass walks: the CPU visible set (legacy path),
-// the prepared instanced clusters, and the per-skinned-mesh joint palettes.
-#[derive(Clone, Copy)]
-pub(in crate::metal) struct DrawInputs<'a> {
-    pub visible: &'a [u32],
-    pub prepared_instances: &'a super::super::instanced::PreparedInstances,
-    pub skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
 }
 
 // The reflection-probe face attachments `encode_main_into_face` renders into
@@ -120,7 +101,6 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
-        draw_inputs: DrawInputs,
         gpu: GpuFrameBuffers,
         world_hidden: bool,
     ) -> Result<u32, String> {
@@ -130,11 +110,6 @@ impl MtlContext {
             view: _,
             cam_pos,
         } = camera;
-        let DrawInputs {
-            visible,
-            prepared_instances,
-            skinned_joint_bufs,
-        } = draw_inputs;
         // Only `object_buffer` gates the descriptor's store action below; the
         // rest of `gpu` travels intact into `encode_main_static_into`.
         let object_buffer = gpu.object_buffer;
@@ -225,32 +200,21 @@ impl MtlContext {
         };
 
         // While the world is hidden behind an opaque menu, the pass stops at the
-        // descriptor's Clear load action: skip every geometry sub-path so even a
-        // non-bindless skinned world (whose draw does not consult the now-empty
-        // visible / instance / object inputs) renders nothing behind the menu.
-        // A scene-less world (no main pipeline) takes the same bare-clear shape
-        // every frame.
+        // descriptor's Clear load action. A scene-less world (no main pipeline)
+        // takes the same bare-clear shape every frame.
         if world_hidden || self.pipeline_state.is_none() {
             return Ok(0);
         }
 
-        // Main camera: bind the per-cluster light lists once for every sub-path.
+        // Main camera: bind the per-cluster light lists once for the pass.
         self.bind_clusters(&encoder, true);
-        let count_static = self.encode_main_static_into(
+        Ok(self.encode_main_geometry_into(
             &encoder,
             &view_uniforms,
-            cam_pos,
-            visible,
             gpu,
             // Main pass: the main cull ICB (no override).
             None,
-        );
-        let count_instanced =
-            self.encode_main_instanced_into(&encoder, &view_uniforms, prepared_instances);
-        let count_skinned =
-            self.encode_main_skinned_into(&encoder, &view_uniforms, cam_pos, skinned_joint_bufs);
-
-        Ok(count_static + count_instanced + count_skinned)
+        ))
     }
 
     // Render the main pass into one reflection-probe cube face instead of the
@@ -266,7 +230,6 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         face_targets: FaceTargets,
         camera: MainPassCamera,
-        draw_inputs: DrawInputs,
         gpu: GpuFrameBuffers,
         // Bindless ICB to execute instead of the main cull's. The planar mirror
         // render passes its slot's mirror ICB (culled against the reflected
@@ -287,11 +250,6 @@ impl MtlContext {
             view,
             cam_pos,
         } = camera;
-        let DrawInputs {
-            visible,
-            prepared_instances,
-            skinned_joint_bufs,
-        } = draw_inputs;
         let desc = MTLRenderPassDescriptor::new();
         let [r, g, b, a] = self.view.clear_color;
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
@@ -343,20 +301,7 @@ impl MtlContext {
         // Planar / probe re-render: the main camera's cluster grid does not match
         // this viewpoint, so iterate every local light instead of the clusters.
         self.bind_clusters(&encoder, false);
-        let count_static = self.encode_main_static_into(
-            &encoder,
-            &view_uniforms,
-            cam_pos,
-            visible,
-            gpu,
-            icb_override,
-        );
-        let count_instanced =
-            self.encode_main_instanced_into(&encoder, &view_uniforms, prepared_instances);
-        let count_skinned =
-            self.encode_main_skinned_into(&encoder, &view_uniforms, cam_pos, skinned_joint_bufs);
-
-        Ok(count_static + count_instanced + count_skinned)
+        Ok(self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, icb_override))
     }
 
     // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not
@@ -674,15 +619,13 @@ impl MtlContext {
         true
     }
 
-    // Encode the static-geometry sub-path: either the bindless GPU-driven
-    // ICB execution or the legacy per-draw loop, depending on which path
-    // the world's pipeline opted into.
-    fn encode_main_static_into(
+    // Encode the frame's geometry: the GPU-driven bindless pass, one indirect
+    // range per shader bucket plus the folded skinned tail. Returns 0 without
+    // touching the encoder when the world has nothing to draw this frame.
+    fn encode_main_geometry_into(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view_uniforms: &ViewUniforms,
-        cam_pos: [f32; 3],
-        visible: &[u32],
         gpu: GpuFrameBuffers,
         // ICB to execute instead of the main cull's `self.cull.icb`: the planar
         // mirror render passes its slot's mirror ICB (culled against the
@@ -696,13 +639,11 @@ impl MtlContext {
             deformed_skinned,
             counts,
         } = gpu;
-        enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main static"));
+        enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main geometry"));
         if !self.bind_main_pass_shared(enc, view_uniforms) {
             enc.popDebugGroup();
             return 0;
         }
-
-        let mut draw_calls: u32 = 0;
 
         // The planar mirror override is a single command stream executed under
         // the encoder's default pipeline; the main + probe paths execute the
@@ -715,11 +656,12 @@ impl MtlContext {
             }
             None => &self.cull.icbs,
         };
+        let mut draw_calls: u32 = 0;
         if let (Some(obj_buf), Some(tex_args), false) =
             (object_buffer, bindless_tex_args, bucket_icbs.is_empty())
         {
-            // Bindless static pass, GPU-driven. Shared with the phase-2 main
-            // pass under two-pass occlusion: see `execute_bindless_static_icb`.
+            // Shared with the phase-2 main pass under two-pass occlusion: see
+            // `execute_bindless_static_icb`.
             draw_calls += self.execute_bindless_static_icb(
                 enc,
                 obj_buf,
@@ -728,150 +670,7 @@ impl MtlContext {
                 deformed_skinned,
                 counts,
             );
-        } else {
-            // Legacy static pass: rebind model/material/textures per draw.
-            // Used by shaders without a `fragment_main_bindless` entry point
-            // (custom shaders). The shared helper owns the
-            // visible/resident filter, the camera-distance LOD pick (matching the
-            // bindless path's GpuDrawArgs selection), and the indexed draw.
-            draw_calls += self.draw_static_objects(enc, visible, cam_pos, |enc, obj, _| {
-                let model_uniforms = ModelUniforms { model: obj.model };
-                // model matrix at vertex buffer(2)
-                enc.set_vertex_value(&model_uniforms, 2);
-                // material at fragment buffer(3)
-                enc.set_fragment_value(&obj.material, 3);
-                // albedo at texture(0), normal map at texture(1)
-                enc.set_fragment_texture(self.albedo_pool_texture(obj.texture_slot), 0);
-                enc.set_fragment_texture(self.normal_pool_texture(obj.normal_map_slot), 1);
-                enc.set_fragment_sampler(&self.sampler, 0);
-            });
         }
-        enc.popDebugGroup();
-        draw_calls
-    }
-
-    // Encode the instanced-cluster sub-path. One drawIndexedInstanced per
-    // cluster*LOD bucket, after a cluster-wide frustum/distance cull.
-    fn encode_main_instanced_into(
-        &self,
-        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
-        view_uniforms: &ViewUniforms,
-        prepared: &super::super::instanced::PreparedInstances,
-    ) -> u32 {
-        let Some(inst_ps) = self.instanced.pipeline_state.clone() else {
-            return 0;
-        };
-        if prepared.clusters.is_empty() {
-            return 0;
-        }
-        // When the bindless static pass is active with build-time geometry, the
-        // instances were folded into its cull buffers and drawn by the static
-        // ICB (`execute_bindless_static_icb` over `cull_count()`), so the legacy
-        // per-cluster main draw would double-draw them. This condition equals
-        // `object_buffer.is_some()` (bindless && static geometry present),
-        // mirroring DX/VK's `&& !use_bindless`. Gate only the MAIN draw: the
-        // SSR / SSAO / velocity pre-passes + shadow still consume `prepared`
-        // through the legacy instanced path. Instance-
-        // only worlds (no static geometry) keep the legacy draw here.
-        if self.bindless && !self.draw.objects.is_empty() {
-            return 0;
-        }
-        enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main instanced"));
-        // Share the same view / lights / shadow / IBL / SSAO bindings as the
-        // static path. The pipeline override below swaps to the instanced PSO.
-        if !self.bind_main_pass_shared(enc, view_uniforms) {
-            enc.popDebugGroup();
-            return 0;
-        }
-        enc.set_pipeline(&inst_ps);
-
-        // Per cluster: bind material (fragment buffer(3)) + albedo / normal
-        // textures, shared across the cluster's LOD buckets. The shared helper
-        // owns the cull / LOD-bucket / instance-buffer / draw loop.
-        let draw_calls = self.draw_prepared_instances(enc, prepared, false, |enc, cluster| {
-            enc.set_fragment_value(&cluster.material, 3);
-            enc.set_fragment_texture(self.albedo_pool_texture(cluster.texture_slot), 0);
-            enc.set_fragment_texture(self.normal_pool_texture(cluster.normal_map_slot), 1);
-            enc.set_fragment_sampler(&self.sampler, 0);
-        });
-
-        // Restore the regular pipeline state so a future addition to the
-        // main pass starts from the same shape the static path left it in.
-        if let Some(pipeline_state) = &self.pipeline_state {
-            enc.set_pipeline(pipeline_state);
-        }
-        enc.popDebugGroup();
-        draw_calls
-    }
-
-    // Encode the skinned-mesh sub-path. Linear-blend-skinned geometry,
-    // drawn last in the main pass.
-    fn encode_main_skinned_into(
-        &self,
-        enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
-        view_uniforms: &ViewUniforms,
-        cam_pos: [f32; 3],
-        skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-    ) -> u32 {
-        let (Some(skinned_ps), Some(svb), Some(sib)) = (
-            self.skinned.pipeline_state.clone(),
-            self.skinned.vertex_buffer.clone(),
-            self.skinned.index_buffer.clone(),
-        ) else {
-            return 0;
-        };
-        if self.skinned.draw_objects.is_empty() {
-            return 0;
-        }
-        // When the GPU-driven skinned fold is active (bindless + static
-        // geometry), skinned objects were pre-skinned into the deformed buffer
-        // and drawn by the bindless ICB's skinned tail, so this legacy VS-skinned
-        // draw would double-draw them. `draw.n_skinned > 0` is set in `upload_skinned`
-        // under exactly that condition, mirroring the instanced gate. A pure-
-        // skinned or non-bindless world keeps `draw.n_skinned == 0` and draws here.
-        if self.draw.n_skinned > 0 {
-            return 0;
-        }
-        enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main skinned"));
-        if !self.bind_main_pass_shared(enc, view_uniforms) {
-            enc.popDebugGroup();
-            return 0;
-        }
-        enc.set_pipeline(&skinned_ps);
-        enc.set_vertex_buffer(&svb, 0, 1);
-
-        // The shared helper owns the visible filter, the skinned-camera-distance
-        // LOD pick, and the u16 indexed draw; the closure binds this mesh's model,
-        // joint palette, material, and textures.
-        let draw_calls = self.draw_skinned_objects(enc, &sib, cam_pos, |enc, obj, i| {
-            let model_uniforms = ModelUniforms { model: obj.model };
-            // Morph bindings for the VS: the packed morph buffer at 9 and the
-            // per-draw params + weights at 10. Objects without morph targets
-            // bind the shared VB as a dummy the shader never reads
-            // (`target_count == 0`).
-            let morph = self.skinned.morphs.get(i).and_then(|m| m.as_ref());
-            let mut morph_params = crate::metal::uniforms::VsMorphParams {
-                vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                target_count: morph.map_or(0, |m| m.target_count),
-                _pad: 0,
-                weights: [0.0; crate::metal::uniforms::MAX_MORPH_TARGETS],
-            };
-            if let Some(w) = self.skinned.morph_weights.get(i) {
-                for (dst, src) in morph_params.weights.iter_mut().zip(w.iter()) {
-                    *dst = *src;
-                }
-            }
-            enc.set_vertex_value(&model_uniforms, 2);
-            enc.set_vertex_buffer(&skinned_joint_bufs[i], 0, 8);
-            let morph_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
-            enc.set_vertex_buffer(morph_buf, 0, 9);
-            enc.set_vertex_value(&morph_params, 10);
-            enc.set_fragment_value(&obj.material, 3);
-            enc.set_fragment_texture(self.albedo_pool_texture(obj.texture_slot), 0);
-            enc.set_fragment_texture(self.normal_pool_texture(obj.normal_map_slot), 1);
-            enc.set_fragment_sampler(&self.sampler, 0);
-        });
         enc.popDebugGroup();
         draw_calls
     }

@@ -25,9 +25,9 @@ pub(crate) mod gfx {
         render_types, rt_reflections, ssao, ssgi, ssr,
     };
     pub(crate) use concinnity_core::render::{
-        backend, backend_init, bvh, csm, decal, display_mode, draw_slot, error, fullscreen,
-        hdr_output, input, keymap, lights, ltc, mipmap, parallel_ctx, particles, planar_reflection,
-        reflection_probe, render_graph, rt_geom, rt_refit, rt_topology, scene_flow,
+        backend, backend_init, csm, decal, display_mode, draw_slot, error, fullscreen, hdr_output,
+        input, keymap, lights, ltc, mipmap, parallel_ctx, particles, planar_reflection,
+        reflection_probe, render_graph, rt_geom, rt_refit, rt_topology, scene_flow, shadow_bias,
         shadow_schedule, skinned_pool, slot_rewrites, spot_shadow, transparent, volumetric_fog,
     };
 }
@@ -76,7 +76,9 @@ pub(crate) mod compiler_work;
 // Shared source assembly for the single-source `.slang` shaders every backend
 // draws from.
 #[cfg(any(backend_dx, backend_vk, backend_metal))]
+pub(crate) mod raymarch_source;
 pub(crate) mod slang_source;
+pub(crate) mod surface_source;
 
 // Disk persistence for driver pipeline blobs (VkPipelineCache, D3D12 pipeline
 // library). Metal needs none: its libraries are precompiled or cached above,
@@ -96,12 +98,6 @@ pub mod precompile;
 // a backend has shaders to compile.
 #[cfg(all(test, any(backend_metal, backend_dx, backend_vk)))]
 mod slangc_gate;
-
-// Cross-backend drift guard for the shared `GpuObjectData` shader fragments.
-// Test-only and backend-agnostic on purpose: the fragments are checked as text,
-// so one build validates all three languages.
-#[cfg(test)]
-mod object_data_layout;
 
 // Reflection-driven layout guard for the `#[repr(C)]` structs the CPU uploads
 // into the single-source `.slang` shaders: the expected offsets come from

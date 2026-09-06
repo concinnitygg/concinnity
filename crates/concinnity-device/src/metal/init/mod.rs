@@ -61,10 +61,8 @@ pub(super) struct ReuseHandles {
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
     // inputs (see `crate::gfx::backend_init::BackendInit` for per-field docs).
-    //
-    // Main-shader entry points must be named "vertex_main" and
-    // "fragment_main"; the shadow pass is engine-internal (compiled from
-    // `shadow.metal`) and enabled whenever `shadows.map_size > 0`.
+    // The shadow pass is engine-internal and enabled whenever
+    // `shadows.map_size > 0`.
     pub(crate) fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
@@ -189,65 +187,49 @@ impl MtlContext {
         // outgoing context's heaps go with it.
         let allocator = DeviceAllocator::new(&device, frames_in_flight);
 
-        // Main + cull + bindless argument encoder. The bundle's `bindless`
-        // flag drives the texture-pool overflow warning below. A world with no
+        // Main + cull + bindless argument encoder. A world with no
         // 3D scene content skips the main PBR pipeline and the whole GPU-cull
         // path: the Main pass then survives as a bare clear the composite pass
         // samples (the same shape a world_hidden frame takes).
         let vert_desc = pipelines::make_vertex_descriptor();
-        let (
-            pipeline_state,
-            bindless,
-            cull_pipeline,
-            cull_icb_arg_encoder,
-            cull_pipeline_phase2,
-            cull_icb2_arg_encoder,
-            bindless_tex_arg_encoder,
-            bindless_sampler_arg_encoder,
-        ) = if requirements.scene {
-            let pipelines::MainPipelineBundle {
-                pipeline_state,
-                bindless,
-                cull_pipeline,
-                cull_icb_arg_encoder,
-                cull_pipeline_phase2,
-                cull_icb2_arg_encoder,
-                bindless_tex_arg_encoder,
-                bindless_sampler_arg_encoder,
-            } = pipelines::build_main_pipeline(
-                &device,
-                &vert_desc,
-                world_shaders[0].vert,
-                world_shaders[0].frag,
-                hot_reload,
-            )?;
-            (
-                Some(pipeline_state),
-                bindless,
-                cull_pipeline,
-                cull_icb_arg_encoder,
-                cull_pipeline_phase2,
-                cull_icb2_arg_encoder,
-                bindless_tex_arg_encoder,
-                bindless_sampler_arg_encoder,
-            )
-        } else {
-            (None, false, None, None, None, None, None, None)
-        };
+        let bindless = requirements.scene;
+        let (pipeline_state, cull, bindless_tex_arg_encoder, bindless_sampler_arg_encoder) =
+            if bindless {
+                let pipelines::MainPipelineBundle {
+                    pipeline_state,
+                    cull,
+                    bindless_tex_arg_encoder,
+                    bindless_sampler_arg_encoder,
+                } = pipelines::build_main_pipeline(
+                    &device,
+                    &vert_desc,
+                    world_shaders[0].programs,
+                    hot_reload,
+                )?;
+                (
+                    Some(pipeline_state),
+                    Some(cull),
+                    bindless_tex_arg_encoder,
+                    bindless_sampler_arg_encoder,
+                )
+            } else {
+                (None, None, None, None)
+            };
+        let (cull_pipeline, cull_pipeline_phase2, cull_encode_pipeline, cull_icb_arg_encoder) =
+            match cull {
+                Some(c) => (
+                    Some(c.decide),
+                    Some(c.decide_phase2),
+                    Some(c.encode),
+                    Some(c.icb_arg_encoder),
+                ),
+                None => (None, None, None, None),
+            };
 
         // Two-pass occlusion is only usable on the bindless cull path (the
         // phase-2 pipeline exists exactly then). Gate the request here so the
         // runtime flag is true only when the feature can actually run.
         let two_pass_occlusion = occlusion_two_pass_requested && cull_pipeline_phase2.is_some();
-
-        let instanced_pipeline_state = pipelines::build_instanced_pipeline(
-            &device,
-            &vert_desc,
-            world_shaders[0].vert_instanced,
-            world_shaders[0].frag,
-            !instanced_clusters.is_empty(),
-            hot_reload,
-        )?;
 
         // Material-referenced shaders (ShaderHandle 1..) each get a bindless
         // pipeline; the cull kernel routes their draws into per-bucket ICBs.
@@ -261,12 +243,17 @@ impl MtlContext {
             }
             if !bindless {
                 return Err(
-                    "material-referenced Shaders require the bindless main pass, but the \
-                     default Shader has no fragment_main_bindless entry point"
+                    "material-referenced Shaders need the GPU-driven main pass, which a \
+                            world with no 3D scene content does not build"
                         .to_string(),
                 );
             }
-            pipelines::build_world_pipeline_table(&device, &vert_desc, &world_shaders[1..])?
+            pipelines::build_world_pipeline_table(
+                &device,
+                &vert_desc,
+                &world_shaders[1..],
+                hot_reload,
+            )?
         } else {
             Vec::new()
         };
@@ -571,21 +558,21 @@ impl MtlContext {
             };
 
         // GPU-driven cascaded-shadow resources: the frustum-only
-        // shadow cull kernel + its ICB argument encoder, and the depth-only
-        // bindless shadow render pipeline. Built only on the bindless path with
+        // shadow decision kernel and the depth-only bindless shadow render
+        // pipeline. Built only on the bindless path with
         // shadows enabled; non-bindless / no-shadow worlds keep the legacy
         // per-cascade CPU shadow loop and leave these `None`. The shadow ICB +
         // its argument buffer are allocated lazily by `ensure_shadow_icb_capacity`
         // (sized to NUM_SHADOW_CASCADES * cull_count once geometry is known).
-        let (shadow_cull_pipeline, shadow_bindless_pipeline, shadow_icb_arg_encoder) =
-            if shadow_pipeline_state.is_some() && bindless {
-                let (sc, sc_enc) = super::cull::build_shadow_cull_pipeline(&device, hot_reload)?;
-                let sb =
-                    pipelines::build_shadow_bindless_pipeline(&device, &vert_desc, hot_reload)?;
-                (Some(sc), Some(sb), Some(sc_enc))
-            } else {
-                (None, None, None)
-            };
+        let (shadow_cull_pipeline, shadow_bindless_pipeline) = if shadow_pipeline_state.is_some()
+            && bindless
+        {
+            let sc = super::cull::build_shadow_cull_pipeline(&device, hot_reload)?;
+            let sb = pipelines::build_shadow_bindless_pipeline(&device, &vert_desc, hot_reload)?;
+            (Some(sc), Some(sb))
+        } else {
+            (None, None)
+        };
 
         // Cache the first directional light's direction; per-frame CSM updates
         // use it. `update_directional_lights` re-caches it when the sun changes.
@@ -812,7 +799,6 @@ impl MtlContext {
             auto_exposure_bias_ev: auto_exposure_bias,
         } = effects::build_effects(
             &allocator,
-            &vert_desc,
             requirements.scene,
             effects::EffectDimensions {
                 render_w,
@@ -832,7 +818,6 @@ impl MtlContext {
             effects::EffectFlags {
                 taa_enabled: effective_taa_enabled,
                 needs_velocity: velocity_needed,
-                has_instanced: instanced_pipeline_state.is_some(),
                 hot_reload,
             },
             effects::WorldContentEffects {
@@ -1004,37 +989,23 @@ impl MtlContext {
             }
         };
 
-        // Raymarched SDF volumes. Each volume builds its own pipeline
-        // from the wrapped user source (helpers + user + template) at
-        // init time; the proxy-cube buffers are allocated once and
-        // shared across all volumes. Empty input list → both stay
-        // None / empty and the raymarch executor short-circuits.
+        // Raymarched SDF volumes. Each volume builds its own pipelines from the
+        // field the build compiled into its payload; the proxy-cube buffers are
+        // allocated once and shared across all volumes. Empty input list means
+        // both stay None / empty and the raymarch executor short-circuits.
         let (raymarch_records, raymarch_cube_vertex_buffer, raymarch_cube_index_buffer) =
             if sdf_volumes.is_empty() {
                 (Vec::new(), None, None)
             } else {
                 let mut records = Vec::with_capacity(sdf_volumes.len());
-                for (volume, source_bytes, label) in &sdf_volumes {
+                for (volume, payload, label) in &sdf_volumes {
                     records.push(super::raymarch::build_raymarch_volume_record(
-                        &device,
-                        volume,
-                        source_bytes,
-                        label,
+                        &device, volume, payload, hot_reload, label,
                     )?);
                 }
                 let (vb, ib) = super::raymarch::build_raymarch_cube_buffers(&device)?;
                 (records, Some(vb), Some(ib))
             };
-
-        let (cull_bvh, always_draw) = crate::gfx::bvh::partition_draw_objects(&draw_objects);
-
-        // Seed the always_draw membership map from the initial draw set so a
-        // recycled slot is added to always_draw exactly once. (Draw-slot
-        // allocation itself lives engine-side.)
-        let mut always_draw_member = vec![false; draw_objects.len()];
-        for &idx in &always_draw {
-            always_draw_member[idx as usize] = true;
-        }
 
         // Snapshot each object's initial model matrix as its "previous" frame
         // so the velocity pre-pass sees zero motion until the first update.
@@ -1146,8 +1117,9 @@ impl MtlContext {
         // addresses the flat pool with Metal's CPU-bias convention (NOT the
         // shared core `instance_object_records`, which is the DX/VK raw-index
         // convention): instances are placed at world load and never move, so the
-        // records are static. Per-instance LOD is deferred -- every instance uses
-        // the cluster base index range, so its draw args never change either.
+        // records are static. The draw args carry the cluster base index range;
+        // `build_draw_args_buffer` patches per-instance LOD over it each frame
+        // for the clusters that declare alternates.
         let n_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
         let (instance_records, instance_draw_args) = {
             use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
@@ -1183,6 +1155,7 @@ impl MtlContext {
             bindless,
             cull: super::cull::CullState {
                 pipeline: cull_pipeline,
+                encode_pipeline: cull_encode_pipeline,
                 bucket_count: shader_bucket_count,
                 icbs: Vec::new(),
                 icb_arg_encoder: cull_icb_arg_encoder,
@@ -1190,7 +1163,6 @@ impl MtlContext {
                 icb_capacity: 0,
                 pipeline_phase2: cull_pipeline_phase2,
                 icbs_2: Vec::new(),
-                icb_2_arg_encoder: cull_icb2_arg_encoder,
                 icb_2_arg_buffer: None,
                 status_buffer: None,
                 two_pass_occlusion,
@@ -1201,8 +1173,8 @@ impl MtlContext {
                 shadow_pipeline: shadow_cull_pipeline,
                 shadow_bindless_pipeline,
                 shadow_icb: None,
-                shadow_icb_arg_encoder,
                 shadow_icb_arg_buffer: None,
+                shadow_status: None,
                 shadow_icb_capacity: 0,
                 mirror_slots: Vec::new(),
                 mirror_status: None,
@@ -1216,10 +1188,6 @@ impl MtlContext {
             index_buffer,
             draw: super::context::DrawState {
                 objects: draw_objects,
-                bvh: cull_bvh,
-                always: always_draw,
-                always_member: always_draw_member,
-                visible_scratch: Vec::new(),
                 graph_cache: None,
                 n_instances,
                 // Set by `upload_skinned` (when bindless + static geometry
@@ -1228,10 +1196,10 @@ impl MtlContext {
                 n_skinned: 0,
             },
             instanced: super::context::InstancedState {
+                any_lod: crate::gfx::lod::any_cluster_has_lod(&instanced_clusters),
                 clusters: instanced_clusters,
                 records: instance_records,
                 draw_args: instance_draw_args,
-                pipeline_state: instanced_pipeline_state,
             },
             view: super::context::ViewState {
                 clear_color,
@@ -1374,16 +1342,15 @@ impl MtlContext {
                 reload_pending: shader_reload_pending,
                 watcher: shader_watcher,
             },
+            world_shader: world_shaders[0].programs.cloned(),
             capture,
             prev_draw_models,
             skinned: super::resources::skinning::SkinnedState {
-                pipeline_state: None,
                 shadow_pipeline_state: None,
                 vertex_buffer: None,
                 index_buffer: None,
                 draw_objects: Vec::new(),
                 joint_matrices: Vec::new(),
-                prev_joint_matrices: Vec::new(),
                 skin_pipeline: None,
                 deformed: Vec::new(),
                 deformed_primed: std::sync::atomic::AtomicBool::new(false),
@@ -1443,8 +1410,6 @@ impl MtlContext {
                 prev_model: super::transient::TransientRing::new(frames_in_flight),
                 bindless_tex: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
                 joint: super::transient::JointRing::new(frames_in_flight.max(1) + 1),
-                prev_joint: super::transient::JointRing::new(frames_in_flight),
-                instance: super::transient::InstanceRing::new(frames_in_flight),
                 object_scratch: Vec::new(),
                 draw_args_scratch: Vec::new(),
                 prev_model_scratch: Vec::new(),

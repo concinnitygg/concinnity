@@ -513,19 +513,15 @@ fn shader_stage_source_map_round_trips_empty() {
 
 #[test]
 fn shader_stage_source_map_collects_unique_parent_dirs() {
-    use crate::components::ShaderKind;
+    use crate::components::ShaderStage;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
-        kind: ShaderKind::Vertex,
-        resolved_path: "assets/shaders/default.metal".to_string(),
+        stage: ShaderStage::Vertex,
+        resolved_path: "assets/shaders/sway.slang".to_string(),
     });
     m.entries.push(ShaderStageSourceEntry {
-        kind: ShaderKind::Fragment,
-        resolved_path: "assets/shaders/default.metal".to_string(),
-    });
-    m.entries.push(ShaderStageSourceEntry {
-        kind: ShaderKind::VertexInstanced,
-        resolved_path: "assets/other/custom.metal".to_string(),
+        stage: ShaderStage::Fragment,
+        resolved_path: "assets/other/custom.slang".to_string(),
     });
     let dirs = m.watch_dirs();
     assert_eq!(dirs.len(), 2);
@@ -538,46 +534,31 @@ fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
     // A bare filename has no parent directory; the watcher would try to
     // subscribe to "" which notify rejects. The debug-WS `reload-assets`
     // command still works for these.
-    use crate::components::ShaderKind;
+    use crate::components::ShaderStage;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
-        kind: ShaderKind::Vertex,
-        resolved_path: "standalone.metal".to_string(),
+        stage: ShaderStage::Vertex,
+        resolved_path: "standalone.slang".to_string(),
     });
     assert!(m.watch_dirs().is_empty());
 }
 
 #[test]
-fn metal_extension_is_an_asset_event() {
-    // World-loaded Shader stage sources travel through the same watcher
-    // as the texture / mesh paths; the closure routes them to the
-    // shader-stage flag rather than the texture-decode batch.
+fn slang_extension_is_an_asset_event() {
+    // The world Shader's files travel through the same watcher as the texture
+    // / mesh paths; the closure routes them to the shader-stage flag rather
+    // than the texture-decode batch.
     let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
-        .add_path(PathBuf::from("/tmp/scene.metal"));
-    assert!(is_asset_event(&evt));
-}
-
-#[test]
-fn hlsl_extension_is_an_asset_event() {
-    let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
-        .add_path(PathBuf::from("/tmp/scene_vert.hlsl"));
-    assert!(is_asset_event(&evt));
-}
-
-#[test]
-fn glsl_extension_is_an_asset_event() {
-    let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
-        .add_path(PathBuf::from("/tmp/scene.glsl"));
+        .add_path(PathBuf::from("/tmp/scene.slang"));
     assert!(is_asset_event(&evt));
 }
 
 #[test]
 fn shader_extension_matches_case_insensitively() {
-    assert!(is_shader_extension("metal"));
-    assert!(is_shader_extension("Metal"));
-    assert!(is_shader_extension("METAL"));
-    assert!(is_shader_extension("hlsl"));
-    assert!(is_shader_extension("glsl"));
+    assert!(is_shader_extension("slang"));
+    assert!(is_shader_extension("Slang"));
+    assert!(is_shader_extension("SLANG"));
+    assert!(!is_shader_extension("metal"));
     assert!(!is_shader_extension("png"));
     assert!(!is_shader_extension("glb"));
 }
@@ -592,10 +573,8 @@ fn modified(path: &str) -> Event {
 #[test]
 fn each_extension_routes_to_its_reload_pass() {
     for (path, expected) in [
-        ("/tmp/lit.metal", ReloadKind::ShaderStages),
-        ("/tmp/lit.hlsl", ReloadKind::ShaderStages),
-        ("/tmp/lit.glsl", ReloadKind::ShaderStages),
-        ("/tmp/LIT.METAL", ReloadKind::ShaderStages),
+        ("/tmp/lit.slang", ReloadKind::ShaderStages),
+        ("/tmp/LIT.SLANG", ReloadKind::ShaderStages),
         ("/tmp/world.jsonl", ReloadKind::World),
         ("/tmp/WORLD.JSONL", ReloadKind::World),
         ("/tmp/intro.md", ReloadKind::Stories),
@@ -630,11 +609,11 @@ fn an_irrelevant_change_routes_nowhere() {
 #[test]
 fn a_shader_among_several_paths_still_routes_to_the_shader_pass() {
     let leading = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
-        .add_path(PathBuf::from("/tmp/lit.metal"))
+        .add_path(PathBuf::from("/tmp/lit.slang"))
         .add_path(PathBuf::from("/tmp/albedo.png"));
     let trailing = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
         .add_path(PathBuf::from("/tmp/albedo.png"))
-        .add_path(PathBuf::from("/tmp/lit.metal"));
+        .add_path(PathBuf::from("/tmp/lit.slang"));
     assert_eq!(classify_event(&leading), Some(ReloadKind::ShaderStages));
     assert_eq!(classify_event(&trailing), Some(ReloadKind::ShaderStages));
 }
@@ -656,12 +635,12 @@ fn creates_and_removes_route_like_modifies() {
 fn state_with_only_shader_stages_still_spawns_a_watcher() {
     // World loaded only via shader-stage edits (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still want the watcher
-    // alive so `.metal` saves trigger the recompile pass.
-    use crate::components::ShaderKind;
+    // alive so `.slang` saves trigger the recompile pass.
+    use crate::components::ShaderStage;
     let mut stages = ShaderStageSourceMap::new();
     stages.entries.push(ShaderStageSourceEntry {
-        kind: ShaderKind::Vertex,
-        resolved_path: concinnity_host::scratch::path("asset_hot_reload_shader_only.metal")
+        stage: ShaderStage::Vertex,
+        resolved_path: concinnity_host::scratch::path("asset_hot_reload_shader_only.slang")
             .to_string_lossy()
             .into_owned(),
     });
@@ -670,7 +649,7 @@ fn state_with_only_shader_stages_still_spawns_a_watcher() {
         ..Default::default()
     });
     assert_eq!(state.shader_stages.len(), 1);
-    assert_eq!(state.shader_stages.entries[0].kind, ShaderKind::Vertex);
+    assert_eq!(state.shader_stages.entries[0].stage, ShaderStage::Vertex);
 }
 
 #[test]
@@ -716,9 +695,6 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             _: &[crate::gfx::mesh_payload::SkinnedVertex],
             _: &[u32],
             _: Vec<crate::gfx::render_types::SkinnedDrawObject>,
-            _: &[u8],
-            _: &[u8],
-            _: &[u8],
         ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
@@ -747,8 +723,6 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         }
         fn setup_chunk_streaming(
             &mut self,
-            _: usize,
-            _: usize,
             _: usize,
             _: usize,
         ) -> crate::gfx::error::RenderResult<()> {
@@ -868,9 +842,6 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         _: &[crate::gfx::mesh_payload::SkinnedVertex],
         _: &[u32],
         _: Vec<crate::gfx::render_types::SkinnedDrawObject>,
-        _: &[u8],
-        _: &[u8],
-        _: &[u8],
     ) -> crate::gfx::error::RenderResult<()> {
         Ok(())
     }
@@ -902,13 +873,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     ) -> crate::gfx::error::RenderResult<()> {
         Ok(())
     }
-    fn setup_chunk_streaming(
-        &mut self,
-        _: usize,
-        _: usize,
-        _: usize,
-        _: usize,
-    ) -> crate::gfx::error::RenderResult<()> {
+    fn setup_chunk_streaming(&mut self, _: usize, _: usize) -> crate::gfx::error::RenderResult<()> {
         Ok(())
     }
     fn add_chunk_mesh(
@@ -2024,14 +1989,14 @@ fn reload_stories_ignores_worlds_without_stories() {
 
 #[test]
 fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
-    use crate::components::ShaderKind;
+    use crate::components::ShaderStage;
     let dir = tempfile::tempdir().unwrap();
     let mut map = ShaderStageSourceMap::new();
     map.entries.push(ShaderStageSourceEntry {
-        kind: ShaderKind::Vertex,
+        stage: ShaderStage::Vertex,
         resolved_path: dir
             .path()
-            .join("zz_never_written_stage.metal")
+            .join("zz_never_written_stage.slang")
             .to_string_lossy()
             .into_owned(),
     });

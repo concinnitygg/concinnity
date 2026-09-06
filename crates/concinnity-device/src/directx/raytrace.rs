@@ -23,16 +23,18 @@
 //
 // Every resource those two per-frame paths write lives in a ring rather than
 // being allocated fresh: `skinned_ring` is one slot per frame in flight, keyed on
-// `frame_idx`, and `static_ring` advances a cursor one slot per dynamic-transform
-// rebuild. Both are rewritten in place and grown only on demand, so a steady
-// scene allocates nothing after warm-up. The ring rule they rest on is that the
-// frame-begin fence wait retires a slot's previous writer before the next one
-// touches it -- sound for the skinned path because it runs on EVERY frame, and
-// for the static path because its cursor advances per rebuild rather than per
-// frame (a sparsely-moving scene traces one TLAS across many frames, so a
-// frame-keyed slot could be reused while a live trace still reads it). See
-// `SkinnedFrameRing` / `StaticFrameRing`. Only the rare incremental topology
-// refresh still allocates fresh and parks its orphans in `retire`.
+// `frame_idx`, `static_ring` advances a cursor one slot per dynamic-transform
+// rebuild, and the build scratch both paths record over is one buffer per frame
+// in flight too (see `ScratchRing`). All are rewritten in place and grown only on
+// demand, so a steady scene allocates nothing after warm-up. The ring rule they
+// rest on is that the frame-begin fence wait retires a slot's previous writer
+// before the next one touches it -- sound for the skinned path because it runs on
+// EVERY frame, and for the static path because its cursor advances per rebuild
+// rather than per frame (a sparsely-moving scene traces one TLAS across many
+// frames, so a frame-keyed slot could be reused while a live trace still reads
+// it). See `SkinnedFrameRing` / `StaticFrameRing`. Only the rare incremental
+// topology refresh still allocates fresh and parks its orphans (and its own
+// dedicated scratch) in `retire`.
 
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -202,6 +204,79 @@ fn create_as_buffer(device: &ID3D12Device, size: u64) -> Result<ID3D12Resource, 
 // `ExecuteCommandLists`, re-promoting on the next reused-scratch rebuild).
 fn create_scratch(device: &ID3D12Device, size: u64) -> Result<ID3D12Resource, String> {
     create_uav_buffer(device, size.max(256), D3D12_RESOURCE_STATE_COMMON)
+}
+
+// Byte size of a scratch slot covering a build requiring `needed` bytes. D3D12
+// buffers have a 256-byte minimum, so a slot never sizes below that; keeping the
+// rule here is what lets `ScratchRing::ensure` compare a request against a slot's
+// recorded capacity without under-counting the rounding `create_scratch` applies.
+fn scratch_capacity(needed: u64) -> u64 {
+    needed.max(256)
+}
+
+// One frame's acceleration-structure build scratch, paired with the byte capacity
+// it was created with so a later build can reuse it in place.
+struct ScratchSlot {
+    buffer: ID3D12Resource,
+    capacity: u64,
+}
+
+// The build scratch as a per-frame ring: one buffer per frame in flight, indexed
+// by `frame_idx`. Scratch is written by the build that names it and read by
+// nothing afterwards, so it only has to outlive the frame that recorded it, and
+// the frame-begin fence wait (`FRAMES` deep) retires a slot's previous writer
+// before the next frame reaches it. One shared buffer cannot promise that --
+// frame N's build writes the same bytes frame N-1's build is still working in,
+// a write-after-write race the D3D12 debug layer has no sync validation to
+// report. Mirrors `vulkan::raytrace::ScratchRing`, where the layer does report it.
+//
+// At most one path records over a frame's slot per frame (`rebuild_tlas` and
+// `rebuild_skinned` are mutually exclusive, and a topology refresh builds over
+// its own dedicated scratch), so `ensure` replacing a slot can never pull the
+// buffer out from under a build already recorded this frame.
+struct ScratchRing {
+    slots: Vec<ScratchSlot>,
+}
+
+impl ScratchRing {
+    // Allocate `frames` slots, each covering a build requiring `needed` bytes.
+    fn new(device: &ID3D12Device, frames: usize, needed: u64) -> Result<Self, String> {
+        let capacity = scratch_capacity(needed);
+        let mut slots = Vec::with_capacity(frames.max(1));
+        for _ in 0..frames.max(1) {
+            slots.push(ScratchSlot {
+                buffer: create_scratch(device, capacity)?,
+                capacity,
+            });
+        }
+        Ok(Self { slots })
+    }
+
+    // The address this frame's builds record over.
+    fn gva(&self, frame_idx: usize) -> u64 {
+        com::gpu_va(&self.slots[frame_idx].buffer)
+    }
+
+    // Ensure this frame's slot covers a build requiring `needed` bytes, then hand
+    // back its address. A replaced buffer is released here: its last writer was
+    // this slot's frame a full ring cycle ago, which the frame-begin fence wait
+    // has retired. A failure to allocate leaves the old slot in place.
+    fn ensure(
+        &mut self,
+        device: &ID3D12Device,
+        frame_idx: usize,
+        needed: u64,
+    ) -> Result<u64, String> {
+        let capacity = scratch_capacity(needed);
+        let slot = &mut self.slots[frame_idx];
+        if ring_slot_needs_grow(true, slot.capacity, capacity) {
+            *slot = ScratchSlot {
+                buffer: create_scratch(device, capacity)?,
+                capacity,
+            };
+        }
+        Ok(com::gpu_va(&slot.buffer))
+    }
 }
 
 // Upload a `Copy` slice to a fresh UPLOAD-heap buffer (host-visible,
@@ -493,8 +568,6 @@ struct SkinnedFrameRing {
     refit: SkinnedRefit,
     tlas: Option<ID3D12Resource>,
     tlas_cap: u64,
-    scratch: Option<ID3D12Resource>,
-    scratch_cap: u64,
     instance: Option<PooledBuffer>,
     instance_cap: u64,
     geom: Option<PooledBuffer>,
@@ -657,9 +730,10 @@ pub(super) struct RtAccelData {
     // The TLAS instance-descriptor buffer (UPLOAD heap). Only the TLAS *build*
     // reads it; a clone of the live `static_ring` / `skinned_ring` slot's buffer.
     instance_buffer: PooledBuffer,
-    // Scratch sized for the largest of every BLAS build and the TLAS build;
-    // reused by the per-frame TLAS rebuild (the instance count is fixed).
-    scratch: ID3D12Resource,
+    // Build scratch, one buffer per frame in flight (see `ScratchRing`). Sized at
+    // init for the largest of every BLAS build and the TLAS build; each frame's
+    // own slot grows on demand when a later build outgrows it.
+    scratch: ScratchRing,
     // Size the TLAS prebuild reported; the static rebuild grows the ring slot's
     // TLAS to this size (once, since the static instance count is fixed).
     tlas_size: u64,
@@ -951,8 +1025,10 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     let tlas_pre = prebuild_info(&device5, &tlas_inputs(instance_descs.len() as u32, 0));
     max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
     let tlas = create_as_buffer(device, tlas_pre.ResultDataMaxSizeInBytes)?;
-    let scratch = create_scratch(device, max_scratch)?;
-    let scratch_gva = com::gpu_va(&scratch);
+    // One scratch buffer per frame in flight. The init builds below are their own
+    // fence-waited submit, so they record over slot 0 before any frame exists.
+    let scratch = ScratchRing::new(device, FRAMES, max_scratch)?;
+    let scratch_gva = scratch.gva(0);
 
     // Record every BLAS build (UAV-barrier-serialised over the shared scratch),
     // then the TLAS build, on a one-shot command list; fence-wait so the BVH is
@@ -1243,7 +1319,7 @@ impl RtAccelData {
             return;
         }
 
-        if let Err(e) = self.rebuild_tlas(alloc, cmd, draw_objects, scratch) {
+        if let Err(e) = self.rebuild_tlas(alloc, cmd, draw_objects, frame_idx, scratch) {
             tracing::warn!("RT dynamic TLAS rebuild failed (keeping live BVH): {e}");
         }
     }
@@ -1397,7 +1473,7 @@ impl RtAccelData {
 
         // A single dedicated scratch covers every fresh BLAS build + the TLAS build;
         // retired below (the async builds keep reading it after this returns).
-        let scratch = create_scratch(device, max_scratch.max(256))?;
+        let scratch = create_scratch(device, scratch_capacity(max_scratch))?;
         let scratch_gva = com::gpu_va(&scratch);
 
         // Recycle the next static ring slot (last live a full cycle ago, so its
@@ -1502,9 +1578,13 @@ impl RtAccelData {
         alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
+        frame_idx: usize,
         scratch: &mut RtUpdateScratch,
     ) -> Result<(), String> {
         let device = alloc.device();
+        let device5: ID3D12Device5 = device
+            .cast()
+            .map_err(|e| format!("ID3D12Device5 cast (rebuild): {e}"))?;
         let RtUpdateScratch {
             models,
             instances: instance_descs,
@@ -1564,6 +1644,15 @@ impl RtAccelData {
             .expect("RT geometry table was sized by write_upload_ring above");
         let tlas = slot.tlas.clone().expect("RT TLAS buffer was sized above");
 
+        // Ensure this frame's scratch slot covers this TLAS build. The instance
+        // count is fixed between topology refreshes, so after warm-up this reuses
+        // the slot in place; a refresh that grew the count is what makes the
+        // init-time size too small, and asking the prebuild each rebuild is what
+        // keeps the ring self-sufficient without the refresh path touching it.
+        let scratch_needed = prebuild_info(&device5, &tlas_inputs(instance_descs.len() as u32, 0))
+            .ScratchDataSizeInBytes;
+        let scratch_gva = self.scratch.ensure(device, frame_idx, scratch_needed)?;
+
         let cmd4: ID3D12GraphicsCommandList4 = cmd
             .cast()
             .map_err(|e| format!("ID3D12GraphicsCommandList4 cast (rebuild): {e}"))?;
@@ -1571,7 +1660,7 @@ impl RtAccelData {
             DestAccelerationStructureData: com::gpu_va(&tlas),
             Inputs: tlas_inputs(instance_descs.len() as u32, com::gpu_va(&instance_buffer)),
             SourceAccelerationStructureData: 0,
-            ScratchAccelerationStructureData: com::gpu_va(&self.scratch),
+            ScratchAccelerationStructureData: scratch_gva,
         };
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -1620,12 +1709,13 @@ impl RtAccelData {
     // `rt_refit::REFIT_LIMIT` refits per slot to bound the traversal-quality drift
     // a refit accumulates as the pose walks away from the tree's build pose.
     //
-    // All per-frame buffers (deformed verts, skinned BLAS, TLAS, scratch, instance
-    // descriptors, geometry table) live in `skinned_ring[frame_idx]` and are
-    // rebuilt IN PLACE: they are allocated once and only grown when a larger size
-    // is needed, so the steady state allocates nothing. Reuse is hazard-free
-    // because the frame-begin fence wait gates this slot's prior GPU work
-    // (`FRAMES` deep), so the prior frame's trace that read this slot has finished.
+    // All per-frame buffers (deformed verts, skinned BLAS, TLAS, instance
+    // descriptors, geometry table) live in `skinned_ring[frame_idx]`, and the
+    // build scratch in the `ScratchRing` slot for the same frame; all are rebuilt
+    // IN PLACE: they are allocated once and only grown when a larger size is
+    // needed, so the steady state allocates nothing. Reuse is hazard-free because
+    // the frame-begin fence wait gates this slot's prior GPU work (`FRAMES` deep),
+    // so the prior frame's trace that read this slot has finished.
     // (The previous design allocated all of these fresh every frame and parked the
     // outgoing copies in a retire pool; even though the bookkeeping was bounded,
     // the per-frame committed-resource alloc/free churn grew the driver's video-
@@ -1875,9 +1965,10 @@ impl RtAccelData {
             .clone()
             .expect("RT geometry table was sized by write_upload_ring above");
 
-        // Size the TLAS + scratch in the ring (>= the largest skinned BLAS + the
-        // TLAS). The skinned instance count can change frame to frame, so size the
-        // TLAS from this frame's prebuild rather than the cached size.
+        // Size the TLAS in the ring, and fold its scratch requirement into
+        // `max_scratch` (>= the largest skinned BLAS + the TLAS). The skinned
+        // instance count can change frame to frame, so size the TLAS from this
+        // frame's prebuild rather than the cached size.
         let tlas_pre = prebuild_info(&device5, &tlas_inputs(instance_descs.len() as u32, 0));
         max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
         let tlas_needed = tlas_pre.ResultDataMaxSizeInBytes;
@@ -1885,17 +1976,11 @@ impl RtAccelData {
             ring.tlas = Some(create_as_buffer(device, tlas_needed)?);
             ring.tlas_cap = tlas_needed;
         }
-        let scratch_needed = max_scratch.max(256);
-        if ring_slot_needs_grow(ring.scratch.is_some(), ring.scratch_cap, scratch_needed) {
-            ring.scratch = Some(create_scratch(device, scratch_needed)?);
-            ring.scratch_cap = scratch_needed;
-        }
         let tlas = ring.tlas.clone().expect("RT TLAS buffer was sized above");
-        let scratch_buffer = ring
-            .scratch
-            .clone()
-            .expect("RT scratch buffer was sized above");
-        let scratch_gva = com::gpu_va(&scratch_buffer);
+        // Ensure this frame's scratch slot covers the skinned BLAS builds/refits
+        // plus this frame's TLAS. `ring` is out on loan, so nothing else holds a
+        // borrow of `self` here.
+        let scratch_gva = self.scratch.ensure(device, frame_idx, max_scratch)?;
 
         // Settle build-or-refit last, once every fallible step above has passed:
         // recording a build the command list never gets would leave the slot
@@ -1945,7 +2030,6 @@ impl RtAccelData {
         self.tlas = tlas;
         self.geom_table = geom_table;
         self.instance_buffer = instance_buffer;
-        self.scratch = scratch_buffer;
         self.deformed_verts = deformed_verts;
         self.skinned_ring[frame_idx] = ring;
         self.has_skinned = true;
@@ -2202,6 +2286,39 @@ mod tests {
         assert!(!ring_slot_needs_grow(true, 4096, 1024));
         // Present but too small: grow.
         assert!(ring_slot_needs_grow(true, 512, 1024));
+    }
+
+    #[test]
+    fn scratch_capacity_never_drops_below_the_buffer_minimum() {
+        // A build asking for more than the minimum is sized exactly.
+        assert_eq!(scratch_capacity(1024), 1024);
+        assert_eq!(scratch_capacity(257), 257);
+        // A tiny (or zero-instance) build still gets D3D12's 256-byte floor, which
+        // is what `create_scratch` allocates, so the recorded capacity matches.
+        assert_eq!(scratch_capacity(0), 256);
+        assert_eq!(scratch_capacity(255), 256);
+    }
+
+    #[test]
+    fn scratch_slot_is_replaced_only_when_the_build_outgrows_it() {
+        // `ScratchRing::ensure` compares the request's capacity against the slot's,
+        // through the same rule the other rings use.
+        let capacity = scratch_capacity(1000);
+        // The build it was sized for, and a smaller one, reuse it.
+        assert!(!ring_slot_needs_grow(
+            true,
+            capacity,
+            scratch_capacity(1000)
+        ));
+        assert!(!ring_slot_needs_grow(true, capacity, scratch_capacity(1)));
+        // One byte more does not.
+        assert!(ring_slot_needs_grow(true, capacity, scratch_capacity(1001)));
+        // A slot sized at the floor still covers every sub-floor build.
+        assert!(!ring_slot_needs_grow(
+            true,
+            scratch_capacity(0),
+            scratch_capacity(255)
+        ));
     }
 
     #[test]

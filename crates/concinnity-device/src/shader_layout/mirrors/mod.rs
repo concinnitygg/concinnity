@@ -8,4 +8,5 @@
 pub(super) mod forward;
 pub(super) mod geometry;
 pub(super) mod post;
+pub(super) mod raymarch;
 pub(super) mod transparent;

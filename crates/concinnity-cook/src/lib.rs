@@ -1,6 +1,6 @@
 //! concinnity-cook: the build side, kept out of the runtime foundation so that
-//! foundation carries none of the build-only dependencies (fbxcel, shaderc,
-//! sha2, kira). This crate turns world.jsonl + source files into the binary
+//! foundation carries none of the build-only dependencies (fbxcel, sha2,
+//! kira). This crate turns world.jsonl + source files into the binary
 //! blobs the runtime reads; it depends on concinnity-core and core has no edge
 //! back into it.
 //!
@@ -90,6 +90,8 @@ mod file_stamp;
 pub mod import;
 pub mod pipeline;
 pub mod resource_handles;
+#[cfg(test)]
+mod slangc_gate;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode API stays in concinnity-core.

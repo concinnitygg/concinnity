@@ -207,7 +207,7 @@ impl DxContext {
         // collapses to a single LOD0 bucket containing all instances,
         // same byte order as the legacy single-draw path).
         if !world_hidden && !self.instanced.clusters.is_empty() {
-            self.build_instance_upload(frame_idx, cam_pos);
+            self.build_instance_upload(cam_pos);
         }
 
         // Per-frame seed inputs for the shared backend-agnostic frame builder
@@ -429,23 +429,7 @@ impl DxContext {
             );
         }
 
-        // BVH-based frustum cull. RefCell::replace swaps out the persistent
-        // scratch buffer so its heap allocation is reused across frames; it's
-        // put back below before we return Ok (error path loses capacity, fine
-        // since record_frame errors are exceptional). RefCell because
-        // record_frame is &self (matches the deferred_buffers pattern).
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp_mat);
-        let mut visible = self.draw.visible_scratch.replace(Vec::new());
-        visible.clear();
-        // Left empty while the world is hidden behind an opaque menu so the
-        // Main pass draws nothing behind it.
-        if !world_hidden {
-            self.draw
-                .bvh
-                .query(&frustum, cam_pos, |idx| visible.push(idx));
-            visible.sort_unstable();
-            visible.extend_from_slice(&self.draw.always);
-        }
 
         let (view_gva, light_gva, local_lights_gva) = (
             com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),
@@ -517,7 +501,6 @@ impl DxContext {
             elapsed,
             near,
             far,
-            visible: &visible,
         };
         let pass_cmd_lists = self.execute_graph(&frame_graph, &frame_params)?;
         // Cache the compiled graph under this frame's inputs so the next frame with
@@ -561,7 +544,6 @@ impl DxContext {
             prev_models.extend(self.draw.objects.iter().map(|o| o.model));
         }
 
-        self.draw.visible_scratch.replace(visible);
         Ok(pass_cmd_lists)
     }
 }
@@ -595,21 +577,7 @@ pub(in crate::directx) struct LocalLightParams {
 }
 
 impl LocalLightParams {
-    // Legacy static main root signature.
-    pub(crate) const MAIN: Self = Self {
-        spot_buffer: 12,
-        spot_table: 13,
-        area_buffer: 14,
-        ltc_table: 15,
-    };
-    // Shared instanced + skinned root signature.
-    pub(crate) const INSTANCED: Self = Self {
-        spot_buffer: 13,
-        spot_table: 14,
-        area_buffer: 15,
-        ltc_table: 16,
-    };
-    // Bindless main root signature.
+    // The GPU-driven main root signature.
     pub(crate) const BINDLESS: Self = Self {
         spot_buffer: 15,
         spot_table: 16,

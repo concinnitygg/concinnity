@@ -26,10 +26,7 @@ pub(super) mod taa;
 pub(super) mod upscale;
 
 pub(super) use bloom::{BloomPipelines, BloomTargets, build_bloom_pipelines, create_bloom_targets};
-pub(super) use gbuffer::{
-    GBufferState, build_gbuffer_bindless_pipeline, build_gbuffer_prepass_pipeline,
-    create_gbuffer_targets,
-};
+pub(super) use gbuffer::{GBufferState, build_gbuffer_bindless_pipeline, create_gbuffer_targets};
 pub(super) use rt_reflections::build_rt_reflection_pipeline;
 pub(super) use ssao::{SsaoState, build_ssao_pipeline, create_ssao_targets};
 pub(super) use ssgi::{

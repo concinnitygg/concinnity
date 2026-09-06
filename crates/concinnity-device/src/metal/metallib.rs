@@ -18,7 +18,7 @@ mod tests {
     // be one that still exists: a name that has been ported away skips both
     // coverage tests silently, which is what `post.metal` did after the
     // composite pass moved to single source.
-    const TOOLCHAIN_SENTINEL: &str = "main.metal";
+    const TOOLCHAIN_SENTINEL: &str = "cull_encode.metal";
 
     #[test]
     fn precompiled_coverage_is_all_or_nothing() {

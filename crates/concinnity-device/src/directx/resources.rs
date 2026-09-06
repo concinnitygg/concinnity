@@ -2,7 +2,7 @@
 //
 // Runtime GPU resource management for DxContext: texture-pool slot updates,
 // mesh upload/eviction, chunk streaming, and skinned-mesh upload. Also owns
-// the skinned-mesh pipelines (built lazily by `upload_skinned` the first time
+// the skinned shadow pipeline (built lazily by `upload_skinned` the first time
 // a SkinnedMesh is uploaded), mirroring metal/resources/skinning.rs.
 use concinnity_core::gfx::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -12,39 +12,25 @@ use super::allocator::PooledBuffer;
 use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::*;
+use crate::gfx::shadow_bias;
 
-use super::builtins;
 use super::com;
 use super::context::*;
-use super::init::pipelines::{create_main_instanced_root_signature, create_main_pso};
+use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
 use super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
 use super::slang_builtins;
 use super::texture::*;
 use crate::directx::slang_builtins::SlangCompile;
 
-// Skinned pipeline builders
+// Skinned shadow pipeline builders
 //
-// These mirror the static + shadow PSO builders in init/pipelines.rs but use
-// the skinned vertex layout (80-byte SkinnedVertex with joint indices +
-// weights) and pair with the skinned vertex shaders.
+// These mirror the shadow PSO builder in init/pipelines.rs but use the skinned
+// vertex layout (80-byte SkinnedVertex with joint indices + weights). Skinned
+// main-pass draws ride the GPU-driven pass through the skin fold.
 
-// Compile the skinned-mesh shader stages. Returns (main_skinned_vs,
-// shadow_skinned_vs, frag_ps). The main skinned VS pairs with the standard
-// fragment shader; the shadow skinned VS is depth-only. `frag_bytes`, when
-// non-empty, is treated as pre-compiled DXBC (the same resolution the static
-// path applies); otherwise the built-in default fragment shader is compiled.
-// Compiled skinned-mesh shaders: main vertex, shadow vertex, fragment bytecode.
-type SkinnedShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
-
-fn compile_skinned_shaders(frag_bytes: &[u8], hot_reload: bool) -> Result<SkinnedShaders, String> {
-    let main_vs = builtins::SKINNED_VERT.compile(hot_reload)?;
-    let shadow_vs = slang_builtins::SKINNED_SHADOW_VERT.compile(hot_reload)?;
-    let frag_ps = if !frag_bytes.is_empty() {
-        frag_bytes.to_vec()
-    } else {
-        builtins::MAIN_FRAG.compile(hot_reload)?
-    };
-    Ok((main_vs, shadow_vs, frag_ps))
+// The depth-only skinned shadow vertex, the engine's own.
+fn compile_skinned_shadow_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
+    slang_builtins::SKINNED_SHADOW_VERT.compile(hot_reload)
 }
 
 // Same as the shadow root signature but with one extra root SRV at slot [2]
@@ -92,121 +78,6 @@ fn create_skinned_shadow_root_signature(
     serialize_and_create_root_sig(device, &params, "skinned shadow root sig")
 }
 
-// Main-pass PSO for skinned geometry: the skinned vertex shader (80-byte
-// layout) paired with the standard fragment shader. Uses the instanced root
-// signature: its extra root SRV at slot [8] (t3) carries the joint matrices.
-fn create_skinned_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-    rtv_format: DXGI_FORMAT,
-    sample_count: u32,
-) -> Result<ID3D12PipelineState, String> {
-    create_skinned_pso_filled(
-        device,
-        root_sig,
-        vs,
-        ps,
-        rtv_format,
-        sample_count,
-        D3D12_FILL_MODE_SOLID,
-    )
-}
-
-// The Wireframe view mode's variant of `create_skinned_pso`; see
-// [`super::wireframe`] for why the mode needs its own PSO per pipeline.
-pub(in crate::directx) fn create_skinned_pso_wireframe(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-    rtv_format: DXGI_FORMAT,
-    sample_count: u32,
-) -> Result<ID3D12PipelineState, String> {
-    create_skinned_pso_filled(
-        device,
-        root_sig,
-        vs,
-        ps,
-        rtv_format,
-        sample_count,
-        D3D12_FILL_MODE_WIREFRAME,
-    )
-}
-
-fn create_skinned_pso_filled(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-    rtv_format: DXGI_FORMAT,
-    sample_count: u32,
-    fill_mode: D3D12_FILL_MODE,
-) -> Result<ID3D12PipelineState, String> {
-    let layout = skinned_input_layout();
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = rtv_format;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_D32_FLOAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: sample_count,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: fill_mode,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: true.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
-            DepthFunc: D3D12_COMPARISON_FUNC_LESS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create skinned PSO: {e}"))
-}
-
 // Shadow-pass PSO for skinned geometry: the skinned shadow vertex shader
 // (80-byte layout, depth-only). Uses the skinned shadow root signature.
 fn create_skinned_shadow_pso(
@@ -237,9 +108,9 @@ fn create_skinned_shadow_pso(
             FillMode: D3D12_FILL_MODE_SOLID,
             CullMode: D3D12_CULL_MODE_NONE,
             FrontCounterClockwise: true.into(),
-            DepthBias: 1,
-            DepthBiasClamp: 0.01,
-            SlopeScaledDepthBias: 1.0,
+            DepthBias: shadow_bias::RASTER_CONSTANT as i32,
+            DepthBiasClamp: shadow_bias::RASTER_CLAMP,
+            SlopeScaledDepthBias: shadow_bias::RASTER_SLOPE,
             DepthClipEnable: true.into(),
             ..Default::default()
         },
@@ -276,117 +147,12 @@ impl DxContext {
         }
     }
 
-    // Resolve the pool resource a legacy per-draw normal SRV should bake for a
-    // `normal_map_slot`: a real normal map is a texture at its own slot (clamped
-    // to the pool); `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the
-    // first entry of `fallback_textures`).
-    fn normal_pool_resource(&self, normal_map_slot: usize) -> &ID3D12Resource {
-        if normal_map_slot == NO_NORMAL_MAP_SLOT {
-            &self.descriptors.fallback_textures[0]
-        } else {
-            let last = self.descriptors.textures.len().saturating_sub(1);
-            &self.descriptors.textures[normal_map_slot.min(last)]
-        }
-    }
-
-    // The same for a legacy per-draw albedo SRV: a real albedo is a texture at
-    // its own slot; `NO_ALBEDO_SLOT` selects the white fallback (the second
-    // entry of `fallback_textures`).
-    fn albedo_pool_resource(&self, texture_slot: usize) -> &ID3D12Resource {
-        if texture_slot == NO_ALBEDO_SLOT {
-            &self.descriptors.fallback_textures[1]
-        } else {
-            let last = self.descriptors.textures.len().saturating_sub(1);
-            &self.descriptors.textures[texture_slot.min(last)]
-        }
-    }
-
-    // Whether a draw samples texture `slot` as its normal map, given the pool
-    // clamp. A real normal is a texture at its own handle; `NO_NORMAL_MAP_SLOT`
-    // samples the never-streamed flat-normal fallback and matches no streamed
-    // slot.
-    fn normal_is_slot(&self, nms: usize, slot: usize) -> bool {
-        let last = self.descriptors.textures.len().saturating_sub(1);
-        nms != NO_NORMAL_MAP_SLOT && nms.min(last) == slot
-    }
-
-    // The same for an albedo slot: `NO_ALBEDO_SLOT` samples the never-streamed
-    // white fallback and so matches no streamed slot.
-    fn albedo_is_slot(&self, ts: usize, slot: usize) -> bool {
-        let last = self.descriptors.textures.len().saturating_sub(1);
-        ts != NO_ALBEDO_SLOT && ts.min(last) == slot
-    }
-
-    // Re-point the build-time per-object / per-cluster / per-skinned SRV pairs
-    // that sample texture-pool `slot`, at the (just-swapped)
-    // `self.descriptors.textures[slot]` resource. Albedo and normal maps share
-    // one pool, so a streamed texture may be an albedo for one draw (the even
-    // SRV of its heap pair) and a normal map for another (the odd SRV); this
-    // re-points both wherever they resolve to `slot`. These pairs are only
-    // referenced by the legacy (non-bindless) draw loops, so while the
-    // bindless pass drives every draw no pending list dereferences them and
-    // rewriting needs no drain. Runtime clones live in their own pool
-    // (`rewrite_bound_texture_srvs`); streamed `VoxelWorld` chunks share
-    // `chunk_srv_base_slot` and are fixed at `setup_chunk_streaming` time
-    // (skipped here).
-    fn rewrite_legacy_object_pairs(&self, slot: usize) {
-        let resource = &self.descriptors.textures[slot];
-        for (obj_idx, obj) in self.draw.objects.iter().enumerate() {
-            if self.clone.slot_by_draw_idx.contains_key(&obj_idx) || obj_idx >= self.draw.n_objects
-            {
-                continue;
-            }
-            let pair_base = 3 + obj_idx * 2;
-            if self.albedo_is_slot(obj.texture_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
-            }
-            if self.normal_is_slot(obj.normal_map_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
-            }
-        }
-        let cluster_base = 3 + self.draw.n_objects * 2;
-        for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
-            let pair_base = cluster_base + cluster_idx * 2;
-            if self.albedo_is_slot(cluster.texture_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
-            }
-            if self.normal_is_slot(cluster.normal_map_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
-            }
-        }
-        for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
-            let pair_base = self.skinned.srv_base_slot + i * 2;
-            if self.albedo_is_slot(obj.texture_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
-            }
-            if self.normal_is_slot(obj.normal_map_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
-            }
-        }
-    }
-
-    // Re-point every SRV that samples texture-pool `slot` and may be
-    // dereferenced by in-flight command lists: the runtime-clone pairs plus
-    // every per-frame flat-pool copy. Only legal under a device drain (the
-    // fallback streaming path and the `cn debug` hot-reload paths).
+    // Re-point every per-frame flat-pool copy that samples texture-pool `slot`.
+    // The swapped resource has exactly one descriptor per frame copy (index ==
+    // its handle), shared by albedo + normal sampling and by the RT hit shader,
+    // so one re-point per copy refreshes every consumer at once.
     fn rewrite_bound_texture_srvs(&self, slot: usize) {
         let resource = &self.descriptors.textures[slot];
-        for (&obj_idx, &clone_offset) in self.clone.slot_by_draw_idx.iter() {
-            let Some(obj) = self.draw.objects.get(obj_idx) else {
-                continue;
-            };
-            let pair_base = self.clone.srv_base_slot + clone_offset * 2;
-            if self.albedo_is_slot(obj.texture_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base));
-            }
-            if self.normal_is_slot(obj.normal_map_slot, slot) {
-                write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
-            }
-        }
-        // Flat shared pool: the swapped resource has exactly one descriptor per
-        // frame copy (index == its handle), shared by albedo + normal sampling
-        // and by the RT hit shader, so one re-point per copy refreshes every
-        // consumer at once.
         for f in 0..FRAMES {
             write_texture_srv(
                 &self.device,
@@ -404,28 +170,16 @@ impl DxContext {
     // Re-point every SRV that samples texture-pool `slot`. Only legal under a
     // device drain.
     fn rewrite_texture_slot(&self, slot: usize) {
-        self.rewrite_legacy_object_pairs(slot);
         self.rewrite_bound_texture_srvs(slot);
     }
 
     // Whether replacing pool `slot` must drain the device first: true when an
     // SRV that samples the slot may be dereferenced by pending command lists
     // AND cannot wait for the per-frame propagation. The flat-pool copies
-    // propagate per frame; the build-time pairs are rewritten immediately
-    // while the legacy loops are inert. What remains are the runtime-clone
-    // pairs and whole worlds where the bindless pass is off (custom-shader;
-    // every legacy pair is then live).
-    fn streamed_slot_needs_drain(&self, slot: usize) -> bool {
-        let bindless_active = self.cull.main_bindless_pso.is_some() && self.cull_count() > 0;
-        if !bindless_active {
-            return true;
-        }
-        self.clone.slot_by_draw_idx.keys().any(|&draw_idx| {
-            self.draw.objects.get(draw_idx).is_some_and(|obj| {
-                self.albedo_is_slot(obj.texture_slot, slot)
-                    || self.normal_is_slot(obj.normal_map_slot, slot)
-            })
-        })
+    // propagate per frame, so only a world with nothing to GPU-drive (which
+    // draws nothing) answers yes.
+    fn streamed_slot_needs_drain(&self) -> bool {
+        !(self.cull.main_bindless_pso.is_some() && self.cull_count() > 0)
     }
 
     // Replace texture-pool `slot` with a freshly decoded texture.
@@ -457,7 +211,7 @@ impl DxContext {
                 self.descriptors.textures.len()
             ));
         }
-        if self.streamed_slot_needs_drain(slot) {
+        if self.streamed_slot_needs_drain() {
             self.wait_idle();
             let texture = upload_texture_image(&self.alloc, image)?;
             self.descriptors.textures[slot] = texture;
@@ -469,7 +223,6 @@ impl DxContext {
         }
         let (texture, in_flight) = upload_texture_image_deferred(&self.alloc, image)?;
         let old = std::mem::replace(&mut self.descriptors.textures[slot], texture);
-        self.rewrite_legacy_object_pairs(slot);
         self.stream.pool_rewrites.queue(slot);
         // `+ 1`: the swap lands between frames, after the previous frame's
         // submit, so the first frame fence that covers the upload submission
@@ -575,42 +328,28 @@ impl DxContext {
         Ok(())
     }
 
-    // GPU descriptor handle for a runtime clone's (albedo, normal) SRV pair.
-    // The pair lives at `clone_srv_base_slot + clone_offset * 2`; the
-    // 2-descriptor table the legacy main pass binds covers both slots.
-    pub(super) fn clone_srv_gpu(&self, clone_offset: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        let slot = self.clone.srv_base_slot + clone_offset * 2;
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: base.ptr + (slot * self.descriptors.srv_descriptor_size) as u64,
-        }
-    }
-
     // Append a new draw object that re-uses an existing slot's geometry
     // region (vertex / index offsets, base_vertex, LOD alternates) with a
     // fresh model matrix, texture / normal-map slots, material, and cull
     // distance. Driven by `world.jsonl` hot-reload (`cn debug` only) when a
     // newly authored Prop references a Mesh / Model already present in the
     // init world. The clone is non-cullable (sentinel AABB) and joins
-    // `draw.always` since the init-time BVH cannot refit; the dynamically
-    // added prop is drawn every frame, like a streamed `VoxelWorld` chunk.
-    // Bakes the clone's (albedo, normal) SRV pair at the next free slot in
-    // the clone descriptor pool reserved at init (`MAX_CLONE_DRAWS` pairs),
-    // and records `draw_idx → clone_offset` in `clone_slot_by_draw_idx`
-    // so the legacy main pass + `rewrite_albedo_slot` /
-    // `rewrite_normal_slot` can find it. Mirrors
-    // `MtlContext::clone_static_draw_object`.
+    // `draw.always` since the init-time BVH cannot refit; the dynamically added
+    // prop is drawn every frame, like a streamed `VoxelWorld` chunk -- and
+    // through the same runtime reserve in the cull records, so it needs no
+    // descriptors of its own. Mirrors `MtlContext::clone_static_draw_object`.
     pub(crate) fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
         dst: crate::gfx::draw_slot::SlotAlloc,
     ) -> Result<(), String> {
+        if runtime_reserve_full(&self.draw.objects, self.draw.n_objects, self.draw.n_runtime) {
+            return Err(format!(
+                "clone_static_draw_object: the runtime draw reserve ({}) is full",
+                self.draw.n_runtime
+            ));
+        }
         let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
             format!(
                 "clone_static_draw_object: src draw {} out of range",
@@ -646,48 +385,8 @@ impl DxContext {
             shader_bucket: src.shader_bucket,
         };
 
-        // Reuse a vacated clone descriptor-pool offset, else grow the pool up to
-        // its cap. `count` is the high-water mark of distinct offsets handed out.
-        let mut reused_offset = false;
-        let clone_offset = if let Some(offset) = self.clone.free_offsets.pop() {
-            reused_offset = true;
-            offset
-        } else if self.clone.count < MAX_CLONE_DRAWS {
-            let offset = self.clone.count;
-            self.clone.count += 1;
-            offset
-        } else {
-            return Err(format!(
-                "clone_static_draw_object: MAX_CLONE_DRAWS ({MAX_CLONE_DRAWS}) exceeded"
-            ));
-        };
-
-        // Always (re)point the offset's (albedo, normal) SRV pair at this clone's
-        // textures. A reused offset's pair may still be referenced by an in-flight
-        // command list (its prior occupant was drawn before being retired) AND its
-        // texture pool slot may have been stream-swapped to a new resource while
-        // the offset sat free -- `rewrite_albedo_slot` only refreshes offsets still
-        // live in `slot_by_draw_idx`, so a freed offset's baked SRV can dangle at a
-        // released resource -- so drain the GPU first on reuse, then overwrite with
-        // the live resource. A fresh offset was never bound, so no drain is needed.
-        if reused_offset {
-            self.wait_idle();
-        }
-        let albedo_slot = self.clone.srv_base_slot + clone_offset * 2;
-        let normal_slot = albedo_slot + 1;
-        write_texture_srv(
-            &self.device,
-            self.albedo_pool_resource(texture_slot),
-            self.srv_slot_cpu(albedo_slot),
-        );
-        write_texture_srv(
-            &self.device,
-            self.normal_pool_resource(normal_map_slot),
-            self.srv_slot_cpu(normal_slot),
-        );
-
         // Write at the engine-allocated destination slot.
-        let new_idx = match dst {
+        match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
                 // Seed the velocity prepass's previous-model snapshot so a
@@ -701,7 +400,6 @@ impl DxContext {
                         prev[slot] = model;
                     }
                 }
-                slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
@@ -710,12 +408,8 @@ impl DxContext {
                     "appended draw slot must match the draw-object count"
                 );
                 self.draw.objects.push(obj);
-                self.draw.always_member.push(false);
-                slot
             }
-        };
-        self.ensure_always_draw(new_idx);
-        self.clone.slot_by_draw_idx.insert(new_idx, clone_offset);
+        }
         // The cloned prop joins the RT-relevant draw set; the next RT update folds
         // it into the BVH (it reuses the source mesh's geometry slice, so only
         // this clone's BLAS is built).
@@ -1070,24 +764,9 @@ impl DxContext {
         self.mesh_stream.idx_alloc.reclaim(0);
     }
 
-    // GPU descriptor handle for the shared chunk (albedo, normal) SRV pair.
-    // Valid only after `setup_chunk_streaming` has populated the two slots.
-    pub(super) fn chunk_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: base.ptr
-                + (self.chunk_stream.srv_base_slot * self.descriptors.srv_descriptor_size) as u64,
-        }
-    }
-
     // Grow the shared vertex/index buffers by a headroom region for streamed
-    // `VoxelWorld` chunks, seed the chunk sub-allocators with it, and bake the
-    // shared chunk (albedo, normal) SRV pair from the world's chunk material.
+    // `VoxelWorld` chunks and seed the chunk sub-allocators with it. The chunk
+    // material's texture slots ride each chunk's cull record.
     //
     // Called once at init by `GraphicsSystem` when a `VoxelWorld` is present.
     // The build-time geometry is copied verbatim into the start of the new
@@ -1098,8 +777,6 @@ impl DxContext {
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-        texture_slot: usize,
-        normal_map_slot: usize,
     ) -> Result<(), String> {
         self.wait_idle();
         let old_v_len = self.geometry.vertex_buffer_view.SizeInBytes as u64;
@@ -1175,20 +852,6 @@ impl DxContext {
         self.chunk_stream
             .idx_alloc
             .free(old_i_len, chunk_idx_bytes as u64, 0);
-
-        // Bake the shared chunk (albedo, normal) SRV pair from the chunk
-        // material's texture-pool slots, clamped to the pool length.
-        let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        write_texture_srv(
-            &self.device,
-            &self.descriptors.textures[texture_slot.min(last_tex)],
-            self.srv_slot_cpu(self.chunk_stream.srv_base_slot),
-        );
-        write_texture_srv(
-            &self.device,
-            self.normal_pool_resource(normal_map_slot),
-            self.srv_slot_cpu(self.chunk_stream.srv_base_slot + 1),
-        );
         Ok(())
     }
 
@@ -1297,10 +960,7 @@ impl DxContext {
             shader_bucket: 0,
         };
 
-        // Write at the engine-allocated destination slot. A slot recycled from
-        // a culled static prop is not yet in `draw.always`;
-        // `ensure_always_draw` adds it, while one recycled from another chunk /
-        // clone already is.
+        // Write at the engine-allocated destination slot.
         let draw_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
@@ -1313,11 +973,9 @@ impl DxContext {
                     "appended draw slot must match the draw-object count"
                 );
                 self.draw.objects.push(obj);
-                self.draw.always_member.push(false);
                 slot
             }
         };
-        self.ensure_always_draw(draw_idx);
         // Seed the G-buffer pre-pass's previous-model snapshot for a recycled
         // slot so a fresh chunk does not inherit the removed chunk's transform
         // and ghost for one frame. A fresh append is past the snapshot's end
@@ -1390,20 +1048,18 @@ impl DxContext {
 }
 
 impl DxContext {
-    // Upload skinned-mesh geometry and build the skinned render pipelines.
+    // Upload skinned-mesh geometry, build the skinned shadow pipeline and the
+    // main-pass skin fold.
     //
     // Called once at init by `GraphicsSystem` when the world declares at least
-    // one `SkinnedMesh`. The skinned vertex + shadow shaders are compiled from
-    // the inline HLSL; the fragment shader is shared with the static path. The
-    // joint matrices live in per-(frame, object) upload buffers the skinned
-    // passes bind as a root SRV. With no skinned meshes this is never called
-    // and every skinned pass is skipped.
+    // one `SkinnedMesh`. The joint matrices live in per-(frame, object) upload
+    // buffers the skinned passes bind as a root SRV. With no skinned meshes
+    // this is never called and every skinned pass is skipped.
     pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        frag_bytes: &[u8],
     ) -> Result<(), String> {
         if draw_objects.is_empty() || vertices.is_empty() || indices.is_empty() {
             return Ok(());
@@ -1417,26 +1073,7 @@ impl DxContext {
         }
         self.wait_idle();
 
-        let (skinned_vs, skinned_shadow_vs, frag_ps) =
-            compile_skinned_shaders(frag_bytes, self.hot_reload.enabled)?;
-
-        // Main skinned pipeline: reuses the instanced root signature (its root
-        // SRV at t3 carries the joint matrices) and the off-screen HDR target.
-        let skinned_root_sig = dump_on_err(
-            self.diagnostics.info_queue.as_ref(),
-            create_main_instanced_root_signature(&self.device),
-        )?;
-        let skinned_pso = dump_on_err(
-            self.diagnostics.info_queue.as_ref(),
-            create_skinned_pso(
-                &self.device,
-                &skinned_root_sig,
-                &skinned_vs,
-                &frag_ps,
-                HDR_FORMAT,
-                self.hdr.msaa_samples,
-            ),
-        )?;
+        let skinned_shadow_vs = compile_skinned_shadow_shader(self.hot_reload.enabled)?;
 
         // Skinned shadow pipeline: built only when the static shadow pass is
         // active, so a skinned mesh casts a correctly deformed shadow.
@@ -1530,22 +1167,6 @@ impl DxContext {
             joint_ptrs.push(frame_ptrs);
         }
 
-        // Bake each skinned object's (albedo, normal) SRV pair from its
-        // material's texture-pool slots, clamped to the pool length.
-        let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        for (i, obj) in draw_objects.iter().enumerate() {
-            write_texture_srv(
-                &self.device,
-                &self.descriptors.textures[obj.texture_slot.min(last_tex)],
-                self.srv_slot_cpu(self.skinned.srv_base_slot + i * 2),
-            );
-            write_texture_srv(
-                &self.device,
-                self.normal_pool_resource(obj.normal_map_slot),
-                self.srv_slot_cpu(self.skinned.srv_base_slot + i * 2 + 1),
-            );
-        }
-
         // Seed each object's joint matrices to identity (bind pose) so the mesh
         // renders undeformed until the first `update_skinned_pose`.
         self.skinned.joint_matrices = draw_objects
@@ -1553,8 +1174,6 @@ impl DxContext {
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
 
-        self.skinned.pso = Some(skinned_pso);
-        self.skinned.root_sig = Some(skinned_root_sig);
         self.skinned.shadow_pso = skinned_shadow_pso;
         self.skinned.shadow_root_sig = skinned_shadow_root_sig;
         self.skinned.vertex_buffer = Some(skinned_vertex_buffer);
@@ -1572,24 +1191,15 @@ impl DxContext {
         self.skinned.morph_weight_buffers = Vec::new();
         self.skinned.morph_weight_ptrs = Vec::new();
 
-        // GPU-driven main-pass skinning fold. When the bindless cull path is
-        // active, build the `rt_skin` compute pipeline (reused independently of
-        // RT) + one UAV-writable deformed-vertex buffer per frame-in-flight, sized
-        // to all skinned verts. Each frame `encode_skin` poses the bind-pose verts
-        // into this frame's buffer and the bindless main pass's 2nd ExecuteIndirect
-        // draws the skinned records the cull buffers reserved. Setting
-        // `self.draw.n_skinned` here (not at init) engages the fold; a build failure
-        // leaves it 0 and the legacy skinned main pass runs.
-        // The cull / object / draw-args / indirect buffers already reserved the
-        // skinned tail at init via the threaded `n_skinned` capacity.
-        //
-        // The gate counts the objects being uploaded here: `cull_count()` reads
-        // `draw.n_skinned`, which only the block below sets, so consulting it
-        // alone would leave a world whose only geometry is skinned on the legacy
-        // pass forever -- and that pass does not morph (rt_skin is the only
-        // DirectX shader that reads morph targets).
-        if self.cull.main_bindless_pso.is_some()
-            && self.cull_count() + self.skinned.draw_objects.len() > 0
+        // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline
+        // (reused independently of RT) + one UAV-writable deformed-vertex buffer
+        // per frame-in-flight, sized to all skinned verts. Each frame
+        // `encode_skin` poses the bind-pose verts into this frame's buffer and
+        // the main pass's 2nd ExecuteIndirect draws the skinned records the cull
+        // buffers reserved at init via the threaded `n_skinned` capacity.
+        // Setting `self.draw.n_skinned` here engages the fold. Every skinned draw
+        // rides the GPU-driven pass, so a build failure is a startup error, as
+        // on Metal.
         {
             let stride = std::mem::size_of::<Vertex>();
             let deformed_bytes = (vertices.len() * stride).max(stride) as u64;
@@ -1623,40 +1233,19 @@ impl DxContext {
                     .collect();
                 cmd.ResourceBarrier(&barriers);
             })?;
-            match super::raytrace::build_rt_skin_pipeline(&self.device, self.hot_reload.enabled) {
-                Ok(skin) => {
-                    self.skinned.skin_pipeline = Some(skin);
-                    self.skinned.deformed_buffers = deformed_buffers;
-                    self.skinned.deformed_vbvs = deformed_vbvs;
-                    // Fresh ring: no slot has been posed yet, so the G-buffer
-                    // velocity must treat the previous deformed buffer as the
-                    // current one until a full frame has primed it.
-                    self.skinned
-                        .deformed_primed
-                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                    self.draw.n_skinned = self.skinned.draw_objects.len();
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "skinned: rt_skin pipeline build failed ({e}); skinned meshes use \
-                         the legacy main pass"
-                    );
-                }
-            }
-        }
-
-        // Build the unified G-buffer pre-pass's skinned PSO now that the
-        // skinned vertex layout exists. Without it, skinned meshes are missing
-        // from the normal+depth / roughness / velocity targets, so they ghost
-        // under TAA, fail to occlude in SSAO, and do not appear in the SSR
-        // reflection ray-march. A no-op when no screen-space consumer drives the
-        // pre-pass (the G-buffer is absent).
-        if let Some(gbuffer) = self.gbuffer.as_mut() {
-            gbuffer.ensure_skinned_pso(
-                &self.device,
-                self.hot_reload.enabled,
-                self.diagnostics.info_queue.as_ref(),
-            )?;
+            let skin =
+                super::raytrace::build_rt_skin_pipeline(&self.device, self.hot_reload.enabled)
+                    .map_err(|e| format!("skinned: main-pass skin fold build failed: {e}"))?;
+            self.skinned.skin_pipeline = Some(skin);
+            self.skinned.deformed_buffers = deformed_buffers;
+            self.skinned.deformed_vbvs = deformed_vbvs;
+            // Fresh ring: no slot has been posed yet, so the G-buffer velocity
+            // must treat the previous deformed buffer as the current one until a
+            // full frame has primed it.
+            self.skinned
+                .deformed_primed
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.draw.n_skinned = self.skinned.draw_objects.len();
         }
 
         Ok(())
@@ -2012,104 +1601,57 @@ impl DxContext {
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/particle.rs].
 impl DxContext {
-    // Rebuild the world-driven graphics pipelines from freshly compiled
-    // Shader stage bytes and hot-swap them, for the live-reload path
-    // (`reload_shader_stages` -> here). A custom-shader world's vertex +
-    // fragment stages drive the legacy static main pipeline; the instanced
-    // pipeline pairs the world's instanced vertex stage with the same fragment;
-    // the skinned main pipeline keeps its engine-internal 80-byte vertex shader
-    // and only swaps the fragment (matching `upload_skinned`, which ignores the
-    // static vertex bytes). The shadow, bindless, and cull pipelines are
-    // engine-internal and reload through `reload_shaders`, not here.
+    // Rebuild bucket 0 of the GPU-driven main pass from a freshly compiled world
+    // Shader and hot-swap it, for the live-reload path (`reload_shader_stages`
+    // -> here). Buckets past 0 and the shadow, G-buffer and cull pipelines are
+    // engine-internal or scene-owned and are not rebuilt here.
     //
-    // Everything is built into temporaries first; any compile / PSO-create
-    // failure early-returns with the live pipelines untouched, mirroring
+    // The replacement is built first; a compile / PSO-create failure
+    // early-returns with the live pipeline untouched, mirroring
     // `reload_shaders`. Mirrors `MtlContext::update_world_shader_pipelines`.
     pub(crate) fn update_world_shader_pipelines(
         &mut self,
-        vert_bytes: Option<&[u8]>,
-        frag_bytes: Option<&[u8]>,
-        _shadow_bytes: Option<&[u8]>,
-        vert_instanced_bytes: Option<&[u8]>,
+        programs: &concinnity_core::components::ShaderPrograms,
     ) -> Result<(), String> {
-        let vert = vert_bytes.ok_or_else(|| {
-            "update_world_shader_pipelines: vertex shader bytes are required".to_string()
-        })?;
-        let frag = frag_bytes.ok_or_else(|| {
-            "update_world_shader_pipelines: fragment shader bytes are required".to_string()
-        })?;
-        let iq = self.diagnostics.info_queue.as_ref();
-        let msaa = self.hdr.msaa_samples;
-
-        // Legacy static main pipeline (the path a custom-shader world uses; the
-        // bindless variant stays engine-internal). Reuses the live root sig.
-        let new_main = dump_on_err(
-            iq,
-            create_main_pso(
-                &self.device,
-                &self.main_root_sig,
-                vert,
-                frag,
-                HDR_FORMAT,
-                msaa,
-            ),
-        )?;
-
-        // Instanced pipeline: rebuilt only when one is live. Needs the world's
-        // instanced vertex stage paired with the fresh fragment.
-        let new_instanced = if let (Some(_), Some(root_sig)) = (
-            self.instanced.pso.as_ref(),
-            self.instanced.root_sig.as_ref(),
-        ) {
-            let inst = vert_instanced_bytes.ok_or_else(|| {
-                "update_world_shader_pipelines: instanced vertex shader bytes are required \
-                 when an instanced pipeline is live"
-                    .to_string()
-            })?;
-            Some(dump_on_err(
-                iq,
-                create_main_pso(&self.device, root_sig, inst, frag, HDR_FORMAT, msaa),
-            )?)
-        } else {
-            None
-        };
-
-        // Skinned main pipeline: rebuilt only when one is live. Keeps its
-        // engine-internal skinned vertex shader; only the fragment changes
-        // (`compile_skinned_shaders` treats the fresh `frag` as the precompiled
-        // pixel shader, exactly as `upload_skinned` does at init).
-        let new_skinned = if let (Some(_), Some(root_sig)) =
-            (self.skinned.pso.as_ref(), self.skinned.root_sig.as_ref())
-        {
-            let (skinned_vs, _skinned_shadow_vs, frag_ps) =
-                compile_skinned_shaders(frag, self.hot_reload.enabled)?;
-            Some(dump_on_err(
-                iq,
-                create_skinned_pso(
-                    &self.device,
-                    root_sig,
-                    &skinned_vs,
-                    &frag_ps,
-                    HDR_FORMAT,
-                    msaa,
-                ),
-            )?)
-        } else {
-            None
-        };
-
-        // All builds succeeded: swap into the live context. The next frame's
-        // draw calls bind the freshly compiled pipelines.
-        self.main_pso = new_main;
-        if let Some(p) = new_instanced {
-            self.instanced.pso = Some(p);
-        }
-        if let Some(p) = new_skinned {
-            self.skinned.pso = Some(p);
-        }
-        // A skinned / instanced pipeline may have come live for the first time
-        // here, so let the next wireframe frame rebuild its twins.
+        let new_main = self.build_world_main_pso(Some(programs), &self.bindless_main_shaders)?;
+        // Drain the GPU before the swap releases the displaced PSO: a command
+        // list does not keep one alive, and the debug reload drive does not
+        // wait for us.
+        self.wait_idle();
+        self.cull.main_bindless_pso = Some(new_main);
+        self.world_shader = Some(programs.clone());
         self.invalidate_wireframe_pipelines();
         Ok(())
+    }
+
+    // Bucket 0's PSO against the live bindless root signature: the world default
+    // Shader's pair where `world` declares one, `engine_default` otherwise.
+    // Errors when the GPU-driven pass is not live, which means the world has
+    // nothing to draw.
+    pub(super) fn build_world_main_pso(
+        &self,
+        world: Option<&concinnity_core::components::ShaderPrograms>,
+        engine_default: &super::init::pipelines::BindlessMainShaders,
+    ) -> Result<ID3D12PipelineState, String> {
+        let root_sig = self
+            .cull
+            .main_bindless_root_sig
+            .as_ref()
+            .ok_or_else(|| "the GPU-driven main pass is not live".to_string())?;
+        build_bucket_pipeline(
+            &self.device,
+            self.diagnostics.info_queue.as_ref(),
+            BucketPipelineTargets {
+                root_sig,
+                msaa_samples: self.hdr.msaa_samples,
+                engine_default,
+                hot_reload: self.hot_reload.enabled,
+            },
+            0,
+            crate::gfx::backend_init::WorldShader {
+                programs: world,
+                deferred: false,
+            },
+        )
     }
 }

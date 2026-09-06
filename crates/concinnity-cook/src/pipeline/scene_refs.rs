@@ -95,7 +95,7 @@ pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
 #[cfg(test)]
 mod tests {
     use crate::pipeline::build_pipeline_from_str;
-    use crate::pipeline::fixtures::{SHADER_BUILD_LOCK, wja};
+    use crate::pipeline::fixtures::wja;
 
     // `screen:show:<name>` / `screen:toggle:<name>` action targets are
     // rewritten to interned ids at build time, like `scene:<name>`.
@@ -138,8 +138,6 @@ mod tests {
     // resolved from the prefix at build time, mirroring Prop scene refs.
     #[test]
     fn build_pipeline_resolves_screen_prefix_on_ui_assets() {
-        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::compile::shader::install_stub_toolchain();
         let world = concat!(
             r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
             "\n",

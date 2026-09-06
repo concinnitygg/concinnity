@@ -144,7 +144,7 @@ pub(super) fn spawn_watcher(
 // recompile plus a pipeline rebuild but no texture or mesh decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReloadKind {
-    // `.metal` / `.hlsl` / `.glsl`.
+    // `.slang`.
     ShaderStages,
     // `.jsonl`, the world file.
     World,
@@ -256,14 +256,11 @@ pub(super) fn is_asset_event(event: &Event) -> bool {
     })
 }
 
-// True for the shader-source extensions recognised by world-loaded
-// `Shader` hot-reload. Case-insensitive so a `.METAL` save still
-// triggers the rebuild. `.metal` files in the engine's bundled shader
-// directory are handled by a separate watcher in
-// [`crate::metal::hot_reload`]; the asset watcher here only subscribes
-// to the parent directories of *captured* Shader stage sources, so the
-// two watchers never observe the same file even though they share an
-// extension list.
+// True for the extension of a world `Shader`'s files. Case-insensitive so a
+// `.SLANG` save still triggers the rebuild. The engine's own `.slang` sources
+// are handled by a separate watcher in each backend's `hot_reload`; the asset
+// watcher here only subscribes to the parent directories of *captured* Shader
+// files, so the two never observe the same file.
 pub(super) fn is_shader_extension(ext: &str) -> bool {
-    matches!(ext.to_ascii_lowercase().as_str(), "metal" | "hlsl" | "glsl")
+    ext.eq_ignore_ascii_case("slang")
 }

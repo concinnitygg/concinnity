@@ -6,7 +6,6 @@ use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef};
 use crate::registry::RegisteredType;
 use crate::registry::Registration;
 use crate::result::CnResult;
-use concinnity_core::platform::Platform;
 
 /// Incoming request to construct an asset from an external caller
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -29,10 +28,7 @@ pub struct AssetRequest {
 /// Does not perform payload compilation (shaders, images, etc.). The build
 /// step calls this first, then runs its compilation pass over the resulting
 /// defs. The HTTP API follows the same two-step pattern
-///
-/// `platform` is the shader platform the world is cooked for; the bake reads it
-/// for the types that resolve a per-backend shader source.
-pub fn create_asset_def(req: &AssetRequest, platform: Platform) -> Result<BlobAssetDef, CnResult> {
+pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
     if let Some(ct) = RegisteredType::parse(&req.asset_type) {
         let reg = ct.registration();
         if reg.origin != AssetOrigin::External {
@@ -47,7 +43,7 @@ pub fn create_asset_def(req: &AssetRequest, platform: Platform) -> Result<BlobAs
         // (`Args != Self`) bakes the translated component instead.
         let args_bytes = match crate::registry::bake_divergent(ct, &args)? {
             Some(bytes) => bytes,
-            None => ct.reserialize_args(&args, platform)?,
+            None => ct.reserialize_args(&args)?,
         };
         return Ok(BlobAssetDef {
             name: None,
@@ -165,7 +161,7 @@ mod tests {
             args: None,
         };
         assert_eq!(
-            create_asset_def(&req, Platform::Metal).unwrap_err(),
+            create_asset_def(&req).unwrap_err(),
             CnResult::AssetInvalidType
         );
     }
@@ -178,7 +174,7 @@ mod tests {
             args: None,
         };
         assert_eq!(
-            create_asset_def(&req, Platform::Metal).unwrap_err(),
+            create_asset_def(&req).unwrap_err(),
             CnResult::InvalidArgument
         );
     }
@@ -189,7 +185,7 @@ mod tests {
             asset_type: "ProceduralMesh".to_string(),
             args: None,
         };
-        let def = create_asset_def(&req, Platform::Metal).unwrap();
+        let def = create_asset_def(&req).unwrap();
         assert_eq!(def.kind, AssetKind::Component);
         assert_eq!(
             Some(def.discriminant),
@@ -210,13 +206,10 @@ mod tests {
     #[test]
     fn every_addable_component_type_builds_a_baked_def() {
         for (ct, _) in RegisteredType::addable_types().filter(|(t, _)| !t.is_resource()) {
-            let def = create_asset_def(
-                &AssetRequest {
-                    asset_type: ct.as_str().to_string(),
-                    args: None,
-                },
-                Platform::Metal,
-            )
+            let def = create_asset_def(&AssetRequest {
+                asset_type: ct.as_str().to_string(),
+                args: None,
+            })
             .unwrap();
             assert_eq!(def.kind, AssetKind::Component, "{}", ct.as_str());
             assert!(!def.args_bytes.is_empty(), "{}", ct.as_str());
@@ -229,7 +222,7 @@ mod tests {
             asset_type: "ProceduralMesh".to_string(),
             args: Some(serde_json::json!({ "generator": "box" })),
         };
-        let def = create_asset_def(&req, Platform::Metal).unwrap();
+        let def = create_asset_def(&req).unwrap();
         let baked: crate::components::ProceduralMesh =
             postcard::from_bytes(&def.args_bytes).unwrap();
         assert_eq!(baked.generator, "box");
@@ -246,7 +239,7 @@ mod tests {
             args: Some(serde_json::json!({ "generator": 42 })),
         };
         assert_eq!(
-            create_asset_def(&req, Platform::Metal).unwrap_err(),
+            create_asset_def(&req).unwrap_err(),
             CnResult::InvalidArgument
         );
     }

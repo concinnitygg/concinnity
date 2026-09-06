@@ -25,7 +25,7 @@ impl VkContext {
     pub(in crate::vulkan) fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+        shader: crate::gfx::backend_init::WorldShader<'_>,
     ) -> Result<(), String> {
         let slot = self.world_pipeline_slot(bucket)?;
         let layout = self
@@ -40,6 +40,9 @@ impl VkContext {
                 layout: layout.handle(),
                 msaa_samples: self.msaa_samples,
                 swapchain_format: self.swapchain.format,
+                hot_reload: self.hot_reload.enabled,
+                pool_size: self.cull.bindless_pool_size,
+                probe_count: self.descriptors.probe_cube_count as usize,
             },
             bucket as usize,
             shader,
@@ -107,6 +110,9 @@ impl VkContext {
             let Some(pipeline) = self.world_pipeline(bucket) else {
                 return;
             };
+            // Every bucket shares the bindless layout, so the Wireframe twin
+            // stands in for each one while that view mode is on.
+            let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {

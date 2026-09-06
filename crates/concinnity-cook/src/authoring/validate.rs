@@ -1,6 +1,6 @@
 //! The bake-time validators, re-exported from their home in
 //! `concinnity_core::components::validate` under the `crate::authoring::validate::<fn>`
-//! paths the registry's `validate:` / `validate_for:` entries name. The build-side
+//! paths the registry's `validate:` entries name. The build-side
 //! `RegisteredType::reserialize_args` applies them while baking the blob
 //! record; the runtime never runs these on a loaded world.
 
@@ -418,19 +418,17 @@ mod tests {
         use super::*;
         use crate::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
 
-        use concinnity_core::platform::Platform;
-
         #[test]
         fn clamps_steps() {
             let mut a = SdfVolume {
                 max_steps: 1,
                 ..Default::default()
             };
-            let fixed = super::super::sdf_volume(a.clone(), Platform::Metal);
+            let fixed = super::super::sdf_volume(a.clone());
             assert_eq!(fixed.max_steps, SDF_MAX_STEPS_FLOOR);
 
             a.max_steps = 9999;
-            let fixed = super::super::sdf_volume(a, Platform::Metal);
+            let fixed = super::super::sdf_volume(a);
             assert_eq!(fixed.max_steps, SDF_MAX_STEPS_CEILING);
         }
 
@@ -440,7 +438,7 @@ mod tests {
                 extent: [0.0, -1.0, f32::NAN],
                 ..Default::default()
             };
-            let fixed = super::super::sdf_volume(a, Platform::Metal);
+            let fixed = super::super::sdf_volume(a);
             assert_eq!(fixed.extent, [1.0, 1.0, 1.0]);
         }
 
@@ -451,45 +449,9 @@ mod tests {
                 max_distance: f32::NAN,
                 ..Default::default()
             };
-            let fixed = super::super::sdf_volume(a, Platform::Metal);
+            let fixed = super::super::sdf_volume(a);
             assert_eq!(fixed.max_gradient, 1.0);
             assert_eq!(fixed.max_distance, 0.1);
-        }
-
-        #[test]
-        fn collapses_map_to_the_requested_backend() {
-            // The runtime struct should carry the cooked backend's path in
-            // `fragment_shader` so the DirectX path-extension filter still works
-            // for map-authored volumes.
-            let mut map = std::collections::BTreeMap::new();
-            map.insert("metal".to_string(), "shaders/blob.metal".to_string());
-            map.insert("hlsl".to_string(), "shaders/blob.hlsl".to_string());
-            map.insert("glsl".to_string(), "shaders/blob.glsl".to_string());
-            let a = SdfVolume {
-                fragment_shaders: Some(map),
-                ..Default::default()
-            };
-            for (platform, expected) in [
-                (Platform::Metal, "shaders/blob.metal"),
-                (Platform::Hlsl, "shaders/blob.hlsl"),
-                (Platform::Glsl, "shaders/blob.glsl"),
-            ] {
-                let resolved = super::super::sdf_volume(a.clone(), platform);
-                assert_eq!(resolved.fragment_shader, expected);
-            }
-        }
-
-        #[test]
-        fn a_source_for_another_backend_is_left_alone() {
-            // A single path whose extension names a different backend is not
-            // this platform's source, so the collapse leaves the field as
-            // authored rather than adopting it.
-            let a = SdfVolume {
-                fragment_shader: "shaders/blob.metal".to_string(),
-                ..Default::default()
-            };
-            let fixed = super::super::sdf_volume(a, Platform::Hlsl);
-            assert_eq!(fixed.fragment_shader, "shaders/blob.metal");
         }
 
         #[test]
@@ -499,7 +461,7 @@ mod tests {
                 cast_shadows: true,
                 ..Default::default()
             };
-            let fixed = super::super::sdf_volume(a, Platform::Metal);
+            let fixed = super::super::sdf_volume(a);
             assert!(fixed.volumetric);
             assert!(
                 !fixed.cast_shadows,
@@ -518,7 +480,7 @@ mod tests {
             v.params[7] = 0.42;
             let json = serde_json::to_value(v.clone()).expect("serialises");
             let back: SdfVolume = serde_json::from_value(json).expect("deserialises");
-            let back = super::super::sdf_volume(back, Platform::Metal);
+            let back = super::super::sdf_volume(back);
             assert_eq!(back.centre, [1.0, 2.0, 3.0]);
             assert_eq!(back.extent, [4.0, 5.0, 6.0]);
             assert_eq!(back.fragment_shader, "shaders/foo.metal");

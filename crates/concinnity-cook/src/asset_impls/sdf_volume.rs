@@ -56,58 +56,61 @@ impl crate::asset::BuildAsset for SdfVolume {
         args: &serde_json::Value,
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> std::io::Result<Vec<u8>> {
-        // Only the cooked backend's shader is required: a volume that
-        // declares an `.hlsl` source (or an `hlsl`-only map) contributes
-        // nothing a Metal build can compile, so it is a hard error here
-        // rather than an attempt to read a file the backend never needs.
-        let platform_key = ctx.platform.key();
-        let raw = sdf_volume_source_path(args, ctx.platform).ok_or_else(|| {
+        let raw = sdf_volume_source_path(args).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "SdfVolume '{}': no fragment shader source for backend \"{}\" \
-                     (declare `fragment_shaders.{}` or a `fragment_shader` path \
-                     with a matching extension)",
-                    ctx.name, platform_key, platform_key
+                    "SdfVolume '{}': no distance field declared (set `fragment_shader` \
+                     to a `.slang` path declaring map + shade, or sampleVolume)",
+                    ctx.name
                 ),
             )
         })?;
 
         let source_path = resolve_source_path(&raw, ctx).unwrap_or_else(|| raw.clone());
-
-        // No MSL compilation here: the runtime backend prepends the
-        // engine-shipped helpers + appends the template and compiles
-        // via `newLibraryWithSource_options_error` (matching how every
-        // other Metal feature pass loads its MSL). We just transport
-        // the user source bytes through the blob so `cn run` worlds
-        // don't need the file on disk.
-        std::fs::read(&source_path).map_err(|e| {
+        let field = std::fs::read_to_string(&source_path).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
                 format!(
-                    "SdfVolume '{}': failed to read fragment shader '{}': {}",
+                    "SdfVolume '{}': failed to read distance field '{}': {}",
                     ctx.name, source_path, e
                 ),
+            )
+        })?;
+
+        // The flags decide which entries exist: a medium is integrated rather
+        // than surfaced, and only a caster needs the depth-only pair. Read from
+        // the args rather than the validated asset because the payload is built
+        // before validation runs.
+        let flag = |k: &str| args.get(k).and_then(serde_json::Value::as_bool);
+        let volumetric = flag("volumetric").unwrap_or(false);
+        let cast_shadows = flag("cast_shadows").unwrap_or(false);
+
+        let programs =
+            super::sdf_field::compile(ctx.name, &field, ctx.platform, volumetric, cast_shadows)?;
+        postcard::to_allocvec(&programs).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("SdfVolume '{}': encoding compiled field: {e}", ctx.name),
             )
         })
     }
 
-    // `TARGET_DEPENDENT` stays false: `compile_payload` transports the source
-    // bytes verbatim, so identical bytes yield an identical payload and two
-    // backends pointing at one file may correctly share a cache entry.
+    // The compile emits SPIR-V on one backend, a DXIL container on another and
+    // MSL text on the third, so one field's bytes produce three different
+    // payloads and the target belongs in the cache key.
+    const TARGET_DEPENDENT: bool = true;
 
-    // Only the cooked backend's shader is read. Reporting it alone keeps an
-    // edit to a sibling backend's shader from invalidating this one, and
-    // covers the resolution the cache's generic walk misses: `fragment_shader`
-    // is typically a path with a directory component (e.g.
-    // `"shaders/chrome_blob.metal"`) under the source-tree `assets/` dir.
-    // Without it, editing that file would replay stale bytes forever.
+    // Only the declared field is read. Reporting it covers the resolution the
+    // cache's generic walk misses: `fragment_shader` is typically a path with a
+    // directory component under the source-tree `assets/` dir, and without this
+    // an edit to it would replay stale bytes forever.
     fn source_files(
         args: &serde_json::Value,
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> crate::asset::SourceFiles {
         use crate::asset::SourceFiles;
-        let Some(raw) = sdf_volume_source_path(args, ctx.platform) else {
+        let Some(raw) = sdf_volume_source_path(args) else {
             return SourceFiles::Only(Vec::new());
         };
         SourceFiles::Only(resolve_source_path(&raw, ctx).into_iter().collect())
@@ -121,7 +124,7 @@ mod tests {
     use concinnity_core::platform::Platform;
 
     fn args(source: &str) -> serde_json::Value {
-        serde_json::json!({"fragment_shaders": {Platform::Metal.key(): source}})
+        serde_json::json!({ "fragment_shader": source })
     }
 
     fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
@@ -134,17 +137,32 @@ mod tests {
         }
     }
 
+    // A minimal surface field: enough for slangc to accept it, so a compile
+    // that fails in these tests is the engine template's fault, not the field's.
+    const FIELD: &str = r#"
+float map(float3 p, SdfParams params, float time) { return sdSphere(p, 0.5); }
+SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
+    SdfSurface s;
+    s.albedo = float3(1.0, 1.0, 1.0);
+    s.roughness = 0.5;
+    s.metallic = 0.0;
+    s.emissive = float3(0.0, 0.0, 0.0);
+    s.transmitted = float3(0.0, 0.0, 0.0);
+    return s;
+}
+"#;
+
     #[test]
     fn an_absolute_path_resolves_only_when_it_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("chrome.metal");
-        std::fs::write(&path, "// msl").unwrap();
+        let path = dir.path().join("chrome.slang");
+        std::fs::write(&path, FIELD).unwrap();
         let raw = path.to_string_lossy().into_owned();
         assert_eq!(resolve_source_path(&raw, &ctx(None)), Some(raw.clone()));
 
         let missing = dir
             .path()
-            .join("absent.metal")
+            .join("absent.slang")
             .to_string_lossy()
             .into_owned();
         assert_eq!(resolve_source_path(&missing, &ctx(None)), None);
@@ -154,22 +172,22 @@ mod tests {
     fn a_relative_path_resolves_under_the_artifacts_dir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("shaders")).unwrap();
-        std::fs::write(dir.path().join("shaders/chrome.metal"), "// msl").unwrap();
+        std::fs::write(dir.path().join("shaders/chrome.slang"), FIELD).unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("shaders/chrome.metal", &ctx(Some(&artifacts))),
-            Some(format!("{artifacts}/shaders/chrome.metal"))
+            resolve_source_path("shaders/chrome.slang", &ctx(Some(&artifacts))),
+            Some(format!("{artifacts}/shaders/chrome.slang"))
         );
     }
 
     #[test]
     fn a_bare_filename_resolves_under_the_artifacts_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("chrome.metal"), "// msl").unwrap();
+        std::fs::write(dir.path().join("chrome.slang"), FIELD).unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("chrome.metal", &ctx(Some(&artifacts))),
-            Some(format!("{artifacts}/chrome.metal"))
+            resolve_source_path("chrome.slang", &ctx(Some(&artifacts))),
+            Some(format!("{artifacts}/chrome.slang"))
         );
     }
 
@@ -178,53 +196,43 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("cn_no_such_shader.metal", &ctx(Some(&artifacts))),
+            resolve_source_path("cn_no_such_field.slang", &ctx(Some(&artifacts))),
             None
         );
         assert_eq!(
-            resolve_source_path("cn_no_such_shader.metal", &ctx(None)),
+            resolve_source_path("cn_no_such_field.slang", &ctx(None)),
             None
         );
-    }
-
-    #[test]
-    fn the_payload_is_the_shader_source_verbatim() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("chrome.metal");
-        std::fs::write(&path, "fragment float4 f() { return 0; }").unwrap();
-        let payload =
-            SdfVolume::compile_payload(&args(&path.to_string_lossy()), &ctx(None)).unwrap();
-        assert_eq!(payload, std::fs::read(&path).unwrap());
     }
 
     #[test]
     fn a_missing_source_file_names_the_asset_and_the_path() {
         let err =
-            SdfVolume::compile_payload(&args("/no/such/chrome.metal"), &ctx(None)).unwrap_err();
+            SdfVolume::compile_payload(&args("/no/such/chrome.slang"), &ctx(None)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(
             err.to_string().contains(
-                "SdfVolume 'blob': failed to read fragment shader '/no/such/chrome.metal'"
+                "SdfVolume 'blob': failed to read distance field '/no/such/chrome.slang'"
             ),
             "got: {err}"
         );
     }
 
     #[test]
-    fn no_source_for_the_building_backend_is_a_hard_error() {
+    fn no_declared_field_is_a_hard_error() {
         let err = SdfVolume::compile_payload(&serde_json::json!({}), &ctx(None)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(
-            err.to_string().contains("no fragment shader source"),
+            err.to_string().contains("no distance field declared"),
             "got: {err}"
         );
     }
 
     #[test]
-    fn source_files_reports_only_the_resolved_backend_shader() {
+    fn source_files_reports_only_the_declared_field() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("chrome.metal");
-        std::fs::write(&path, "// msl").unwrap();
+        let path = dir.path().join("chrome.slang");
+        std::fs::write(&path, FIELD).unwrap();
         let raw = path.to_string_lossy().into_owned();
         assert_eq!(
             SdfVolume::source_files(&args(&raw), &ctx(None)),
@@ -236,11 +244,11 @@ mod tests {
             SourceFiles::Only(Vec::new())
         );
         assert_eq!(
-            SdfVolume::source_files(&args("/no/such/chrome.metal"), &ctx(None)),
+            SdfVolume::source_files(&args("/no/such/chrome.slang"), &ctx(None)),
             SourceFiles::Only(Vec::new())
         );
-        // The source bytes pass through untouched, so two backends pointing at
-        // one file share a cache entry.
-        const { assert!(!SdfVolume::TARGET_DEPENDENT) };
+        // The field compiles to a different artifact per backend, so two
+        // backends must not share one cache entry for it.
+        const { assert!(SdfVolume::TARGET_DEPENDENT) };
     }
 }

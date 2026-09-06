@@ -24,15 +24,6 @@ use super::texture::*;
 // attachment + sampled image on desktop GPUs.
 pub(super) const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
-// Cap on runtime-cloned static draws (`clone_static_draw_object`). The
-// clone descriptor pool is sized for this many (albedo, normal) sets at
-// init. Editor-only: exhausting the pool only happens under
-// `world.jsonl` hot-reload churn that adds 129+ new Props referencing
-// existing meshes; the call returns an error past that. Mirrors
-// `directx::context::MAX_CLONE_DRAWS`. Used by `clone_static_draw_object`,
-// which is reached through the bin's `cn debug` runtime-mutation path.
-pub(super) const MAX_CLONE_DRAWS: usize = 128;
-
 // MAX_BLOOM_MIPS now lives in `crate::vulkan::post::bloom` (re-exported as
 // `crate::vulkan::post::MAX_BLOOM_MIPS`).
 
@@ -179,8 +170,6 @@ impl VkAreaLight {
 // for the main pass, set 1 for the shadow pass; the descriptor set layout is
 // identical so one set serves both.
 pub(super) struct VkSkinned {
-    pub(super) pipeline: Option<OwnedPipeline>,
-    pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) joint_set_layout: Option<OwnedSetLayout>,
     pub(super) descriptor_pool: Option<OwnedDescriptorPool>,
     pub(super) vertex_buffer: PooledBuffer,
@@ -191,8 +180,6 @@ pub(super) struct VkSkinned {
     pub(super) vertex_buffer_bytes: u64,
     pub(super) index_buffer_bytes: u64,
     pub(super) draw_objects: Vec<SkinnedDrawObject>,
-    // Per-object (albedo, normal) descriptor sets (set 1 for the main pass).
-    pub(super) object_sets: Vec<vk::DescriptorSet>,
     // Per-(frame, object) joint storage buffers (host-mapped) + their
     // descriptor sets. Indexed [frame_idx][skinned_idx].
     pub(super) joint_buffers: Vec<Vec<PooledBuffer>>,
@@ -240,7 +227,7 @@ pub(super) struct VkSkinned {
 
 impl VkSkinned {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
-    // `wait_idle`. The per-object `object_sets` and per-frame `joint_sets` are
+    // `wait_idle`. The per-frame `joint_sets` are
     // freed with `descriptor_pool`, so they are not destroyed here.
     pub(super) fn destroy(&mut self, device: &VkDevice) {
         self.vertex_buffer = PooledBuffer::null();
@@ -288,10 +275,10 @@ impl VkGeometry {
 
 // The main geometry-path descriptor set layouts plus the shared pool the
 // per-frame sets are allocated from, grouped off the flat `VkContext` field
-// soup. Global set 0 (camera / lights / shadow / IBL / SSAO), object set 1
-// (per-draw albedo + normal), and the text-overlay set; the `*_sets` are
-// allocated from `descriptor_pool` at init and freed with it. Post, instanced,
-// chunk, clone, and skinned descriptors live in their own pools, not here.
+// soup. Global set 0 (camera / lights / shadow / IBL / SSAO) and the
+// text-overlay set; the `*_sets` are allocated from `descriptor_pool` at init
+// and freed with it. Post and skinned descriptors live in their own pools, not
+// here.
 pub(super) struct VkDescriptors {
     pub(super) global_set_layout: OwnedSetLayout,
     // Whether `global_set_layout` was created with
@@ -308,60 +295,36 @@ pub(super) struct VkDescriptors {
     // re-rendered global set, and probe-shader recompile reads it from here so
     // they stay sized to the layout the pipelines were built against.
     pub(super) probe_cube_count: u32,
-    pub(super) object_set_layout: OwnedSetLayout,
     pub(super) _text_set_layout: OwnedSetLayout,
     pub(super) _descriptor_pool: OwnedDescriptorPool,
     pub(super) global_sets: Vec<vk::DescriptorSet>,
-    pub(super) object_sets: Vec<vk::DescriptorSet>,
     pub(super) text_atlas_sets: Vec<vk::DescriptorSet>,
 }
 
 impl VkDescriptors {
     // Destroy the shared descriptor pool (which frees every set allocated from
-    // it: global_sets / object_sets / text_atlas_sets) and the three set
-    // layouts. Called from `VkContext::drop` after `wait_idle`.
+    // it: global_sets / text_atlas_sets) and the set layouts. Called from
+    // `VkContext::drop` after `wait_idle`.
     pub(super) fn destroy(&self, _device: &VkDevice) {}
 }
 
-// Instanced-prop rendering: the pipeline + per-cluster material sets + the
-// per-(frame, cluster) instance storage buffers and their descriptor sets,
-// grouped off the flat `VkContext` field soup. All `None` / empty when the
-// world declares no `InstancedProp` clusters. `clusters` holds the declared
-// clusters (each with its per-instance transforms); `lod_buckets` is the
-// per-frame LOD partition every instanced draw site shares.
+// Instanced-prop clusters. Every instance folds into the GPU-driven cull
+// records, so the only per-instance walk left is the spot shadow pass, which
+// pushes each transform as a root constant. Empty when the world declares no
+// `InstancedProp` clusters. `clusters` holds the declared clusters (each with
+// its per-instance transforms); `lod_buckets` is the per-frame LOD partition.
 pub(super) struct VkInstanced {
-    // Instanced pipeline; None when no InstancedProp clusters were declared.
-    pub(super) pipeline: Option<OwnedPipeline>,
-    pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) set_layout: Option<OwnedSetLayout>,
     pub(super) clusters: Vec<InstancedCluster>,
-    // Per-cluster (albedo, normal) sets used by the instanced pipeline.
-    // Indexed by cluster index. Empty when no clusters are declared.
-    pub(super) object_sets: Vec<vk::DescriptorSet>,
-    // Per-frame, per-cluster instance buffer descriptor sets bound to set=2.
-    // Indexed [frame_idx][cluster_idx].
-    pub(super) sets: Vec<Vec<vk::DescriptorSet>>,
-    // Per-frame, per-cluster instance storage buffers (host-mapped).
-    pub(super) buffers: Vec<Vec<PooledBuffer>>,
+    // Whether any cluster declares LOD alternates. False skips the per-frame
+    // per-instance LOD patch: without alternates the base slice written into
+    // every frame's draw-args buffer at init is right for the world's life.
+    pub(super) any_lod: bool,
     // Per-cluster LOD-bucket partition for the current frame, indexed by
     // cluster index. Recomputed once per frame by `prepare_instanced_clusters`
     // (on `&mut self`, before the parallel pass fan-out) and consumed read-only
-    // by every instanced draw site (main, shadow, SSR / SSAO / velocity
-    // pre-passes) so all passes agree on the per-instance LOD pick and the
-    // bucket-ordered byte layout uploaded into each cluster's instance SSBO.
-    // Empty until the first frame / when no clusters are declared.
+    // by the spot shadow pass. Empty until the first frame / when no clusters
+    // are declared.
     pub(super) lod_buckets: Vec<Vec<InstancedLodBucket>>,
-}
-
-impl VkInstanced {
-    // Destroy the pipeline, pipeline layout, instance set layout, and the
-    // per-frame instance storage buffers + their mapped memory. Called from
-    // `VkContext::drop` after `wait_idle`. The descriptor sets (`object_sets`,
-    // `sets`) are freed with the shared descriptor pool, so they are not
-    // destroyed here; `clusters` / `lod_buckets` are plain CPU state.
-    pub(super) fn destroy(&mut self, _device: &VkDevice) {
-        self.buffers.clear();
-    }
 }
 
 // Streamed VoxelWorld chunk rendering resources, grouped off the flat
@@ -376,20 +339,10 @@ pub(super) struct VkChunkStream {
     // mesh-streaming allocators.
     pub(super) vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     pub(super) idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    // Dedicated pool + one shared (albedo, normal) descriptor set for streamed
-    // chunks.
-    pub(super) descriptor_pool: Option<OwnedDescriptorPool>,
-    pub(super) object_set: Option<vk::DescriptorSet>,
-    // Albedo / normal-map pool slots the shared chunk material samples, stored
-    // (already clamped) so a streamed swap of either slot re-points `object_set`.
-    pub(super) texture_slot: Option<usize>,
-    pub(super) normal_map_slot: Option<usize>,
 }
 
 impl VkChunkStream {
-    // Destroy the chunk descriptor pool (which frees `object_set`). Called from
-    // `VkContext::drop` after `wait_idle`. The allocators, free-slot list, and
-    // material slots are plain CPU state with nothing to free.
+    // The allocators are plain CPU state with nothing to free.
     pub(super) fn destroy(&self, _device: &VkDevice) {}
 }
 
@@ -398,15 +351,13 @@ impl VkChunkStream {
 // backend's `cull: CullState`. A compute kernel frustum/distance-tests the
 // build-time static objects and writes one indirect draw per survivor; the
 // bindless main pass issues the whole buffer with one indirect draw. All
-// `Some` / non-empty only when the world uses the built-in bindless shader with
-// build-time geometry; non-bindless shaders keep the legacy per-draw loop. Field
-// names are kept verbatim (heterogeneous prefixes, no single cluster prefix to
-// drop). The two-pass Hi-Z pyramid + its temporal state live here too. The
-// legacy `main_pipeline` and the CPU `draw.bvh` are NOT part of this.
+// `Some` / non-empty only when the world has anything to GPU-drive. Field names
+// are kept verbatim (heterogeneous prefixes, no single cluster prefix to drop).
+// The two-pass Hi-Z pyramid + its temporal state live here too.
 pub(super) struct VkCull {
-    // Bindless static main pass. `Some` only on the built-in shader; `None`
-    // keeps the legacy per-draw main pass. The bindless descriptor sets are
-    // freed with the shared descriptor pool.
+    // Bindless static main pass: bucket 0's pipeline, the world default Shader's
+    // pair where the world declares one and the engine's otherwise. The bindless
+    // descriptor sets are freed with the shared descriptor pool.
     pub(super) bindless_pipeline: Option<OwnedPipeline>,
     pub(super) bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) bindless_set_layout: Option<OwnedSetLayout>,
@@ -823,41 +774,10 @@ pub(super) struct TextState {
     pub upload: super::upload_ring::UploadRing,
 }
 
-// Descriptor state for `clone_static_draw_object`. `descriptor_pool` is
-// pre-allocated at init regardless of whether any clone exists yet, holding up
-// to `MAX_CLONE_DRAWS` per-object (albedo, normal) sets so an asset hot-reload
-// that adds a new authored Prop referencing an existing mesh / model can wire
-// its descriptors without growing any other pool. `object_sets` is indexed by
-// clone offset; an offset in `free_offsets` is allocated but unreferenced, ready
-// for the next clone to reuse (re-pointed only if its textures differ).
-// `slot_by_draw_idx` is the `draw_idx -> clone_offset` lookup the legacy main
-// pass uses to pick the right set for an entry past `n_objects` (chunks fall
-// through to `chunk_object_set`). `texture_slots` / `normal_map_slots` are
-// parallel to `object_sets` and read by `rewrite_texture_slot` so a streamed
-// swap repoints the matching clone sets.
-pub(super) struct CloneState {
-    pub descriptor_pool: Option<OwnedDescriptorPool>,
-    pub object_sets: Vec<vk::DescriptorSet>,
-    pub free_offsets: Vec<usize>,
-    pub slot_by_draw_idx: std::collections::HashMap<usize, usize>,
-    pub texture_slots: Vec<usize>,
-    pub normal_map_slots: Vec<usize>,
-}
-
-// The scene draw list plus the CPU cull inputs derived from it, and the record
-// counts that partition the GPU-driven bindless cull buffers.
+// The scene draw list plus the record counts that partition the GPU-driven
+// bindless cull buffers.
 pub(super) struct DrawState {
     pub objects: Vec<DrawObject>,
-    pub bvh: crate::gfx::bvh::Bvh,
-    pub always: Vec<u32>,
-    // Parallel to `objects`: true where that slot is a member of `always`, so
-    // `ensure_always_draw` adds a recycled slot at most once.
-    pub always_member: Vec<bool>,
-    // Per-frame scratch for the legacy CPU draw path's visible set (BVH-culled
-    // cullables + `always` fallback). `mem::take`d at the top of record_frame
-    // and returned at the bottom so the heap allocation is reused across frames
-    // instead of `Vec::with_capacity`'d each tick.
-    pub visible_scratch: Vec<u32>,
     // The last compiled frame graph, keyed by the `FrameGraphInputs` it was
     // built from. `build_frame_graph` is a pure function of those inputs (which
     // change only when a feature toggles or a target resizes), so a frame whose
@@ -878,14 +798,17 @@ pub(super) struct DrawState {
     // 0 when the world has no instanced props or the bindless pass is inactive.
     // `cull_count() == n_objects + n_instances`. See `gfx::render_types`.
     pub n_instances: usize,
-    // Streamed-chunk record reserve folded into the GPU-driven bindless cull
-    // buffers BETWEEN the instances and the skinned tail: the buffers reserve
-    // `[n_objects + n_instances, +n_chunk)` at init (capacity = the worst-case
-    // resident chunk window). Resident chunks pack into this region each frame
-    // and are drawn by the static+instance prefix indirect draw (chunk geometry
-    // already lives in the shared VB/IB); the unused tail is disabled. Fixed at
-    // init, 0 for a non-voxel world. Mirrors `DxContext.n_chunk`.
-    pub n_chunk: usize,
+    // Runtime record reserve folded into the GPU-driven bindless cull buffers
+    // BETWEEN the instances and the skinned tail: the buffers reserve
+    // `[n_objects + n_instances, +n_runtime)` at init. It holds both kinds of
+    // object that appear after init -- streamed `VoxelWorld` chunks (capacity =
+    // the worst-case resident window) and spawned clones (capacity =
+    // `MAX_CLONE_DRAWS`) -- because neither can join the build-time BVH and both
+    // already have their geometry in the shared VB/IB. Resident ones pack into
+    // this region each frame and are drawn by the static+instance prefix
+    // indirect draw; the unused tail is disabled. Fixed at init. Mirrors
+    // `DxContext.n_runtime`.
+    pub n_runtime: usize,
     // Skinned draw objects folded into the GPU-driven bindless cull buffers as
     // `GpuObjectData` / `GpuDrawArgs` records after the instance records (at
     // `n_objects + n_instances + k`), drawn as rigid deformed geometry by the
@@ -1053,8 +976,6 @@ pub(crate) struct VkContext {
     pub(super) linear_sampler: OwnedSampler,
 
     // Pipelines
-    pub(super) main_pipeline: OwnedPipeline,
-    pub(super) main_pipeline_layout: OwnedPipelineLayout,
     // GPU-driven cull + bindless static main pass + two-pass Hi-Z occlusion
     // (pyramid + temporal state). See `VkCull`.
     pub(super) cull: VkCull,
@@ -1257,6 +1178,10 @@ pub(crate) struct VkContext {
 
     // Built-in shader hot reload. See [`HotReloadState`].
     pub(super) hot_reload: HotReloadState,
+    // The world default Shader's compiled programs, `None` for the engine's
+    // own. Kept past init so the built-in shader reload rebuilds bucket 0 from
+    // the world's pair rather than the engine's.
+    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
 
     // Per-frame draw-call / VRAM / GPU-time counters surfaced to the
     // profiler overlay via [`Self::render_stats`]. Lives in a `Cell` because
@@ -1305,8 +1230,6 @@ pub(crate) struct VkContext {
     // draw-slot freelist, the shared chunk descriptor pool + set, and the
     // material slots it samples. See `VkChunkStream`.
     pub(super) chunk_stream: VkChunkStream,
-    // Clone descriptor state. See [`CloneState`].
-    pub(super) clone: CloneState,
 
     // Skinned (skeletally animated) mesh rendering. See `VkSkinned`.
     pub(super) skinned: VkSkinned,
@@ -1809,21 +1732,6 @@ impl VkContext {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = false;
             obj.resident = false;
-            if let Some(offset) = self.clone.slot_by_draw_idx.remove(&index) {
-                self.clone.free_offsets.push(offset);
-            }
-        }
-    }
-
-    // Add a draw slot to `draw.always` if it is not already a member. Runtime
-    // draws (chunks, spawned clones) are drawn unconditionally because the
-    // init-time BVH cannot refit to admit them; a slot recycled from a culled
-    // static prop is not yet in `draw.always` and must be added, while one
-    // recycled from another chunk / clone already is.
-    pub(super) fn ensure_always_draw(&mut self, slot: usize) {
-        if !self.draw.always_member[slot] {
-            self.draw.always.push(slot as u32);
-            self.draw.always_member[slot] = true;
         }
     }
 
@@ -2287,7 +2195,6 @@ impl VkContext {
         self.text.pipeline = None;
         // Instanced-prop pipeline + per-frame instance buffers (see
         // `VkInstanced::destroy`).
-        self.instanced.destroy(device);
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
@@ -2423,16 +2330,13 @@ impl VkContext {
 
         // Render passes.
 
-        // Chunk-stream descriptor pool (frees `chunk_stream.object_set`); the
-        // shared main pool + its set layouts are freed by
-        // `self.descriptors.destroy` below.
         self.chunk_stream.destroy(device);
 
         // Skinned-mesh resources.
         self.skinned.destroy(device);
 
-        // Main descriptor pool + the three set layouts (the pool frees the
-        // global / object / text_atlas sets).
+        // Main descriptor pool + the set layouts (the pool frees the global /
+        // text_atlas sets).
         self.descriptors.destroy(device);
 
         // Geometry.

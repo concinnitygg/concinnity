@@ -60,37 +60,6 @@ pub struct Material {
     /// Additive emission colour in linear space. Non-zero values make the
     /// surface appear to glow independently of the scene lighting.
     pub emissive_factor: [f32; 3],
-    /// Macro-variation strength in [0, 1]. When non-zero, a large-scale,
-    /// world-space noise modulates the albedo so a tiled texture on a big
-    /// surface (terrain, floors) stops reading as an obvious repeating grid.
-    /// 0 disables it.
-    pub macro_variation: f32,
-    /// Terrain-shading blend in [0, 1]. When non-zero, the albedo and normal
-    /// are sampled by a world-space projection blended from the three world
-    /// axes (instead of a single UV lookup), and the surface shifts toward a
-    /// darker rocky tint on steep slopes. This removes the obvious UV-stretch
-    /// banding that heightfield ground shows when stretched across a big mesh,
-    /// and gives "grass on top, rock on the cliffs" variation for free.
-    /// 0 disables it.
-    pub terrain_blend: f32,
-    /// Optional second albedo [Texture](#texture) for the slope-based terrain
-    /// blend. When present, the steep / cliff regions sample this texture and
-    /// blend with the primary `albedo` over the flat regions, using the
-    /// surface's up-facing component (softened by a per-pixel noise so the
-    /// transition doesn't read as a clean line). Without it, a rocky-tint
-    /// multiplier is applied to the primary texture instead. Only used when
-    /// `terrain_blend > 0`.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
-    pub albedo_secondary: Option<TextureHandle>,
-    /// Tangent-space normal map paired with `albedo_secondary`. Only used when
-    /// both that field and `terrain_blend` are set.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
-    pub normal_secondary: Option<TextureHandle>,
-    /// Sharpness of the slope-based blend in [0, 1]. 0 = wide soft
-    /// gradient between the two layers; 1 = nearly hard cliff edge.
-    /// Default `0.5` matches the "smooth but visible" transition AAA
-    /// terrain materials typically tune to.
-    pub secondary_blend_sharpness: f32,
     /// Alpha-cutout threshold in [0, 1]. When non-zero, a texel whose `albedo`
     /// alpha falls below it is discarded outright, punching a hole in the
     /// surface: this is how foliage, chain-link, and decal cards are drawn as
@@ -137,11 +106,6 @@ impl Default for Material {
             metallic: 0.0,
             tint: [1.0, 1.0, 1.0],
             emissive_factor: [0.0, 0.0, 0.0],
-            macro_variation: 0.0,
-            terrain_blend: 0.0,
-            albedo_secondary: None,
-            normal_secondary: None,
-            secondary_blend_sharpness: 0.5,
             alpha_cutoff: 0.0,
             opacity: 1.0,
             transparent: false,
@@ -167,9 +131,6 @@ mod tests {
         assert!(!m.see_through);
         // Zero alpha cutoff means "no cutout", not "discard everything".
         assert_eq!(m.alpha_cutoff, 0.0);
-        assert_eq!(m.macro_variation, 0.0);
-        assert_eq!(m.terrain_blend, 0.0);
-        assert_eq!(m.secondary_blend_sharpness, 0.5);
         for map in [&m.albedo, &m.normal_map, &m.emissive_map, &m.orm_map] {
             assert!(map.is_none());
         }
@@ -182,16 +143,13 @@ mod tests {
         crate::test_support::install_resolvers();
         let m: Material = serde_json::from_str(
             r#"{"albedo":"tex_a","normal_map":"tex_nm","emissive_map":"tex_em",
-                "orm_map":"tex_orm","albedo_secondary":"tex_b","normal_secondary":"tex_nb",
-                "shader":"water_shader"}"#,
+                "orm_map":"tex_orm","shader":"water_shader"}"#,
         )
         .unwrap();
         assert_eq!(m.albedo, Some(TextureHandle(5)));
         assert_eq!(m.normal_map, Some(TextureHandle(6)));
         assert_eq!(m.emissive_map, Some(TextureHandle(6)));
         assert_eq!(m.orm_map, Some(TextureHandle(7)));
-        assert_eq!(m.albedo_secondary, Some(TextureHandle(5)));
-        assert_eq!(m.normal_secondary, Some(TextureHandle(6)));
         assert_eq!(m.shader, Some(ShaderHandle(12)));
     }
 
@@ -199,8 +157,7 @@ mod tests {
     fn a_glass_material_round_trips_through_postcard() {
         let m: Material = serde_json::from_str(
             r#"{"roughness":0.05,"metallic":1,"tint":[0.8,0.9,1],"emissive_factor":[2,2,2],
-                "alpha_cutoff":0.5,"opacity":0.3,"transparent":true,"see_through":true,
-                "macro_variation":0.4,"terrain_blend":0.6,"secondary_blend_sharpness":0.9}"#,
+                "alpha_cutoff":0.5,"opacity":0.3,"transparent":true,"see_through":true}"#,
         )
         .unwrap();
         let bytes = postcard::to_allocvec(&m).unwrap();
@@ -213,9 +170,6 @@ mod tests {
         assert_eq!(back.opacity, 0.3);
         assert!(back.transparent);
         assert!(back.see_through);
-        assert_eq!(back.macro_variation, 0.4);
-        assert_eq!(back.terrain_blend, 0.6);
-        assert_eq!(back.secondary_blend_sharpness, 0.9);
         assert_eq!(back.asset_id, AssetId::default());
     }
 }

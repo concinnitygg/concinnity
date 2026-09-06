@@ -22,26 +22,24 @@ use std::time::{Duration, Instant};
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
-use super::cull::{build_cull_pipeline, build_shadow_cull_pipeline};
+use super::cull::build_shadow_cull_pipeline;
 use super::decal::build_decal_pipeline;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::fog::build_fog_pipeline;
 use super::hiz::build_hiz_pipelines;
 use super::init::pipelines::{
-    MainPipelineBundle, build_instanced_pipeline, build_main_pipeline,
-    build_shadow_bindless_pipeline, build_shadow_pipeline, make_vertex_descriptor,
+    MainPipelineBundle, build_main_pipeline, build_shadow_bindless_pipeline, build_shadow_pipeline,
+    make_vertex_descriptor,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::{
-    build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_gbuffer_prepass_pipeline,
-    build_reflection_blur_pipeline, build_reflection_composite_pipeline,
-    build_rt_reflection_pipeline, build_ssao_pipeline, build_ssgi_composite_pipeline,
-    build_ssgi_gather_pipeline, build_ssr_pipeline, build_taa_pipeline,
+    build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
+    build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
+    build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline,
+    build_taa_pipeline,
 };
-use super::resources::skinning::{
-    build_skinned_main_pipeline, build_skinned_shadow_pipeline, make_skinned_vertex_descriptor,
-};
-use crate::metal::slang_shaders::{self, SSAO_BLUR, SSAO_KERNEL};
+use super::resources::skinning::{build_skinned_shadow_pipeline, make_skinned_vertex_descriptor};
+use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
 // `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
@@ -246,14 +244,12 @@ impl MtlContext {
     // or link error logs the underlying message and leaves the live pipelines
     // untouched: a typo in a shader edit won't crash the running session.
     //
-    // Covers the skinned velocity / SSAO / SSR pre-pass variants too: they
-    // compile from the same on-disk `velocity.metal` / `ssao.metal` /
-    // `ssr.metal` sources as their static + instanced siblings, just with a
-    // different vertex entry point. The skinned main + skinned shadow
-    // pipelines are not built here: their entry points live in the world's
-    // vertex / fragment / shadow `Shader` library bytes, so they
-    // reload through [`Self::update_world_shader_pipelines`] alongside the
-    // static main pipeline.
+    // Covers the main pass and its GPU cull (one builder, since the cull's
+    // argument encoder comes from the pipeline it feeds) and the skinned
+    // G-buffer pre-pass and skinned shadow variants, which compile from the
+    // same single-source files as their static siblings under a different
+    // entry. A world Shader's own pair still wins in the main build, so a save
+    // to an engine template never swaps a world's program for the engine's.
     pub(super) fn reload_shaders(&mut self) -> Result<(), String> {
         if !self.hot_reload.enabled {
             return Ok(());
@@ -279,10 +275,34 @@ impl MtlContext {
             self.taa.pipeline_state.is_some(),
             build_taa_pipeline(device, hr)
         );
-        let cull = rebuild_if_live!(
-            self.cull.pipeline.is_some(),
-            build_cull_pipeline(device, hr)
+        // The main pass and the GPU cull come from one builder, because the
+        // cull's argument encoder is derived from the pipeline it feeds. A
+        // world Shader's pair wins here exactly as it does at init, so a save
+        // to an engine template does not swap a world's program for the
+        // engine's.
+        let main = rebuild_if_live!(
+            self.pipeline_state.is_some(),
+            build_main_pipeline(
+                device,
+                &make_vertex_descriptor(),
+                self.world_shader.as_ref(),
+                hr,
+            )
         );
+        // The engine sampler block rides the fresh fragment's encoder.
+        let main_sampler_args = match main
+            .as_ref()
+            .and_then(|m| m.bindless_sampler_arg_encoder.as_ref())
+        {
+            Some(enc) => Some(super::init::pipelines::build_bindless_sampler_args(
+                device,
+                enc,
+                &self.sampler,
+                &self.shadow.sampler,
+                &self.cube_sampler,
+            )?),
+            None => None,
+        };
         // Hi-Z build kernels are engine built-ins (independent of the world
         // shader); rebuild them whenever a Hi-Z resource exists so a saved
         // edit to `hiz_build.slang` is picked up. The texture + mip views are
@@ -298,7 +318,7 @@ impl MtlContext {
         );
         let fog = rebuild_if_live!(self.fog.pipeline.is_some(), build_fog_pipeline(device, hr));
 
-        // The G-buffer pre-pass + SSAO/SSR resolve variants need the static layout.
+        // The shadow pipeline needs the static vertex layout.
         let static_vdesc = static_vertex_descriptor();
         let ssao_kernel = rebuild_if_live!(
             self.ssao.kernel_pipeline.is_some(),
@@ -308,26 +328,8 @@ impl MtlContext {
             self.ssao.blur_pipeline.is_some(),
             build_ssao_pipeline(device, &SSAO_BLUR, hr)
         );
-        let gbuffer_prepass = rebuild_if_live!(
-            self.gbuffer.prepass_pipeline.is_some(),
-            build_gbuffer_prepass_pipeline(
-                device,
-                &static_vdesc,
-                &slang_shaders::GBUFFER_PREPASS_VERT,
-                hr
-            )
-        );
-        let gbuffer_instanced = rebuild_if_live!(
-            self.gbuffer.instanced_pipeline.is_some(),
-            build_gbuffer_prepass_pipeline(
-                device,
-                &static_vdesc,
-                &slang_shaders::GBUFFER_PREPASS_VERT_INSTANCED,
-                hr,
-            )
-        );
-        // GPU-driven bindless G-buffer pipeline: builds its own
-        // two-stream vertex descriptor internally.
+        // The G-buffer pipeline builds its own two-stream vertex descriptor
+        // internally.
         let gbuffer_bindless = rebuild_if_live!(
             self.gbuffer.bindless_pipeline.is_some(),
             build_gbuffer_bindless_pipeline(device, hr)
@@ -369,27 +371,12 @@ impl MtlContext {
             )
         );
 
-        // Skinned pre-pass variants compile from the same on-disk shader
-        // sources as the static variants: only the vertex entry point and
-        // 80-byte vertex layout differ. `upload_skinned` only builds these
-        // when the matching static pre-pass exists, so the per-field
-        // `is_some()` check here is the same gate.
-        let skinned_vdesc = if self.gbuffer.skinned_pipeline.is_some()
-            || self.skinned.shadow_pipeline_state.is_some()
-        {
+        // The skinned shadow caster rides the 80-byte skinned vertex layout.
+        let skinned_vdesc = if self.skinned.shadow_pipeline_state.is_some() {
             Some(make_skinned_vertex_descriptor())
         } else {
             None
         };
-        let gbuffer_skinned = rebuild_if_live!(
-            self.gbuffer.skinned_pipeline.is_some(),
-            build_gbuffer_prepass_pipeline(
-                device,
-                skinned_vdesc.as_ref().expect("skinned vdesc just built"),
-                &slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
-                hr,
-            )
-        );
 
         // Shadow pass shaders are engine-internal (compiled from
         // `shadow.metal`), so they rebuild here alongside the other
@@ -409,10 +396,10 @@ impl MtlContext {
             )
         );
 
-        // GPU-driven cascaded-shadow pipelines: the frustum-only
-        // shadow cull kernel (from cull.metal) + the depth-only bindless shadow
-        // render pipeline (from shadow.metal). Both engine-internal, so they
-        // rebuild here. Gated on the live shadow-bindless path.
+        // GPU-driven cascaded-shadow pipelines: the frustum-only shadow
+        // decision kernel (from cull.slang) + the depth-only bindless shadow
+        // render pipeline. Both engine-internal, so they rebuild here. Gated on
+        // the live shadow-bindless path.
         let shadow_cull = rebuild_if_live!(
             self.cull.shadow_pipeline.is_some(),
             build_shadow_cull_pipeline(device, hr)
@@ -435,23 +422,28 @@ impl MtlContext {
         if let Some(p) = taa {
             self.taa.pipeline_state = Some(p);
         }
-        if let Some(p) = cull {
-            self.cull.pipeline = Some(p.state);
-            self.cull.icb_arg_encoder = Some(p.icb_arg_encoder);
-            // The phase-2 (two-pass occlusion) pipeline + ICB arg encoder come
-            // from the same rebuilt library; swap them in lockstep.
-            self.cull.pipeline_phase2 = Some(p.state_phase2);
-            self.cull.icb_2_arg_encoder = Some(p.icb2_arg_encoder);
-            // Force ICB rebuild on next frame so its argument-buffer encoding
-            // re-binds to the new arg encoders the new cull kernels produced.
-            // The status buffer + phase-2 ICB are rebuilt by the same
-            // `ensure_icb_capacity` pass that rebuilds the phase-1 ICB.
+        if let Some(p) = main {
+            self.pipeline_state = Some(p.pipeline_state);
+            self.bindless_tex_arg_encoder = p.bindless_tex_arg_encoder;
+            self.bindless_sampler_args = main_sampler_args;
+            self.cull.pipeline = Some(p.cull.decide);
+            self.cull.pipeline_phase2 = Some(p.cull.decide_phase2);
+            self.cull.encode_pipeline = Some(p.cull.encode);
+            self.cull.icb_arg_encoder = Some(p.cull.icb_arg_encoder);
+            // Force the ICB rebuilds on the next frame so every argument buffer
+            // is re-encoded with the arg encoder the new encode kernel produced.
+            // The status buffers and the phase-2 ICB are rebuilt by the same
+            // `ensure_*_capacity` passes that rebuild the ICBs.
             self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
             self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
+            self.cull.shadow_icb = None;
+            self.cull.shadow_icb_arg_buffer = None;
+            self.cull.shadow_status = None;
+            self.cull.shadow_icb_capacity = 0;
         }
         if let Some((init_pipeline, downsample_pipeline)) = hiz
             && let Some(h) = self.cull.hiz.as_mut()
@@ -472,12 +464,6 @@ impl MtlContext {
         }
         if let Some(p) = ssao_blur {
             self.ssao.blur_pipeline = Some(p);
-        }
-        if let Some(p) = gbuffer_prepass {
-            self.gbuffer.prepass_pipeline = Some(p);
-        }
-        if let Some(p) = gbuffer_instanced {
-            self.gbuffer.instanced_pipeline = Some(p);
         }
         if let Some(p) = gbuffer_bindless {
             self.gbuffer.bindless_pipeline = Some(p);
@@ -503,24 +489,14 @@ impl MtlContext {
         if let Some(p) = rt_reflections_textured {
             self.rt.pipeline_textured = Some(p);
         }
-        if let Some(p) = gbuffer_skinned {
-            self.gbuffer.skinned_pipeline = Some(p);
-        }
         if let Some(p) = shadow {
             self.shadow.pipeline_state = Some(p);
         }
         if let Some(p) = skinned_shadow {
             self.skinned.shadow_pipeline_state = Some(p);
         }
-        if let Some((p, enc)) = shadow_cull {
+        if let Some(p) = shadow_cull {
             self.cull.shadow_pipeline = Some(p);
-            self.cull.shadow_icb_arg_encoder = Some(enc);
-            // Force the shadow ICB rebuild on the next frame so its argument
-            // buffer re-binds to the freshly compiled kernel's arg encoder
-            // (mirrors the main cull ICB reset above).
-            self.cull.shadow_icb = None;
-            self.cull.shadow_icb_arg_buffer = None;
-            self.cull.shadow_icb_capacity = 0;
         }
         if let Some(p) = shadow_bindless {
             self.cull.shadow_bindless_pipeline = Some(p);
@@ -528,105 +504,35 @@ impl MtlContext {
         Ok(())
     }
 
-    // Rebuild the world-loaded shader pipelines (main, optional instanced,
-    // optional shadow) from freshly compiled metallib bytes. Driven by
-    // asset hot-reload (`cn debug` only) when a captured `Shader`
-    // source file is saved or `reload-assets` is fired. Mirrors the
+    // Rebuild the world-loaded main pipeline from a freshly compiled Shader
+    // payload. Driven by asset hot-reload (`cn debug` only) when one of the
+    // Shader's files is saved or `reload-assets` is fired. Mirrors the
     // rebuild-then-swap safety pattern of [`Self::reload_shaders`]: every
-    // replacement is constructed into a temporary first, and the atomic
-    // swap only runs when every build succeeds: a typo in a shader edit
-    // leaves the live pipelines untouched and the session keeps rendering.
+    // replacement is constructed into a temporary first, and the swap only
+    // runs when every build succeeds, so a typo in a shader edit leaves the
+    // live pipelines untouched and the session keeps rendering.
     //
-    // `vert_bytes` and `frag_bytes` are always required (the main pipeline
-    // is required for the world to render). `vert_instanced_bytes` is honoured
-    // only when the instanced pipeline is currently live. Hot-reload cannot
-    // introduce a new shader-stage kind (or drop one): that would need
-    // draw-list / asset graph changes that this path doesn't support.
-    //
-    // Skinned variants ride the same library bytes: when the world declared
-    // a `SkinnedMesh` (so `upload_skinned` ran and `skinned_pipeline_state`
-    // is live), this also rebuilds the main skinned pipeline. The shadow
-    // pipelines (static + skinned) and the skinned velocity / SSAO / SSR
-    // pre-pass pipelines compile from disk-resident engine-internal source
-    // (not from world library bytes), so they are covered by
-    // [`Self::reload_shaders`]: no work here. `_shadow_bytes` is retained for
-    // the cross-backend signature but unused (the shadow shader is internal).
+    // Every draw a world Shader reaches goes through the GPU-driven pass, so
+    // this is the one pipeline it owns. The shadow and G-buffer pipelines
+    // compile from engine-internal source and are covered by
+    // [`Self::reload_shaders`].
     pub(super) fn update_world_shader_pipelines(
         &mut self,
-        vert_bytes: Option<&[u8]>,
-        frag_bytes: Option<&[u8]>,
-        _shadow_bytes: Option<&[u8]>,
-        vert_instanced_bytes: Option<&[u8]>,
+        programs: &concinnity_core::components::ShaderPrograms,
     ) -> Result<(), String> {
-        let vert_bytes = vert_bytes
-            .ok_or_else(|| "vertex shader bytes are required for the main pipeline".to_string())?;
-        let frag_bytes = frag_bytes.ok_or_else(|| {
-            "fragment shader bytes are required for the main pipeline".to_string()
-        })?;
+        let world = Some(programs);
 
         // Build everything into temporaries first. Any `?` early-return
         // leaves the live pipelines untouched, mirroring `reload_shaders`.
         // A scene-less world never built a main pipeline; there is nothing
-        // for the fresh world-shader bytes to replace.
+        // for the fresh world-shader programs to replace.
         let vert_desc = make_vertex_descriptor();
         let new_main = if self.pipeline_state.is_some() {
             Some(build_main_pipeline(
                 &self.device,
                 &vert_desc,
-                vert_bytes,
-                frag_bytes,
+                world,
                 self.hot_reload.enabled,
-            )?)
-        } else {
-            None
-        };
-
-        // Instanced pipeline depends on both the instanced vertex bytes and
-        // the (potentially fresh) fragment bytes. Rebuilt only when an
-        // instanced pipeline is currently live AND the caller supplied new
-        // instanced vertex bytes: a world without an instanced stage keeps
-        // `instanced.pipeline_state == None` and skips this branch.
-        let new_instanced = if self.instanced.pipeline_state.is_some() {
-            let inst_bytes = vert_instanced_bytes.ok_or_else(|| {
-                "instanced vertex shader bytes are required when an instanced pipeline is live"
-                    .to_string()
-            })?;
-            // `has_clusters = true` forces the build path (the builder
-            // short-circuits on `!has_clusters`).
-            let ps = build_instanced_pipeline(
-                &self.device,
-                &vert_desc,
-                inst_bytes,
-                frag_bytes,
-                true,
-                true,
-            )?
-            .ok_or_else(|| {
-                "build_instanced_pipeline returned None on a forced rebuild".to_string()
-            })?;
-            Some(ps)
-        } else {
-            None
-        };
-
-        // Skinned main pipeline rides the same vert + frag library bytes as
-        // the static main pipeline (just a different vertex entry point and
-        // the 80-byte skinned vertex layout). Rebuilt only when a skinned
-        // pipeline is currently live: a world without a `SkinnedMesh`
-        // never called `upload_skinned`, so this stays `None`.
-        let skinned_vdesc = if self.skinned.pipeline_state.is_some() {
-            Some(make_skinned_vertex_descriptor())
-        } else {
-            None
-        };
-        let new_skinned_main = if self.skinned.pipeline_state.is_some() {
-            let vdesc = skinned_vdesc.as_ref().expect("skinned vdesc just built");
-            Some(build_skinned_main_pipeline(
-                &self.device,
-                vdesc,
-                vert_bytes,
-                frag_bytes,
-                true,
             )?)
         } else {
             None
@@ -655,49 +561,36 @@ impl MtlContext {
         if let Some(new_main) = new_main {
             let MainPipelineBundle {
                 pipeline_state,
-                bindless,
-                cull_pipeline,
-                cull_icb_arg_encoder,
-                cull_pipeline_phase2,
-                cull_icb2_arg_encoder,
+                cull,
                 bindless_tex_arg_encoder,
                 bindless_sampler_arg_encoder: _,
             } = new_main;
             self.pipeline_state = Some(pipeline_state);
-            // Swap the bindless flag + dependent state. The flag is the
-            // bindless-vs-legacy switch for the static draw loop; if it changed
-            // (e.g. the user toggled `fragment_main_bindless` on or off in
-            // their shader), the ICB also has to be rebuilt because the new
-            // arg encoder produces a different encoding shape.
-            self.bindless = bindless;
-            self.cull.pipeline = cull_pipeline;
-            self.cull.icb_arg_encoder = cull_icb_arg_encoder;
-            // Second-pass (two-pass occlusion) pipeline + ICB arg encoder swap with
-            // the rest of the bundle. `two_pass_occlusion` is left as the init-time
-            // resolution: a shader edit that drops `fragment_main_bindless` leaves
-            // `cull_pipeline_phase2` None, and `ensure_icb_capacity` then skips the
-            // phase-2 ICB while the graph builder skips the phase-2 nodes.
-            self.cull.pipeline_phase2 = cull_pipeline_phase2;
-            self.cull.icb_2_arg_encoder = cull_icb2_arg_encoder;
+            // Swap the cull state with the pipeline; `two_pass_occlusion` keeps
+            // its init-time resolution.
+            self.cull.pipeline = Some(cull.decide);
+            self.cull.pipeline_phase2 = Some(cull.decide_phase2);
+            self.cull.encode_pipeline = Some(cull.encode);
+            self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
             self.bindless_tex_arg_encoder = bindless_tex_arg_encoder;
             self.bindless_sampler_args = new_sampler_args;
-            // Force a fresh ICB on the next frame so its argument-buffer encoding
-            // re-binds to the new encoder. Matches the `cull` swap in
-            // `reload_shaders`; the phase-2 ICB + status buffer rebuild alongside.
+            // Force fresh ICBs on the next frame so every argument buffer is
+            // re-encoded with the new encoder. Matches the `cull` swap in
+            // `reload_shaders`; the status buffers and phase-2 ICB rebuild
+            // alongside.
             self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
             self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
+            self.cull.shadow_icb = None;
+            self.cull.shadow_icb_arg_buffer = None;
+            self.cull.shadow_status = None;
+            self.cull.shadow_icb_capacity = 0;
         }
 
-        if let Some(ps) = new_instanced {
-            self.instanced.pipeline_state = Some(ps);
-        }
-        if let Some(ps) = new_skinned_main {
-            self.skinned.pipeline_state = Some(ps);
-        }
+        self.world_shader = Some(programs.clone());
         Ok(())
     }
 }

@@ -10,7 +10,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerAddressMode,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState, MTLTexture, MTLVertexDescriptor,
+    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState, MTLTexture,
 };
 
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
@@ -30,14 +30,13 @@ use crate::metal::particle::{
 };
 use crate::metal::post::{
     BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState,
-    build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_gbuffer_prepass_pipeline,
-    build_reflection_blur_pipeline, build_reflection_composite_pipeline,
-    build_rt_reflection_pipeline, build_ssao_pipeline, build_ssgi_composite_pipeline,
-    build_ssgi_gather_pipeline, build_ssr_pipeline, build_taa_pipeline, create_bloom_targets,
-    create_gbuffer_targets, create_ssao_targets, create_ssgi_targets, create_ssr_targets,
-    create_taa_targets,
+    build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
+    build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
+    build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline,
+    build_taa_pipeline, create_bloom_targets, create_gbuffer_targets, create_ssao_targets,
+    create_ssgi_targets, create_ssr_targets, create_taa_targets,
 };
-use crate::metal::slang_shaders::{self, SSAO_BLUR, SSAO_KERNEL};
+use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::texture::create_fallback_texture;
 use crate::metal::transient_pool::{TransientTexturePool, transient_slots};
 
@@ -68,7 +67,6 @@ pub(crate) struct EffectFlags {
     // Whether the velocity pre-pass + targets should be built. True when TAA is
     // on or temporal upscaling is on (the MetalFX scaler consumes motion vectors).
     pub needs_velocity: bool,
-    pub has_instanced: bool,
     pub hot_reload: bool,
 }
 
@@ -195,14 +193,10 @@ pub(crate) struct QualityEffectsBundle {
 }
 
 // Build the toggle-controlled effects subset (see [`QualityEffectsBundle`]). The
-// `gbuffer.skinned_pipeline` is left `None` here (as in the init path); the
-// caller builds the 80-byte skinned variant separately when the world has
-// skinned meshes (init via `upload_skinned`, the runtime rebuild re-attaches it).
-// The RT acceleration structure is also the caller's responsibility (it needs the
+// RT acceleration structure is the caller's responsibility (it needs the
 // resident geometry buffers); this builds only the RT resolve pipelines.
 pub(crate) fn build_quality_effects(
     alloc: &DeviceAllocator,
-    vert_desc: &MTLVertexDescriptor,
     dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
@@ -226,7 +220,6 @@ pub(crate) fn build_quality_effects(
     let EffectFlags {
         taa_enabled,
         needs_velocity,
-        has_instanced,
         hot_reload,
     } = flags;
     // TAA pipeline + ping-pong history buffers. Built only when TAA is on;
@@ -325,44 +318,19 @@ pub(crate) fn build_quality_effects(
             (None, None, None, None)
         };
 
-    // Unified G-buffer pre-pass (Metal): one pipeline per geometry kind + the
-    // shared targets, built when any consumer (SSR / SSGI / RT / SSAO / velocity)
-    // is on. The skinned variant is built by the caller.
-    let (gbuffer_targets, gbuffer_prepass_pipeline, gbuffer_instanced_pipeline) = if needs_gbuffer {
-        let inst = if has_instanced {
-            Some(build_gbuffer_prepass_pipeline(
-                device,
-                vert_desc,
-                &slang_shaders::GBUFFER_PREPASS_VERT_INSTANCED,
-                hot_reload,
-            )?)
-        } else {
-            None
-        };
+    // Unified G-buffer pre-pass (Metal): the shared targets and the one
+    // GPU-driven pipeline that fills them, built when any consumer (SSR / SSGI /
+    // RT / SSAO / velocity) is on. The pipeline is one engine-internal shader,
+    // independent of the world's fragment, so it builds the same in init and the
+    // runtime quality rebuild; the encode gates on the cull-produced object
+    // buffer, so a world with nothing in the cull records draws nothing here.
+    let (gbuffer_targets, gbuffer_bindless_pipeline) = if needs_gbuffer {
         (
             Some(create_gbuffer_targets(device, render_w, render_h)?),
-            Some(build_gbuffer_prepass_pipeline(
-                device,
-                vert_desc,
-                &slang_shaders::GBUFFER_PREPASS_VERT,
-                hot_reload,
-            )?),
-            inst,
+            Some(build_gbuffer_bindless_pipeline(device, hot_reload)?),
         )
     } else {
-        (None, None, None)
-    };
-
-    // GPU-driven bindless G-buffer pipeline: built whenever the
-    // G-buffer is, so the GPU-driven pre-pass engages on bindless worlds. It is
-    // one engine-internal shader (`gbuffer_prepass.metal`), independent of the
-    // world's fragment, so it builds the same in init and the runtime quality
-    // rebuild; the encode gates on the cull-produced object buffer, so a
-    // non-bindless / custom-shader world never reaches it.
-    let gbuffer_bindless_pipeline = if needs_gbuffer {
-        Some(build_gbuffer_bindless_pipeline(device, hot_reload)?)
-    } else {
-        None
+        (None, None)
     };
 
     // SSGI: the hemisphere-gather + depth-aware-blur composite pipelines and
@@ -392,10 +360,6 @@ pub(crate) fn build_quality_effects(
     };
     let gbuffer = GBufferState {
         targets: gbuffer_targets,
-        prepass_pipeline: gbuffer_prepass_pipeline,
-        instanced_pipeline: gbuffer_instanced_pipeline,
-        // The skinned variant is built by the caller (80-byte layout).
-        skinned_pipeline: None,
         bindless_pipeline: gbuffer_bindless_pipeline,
     };
     let ssgi = SsgiState {
@@ -484,7 +448,6 @@ pub(crate) fn build_quality_effects(
 
 pub(crate) fn build_effects(
     alloc: &DeviceAllocator,
-    vert_desc: &MTLVertexDescriptor,
     // False for a world with no 3D scene content: bloom pipelines are skipped
     // (the settings-gated features below are already trimmed by the
     // requirements derivation before they reach here).
@@ -513,9 +476,9 @@ pub(crate) fn build_effects(
     // The toggle-controlled subset (TAA, SSAO, SSR, SSGI, RT resolve pipelines,
     // auto-exposure, + the shared G-buffer pre-pass and the transient pool).
     // Shared with the runtime rebuild (`apply_quality_settings`) so init and a
-    // live toggle produce byte-identical resources. The skinned G-buffer
-    // pipeline + the RT acceleration structure are built below. Runs before the
-    // bloom chain, which takes its top mip from the pool this builds.
+    // live toggle produce byte-identical resources. The RT acceleration
+    // structure is built below. Runs before the bloom chain, which takes its top
+    // mip from the pool this builds.
     let QualityEffectsBundle {
         taa_pipeline_state,
         taa_targets,
@@ -532,7 +495,7 @@ pub(crate) fn build_effects(
         auto_exposure_output,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
-    } = build_quality_effects(alloc, vert_desc, dims, settings, flags)?;
+    } = build_quality_effects(alloc, dims, settings, flags)?;
 
     // Bloom chain + pipelines. Bloom samples whatever scene_color the post
     // stack hands it: that's at output (drawable) resolution when MetalFX

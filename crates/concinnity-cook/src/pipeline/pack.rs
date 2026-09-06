@@ -585,13 +585,10 @@ mod tests {
     use crate::resource_handles::{RegisteredType, ResourceKind};
 
     fn procedural_mesh_def() -> BlobAssetDef {
-        asset_api::create_asset_def(
-            &AssetRequest {
-                asset_type: "ProceduralMesh".to_string(),
-                args: Some(serde_json::json!({"generator": "box"})),
-            },
-            concinnity_core::platform::Platform::Metal,
-        )
+        asset_api::create_asset_def(&AssetRequest {
+            asset_type: "ProceduralMesh".to_string(),
+            args: Some(serde_json::json!({"generator": "box"})),
+        })
         .expect("ProceduralMesh def")
     }
 
@@ -853,13 +850,10 @@ mod tests {
         let assets = vec![wja("day", "Scene", serde_json::json!({}))];
         let mut named = vec![(
             "day".to_string(),
-            asset_api::create_asset_def(
-                &AssetRequest {
-                    asset_type: "Scene".to_string(),
-                    args: Some(serde_json::json!({})),
-                },
-                concinnity_core::platform::Platform::Metal,
-            )
+            asset_api::create_asset_def(&AssetRequest {
+                asset_type: "Scene".to_string(),
+                args: Some(serde_json::json!({})),
+            })
             .expect("Scene def"),
         )];
         let out = compile_and_pack_payloads(

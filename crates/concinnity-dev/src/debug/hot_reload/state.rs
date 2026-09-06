@@ -114,10 +114,10 @@ pub(crate) struct AssetHotReloadState {
     // live `world.jsonl`. No file watcher: the trigger is the same
     // `PENDING_WORLD` flag the Prop-diff path consumes.
     pub procedural_meshes: ProceduralMeshSourceMap,
-    // World-loaded `Shader` assets whose source files can be re-
-    // compiled from disk. The asset watcher recognises `.metal` / `.hlsl`
-    // / `.glsl` events against the parent directories of these entries and
-    // sets [`super::pending::set_pending_shader_stages`] (separate
+    // The world default `Shader`'s files, which can be recompiled from disk.
+    // The asset watcher recognises `.slang` events against the parent
+    // directories of these entries and sets
+    // [`super::pending::set_pending_shader_stages`] (separate
     // from the texture / mesh / LUT batch path so a shader save does not
     // also kick a 43-texture re-decode).
     pub shader_stages: ShaderStageSourceMap,

@@ -17,6 +17,7 @@
 //! `render_stats` has a default no-op impl so a backend with no draw-call /
 //! object counters need not override it; all three shipping backends do.
 
+use crate::components::ShaderPrograms;
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::profile::RenderStats;
@@ -27,7 +28,7 @@ use crate::gfx::rt_reflections::RtReflectionSettings;
 use crate::gfx::ssao::SsaoSettings;
 use crate::gfx::ssgi::SsgiSettings;
 use crate::gfx::ssr::SsrSettings;
-use crate::render::backend_init::{BackendInit, ShaderBytes, SwapchainConfig};
+use crate::render::backend_init::{BackendInit, SwapchainConfig, WorldShader};
 use crate::render::error::{RenderError, RenderResult};
 use crate::render::input::RenderInput;
 use crate::render::keymap::KeyMap;
@@ -421,16 +422,14 @@ pub trait RenderBackend: SceneControl + Send {
     /// if the index is out of range.
     fn retire_draw_object(&mut self, draw_idx: usize);
 
-    /// Skinning. `vert_bytes` and `shadow_bytes` are Metal-only payloads;
-    /// DX/VK ignore them.
+    /// Skinning. The skinned pipelines pair the world default Shader's
+    /// programs where the world declares one, which the backend kept from
+    /// init.
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        vert_bytes: &[u8],
-        frag_bytes: &[u8],
-        shadow_bytes: &[u8],
     ) -> RenderResult<()>;
     /// Push one skinned slot's joint matrices for this frame.
     fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
@@ -518,14 +517,12 @@ pub trait RenderBackend: SceneControl + Send {
         let _ = (vtx_offset, vtx_bytes, idx_offset, idx_bytes);
     }
 
-    /// Voxel-world chunk streaming. `texture_slot` and `normal_map_slot`
-    /// are ignored by Metal (it binds chunk textures per draw).
+    /// Voxel-world chunk streaming: grow the shared geometry buffers by the
+    /// chunk headroom. A chunk's material slots ride its own draw record.
     fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-        texture_slot: usize,
-        normal_map_slot: usize,
     ) -> RenderResult<()>;
     /// The destination draw slot comes from the engine's allocator, like
     /// `clone_static_draw_object`; the freed slot is likewise returned to it by
@@ -1061,33 +1058,16 @@ pub trait RenderBackend: SceneControl + Send {
         Err("remove_emitter: not implemented on this backend".to_string())
     }
 
-    /// Rebuild the live main / instanced / shadow render pipelines from
-    /// freshly compiled world-loaded shader stage bytes. Driven by asset
-    /// hot-reload (`cn debug` only) when one of the captured `Shader`
-    /// source files is saved or a debug-WS `reload-assets` command fires.
-    /// Each `Some(bytes)` replaces the matching live pipeline (and any
-    /// dependent state: bindless-texture argument encoder, cull pipeline,
-    /// instanced variant, shadow variant); `None` leaves the pipeline
-    /// untouched (e.g. a world without an instanced shader passes `None`
-    /// for the instanced slot). The backend should build every replacement
-    /// into a temporary first and only swap when every build succeeds;
-    /// mirrors the safety pattern in the Metal backend's `hot_reload` so a
+    /// Rebuild the live world-default pipelines (main, instanced, skinned)
+    /// from a freshly compiled Shader payload. Driven by asset hot-reload
+    /// (`cn debug` only) when one of the Shader's files is saved or a debug-WS
+    /// `reload-assets` command fires. The backend builds every replacement
+    /// into a temporary first and only swaps when every build succeeds, so a
     /// compile error never overwrites a live pipeline with a half-built
-    /// replacement. Default no-op (returns `Err`): backends without an
-    /// implementation leave the world-loaded shader reload logged + skipped
-    /// at the caller.
-    ///
-    /// Skinned-mesh variants are out of scope here: their pipelines depend
-    /// on the world's `SkinnedMesh`-injected library bytes that
-    /// [`Self::upload_skinned`] consumes and drops.
-    fn update_world_shader_pipelines(
-        &mut self,
-        vert_bytes: Option<&[u8]>,
-        frag_bytes: Option<&[u8]>,
-        shadow_bytes: Option<&[u8]>,
-        vert_instanced_bytes: Option<&[u8]>,
-    ) -> Result<(), String> {
-        let _ = (vert_bytes, frag_bytes, shadow_bytes, vert_instanced_bytes);
+    /// replacement. Default `Err`: a backend without an implementation leaves
+    /// the reload logged and skipped at the caller.
+    fn update_world_shader_pipelines(&mut self, programs: &ShaderPrograms) -> Result<(), String> {
+        let _ = programs;
         Err("update_world_shader_pipelines: not implemented on this backend".to_string())
     }
 
@@ -1101,7 +1081,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// Default no-op-with-Ok: a backend that renders every draw with the world
     /// default program has no per-bucket pipeline to build, and the bucket is
     /// resident as far as scene loading is concerned.
-    fn install_world_shader(&mut self, bucket: u32, shader: ShaderBytes<'_>) -> RenderResult<()> {
+    fn install_world_shader(&mut self, bucket: u32, shader: WorldShader<'_>) -> RenderResult<()> {
         let _ = (bucket, shader);
         Ok(())
     }
@@ -1180,9 +1160,6 @@ pub(crate) mod test_stub {
             _vertices: &[SkinnedVertex],
             _indices: &[u32],
             _draw_objects: Vec<SkinnedDrawObject>,
-            _vert_bytes: &[u8],
-            _frag_bytes: &[u8],
-            _shadow_bytes: &[u8],
         ) -> RenderResult<()> {
             Ok(())
         }
@@ -1213,8 +1190,6 @@ pub(crate) mod test_stub {
             &mut self,
             _chunk_vtx_bytes: usize,
             _chunk_idx_bytes: usize,
-            _texture_slot: usize,
-            _normal_map_slot: usize,
         ) -> RenderResult<()> {
             Ok(())
         }
@@ -1518,7 +1493,7 @@ mod tests {
         assert!(backend.remove_emitter(0).is_err());
         assert!(
             backend
-                .update_world_shader_pipelines(None, None, None, None)
+                .update_world_shader_pipelines(&ShaderPrograms::default())
                 .is_err()
         );
     }

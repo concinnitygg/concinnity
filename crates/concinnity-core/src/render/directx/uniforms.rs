@@ -11,8 +11,6 @@
 //! morph kernels, the raymarch SDF templates, the legacy per-draw main and
 //! velocity passes, and Metal's water.
 
-use crate::components::sdf_volume::SDF_PARAMS_LEN;
-
 /// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalised
 /// frustum planes, the camera position sharing its row with the object count, the
 /// previous frame's view-projection, the Hi-Z metadata (dims, mip count, enable
@@ -46,67 +44,17 @@ pub struct CullParams {
     pub _pad: [u32; 2],
 }
 
-/// The raymarch pass per-frame `RaymarchView` cbuffer (b0, 208 bytes; aligned to
-/// 256 for the D3D12 cbuffer). Mirrors the Metal `RaymarchView`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct RaymarchView {
-    /// View-projection matrix, column-major.
-    pub vp: [[f32; 4]; 4],
-    /// Inverse view-projection matrix, column-major.
-    pub inv_vp: [[f32; 4]; 4],
-    /// World-space camera position.
-    pub cam_pos: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad0: f32,
-    /// Render-target size in pixels.
-    pub viewport: [f32; 2],
-    /// Seconds since the world started.
-    pub time: f32,
-    /// IBL cubemap mip count; 0 when there is no IBL.
-    pub prefilter_mip_count: f32,
-    /// Rows of the rotation taking a world-space direction into the environment
-    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a volume's
-    /// image-based ambient turns with the sky. One `float4` per row.
-    pub sky_rot: [[f32; 4]; 3],
-}
-
-/// The per-volume `SdfVolumeUniforms` cbuffer (b1, 176 bytes; aligned to 256 in
-/// the cbuffer allocation).
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct RaymarchVolumeUniforms {
-    /// World-space centre.
-    pub centre: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad0: f32,
-    /// Half-extents from the centre, in world units.
-    pub extent: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad1: f32,
-    /// Cone-tracing footprint growth per unit of march distance.
-    pub cone_ratio: f32,
-    /// Furthest world distance the march travels.
-    pub max_distance: f32,
-    /// Ray-march step cap.
-    pub max_steps: i32,
-    /// Non-zero when the volume samples the shadow maps.
-    pub receive_shadows: i32,
-    /// The volume's authored SDF parameters.
-    pub params: [f32; SDF_PARAMS_LEN],
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
 
-    // CullParams must match the `CullParams` cbuffer (b0) in cull.hlsl: six
-    // frustum planes, cam_pos sharing its row with object_count, the previous
-    // view-projection, the Hi-Z metadata, then the bucket routing pair opening
-    // a fresh 16-byte row (208 B total).
+    // CullParams must match the `CullParams` root-constant block (b0) in
+    // cull.slang under DXIL_ABI: six frustum planes, cam_pos sharing its row
+    // with object_count, the previous view-projection, the Hi-Z metadata, then
+    // the bucket routing pair opening a fresh 16-byte row (208 B total).
     #[test]
-    fn cull_params_layout_matches_hlsl() {
+    fn cull_params_layout_matches_the_shader() {
         assert_eq!(size_of::<CullParams>(), 208);
         assert_eq!(offset_of!(CullParams, planes), 0);
         assert_eq!(offset_of!(CullParams, cam_pos), 96);
@@ -117,39 +65,5 @@ mod tests {
         assert_eq!(offset_of!(CullParams, hiz_enabled), 188);
         assert_eq!(offset_of!(CullParams, bucket_count), 192);
         assert_eq!(offset_of!(CullParams, bucket_stride), 196);
-    }
-
-    // RaymarchView must match the `RaymarchView` cbuffer (b0) in
-    // raymarch_helpers.hlsl: two column-major float4x4 then the packed
-    // cam_pos/pad/viewport/time/prefilter scalars, then the sky rows (208 B).
-    #[test]
-    fn raymarch_view_layout_matches_hlsl() {
-        assert_eq!(size_of::<RaymarchView>(), 208);
-        assert_eq!(offset_of!(RaymarchView, vp), 0);
-        assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
-        assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
-        assert_eq!(offset_of!(RaymarchView, _pad0), 140);
-        assert_eq!(offset_of!(RaymarchView, viewport), 144);
-        assert_eq!(offset_of!(RaymarchView, time), 152);
-        assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
-        assert_eq!(offset_of!(RaymarchView, sky_rot), 160);
-        assert_eq!(size_of::<RaymarchView>() % 16, 0);
-    }
-
-    // RaymarchVolumeUniforms must match the `SdfVolumeUniforms` cbuffer (b1):
-    // centre/pad, extent/pad, the four scalars, then 32 floats of params packed
-    // as 8 float4 rows (176 B total).
-    #[test]
-    fn raymarch_volume_uniforms_layout_matches_hlsl() {
-        assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, centre), 0);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, _pad0), 12);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, extent), 16);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, _pad1), 28);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, cone_ratio), 32);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_distance), 36);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_steps), 40);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, receive_shadows), 44);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, params), 48);
     }
 }

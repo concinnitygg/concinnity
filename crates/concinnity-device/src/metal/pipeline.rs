@@ -45,63 +45,29 @@ pub(super) fn ns_str(s: &str) -> Retained<NSString> {
 // off the same `name`, so an unregistered shader is never loaded from disk
 // either. Locked by `unknown_name_panics` /
 // `unknown_name_panics_even_with_hot_reload`.
-// The shared bindless per-object record, substituted into every pass that
-// strides the per-frame object buffer at its `{OBJECT_DATA}` marker. Sole MSL
-// declaration of `GpuObjectData`: the legacy per-draw main pass and the cull
-// kernel read the same buffer the single-source passes do, so a per-shader copy
-// is a silent layout-drift hazard. `newLibraryWithSource` resolves no include paths, hence
-// the marker; the build script's precompile substitutes the same fragment
-// before handing each shader to `xcrun metal`.
-const OBJECT_COMMON_MSL: &str = include_str!("shaders/object_common.msl");
-
-// Resolve the shared fragment the same disk-first way as its consumer, so a
-// hot-reload edit to the record reaches every pass that strides the buffer.
-fn object_common(hot_reload: bool) -> std::borrow::Cow<'static, str> {
-    if hot_reload {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/metal/shaders/object_common.msl"
-        );
-        match std::fs::read_to_string(path) {
-            Ok(s) => return std::borrow::Cow::Owned(s),
-            Err(e) => {
-                tracing::debug!("hot-reload: falling back to embedded object_common.msl ({e})");
-            }
-        }
-    }
-    std::borrow::Cow::Borrowed(OBJECT_COMMON_MSL)
-}
-
 pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'static, str> {
     let embedded: &'static str = match name {
-        "cull.metal" => include_str!("shaders/cull.metal"),
-        "main.metal" => include_str!("shaders/main.metal"),
+        "cull_encode.metal" => include_str!("shaders/cull_encode.metal"),
         _ => panic!(
             "shader_source: '{name}' is not a registered Metal shader. Add an \
              `include_str!(\"shaders/{name}\")` arm to shader_source in \
              metal/pipeline.rs -- every shipped shader must be registered."
         ),
     };
-    let src = if hot_reload {
+    if hot_reload {
         let path = format!("{}/src/metal/shaders/{}", env!("CARGO_MANIFEST_DIR"), name);
         match std::fs::read_to_string(&path) {
-            Ok(s) => std::borrow::Cow::Owned(s),
+            Ok(s) => return std::borrow::Cow::Owned(s),
             Err(e) => {
                 tracing::debug!(
                     "hot-reload: falling back to embedded source for {} ({})",
                     name,
                     e
                 );
-                std::borrow::Cow::Borrowed(embedded)
             }
         }
-    } else {
-        std::borrow::Cow::Borrowed(embedded)
-    };
-    if src.contains("{OBJECT_DATA}") {
-        return std::borrow::Cow::Owned(src.replace("{OBJECT_DATA}", &object_common(hot_reload)));
     }
-    src
+    std::borrow::Cow::Borrowed(embedded)
 }
 
 // Produce the MTLLibrary for a built-in renderer shader. The fast path loads
@@ -124,18 +90,25 @@ pub(super) fn shader_library(
         .map_err(|e| format!("{name}: shader compile error: {e:?}"))
 }
 
-// The library a main-pass stage renders with: a world-authored Shader supplies
-// its own compiled metallib, and an empty slice means the world declared none,
-// so the engine's own `main.metal` program runs instead.
-pub(super) fn stage_library(
+// The world Shader's library holding `entry`: the cook's MSL text, or a
+// compile of the current templates when it predates them, turned into a
+// library through the metallib cache.
+pub(super) fn world_library(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-    bytes: &[u8],
+    programs: &concinnity_core::components::ShaderPrograms,
+    entry: &str,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
-    if bytes.is_empty() {
-        return shader_library(device, hot_reload, "main.metal");
-    }
-    load_library(device, bytes)
+    let req = crate::surface_source::Request {
+        platform: concinnity_core::platform::Platform::Metal,
+        pool_size: concinnity_core::render::uniforms::BINDLESS_POOL_SIZE,
+        probe_count: concinnity_core::render::uniforms::MAX_PROBES,
+        hot_reload,
+    };
+    let msl = crate::surface_source::artifact(programs, entry, &req)?;
+    let msl = std::str::from_utf8(&msl)
+        .map_err(|e| format!("world shader {entry}: artifact is not MSL text: {e}"))?;
+    super::msl_cache::compiled_library(device, msl, &format!("world shader {entry}"))
 }
 
 // Load a MTLLibrary from raw .metallib bytes via a DispatchData.
@@ -260,12 +233,9 @@ mod shader_source_tests {
     use super::shader_source;
 
     #[test]
-    fn embedded_path_splices_object_data() {
-        // Both registered shaders carry the marker, so the embedded source is
-        // spliced rather than handed back verbatim.
-        let s = shader_source(false, "main.metal");
-        assert!(s.contains("vertex VertexOut vertex_main("));
-        assert!(!s.contains("{OBJECT_DATA}"));
+    fn embedded_path_serves_the_registered_source() {
+        let s = shader_source(false, "cull_encode.metal");
+        assert!(s.contains("kernel void cull_encode("));
     }
 
     #[test]
@@ -290,55 +260,8 @@ mod shader_source_tests {
     fn hot_reload_prefers_disk_when_present() {
         // The shader files live in this checkout, so the disk-load path
         // succeeds and produces the same content (or a newer edit).
-        let s = shader_source(true, "main.metal");
-        assert!(s.contains("vertex VertexOut vertex_main("));
-    }
-
-    #[test]
-    fn main_metal_reflection_cut_matches_canonical() {
-        // main.metal is precompiled to a metallib at build time, so it keeps
-        // its own `constant float REFL_RESOLVE_CUT` instead of the
-        // runtime-injected shared constant the resolve shaders use. Lock it to
-        // the canonical value so the forward double-count fade can never drift
-        // from the SSR / RT resolve gates. Expects a clean `= <value>;` decl.
-        let src = shader_source(false, "main.metal");
-        let decl = src
-            .lines()
-            .find(|l| l.contains("constant float REFL_RESOLVE_CUT"))
-            .expect("REFL_RESOLVE_CUT declaration in main.metal");
-        let value: f32 = decl
-            .split(';')
-            .next()
-            .and_then(|head| head.split('=').nth(1))
-            .map(str::trim)
-            .and_then(|s| s.parse().ok())
-            .expect("parse REFL_RESOLVE_CUT value from main.metal");
-        assert_eq!(
-            value,
-            concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT,
-            "main.metal REFL_RESOLVE_CUT must equal REFLECTION_ROUGHNESS_CUT"
-        );
-    }
-
-    // Every pass that strides the per-frame object buffer resolves its marker
-    // to the shared record, in both hot-reload modes -- the embedded fragment
-    // and the disk read must agree, since a `cn debug` session compiles from
-    // source while a shipped binary loads the build-time metallib.
-    #[test]
-    fn object_data_shaders_splice_the_shared_record() {
-        for name in ["main.metal", "cull.metal"] {
-            for hot_reload in [false, true] {
-                let src = shader_source(hot_reload, name);
-                assert!(
-                    src.contains("struct GpuObjectData"),
-                    "{name}: object record missing (hot_reload = {hot_reload})"
-                );
-                assert!(
-                    !src.contains("{OBJECT_DATA}"),
-                    "{name}: left the OBJECT_DATA marker (hot_reload = {hot_reload})"
-                );
-            }
-        }
+        let s = shader_source(true, "cull_encode.metal");
+        assert!(s.contains("kernel void cull_encode("));
     }
 
     #[test]
@@ -350,17 +273,10 @@ mod shader_source_tests {
         // caught the unregistered `gbuffer_prepass.metal` at test time instead
         // of as a baffling `<entry> not found in metallib` at init.
         //
-        // The raymarch SDF templates/helpers are deliberately excluded: they
-        // are not standalone libraries loaded by name but text fragments
-        // assembled with the user's `SdfVolume` source at runtime (see
-        // metal/raymarch.rs, which `include_str!`s them directly). They never
-        // pass through `shader_source`, so registering them would be wrong.
-        const ASSEMBLED_ELSEWHERE: &[&str] = &[
-            "raymarch_helpers.metal",
-            "raymarch_shadow.metal",
-            "raymarch_template.metal",
-            "raymarch_volumetric_template.metal",
-        ];
+        // A file spliced into another shader's text rather than loaded as a
+        // library of its own belongs here: it never passes through
+        // `shader_source`, so registering it would be wrong.
+        const ASSEMBLED_ELSEWHERE: &[&str] = &[];
 
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/metal/shaders");
         let mut checked = 0usize;

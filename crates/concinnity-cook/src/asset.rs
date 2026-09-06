@@ -66,16 +66,13 @@ pub(crate) trait BuildAsset: Component {
 
     // True when identical source bytes compile to a different payload per
     // backend, so the compile target is itself an input to the payload and
-    // belongs in the cache key. `Shader` sets this: the same file can be
-    // selected by two backends (`Platform::accepts_ext` accepts any
-    // unrecognised extension, and a `sources` map entry is taken without an
-    // extension check at all) and compiles to DXIL on one and SPIR-V on the
-    // other.
+    // belongs in the cache key. `Shader` and `SdfVolume` set this: one `.slang`
+    // file compiles to MSL text on one backend, DXIL on another and SPIR-V on
+    // the third.
     //
-    // Assets that transport their source verbatim leave this false, even when
-    // they select that source per backend: `SdfVolume` reads shader bytes
-    // straight through, so identical bytes yield an identical payload and two
-    // backends may correctly share one cache entry.
+    // Assets that transport their source verbatim leave this false: identical
+    // bytes yield an identical payload and two backends may correctly share one
+    // cache entry.
     const TARGET_DEPENDENT: bool = false;
 
     // The inputs this asset's `compile_payload` reads, relative to the payload

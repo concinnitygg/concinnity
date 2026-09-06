@@ -20,15 +20,14 @@ include = [
 
 [features]
 default = ["native"]
-native = ["concinnity-engine/native", "concinnity-shader/native"]
-metal = ["concinnity-engine/metal", "concinnity-shader/metal"]
-directx = ["concinnity-engine/directx", "concinnity-shader/directx"]
-vulkan = ["concinnity-engine/vulkan", "concinnity-shader/vulkan"]
+native = ["concinnity-engine/native"]
+metal = ["concinnity-engine/metal"]
+directx = ["concinnity-engine/directx"]
+vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]
 concinnity-engine = { workspace = true }
 concinnity-cook = { workspace = true }
-concinnity-shader = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 

@@ -3,8 +3,6 @@
 
 use std::path::Path;
 
-use concinnity_core::platform::Platform;
-
 use crate::asset_api::{self, AssetRequest};
 use crate::ecs::asset_id;
 
@@ -20,14 +18,10 @@ use super::errors_to_io;
 /// - per-type structural checks via `crate::check`
 ///
 /// Shader assets are not compiled here; use the validate_shader tool for that.
-///
-/// `platform` is the shader platform the world is cooked for; the shader-backed
-/// types are checked against it.
 pub fn validate_asset(
     asset_type: &str,
     name: &str,
     args: &serde_json::Value,
-    platform: Platform,
 ) -> Result<(), String> {
     // Single-asset validation has no surrounding world to intern against; the
     // resulting ids are throwaway. Reset so calls do not accumulate entries.
@@ -57,7 +51,7 @@ pub fn validate_asset(
     // A resource asset never builds a component def; validate it as a known type
     // with a structural check instead of routing through `create_asset_def`.
     if crate::registry::RegisteredType::parse(asset_type).is_some_and(|t| t.is_resource()) {
-        crate::check::check_asset(&type_norm, name, args, platform)?;
+        crate::check::check_asset(&type_norm, name, args)?;
         return Ok(());
     }
 
@@ -65,9 +59,9 @@ pub fn validate_asset(
         asset_type: asset_type.to_string(),
         args: Some(args.clone()),
     };
-    asset_api::create_asset_def(&req, platform).map_err(|e| format!("Asset '{}': {}", name, e))?;
+    asset_api::create_asset_def(&req).map_err(|e| format!("Asset '{}': {}", name, e))?;
 
-    crate::check::check_asset(&type_norm, name, args, platform)?;
+    crate::check::check_asset(&type_norm, name, args)?;
 
     Ok(())
 }
@@ -79,13 +73,8 @@ pub fn validate_asset(
 /// `assets_dir` is the asset search root the expansion passes resolve their
 /// sources and presets against. Every problem found is reported in a single
 /// newline-joined error.
-pub fn validate_world_jsonl(
-    content: &str,
-    assets_dir: Option<&Path>,
-    platform: Platform,
-) -> std::io::Result<()> {
-    let loaded =
-        crate::build_only::prepare_world(content, assets_dir, platform).map_err(errors_to_io)?;
+pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io::Result<()> {
+    let loaded = crate::build_only::prepare_world(content, assets_dir).map_err(errors_to_io)?;
 
     let mut errors: Vec<String> = Vec::new();
     for asset in &loaded.assets {
@@ -100,7 +89,7 @@ pub fn validate_world_jsonl(
             asset_type: asset.asset_type.clone(),
             args: Some(asset.args.clone()),
         };
-        if let Err(e) = asset_api::create_asset_def(&req, platform) {
+        if let Err(e) = asset_api::create_asset_def(&req) {
             errors.push(format!("Asset '{}': {}", asset.name, e));
         }
     }
@@ -139,8 +128,7 @@ mod tests {
 {"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}}
 {"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}
 "#;
-        validate_world_jsonl(world, None, Platform::Metal)
-            .expect("visual_novel-shaped world should validate");
+        validate_world_jsonl(world, None).expect("visual_novel-shaped world should validate");
     }
 
     #[test]
@@ -155,7 +143,7 @@ mod tests {
             "CharacterSchema",
             "CharacterModel",
         ] {
-            validate_asset(ty, "x", &serde_json::json!({}), Platform::Metal)
+            validate_asset(ty, "x", &serde_json::json!({}))
                 .unwrap_or_else(|e| panic!("{ty} should validate: {e}"));
         }
     }
@@ -164,20 +152,10 @@ mod tests {
     // through the structural check alone rather than `create_asset_def`.
     #[test]
     fn validate_asset_routes_resource_only_types_past_the_component_registry() {
-        validate_asset(
-            "AudioClip",
-            "clip",
-            &serde_json::json!({"source": "a.wav"}),
-            Platform::Metal,
-        )
-        .expect("a source-backed AudioClip validates");
-        let err = validate_asset(
-            "Texture",
-            "tex",
-            &serde_json::json!({"generator": "nope"}),
-            Platform::Metal,
-        )
-        .expect_err("an unknown texture generator is rejected");
+        validate_asset("AudioClip", "clip", &serde_json::json!({"source": "a.wav"}))
+            .expect("a source-backed AudioClip validates");
+        let err = validate_asset("Texture", "tex", &serde_json::json!({"generator": "nope"}))
+            .expect_err("an unknown texture generator is rejected");
         assert!(err.contains("nope"), "got: {err}");
     }
 
@@ -185,23 +163,17 @@ mod tests {
     // structural check, and a clean asset returns Ok.
     #[test]
     fn validate_asset_runs_the_structural_check_after_type_resolution() {
-        validate_asset("Scene", "day", &serde_json::json!({}), Platform::Metal)
-            .expect("a Scene validates");
+        validate_asset("Scene", "day", &serde_json::json!({})).expect("a Scene validates");
         // A Prop resolves as a type but has no mesh source to render.
-        let err = validate_asset(
-            "Prop",
-            "empty_prop",
-            &serde_json::json!({}),
-            Platform::Metal,
-        )
-        .expect_err("a source-less Prop is rejected");
+        let err = validate_asset("Prop", "empty_prop", &serde_json::json!({}))
+            .expect_err("a source-less Prop is rejected");
         assert!(err.contains("empty_prop"), "got: {err}");
     }
 
     #[test]
     fn validate_asset_unknown_type_mentions_the_asset_name() {
-        let err = validate_asset("Bogus", "my_thing", &serde_json::json!({}), Platform::Metal)
-            .expect_err("unknown type");
+        let err =
+            validate_asset("Bogus", "my_thing", &serde_json::json!({})).expect_err("unknown type");
         assert!(err.contains("my_thing"), "got: {err}");
     }
 
@@ -212,7 +184,6 @@ mod tests {
             "ProceduralMesh",
             "bad_mesh",
             &serde_json::json!({"generator": 5}),
-            Platform::Metal,
         )
         .expect_err("bad args");
         assert!(err.contains("bad_mesh"), "got: {err}");
@@ -228,7 +199,7 @@ mod tests {
             r#"{"name":"clip","type":"AudioClip","args":{"source":"a.wav"}}"#,
             "\n",
         );
-        validate_world_jsonl(world, None, Platform::Metal).expect("a resolvable world validates");
+        validate_world_jsonl(world, None).expect("a resolvable world validates");
 
         // Args of the wrong shape survive the structural world checks and are
         // rejected when the def is built.
@@ -238,8 +209,7 @@ mod tests {
             r#"{"name":"t2","type":"PointLight","args":{"intensity":"later"}}"#,
             "\n",
         );
-        let err = validate_world_jsonl(bad, None, Platform::Metal)
-            .expect_err("mistyped args do not resolve");
+        let err = validate_world_jsonl(bad, None).expect_err("mistyped args do not resolve");
         let msg = err.to_string();
         assert!(msg.contains("Asset 't1'"), "got: {msg}");
         assert!(msg.contains("Asset 't2'"), "got: {msg}");

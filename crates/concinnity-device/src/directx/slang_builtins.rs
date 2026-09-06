@@ -22,7 +22,7 @@ pub(crate) trait SlangCompile {
 impl SlangCompile for SlangProgram {
     // Assemble the exact source text this program compiles.
     fn source(&self, hot_reload: bool) -> String {
-        crate::slang_source::assemble(hot_reload, self.file, self.defines)
+        crate::slang_source::assemble(hot_reload, self.file, self.defines, &[])
     }
 
     fn target(&self) -> slang::SlangTarget {
@@ -155,9 +155,8 @@ mod tests {
     // The pre-pass rasterises the same visible set the main pass does, sky
     // shell included, and the shell's corners fall outside the far plane, so
     // an unpinned sky vert clips and the G-buffer loses coverage the main pass
-    // has. Two entries can carry skybox geometry -- the per-draw static one and
-    // the GPU-driven one -- and both must call the pin. The instanced and
-    // skinned entries are excluded: neither ever carries skybox geometry.
+    // has. The bindless vertex entry is the only one that carries skybox
+    // geometry, so the two matches are the pin's definition and its one call.
     #[test]
     fn the_prepass_pins_sky_to_the_far_plane() {
         assert!(concinnity_core::render::shaders::GBUFFER_PREPASS.contains("color.b > 1.5"));
@@ -168,7 +167,7 @@ mod tests {
             concinnity_core::render::shaders::GBUFFER_PREPASS
                 .matches("gb_sky_pin(")
                 .count(),
-            3
+            2
         );
     }
 
@@ -230,8 +229,8 @@ mod tests {
         );
         for (name, src) in [
             (
-                "main_bindless.slang",
-                concinnity_core::render::shaders::MAIN_BINDLESS,
+                "main_shading.slang",
+                concinnity_core::render::shaders::MAIN_SHADING,
             ),
             ("ssr.slang", concinnity_core::render::shaders::SSR),
             (
@@ -258,7 +257,7 @@ mod tests {
         use crate::gfx::render_types::{CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER};
         for src in [
             concinnity_core::render::shaders::LIGHT_CULL,
-            concinnity_core::render::shaders::MAIN_BINDLESS,
+            concinnity_core::render::shaders::MAIN_SHADING,
         ] {
             assert!(src.contains(&format!(
                 "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
@@ -272,13 +271,14 @@ mod tests {
     }
 
     // The sky shell's half-extent tracks the camera far plane, so its corners
-    // always fall outside it: the bindless vertex path must pin sky verts to the
-    // far plane or those corners clip and the clear colour shows through.
+    // always fall outside it: every vertex path must pin sky verts to the far
+    // plane or those corners clip and the clear colour shows through. One
+    // `project_vertex` serves the GPU-driven and the per-draw entries alike, so
+    // one check covers both.
     #[test]
-    fn the_bindless_vertex_path_pins_sky_to_the_far_plane() {
-        assert!(concinnity_core::render::shaders::MAIN_BINDLESS.contains("v.color.b > 1.5"));
-        assert!(
-            concinnity_core::render::shaders::MAIN_BINDLESS.contains("o.position.z = o.position.w")
-        );
+    fn the_vertex_path_pins_sky_to_the_far_plane() {
+        let src = concinnity_core::render::shaders::MAIN_SHADING;
+        assert!(src.contains("color.b > 1.5"));
+        assert!(src.contains("o.position.z = o.position.w"));
     }
 }

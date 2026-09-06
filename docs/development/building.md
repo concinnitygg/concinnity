@@ -95,7 +95,6 @@ needed for an SDK installed somewhere `vendor.py` did not put it.
 | `CN_XESS_SDK`       | build       | `vendor/xess-*`                                                                     | Intel XeSS                                                                                                       |
 | `CN_STREAMLINE_SDK` | build       | `vendor/streamline-*`                                                               | NVIDIA Streamline, for DLSS                                                                                      |
 | `CN_DXC_SDK`        | build       | the Windows SDK's `bin`, under `%ProgramFiles(x86)%`                                | A standalone DirectX Shader Compiler, over the Windows SDK's                                                     |
-| `SHADERC_LIB_DIR`   | build       | none                                                                                | A prebuilt `shaderc`, skipping its from-source build (read by `shaderc-sys`, not by this workspace)              |
 
 A vendored SDK needs no variable set. There is no third fallback to a stock
 install path: these unpack wherever their user puts them, so any hardcoded
@@ -121,7 +120,7 @@ launch.
 | `CN_ENABLE_FFX_FSR3`    | on      | No FSR 3; upscaling falls back to native resolution |
 | `CN_ENABLE_XESS`        | on      | No XeSS                                             |
 | `CN_ENABLE_DLSS`        | on      | No DLSS                                             |
-| `CN_ENABLE_DXC`         | on      | DXIL compiles through FXC's shader models only      |
+| `CN_ENABLE_DXC`         | on      | No bundled DXC; hardware ray tracing needs one on PATH |
 | `CN_ENABLE_AGILITY_SDK` | **off** | Not applicable; this one is opt-_in_, see below     |
 
 The three upscalers are loaded with `LoadLibrary` at runtime and degrade to a
@@ -152,9 +151,9 @@ below.
    come from the Xcode SDK. The Command Line Tools alone are not sufficient.
 
 2. Install the **Metal toolchain**. Since Xcode 16 it ships as a separate,
-   downloadable component rather than being bundled. The asset compiler invokes
-   `xcrun metal` / `xcrun metallib` to compile shaders at build time, so this is
-   required:
+   downloadable component rather than being bundled. The device build script
+   invokes `xcrun metal` / `xcrun metallib` to precompile the engine's shaders,
+   so this is required:
 
    ```sh
    xcodebuild -downloadComponent MetalToolchain
@@ -198,9 +197,8 @@ build them). In addition:
    vulkaninfo --summary
    ```
 
-2. Building `shaderc` from source (which compiles GLSL to SPIR-V at runtime)
-   needs **CMake**, **Python 3**, and **Git** on `PATH`. The first build takes a
-   few minutes; the result is cached in `target/`.
+2. Every shader compiles through `slangc`, resolved from `vendor/` (see
+   `scripts/vendor.py`) or the Vulkan SDK; no other shader compiler is built.
 
    ```sh
    brew install cmake python git
@@ -246,9 +244,9 @@ DirectX 12 is the default backend on Windows.
    through Visual Studio 2022 (any edition) or the standalone
    [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/),
    selecting the **Desktop development with C++** workload. This provides the MSVC
-   linker plus the Windows SDK, which supplies the HLSL shader compilers
-   (`FXC` and `DXC`). The build script locates `dxcompiler.dll` / `dxil.dll` in
-   the Windows SDK automatically.
+   linker plus the Windows SDK, which supplies the DirectX Shader Compiler
+   (`DXC`) that `slangc` hands its DXIL to. The build script locates
+   `dxcompiler.dll` / `dxil.dll` in the Windows SDK automatically.
 
 ### Build
 
@@ -321,18 +319,8 @@ In addition to the [DirectX prerequisites](#windows-directx-12) above (the MSVC
 toolchain is still required):
 
 1. Install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) from LunarG. This
-   provides the Vulkan loader and validation layers, plus the prebuilt `shaderc`
-   library used to compile GLSL to SPIR-V.
-
-2. Point `shaderc` at the SDK's prebuilt library so it does not have to build from
-   source:
-
-   ```powershell
-   $env:SHADERC_LIB_DIR = "$env:VULKAN_SDK\Lib"
-   ```
-
-   If `SHADERC_LIB_DIR` is unset, `shaderc` is compiled from source instead,
-   which additionally requires **CMake**, **Python 3**, and **Git** on `PATH`.
+   provides the Vulkan loader and validation layers. Shaders compile through
+   the vendored `slangc`, or the SDK's when none is vendored.
 
 Windowing and input use the native Win32 window (shared with the DirectX
 backend), so no windowing-library install or runtime DLL is involved.
@@ -400,11 +388,8 @@ Ubuntu; translate them to your distribution's equivalents as needed.
      libxcursor-dev libxi-dev libudev-dev libdbus-1-dev
    ```
 
-   - `build-essential`, `cmake`, `git`, `python3` — build `shaderc` from source
-     (and GLFW, when no prebuilt library is found). `shaderc` is always built
-     from source and linked statically, so the binaries carry no
-     `libshaderc_shared.so` dependency. The first build takes a few minutes; the
-     result is cached in `target/`.
+   - `build-essential`, `cmake`, `git`, `python3` — build GLFW from source when
+     no prebuilt library is found.
    - `libssl-dev` — TLS for the networking client.
    - `libasound2-dev` — ALSA, used by the audio backend.
    - `libglfw3` / `libglfw3-dev` and the `libx*` packages — windowing and input

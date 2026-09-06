@@ -120,13 +120,7 @@ impl VkContext {
                     height: self.render_extent.height,
                     frames: self.frames_in_flight,
                 },
-                super::post::gbuffer::GbufferSsboLayouts {
-                    instance: self.instanced.set_layout.as_ref().map(|l| l.handle()),
-                    // Skinned variant is built lazily by `upload_skinned`, as at init.
-                    skinned: None,
-                },
                 self.draw.objects.len(),
-                self.hot_reload.enabled,
                 &pooled,
             )?;
             self.gbuffer = Some(gb);
@@ -430,9 +424,8 @@ impl VkContext {
         let rough_views = gb.roughness_views();
         let (geom_buffer, geom_size) = accel.geom_table();
         // The textured hit variant indexes the bindless pool, so it compiles
-        // against the length the pool set layout was built with; 0 when the
-        // legacy per-draw path is active (no bindless layout, so the textured
-        // variant is not built).
+        // against the length the pool set layout was built with; 0 when there
+        // is no bindless layout, in which case the variant is not built.
         let bindless_pool_size = self.cull.bindless_pool_size;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuild {

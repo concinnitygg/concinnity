@@ -290,16 +290,11 @@ pub(in crate::directx) struct CompositeResolution {
     pub height: u32,
 }
 
-// Camera + viewport state for the bindless main pass.
+// Render-target dimensions of the main pass, in pixels.
 #[derive(Clone, Copy)]
-pub(in crate::directx) struct MainPassCamera<'a> {
-    // Render-target dimensions in pixels.
+pub(in crate::directx) struct MainPassExtent {
     pub width: u32,
     pub height: u32,
-    // Camera frustum for per-cluster culling and LOD selection.
-    pub frustum: &'a crate::gfx::frustum::Frustum,
-    // Camera world position.
-    pub cam_pos: [f32; 3],
 }
 
 // GPU virtual addresses of this frame's view / light / shadow constant buffers.
@@ -399,10 +394,6 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Camera far-plane in view units. Consumed by `Upscale` (FSR3
     // dispatch's `cameraFar`).
     pub far: f32,
-    // BVH-culled visible-object indices (sorted, with `draw.always`
-    // appended). Consumed by Main's bindless + legacy + instanced
-    // sub-passes.
-    pub visible: &'a [u32],
 }
 
 impl DxContext {
@@ -854,8 +845,7 @@ impl DxContext {
         super::raymarch::RaymarchView {
             vp: params.cur_vp,
             inv_vp,
-            cam_pos: params.cam_pos,
-            _pad0: 0.0,
+            cam_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
             viewport: [params.width as f32, params.height as f32],
             time: params.elapsed,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
@@ -977,11 +967,9 @@ impl DxContext {
                 self.encode_main_pass(
                     cmd,
                     params.frame_idx,
-                    MainPassCamera {
+                    MainPassExtent {
                         width: params.width,
                         height: params.height,
-                        frustum: params.frustum,
-                        cam_pos: params.cam_pos,
                     },
                     FrameGpuBuffers {
                         view_gva: params.view_gva,
@@ -989,7 +977,6 @@ impl DxContext {
                         local_lights_gva: params.local_lights_gva,
                         shadow_ubo_gva: params.shadow_ubo_gva,
                     },
-                    params.visible,
                     params.world_hidden,
                 );
             }
@@ -1168,10 +1155,7 @@ impl DxContext {
                     crate::directx::post::gbuffer::GbufferPrepassView {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
-                        frustum: params.frustum,
-                        cam_pos: params.cam_pos,
                     },
-                    params.visible,
                     self.taa.is_some(),
                 );
             }

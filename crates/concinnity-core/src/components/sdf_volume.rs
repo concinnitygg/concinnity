@@ -8,7 +8,6 @@
 use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
 use crate::ecs::asset_id::AssetId;
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 
 /// Per-volume parameter slots packed into a single fixed-size uniform
@@ -23,10 +22,9 @@ pub const SDF_PARAMS_LEN: usize = 32;
 /// the box, composites correctly with the surrounding scene through the depth
 /// buffer, and shades hits with the engine's lighting helpers.
 ///
-/// The fragment shader is selected per backend: a `fragment_shaders` map keyed
-/// by `"metal"` / `"hlsl"` / `"glsl"` lets one volume target multiple backends,
-/// and the build only requires the entry for the backend it is building for. A
-/// single `fragment_shader` path is the fallback when no map entry matches.
+/// The distance field is one `.slang` file for every backend. The build
+/// compiles it, so a field that does not compile fails `cn build` rather than
+/// the renderer, and a shipped player needs no shader compiler of its own.
 ///
 /// ```rust
 /// # use concinnity_core::components::SdfVolume;
@@ -50,19 +48,11 @@ pub struct SdfVolume {
     /// XYZ half-widths of the bounding box. The raymarch is clipped to the box,
     /// so the SDF only has to be well-defined inside this region.
     pub extent: [f32; 3],
-    /// Single-platform fragment shader source path (e.g.
-    /// `"shaders/chrome_blob.metal"`), resolved relative to the project's
-    /// `assets/` at build time. Used when `fragment_shaders` has no entry for
-    /// the building backend; the file extension must match the backend
-    /// (`.metal` / `.hlsl`). The file defines the SDF's `map` and `shade`
-    /// functions.
+    /// Distance-field source path (e.g. `"shaders/chrome_blob.slang"`),
+    /// resolved relative to the project's `assets/` at build time. The file
+    /// defines `map` and `shade`, or `sampleVolume` for a volumetric volume.
     #[serde(default)]
     pub fragment_shader: String,
-    /// Per-backend fragment shader source paths keyed by `"metal"`, `"hlsl"`,
-    /// or `"glsl"`. Takes priority over `fragment_shader`, letting one volume
-    /// target multiple backends from a single declaration.
-    #[serde(default)]
-    pub fragment_shaders: Option<BTreeMap<String, String>>,
     /// Worst-case gradient of the SDF, used to size the cone-march step. `1.0`
     /// is correct for any well-formed SDF; higher values shorten the step but
     /// stay safe. Must be > 0.
@@ -90,8 +80,8 @@ pub struct SdfVolume {
     pub volumetric: bool,
     /// When false the volume is skipped each frame.
     pub visible: bool,
-    /// Injected at load time from the blob def. Carries the user
-    /// shader source bytes packed at build time.
+    /// Injected at load time from the blob def. Carries the compiled distance
+    /// field the build produced.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
 }
@@ -103,7 +93,6 @@ impl Default for SdfVolume {
             centre: [0.0, 0.0, 0.0],
             extent: [1.0, 1.0, 1.0],
             fragment_shader: String::new(),
-            fragment_shaders: None,
             max_gradient: 1.0,
             max_steps: 64,
             max_distance: 30.0,
@@ -176,41 +165,32 @@ mod tests {
     }
 
     #[test]
-    fn per_backend_shader_sources_parse_and_round_trip_through_postcard() {
+    fn an_authored_volume_parses_and_round_trips_through_postcard() {
         let v: SdfVolume = serde_json::from_str(
             r#"{"centre":[0,2,0],"extent":[3,3,3],"max_gradient":2.0,
-                "fragment_shaders":{"metal":"blob.metal","hlsl":"blob.hlsl"},
+                "fragment_shader":"shaders/blob.slang",
                 "cast_shadows":true,"visible":false}"#,
         )
         .unwrap();
         assert_eq!(v.cone_ratio(), 0.5);
         assert!(v.cast_shadows);
         assert!(!v.visible);
-        let per_backend = v.fragment_shaders.as_ref().expect("per-backend sources");
-        assert_eq!(per_backend["metal"], "blob.metal");
-        assert_eq!(per_backend["hlsl"], "blob.hlsl");
-        // The single-source field stays empty when the map is used.
-        assert!(v.fragment_shader.is_empty());
+        assert_eq!(v.fragment_shader, "shaders/blob.slang".to_string());
 
         let bytes = postcard::to_allocvec(&v).unwrap();
         let back: SdfVolume = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.extent, [3.0, 3.0, 3.0]);
-        assert_eq!(
-            back.fragment_shaders.expect("per-backend sources")["metal"],
-            "blob.metal"
-        );
+        assert_eq!(back.fragment_shader, "shaders/blob.slang".to_string());
         // Identity and payload location are injected at load, never authored.
         assert_eq!(back.asset_id, AssetId::default());
         assert!(back.locator.is_none());
     }
 
     #[test]
-    fn a_single_source_volume_leaves_the_per_backend_map_absent() {
-        let v: SdfVolume = serde_json::from_str(r#"{"fragment_shader":"blob.metal"}"#).unwrap();
-        assert_eq!(v.fragment_shader, "blob.metal".to_string());
-        assert!(v.fragment_shaders.is_none());
-        // `params` is a fixed-width uniform block, so a short array is a length
-        // mismatch rather than a partial fill.
+    fn params_is_a_fixed_width_block_rather_than_a_partial_fill() {
+        let v: SdfVolume = serde_json::from_str(r#"{"fragment_shader":"blob.slang"}"#).unwrap();
+        assert_eq!(v.fragment_shader, "blob.slang".to_string());
+        // A short array is a length mismatch, not a partial fill.
         assert!(serde_json::from_str::<SdfVolume>(r#"{"params":[1.5]}"#).is_err());
     }
 }

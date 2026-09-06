@@ -361,16 +361,13 @@ impl StreamingState {
         };
         let resident = if want_resident {
             match self.shader_warmup.as_ref().map(|w| w.load(bucket)) {
-                Some(Ok(stages)) => {
+                Some(Ok(programs)) => {
                     // The payload is in hand; the recorded install is what
                     // ends the deferral. Pipeline creation is device work, so
                     // it runs (and is timed) at replay beside the draw.
                     ops.record(move |backend| {
-                        let shader = crate::gfx::backend_init::ShaderBytes {
-                            vert: &stages.vert,
-                            frag: &stages.frag,
-                            shadow: &[],
-                            vert_instanced: &stages.vert_instanced,
+                        let shader = crate::gfx::backend_init::WorldShader {
+                            programs: Some(&programs),
                             deferred: false,
                         };
                         let started = std::time::Instant::now();

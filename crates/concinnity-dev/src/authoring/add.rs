@@ -422,7 +422,7 @@ fn validated_entry(
         asset_type: asset_type.to_string(),
         args: Some(args.clone()),
     };
-    create_asset_def(&req, crate::cook_platform())
+    create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let resolved_args = normalized_args_value(asset_type, &args);
 
@@ -450,8 +450,7 @@ fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_js
             base.insert(k.clone(), v.clone());
         }
     }
-    ct.normalized_args(&merged, crate::cook_platform())
-        .unwrap_or_else(|_| empty())
+    ct.normalized_args(&merged).unwrap_or_else(|_| empty())
 }
 
 // Build an entry for a build-time (BuildOnly) import asset that expands from
@@ -492,7 +491,7 @@ pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
     ("Environment maps", &["hdr"]),
     ("Audio", &["ogg", "wav", "mp3", "flac"]),
     ("Fonts", &["ttf", "otf"]),
-    ("Shaders", &["vert", "frag", "glsl", "metal", "wgsl"]),
+    ("Shaders", &["slang"]),
     ("Models & data", &["obj", "mtl", "json", "gguf"]),
 ];
 
@@ -527,34 +526,11 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     }
 
     match ext.as_str() {
-        // Dedicated-extension GLSL shaders: a Shader needs both stages, so
-        // the file is paired with its sibling stage file.
-        "vert" => {
-            let frag = sibling_path(path, "frag")?;
-            shader_pair_entry(&stem, path_str, &frag)
-        }
-        "frag" => {
-            let vert = sibling_path(path, "vert")?;
-            shader_pair_entry(&stem, &vert, path_str)
-        }
-
-        // GLSL: infer the stage from the filename stem and pair with the
-        // counterpart file (foo_vert.glsl <-> foo_frag.glsl).
-        "glsl" => {
-            let (vert, frag, pair_stem) = glsl_pair(path, path_str, &stem)?;
-            shader_pair_entry(&pair_stem, &vert, &frag)
-        }
-
-        // Metal: parse source to detect which stages are present
-        "metal" => {
+        // Slang: a distance field (defines `map`) becomes an SdfVolume, any
+        // other file a Shader whose surface hook it defines.
+        "slang" => {
             let source = read_source_file(path_str)?;
-            shader_entries_from_stages(path_str, &stem, "metal", &detect_metal_stages(&source))
-        }
-
-        // WGSL: parse source to detect which stages are present
-        "wgsl" => {
-            let source = read_source_file(path_str)?;
-            shader_entries_from_stages(path_str, &stem, "wgsl", &detect_wgsl_stages(&source))
+            slang_entry(&stem, path_str, &source)
         }
 
         // Fonts: stem only, no extension suffix needed, font names won't conflict with shaders
@@ -671,158 +647,35 @@ fn environment_map_entry(stem: &str, path_str: &str) -> std::io::Result<serde_js
     )
 }
 
-// Build one Shader entry from a source file that must carry both stages.
-// Named "{stem}_shader", with both stages reading the same source file.
-fn shader_entries_from_stages(
+// One entry from a `.slang` file: an SdfVolume named "{stem}_volume" when the
+// file defines a distance field, else a fragment-only Shader named
+// "{stem}_shader". A Shader's optional vertex file is declared by hand.
+fn slang_entry(
+    stem: &str,
     path_str: &str,
-    stem: &str,
-    ext: &str,
-    stages: &[&str],
+    source: &str,
 ) -> std::io::Result<Vec<serde_json::Value>> {
-    if !(stages.contains(&"vertex") && stages.contains(&"fragment")) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "a Shader needs both a vertex and a fragment stage, but the .{ext} \
-                 source declares only {stages:?}. Add the missing stage function, or \
-                 declare a Shader entry in world.jsonl with per-stage sources"
-            ),
-        ));
+    if defines_distance_field(source) {
+        return Ok(vec![validated_entry(
+            &format!("{stem}_volume"),
+            "SdfVolume",
+            serde_json::json!({ "fragment_shader": path_str }),
+        )?]);
     }
-    shader_pair_entry(stem, path_str, path_str)
-}
-
-// One Shader entry named "{stem}_shader" from a vertex + fragment source pair
-// (the two paths are the same file for multi-stage sources).
-fn shader_pair_entry(
-    stem: &str,
-    vert_path: &str,
-    frag_path: &str,
-) -> std::io::Result<Vec<serde_json::Value>> {
     Ok(vec![validated_entry(
         &format!("{stem}_shader"),
         "Shader",
-        serde_json::json!({
-            "vertex": { "source": vert_path },
-            "fragment": { "source": frag_path },
-        }),
+        serde_json::json!({ "fragment": path_str }),
     )?])
 }
 
-// The sibling stage file next to a dedicated-extension GLSL shader
-// (x.vert <-> x.frag). Errors when the counterpart is missing: half a shader
-// program cannot render.
-fn sibling_path(path: &std::path::Path, sibling_ext: &str) -> std::io::Result<String> {
-    let sibling = path.with_extension(sibling_ext);
-    if !sibling.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!(
-                "a Shader needs both stages: expected the {} stage next to {} \
-                 (looked for {})",
-                if sibling_ext == "vert" {
-                    "vertex"
-                } else {
-                    "fragment"
-                },
-                path.display(),
-                sibling.display(),
-            ),
-        ));
-    }
-    Ok(sibling.to_string_lossy().into_owned())
-}
-
-// Pair a .glsl file with its counterpart stage by swapping the stage marker in
-// the filename stem (foo_vert.glsl <-> foo_frag.glsl). Returns (vertex,
-// fragment) source paths plus the marker-stripped stem, so adding either file
-// of the pair produces the same Shader entry name.
-fn glsl_pair(
-    path: &std::path::Path,
-    path_str: &str,
-    stem: &str,
-) -> std::io::Result<(String, String, String)> {
-    let (this_marker, other_marker) = if stem.contains("fragment") {
-        ("fragment", "vertex")
-    } else if stem.contains("frag") {
-        ("frag", "vert")
-    } else if stem.contains("vertex") {
-        ("vertex", "fragment")
-    } else if stem.contains("vert") {
-        ("vert", "frag")
-    } else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "cannot infer the shader stage of {path_str}: name the files with \
-                 vert/frag markers (foo_vert.glsl + foo_frag.glsl), or declare a \
-                 Shader entry in world.jsonl with per-stage sources"
-            ),
-        ));
-    };
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(path_str);
-    let counterpart = path.with_file_name(file_name.replace(this_marker, other_marker));
-    if !counterpart.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!(
-                "a Shader needs both stages: expected the {other_marker} counterpart \
-                 of {path_str} (looked for {})",
-                counterpart.display()
-            ),
-        ));
-    }
-    let counterpart = counterpart.to_string_lossy().into_owned();
-    let this = path_str.to_string();
-    let pair_stem = stem
-        .replace(this_marker, "")
-        .trim_matches('_')
-        .replace("__", "_");
-    let (vert, frag) = if this_marker.starts_with('v') {
-        (this, counterpart)
-    } else {
-        (counterpart, this)
-    };
-    Ok((vert, frag, pair_stem))
-}
-
-// Detect Metal pipeline stages from source text.
-// Metal uses `vertex` / `fragment` as function-qualifier keywords at the start of declarations.
-// Returns a non-empty list; defaults to ["vertex"] when no qualifiers are found.
-pub(crate) fn detect_metal_stages(source: &str) -> Vec<&'static str> {
-    let has_vertex = source.lines().any(|l| {
+// Whether a `.slang` file is an SdfVolume's distance field: it defines `map`,
+// which a surface Shader never does.
+pub(crate) fn defines_distance_field(source: &str) -> bool {
+    source.lines().any(|l| {
         let t = l.trim_start();
-        t.starts_with("vertex ") || t.starts_with("vertex\t")
-    });
-    let has_fragment = source.lines().any(|l| {
-        let t = l.trim_start();
-        t.starts_with("fragment ") || t.starts_with("fragment\t")
-    });
-    stages_from_flags(has_vertex, has_fragment)
-}
-
-// Detect WGSL pipeline stages from source text.
-// WGSL uses `@vertex` / `@fragment` attribute decorators.
-// Returns a non-empty list; defaults to ["vertex"] when no attributes are found.
-pub(crate) fn detect_wgsl_stages(source: &str) -> Vec<&'static str> {
-    stages_from_flags(source.contains("@vertex"), source.contains("@fragment"))
-}
-
-fn stages_from_flags(has_vertex: bool, has_fragment: bool) -> Vec<&'static str> {
-    let mut stages = Vec::new();
-    if has_vertex {
-        stages.push("vertex");
-    }
-    if has_fragment {
-        stages.push("fragment");
-    }
-    if stages.is_empty() {
-        stages.push("vertex");
-    }
-    stages
+        t.starts_with("float map(") || t.starts_with("float map (")
+    })
 }
 
 fn read_source_file(path_str: &str) -> std::io::Result<String> {
@@ -988,7 +841,7 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
         asset_type: asset_type.to_string(),
         args: Some(args.clone()),
     };
-    create_asset_def(&req, crate::cook_platform())
+    create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let resolved_args = normalized_args_value(asset_type, &args);
 
@@ -1052,7 +905,7 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
         asset_type: type_str.to_string(),
         args: None,
     };
-    create_asset_def(&req, crate::cook_platform())
+    create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let args = normalized_args_value(type_str, &serde_json::Value::Object(Default::default()));
 
@@ -1069,104 +922,37 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
 mod tests {
     use super::*;
 
-    // detect_metal_stages
+    // slang_entry
 
     #[test]
-    fn metal_both_stages() {
-        let src = "vertex VertexOut vert_main() {}\nfragment float4 frag_main() {}";
-        assert_eq!(detect_metal_stages(src), vec!["vertex", "fragment"]);
-    }
-
-    #[test]
-    fn metal_vertex_only() {
-        let src = "vertex VertexOut vert_main() {}";
-        assert_eq!(detect_metal_stages(src), vec!["vertex"]);
-    }
-
-    #[test]
-    fn metal_fragment_only() {
-        let src = "fragment float4 frag_main() {}";
-        assert_eq!(detect_metal_stages(src), vec!["fragment"]);
-    }
-
-    #[test]
-    fn metal_no_qualifiers_defaults_to_vertex() {
-        let src = "// helper only\nfloat4 helper() { return float4(1.0); }";
-        assert_eq!(detect_metal_stages(src), vec!["vertex"]);
-    }
-
-    #[test]
-    fn metal_tab_separated_qualifier() {
-        let src = "vertex\tVertexOut vert_main() {}";
-        assert_eq!(detect_metal_stages(src), vec!["vertex"]);
-    }
-
-    #[test]
-    fn metal_indented_qualifier_still_detected() {
-        // Metal qualifiers can appear with leading whitespace (e.g. inside a namespace-like block)
-        let src = "  vertex VertexOut vert_main() {}\n  fragment float4 frag_main() {}";
-        assert_eq!(detect_metal_stages(src), vec!["vertex", "fragment"]);
-    }
-
-    // detect_wgsl_stages
-
-    #[test]
-    fn wgsl_both_stages() {
-        let src =
-            "@vertex\nfn vs() -> VertexOutput {}\n@fragment\nfn fs() -> @location(0) vec4<f32> {}";
-        assert_eq!(detect_wgsl_stages(src), vec!["vertex", "fragment"]);
-    }
-
-    #[test]
-    fn wgsl_vertex_only() {
-        let src = "@vertex fn vs() {}";
-        assert_eq!(detect_wgsl_stages(src), vec!["vertex"]);
-    }
-
-    #[test]
-    fn wgsl_no_attributes_defaults_to_vertex() {
-        let src = "fn helper() -> f32 { return 1.0; }";
-        assert_eq!(detect_wgsl_stages(src), vec!["vertex"]);
-    }
-
-    #[test]
-    fn a_two_stage_source_becomes_one_shader_entry() {
-        let entries =
-            shader_entries_from_stages("s.metal", "s", "metal", &["vertex", "fragment"]).unwrap();
+    fn a_surface_file_becomes_a_fragment_only_shader() {
+        let entries = slang_entry(
+            "water",
+            "shaders/water.slang",
+            "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }",
+        )
+        .unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["name"], "s_shader");
+        assert_eq!(entries[0]["name"], "water_shader");
         assert_eq!(entries[0]["type"], "Shader");
-        assert_eq!(entries[0]["args"]["vertex"]["source"], "s.metal");
-        assert_eq!(entries[0]["args"]["fragment"]["source"], "s.metal");
+        assert_eq!(entries[0]["args"]["fragment"], "shaders/water.slang");
+        assert!(entries[0]["args"].get("vertex").is_none_or(|v| v.is_null()));
     }
 
     #[test]
-    fn a_single_stage_source_is_rejected_with_guidance() {
-        let err = shader_entries_from_stages("s.metal", "s", "metal", &["vertex"]).unwrap_err();
-        assert!(err.to_string().contains("both a vertex and a fragment"));
-    }
-
-    #[test]
-    fn glsl_pair_swaps_the_stage_marker_and_shares_a_stem() {
-        let dir = tempfile::tempdir().unwrap();
-        let vert = dir.path().join("foo_vert.glsl");
-        let frag = dir.path().join("foo_frag.glsl");
-        std::fs::write(&vert, "").unwrap();
-        std::fs::write(&frag, "").unwrap();
-
-        // Adding either file of the pair resolves the same (vert, frag, stem).
-        let from_vert = glsl_pair(&vert, vert.to_str().unwrap(), "foo_vert").unwrap();
-        let from_frag = glsl_pair(&frag, frag.to_str().unwrap(), "foo_frag").unwrap();
-        assert_eq!(from_vert.0, vert.to_str().unwrap());
-        assert_eq!(from_vert.1, frag.to_str().unwrap());
-        assert_eq!(from_vert.0, from_frag.0);
-        assert_eq!(from_vert.1, from_frag.1);
-        assert_eq!(from_vert.2, "foo");
-        assert_eq!(from_frag.2, "foo");
-
-        // A missing counterpart is an error, not half a Shader.
-        std::fs::remove_file(&frag).unwrap();
-        assert!(glsl_pair(&vert, vert.to_str().unwrap(), "foo_vert").is_err());
+    fn a_distance_field_becomes_an_sdf_volume() {
+        let src = "float map(float3 p, SdfParams q, float t) { return 1.0; }";
+        assert!(defines_distance_field(src));
+        assert!(defines_distance_field(
+            "  float map (float3 p, SdfParams q, float t)"
+        ));
+        assert!(!defines_distance_field(
+            "float4 shade(VertexOut in, GpuObjectData od)"
+        ));
+        let entries = slang_entry("blob", "shaders/blob.slang", src).unwrap();
+        assert_eq!(entries[0]["name"], "blob_volume");
+        assert_eq!(entries[0]["type"], "SdfVolume");
+        assert_eq!(entries[0]["args"]["fragment_shader"], "shaders/blob.slang");
     }
 
     // font stem naming
@@ -1193,23 +979,6 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains(".xyz"));
-    }
-
-    // stages_from_flags edge cases
-
-    #[test]
-    fn stages_from_flags_neither() {
-        assert_eq!(stages_from_flags(false, false), vec!["vertex"]);
-    }
-
-    #[test]
-    fn stages_from_flags_both() {
-        assert_eq!(stages_from_flags(true, true), vec!["vertex", "fragment"]);
-    }
-
-    #[test]
-    fn stages_from_flags_fragment_only() {
-        assert_eq!(stages_from_flags(false, true), vec!["fragment"]);
     }
 
     // target_bootstrap_kind
@@ -1425,13 +1194,12 @@ mod tests {
                     .get("args")
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({}));
-                concinnity_cook::validate_asset(ty, name, &args, crate::cook_platform())
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "template '{}' entry '{name}' ({ty}) failed to validate: {e}",
-                            t.name
-                        )
-                    });
+                concinnity_cook::validate_asset(ty, name, &args).unwrap_or_else(|e| {
+                    panic!(
+                        "template '{}' entry '{name}' ({ty}) failed to validate: {e}",
+                        t.name
+                    )
+                });
             }
         }
     }
@@ -1543,13 +1311,8 @@ mod tests {
         std::fs::write(&path, b"radiance").unwrap();
 
         let entry = entry_from_path(path.to_str().unwrap()).unwrap().remove(0);
-        concinnity_cook::validate_asset(
-            "EnvironmentMap",
-            "studio",
-            &entry["args"],
-            crate::cook_platform(),
-        )
-        .expect("a `.hdr` add must produce a cookable EnvironmentMap");
+        concinnity_cook::validate_asset("EnvironmentMap", "studio", &entry["args"])
+            .expect("a `.hdr` add must produce a cookable EnvironmentMap");
     }
 
     // try_retarget_environment_map

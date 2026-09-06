@@ -9,42 +9,14 @@
 //! concinnity-device, which reads the expected offsets out of slangc's
 //! reflection per target. The hand-written asserts below are for the families
 //! whose shaders are still per backend -- the cull kernel, the skinning and
-//! morph kernels, the raymarch SDF templates, the legacy per-draw main and
-//! velocity passes, and Metal's water.
-
-use crate::components::sdf_volume::SDF_PARAMS_LEN;
+//! morph kernels, the raymarch SDF templates, the velocity pass, and Metal's
+//! water.
 
 /// Byte size of the auto-exposure push-constant range. Pins the struct size to
 /// what the pipeline layout declares.
 pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
 
-/// The main-pass push constant (std430): the model matrix, roughness/metallic
-/// with two pads, then tint and emissive vec3s each followed by a pad (112 B
-/// total). Matches ModelUniforms(64) + MaterialUniforms(48) packed together.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct MainPush {
-    /// Model matrix, column-major.
-    pub model: [[f32; 4]; 4],
-    /// Perceptual roughness in `[0, 1]`.
-    pub roughness: f32,
-    /// Metalness in `[0, 1]`.
-    pub metallic: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _mpad0: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _mpad1: f32,
-    /// Linear RGB base-colour tint.
-    pub tint: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _mpad2: f32,
-    /// Linear RGB emissive radiance.
-    pub emissive: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _mpad3: f32,
-}
-
-/// The GPU-cull push constant (cull.comp, std430): six already-normalised frustum
+/// The GPU-cull push constant (cull.slang): six already-normalised frustum
 /// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
 /// the build-time object count, then the shader-bucket routing (120 B total).
 #[derive(Copy, Clone)]
@@ -65,7 +37,7 @@ pub struct CullParams {
     pub bucket_stride: u32,
 }
 
-/// Cull-side Hi-Z uniforms (cull.comp, std140, 80 bytes): the previous frame's
+/// Cull-side Hi-Z uniforms (cull.slang, 80 bytes): the previous frame's
 /// un-jittered view-projection, the Hi-Z mip-0 dimensions, the mip count, and an
 /// enable flag. Mirrors the Metal / DirectX CullUniforms tail.
 #[derive(Copy, Clone)]
@@ -83,105 +55,17 @@ pub struct CullHizParams {
     pub hiz_enabled: u32,
 }
 
-/// The G-buffer pre-pass push constant (shared GLSL `PushBlock`): cur_model then
-/// prev_model (two column-major mat4) then roughness, plus a trailing pad to
-/// 16-byte alignment. The motion vector reads cur/prev model; the fragment reads
-/// roughness.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct GbModelPush {
-    /// This frame's model matrix, column-major.
-    pub cur_model: [[f32; 4]; 4],
-    /// The previous frame's model matrix, for velocity.
-    pub prev_model: [[f32; 4]; 4],
-    /// Perceptual roughness in `[0, 1]`.
-    pub roughness: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: [f32; 3],
-}
-
-/// Byte size of the G-buffer pre-pass push-constant range (cur_model 64 +
-/// prev_model 64 + roughness 4 + 12 pad). Pins the struct size.
-pub const GBUFFER_PREPASS_PUSH_BYTES: u32 = 144;
-
-/// The raymarch pass per-frame view UBO (raymarch_helpers.glsl
-/// `RaymarchViewBlock`, std140, 208 bytes). Mirrors the DirectX / Metal
-/// `RaymarchView`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct RaymarchView {
-    /// View-projection matrix, column-major.
-    pub vp: [[f32; 4]; 4],
-    /// Inverse view-projection matrix, column-major.
-    pub inv_vp: [[f32; 4]; 4],
-    /// World-space camera position.
-    pub cam_pos: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad0: f32,
-    /// Render-target size in pixels.
-    pub viewport: [f32; 2],
-    /// Seconds since the world started.
-    pub time: f32,
-    /// IBL cubemap mip count; 0 when there is no IBL.
-    pub prefilter_mip_count: f32,
-    /// Rows of the rotation taking a world-space direction into the environment
-    /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a volume's
-    /// image-based ambient turns with the sky. One `float4` per row.
-    pub sky_rot: [[f32; 4]; 3],
-}
-
-/// The per-volume SDF raymarch UBO (`SdfVolumeBlock`, std140, 176 bytes). Mirrors
-/// the DirectX `RaymarchVolumeUniforms`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct RaymarchVolumeUniforms {
-    /// World-space centre.
-    pub centre: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad0: f32,
-    /// Half-extents from the centre, in world units.
-    pub extent: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad1: f32,
-    /// Cone-tracing footprint growth per unit of march distance.
-    pub cone_ratio: f32,
-    /// Furthest world distance the march travels.
-    pub max_distance: f32,
-    /// Ray-march step cap.
-    pub max_steps: i32,
-    /// Non-zero when the volume samples the shadow maps.
-    pub receive_shadows: i32,
-    /// The volume's authored SDF parameters.
-    pub params: [f32; SDF_PARAMS_LEN],
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
 
-    // MainPush must match the `PushBlock` push constant in the main-pass shaders
-    // (std430): the model matrix, roughness/metallic with two pads, then tint and
-    // emissive vec3s each followed by a pad (112 B total).
+    // CullParams must match the `CullParams` push-constant block in cull.slang:
+    // six frustum planes, then cam_pos sharing its 16-byte slot with
+    // object_count. `shader_layout` in concinnity-device reflects the same
+    // source; this is the copy that runs without slangc.
     #[test]
-    fn main_push_layout_matches_glsl() {
-        assert_eq!(size_of::<MainPush>(), 112);
-        assert_eq!(offset_of!(MainPush, model), 0);
-        assert_eq!(offset_of!(MainPush, roughness), 64);
-        assert_eq!(offset_of!(MainPush, metallic), 68);
-        assert_eq!(offset_of!(MainPush, _mpad0), 72);
-        assert_eq!(offset_of!(MainPush, _mpad1), 76);
-        assert_eq!(offset_of!(MainPush, tint), 80);
-        assert_eq!(offset_of!(MainPush, _mpad2), 92);
-        assert_eq!(offset_of!(MainPush, emissive), 96);
-        assert_eq!(offset_of!(MainPush, _mpad3), 108);
-    }
-
-    // CullParams must match the `CullParams` push-constant block in cull.comp
-    // (std430): six frustum planes, then cam_pos sharing its 16-byte slot with
-    // object_count (112 B total).
-    #[test]
-    fn cull_params_layout_matches_glsl() {
+    fn cull_params_layout_matches_the_shader() {
         assert_eq!(size_of::<CullParams>(), 120);
         assert_eq!(offset_of!(CullParams, planes), 0);
         assert_eq!(offset_of!(CullParams, cam_pos), 96);
@@ -190,41 +74,14 @@ mod tests {
         assert_eq!(offset_of!(CullParams, bucket_stride), 116);
     }
 
-    // std140 CullHizParams in cull.comp: mat4 (64) + vec2 (8, 8-aligned) + two
-    // uints. Total 80 bytes, tightly packed after the mat4.
+    // CullHizParams in cull.slang: mat4 (64) + float2 (8) + two uints. Total 80
+    // bytes, tightly packed after the mat4.
     #[test]
-    fn cull_hiz_params_layout_matches_glsl() {
+    fn cull_hiz_params_layout_matches_the_shader() {
         assert_eq!(size_of::<CullHizParams>(), 80);
         assert_eq!(offset_of!(CullHizParams, prev_view_proj), 0);
         assert_eq!(offset_of!(CullHizParams, hiz_size), 64);
         assert_eq!(offset_of!(CullHizParams, hiz_mip_count), 72);
         assert_eq!(offset_of!(CullHizParams, hiz_enabled), 76);
-    }
-
-    // The GLSL `RaymarchViewBlock` std140 layout is 208 bytes.
-    #[test]
-    fn raymarch_view_layout_matches_glsl() {
-        assert_eq!(size_of::<RaymarchView>(), 208);
-        assert_eq!(offset_of!(RaymarchView, vp), 0);
-        assert_eq!(offset_of!(RaymarchView, inv_vp), 64);
-        assert_eq!(offset_of!(RaymarchView, cam_pos), 128);
-        assert_eq!(offset_of!(RaymarchView, viewport), 144);
-        assert_eq!(offset_of!(RaymarchView, time), 152);
-        assert_eq!(offset_of!(RaymarchView, prefilter_mip_count), 156);
-        assert_eq!(offset_of!(RaymarchView, sky_rot), 160);
-        assert_eq!(size_of::<RaymarchView>() % 16, 0);
-    }
-
-    // The GLSL `SdfVolumeBlock` std140 layout is 176 bytes.
-    #[test]
-    fn sdf_volume_uniforms_layout_matches_glsl() {
-        assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, centre), 0);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, extent), 16);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, cone_ratio), 32);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_distance), 36);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, max_steps), 40);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, receive_shadows), 44);
-        assert_eq!(offset_of!(RaymarchVolumeUniforms, params), 48);
     }
 }

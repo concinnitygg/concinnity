@@ -2,23 +2,66 @@
 
 # Shader
 
-Declares a custom shader program: the vertex and fragment stages, plus the
-optional GPU-instanced vertex stage.
+Replaces how surfaces are shaded, and optionally how vertices are placed,
+with functions of your own. Written in Slang, one source for every
+backend.
 
-**A Shader is entirely optional.** The engine ships its own main-pass
-program and uses it for every draw a Shader does not claim, so a world that
-wants standard lighting declares no Shader at all. Declare one only to
-replace that program with your own. The shadow pass is engine-internal (no
-Shader stage of its own); enable or size it with `shadow_map_size` in
-[GraphicsConfig](GraphicsConfig.md).
+**A Shader is entirely optional.** The engine ships its own lighting and
+projection and uses them for every draw a Shader does not claim, so a world
+that wants standard lighting declares no Shader at all. The shadow pass and
+the depth pre-pass are engine-internal and take no Shader stage; enable or
+size shadows with `shadow_map_size` in [GraphicsConfig](GraphicsConfig.md).
 
-The engine-internal shadow map covers a ±20 m world-space region centred at
-the origin with 80 m depth. For larger scenes, increase `shadow_map_size` in
-[GraphicsConfig](GraphicsConfig.md) to maintain resolution.
+# The two hooks
 
-A stage that resolves no source for the running backend falls back to the
-engine's own program for that stage, so a Shader may cover only the
-platforms it has sources for.
+A Shader file defines a function, not an entry point. The engine owns every
+entry point, binding and pipeline on every backend, and calls the world's
+functions from inside its own:
+
+```hlsl
+// the `fragment` file, required
+float4 shade(VertexOut in, GpuObjectData od);
+
+// the `vertex` file, optional; without one the engine projects the vertex itself
+VertexOut transform(float4x4 model, float3 pos, float3 normal, float3 tangent,
+                    float3 color, float2 uv);
+```
+
+`shade` returns the surface's linear-light colour with alpha. `od` is the
+surface's material record whichever path drew it: `tint_roughness`,
+`emissive_metallic`, `albedo_index`, `normal_index`, `emissive_map_index`,
+`orm_map_index` and `bb_max_alpha_cutoff.w` are the fields a surface
+reads. `transform` receives the model matrix and the model-space
+attributes, after skinning for a [SkinnedMesh](SkinnedMesh.md) and per
+instance for an [InstancedProp](InstancedProp.md), and returns the projected
+vertex; the engine's own is `project_vertex`, so a displacement is
+`return project_vertex(model, pos + offset, normal, tangent, color, uv);`.
+
+Both files are compiled inside the engine's own main-pass source, so they
+see the same vocabulary the engine's shading uses and declare no layout,
+binding, register, attribute or varying of their own:
+
+- `shade_surface(in, od)`: the engine's PBR lighting, so
+  `return shade_surface(in, od) * tint;` starts from it.
+- `project_vertex(model, pos, normal, tangent, color, uv)`: the engine's
+  projection.
+- `pool_sample(index, uv)`: a texture from the world's pool by the record's
+  index.
+- `decode_normal_map(rg)`: a tangent-space normal from a normal-map texel.
+- `shadow_factor_cascaded(world_pos, view_depth, screen_xy)`: the sun's
+  cascaded shadow term.
+- `environment_specular(world_pos, reflected, lod)`: the reflection
+  environment.
+- `irradiance_sample(normal)`: the diffuse environment.
+- `VIEW`: the view block, with `vp`, `view_mat`, `elapsed`, `cam_x` /
+  `cam_y` / `cam_z` and `sky_rot`.
+- `LIGHTS`: the light block, with `dir[]`, `pt[]`, `num_dir`, `num_pt` and
+  `ambient_intensity`.
+- `SKY_DIR(d)`: a world direction in the environment map's frame.
+
+`VertexOut` is the engine's varying block: `position` (clip), `world_pos`,
+`normal`, `tangent`, `bitangent`, `uv`, `view_depth` and `color`. A `shade`
+must not read `in.object_id`; the record is `od`.
 
 # More than one Shader
 
@@ -26,15 +69,6 @@ The first declared Shader is the world's default: everything renders with it
 unless a [Material](Material.md) names another one through its `shader` field.
 A world may declare up to 8 Shaders in total.
 
-Three rules come with the second Shader, all enforced at build time:
-
-- **Every fragment stage must define `fragment_main_bindless`.** Multi-Shader
-  worlds render through the GPU-driven bindless path, which is the only path
-  that can switch programs per draw. A single-Shader world has no such
-  requirement and may define just `fragment_main`. This applies to `.metal`
-  sources, which carry one program per entry point; an `.hlsl` or GLSL stage
-  compiles a single `main`, so there is no entry point to pick -- what it must
-  match instead is the bindless binding layout (see below).
 - **Instanced, skinned, and voxel-chunk draws always use the world default.**
   A Material naming a Shader cannot be used by an
   [InstancedProp](InstancedProp.md), a [SkinnedMesh](SkinnedMesh.md), or a
@@ -45,55 +79,21 @@ Planar reflections are the one case with no build-time signal: a surface
 reflected in a mirror is drawn with the world default Shader regardless of
 its Material. Reflection probe cubes capture it the same way.
 
-A non-default Shader's stages must be written against the engine's **bindless**
-binding layout, not the per-draw one: the material, transform, and texture
-indices come from the per-frame object buffer rather than per-draw constants.
-
 A Shader referenced only by materials belonging to one [Scene](Scene.md) is
 owned by that scene: its pipeline is built when the scene loads (behind the
 loading screen, alongside that scene's textures and meshes) and released when
 the scene unloads. A Shader used across scenes, or by the world default,
 loads at startup.
 
-**Custom shader vertex layout**: the engine always supplies vertices with 5
-attributes at a fixed 56-byte stride. Any custom `.metal` shader **must** declare
-`struct Vertex` exactly as shown below: wrong attribute indices cause tangent
-data to be read as vertex colour, producing red/green/blue geometry:
+# Compilation
 
-```metal
-struct Vertex {
-    float3 pos     [[attribute(0)]];  // offset  0
-    float3 normal  [[attribute(1)]];  // offset 12
-    float3 tangent [[attribute(2)]];  // offset 24
-    float3 color   [[attribute(3)]];  // offset 36
-    float2 uv      [[attribute(4)]];  // offset 48
-};
-```
-
-Buffer and texture bindings that must match:
-
-```metal
-struct DirectionalLightData {
-    packed_float3 direction;
-    float         intensity;
-    packed_float3 color;
-    float         _pad;
-};
-
-struct PointLightData {
-    packed_float3 position;
-    float         range;
-    packed_float3 color;
-    float         intensity;
-};
-
-struct ShadowUniforms {
-    float4x4 light_vp;
-};
-```
+`cn build` compiles both files for the backend it cooks for and stores the
+result in the world; a player needs no shader compiler. A file that fails
+to compile, or omits its hook, fails the build naming the Shader and the
+hook. Under `cn debug` a save to either file recompiles it and swaps the
+live pipelines.
 
 ## Parameters
 
-- `vertex`: A [StageSource](StageSource.md) object. The vertex stage. Required.
-- `fragment`: A [StageSource](StageSource.md) object. The fragment stage. Required.
-- `vertex_instanced`: A [StageSource](StageSource.md) object. The GPU-instanced vertex stage. Required only for worlds with [InstancedProp](InstancedProp.md) components. Optional.
+- `fragment`: A string. Path to the `.slang` file defining `shade`. Required.
+- `vertex`: A string. Path to the `.slang` file defining `transform`. Omit to keep the engine's own projection.

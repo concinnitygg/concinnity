@@ -239,14 +239,6 @@ impl MtlContext {
         // Per-object morph weights for the skinned fold, from the same ring slot.
         let skinned_morph_weight_bufs = self.build_morph_weight_buffers(ring_slot)?;
 
-        // Previous-frame joint matrices, used only by the velocity pre-pass to
-        // capture skinned deformation. Empty when TAA is disabled.
-        let prev_skinned_joint_bufs = if self.taa.enabled {
-            self.build_prev_joint_buffers(ring_slot)?
-        } else {
-            Vec::new()
-        };
-
         // Compute per-frame cascade VPs + splits from current camera + light.
         // The aspect/near/far are taken from the same params used by the main
         // perspective below so cascades match the visible camera frustum.
@@ -290,7 +282,7 @@ impl MtlContext {
         // their projections are static, so only the depth contents redraw.
         self.spot_shadow.render_mask = self.next_spot_shadow_mask();
 
-        // Main pass prep: resize off-screen targets, then the visible set.
+        // Main pass prep: resize off-screen targets.
         // Resize the HDR targets if the drawable size changed (window resize
         // or initial layout). The drawable was just refreshed by window.view.draw().
         let draw_size = self.window.view.drawableSize();
@@ -360,47 +352,15 @@ impl MtlContext {
         let inv_vp = mat4_inverse(vp);
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
 
-        // Resolve the visible set for the legacy CPU draw path, the TAA
-        // velocity pre-pass, and the SSAO pre-pass: BVH-culled cullable
-        // objects, then the always-draw fallback (skybox, rooms, dynamic
-        // props). The bindless static pass instead consumes the GPU-culled
-        // indirect command buffer, so it never walks this list.
-        // mem::take swaps out the persistent scratch buffer so its heap
-        // allocation is reused across frames; it's put back below before we
-        // return Ok (the error path silently loses the capacity, which is
-        // acceptable since draw_frame errors are exceptional).
-        // mem::take swaps out the persistent scratch buffer so its heap
-        // allocation is reused across frames; it's put back below before we
-        // return Ok. While the world is hidden behind an opaque menu, the
-        // surviving Main pass is fed an empty scene -- no visible set, no
-        // bindless object / cull / texture buffers, no instanced clusters, and
-        // no acceleration-structure refresh -- so it runs as a bare clear that
-        // the opaque overlay then covers. The masked graph drops every other
-        // world pass, so none of this work would be consumed anyway.
-        let mut visible = std::mem::take(&mut self.draw.visible_scratch);
-        visible.clear();
-        let (object_buffer, cull_draw_args, bindless_tex_args, prepared_instances) = if world_hidden
-        {
-            (
-                None,
-                None,
-                None,
-                super::instanced::PreparedInstances {
-                    clusters: Vec::new(),
-                },
-            )
+        // While the world is hidden behind an opaque menu, the surviving Main
+        // pass is fed an empty scene -- no bindless object / cull / texture
+        // buffers, no instanced clusters, and no acceleration-structure refresh
+        // -- so it runs as a bare clear that the opaque overlay then covers. The
+        // masked graph drops every other world pass, so none of this work would
+        // be consumed anyway.
+        let (object_buffer, cull_draw_args, bindless_tex_args) = if world_hidden {
+            (None, None, None)
         } else {
-            // Resolve the visible set for the legacy CPU draw path, the TAA
-            // velocity pre-pass, and the SSAO pre-pass: BVH-culled cullable
-            // objects, then the always-draw fallback (skybox, rooms, dynamic
-            // props). The bindless static pass instead consumes the GPU-culled
-            // indirect command buffer, so it never walks this list.
-            self.draw
-                .bvh
-                .query(&frustum, cam_pos, |idx| visible.push(idx));
-            visible.sort_unstable();
-            visible.extend_from_slice(&self.draw.always);
-
             // Per-frame GPU buffer prep for the bindless path.
             // The object data + indirect-args + bindless texture argbuf are
             // all per-frame Metal buffers the bindless Main pass + Cull
@@ -439,12 +399,6 @@ impl MtlContext {
                 None
             };
 
-            // Cull + LOD-bucket + upload every instanced cluster ONCE here, on the
-            // main thread before the pass fan-out. The main / SSR / SSAO / velocity
-            // passes share this prepared set instead of each repeating the cull and
-            // re-uploading the instance matrices to their own transient buffer.
-            let prepared_instances = self.prepare_instanced_draws(ring_slot, cam_pos, &frustum)?;
-
             // Keep the RT acceleration structure current with this frame's
             // transforms before any pass reads `rt_accel`. The default `Auto` mode
             // rebuilds the TLAS only when a participating prop actually moved; a
@@ -459,12 +413,7 @@ impl MtlContext {
                 &skinned_joint_bufs,
             );
 
-            (
-                object_buffer,
-                cull_draw_args,
-                bindless_tex_args,
-                prepared_instances,
-            )
+            (object_buffer, cull_draw_args, bindless_tex_args)
         };
 
         // Per-frame pass uniforms hoisted upfront.
@@ -805,9 +754,9 @@ impl MtlContext {
             None
         };
         // Per-frame parallel prev_model buffer for the GPU-driven G-buffer pass.
-        // Built only when that path will run (bindless object buffer +
-        // a G-buffer consumer + the bindless G-buffer pipeline), indexed
-        // identically to the object buffer.
+        // Built only when that path will run (cull object buffer + a G-buffer
+        // consumer + the bindless G-buffer pipeline), indexed identically to
+        // the object buffer.
         let prev_model_buffer = if object_buffer.is_some()
             && self.gbuffer.targets.is_some()
             && self.gbuffer.bindless_pipeline.is_some()
@@ -837,9 +786,7 @@ impl MtlContext {
             elapsed,
             vp,
             inv_vp,
-            visible: &visible,
             frustum: &frustum,
-            prepared_instances: &prepared_instances,
             object_buffer: object_buffer.as_ref(),
             bindless_tex_args: bindless_tex_args.as_ref(),
             deformed_skinned: deformed_this_frame.as_ref(),
@@ -847,7 +794,6 @@ impl MtlContext {
             prev_model_buffer: prev_model_buffer.as_ref(),
             draw_args_buffer: cull_draw_args.as_ref(),
             vel_uniforms: vel_uniforms.as_ref(),
-            prev_skinned_joint_bufs: &prev_skinned_joint_bufs,
             taa_uniforms: taa_uniforms.as_ref(),
             scene_pre_taa: if self.taa.enabled
                 || self.upscale.scaler.is_some()
@@ -1030,12 +976,8 @@ impl MtlContext {
             {
                 *prev = obj.model;
             }
-            self.skinned
-                .prev_joint_matrices
-                .clone_from(&self.skinned.joint_matrices);
         }
 
-        self.draw.visible_scratch = visible;
         Ok(())
     }
 

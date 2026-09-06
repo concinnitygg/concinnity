@@ -52,7 +52,7 @@ impl VkContext {
         reuse: Option<VkReuse>,
     ) -> Result<Self, String> {
         use crate::gfx::backend_init::{
-            BackendInit, MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
+            BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx, WorldShader,
         };
         let BackendInit {
             window,
@@ -77,9 +77,9 @@ impl VkContext {
                     // the live `self.draw.n_skinned`; this only reserves capacity.
                     n_skinned,
                     // Reserves a chunk record region in the shared cull buffers
-                    // at init (`[n_objects + n_instances, +n_chunk_max)`);
+                    // at init (`[n_objects + n_instances, +n_runtime)`);
                     // resident chunks fold into the indirect path each frame.
-                    // Sets the live `self.draw.n_chunk`.
+                    // Sets the live `self.draw.n_runtime`.
                     n_chunk_max,
                 },
             shaders: world_shaders,
@@ -141,11 +141,8 @@ impl VkContext {
         } = init;
         // Entry 0 is the world default program; entries 1.. are the
         // material-referenced shader buckets (see `world_shaders.rs`).
-        let &ShaderBytes {
-            vert: vert_bytes,
-            frag: frag_bytes,
-            shadow: shadow_bytes,
-            vert_instanced: vert_instanced_bytes,
+        let &WorldShader {
+            programs: world_programs,
             // The world default program is never deferred (bucket 0 always
             // decodes at init); only the material-referenced buckets can be.
             deferred: _,
@@ -381,6 +378,7 @@ impl VkContext {
                     device,
                     memory_budget: memory_budget_supported,
                     rt_capable,
+                    depth_bias_clamp,
                     update_after_bind,
                 } = create_logical_device(
                     &instance,
@@ -404,6 +402,7 @@ impl VkContext {
                         messenger: debug_messenger,
                         filter: debug_filter,
                     },
+                    depth_bias_clamp,
                 );
 
                 // SAFETY: a property query on a live handle; it only reads.
@@ -710,10 +709,8 @@ impl VkContext {
 
         //  Shadow map (4-layer D32_SFLOAT array image, one slice per cascade)
         // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
-        // shadows). The shadow vertex shader is engine-internal (the baked
-        // shadow.vert), so an empty `shadow_bytes` override no longer means
-        // "no shadows": it just selects the built-in shader. Mirrors the Metal
-        // internal-shadow path.
+        // shadows). The shadow vertex shader is engine-internal. Mirrors the
+        // Metal internal-shadow path.
         let effective_shadow_size = shadow_map_size;
         let shadow_map = create_shadow_map_array(
             &GpuUploadContext {
@@ -1307,9 +1304,6 @@ impl VkContext {
                 .create_descriptor_set_layout(&info)
                 .map_err(|e| format!("global set layout: {e}"))?
         };
-        // Per-object set (set 1): albedo + normal map.
-        let object_set_layout =
-            create_descriptor_set_layout(&device, &super::descriptor_layout::object_set())?;
         // Text set (set 0 for text pass): atlas sampler.
         let text_set_layout = create_descriptor_set_layout(
             &device,
@@ -1349,20 +1343,6 @@ impl VkContext {
         )?;
 
         //  Pipeline layouts
-        // Main push constants: 112 bytes for model (64) + material (48).
-        let main_pc_range = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-            .offset(0)
-            .size(112);
-        let main_set_layouts = [global_set_layout.handle(), object_set_layout.handle()];
-        let main_pipeline_layout = device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&main_set_layouts)
-                    .push_constant_ranges(std::slice::from_ref(&main_pc_range)),
-            )
-            .map_err(|e| format!("main pipeline layout: {e}"))?;
-
         let shadow_pc_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
@@ -1426,73 +1406,8 @@ impl VkContext {
             .map_err(|e| format!("bloom pipeline layout: {e}"))?;
 
         //  Pipelines
-        let (vert_spv, frag_spv) = resolve_main_shaders(hot_reload, vert_bytes, frag_bytes)?;
-        let main_pipeline = create_main_pipeline(
-            &device,
-            MeshPipelineTargets {
-                render_pass: main_render_pass.handle(),
-                layout: main_pipeline_layout.handle(),
-                vert_spv: &vert_spv,
-                frag_spv: &frag_spv,
-            },
-            msaa_samples,
-            swapchain_format,
-        )?;
-
-        //  Instanced pipeline (optional)
-        // Set 2 binding 0 is a storage buffer of per-instance world matrices.
-        let need_instanced = !instanced_clusters.is_empty();
-        let instance_set_layout_opt = if need_instanced {
-            Some(create_descriptor_set_layout(
-                &device,
-                &[(
-                    0,
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    vk::ShaderStageFlags::VERTEX,
-                )],
-            )?)
-        } else {
-            None
-        };
-
-        let (instanced_pipeline_opt, instanced_pipeline_layout_opt) = if need_instanced {
-            let instance_set_layout = instance_set_layout_opt
-                .as_ref()
-                .expect("instance set layout was created because instanced draws are needed");
-            let instanced_set_layouts = [
-                global_set_layout.handle(),
-                object_set_layout.handle(),
-                instance_set_layout.handle(),
-            ];
-            let instanced_pl = device
-                .create_pipeline_layout(
-                    &vk::PipelineLayoutCreateInfo::default()
-                        .set_layouts(&instanced_set_layouts)
-                        .push_constant_ranges(std::slice::from_ref(&main_pc_range)),
-                )
-                .map_err(|e| format!("instanced pipeline layout: {e}"))?;
-
-            let inst_spv_opt =
-                resolve_instanced_shader(hot_reload, vert_instanced_bytes, need_instanced)?
-                    .ok_or("instanced shader payload missing")?;
-            let pipeline = create_instanced_pipeline(
-                &device,
-                MeshPipelineTargets {
-                    render_pass: main_render_pass.handle(),
-                    layout: instanced_pl.handle(),
-                    vert_spv: &inst_spv_opt,
-                    frag_spv: &frag_spv,
-                },
-                msaa_samples,
-                swapchain_format,
-            )?;
-            (Some(pipeline), Some(instanced_pl))
-        } else {
-            (None, None)
-        };
-
         let (shadow_pipeline_opt, shadow_framebuffers_vec) = if effective_shadow_size > 0
-            && let Ok(Some(shadow_spv)) = resolve_shadow_shader(hot_reload, shadow_bytes)
+            && let Ok(Some(shadow_spv)) = resolve_shadow_shader(hot_reload)
         {
             let pl = create_shadow_pipeline(
                 &device,
@@ -1704,15 +1619,7 @@ impl VkContext {
                     height: render_extent.height,
                     frames,
                 },
-                super::post::gbuffer::GbufferSsboLayouts {
-                    instance: instance_set_layout_opt.as_ref().map(|l| l.handle()),
-                    // Skinned variant built lazily by `upload_skinned` via
-                    // `ensure_skinned_gbuffer_pso` (the joint-set layout does not
-                    // exist yet at init time), matching the gbuffer / TAA.
-                    skinned: None,
-                },
                 draw_objects.len(),
-                hot_reload,
                 &gbuffer_pooled,
             )?)
         } else {
@@ -1762,19 +1669,25 @@ impl VkContext {
         // in after the instances (a per-frame-rebuilt tail of `n_skinned` records),
         // so `n_cull` reserves their slots too. Mirrors `directx/init`.
         let n_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
-        // Streamed-chunk record reserve (`[n_objects + n_instances, +n_chunk_max)`),
+        // Runtime record reserve (`[n_objects + n_instances, +n_runtime)`): the
+        // worst-case resident streamed-chunk window plus the runtime-clone cap,
         // between the instances and the skinned tail; resident chunks fold in per
         // frame. 0 for a non-voxel world.
-        let n_cull = draw_objects.len() + n_instances + n_chunk_max + n_skinned;
+        let n_cull = draw_objects.len()
+            + n_instances
+            + n_chunk_max
+            + clone_reserve(draw_objects.len())
+            + n_skinned;
 
-        // Bindless static pass: active when the world uses the built-in shader AND
-        // there is ANYTHING to GPU-drive -- build-time static geometry, instances,
-        // streamed chunks, or skinned meshes (`n_cull > 0`). A pure-voxel world has
-        // no build-time geometry but folds its chunks here. Its texture pool is the
-        // deduplicated [albedo..] ++ [normal-map..] image set
+        // GPU-driven static pass: active when there is anything to drive --
+        // build-time static geometry, instances, streamed chunks, or skinned
+        // meshes (`n_cull > 0`). A pure-voxel world has no build-time geometry but
+        // folds its chunks here. A world default Shader drives it through bucket
+        // 0, built from the world's own bindless pair below. Its texture pool is
+        // the deduplicated [albedo..] ++ [normal-map..] image set
         // (`gpu_textures.len() + gpu_normal_maps.len()`); the helper derives the
         // same value from the texture table so the export-time precompile matches.
-        let bindless_active = !is_spirv(vert_bytes) && !is_spirv(frag_bytes) && n_cull > 0;
+        let bindless_active = n_cull > 0;
         // Whether this device can declare the pool at its fixed ceiling rather
         // than sizing it to the world. Two things have to hold, and both are
         // about never needing to clamp or truncate: the ceiling has to fit the
@@ -1832,7 +1745,6 @@ impl VkContext {
         let bindless_uab = pool_overflows_samplers && update_after_bind;
 
         //  Descriptor pool
-        let n_obj = draw_objects.len().max(1) as u32;
         let n_cluster = instanced_clusters.len() as u32;
         let n_atlas = gpu_text_atlases.len().max(1) as u32;
         let n_frames = frames as u32;
@@ -1856,18 +1768,15 @@ impl VkContext {
                 .descriptor_count(n_frames * 5 + n_frames + gbuffer_sets_count),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                // per-obj(2) + per-frame {shadow + spot shadow + IBL
-                // irradiance + IBL prefilter + SSAO occlusion + the 2 area-light
-                // LTC tables} + per-frame probe cube array + text
-                // atlas + per-cluster(2) + per-frame composite(6: HDR resolve +
-                // bloom mip 0 + 3D colour LUT + the 3 view-mode G-buffer
-                // channels) + per-frame bindless texture pool.
+                // per-frame {shadow + spot shadow + IBL irradiance + IBL
+                // prefilter + SSAO occlusion + the 2 area-light LTC tables} +
+                // per-frame probe cube array + text atlas + per-frame
+                // composite(6: HDR resolve + bloom mip 0 + 3D colour LUT + the 3
+                // view-mode G-buffer channels) + per-frame bindless texture pool.
                 .descriptor_count(
-                    n_obj * 2
-                        + n_frames * 7
+                    n_frames * 7
                         + n_frames * probe_cube_count
                         + n_atlas
-                        + n_cluster * 2
                         + n_frames * 6
                         + bindless_pool_size as u32 * bindless_sets_count,
                 ),
@@ -1908,15 +1817,12 @@ impl VkContext {
                     .descriptor_count(storage_count),
             );
         }
-        // total sets: global (n_frames) + shadow global (n_frames) + per-obj +
-        // per-cluster object set + atlas + per-frame×cluster instance sets +
-        // per-frame composite sets + per-frame bindless sets + per-frame
-        // GPU-cull sets.
+        // total sets: global (n_frames) + shadow global (n_frames) + atlas +
+        // per-frame×cluster instance sets + per-frame composite sets + per-frame
+        // bindless sets + per-frame GPU-cull sets.
         let total_sets = n_frames
-            + n_obj
             + n_frames
             + n_atlas
-            + n_cluster
             + n_frames * n_cluster
             + n_frames
             + bindless_sets_count
@@ -2158,64 +2064,6 @@ impl VkContext {
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
 
-        // Per-object sets.
-        let object_set_layouts: Vec<_> = draw_objects
-            .iter()
-            .map(|_| object_set_layout.handle())
-            .collect();
-        let object_sets = if object_set_layouts.is_empty() {
-            vec![]
-        } else {
-            let sets =
-                alloc_descriptor_sets(&device, descriptor_pool.handle(), &object_set_layouts)?;
-            let last_tex = gpu_textures.len().saturating_sub(1);
-            // Resolve the image view a `normal_map_slot` samples: a real normal
-            // map is a texture in the shared pool at its own slot;
-            // `NO_NORMAL_MAP_SLOT` selects the flat-normal fallback (the first
-            // entry of `gpu_fallbacks`). `NO_ALBEDO_SLOT` likewise selects the
-            // white fallback, so an untextured material shows its tint.
-            let normal_view = |nms: usize| {
-                if nms == NO_NORMAL_MAP_SLOT {
-                    gpu_fallbacks[0].view
-                } else {
-                    gpu_textures[nms.min(last_tex)].view
-                }
-            };
-            let albedo_view = |ts: usize| {
-                if ts == NO_ALBEDO_SLOT {
-                    gpu_fallbacks[1].view
-                } else {
-                    gpu_textures[ts.min(last_tex)].view
-                }
-            };
-            for (&set, obj) in sets.iter().zip(draw_objects.iter()) {
-                let albedo_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(albedo_view(obj.texture_slot))
-                    .sampler(linear_sampler.handle());
-                let nm_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(normal_view(obj.normal_map_slot))
-                    .sampler(linear_sampler.handle());
-                let writes = [
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(0)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(std::slice::from_ref(&albedo_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(1)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(std::slice::from_ref(&nm_info)),
-                ];
-                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-                // every set and resource it names belongs to this device.
-                unsafe { device.update_descriptor_sets(&writes, &[]) };
-            }
-            sets
-        };
-
         // Bindless static pass: bindless static main pass resources. A dedicated
         // set layout (set 1: SSBO + bindless texture pool), pipeline layout,
         // pipeline, per-frame GpuObjectData storage buffers, and one descriptor
@@ -2268,18 +2116,25 @@ impl VkContext {
                 )
                 .map_err(|e| format!("bindless pipeline layout: {e}"))?;
 
-            let (bvs, bfs) =
+            // The engine's own pair is the program for every bucket that
+            // declares no Shader and the source of the Wireframe twin; bucket 0
+            // takes the world default Shader's pair where it declares one.
+            let engine_pair =
                 compile_bindless_shaders(hot_reload, bindless_pool_size, probe_cube_count)?;
-            let pipeline = create_main_pipeline(
+            let pipeline = build_bucket_pipeline(
                 &device,
-                MeshPipelineTargets {
+                BucketPipelineTargets {
                     render_pass: main_render_pass.handle(),
                     layout: pipeline_layout.handle(),
-                    vert_spv: &bvs,
-                    frag_spv: &bfs,
+                    msaa_samples,
+                    swapchain_format,
+                    hot_reload,
+                    pool_size: bindless_pool_size,
+                    probe_count: probe_cube_count as usize,
                 },
-                msaa_samples,
-                swapchain_format,
+                0,
+                world_shaders[0],
+                &engine_pair,
             )?;
 
             // Per-frame GpuObjectData storage buffers, persistently mapped.
@@ -2348,7 +2203,7 @@ impl VkContext {
                 Some(set_layout),
                 sets,
                 buffers,
-                (bvs, bfs),
+                engine_pair,
             )
         } else {
             (
@@ -2363,8 +2218,7 @@ impl VkContext {
 
         // Material-referenced shaders (ShaderHandle 1..) each get their own
         // bindless main-pass pipeline, so their draws route into their own region
-        // of the GPU-culled command buffer. They exist only on the bindless path:
-        // a world with a legacy per-draw main shader carries no bucket routing.
+        // of the GPU-culled command buffer.
         let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
         let world_pipelines = match (bindless_pipeline_layout.as_ref(), bucket_shaders.is_empty()) {
             (Some(layout), false) => {
@@ -2382,17 +2236,13 @@ impl VkContext {
                         layout: layout.handle(),
                         msaa_samples,
                         swapchain_format,
+                        hot_reload,
+                        pool_size: bindless_pool_size,
+                        probe_count: probe_cube_count as usize,
                     },
                     bucket_shaders,
                     &bindless_main_spv,
                 )?
-            }
-            (_, false) => {
-                return Err(
-                    "material-referenced world shaders need the bindless main pass, which a \
-                     world-authored main shader disables"
-                        .to_string(),
-                );
             }
             _ => Vec::new(),
         };
@@ -2770,10 +2620,11 @@ impl VkContext {
                 GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
             };
             let records = instance_object_records(&instanced_clusters, gpu_textures.len() as u32);
-            // Cluster base LOD slice (absolute indices, so `base_vertex = 0`);
-            // per-instance LOD is a follow-up. Every instance is visible +
-            // resident + cullable, so its finite per-instance world AABB is
-            // frustum / distance / Hi-Z tested independently by the cull kernel.
+            // Cluster base LOD slice (absolute indices, so `base_vertex = 0`),
+            // which `build_draw_args_buffer` patches per frame for the clusters
+            // that declare alternates. Every instance is visible + resident +
+            // cullable, so its finite per-instance world AABB is frustum /
+            // distance / Hi-Z tested independently by the cull kernel.
             let mut draw_args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
             for cluster in &instanced_clusters {
                 for _ in &cluster.instances {
@@ -3144,107 +2995,6 @@ impl VkContext {
         } else {
             (None, Vec::new(), None, Vec::new(), None, None)
         };
-
-        // Per-cluster (albedo, normal) sets share the per-object layout.
-        let cluster_object_sets: Vec<vk::DescriptorSet> = if instanced_clusters.is_empty() {
-            Vec::new()
-        } else {
-            let cluster_layouts: Vec<_> = instanced_clusters
-                .iter()
-                .map(|_| object_set_layout.handle())
-                .collect();
-            let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &cluster_layouts)?;
-            let last_tex = gpu_textures.len().saturating_sub(1);
-            let normal_view = |nms: usize| {
-                if nms == NO_NORMAL_MAP_SLOT {
-                    gpu_fallbacks[0].view
-                } else {
-                    gpu_textures[nms.min(last_tex)].view
-                }
-            };
-            let albedo_view = |ts: usize| {
-                if ts == NO_ALBEDO_SLOT {
-                    gpu_fallbacks[1].view
-                } else {
-                    gpu_textures[ts.min(last_tex)].view
-                }
-            };
-            for (cluster, &set) in instanced_clusters.iter().zip(sets.iter()) {
-                let albedo_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(albedo_view(cluster.texture_slot))
-                    .sampler(linear_sampler.handle());
-                let nm_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(normal_view(cluster.normal_map_slot))
-                    .sampler(linear_sampler.handle());
-                let writes = [
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(0)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(std::slice::from_ref(&albedo_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(1)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(std::slice::from_ref(&nm_info)),
-                ];
-                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-                // every set and resource it names belongs to this device.
-                unsafe { device.update_descriptor_sets(&writes, &[]) };
-            }
-            sets
-        };
-
-        // Per-frame, per-cluster instance storage buffers (host-mapped).
-        let mut instance_buffers: Vec<Vec<super::allocator::PooledBuffer>> =
-            Vec::with_capacity(frames);
-        let mut instance_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
-        if !instanced_clusters.is_empty() {
-            let instance_set_layout = instance_set_layout_opt
-                .as_ref()
-                .expect("instance set layout was created because instanced draws are needed");
-            for _ in 0..frames {
-                let mut bufs: Vec<super::allocator::PooledBuffer> =
-                    Vec::with_capacity(instanced_clusters.len());
-                for cluster in &instanced_clusters {
-                    let size_bytes = (cluster.instances.len().max(1)
-                        * std::mem::size_of::<[[f32; 4]; 4]>())
-                        as vk::DeviceSize;
-                    let buf = alloc.create_buffer(
-                        size_bytes,
-                        vk::BufferUsageFlags::STORAGE_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )?;
-                    bufs.push(buf);
-                }
-                // Allocate one descriptor set per cluster for this frame.
-                let layouts: Vec<_> = instanced_clusters
-                    .iter()
-                    .map(|_| instance_set_layout.handle())
-                    .collect();
-                let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &layouts)?;
-                // Wire each set to its buffer.
-                for (i, &set) in sets.iter().enumerate() {
-                    let info = vk::DescriptorBufferInfo::default()
-                        .buffer(bufs[i].buffer())
-                        .offset(0)
-                        .range(vk::WHOLE_SIZE);
-                    let write = vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&info));
-                    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call,
-                    // and every set and resource it names belongs to this device.
-                    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-                }
-                instance_buffers.push(bufs);
-                instance_sets.push(sets);
-            }
-        }
 
         // Text atlas sets.
         let text_atlas_layouts: Vec<_> = gpu_text_atlases
@@ -3855,20 +3605,6 @@ impl VkContext {
             );
         }
 
-        let (cull_bvh, always_draw) = crate::gfx::bvh::partition_draw_objects(&draw_objects);
-
-        // Membership flags parallel to `draw_objects` so a recycled draw slot is
-        // added to `always_draw` at most once. The free-list allocator starts
-        // with every build-time slot already in use; runtime spawns and streamed
-        // chunks pop a vacated slot before appending past this count.
-        let always_draw_member = {
-            let mut member = vec![false; draw_objects.len()];
-            for &i in &always_draw {
-                member[i as usize] = true;
-            }
-            member
-        };
-
         let shadow_pipeline_layout_field = if shadow_pipeline_opt.is_some() {
             Some(shadow_pipeline_layout)
         } else {
@@ -3947,8 +3683,6 @@ impl VkContext {
             textures: gpu_textures,
             fallback_textures: gpu_fallbacks,
             linear_sampler,
-            main_pipeline,
-            main_pipeline_layout,
             light_cull,
             cull: VkCull {
                 bindless_pipeline,
@@ -3999,13 +3733,8 @@ impl VkContext {
                 upload: crate::vulkan::upload_ring::UploadRing::new(frames),
             },
             instanced: VkInstanced {
-                pipeline: instanced_pipeline_opt,
-                pipeline_layout: instanced_pipeline_layout_opt,
-                set_layout: instance_set_layout_opt,
-                object_sets: cluster_object_sets,
-                sets: instance_sets,
-                buffers: instance_buffers,
                 lod_buckets: vec![Vec::new(); instanced_clusters.len()],
+                any_lod: crate::gfx::lod::any_cluster_has_lod(&instanced_clusters),
                 clusters: instanced_clusters,
             },
             composite: super::context::CompositeState {
@@ -4090,6 +3819,7 @@ impl VkContext {
                 reload_pending: shader_reload_pending,
                 watcher: shader_watcher,
             },
+            world_shader: world_programs.cloned(),
             frame_stats: std::cell::Cell::new(crate::gfx::profile::RenderStats::default()),
             draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
             timestamp_query_pool,
@@ -4100,11 +3830,9 @@ impl VkContext {
                 global_set_layout,
                 global_update_after_bind,
                 probe_cube_count,
-                object_set_layout,
                 _text_set_layout: text_set_layout,
                 _descriptor_pool: descriptor_pool,
                 global_sets,
-                object_sets,
                 text_atlas_sets,
             },
             geometry: VkGeometry {
@@ -4118,22 +3846,8 @@ impl VkContext {
             chunk_stream: VkChunkStream {
                 vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
                 idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-                descriptor_pool: None,
-                object_set: None,
-                texture_slot: None,
-                normal_map_slot: None,
-            },
-            clone: super::context::CloneState {
-                descriptor_pool: None,
-                object_sets: Vec::new(),
-                free_offsets: Vec::new(),
-                slot_by_draw_idx: std::collections::HashMap::new(),
-                texture_slots: Vec::new(),
-                normal_map_slots: Vec::new(),
             },
             skinned: VkSkinned {
-                pipeline: None,
-                pipeline_layout: None,
                 joint_set_layout: None,
                 descriptor_pool: None,
                 vertex_buffer: super::allocator::PooledBuffer::null(),
@@ -4141,7 +3855,6 @@ impl VkContext {
                 index_buffer: super::allocator::PooledBuffer::null(),
                 index_buffer_bytes: 0,
                 draw_objects: Vec::new(),
-                object_sets: Vec::new(),
                 joint_buffers: Vec::new(),
                 joint_sets: Vec::new(),
                 joint_matrices: Vec::new(),
@@ -4178,24 +3891,24 @@ impl VkContext {
                 pass_command_pools,
                 pass_command_buffers,
             },
-            draw: super::context::DrawState {
-                n_objects: draw_objects.len(),
-                objects: draw_objects,
-                bvh: cull_bvh,
-                always: always_draw,
-                always_member: always_draw_member,
-                visible_scratch: Vec::new(),
-                graph_cache: None,
-                n_instances,
-                // Streamed-chunk record reserve (fixed at init = the worst-case
-                // resident chunk window). The cull buffers reserve `[n_objects +
-                // n_instances, +n_chunk)`; resident chunks fold in per frame, the
-                // unused tail is disabled. 0 for a non-voxel world.
-                n_chunk: n_chunk_max,
-                // Set in `upload_skinned` once the skin fold is built; the cull
-                // buffers reserve the tail at init via the threaded `n_skinned`
-                // capacity, but `cull_count()` reads this runtime count.
-                n_skinned: 0,
+            draw: {
+                let n_objects = draw_objects.len();
+                super::context::DrawState {
+                    n_objects,
+                    objects: draw_objects,
+                    graph_cache: None,
+                    n_instances,
+                    // Runtime record reserve (fixed at init): the worst-case
+                    // resident streamed-chunk window plus the runtime-clone budget.
+                    // The cull buffers reserve `[n_objects + n_instances,
+                    // +n_runtime)`; resident chunks and spawned clones fold in per
+                    // frame, the unused tail is disabled.
+                    n_runtime: n_chunk_max + clone_reserve(n_objects),
+                    // Set in `upload_skinned` once the skin fold is built; the cull
+                    // buffers reserve the tail at init via the threaded `n_skinned`
+                    // capacity, but `cull_count()` reads this runtime count.
+                    n_skinned: 0,
+                }
             },
             view: super::context::ViewState {
                 clear_color,

@@ -141,7 +141,7 @@ impl RenderBackend for MtlContext {
         fn remove_decal(&mut self, decal_id: usize) -> Result<(), String>;
         fn add_emitter(&mut self, record: crate::gfx::particles::ParticleEmitterRecord) -> Result<usize, String>;
         fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String>;
-        fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> Result<(), String>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -155,9 +155,6 @@ impl RenderBackend for MtlContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        vert_bytes: &[u8],
-        frag_bytes: &[u8],
-        shadow_bytes: &[u8],
     ) -> RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
         Ok(MtlContext::upload_skinned(
@@ -165,9 +162,6 @@ impl RenderBackend for MtlContext {
             vertices,
             indices,
             draw_objects,
-            vert_bytes,
-            frag_bytes,
-            shadow_bytes,
         )?)
     }
 
@@ -213,17 +207,16 @@ impl RenderBackend for MtlContext {
         Ok(MtlContext::rebuild_static_geometry(self, changes)?)
     }
 
-    // The inherent takes the two stage slices it needs rather than the whole
-    // payload struct: a bucket pipeline pairs `vertex_main` with
-    // `fragment_main_bindless` and has no instanced or shadow variant.
     fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+        shader: crate::gfx::backend_init::WorldShader<'_>,
     ) -> RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
-        MtlContext::install_world_shader(self, bucket, shader.vert, shader.frag)
-            .map_err(RenderError::ShaderCompile)
+        let programs = shader.programs.ok_or_else(|| {
+            RenderError::ShaderCompile("shader bucket carries no programs".into())
+        })?;
+        MtlContext::install_world_shader(self, bucket, programs).map_err(RenderError::ShaderCompile)
     }
 
     // Trait method returns unit; the inherent returns Result (buffer
@@ -270,11 +263,8 @@ impl RenderBackend for MtlContext {
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-        _texture_slot: usize,
-        _normal_map_slot: usize,
     ) -> RenderResult<()> {
         debug_assert_main_thread("setup_chunk_streaming");
-        // Metal binds chunk textures per draw, so the slot args are unused.
         Ok(self.setup_chunk_streaming(chunk_vtx_bytes, chunk_idx_bytes)?)
     }
 

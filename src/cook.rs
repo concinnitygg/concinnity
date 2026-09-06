@@ -272,10 +272,6 @@ impl WorldBuilder {
             return Err(std::io::Error::new(e.kind(), e.to_string()));
         }
 
-        // The cook ships no shader compilers of its own; hand it this build's
-        // before any ShaderStage is compiled.
-        concinnity_shader::install();
-
         // Bare `source` filenames resolve under the root the embedder named
         // (`assets_in`). Without one there is no tree to search, so only paths
         // that stand on their own resolve.
@@ -284,9 +280,8 @@ impl WorldBuilder {
         // module consumes, so a world compiled in memory runs in the same
         // process.
         let platform = concinnity_engine::platform::current();
-        let loaded: LoadedWorld =
-            prepare_world(&self.lines.concat(), assets_dir.as_deref(), platform)
-                .map_err(|errs| report_validation_errors(&errs))?;
+        let loaded: LoadedWorld = prepare_world(&self.lines.concat(), assets_dir.as_deref())
+            .map_err(|errs| report_validation_errors(&errs))?;
         build_compiled(loaded.assets, assets_dir.as_deref(), None, platform)
     }
 }

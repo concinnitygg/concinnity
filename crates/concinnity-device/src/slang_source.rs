@@ -8,19 +8,24 @@
 
 /// The exact source text a program compiles. `file` names the `.slang` under
 /// core's `src/render/shaders/`; under `hot_reload` its checkout copy is
-/// preferred, for the shader and for every fragment spliced into it.
-pub(crate) fn assemble(hot_reload: bool, file: &str, defines: &[(&str, &str)]) -> String {
-    if !hot_reload {
-        return concinnity_core::render::slang_source::assemble(file, defines);
-    }
-    concinnity_core::render::slang_source::assemble_with(file, defines, from_checkout)
+/// preferred, for the shader and for every fragment spliced into it. `splices`
+/// fills markers no file in the tree can, which today is only a world's own
+/// distance field.
+pub(crate) fn assemble(
+    hot_reload: bool,
+    file: &str,
+    defines: &[(&str, &str)],
+    splices: &[(&str, &str)],
+) -> String {
+    let resolve = |f: &str| hot_reload.then(|| from_checkout(f)).flatten();
+    concinnity_core::render::slang_source::assemble_with_splices(file, defines, resolve, splices)
 }
 
 // The checkout's copy of `file`, leaked so it can join the embedded texts under
 // one `&'static str` resolver. Hot-reload is a development path that recompiles
 // a bounded set of shaders on edit, so the leak is bounded by how many distinct
 // shader revisions one session touches.
-fn from_checkout(file: &str) -> Option<&'static str> {
+pub(crate) fn from_checkout(file: &str) -> Option<&'static str> {
     let path = format!(
         "{}/../concinnity-core/src/render/shaders/{}",
         env!("CARGO_MANIFEST_DIR"),
@@ -43,7 +48,7 @@ mod tests {
     // defines leading.
     #[test]
     fn the_embedded_body_is_assembled_with_defines_leading() {
-        let src = assemble(false, "fog.slang", &[("A", "1")]);
+        let src = assemble(false, "fog.slang", &[("A", "1")], &[]);
         assert!(src.starts_with("#define A 1\n"));
         assert!(!src.contains("{POST_COMMON}"));
     }
@@ -54,7 +59,7 @@ mod tests {
     #[test]
     fn a_missing_hot_reload_file_falls_back_to_embedded() {
         assert_eq!(
-            assemble(true, "definitely_not_a_shader.slang", &[("A", "1")]),
+            assemble(true, "definitely_not_a_shader.slang", &[("A", "1")], &[]),
             "#define A 1\n"
         );
     }
@@ -65,8 +70,8 @@ mod tests {
     #[test]
     fn hot_reload_matches_the_embedded_assembly_for_an_unedited_shader() {
         assert_eq!(
-            assemble(true, "fog.slang", &[("A", "1")]),
-            assemble(false, "fog.slang", &[("A", "1")])
+            assemble(true, "fog.slang", &[("A", "1")], &[]),
+            assemble(false, "fog.slang", &[("A", "1")], &[])
         );
     }
 }

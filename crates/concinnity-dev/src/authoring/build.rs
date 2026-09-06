@@ -14,20 +14,8 @@ use concinnity_cook::build_only::LoadedWorld;
 // validation and asset fetching behave identically. The `cn build` blob path
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
-    // Install this build's shader toolchain (and the backend's shader-layout
-    // validator, where it ships one) before any shader compiles: the cook has no
-    // compiler of its own, and a user shader that mis-declares an engine buffer
-    // struct should fail the build with a clear message instead of faulting the
-    // GPU at run time. Idempotent, so covering `run` and the FFI entry points
-    // here costs nothing when the CLI already installed at startup.
-    concinnity_shader::install();
-
-    let loaded = concinnity_cook::prepare_world(
-        content,
-        crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
-    )
-    .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
+    let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
+        .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
 
     Ok(loaded)
 }

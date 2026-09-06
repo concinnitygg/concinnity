@@ -7,17 +7,15 @@ bounding box; a user-authored fragment shader sphere-traces an SDF inside
 the box, composites correctly with the surrounding scene through the depth
 buffer, and shades hits with the engine's lighting helpers.
 
-The fragment shader is selected per backend: a `fragment_shaders` map keyed
-by `"metal"` / `"hlsl"` / `"glsl"` lets one volume target multiple backends,
-and the build only requires the entry for the backend it is building for. A
-single `fragment_shader` path is the fallback when no map entry matches.
+The distance field is one `.slang` file for every backend. The build
+compiles it, so a field that does not compile fails `cn build` rather than
+the renderer, and a shipped player needs no shader compiler of its own.
 
 ## Parameters
 
 - `centre`: An array of 3 floats. World-space centre of the bounding box. Defaults to `[0.0, 0.0, 0.0]`.
 - `extent`: An array of 3 floats. XYZ half-widths of the bounding box. The raymarch is clipped to the box, so the SDF only has to be well-defined inside this region. Defaults to `[1.0, 1.0, 1.0]`.
-- `fragment_shader`: A string. Single-platform fragment shader source path (e.g. `"shaders/chrome_blob.metal"`), resolved relative to the project's `assets/` at build time. Used when `fragment_shaders` has no entry for the building backend; the file extension must match the backend (`.metal` / `.hlsl`). The file defines the SDF's `map` and `shade` functions.
-- `fragment_shaders`: An object. Per-backend fragment shader source paths keyed by `"metal"`, `"hlsl"`, or `"glsl"`. Takes priority over `fragment_shader`, letting one volume target multiple backends from a single declaration. Optional.
+- `fragment_shader`: A string. Distance-field source path (e.g. `"shaders/chrome_blob.slang"`), resolved relative to the project's `assets/` at build time. The file defines `map` and `shade`, or `sampleVolume` for a volumetric volume.
 - `max_gradient`: A float. Worst-case gradient of the SDF, used to size the cone-march step. `1.0` is correct for any well-formed SDF; higher values shorten the step but stay safe. Must be > 0. Defaults to `1.0`.
 - `max_steps`: An integer. Maximum cone-march steps per pixel. Clamped to `[8, 256]`. Defaults to `64`.
 - `max_distance`: A float. Maximum march distance in metres. Must be ≥ 0.1. Defaults to `30.0`.

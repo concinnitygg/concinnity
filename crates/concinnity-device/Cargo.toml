@@ -22,15 +22,13 @@ default = ["native"]
 native = []
 metal = []
 directx = []
-vulkan = [
-    "dep:ash",
-    "dep:shaderc",
-]
+vulkan = ["dep:ash"]
 
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-slang = { workspace = true }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 
 bytemuck = { version = "1", features = ["derive"] }
 hex = "0.4.3"
@@ -47,7 +45,6 @@ sha2 = "0.11.0"
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
 ash = "0.38"
 glfw = "0.62.0"
-shaderc = { version = "0.10.1", features = ["build-from-source"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = [
@@ -55,7 +52,6 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Direct3D_Dxc",
-    "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
@@ -67,17 +63,14 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 # Activated by the `vulkan` feature for a Vulkan build on Windows (shared native
-# Win32 windowing, no glfw). `shaderc` compiles GLSL to SPIR-V at runtime.
+# Win32 windowing, no glfw).
 ash = { version = "0.38", optional = true }
-shaderc = { version = "0.10.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Activated by the `vulkan` feature for a Vulkan build on macOS, which runs over
 # the MoltenVK ICD. Windowing is the shared native AppKit layer (src/appkit),
-# the same one the Metal backend uses, so no GLFW is involved. `shaderc`
-# compiles GLSL to SPIR-V at runtime.
+# the same one the Metal backend uses, so no GLFW is involved.
 ash = { version = "0.38", optional = true }
-shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"] }
 
 block2 = "0.6.2"
 dispatch2 = "0.3.1"

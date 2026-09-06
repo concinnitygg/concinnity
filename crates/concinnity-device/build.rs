@@ -19,21 +19,9 @@ use concinnity_toolchain::{
 };
 use std::path::PathBuf;
 
-// The raymarch SDF fragments are not standalone shaders: they are text
-// templates assembled with the user's SdfVolume source at runtime (see
-// src/metal/raymarch.rs), so they can only ever compile from source.
-const SOURCE_ONLY_METAL_SHADERS: &[&str] = &[
-    "raymarch_helpers.metal",
-    "raymarch_shadow.metal",
-    "raymarch_template.metal",
-    "raymarch_volumetric_template.metal",
-];
-
-// Shared declarations spliced into the shaders that carry the marker, matching
-// what `metal::pipeline::shader_source` substitutes when the same shader
-// compiles from source. The `.msl` extension keeps a fragment out of the
-// `.metal` precompile scan: it is not a standalone library.
-const METAL_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{OBJECT_DATA}", "object_common.msl")];
+// Metal shaders that only ever compile from source at runtime. None since the
+// raymarch templates became `raymarch.slang`.
+const SOURCE_ONLY_METAL_SHADERS: &[&str] = &[];
 
 // The Metal bindless texture-pool capacity and reflection-probe array length,
 // baked into the single-source shaders at build time. Must match
@@ -105,30 +93,47 @@ struct DxilAbi {
 // signature at all. `dx_crosscheck.sh` runs this script's DirectX branch, which
 // is where such an edit gets caught.
 const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
+    // The draw cull. Its registers are pinned in the source because declaration
+    // order would hand `cull_status` u0 and `commands` u1, the reverse of what
+    // `directx/cull.rs` binds; the shadow variant declares no status or Hi-Z.
     DxilAbi {
-        file: "gbuffer_prepass.slang",
-        gates: &["GB_STATIC"],
-        entry: "gbuffer_prepass_vertex",
-        profile: "vs_6_0",
-        registers: &[("gb_view", "b0"), ("gb_model", "b1")],
-    },
-    DxilAbi {
-        file: "gbuffer_prepass.slang",
-        gates: &["GB_INSTANCED"],
-        entry: "gbuffer_prepass_vertex_instanced",
-        profile: "vs_6_0",
-        registers: &[("gb_view", "b0"), ("instances", "t0")],
-    },
-    DxilAbi {
-        file: "gbuffer_prepass.slang",
-        gates: &["GB_SKINNED"],
-        entry: "gbuffer_prepass_vertex_skinned",
-        profile: "vs_6_0",
+        file: "cull.slang",
+        gates: &[],
+        entry: "cull_kernel",
+        profile: "cs_6_0",
         registers: &[
-            ("gb_view", "b0"),
-            ("gb_model", "b1"),
-            ("cur_joints", "t0"),
-            ("prev_joints", "t1"),
+            ("cull", "b0"),
+            ("objects", "t0"),
+            ("draw_args", "t1"),
+            ("hiz_tex", "t2"),
+            ("commands", "u0"),
+            ("cull_status", "u1"),
+        ],
+    },
+    DxilAbi {
+        file: "cull.slang",
+        gates: &["CULL_PHASE2"],
+        entry: "cull_kernel",
+        profile: "cs_6_0",
+        registers: &[
+            ("cull", "b0"),
+            ("objects", "t0"),
+            ("draw_args", "t1"),
+            ("hiz_tex", "t2"),
+            ("commands", "u0"),
+            ("cull_status", "u1"),
+        ],
+    },
+    DxilAbi {
+        file: "cull.slang",
+        gates: &["SHADOW_CULL"],
+        entry: "cull_kernel",
+        profile: "cs_6_0",
+        registers: &[
+            ("cull", "b0"),
+            ("objects", "t0"),
+            ("draw_args", "t1"),
+            ("commands", "u0"),
         ],
     },
     DxilAbi {
@@ -142,13 +147,6 @@ const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("objects", "t0"),
             ("prev_models", "t1"),
         ],
-    },
-    DxilAbi {
-        file: "gbuffer_prepass.slang",
-        gates: &["GB_FRAGMENT"],
-        entry: "gbuffer_prepass_fragment",
-        profile: "ps_6_0",
-        registers: &[("gb_mat", "b0")],
     },
     DxilAbi {
         file: "gbuffer_prepass.slang",
@@ -502,6 +500,24 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         defines: SLANG_MAIN_DEFINES,
     },
     SlangLibSpec {
+        name: "cull_phase1.slang",
+        file: "cull.slang",
+        entries: &["cull_kernel"],
+        defines: &[("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "cull_phase2.slang",
+        file: "cull.slang",
+        entries: &["cull_kernel"],
+        defines: &[("CULL_PHASE2", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "cull_shadow.slang",
+        file: "cull.slang",
+        entries: &["cull_kernel"],
+        defines: &[("SHADOW_CULL", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
         name: "light_cull.slang",
         file: "light_cull.slang",
         entries: &["light_cull_kernel"],
@@ -538,34 +554,10 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         defines: &[("PROBE_GGX", "1"), ("METAL_BINDINGS", "1")],
     },
     SlangLibSpec {
-        name: "gbuffer_prepass_vert.slang",
-        file: "gbuffer_prepass.slang",
-        entries: &["gbuffer_prepass_vertex"],
-        defines: &[("GB_STATIC", "1"), ("METAL_BINDINGS", "1")],
-    },
-    SlangLibSpec {
-        name: "gbuffer_prepass_vert_instanced.slang",
-        file: "gbuffer_prepass.slang",
-        entries: &["gbuffer_prepass_vertex_instanced"],
-        defines: &[("GB_INSTANCED", "1"), ("METAL_BINDINGS", "1")],
-    },
-    SlangLibSpec {
-        name: "gbuffer_prepass_vert_skinned.slang",
-        file: "gbuffer_prepass.slang",
-        entries: &["gbuffer_prepass_vertex_skinned"],
-        defines: &[("GB_SKINNED", "1"), ("METAL_BINDINGS", "1")],
-    },
-    SlangLibSpec {
         name: "gbuffer_prepass_vert_bindless.slang",
         file: "gbuffer_prepass.slang",
         entries: &["gbuffer_prepass_vertex_bindless"],
         defines: &[("GB_BINDLESS", "1"), ("METAL_BINDINGS", "1")],
-    },
-    SlangLibSpec {
-        name: "gbuffer_prepass_frag.slang",
-        file: "gbuffer_prepass.slang",
-        entries: &["gbuffer_prepass_fragment"],
-        defines: &[("GB_FRAGMENT", "1"), ("METAL_BINDINGS", "1")],
     },
     SlangLibSpec {
         name: "gbuffer_prepass_frag_bindless.slang",
@@ -968,9 +960,19 @@ fn spirv_artifact_name(label: &str, msaa: bool) -> String {
 // uses, so the text compiled here is the text it would have compiled -- which is
 // what lets `directx::slang_builtins` serve these bytes without re-deriving the
 // cache key.
+//
+// DXIL is the one target slangc cannot emit alone: it hands the HLSL to dxc,
+// loaded as `dxcompiler.dll`, which only a Windows host has. The DirectX branch
+// runs on any other host only under `dx_crosscheck.sh`, which type-checks the
+// backend and never runs the binary, so that host embeds nothing and the lookup
+// answers `None` for everything.
 fn precompile_dxil() {
     use concinnity_core::render::slang_programs::dx;
 
+    if !cfg!(windows) {
+        concinnity_toolchain::precompile_slang_artifacts(&[], "engine_dxil.rs", "embedded_dxil");
+        return;
+    }
     let artifacts: Vec<_> = dx::ALL
         .iter()
         .map(|p| concinnity_toolchain::SlangArtifact {
@@ -991,12 +993,7 @@ fn main() {
     if backend == Some(Backend::Metal) {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");
-        precompile_metal_shaders(
-            &shaders_dir,
-            SOURCE_ONLY_METAL_SHADERS,
-            METAL_SHADER_FRAGMENTS,
-            SLANG_METAL_LIBS,
-        );
+        precompile_metal_shaders(&shaders_dir, SOURCE_ONLY_METAL_SHADERS, SLANG_METAL_LIBS);
         assert_slang_metal_abi();
         emit_slang_metal_defines();
     }
@@ -1010,53 +1007,129 @@ fn main() {
     emit_shader_compile_source_hash();
 }
 
-// The Metal main-pass binding layout is a stable contract: world-authored
-// Shader assets hand-write MSL against it. The `.slang` source pins the loose
-// buffers with register() numbers, but the two parameter blocks (the texture
-// argument buffer and the sampler block) land on first-free slot assignment,
-// which is compiler behaviour rather than an annotation. Assert the emitted
-// MSL here so a slangc upgrade that moves a slot fails the build instead of
-// binding garbage at draw time. Skipped when slangc is absent (the runtime
-// compile path reports its own error then).
+// The Metal main-pass binding layout is what the encoders in `metal/draw/`
+// write, and a world Shader's stages compile from the same declarations. The
+// `.slang` sources pin the loose buffers with register()
+// numbers, but the bindless pair's two parameter blocks and every per-draw
+// texture and sampler land on first-free slot assignment, which is compiler
+// behaviour rather than an annotation. Assert the emitted MSL here so a slangc
+// upgrade that moves a slot fails the build instead of binding garbage at draw
+// time. Skipped when slangc is absent (the runtime compile path reports its own
+// error then).
 fn assert_slang_metal_abi() {
     if slang::slangc_path().is_none() {
         return;
     }
-    let source =
-        concinnity_core::render::slang_source::assemble("main_bindless.slang", SLANG_MAIN_DEFINES);
-    let job = slang::SlangJob {
-        source: &source,
-        file_name: "main_bindless_abi_check.slang",
-        entries: &["fragment_main_bindless"],
-        target: slang::SlangTarget::Metal,
-    };
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let msl = slang::compile(&job, &out_dir).expect("slang ABI check compile");
-    let msl = String::from_utf8_lossy(&msl);
-    for (param, index) in [
-        ("view_cb", 0),
-        ("lights_cb", 4),
-        ("shadow_cb", 5),
-        ("probe_set_cb", 6),
-        ("tex", 7),
-        ("local_lights_sb", 8),
-        ("objects_sb", 9),
-        ("samps", 10),
-        ("cluster_cb", 11),
-        ("cluster_list_sb", 12),
-        ("spot_shadows_sb", 13),
-        ("area_lights_sb", 14),
-    ] {
-        // Emitted parameter names carry a `_<n>` suffix (e.g. `tex_1`).
-        let re = format!("{param}_1 [[buffer({index})]]");
-        assert!(
-            msl.contains(&re),
-            "main_bindless.slang Metal ABI drifted: expected `{re}` in the emitted MSL. \
-             The Metal binding layout is frozen (world shaders hand-write against it); \
-             fix the .slang declarations or the slangc slot assignment before shipping."
-        );
+    for abi in SLANG_METAL_ENTRY_ABI {
+        let source = concinnity_core::render::slang_source::assemble(abi.file, abi.defines);
+        let job = slang::SlangJob {
+            source: &source,
+            file_name: "metal_abi_check.slang",
+            entries: &[abi.entry],
+            target: slang::SlangTarget::Metal,
+        };
+        let msl = slang::compile(&job, &out_dir).expect("slang ABI check compile");
+        let msl = String::from_utf8_lossy(&msl);
+        for (param, attribute) in abi.slots {
+            assert!(
+                msl_binds(&msl, param, attribute),
+                "{}: Metal ABI drifted at `{}`: expected `{param}` on [[{attribute}]] in the \
+                 emitted MSL. \
+                 The Metal binding layout is what the encoder writes and what world shaders \
+                 compile from; fix the .slang declarations or the slot assignment \
+                 before shipping.",
+                abi.file,
+                abi.entry
+            );
+        }
     }
 }
+
+// Whether the emitted MSL binds `param` at `attribute`. Emitted parameter names
+// carry a `_<n>` suffix whose number is the compiler's own (`joints_3`), so the
+// name is matched up to it.
+fn msl_binds(msl: &str, param: &str, attribute: &str) -> bool {
+    let marker = format!(" [[{attribute}]]");
+    msl.match_indices(&marker).any(|(at, _)| {
+        msl[..at]
+            .rsplit(|c: char| c.is_whitespace())
+            .next()
+            .and_then(|name| name.rsplit_once('_'))
+            .is_some_and(|(head, tail)| head == param && tail.chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
+// One entry point and the Metal slots its host encoder writes, as
+// (parameter, attribute) pairs.
+struct MetalAbi {
+    file: &'static str,
+    entry: &'static str,
+    defines: &'static [(&'static str, &'static str)],
+    slots: &'static [(&'static str, &'static str)],
+}
+
+const SLANG_METAL_ENTRY_ABI: &[MetalAbi] = &[
+    // The draw cull's decision half. Its buffers are pinned by register() and
+    // the Hi-Z texture takes texture(0) from declaration order; the slots are
+    // what `metal/cull.rs` binds once for this dispatch and the ICB encode
+    // dispatch that follows it on the same encoder.
+    MetalAbi {
+        file: "cull.slang",
+        entry: "cull_kernel",
+        defines: &[("METAL_BINDINGS", "1")],
+        slots: &[
+            ("objects", "buffer(0)"),
+            ("draw_args", "buffer(1)"),
+            ("cull", "buffer(2)"),
+            ("cull_status", "buffer(5)"),
+            ("hiz_tex", "texture(0)"),
+        ],
+    },
+    // Phase 2 re-tests candidates only, so it never reads `draw_args`; the
+    // encode dispatch after it does, from the same binding.
+    MetalAbi {
+        file: "cull.slang",
+        entry: "cull_kernel",
+        defines: &[("CULL_PHASE2", "1"), ("METAL_BINDINGS", "1")],
+        slots: &[
+            ("objects", "buffer(0)"),
+            ("cull", "buffer(2)"),
+            ("cull_status", "buffer(5)"),
+            ("hiz_tex", "texture(0)"),
+        ],
+    },
+    MetalAbi {
+        file: "cull.slang",
+        entry: "cull_kernel",
+        defines: &[("SHADOW_CULL", "1"), ("METAL_BINDINGS", "1")],
+        slots: &[
+            ("objects", "buffer(0)"),
+            ("draw_args", "buffer(1)"),
+            ("cull", "buffer(2)"),
+            ("cull_status", "buffer(5)"),
+        ],
+    },
+    MetalAbi {
+        file: "main_bindless.slang",
+        entry: "fragment_main_bindless",
+        defines: SLANG_MAIN_DEFINES,
+        slots: &[
+            ("view_cb", "buffer(0)"),
+            ("lights_cb", "buffer(4)"),
+            ("shadow_cb", "buffer(5)"),
+            ("probe_set_cb", "buffer(6)"),
+            ("tex", "buffer(7)"),
+            ("local_lights_sb", "buffer(8)"),
+            ("objects_sb", "buffer(9)"),
+            ("samps", "buffer(10)"),
+            ("cluster_cb", "buffer(11)"),
+            ("cluster_list_sb", "buffer(12)"),
+            ("spot_shadows_sb", "buffer(13)"),
+            ("area_lights_sb", "buffer(14)"),
+        ],
+    },
+];
 
 // The DirectX bindless main-pass binding layout is a stable contract for the
 // same reason Metal's is: a world Shader asset builds its own PSO against the

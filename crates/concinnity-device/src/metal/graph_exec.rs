@@ -119,17 +119,11 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // that reconstructs world-space position from depth (fog / decals /
     // raymarch / transparent) instead of each re-inverting `vp`.
     pub inv_vp: [[f32; 4]; 4],
-    pub visible: &'a [u32],
     pub frustum: &'a Frustum,
-    // Instanced clusters culled + LOD-bucketed + uploaded once this frame,
-    // shared by the main / SSR / SSAO / velocity passes (see
-    // `metal/instanced.rs`). Empty when the scene has no clusters.
-    pub prepared_instances: &'a super::instanced::PreparedInstances,
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // This frame's skinned deformed-vertex buffer. `Some` only
-    // when the skinned fold is active (bindless + static geometry + a folded
-    // SkinnedMesh). The Cull pass's `encode_main_skin` writes it; the Main /
+    // This frame's skinned deformed-vertex buffer. `Some` only when a
+    // SkinnedMesh has uploaded. The Cull pass's `encode_main_skin` writes it; the Main /
     // Main2 skinned ICB tail binds it as the vertex buffer for that draw range.
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     // The previous-frame skinned deformed-vertex buffer: the slot one
@@ -150,10 +144,6 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // `Velocity` pass is in the graph this frame (matches
     // `FrameGraphInputs::velocity_enabled`).
     pub vel_uniforms: Option<&'a VelocityUniforms>,
-    // Skinned joint matrices from the previous frame, used only by the
-    // Velocity pass to emit motion vectors for animated meshes. Empty
-    // when TAA is off.
-    pub prev_skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // TAA-resolve pass uniforms. `Some` only when the `TaaResolve` pass
     // is in the graph this frame (matches `FrameGraphInputs::taa_enabled`).
     pub taa_uniforms: Option<&'a TaaParams>,
@@ -502,8 +492,6 @@ impl MtlContext {
                 };
                 self.encode_shadow_pass(
                     cmd_buf,
-                    params.skinned_joint_bufs,
-                    params.cam_pos,
                     params.object_buffer,
                     params.deformed_skinned,
                     raymarch_view.as_ref(),
@@ -519,11 +507,6 @@ impl MtlContext {
                     vp: params.vp,
                     view: self.view.matrix,
                     cam_pos: params.cam_pos,
-                },
-                crate::metal::draw::main::DrawInputs {
-                    visible: params.visible,
-                    prepared_instances: params.prepared_instances,
-                    skinned_joint_bufs: params.skinned_joint_bufs,
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
                     object_buffer: params.object_buffer,
@@ -571,13 +554,6 @@ impl MtlContext {
                 self.encode_gbuffer_prepass(
                     cmd_buf,
                     &gview,
-                    crate::metal::post::gbuffer::GbufferSceneInputs {
-                        visible: params.visible,
-                        cam_pos: params.cam_pos,
-                        prepared_instances: params.prepared_instances,
-                        cur_joint_bufs: params.skinned_joint_bufs,
-                        prev_joint_bufs: params.prev_skinned_joint_bufs,
-                    },
                     crate::metal::post::gbuffer::GbufferGpuBuffers {
                         object_buffer: params.object_buffer,
                         prev_model_buffer: params.prev_model_buffer,

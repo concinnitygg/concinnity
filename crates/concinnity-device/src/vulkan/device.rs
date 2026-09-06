@@ -80,6 +80,10 @@ pub(super) struct LogicalDevice {
     // enables. False on an RT-incapable GPU or under XeSS, and the renderer stays
     // on SSR.
     pub rt_capable: bool,
+    // `depthBiasClamp` was enabled, so a shadow pipeline may bind a non-zero
+    // `depth_bias_clamp`. A device without it renders the shadow passes
+    // unclamped.
+    pub depth_bias_clamp: bool,
     // `descriptorBindingSampledImageUpdateAfterBind` was enabled, so the bindless
     // texture pool's set layout may opt into
     // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` and budget
@@ -334,6 +338,9 @@ pub(super) fn create_logical_device(
         // pipeline variants. Inert (and the mode falls back to solid fill) on a
         // device without it.
         .fill_mode_non_solid(base_supported.fill_mode_non_solid != 0)
+        // The shadow passes' depth-bias clamp. Inert (and the clamp drops to
+        // 0.0) on a device without it.
+        .depth_bias_clamp(base_supported.depth_bias_clamp != 0)
         .shader_int16(base_supported.shader_int16 != 0)
         .shader_storage_image_write_without_format(
             base_supported.shader_storage_image_write_without_format != 0,
@@ -454,6 +461,7 @@ pub(super) fn create_logical_device(
             device,
             memory_budget: has_memory_budget,
             rt_capable: false,
+            depth_bias_clamp: base_supported.depth_bias_clamp != 0,
             update_after_bind: false,
         });
     }
@@ -497,6 +505,7 @@ pub(super) fn create_logical_device(
         device,
         memory_budget: has_memory_budget,
         rt_capable,
+        depth_bias_clamp: base_supported.depth_bias_clamp != 0,
         update_after_bind: want_update_after_bind,
     })
 }

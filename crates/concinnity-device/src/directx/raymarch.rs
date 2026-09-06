@@ -49,13 +49,16 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::platform::Platform;
+use concinnity_core::render::slang_programs::raymarch::{self, Family};
+use concinnity_slang::SlangTarget;
+
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use crate::components::sdf_volume::SdfVolume;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::{
-    compile_hlsl, main_input_layout, serialize_desc_and_create, shader_source,
-};
+use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_fallback_white_resource, create_hdr_resolve_target,
     transition_barrier,
@@ -63,19 +66,12 @@ use crate::directx::texture::{
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::LightUniforms;
 
-const RAYMARCH_HELPERS_HLSL: &str = include_str!("shaders/raymarch_helpers.hlsl");
-const RAYMARCH_TEMPLATE_HLSL: &str = include_str!("shaders/raymarch_template.hlsl");
-const RAYMARCH_SHADOW_HLSL: &str = include_str!("shaders/raymarch_shadow.hlsl");
-const RAYMARCH_VOLUMETRIC_TEMPLATE_HLSL: &str =
-    include_str!("shaders/raymarch_volumetric_template.hlsl");
-
-// `RaymarchView` (per-frame view cbuffer) and `RaymarchVolumeUniforms`
-// (per-volume SDF cbuffer) are GPU-free layout structs that live in
-// `core::render`; re-export them so
-// `crate::directx::raymarch::{RaymarchView,RaymarchVolumeUniforms}` are unchanged
-// for the encode + `volume_uniforms_from` paths.
-pub(in crate::directx) use crate::directx::uniforms::RaymarchView;
-pub(in crate::directx) use crate::directx::uniforms::RaymarchVolumeUniforms;
+// One declaration for all three backends, in `core::render::uniforms`.
+// Re-exported so `crate::directx::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
+// stay the paths the encode and `volume_uniforms_from` sites use.
+pub(in crate::directx) use concinnity_core::render::uniforms::{
+    RaymarchView, RaymarchVolumeUniforms,
+};
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
@@ -181,18 +177,46 @@ pub(in crate::directx) struct RaymarchResources {
     pub(in crate::directx) volumes: Vec<RaymarchVolumeRecord>,
 }
 
-// Compile the per-volume HLSL source by wrapping the user's bytes
-// between the engine-shipped helpers and the template. The wrap order
-// is helpers → user → template so the template's `raymarch_fragment`
-// can call the user's `map` / `shade` through the helpers' forward
-// decls.
-fn wrap_user_source(user_source: &str, hot_reload: bool) -> String {
-    let helpers = shader_source(hot_reload, "raymarch_helpers.hlsl", RAYMARCH_HELPERS_HLSL);
-    let template = shader_source(hot_reload, "raymarch_template.hlsl", RAYMARCH_TEMPLATE_HLSL);
-    format!(
-        "{}\n// === user SdfVolume::fragment_shader ===\n{}\n// === engine raymarch template ===\n{}\n",
-        helpers, user_source, template
-    )
+// The DXIL for one family of a volume's field, as (vertex, fragment).
+//
+// The cook compiled these; a DXIL container holds exactly one entry, so each
+// stage is its own artifact. A template edit makes both miss and compile here.
+fn family_dxil(
+    programs: &SdfPrograms,
+    family: Family,
+    hot_reload: bool,
+    label: &str,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
+    let dxil = |entry: &str, profile: &'static str| -> Result<Vec<u8>, String> {
+        crate::raymarch_source::artifact(
+            programs,
+            &crate::raymarch_source::Request {
+                family,
+                platform: Platform::Hlsl,
+                entries: &[entry],
+                target: SlangTarget::Dxil(profile),
+                hot_reload,
+                label,
+            },
+        )
+        .map(|bytes| bytes.into_owned())
+    };
+    let vs = dxil(
+        stages
+            .next()
+            .expect("a family declares a vertex entry")
+            .entry,
+        "vs_6_0",
+    )?;
+    let ps = dxil(
+        stages
+            .next()
+            .expect("a family declares a fragment entry")
+            .entry,
+        "ps_6_0",
+    )?;
+    Ok((vs, ps))
 }
 
 // Root signature shared by every per-volume raymarch PSO.
@@ -367,40 +391,13 @@ fn create_raymarch_pso(
 fn compile_volume_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
-    user_source_bytes: &[u8],
+    programs: &SdfPrograms,
     asset_label: &str,
     msaa_samples: u32,
     hot_reload: bool,
 ) -> Result<ID3D12PipelineState, String> {
-    let user_source = std::str::from_utf8(user_source_bytes).map_err(|e| {
-        format!(
-            "SdfVolume '{}': fragment shader payload is not valid UTF-8: {}",
-            asset_label, e
-        )
-    })?;
-    let wrapped = wrap_user_source(user_source, hot_reload);
-    let vs = compile_hlsl(&wrapped, "raymarch_vertex", "vs_5_1")
-        .map_err(|e| format!("SdfVolume '{}': vertex compile: {}", asset_label, e))?;
-    let ps = compile_hlsl(&wrapped, "raymarch_fragment", "ps_5_1")
-        .map_err(|e| format!("SdfVolume '{}': fragment compile: {}", asset_label, e))?;
+    let (vs, ps) = family_dxil(programs, Family::Surface, hot_reload, asset_label)?;
     create_raymarch_pso(device, root_sig, &vs, &ps, msaa_samples)
-}
-
-// Wrap a volumetric user shader: helpers → user → volumetric template.
-// FXC DCEs the unused surface forward decls (`map`, `shade`) along
-// with engine helpers that reference them (`sdfNormal`, `coneRaymarch`),
-// so the volumetric author doesn't need to provide stub definitions.
-fn wrap_user_source_volumetric(user_source: &str, hot_reload: bool) -> String {
-    let helpers = shader_source(hot_reload, "raymarch_helpers.hlsl", RAYMARCH_HELPERS_HLSL);
-    let template = shader_source(
-        hot_reload,
-        "raymarch_volumetric_template.hlsl",
-        RAYMARCH_VOLUMETRIC_TEMPLATE_HLSL,
-    );
-    format!(
-        "{}\n// === user SdfVolume::fragment_shader (volumetric) ===\n{}\n// === engine raymarch volumetric template ===\n{}\n",
-        helpers, user_source, template
-    )
 }
 
 // Volumetric variant of the raymarch PSO: same root signature + same
@@ -500,30 +497,12 @@ fn create_raymarch_volumetric_pso(
 fn compile_volume_volumetric_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
-    user_source_bytes: &[u8],
+    programs: &SdfPrograms,
     asset_label: &str,
     msaa_samples: u32,
     hot_reload: bool,
 ) -> Result<ID3D12PipelineState, String> {
-    let user_source = std::str::from_utf8(user_source_bytes).map_err(|e| {
-        format!(
-            "SdfVolume '{}' (volumetric): fragment shader payload is not valid UTF-8: {}",
-            asset_label, e
-        )
-    })?;
-    let wrapped = wrap_user_source_volumetric(user_source, hot_reload);
-    let vs = compile_hlsl(&wrapped, "raymarch_volumetric_vertex", "vs_5_1").map_err(|e| {
-        format!(
-            "SdfVolume '{}' (volumetric): vertex compile: {}",
-            asset_label, e
-        )
-    })?;
-    let ps = compile_hlsl(&wrapped, "raymarch_volumetric_fragment", "ps_5_1").map_err(|e| {
-        format!(
-            "SdfVolume '{}' (volumetric): fragment compile: {}",
-            asset_label, e
-        )
-    })?;
+    let (vs, ps) = family_dxil(programs, Family::Volumetric, hot_reload, asset_label)?;
     create_raymarch_volumetric_pso(device, root_sig, &vs, &ps, msaa_samples)
 }
 
@@ -576,18 +555,6 @@ fn create_raymarch_shadow_root_signature(
         ..Default::default()
     };
     serialize_desc_and_create(device, &desc, "raymarch shadow root sig")
-}
-
-// Wrap the user's HLSL for the shadow PSO. Helpers → user → shadow
-// template. The user's `shade` is dead code (FXC DCE strips it) so
-// only `map` ends up sampled by the shadow march.
-fn wrap_user_source_shadow(user_source: &str, hot_reload: bool) -> String {
-    let helpers = shader_source(hot_reload, "raymarch_helpers.hlsl", RAYMARCH_HELPERS_HLSL);
-    let template = shader_source(hot_reload, "raymarch_shadow.hlsl", RAYMARCH_SHADOW_HLSL);
-    format!(
-        "{}\n// === user SdfVolume::fragment_shader ===\n{}\n// === engine raymarch shadow template ===\n{}\n",
-        helpers, user_source, template
-    )
 }
 
 // Build the depth-only shadow PSO for one volume. No RTV, no MSAA
@@ -664,25 +631,11 @@ fn create_raymarch_shadow_pso(
 fn compile_volume_shadow_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
-    user_source_bytes: &[u8],
+    programs: &SdfPrograms,
     asset_label: &str,
     hot_reload: bool,
 ) -> Result<ID3D12PipelineState, String> {
-    let user_source = std::str::from_utf8(user_source_bytes).map_err(|e| {
-        format!(
-            "SdfVolume '{}': fragment shader payload is not valid UTF-8: {}",
-            asset_label, e
-        )
-    })?;
-    let wrapped = wrap_user_source_shadow(user_source, hot_reload);
-    let vs = compile_hlsl(&wrapped, "raymarch_shadow_vertex", "vs_5_1")
-        .map_err(|e| format!("SdfVolume '{}': shadow vertex compile: {}", asset_label, e))?;
-    let ps = compile_hlsl(&wrapped, "raymarch_shadow_fragment", "ps_5_1").map_err(|e| {
-        format!(
-            "SdfVolume '{}': shadow fragment compile: {}",
-            asset_label, e
-        )
-    })?;
+    let (vs, ps) = family_dxil(programs, Family::Shadow, hot_reload, asset_label)?;
     create_raymarch_shadow_pso(device, root_sig, &vs, &ps)
 }
 
@@ -1019,26 +972,10 @@ impl RaymarchResources {
             sampler_base_gpu,
             sampler_descriptor_size,
         } = handles;
-        // Filter `.hlsl` volumes; Metal-first SDFs get dropped with a
-        // warning so the rest of the world keeps rendering.
-        let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes
-            .iter()
-            .filter(|(v, _, label)| {
-                let p = v.fragment_shader.to_ascii_lowercase();
-                if p.ends_with(".hlsl") {
-                    true
-                } else {
-                    tracing::warn!(
-                        "SdfVolume '{}': fragment shader '{}' is not .hlsl; \
-                         skipping on DirectX (Metal-first SDF, the rest of \
-                         the world still renders)",
-                        label,
-                        v.fragment_shader
-                    );
-                    false
-                }
-            })
-            .collect();
+        // Every volume is this backend's: one distance field serves all three,
+        // so there is no per-backend source to select between and nothing to
+        // filter out. This used to drop anything not named `.hlsl`.
+        let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes.iter().collect();
         if active.is_empty() {
             return Ok(None);
         }
@@ -1085,31 +1022,41 @@ impl RaymarchResources {
         // unlike the .hlsl filter above, a compile error in an active
         // volume is a developer-time bug, not a graceful fallback.
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
-        for (vol, bytes, label) in &active {
+        for (vol, payload, label) in &active {
+            let programs = crate::raymarch_source::decode(payload, label)?;
             let pso = dump_on_err(
                 info_queue,
                 if vol.volumetric {
                     compile_volume_volumetric_pso(
                         device,
                         &root_sig,
-                        bytes,
+                        &programs,
                         label,
                         msaa_samples,
                         hot_reload,
                     )
                 } else {
-                    compile_volume_pso(device, &root_sig, bytes, label, msaa_samples, hot_reload)
+                    compile_volume_pso(
+                        device,
+                        &root_sig,
+                        &programs,
+                        label,
+                        msaa_samples,
+                        hot_reload,
+                    )
                 },
             )?;
-            // Shadow PSO only when the asset opts in. Compile failures
-            // here abort init alongside the main PSO; the shadow
-            // template is engine-shipped, so the only realistic failure
-            // is a user `map` that doesn't compile in HLSL, which would
-            // already have failed for the main PSO above.
+            // Shadow PSO only when the asset opts in.
             let shadow_pso = if vol.cast_shadows {
                 Some(dump_on_err(
                     info_queue,
-                    compile_volume_shadow_pso(device, &shadow_root_sig, bytes, label, hot_reload),
+                    compile_volume_shadow_pso(
+                        device,
+                        &shadow_root_sig,
+                        &programs,
+                        label,
+                        hot_reload,
+                    ),
                 )?)
             } else {
                 None

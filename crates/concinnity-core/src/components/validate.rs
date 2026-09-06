@@ -1,12 +1,11 @@
 //! Named bake-time validators for the data-only assets. Each function clamps or
 //! normalizes an asset's authored value into a self-consistent runtime value.
-//! The authoring registry names the function via `validate: <fn>` (or
-//! `validate_for: <fn>` when the clamp also reads the shader platform the world
-//! is cooked for) and applies it while baking the blob record; a runtime bake
+//! The authoring registry names the function via `validate: <fn>` and applies
+//! it while baking the blob record; a runtime bake
 //! applies the same function before installing the value. The runtime never runs these on a loaded
 //! world -- a baked record is already validated.
 
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 
 use crate::components::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, MAX_WATER_WAVES,
@@ -15,43 +14,12 @@ use crate::components::{
     SpotLightGeometry, VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 use crate::math::sqrt;
-use crate::platform::Platform;
-
-// Extension of the file name at the end of `path`, or "" when it has none.
-// The no_std stand-in for `std::path::Path::extension`.
-fn path_extension(path: &str) -> &str {
-    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    match file.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => ext,
-        _ => "",
-    }
-}
-
-// Resolve the fragment shader source path `platform` selects from a volume's
-// `fragment_shaders` map (preferred) or its `fragment_shader` fallback.
-fn sdf_source_for(v: &SdfVolume, platform: Platform) -> Option<String> {
-    if let Some(map) = &v.fragment_shaders
-        && let Some(src) = map.get(platform.key()).filter(|s| !s.is_empty())
-    {
-        return Some(src.clone());
-    }
-    if v.fragment_shader.is_empty() {
-        return None;
-    }
-    if platform.accepts_ext(path_extension(&v.fragment_shader)) {
-        Some(v.fragment_shader.clone())
-    } else {
-        None
-    }
-}
 
 /// Normalize an authored volume for the runtime: clamp the raymarch knobs to
-/// sane bounds, force shadows off for translucent volumetrics (they write no
-/// depth), and collapse the per-backend `fragment_shaders` map to
-/// `platform`'s `fragment_shader` (the DirectX raymarch pass filters volumes by
-/// that path's extension). The step-count bounds stay with the schema: they
+/// sane bounds and force shadows off for translucent volumetrics, which write
+/// no depth to cast from. The step-count bounds stay with the schema: they
 /// double as the runtime kernel's loop bound.
-pub fn sdf_volume(mut v: SdfVolume, platform: Platform) -> SdfVolume {
+pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
     use crate::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
     // Extents must be positive: a zero or negative extent would produce an
     // inside-out bounding box no fragment ever enters.
@@ -71,9 +39,6 @@ pub fn sdf_volume(mut v: SdfVolume, platform: Platform) -> SdfVolume {
     }
     if v.volumetric {
         v.cast_shadows = false;
-    }
-    if let Some(src) = sdf_source_for(&v, platform) {
-        v.fragment_shader = src;
     }
     v
 }
@@ -136,9 +101,6 @@ pub fn sky_rotation(mut args: SkyRotation) -> SkyRotation {
 pub fn material(mut args: Material) -> Material {
     args.roughness = args.roughness.clamp(0.0, 1.0);
     args.metallic = args.metallic.clamp(0.0, 1.0);
-    args.macro_variation = args.macro_variation.clamp(0.0, 1.0);
-    args.terrain_blend = args.terrain_blend.clamp(0.0, 1.0);
-    args.secondary_blend_sharpness = args.secondary_blend_sharpness.clamp(0.0, 1.0);
     args.alpha_cutoff = args.alpha_cutoff.clamp(0.0, 1.0);
     args.opacity = args.opacity.clamp(0.0, 1.0);
     // See-through glass is by definition transparent; opting into it implies
@@ -317,14 +279,5 @@ mod tests {
             ..DirectionalLight::default()
         });
         assert_eq!(d.intensity, 0.0);
-    }
-
-    #[test]
-    fn path_extension_matches_file_name_semantics() {
-        assert_eq!(path_extension("shaders/blob.metal"), "metal");
-        assert_eq!(path_extension("blob.hlsl"), "hlsl");
-        assert_eq!(path_extension("dir.v2/shader"), "");
-        assert_eq!(path_extension(".hidden"), "");
-        assert_eq!(path_extension("noext"), "");
     }
 }

@@ -27,19 +27,46 @@ use crate::render::shaders;
 /// The shared fragments, as (marker, file). A shader carrying a marker has the
 /// named file's text spliced in at that point.
 ///
-/// Two of them come in pairs, because a shader's resource bindings sit between
-/// the halves: PROBE_TYPES / RT_TYPES declare the records a binding names, and
-/// PROBE_COMMON / RT_TRACE the code that reads the bound resources.
+/// Three of them come in pairs, because a shader's resource bindings sit
+/// between the halves: MAIN_TYPES / PROBE_TYPES / RT_TYPES declare the records
+/// a binding names, and MAIN_SHADING / PROBE_COMMON / RT_TRACE the code that
+/// reads the bound resources.
+///
 /// PARTICLE_TYPES is the one shared by two halves of a *system* rather than of
 /// a shader: the simulation kernel writes the pool the render pair reads.
+///
+/// The order is load-bearing where one fragment carries another's marker: the
+/// splice runs the table once, so a nested marker is only replaced if its own
+/// row comes later.
 pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{POST_COMMON}", "post_common.slang"),
+    // MAIN_TYPES leads OBJECT_COMMON because it carries that marker itself:
+    // the object record belongs with the rest of the main pass's vocabulary,
+    // and a fragment spliced after its own marker has been passed would land
+    // unreplaced.
+    ("{MAIN_TYPES}", "main_types.slang"),
     ("{OBJECT_COMMON}", "object_common.slang"),
     ("{PROBE_TYPES}", "probe_types.slang"),
     ("{PROBE_COMMON}", "probe_common.slang"),
     ("{RT_TYPES}", "rt_types.slang"),
     ("{RT_TRACE}", "rt_trace.slang"),
     ("{PARTICLE_TYPES}", "particle_types.slang"),
+    // RAYMARCH_TYPES leads LIGHT_TYPES for the reason MAIN_TYPES leads
+    // OBJECT_COMMON: it carries that marker itself, and the main pass's own
+    // splice carries it too, so the light records land whichever half asked.
+    ("{RAYMARCH_TYPES}", "raymarch_types.slang"),
+    ("{LIGHT_TYPES}", "light_types.slang"),
+    ("{RAYMARCH_COMMON}", "raymarch_common.slang"),
+    ("{MAIN_SHADING}", "main_shading.slang"),
+    // SHADOW_BIAS trails both halves that carry it: the cascade compare
+    // offset is shared by the main pass and the raymarched surfaces, and a
+    // row placed ahead of theirs would leave the marker unreplaced.
+    ("{SHADOW_BIAS}", "shadow_bias.slang"),
+    // The two hooks a world Shader defines, with the engine's own shading as
+    // the default. A world compile passes its files as caller splices for the
+    // same markers, which take precedence over these rows.
+    ("{SURFACE_VERTEX}", "surface_vertex_default.slang"),
+    ("{SURFACE_FRAGMENT}", "surface_fragment_default.slang"),
 ];
 
 /// Prepend a `#define` line per `(name, value)` pair. The defines become part
@@ -100,14 +127,49 @@ pub fn assemble_with(
     defines: &[(&str, &str)],
     resolve: impl Fn(&str) -> Option<&'static str>,
 ) -> String {
+    assemble_with_splices(file, defines, resolve, &[])
+}
+
+/// The same assembly with caller-supplied text spliced in as well, for a shader
+/// whose source is only complete once something outside the shader tree is
+/// known. The raymarched SDF volumes are the case: a world authors the distance
+/// field, so `{SDF_BODY}` is filled from the volume's payload rather than from
+/// a file the table can name.
+///
+/// A caller's splice wins over a [`FRAGMENTS`] row for the same marker, which
+/// is how a world Shader's hooks replace the engine's default ones; the
+/// caller's splices also run again after the table, so a fragment may carry
+/// one of their markers and still have it filled. Like the defines and the
+/// shared fragments, they ride the text, which is what makes the
+/// content-addressed shader cache key two worlds' shaders apart.
+pub fn assemble_with_splices(
+    file: &str,
+    defines: &[(&str, &str)],
+    resolve: impl Fn(&str) -> Option<&'static str>,
+    splices: &[(&str, &str)],
+) -> String {
     let mut spliced = read(file, &resolve);
+    // The table fills every marker the caller does not claim, then the
+    // caller's text lands once, after it, so a table marker spelled inside a
+    // world file is never expanded and a marker a fragment introduces is
+    // still reached.
     for (marker, fragment_file) in FRAGMENTS {
-        if spliced.contains(marker) {
+        if spliced.contains(marker) && !splices.iter().any(|(m, _)| m == marker) {
             let text = read(fragment_file, &resolve);
             spliced = Cow::Owned(spliced.replace(marker, &text));
         }
     }
+    spliced = splice_all(spliced, splices);
     inject_defines(&spliced, defines)
+}
+
+fn splice_all<'a>(mut text: Cow<'a, str>, splices: &[(&str, &str)]) -> Cow<'a, str> {
+    for (marker, fill) in splices {
+        if text.contains(marker) {
+            text = Cow::Owned(text.replace(marker, fill));
+        }
+    }
+    text
 }
 
 fn read(file: &str, resolve: &impl Fn(&str) -> Option<&'static str>) -> Cow<'static, str> {
@@ -172,6 +234,123 @@ mod tests {
             assemble_with("fog.slang", &[], |_| None),
             assemble("fog.slang", &[])
         );
+    }
+
+    // A caller-supplied splice fills a marker no file in the table names, which
+    // is how a world's own distance field reaches the raymarch source.
+    #[test]
+    fn a_caller_splice_fills_a_marker_the_table_does_not_name() {
+        let src = assemble_with_splices(
+            "x.slang",
+            &[],
+            |f| (f == "x.slang").then_some("A\n{SDF_BODY}\nB\n"),
+            &[("{SDF_BODY}", "float map() { return 1.0; }")],
+        );
+        assert_eq!(src, "A\nfloat map() { return 1.0; }\nB\n");
+    }
+
+    // The caller's splices run after the table's, so a shared fragment may
+    // carry one of their markers. Nothing does today; the ordering is what
+    // keeps that from becoming a silent unreplaced marker if one ever does.
+    #[test]
+    fn a_caller_splice_reaches_a_marker_inside_a_shared_fragment() {
+        let src = assemble_with_splices(
+            "x.slang",
+            &[],
+            |f| match f {
+                "x.slang" => Some("{POST_COMMON}\n"),
+                "post_common.slang" => Some("frag {SDF_BODY} end"),
+                _ => None,
+            },
+            &[("{SDF_BODY}", "FILLED")],
+        );
+        assert_eq!(src, "frag FILLED end\n");
+    }
+
+    // A world file lands verbatim: a table marker spelled inside it (in a
+    // comment, say) is not expanded, and its text is never rescanned.
+    #[test]
+    fn a_caller_splice_is_not_rescanned_for_table_markers() {
+        let src = assemble_with_splices(
+            "x.slang",
+            &[],
+            |f| (f == "x.slang").then_some("{SURFACE_FRAGMENT}\n"),
+            &[(
+                "{SURFACE_FRAGMENT}",
+                "// see {MAIN_TYPES} and {SURFACE_VERTEX}\n",
+            )],
+        );
+        assert_eq!(src, "// see {MAIN_TYPES} and {SURFACE_VERTEX}\n\n");
+    }
+
+    // A caller splice for a marker the table also names replaces the table's
+    // default: a world Shader's hooks land where the engine's own would.
+    #[test]
+    fn a_caller_splice_wins_over_a_table_row_for_the_same_marker() {
+        let body = "{SURFACE_VERTEX}\n{SURFACE_FRAGMENT}\n";
+        let src = assemble_with_splices(
+            "x.slang",
+            &[],
+            |f| (f == "x.slang").then_some(body),
+            &[("{SURFACE_FRAGMENT}", "WORLD SHADE")],
+        );
+        assert!(src.contains("WORLD SHADE"));
+        assert!(
+            !src.contains("float4 shade(VertexOut in, GpuObjectData od)\n{"),
+            "default shade replaced"
+        );
+        assert!(
+            src.contains("VertexOut transform("),
+            "default transform kept"
+        );
+    }
+
+    // The two halves of the raymarch splice land in the order the source needs:
+    // the records a binding names, then the body that reads them, then the
+    // world's own field after both. The light records arrive through the types
+    // half, so a raymarch shader never declares them itself.
+    #[test]
+    fn the_raymarch_source_assembles_records_then_body_then_the_world_field() {
+        let src = assemble_with_splices(
+            "raymarch.slang",
+            &[("RAYMARCH_METAL", "1"), ("RAYMARCH_SURFACE", "1")],
+            shaders::embedded,
+            &[("{SDF_BODY}", "// the world's field")],
+        );
+        for (marker, _) in FRAGMENTS {
+            assert!(!src.contains(marker), "unspliced {marker}");
+        }
+        assert!(!src.contains("{SDF_BODY}"));
+        let types = src.find("struct SdfVolumeUniforms").expect("records");
+        let lights = src.find("struct LightUniforms").expect("light records");
+        let body = src.find("RayHit coneRaymarch(").expect("marcher");
+        let field = src.find("// the world's field").expect("world field");
+        let entry = src
+            .find("RaymarchFragOut raymarch_fragment(")
+            .expect("entry");
+        assert!(lights < types, "light records precede the volume block");
+        assert!(types < body, "records precede the body that reads them");
+        assert!(
+            body < field,
+            "the field is declared after the helpers call it"
+        );
+        assert!(field < entry, "the entry points come last");
+    }
+
+    // Both halves of the light-record splice resolve: the main pass carries it
+    // through its own types fragment and the raymarch pass through its. A
+    // shader that declared these itself would be the drift the split removes.
+    #[test]
+    fn both_passes_take_the_light_records_from_one_fragment() {
+        for file in ["main_bindless.slang", "raymarch.slang"] {
+            let src = assemble(file, &[]);
+            assert!(!src.contains("{LIGHT_TYPES}"), "{file} left the marker");
+            assert_eq!(
+                src.matches("struct LightUniforms").count(),
+                1,
+                "{file} declares the light block other than once"
+            );
+        }
     }
 
     // A body without the marker keeps its text byte for byte, so the splice

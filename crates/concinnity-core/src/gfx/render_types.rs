@@ -6,8 +6,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::math::sqrt;
-
 /// Capacity of the fixed directional-light array in `LightUniforms`.
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
 /// Capacity of the fixed point-light array in `LightUniforms`, which the
@@ -78,8 +76,8 @@ pub fn spot_shadow_slice_size(shadow_map_size: u32) -> u32 {
 /// upload may carry per object.
 pub const MAX_JOINTS: usize = 64;
 
-/// Per-draw-call material parameters pushed to the fragment shader at buffer(3).
-/// Must stay in sync with the `MaterialUniforms` struct in every .metal shader.
+/// A draw object's material scalars. A CPU record: the cull packs it into the
+/// `GpuObjectData` the GPU-driven pass reads, and no shader declares it.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct MaterialUniforms {
@@ -87,40 +85,6 @@ pub struct MaterialUniforms {
     pub roughness: f32,
     /// Metallic factor [0, 1]: 0 = dielectric, 1 = metal.
     pub metallic: f32,
-    /// Macro-variation strength [0, 1]; 0 disables the tiling-break noise.
-    pub macro_variation: f32,
-    /// Terrain-shading blend [0, 1]; 0 disables (default PBR sampling),
-    /// non-zero switches the shader to a triplanar world-space projection
-    /// with slope-based rocky-tint blending. See `Material::terrain_blend`.
-    pub terrain_blend: f32,
-    /// Linear-space RGB multiplier on the albedo sample.
-    pub tint: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad2: f32,
-    /// Additive emission colour in linear space.
-    pub emissive: [f32; 3],
-    /// Sharpness of the slope-based blend between the primary and the
-    /// `albedo_secondary` texture pair. 0 = wide soft gradient;
-    /// 1 = nearly hard cliff edge. Ignored unless both `terrain_blend > 0`
-    /// and the secondary texture pair is bound.
-    pub secondary_blend_sharpness: f32,
-    /// Index into the per-draw albedo texture (legacy path) or the
-    /// bindless texture pool (bindless path) for the slope-shaded
-    /// secondary albedo. `0` is also the fallback when the material
-    /// doesn't declare a secondary texture; the shader's
-    /// `terrain_blend > 0 && secondary_blend_sharpness > 0` gate keeps
-    /// it from being sampled in that case.
-    pub albedo_secondary_index: u32,
-    /// Companion to `albedo_secondary_index` for the slope-shaded
-    /// secondary normal map.
-    pub normal_secondary_index: u32,
-    /// Bindless-pool index for the emissive map. `0` means no map: the shader
-    /// gates on a non-zero index, falling back to the scalar `emissive` factor.
-    pub emissive_map_index: u32,
-    /// Bindless-pool index for the packed occlusion/roughness/metalness map
-    /// (R = occlusion, G = roughness, B = metalness). `0` means no map: the
-    /// shader keeps the scalar `roughness`/`metallic` and full occlusion.
-    pub orm_map_index: u32,
     /// Alpha-cutout threshold in [0, 1]; 0 disables the test. Non-zero makes the
     /// fragment shader discard any texel whose albedo alpha falls below it, which
     /// is how foliage and decal cards punch holes while staying in the opaque pass.
@@ -130,6 +94,21 @@ pub struct MaterialUniforms {
     /// transparent pass. Carried on the material so it rides Material ->
     /// DrawObject.material to the backend; the opaque main-pass shader ignores it.
     pub opacity: f32,
+    /// Linear-space RGB multiplier on the albedo sample.
+    pub tint: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
+    pub _pad0: f32,
+    /// Additive emission colour in linear space.
+    pub emissive: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
+    pub _pad1: f32,
+    /// Bindless-pool index for the emissive map. `0` means no map: the shader
+    /// gates on a non-zero index, falling back to the scalar `emissive` factor.
+    pub emissive_map_index: u32,
+    /// Bindless-pool index for the packed occlusion/roughness/metalness map
+    /// (R = occlusion, G = roughness, B = metalness). `0` means no map: the
+    /// shader keeps the scalar `roughness`/`metallic` and full occlusion.
+    pub orm_map_index: u32,
     /// 1 when this surface routes through the transparent pass instead of the
     /// opaque one (a glass MESH on an RT-capable device); 0 for opaque. A CPU
     /// routing flag: the backend reads it to skip the draw in the opaque pass +
@@ -145,32 +124,57 @@ pub struct MaterialUniforms {
     pub see_through: u32,
 }
 
+/// Runtime-clone cap: how many spawned clones the GPU-driven cull records
+/// reserve room for, past the streamed-chunk window.
+///
+/// Exhausting it takes 129+ live clones at once, which only runtime spawn or
+/// `world.jsonl` hot-reload churn reaches; the backend's
+/// `clone_static_draw_object` errors once the reserve is full (see
+/// [`runtime_reserve_full`]).
+pub const MAX_CLONE_DRAWS: usize = 128;
+
+/// How many clone records a world needs reserved. A clone copies an existing
+/// draw object's geometry slice, so a world with no build-time objects has
+/// nothing to clone from and reserves none -- which is what keeps `cull_count()`
+/// zero for a world with no geometry at all, and so keeps the GPU-driven path
+/// (and the pipelines it builds) off for a menu-only world.
+pub fn clone_reserve(n_objects: usize) -> usize {
+    if n_objects == 0 { 0 } else { MAX_CLONE_DRAWS }
+}
+
+/// Whether the runtime reserve has no record left for another object. Streamed
+/// chunks and clones share it, and a retired slot frees its record, so what
+/// counts is how many objects past the build-time count are resident now.
+pub fn runtime_reserve_full(objects: &[DrawObject], n_objects: usize, n_runtime: usize) -> bool {
+    objects
+        .iter()
+        .skip(n_objects)
+        .filter(|o| o.resident)
+        .count()
+        >= n_runtime
+}
+
 impl MaterialUniforms {
     /// Neutral material: matte, non-metallic, white tint, no emission.
     pub const DEFAULT: Self = Self {
         roughness: 0.8,
         metallic: 0.0,
-        macro_variation: 0.0,
-        terrain_blend: 0.0,
-        tint: [1.0, 1.0, 1.0],
-        _pad2: 0.0,
-        emissive: [0.0, 0.0, 0.0],
-        secondary_blend_sharpness: 0.5,
-        albedo_secondary_index: 0,
-        normal_secondary_index: 0,
-        emissive_map_index: 0,
-        orm_map_index: 0,
         alpha_cutoff: 0.0,
         opacity: 1.0,
+        tint: [1.0, 1.0, 1.0],
+        _pad0: 0.0,
+        emissive: [0.0, 0.0, 0.0],
+        _pad1: 0.0,
+        emissive_map_index: 0,
+        orm_map_index: 0,
         transparent: 0,
         see_through: 0,
     };
 }
 
 /// One directional light entry in LightUniforms.
-/// Layout (32 bytes) must match DirectionalLightData in every .metal shader.
-/// MSL shaders must declare float3 fields as packed_float3 in constant buffer
-/// structs; plain float3 has size=16 in MSL which shifts subsequent fields.
+/// Layout (32 bytes) mirrors `DirLight` in `main_types.slang`, which spells each
+/// (float3, scalar) pair as one float4 lane.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct DirectionalLightData {
@@ -185,8 +189,8 @@ pub struct DirectionalLightData {
 }
 
 /// One point light entry in LightUniforms.
-/// Layout (32 bytes) must match PointLightData in every .metal shader.
-/// Same packed_float3 requirement as DirectionalLightData above.
+/// Layout (32 bytes) mirrors `PointLight` in `main_types.slang`, spelled the
+/// same way as `DirectionalLightData`.
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct PointLightData {
@@ -264,7 +268,7 @@ const ZERO_POINT_LIGHT: PointLightData = PointLightData {
 };
 
 /// All scene lights packed into a single GPU buffer pushed at fragment buffer(4).
-/// Must stay in sync with LightUniforms in every .metal shader.
+/// Mirrors `LightUniforms` in `main_types.slang`; the layout guard reflects it.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LightUniforms {
@@ -1185,16 +1189,12 @@ impl DrawObject {
 /// cull kernel can read object bounds straight from this buffer without a
 /// layout change.
 ///
-/// Layout (176 bytes) must stay in sync with the shader-side record, declared
-/// once per language in concinnity-device: `vulkan/shaders/object_common.glsl`,
-/// `directx/shaders/object_common.hlsl` and `metal/shaders/object_common.msl`,
-/// each spliced into its backend's passes at an `{OBJECT_DATA}` marker, plus
-/// `shaders/object_common.slang` for the single-source passes.
-/// `object_data_layout` in concinnity-device pins the three hand-written
-/// fragments to each other, and `shader_layout` there pins this struct against
-/// slangc's reflection of the fourth.
+/// Layout (144 bytes) must stay in sync with the shader-side record, declared
+/// once in `shaders/object_common.slang` and spliced into every pass that
+/// strides the buffer; `shader_layout` in concinnity-device pins this struct
+/// against slangc's reflection of it on every target.
 ///
-/// `albedo_index` / `normal_index` (and the secondary / emissive / ORM indices)
+/// `albedo_index` / `normal_index` (and the emissive / ORM indices)
 /// are indices into each backend's single handle-indexed texture pool: albedo,
 /// normal, and every optional map share one dense table, so a texture used in
 /// more than one role resolves to one descriptor. The pool's two fallbacks
@@ -1218,42 +1218,21 @@ pub struct GpuObjectData {
     pub albedo_index: u32,
     /// Index into the bindless texture pool for this object's normal map.
     pub normal_index: u32,
-    /// Macro-variation strength [0, 1]; 0 disables the tiling-break noise.
-    pub macro_variation: f32,
-    /// Terrain-shading blend [0, 1]; 0 disables (default PBR sampling),
-    /// non-zero switches the shader to a triplanar world-space projection
-    /// with slope-based rocky-tint blending. See `Material::terrain_blend`.
-    pub terrain_blend: f32,
-    /// World-space AABB minimum (compute-cull bounds input).
-    pub bb_min: [f32; 3],
-    /// View-distance cutoff; 0 = no cutoff (compute-cull bounds input).
-    pub cull_distance: f32,
-    /// World-space AABB maximum (compute-cull bounds input).
-    pub bb_max: [f32; 3],
-    /// Sharpness of the slope-based blend between primary and
-    /// `albedo_secondary_index` textures. 0 = wide soft gradient;
-    /// 1 = nearly hard cliff edge. Mirrors
-    /// `MaterialUniforms::secondary_blend_sharpness`.
-    pub secondary_blend_sharpness: f32,
-    /// Bindless-pool index for the secondary albedo (slope-shaded).
-    /// 0 when the material doesn't declare a secondary texture; the
-    /// shader's `terrain_blend > 0` gate keeps it from being sampled
-    /// in that case.
-    pub albedo_secondary_index: u32,
-    /// Bindless-pool index for the secondary normal map (slope-shaded).
-    pub normal_secondary_index: u32,
     /// Bindless-pool index for the emissive map (0 = none). Mirrors
     /// `MaterialUniforms::emissive_map_index`.
     pub emissive_map_index: u32,
     /// Bindless-pool index for the packed occlusion/roughness/metalness map
     /// (0 = none). Mirrors `MaterialUniforms::orm_map_index`.
     pub orm_map_index: u32,
+    /// World-space AABB minimum (compute-cull bounds input).
+    pub bb_min: [f32; 3],
+    /// View-distance cutoff; 0 = no cutoff (compute-cull bounds input).
+    pub cull_distance: f32,
+    /// World-space AABB maximum (compute-cull bounds input).
+    pub bb_max: [f32; 3],
     /// Alpha-cutout threshold in [0, 1]; 0 disables the test. Mirrors
     /// `MaterialUniforms::alpha_cutoff`.
     pub alpha_cutoff: f32,
-    /// Rounds the record to a 16-byte multiple so an array of them keeps every
-    /// `model` matrix 16-byte aligned.
-    pub _pad: [f32; 3],
 }
 
 /// Resolve an albedo `texture_slot` to its index in the handle-indexed texture
@@ -1311,18 +1290,12 @@ impl GpuObjectData {
             metallic: material.metallic,
             albedo_index,
             normal_index,
-            macro_variation: material.macro_variation,
-            terrain_blend: material.terrain_blend,
+            emissive_map_index: material.emissive_map_index,
+            orm_map_index: material.orm_map_index,
             bb_min: bounds.bb_min,
             cull_distance: bounds.cull_distance,
             bb_max: bounds.bb_max,
-            secondary_blend_sharpness: material.secondary_blend_sharpness,
-            albedo_secondary_index: material.albedo_secondary_index,
-            normal_secondary_index: material.normal_secondary_index,
-            emissive_map_index: material.emissive_map_index,
-            orm_map_index: material.orm_map_index,
             alpha_cutoff: material.alpha_cutoff,
-            _pad: [0.0; 3],
         }
     }
 }
@@ -1441,10 +1414,8 @@ pub fn pack_skinned_record(
 /// `CULLABLE` selects whether the object is frustum/distance-tested at all
 /// (mirrors `DrawObject::cullable()`: non-cullable objects always draw).
 ///
-/// Layout (16 bytes) must stay in sync with the `GpuDrawArgs` struct in every
-/// backend's cull kernel: `main.metal` / the Metal `build_cull_pipeline`
-/// MSL, the inline cull HLSL in `directx/pipeline.rs`, and the inline cull
-/// GLSL in `vulkan/pipeline.rs`.
+/// Layout (16 bytes) must stay in sync with the `GpuDrawArgs` struct in
+/// `cull.slang` and in the Metal ICB encode kernel, `cull_encode.metal`.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuDrawArgs {
@@ -1471,14 +1442,31 @@ impl DrawArgsFlags {
     pub(crate) const CULLABLE: u32 = 2;
     // The record's shader bucket rides bits 8..16: the cull kernel routes the
     // record's indirect command into that bucket's ICB. Values and layout are
-    // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.metal).
+    // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.slang and
+    // cull_encode.metal).
     pub(crate) const BUCKET_SHIFT: u32 = 8;
 }
 
+/// The per-object outcomes the GPU cull records in its status buffer. Values
+/// mirror the `STATUS_*` constants in `cull.slang`; Metal's ICB encode kernel
+/// is told which one to draw rather than declaring them itself.
+pub struct CullStatus;
+
+impl CullStatus {
+    /// Visible in phase 1, drawn by the main pass.
+    pub const DRAWN: u32 = 0;
+    /// Hi-Z-occluded in phase 1; the only outcome phase 2 re-tests.
+    pub const HIZ_CANDIDATE: u32 = 1;
+    /// Frustum-, distance- or disabled-culled; settled.
+    pub const CULLED: u32 = 2;
+    /// A candidate phase 2 found visible, drawn by the disocclusion pass.
+    pub const REDRAW: u32 = 3;
+}
+
 /// Upper bound on world shader buckets a cull dispatch can route between (the
-/// ICB argument-buffer array length in the cull shaders). Mirrored by
-/// MAX_SHADER_BUCKETS in cull.metal, enforced by the world-shape check, and
-/// quoted as a number in the Shader asset docs.
+/// ICB argument-buffer array length in the Metal encode kernel). Mirrored by
+/// MAX_SHADER_BUCKETS in cull_encode.metal, enforced by the world-shape check,
+/// and quoted as a number in the Shader asset docs.
 pub const MAX_SHADER_BUCKETS: usize = 8;
 
 /// Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the
@@ -1620,10 +1608,7 @@ impl InstancedCluster {
         }
 
         for m in &self.instances {
-            let dx = m[3][0] - cam_pos[0];
-            let dy = m[3][1] - cam_pos[1];
-            let dz = m[3][2] - cam_pos[2];
-            let d = sqrt(dx * dx + dy * dy + dz * dz);
+            let d = crate::gfx::lod::instance_camera_distance(*m, cam_pos);
             let pick = crate::gfx::lod::pick_lod_level(&self.lod_alternates, d);
             buckets[pick].instances.push(*m);
         }
@@ -1770,6 +1755,37 @@ mod tests {
         );
     }
 
+    // A clone copies an existing draw object, so a world with none reserves no
+    // clone records; that is what keeps the GPU-driven path off for a
+    // menu-only world.
+    #[test]
+    fn the_clone_reserve_is_empty_without_build_time_objects() {
+        assert_eq!(clone_reserve(0), 0);
+        assert_eq!(clone_reserve(1), MAX_CLONE_DRAWS);
+        assert_eq!(clone_reserve(500), MAX_CLONE_DRAWS);
+    }
+
+    // Only resident objects past the build-time count hold a runtime record, so
+    // a retired slot frees its record and build-time objects never count.
+    #[test]
+    fn the_runtime_reserve_counts_resident_runtime_objects_only() {
+        let resident = draw_object();
+        let mut retired = draw_object();
+        retired.resident = false;
+        let n_objects = 2;
+        let objects = vec![
+            draw_object(),
+            draw_object(),
+            resident,
+            retired,
+            draw_object(),
+        ];
+        assert!(!runtime_reserve_full(&objects, n_objects, 3));
+        assert!(runtime_reserve_full(&objects, n_objects, 2));
+        assert!(runtime_reserve_full(&objects, n_objects, 0));
+        assert!(!runtime_reserve_full(&objects[..n_objects], n_objects, 1));
+    }
+
     // The regression this fixes: slot 0 is a real handle, so an unset albedo
     // encoded as 0 sampled whichever texture the world declared first. Only the
     // sentinel may reach the white entry.
@@ -1830,28 +1846,24 @@ mod tests {
     }
 
     #[test]
-    fn material_uniforms_layout_matches_msl() {
-        // The MSL `MaterialUniforms` in main.metal declares
-        // `tint` and `emissive` as packed_float3 (align 4), so the offsets line
-        // up with this tightly-packed Rust struct. A plain float3 there would
-        // 16-align `tint` and shift every following field.
-        assert_eq!(size_of::<MaterialUniforms>(), 80);
-        assert_eq!(offset_of!(MaterialUniforms, roughness), 0);
-        assert_eq!(offset_of!(MaterialUniforms, metallic), 4);
-        assert_eq!(offset_of!(MaterialUniforms, macro_variation), 8);
-        assert_eq!(offset_of!(MaterialUniforms, terrain_blend), 12);
-        assert_eq!(offset_of!(MaterialUniforms, tint), 16);
-        assert_eq!(offset_of!(MaterialUniforms, _pad2), 28);
-        assert_eq!(offset_of!(MaterialUniforms, emissive), 32);
-        assert_eq!(offset_of!(MaterialUniforms, secondary_blend_sharpness), 44);
-        assert_eq!(offset_of!(MaterialUniforms, albedo_secondary_index), 48);
-        assert_eq!(offset_of!(MaterialUniforms, normal_secondary_index), 52);
-        assert_eq!(offset_of!(MaterialUniforms, emissive_map_index), 56);
-        assert_eq!(offset_of!(MaterialUniforms, orm_map_index), 60);
-        assert_eq!(offset_of!(MaterialUniforms, alpha_cutoff), 64);
-        assert_eq!(offset_of!(MaterialUniforms, opacity), 68);
-        assert_eq!(offset_of!(MaterialUniforms, transparent), 72);
-        assert_eq!(offset_of!(MaterialUniforms, see_through), 76);
+    fn gpu_object_data_layout_matches_shaders() {
+        // `object_common.slang` spells each (vec3, scalar)
+        // pair as one 16-byte lane; the four indices fill the lane between the
+        // material block and the cull bounds.
+        assert_eq!(size_of::<GpuObjectData>(), 144);
+        assert_eq!(offset_of!(GpuObjectData, model), 0);
+        assert_eq!(offset_of!(GpuObjectData, tint), 64);
+        assert_eq!(offset_of!(GpuObjectData, roughness), 76);
+        assert_eq!(offset_of!(GpuObjectData, emissive), 80);
+        assert_eq!(offset_of!(GpuObjectData, metallic), 92);
+        assert_eq!(offset_of!(GpuObjectData, albedo_index), 96);
+        assert_eq!(offset_of!(GpuObjectData, normal_index), 100);
+        assert_eq!(offset_of!(GpuObjectData, emissive_map_index), 104);
+        assert_eq!(offset_of!(GpuObjectData, orm_map_index), 108);
+        assert_eq!(offset_of!(GpuObjectData, bb_min), 112);
+        assert_eq!(offset_of!(GpuObjectData, cull_distance), 124);
+        assert_eq!(offset_of!(GpuObjectData, bb_max), 128);
+        assert_eq!(offset_of!(GpuObjectData, alpha_cutoff), 140);
     }
 
     #[test]
@@ -2236,7 +2248,7 @@ mod tests {
         assert_eq!(rec.roughness, obj.material.roughness);
         assert_eq!(rec.emissive, obj.material.emissive);
         assert_eq!(rec.metallic, obj.material.metallic);
-        assert_eq!(rec.macro_variation, obj.material.macro_variation);
+        assert_eq!(rec.alpha_cutoff, obj.material.alpha_cutoff);
         assert_eq!(rec.bb_min, obj.bb_min);
         assert_eq!(rec.bb_max, obj.bb_max);
         assert_eq!(rec.cull_distance, obj.cull_distance);
@@ -2254,9 +2266,9 @@ mod tests {
 
     #[test]
     fn gpu_draw_args_layout_matches_shaders() {
-        // The `GpuDrawArgs` struct in every backend's cull kernel (Metal MSL,
-        // DirectX HLSL, Vulkan std430 GLSL) is four tightly packed uints; the
-        // kernel reads garbage if the Rust record drifts from it.
+        // The `GpuDrawArgs` struct in `cull.slang` and `cull_encode.metal` is
+        // four tightly packed uints; the kernel reads garbage if the Rust
+        // record drifts from it.
         assert_eq!(size_of::<GpuDrawArgs>(), 16);
         assert_eq!(offset_of!(GpuDrawArgs, index_count), 0);
         assert_eq!(offset_of!(GpuDrawArgs, index_offset), 4);

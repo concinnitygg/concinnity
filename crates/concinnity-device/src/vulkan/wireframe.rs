@@ -7,29 +7,24 @@
 // whenever the shaders they were built from are rebuilt, so a shipped runtime
 // never pays for them.
 //
-// The variants render the engine's built-in main shaders: material shader
-// buckets own their own pipelines and keep drawing solid, which is the one
-// place this diverges from Metal's encoder-state fill mode. A device without
-// `fillModeNonSolid` gets no variants and keeps solid fill.
+// The twin renders the engine's own bindless pair rather than a world Shader's:
+// a world fragment is free to ignore the fill mode's intent and the edges only
+// need to be visible. Every shader bucket shares the bindless pipeline layout,
+// so the one twin stands in for every bucket's pipeline while the mode is on,
+// as Metal's encoder-state fill mode does. A device without `fillModeNonSolid`
+// gets no twin and keeps solid fill.
 
 use crate::vulkan::owned::OwnedPipeline;
 
 use super::context::VkContext;
-use super::pipeline::{
-    MeshPipelineTargets, compile_bindless_shaders, compile_skinned_shaders,
-    create_main_pipeline_wireframe, create_skinned_pipeline_wireframe, resolve_instanced_shader,
-    resolve_main_shaders,
-};
+use super::pipeline::{MeshPipelineTargets, create_main_pipeline_wireframe};
 
-// Wireframe twins of the engine main-pass pipelines, keyed to the solid
-// pipeline each mirrors. A `None` entry means the pipeline it mirrors is not
-// live either (or its build failed), in which case the pass keeps the solid one.
+// The Wireframe twin of the GPU-driven main pipeline. `None` means the pass
+// it mirrors is not live either (or the build failed), in which case the pass
+// keeps the solid pipeline.
 #[derive(Default)]
 pub(super) struct VkWireframe {
     pub(super) bindless: Option<OwnedPipeline>,
-    pub(super) main: Option<OwnedPipeline>,
-    pub(super) instanced: Option<OwnedPipeline>,
-    pub(super) skinned: Option<OwnedPipeline>,
     // Set once a build has run so a failure is not retried every frame.
     built: bool,
 }
@@ -42,8 +37,8 @@ impl VkWireframe {
 }
 
 impl VkContext {
-    // Build the wireframe pipeline variants if the view mode needs them and
-    // they are not built yet. Called from `draw_frame` before the frame is
+    // Build the wireframe twin if the view mode needs it and it is not built
+    // yet. Called from `draw_frame` before the frame is
     // recorded.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
         if self.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
@@ -68,16 +63,15 @@ impl VkContext {
         }
     }
 
-    // Destroy the built variants so the next wireframe frame rebuilds them
-    // against the current shaders. Called wherever a main-pass pipeline is
-    // rebuilt (shader hot-reload, world shader swap) and at teardown.
+    // Destroy the built twin so the next wireframe frame rebuilds it against
+    // the current shaders. Called wherever the main-pass pipeline is rebuilt
+    // (shader hot-reload, world shader swap) and at teardown.
     pub(super) fn invalidate_wireframe_pipelines(&mut self) {
         self.wireframe.destroy();
     }
 
     fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
         let device = self.device.clone();
-        let hr = self.hot_reload.enabled;
         let msaa = self.msaa_samples;
         let format = self.swapchain.format;
         let render_pass = self.main_render_pass.handle();
@@ -85,82 +79,26 @@ impl VkContext {
             built: true,
             ..Default::default()
         };
-        // Any failure past this point leaves `built`'s successful pipelines
-        // unowned, so destroy what was made before propagating.
         let mut build = || -> Result<(), String> {
             if let (Some(_), Some(layout)) = (
                 self.cull.bindless_pipeline.as_ref(),
                 self.cull.bindless_pipeline_layout.as_ref(),
             ) {
-                let (vs, fs) = compile_bindless_shaders(
-                    hr,
-                    self.cull.bindless_pool_size,
-                    self.descriptors.probe_cube_count,
-                )?;
+                // The engine's pair, retained on the context past init.
+                let (vs, fs) = &self.cull.bindless_main_spv;
                 built.bindless = Some(create_main_pipeline_wireframe(
                     &device,
                     MeshPipelineTargets {
                         render_pass,
                         layout: layout.handle(),
-                        vert_spv: &vs,
-                        frag_spv: &fs,
+                        vert_spv: vs,
+                        frag_spv: fs,
                     },
                     msaa,
                     format,
                 )?);
             }
 
-            // The legacy, instanced, and skinned paths are rebuilt from the
-            // built-in shaders rather than a world's custom ones: a custom
-            // fragment stage is free to ignore the fill mode's intent and the
-            // edges only need to be visible.
-            let (main_vs, main_fs) = resolve_main_shaders(hr, &[], &[])?;
-            built.main = Some(create_main_pipeline_wireframe(
-                &device,
-                MeshPipelineTargets {
-                    render_pass,
-                    layout: self.main_pipeline_layout.handle(),
-                    vert_spv: &main_vs,
-                    frag_spv: &main_fs,
-                },
-                msaa,
-                format,
-            )?);
-
-            if let (Some(_), Some(layout)) = (
-                self.instanced.pipeline.as_ref(),
-                self.instanced.pipeline_layout.as_ref(),
-            ) && let Some(vs) = resolve_instanced_shader(hr, &[], true)?
-            {
-                built.instanced = Some(create_main_pipeline_wireframe(
-                    &device,
-                    MeshPipelineTargets {
-                        render_pass,
-                        layout: layout.handle(),
-                        vert_spv: &vs,
-                        frag_spv: &main_fs,
-                    },
-                    msaa,
-                    format,
-                )?);
-            }
-
-            if let (Some(_), Some(layout)) = (
-                self.skinned.pipeline.as_ref(),
-                self.skinned.pipeline_layout.as_ref(),
-            ) {
-                let (skinned_vs, _, frag) = compile_skinned_shaders(hr, &[])?;
-                built.skinned = Some(create_skinned_pipeline_wireframe(
-                    &device,
-                    MeshPipelineTargets {
-                        render_pass,
-                        layout: layout.handle(),
-                        vert_spv: &skinned_vs,
-                        frag_spv: &frag,
-                    },
-                    msaa,
-                )?);
-            }
             Ok(())
         };
         match build() {
@@ -169,8 +107,7 @@ impl VkContext {
                 Ok(())
             }
             Err(e) => {
-                // Retire whatever did build, and keep `built` set so the
-                // failure is not retried every frame.
+                // Keep `built` set so the failure is not retried every frame.
                 built.destroy();
                 built.built = true;
                 self.wireframe = built;
@@ -179,9 +116,9 @@ impl VkContext {
         }
     }
 
-    // The pipeline the main pass should bind for `solid`'s path this frame: the
-    // wireframe twin while that view mode is active and the twin built, else
-    // the solid pipeline itself.
+    // The pipeline the main pass should bind in place of `solid` this frame:
+    // the wireframe twin while that view mode is active and the twin built,
+    // else the solid pipeline itself.
     pub(in crate::vulkan) fn wireframe_or<'a>(
         &self,
         solid: &'a OwnedPipeline,

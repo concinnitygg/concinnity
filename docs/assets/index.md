@@ -58,7 +58,7 @@
 - [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
 - [ScrollPanel](ScrollPanel.md) - Runtime model that makes a band of UI rows scrollable and (optionally) collapsible.
 - [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.
-- [Shader](Shader.md) - Declares a custom shader program: the vertex and fragment stages, plus the optional GPU-instanced vertex stage.
+- [Shader](Shader.md) - Replaces how surfaces are shaded, and optionally how vertices are placed, with functions of your own. Written in Slang, one source for every backend.
 - [SkinnedMesh](SkinnedMesh.md) - A skeletally animated mesh placed directly in the world.
 - [SkyRotation](SkyRotation.md) - Turns the whole celestial sphere: the sky, the image-based lighting it casts, every [DirectionalLight](DirectionalLight.md), and any [Prop](Prop.md) hung on it.
 - [Slider](Slider.md) - A settings row that sets a continuous value by dragging a handle along a track.
@@ -129,7 +129,6 @@
 - [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / colour / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalised at build time.
 - [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
-- [StageSource](StageSource.md) - Source declaration for one stage of a [Shader](Shader.md).
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
 - [StoryCompareOp](StoryCompareOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 - [StoryCondition](StoryCondition.md) - A condition on a [StoryChoice](StoryChoice.md).

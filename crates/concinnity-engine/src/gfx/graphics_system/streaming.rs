@@ -483,9 +483,9 @@ impl GraphicsSystem {
     // was declared. Resolves the block palette and shared material, grows the
     // GPU buffers by a chunk-headroom region, and builds the ChunkStreamer;
     // `step` then generates and uploads chunks around the camera each frame.
-    // The buffer-growth + SRV/descriptor setup differs per backend (the
-    // `setup_chunk_streaming` match below); the palette/material resolution,
-    // headroom sizing, and streamer build are backend-agnostic.
+    // The buffer growth differs per backend (the `setup_chunk_streaming` match
+    // below); the palette/material resolution, headroom sizing, and streamer
+    // build are backend-agnostic.
     pub(super) fn setup_voxel_world_streaming(
         &mut self,
         voxel_world: Option<VoxelWorld>,
@@ -580,17 +580,10 @@ impl GraphicsSystem {
             .map(|b| b.gpu_profile().memory_budget_bytes)
             .unwrap_or(0);
 
-        // Backend-specific buffer growth + SRV/descriptor setup. Metal binds
-        // chunk textures per draw and ignores the slot args (its impl drops
-        // them); DirectX and Vulkan bake one shared (albedo, normal)
-        // descriptor from the chunk material.
+        // Backend-specific buffer growth; each chunk's draw record carries its
+        // material slots.
         let setup_result = match self.backend.as_deref_mut() {
-            Some(backend) => backend.setup_chunk_streaming(
-                chunk_vtx_bytes,
-                chunk_idx_bytes,
-                texture_slot,
-                normal_map_slot,
-            ),
+            Some(backend) => backend.setup_chunk_streaming(chunk_vtx_bytes, chunk_idx_bytes),
             None => return,
         };
         if let Err(e) = setup_result {

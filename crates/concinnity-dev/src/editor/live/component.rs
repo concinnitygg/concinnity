@@ -79,7 +79,7 @@ pub(super) fn bake(
     let value = Value::Object(args.clone());
     let args_bytes = match registry::bake_divergent(ct, &value)? {
         Some(bytes) => bytes,
-        None => ct.reserialize_args(&value, crate::cook_platform())?,
+        None => ct.reserialize_args(&value)?,
     };
     let def = BlobAssetDef {
         name: Some(id),

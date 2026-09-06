@@ -1,4 +1,4 @@
-//! Which shader source language this build's rendering backend consumes.
+//! Which shader compile target this build's rendering backend consumes.
 //!
 //! The backend cfg is resolved once in build.rs; this is the one place that
 //! reads it as a value, so the runtime, the editor, and the cook all name the
@@ -8,7 +8,7 @@ use concinnity_core::platform::Platform;
 
 /// The shader platform this build's rendering backend consumes. Resolved from
 /// the backend cfg rather than the target OS, so a Windows Vulkan build
-/// correctly reports GLSL rather than HLSL.
+/// correctly reports SPIR-V rather than DXIL.
 ///
 /// A build with no backend runs nothing that consumes bytecode, but the cook
 /// still needs a language to produce; the one this target renders with is the
@@ -48,12 +48,11 @@ mod tests {
     use super::*;
 
     // At most one backend cfg is on, so the resolved platform is one of the
-    // three and its key round-trips through the `sources`-map spelling.
+    // three.
     #[test]
     fn the_backend_resolves_to_one_platform() {
         let platform = current();
         assert!(["metal", "hlsl", "glsl"].contains(&platform.key()));
-        assert!(platform.accepts_ext(platform.key()));
     }
 
     #[test]

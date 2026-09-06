@@ -262,9 +262,10 @@ pub(crate) struct RtAccelData {
     // The geometry-table entries for the cluster instances, parallel to
     // `cluster_instances`. Re-appended alongside them on a rebuild.
     cluster_geom: Vec<RtGeomEntry>,
-    // Private scratch buffer sized for the largest of every BLAS build and the
-    // TLAS build, reused by the per-frame TLAS rebuild (the instance count is
-    // fixed across rebuilds, so the init sizing always suffices).
+    // Private scratch for the seed build and the static `rebuild_tlas`, which
+    // grows it as the instance count rises. One buffer serves every frame
+    // because both paths commit and wait; the paths that do not (the skinned
+    // update, a topology refresh) take scratch of their own.
     scratch: Retained<ProtocolObject<dyn MTLBuffer>>,
     // The TLAS instance-descriptor buffer of the last *asynchronous* static
     // build. Only the TLAS build reads it (the built TLAS bakes the instances),

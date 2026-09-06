@@ -22,22 +22,17 @@
 // sizes already differ: DirectX reports a 276-byte `ShadowUniforms` block where
 // Metal and SPIR-V round it to 288.
 //
-// Not every layout assert can move here. `cull`, the legacy per-draw main pass
-// and the raymarch templates are still hand-written per backend, and so a struct
-// used only by those has no `.slang` to reflect and its hand assert is the only
-// check it has. The reverse gap exists too: slangc rejects `TraceRayInline` on
-// the Metal target, so `rt_reflections.slang` reflects on Vulkan and DirectX
-// only and `RtParams` / `RtGeomEntry` have no check against the Metal RT
-// sources. Vertex payloads are the other exclusion: slangc binds a vertex input
-// by attribute index, not byte offset, so `Vertex` / `SkinnedVertex` /
-// `MorphEntry` / `TextVertex` / `LineVertex` reflect no layout at all -- where a
-// kernel byte-addresses those payloads instead, `byte_offsets` locks its
-// constants to the mirrors, which reflection cannot do. The surviving asserts
-// are listed in private/docs/shader-single-source.md.
+// Not every layout assert can move here. The Metal ICB encode kernel is
+// hand-written, so its parameter block has no `.slang` to reflect and its hand
+// assert is the only check it has. Vertex
+// payloads are the other exclusion: slangc binds a vertex input by attribute
+// index, not byte offset, so `Vertex` / `SkinnedVertex` / `MorphEntry` /
+// `TextVertex` / `LineVertex` reflect no layout at all -- where a kernel
+// byte-addresses those payloads instead, `byte_offsets` locks its constants to
+// the mirrors, which reflection cannot do.
 //
-// The runtime Metal reflection validator (concinnity-shader) stays as well: it
-// checks world-authored shaders, which reflection over engine `.slang` files
-// cannot see.
+// World Shaders declare no layout of their own: they compile from the engine's
+// own main-pass files with their hooks spliced in, so these mirrors cover them.
 
 mod byte_offsets;
 mod mirror;
@@ -102,12 +97,52 @@ fn check(program: &Program, cases: &[Case]) {
     );
 }
 
+// The object record has one declaration, `object_common.slang`, spliced into
+// every pass that strides the per-frame object buffer. A shader that grows its
+// own copy is exactly the drift the splice exists to prevent, on any backend,
+// so the single-source set and the hand-written Metal directory are both
+// scanned as text.
+#[test]
+fn no_shader_redeclares_the_object_record() {
+    const RECORD: &str = "struct GpuObjectData";
+    let mut declarations = 0usize;
+    for (name, source) in concinnity_core::render::shaders::SOURCES {
+        if source.contains(RECORD) {
+            assert_eq!(
+                *name, "object_common.slang",
+                "{name} declares its own GpuObjectData; splice the shared fragment instead"
+            );
+            declarations += 1;
+        }
+    }
+    assert_eq!(
+        declarations, 1,
+        "object_common.slang no longer declares the record"
+    );
+    let metal = concat!(env!("CARGO_MANIFEST_DIR"), "/src/metal/shaders");
+    for entry in std::fs::read_dir(metal).unwrap_or_else(|e| panic!("read {metal}: {e}")) {
+        let path = entry.expect("dir entry").path();
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        assert!(
+            !source.contains(RECORD),
+            "{}: a hand-written Metal shader declares GpuObjectData",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn main_bindless_layouts_match_the_shader() {
     check(
         &programs::MAIN_BINDLESS_VERT,
         &mirrors::forward::main_bindless(),
     );
+}
+
+#[test]
+fn cull_layouts_match_the_shader() {
+    check(&programs::CULL_KERNEL, &mirrors::geometry::cull());
 }
 
 #[test]
@@ -128,14 +163,6 @@ fn gbuffer_prepass_vertex_layouts_match_the_shader() {
     check(
         &programs::GBUFFER_PREPASS_VERT,
         &mirrors::geometry::gbuffer_vertex(),
-    );
-}
-
-#[test]
-fn gbuffer_prepass_fragment_layouts_match_the_shader() {
-    check(
-        &programs::GBUFFER_PREPASS_FRAG,
-        &mirrors::geometry::gbuffer_fragment(),
     );
 }
 
@@ -193,6 +220,19 @@ fn rt_reflections_layouts_match_the_shader() {
 #[test]
 fn fog_layouts_match_the_shader() {
     check(&programs::FOG_FROXEL, &mirrors::transparent::fog());
+}
+
+#[test]
+fn raymarch_layouts_match_the_shader() {
+    check(&programs::RAYMARCH_FRAG, &mirrors::raymarch::surface());
+}
+
+#[test]
+fn raymarch_shadow_layouts_match_the_shader() {
+    check(
+        &programs::RAYMARCH_SHADOW_VERT,
+        &mirrors::raymarch::shadow(),
+    );
 }
 
 #[test]

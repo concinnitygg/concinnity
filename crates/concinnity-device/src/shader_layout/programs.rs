@@ -70,6 +70,10 @@ pub(super) struct Program {
     pub metal: Defines,
     pub vulkan: Defines,
     pub directx: Defines,
+    // Text spliced in at a marker no file in the shader tree can fill. Only the
+    // raymarched volumes need one: their source is completed by a world's own
+    // distance field, so reflecting them means supplying a stand-in for it.
+    pub splices: &'static [(&'static str, &'static str)],
 }
 
 impl Program {
@@ -81,7 +85,7 @@ impl Program {
             Target::DirectX => self.directx,
         };
         let defines: Vec<(&str, &str)> = self.common.iter().chain(backend).copied().collect();
-        slang_source::assemble(false, self.file, &defines)
+        slang_source::assemble(false, self.file, &defines, self.splices)
     }
 }
 
@@ -118,6 +122,20 @@ pub(super) static MAIN_BINDLESS_VERT: Program = Program {
     metal: &[("METAL_ABI", "1"), POOL],
     vulkan: &[POOL],
     directx: &[("DXIL_ABI", "1")],
+    splices: &[],
+};
+
+// The phase-1 variant: the only one that declares every struct the family has.
+// Metal runs it as the decision half, under `METAL_BINDINGS`.
+pub(super) static CULL_KERNEL: Program = Program {
+    file: "cull.slang",
+    entry: "cull_kernel",
+    profile: "cs_6_0",
+    common: &[],
+    metal: &[("METAL_BINDINGS", "1")],
+    vulkan: &[],
+    directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 pub(super) static LIGHT_CULL_KERNEL: Program = Program {
@@ -128,6 +146,7 @@ pub(super) static LIGHT_CULL_KERNEL: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 // The RT skinning kernel. `METAL_BINDINGS` picks the Metal host's slot
@@ -141,26 +160,18 @@ pub(super) static RT_SKIN_KERNEL: Program = Program {
     metal: &[("METAL_BINDINGS", "1")],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static GBUFFER_PREPASS_VERT: Program = Program {
     file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex",
+    entry: "gbuffer_prepass_vertex_bindless",
     profile: "vs_6_0",
-    common: &[("GB_STATIC", "1")],
+    common: &[("GB_BINDLESS", "1")],
     metal: &[("METAL_BINDINGS", "1")],
     vulkan: &[],
     directx: &[("DXIL_ABI", "1")],
-};
-
-pub(super) static GBUFFER_PREPASS_FRAG: Program = Program {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_fragment",
-    profile: "ps_6_0",
-    common: &[("GB_FRAGMENT", "1")],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 pub(super) static SHADOW_VERT: Program = Program {
@@ -171,6 +182,7 @@ pub(super) static SHADOW_VERT: Program = Program {
     metal: &[("METAL_BINDINGS", "1")],
     vulkan: &[],
     directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 pub(super) static GLASS_VERT: Program = Program {
@@ -181,6 +193,7 @@ pub(super) static GLASS_VERT: Program = Program {
     metal: &[("METAL_ABI", "1")],
     vulkan: &[("USE_MSAA", "1")],
     directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 // The glass mesh vertex stage declares both of its blocks: it reads the model
@@ -195,6 +208,7 @@ pub(super) static GLASS_MESH_VERT: Program = Program {
     metal: &[("METAL_ABI", "1")],
     vulkan: &[("USE_MSAA", "1")],
     directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 // The water vertex stage is the smallest entry that declares the whole water
@@ -208,6 +222,7 @@ pub(super) static WATER_VERT: Program = Program {
     metal: &[("METAL_ABI", "1")],
     vulkan: &[("USE_MSAA", "1")],
     directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 pub(super) static RT_REFLECTIONS_FRAG: Program = Program {
@@ -218,6 +233,7 @@ pub(super) static RT_REFLECTIONS_FRAG: Program = Program {
     metal: &[("METAL_ABI", "1")],
     vulkan: &[],
     directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 pub(super) static DECAL_VERT: Program = Program {
@@ -228,6 +244,7 @@ pub(super) static DECAL_VERT: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static LINE_VERT: Program = Program {
@@ -238,6 +255,7 @@ pub(super) static LINE_VERT: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static PARTICLE_VERT: Program = Program {
@@ -248,6 +266,7 @@ pub(super) static PARTICLE_VERT: Program = Program {
     metal: &[("METAL_BINDINGS", "1")],
     vulkan: &[],
     directx: &[("DXIL_ABI", "1")],
+    splices: &[],
 };
 
 pub(super) static TEXT_VERT: Program = Program {
@@ -258,6 +277,7 @@ pub(super) static TEXT_VERT: Program = Program {
     metal: &[("METAL_BINDINGS", "1")],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static TAA_FRAG: Program = Program {
@@ -268,6 +288,7 @@ pub(super) static TAA_FRAG: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static BLOOM_PREFILTER: Program = Program {
@@ -278,6 +299,7 @@ pub(super) static BLOOM_PREFILTER: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static COMPOSITE_FRAG: Program = Program {
@@ -288,6 +310,7 @@ pub(super) static COMPOSITE_FRAG: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static SSAO_KERNEL: Program = Program {
@@ -298,6 +321,7 @@ pub(super) static SSAO_KERNEL: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static SSR_RESOLVE: Program = Program {
@@ -308,6 +332,7 @@ pub(super) static SSR_RESOLVE: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[("SPLIT_PROBE_SAMPLER", "1")],
+    splices: &[],
 };
 
 pub(super) static SSGI_GATHER: Program = Program {
@@ -318,6 +343,7 @@ pub(super) static SSGI_GATHER: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static FOG_FROXEL: Program = Program {
@@ -328,6 +354,7 @@ pub(super) static FOG_FROXEL: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[("DXIL_SPLIT", "1")],
+    splices: &[],
 };
 
 pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
@@ -338,6 +365,7 @@ pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
     metal: &[("METAL_BINDINGS", "1")],
     vulkan: &[],
     directx: &[],
+    splices: &[],
 };
 
 pub(super) static HIZ_INIT_SINGLE: Program = Program {
@@ -348,4 +376,40 @@ pub(super) static HIZ_INIT_SINGLE: Program = Program {
     metal: &[],
     vulkan: &[],
     directx: &[],
+    splices: &[],
+};
+
+// A stand-in distance field for the raymarch programs. Their source is only
+// complete once a world supplies one, so reflecting them means splicing a field
+// here -- synthetic, in source, because a test may not read a world's.
+const SDF_STANDIN: (&str, &str) = (
+    "{SDF_BODY}",
+    "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
+     SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\
+         SdfSurface s; s.albedo = float3(1.0, 1.0, 1.0); s.roughness = 0.5;\n\
+         s.metallic = 0.0; s.emissive = float3(0.0, 0.0, 0.0);\n\
+         s.transmitted = float3(0.0, 0.0, 0.0); return s; }\n",
+);
+
+pub(super) static RAYMARCH_FRAG: Program = Program {
+    file: "raymarch.slang",
+    entry: "raymarch_fragment",
+    profile: "ps_6_0",
+    common: &[("RAYMARCH_SURFACE", "1")],
+    metal: &[("RAYMARCH_METAL", "1")],
+    vulkan: &[],
+    directx: &[("RAYMARCH_DXIL", "1")],
+    splices: &[SDF_STANDIN],
+};
+
+// The shadow caster is the only entry that binds the cascade block.
+pub(super) static RAYMARCH_SHADOW_VERT: Program = Program {
+    file: "raymarch.slang",
+    entry: "raymarch_shadow_vertex",
+    profile: "vs_6_0",
+    common: &[("RAYMARCH_SHADOW", "1")],
+    metal: &[("RAYMARCH_METAL", "1")],
+    vulkan: &[],
+    directx: &[("RAYMARCH_DXIL", "1")],
+    splices: &[SDF_STANDIN],
 };

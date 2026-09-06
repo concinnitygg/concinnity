@@ -103,7 +103,7 @@ impl RenderBackend for DxContext {
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
         fn update_fog_settings(&mut self, settings: Option<crate::gfx::volumetric_fog::FogSettings>);
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
-        fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> Result<(), String>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
@@ -157,16 +157,12 @@ impl RenderBackend for DxContext {
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-        texture_slot: usize,
-        normal_map_slot: usize,
     ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("setup_chunk_streaming");
         Ok(DxContext::setup_chunk_streaming(
             self,
             chunk_vtx_bytes,
             chunk_idx_bytes,
-            texture_slot,
-            normal_map_slot,
         )?)
     }
 
@@ -195,7 +191,7 @@ impl RenderBackend for DxContext {
     fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+        shader: crate::gfx::backend_init::WorldShader<'_>,
     ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
         DxContext::install_world_shader(self, bucket, shader)
@@ -207,14 +203,12 @@ impl RenderBackend for DxContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        _vert_bytes: &[u8],
-        frag_bytes: &[u8],
-        _shadow_bytes: &[u8],
     ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
-        // DirectX compiles the vertex / shadow paths from inline HLSL; only the
-        // fragment shader is supplied as a precompiled DXBC payload.
-        Ok(self.upload_skinned(vertices, indices, draw_objects, frag_bytes)?)
+        // Every skinned stage is the engine's own here: the world's fragment is
+        // shader model 5.1, which D3D12 cannot pair with the engine's 6.0
+        // vertex (see `compile_skinned_shaders`).
+        Ok(self.upload_skinned(vertices, indices, draw_objects)?)
     }
 
     // Trait method returns unit; the inherent returns Result (buffer

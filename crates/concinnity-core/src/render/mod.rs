@@ -12,7 +12,6 @@
 pub mod area_light;
 pub mod backend;
 pub mod backend_init;
-pub mod bvh;
 pub mod call_buffer;
 pub mod chunk_window;
 pub mod csm;
@@ -44,6 +43,7 @@ pub mod rt_topology;
 pub mod scene_flow;
 pub mod scene_residency;
 pub mod shaders;
+pub mod shadow_bias;
 pub mod shadow_schedule;
 pub mod skinned_pool;
 pub mod slang_programs;

@@ -1,8 +1,7 @@
 // src/directx/post/gbuffer.rs
 //
 // Unified geometry G-buffer pre-pass for the D3D12 backend. One jittered
-// traversal of the visible set (static + instanced + skinned, via the shared
-// draw_iter helpers) rasterises into a single MRT:
+// traversal of the GPU cull's records rasterises into a single MRT:
 //
 //   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
 //   target 1  R8       perceptual roughness
@@ -26,9 +25,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::{
-    main_input_layout, serialize_and_create_root_sig, skinned_input_layout,
-};
+use crate::directx::pipeline::serialize_and_create_root_sig;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
@@ -57,195 +54,16 @@ pub(in crate::directx) const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0,
 // (four float4x4 = 256 B). Matches the `GbView` cbuffer in every pre-pass VS.
 const GBUFFER_VIEW_UBO_SIZE: u64 = 256;
 
-// `GBufferView` (the `GbView` cbuffer) and `GBufferModel` (the per-draw model
-// root constants) are GPU-free layout structs that live in `core::render`;
-// re-export them so `crate::directx::post::gbuffer::{GBufferView,GBufferModel}`
-// are unchanged.
-pub(in crate::directx) use concinnity_core::render::uniforms::GBufferModel;
+// `GBufferView` (the `GbView` cbuffer) is a GPU-free layout struct that lives in
+// `core::render`; re-export it so
+// `crate::directx::post::gbuffer::GBufferView` is unchanged.
 pub(in crate::directx) use concinnity_core::render::uniforms::GBufferView;
-
-// Shader compilation
-
-struct GbufferShaders {
-    vs_static: Vec<u8>,
-    vs_instanced: Vec<u8>,
-    vs_skinned: Vec<u8>,
-    ps: Vec<u8>,
-}
-
-// Compile every G-buffer pre-pass shader stage. `need_instanced` /
-// `need_skinned` gate the geometry-kind-specific vertex shaders.
-fn compile_gbuffer_shaders(
-    need_instanced: bool,
-    need_skinned: bool,
-    hot_reload: bool,
-) -> Result<GbufferShaders, String> {
-    Ok(GbufferShaders {
-        vs_static: slang_builtins::GBUFFER_PREPASS_VERT.compile(hot_reload)?,
-        vs_instanced: if need_instanced {
-            slang_builtins::GBUFFER_PREPASS_VERT_INSTANCED.compile(hot_reload)?
-        } else {
-            Vec::new()
-        },
-        vs_skinned: if need_skinned {
-            slang_builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(hot_reload)?
-        } else {
-            Vec::new()
-        },
-        ps: slang_builtins::GBUFFER_PREPASS_FRAG.compile(hot_reload)?,
-    })
-}
 
 // Root signatures
 
-// Static: root CBV at b0 (GbView), 32 root constants at b1 (cur+prev model),
-// 4 root constants at b0 PS-visibility (roughness).
-fn create_gbuffer_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                    Num32BitValues: 32,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 4,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    serialize_and_create_root_sig(device, &params, "gbuffer prepass root sig")
-}
-
-// Instanced: root CBV at b0 (GbView), root SRV at t0 (per-instance models),
-// 4 root constants at b0 PS-visibility (roughness).
-fn create_gbuffer_instanced_root_signature(
-    device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 4,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    serialize_and_create_root_sig(device, &params, "gbuffer prepass instanced root sig")
-}
-
-// Skinned: root CBV at b0 (GbView), 32 root constants at b1 (cur+prev model),
-// root SRV at t0 (current joints), root SRV at t1 (previous joints), 4 root
-// constants at b0 PS-visibility (roughness).
-fn create_gbuffer_skinned_root_signature(
-    device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                    Num32BitValues: 32,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 4,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    serialize_and_create_root_sig(device, &params, "gbuffer prepass skinned root sig")
-}
-
-// PSO for the static / instanced / skinned G-buffer pre-pass. Writes the three
-// MRT targets over a private single-sample depth buffer. Mirrors the main
-// pass's no-cull rasteriser + LESS depth test so the G-buffer matches the main
-// pass's visible surfaces.
+// PSO for the G-buffer pre-pass. Writes the three MRT targets over a private
+// single-sample depth buffer. Mirrors the main pass's no-cull rasteriser + LESS
+// depth test so the G-buffer matches the main pass's visible surfaces.
 fn create_gbuffer_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -501,16 +319,6 @@ pub(in crate::directx) struct GbufferResources {
     pub(in crate::directx) view_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) view_ubo_ptrs: Vec<*mut u8>,
 
-    // Pipelines. Instanced / skinned are `Some` only when the world declares
-    // that geometry kind (the skinned one builds lazily via `ensure_skinned_pso`
-    // once the joint-bound vertex layout exists).
-    pub(in crate::directx) root_sig: ID3D12RootSignature,
-    pub(in crate::directx) pso: ID3D12PipelineState,
-    pub(in crate::directx) instanced_root_sig: Option<ID3D12RootSignature>,
-    pub(in crate::directx) instanced_pso: Option<ID3D12PipelineState>,
-    pub(in crate::directx) skinned_root_sig: Option<ID3D12RootSignature>,
-    pub(in crate::directx) skinned_pso: Option<ID3D12PipelineState>,
-
     // Previous-frame motion state, owned here so the velocity channel works for
     // any consumer (TAA or FSR) independent of whether engine-TAA is on.
     // `prev_view_proj` is last frame's un-jittered VP; `prev_models` is each
@@ -519,11 +327,10 @@ pub(in crate::directx) struct GbufferResources {
     pub(in crate::directx) prev_models: RefCell<Vec<[[f32; 4]; 4]>>,
 }
 
-// The device + optional debug info queue the G-buffer builder submits against.
+// The device the G-buffer builder allocates against.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub info_queue: Option<&'a ID3D12InfoQueue>,
 }
 
 // The three colour targets the transient pool owns, handed to the G-buffer at
@@ -542,12 +349,6 @@ pub(in crate::directx) struct GbufferPooled {
 pub(in crate::directx) struct GbufferExtent {
     pub width: u32,
     pub height: u32,
-    // Build the instanced root sig / PSO for GPU-instanced static geometry.
-    pub need_instanced: bool,
-    // Build the skinned variant (skinned geometry present; built lazily in
-    // `upload_skinned` at init, so `false` there).
-    pub need_skinned: bool,
-    pub hot_reload: bool,
 }
 
 // The RTV + SRV descriptor slots the three pooled colour targets are viewed
@@ -594,15 +395,9 @@ impl GbufferResources {
         slots: GbufferSlots,
         pooled: &GbufferPooled,
     ) -> Result<Self, String> {
-        let GbufferDeviceCtx { alloc, info_queue } = ctx;
+        let GbufferDeviceCtx { alloc } = ctx;
         let device = alloc.device();
-        let GbufferExtent {
-            width,
-            height,
-            need_instanced,
-            need_skinned,
-            hot_reload,
-        } = extent;
+        let GbufferExtent { width, height } = extent;
         // The three colour targets come from the transient pool; this only
         // writes their views into the pre-reserved descriptor slots.
         let (normal_depth, roughness, velocity) = write_pooled_views(
@@ -637,50 +432,6 @@ impl GbufferResources {
             view_ubo_resources.push(buf);
         }
 
-        // Pipelines.
-        let shaders = compile_gbuffer_shaders(need_instanced, need_skinned, hot_reload)?;
-        let root_sig = dump_on_err(info_queue, create_gbuffer_root_signature(device))?;
-        let static_layout = main_input_layout();
-        let pso = dump_on_err(
-            info_queue,
-            create_gbuffer_pso(
-                device,
-                &root_sig,
-                &shaders.vs_static,
-                &shaders.ps,
-                &static_layout,
-            ),
-        )?;
-
-        let (instanced_root_sig, instanced_pso) = if need_instanced {
-            let rs = dump_on_err(info_queue, create_gbuffer_instanced_root_signature(device))?;
-            let pso = dump_on_err(
-                info_queue,
-                create_gbuffer_pso(
-                    device,
-                    &rs,
-                    &shaders.vs_instanced,
-                    &shaders.ps,
-                    &static_layout,
-                ),
-            )?;
-            (Some(rs), Some(pso))
-        } else {
-            (None, None)
-        };
-
-        let (skinned_root_sig, skinned_pso) = if need_skinned {
-            let rs = dump_on_err(info_queue, create_gbuffer_skinned_root_signature(device))?;
-            let layout = skinned_input_layout();
-            let pso = dump_on_err(
-                info_queue,
-                create_gbuffer_pso(device, &rs, &shaders.vs_skinned, &shaders.ps, &layout),
-            )?;
-            (Some(rs), Some(pso))
-        } else {
-            (None, None)
-        };
-
         Ok(Self {
             normal_depth,
             normal_depth_rtv: slots.normal_depth_rtv,
@@ -695,40 +446,9 @@ impl GbufferResources {
             depth_dsv: slots.depth_dsv,
             view_ubo_resources,
             view_ubo_ptrs,
-            root_sig,
-            pso,
-            instanced_root_sig,
-            instanced_pso,
-            skinned_root_sig,
-            skinned_pso,
             prev_view_proj: RefCell::new(IDENTITY),
             prev_models: RefCell::new(Vec::new()),
         })
-    }
-
-    // Build the skinned G-buffer pre-pass root signature + PSO. Called by
-    // `upload_skinned` once the skinned vertex layout exists. Idempotent: a
-    // second call replaces the existing PSO.
-    pub(in crate::directx) fn ensure_skinned_pso(
-        &mut self,
-        device: &ID3D12Device,
-        hot_reload: bool,
-        info_queue: Option<&ID3D12InfoQueue>,
-    ) -> Result<(), String> {
-        let vs = slang_builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(hot_reload)?;
-        let ps = slang_builtins::GBUFFER_PREPASS_FRAG.compile(hot_reload)?;
-        let root_sig = match self.skinned_root_sig.as_ref() {
-            Some(rs) => rs.clone(),
-            None => dump_on_err(info_queue, create_gbuffer_skinned_root_signature(device))?,
-        };
-        let layout = skinned_input_layout();
-        let pso = dump_on_err(
-            info_queue,
-            create_gbuffer_pso(device, &root_sig, &vs, &ps, &layout),
-        )?;
-        self.skinned_root_sig = Some(root_sig);
-        self.skinned_pso = Some(pso);
-        Ok(())
     }
 
     // Re-point the MRT views at the rebuilt pool and recreate the private depth
@@ -779,113 +499,30 @@ impl GbufferResources {
     }
 }
 
-// Replacement G-buffer PSOs returned by a hot-reload rebuild. Each field is
-// `Some` when the matching live PSO exists; the caller swaps them in atomically
-// only if every required build succeeded.
-pub(in crate::directx) struct RebuiltGbufferPipelines {
-    pub pso: ID3D12PipelineState,
-    pub instanced_pso: Option<ID3D12PipelineState>,
-    pub skinned_pso: Option<ID3D12PipelineState>,
-}
-
-// Rebuild the G-buffer pre-pass PSOs from disk-resident HLSL for shader
-// hot-reload. Returns `None` for a variant whose live PSO does not exist, so
-// the caller leaves it untouched.
-pub(in crate::directx) fn rebuild_gbuffer_pipelines(
-    device: &ID3D12Device,
-    gbuffer: &GbufferResources,
-    hot_reload: bool,
-    info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<RebuiltGbufferPipelines, String> {
-    let shaders = compile_gbuffer_shaders(
-        gbuffer.instanced_pso.is_some(),
-        gbuffer.skinned_pso.is_some(),
-        hot_reload,
-    )?;
-    let static_layout = main_input_layout();
-    let pso = dump_on_err(
-        info_queue,
-        create_gbuffer_pso(
-            device,
-            &gbuffer.root_sig,
-            &shaders.vs_static,
-            &shaders.ps,
-            &static_layout,
-        ),
-    )?;
-    let instanced_pso = match gbuffer.instanced_root_sig.as_ref() {
-        Some(rs) => Some(dump_on_err(
-            info_queue,
-            create_gbuffer_pso(
-                device,
-                rs,
-                &shaders.vs_instanced,
-                &shaders.ps,
-                &static_layout,
-            ),
-        )?),
-        None => None,
-    };
-    let skinned_pso = match gbuffer.skinned_root_sig.as_ref() {
-        Some(rs) => {
-            let layout = skinned_input_layout();
-            Some(dump_on_err(
-                info_queue,
-                create_gbuffer_pso(device, rs, &shaders.vs_skinned, &shaders.ps, &layout),
-            )?)
-        }
-        None => None,
-    };
-    Ok(RebuiltGbufferPipelines {
-        pso,
-        instanced_pso,
-        skinned_pso,
-    })
-}
-
 // Camera + view-projection inputs for the G-buffer pre-pass. The two VPs drive
 // rasterisation (jittered) and motion vectors (un-jittered current vs previous).
-pub(in crate::directx) struct GbufferPrepassView<'a> {
+pub(in crate::directx) struct GbufferPrepassView {
     // Jittered view-projection (rasterisation target).
     pub jittered_vp: [[f32; 4]; 4],
     // Un-jittered current view-projection (motion vectors).
     pub cur_vp: [[f32; 4]; 4],
-    // Camera frustum for per-cluster culling + LOD.
-    pub frustum: &'a crate::gfx::frustum::Frustum,
-    // Camera world position.
-    pub cam_pos: [f32; 3],
-}
-
-// View inputs for the legacy CPU-driven G-buffer path: the view CBV address plus
-// the camera used to cull + LOD each object.
-struct GbufferLegacyView<'a> {
-    // GPU virtual address of the view uniforms CBV (root param 0).
-    view_gva: u64,
-    // Camera frustum for per-object culling + LOD.
-    frustum: &'a crate::gfx::frustum::Frustum,
-    // Camera world position.
-    cam_pos: [f32; 3],
 }
 
 impl DxContext {
-    // Encode the unified G-buffer pre-pass: one jittered traversal of the
-    // visible set (static + instanced + skinned) into the normal+depth /
-    // roughness / velocity MRT. `velocity_active` is true when a consumer (TAA
-    // or FSR) reads motion; when false, cur == prev so the motion channel is a
-    // harmless zero.
+    // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
+    // records into the normal+depth / roughness / velocity MRT.
+    // `velocity_active` is true when a consumer (TAA or FSR) reads motion; when
+    // false, cur == prev so the motion channel is a harmless zero.
     pub(in crate::directx) fn encode_gbuffer_prepass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        view: GbufferPrepassView<'_>,
-        visible: &[u32],
+        view: GbufferPrepassView,
         velocity_active: bool,
     ) {
         let GbufferPrepassView {
             jittered_vp,
             cur_vp,
-            frustum,
-            cam_pos,
         } = view;
         let gb = match &self.gbuffer {
             Some(g) => g,
@@ -956,224 +593,12 @@ impl DxContext {
             );
         }
 
-        // When the bindless GPU-cull path is active, the G-buffer pre-pass is
-        // GPU-driven: it reuses the main pass's per-frame indirect command buffer
-        // (same camera frustum + active LOD) with two `ExecuteIndirect` draws
-        // (static + instance prefix, then the skinned tail over the deformed VB),
-        // instead of the CPU per-object loops -- plus a legacy extra loop for
-        // streamed chunks / runtime clones not in the cull records. A non-bindless
-        // world (custom shader) keeps the legacy path. Both write the same MRT, so
-        // the targets -> pixel-shader-resource transition below is shared.
-        if self.cull.gbuffer_bindless_pso.is_some() && self.cull_count() > 0 {
-            self.encode_gbuffer_prepass_gpu_driven(
-                cmd,
-                frame_idx,
-                view_gva,
-                visible,
-                cam_pos,
-                velocity_active,
-            );
-        } else {
-            self.encode_gbuffer_prepass_legacy(
-                cmd,
-                frame_idx,
-                GbufferLegacyView {
-                    view_gva,
-                    frustum,
-                    cam_pos,
-                },
-                visible,
-                velocity_active,
-            );
-        }
-    }
-
-    // Legacy CPU-driven G-buffer pre-pass: per-object `DrawIndexedInstanced` for
-    // static + instanced + skinned geometry. Used for non-bindless worlds (custom
-    // shader) or worlds with no build-time geometry. The caller has already
-    // transitioned the targets to RENDER_TARGET, cleared them, and set the
-    // viewport / scissor / topology.
-    fn encode_gbuffer_prepass_legacy(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        frame_idx: usize,
-        view: GbufferLegacyView<'_>,
-        visible: &[u32],
-        velocity_active: bool,
-    ) {
-        let GbufferLegacyView {
-            view_gva,
-            frustum,
-            cam_pos,
-        } = view;
-        let gb = match &self.gbuffer {
-            Some(g) => g,
-            None => return,
-        };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
-
-            cmd.SetPipelineState(&gb.pso);
-            cmd.SetGraphicsRootSignature(&gb.root_sig);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-        }
-
-        // Static geometry: same visible set + LOD pick as the main pass so the
-        // G-buffer covers exactly what main rasterised.
-        {
-            let prev_models = gb.prev_models.borrow();
-            self.draw_static_objects(visible, cam_pos, |obj, i, index_offset, index_count| {
-                let prev_model = if velocity_active {
-                    prev_models.get(i).copied().unwrap_or(obj.model)
-                } else {
-                    obj.model
-                };
-                let push = GBufferModel {
-                    cur_model: obj.model,
-                    prev_model,
-                };
-                let mat = [obj.material.roughness, 0.0_f32, 0.0, 0.0];
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.SetGraphicsRoot32BitConstants(
-                        1,
-                        32,
-                        &push as *const GBufferModel as *const std::ffi::c_void,
-                        0,
-                    );
-                    cmd.SetGraphicsRoot32BitConstants(
-                        2,
-                        4,
-                        mat.as_ptr() as *const std::ffi::c_void,
-                        0,
-                    );
-                    cmd.DrawIndexedInstanced(
-                        index_count as u32,
-                        1,
-                        index_offset as u32,
-                        obj.base_vertex,
-                        0,
-                    );
-                }
-            });
-        }
-
-        // GPU-instanced clusters: instance transforms never change, so the
-        // motion is camera-only (the instanced VS feeds the same matrix to cur
-        // and prev clip). Reuses the per-cluster matrix buffer the main
-        // instanced pass already filled this frame; roughness rides b0(PS), the
-        // per-bucket instance SRV bumps t0.
-        if let (Some(inst_pso), Some(inst_root_sig)) =
-            (gb.instanced_pso.as_ref(), gb.instanced_root_sig.as_ref())
-            && !self.instanced.clusters.is_empty()
-        {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetPipelineState(inst_pso);
-                cmd.SetGraphicsRootSignature(inst_root_sig);
-                cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            }
-            self.draw_instanced_clusters(
-                frame_idx,
-                frustum,
-                cam_pos,
-                |_cluster_idx, cluster| {
-                    let mat = [cluster.material.roughness, 0.0_f32, 0.0, 0.0];
-                    // SAFETY: the command list is in the recording state, and every resource,
-                    // descriptor and slice these commands name is live for the call.
-                    unsafe {
-                        cmd.SetGraphicsRoot32BitConstants(
-                            2,
-                            4,
-                            mat.as_ptr() as *const std::ffi::c_void,
-                            0,
-                        );
-                    }
-                },
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                |bucket, inst_gva_base| unsafe {
-                    cmd.SetGraphicsRootShaderResourceView(
-                        1,
-                        inst_gva_base + bucket.instance_byte_offset,
-                    );
-                    cmd.DrawIndexedInstanced(
-                        bucket.index_count as u32,
-                        bucket.instance_count,
-                        bucket.index_offset as u32,
-                        0,
-                        0,
-                    );
-                },
-            );
-        }
-
-        // Skinned meshes: redraw with the current + previous pose so per-vertex
-        // deformation produces a correct motion vector. The model matrix is
-        // static (skinned meshes are self-placing), so cur and prev model are
-        // identical; the deformation motion comes from the current +
-        // previous-frame joint palettes at t0 / t1. Previous joints live in the
-        // per-frame joint ring at slot (frame_idx - 1) mod FRAMES.
-        if let (Some(sk_pso), Some(sk_root_sig)) =
-            (gb.skinned_pso.as_ref(), gb.skinned_root_sig.as_ref())
-            && !self.skinned.draw_objects.is_empty()
-        {
-            let prev_frame_idx = (frame_idx + FRAMES - 1) % FRAMES;
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetPipelineState(sk_pso);
-                cmd.SetGraphicsRootSignature(sk_root_sig);
-                cmd.IASetVertexBuffers(0, Some(&[self.skinned.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            }
-            self.draw_skinned_objects(cam_pos, |obj, i, index_offset, index_count| {
-                let push = GBufferModel {
-                    cur_model: obj.model,
-                    prev_model: obj.model,
-                };
-                let mat = [obj.material.roughness, 0.0_f32, 0.0, 0.0];
-                // When velocity is inactive, point the previous palette at
-                // the current one so the motion channel stays zero.
-                let prev_slot = if velocity_active {
-                    prev_frame_idx
-                } else {
-                    frame_idx
-                };
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.SetGraphicsRoot32BitConstants(
-                        1,
-                        32,
-                        &push as *const GBufferModel as *const std::ffi::c_void,
-                        0,
-                    );
-                    cmd.SetGraphicsRootShaderResourceView(2, self.skinned_joint_gva(frame_idx, i));
-                    cmd.SetGraphicsRootShaderResourceView(3, self.skinned_joint_gva(prev_slot, i));
-                    cmd.SetGraphicsRoot32BitConstants(
-                        4,
-                        4,
-                        mat.as_ptr() as *const std::ffi::c_void,
-                        0,
-                    );
-                    cmd.DrawIndexedInstanced(index_count as u32, 1, index_offset as u32, 0, 0);
-                }
-            });
-            // Restore the static vertex/index buffers for later passes.
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
-            }
-        }
+        // The pre-pass is GPU-driven: it reuses the main pass's per-frame indirect
+        // command buffer (same camera frustum + active LOD) with two
+        // `ExecuteIndirect` draws (static + instance prefix, then the skinned
+        // tail over the deformed VB). With nothing to draw the pass is the
+        // clears above, which is what "no geometry" means to every reader.
+        self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, view_gva, velocity_active);
     }
 
     // GPU-driven G-buffer pre-pass raster. Reuses the main pass's per-frame
@@ -1185,16 +610,13 @@ impl DxContext {
     // over the current deformed VB (slot 0) + the previous-frame deformed VB
     // (slot 1), so per-vertex skin deformation produces a correct motion vector.
     // model + roughness ride the per-frame GpuObjectData buffer; the previous-frame
-    // model rides a parallel buffer. Streamed chunks / runtime clones (records past
-    // `draw.n_objects`) keep a legacy per-object loop. The CPU never walks the static /
-    // skinned draw lists.
+    // model rides a parallel buffer. The CPU never walks the static / skinned
+    // draw lists.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         view_gva: u64,
-        visible: &[u32],
-        cam_pos: [f32; 3],
         velocity_active: bool,
     ) {
         let (Some(pso), Some(root_sig), Some(cmd_sig), Some(prev_model_res)) = (
@@ -1308,93 +730,17 @@ impl DxContext {
                 .deformed_primed
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-
-        // Legacy extra: streamed chunks + runtime clones (records past `draw.n_objects`)
-        // are not in the GpuObjectData buffer, so draw them with the legacy
-        // per-object pipeline into the same MRT. Converged by the chunk phase.
-        self.encode_gbuffer_legacy_extra(cmd, view_gva, visible, cam_pos, velocity_active);
-    }
-
-    // Legacy per-object G-buffer draws for runtime clones past the bindless range
-    // (`i >= draw.n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
-    // now fold into the GPU-driven cull records (drawn by the prefix indirect draw),
-    // so they are skipped here. Mirrors the legacy static loop, appending into the
-    // same MRT after the indirect draws (no re-clear). A no-op for worlds with no
-    // clones (the common case, incl. pure-voxel worlds).
-    fn encode_gbuffer_legacy_extra(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        view_gva: u64,
-        visible: &[u32],
-        cam_pos: [f32; 3],
-        velocity_active: bool,
-    ) {
-        if self.clone.slot_by_draw_idx.is_empty() {
-            return;
-        }
-        let gb = match &self.gbuffer {
-            Some(g) => g,
-            None => return,
-        };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(&gb.pso);
-            cmd.SetGraphicsRootSignature(&gb.root_sig);
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-        }
-        let prev_models = gb.prev_models.borrow();
-        self.draw_static_objects(visible, cam_pos, |obj, i, index_offset, index_count| {
-            if i < self.draw.n_objects {
-                return; // build-time object, already drawn via ExecuteIndirect
-            }
-            if !self.clone.slot_by_draw_idx.contains_key(&i) {
-                return; // streamed chunk -> folded into the cull records
-            }
-            let prev_model = if velocity_active {
-                prev_models.get(i).copied().unwrap_or(obj.model)
-            } else {
-                obj.model
-            };
-            let push = GBufferModel {
-                cur_model: obj.model,
-                prev_model,
-            };
-            let mat = [obj.material.roughness, 0.0_f32, 0.0, 0.0];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetGraphicsRoot32BitConstants(
-                    1,
-                    32,
-                    &push as *const GBufferModel as *const std::ffi::c_void,
-                    0,
-                );
-                cmd.SetGraphicsRoot32BitConstants(2, 4, mat.as_ptr() as *const std::ffi::c_void, 0);
-                cmd.DrawIndexedInstanced(
-                    index_count as u32,
-                    1,
-                    index_offset as u32,
-                    obj.base_vertex,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
-        });
     }
 
     // Fill this frame's previous-frame model buffer for the GPU-driven G-buffer
     // velocity. Indexed by cull record id, parallel to the GpuObjectData buffer:
-    // the static prefix `[0, draw.n_objects)` gets last frame's model (so a moving
-    // static object reprojects correctly), the chunk region
-    // `[chunk_record_base(), +draw.n_chunk)` gets the chunk's current model (camera-only
-    // velocity -- chunk terrain is static-in-world; the camera-relative origin
-    // rebase nets to zero screen motion, matching the legacy chunk path), the
+    // the static prefix `[0, draw.n_objects)` and the runtime region
+    // `[runtime_record_base(), +draw.n_runtime)` get last frame's model (so a
+    // moving static object or a moving spawned clone reprojects correctly; a
+    // chunk never moves and reads the same either way), the
     // skinned tail `[skinned_record_base(), cull_count())` gets the current model
     // (skinned deformation motion comes from the previous-frame deformed buffer).
-    // The instance region `[draw.n_objects, chunk_record_base())` is init-written +
+    // The instance region `[draw.n_objects, runtime_record_base())` is init-written +
     // immutable. When velocity is inactive every written record gets its current
     // model, so the motion channel stays zero (GbView prev_vp also equals cur_vp).
     // Mirrors build_object_buffer's record indexing.
@@ -1429,18 +775,22 @@ impl DxContext {
                 );
             }
         }
-        // Streamed chunks: current model -> camera-only velocity. (Unused reserve
-        // slots keep stale prev_models, but their draw-args are disabled, so the
-        // gbuffer never rasterises them.)
-        let chunk_base = self.chunk_record_base();
-        self.for_each_chunk_record(|k, obj| {
-            let prev = obj.model;
-            // SAFETY: `for_each_chunk_record` caps `k < draw.n_chunk`, so
-            // `chunk_base + k < skinned_record_base()`, in range for `cull_count()`.
+        // Runtime objects: last frame's model, keyed by draw index like the
+        // static prefix. (Unused reserve slots keep stale prev_models, but their
+        // draw-args are disabled, so the gbuffer never rasterises them.)
+        let runtime_base = self.runtime_record_base();
+        self.for_each_runtime_record(|k, i, obj| {
+            let prev = if velocity_active {
+                prev_models.get(i).copied().unwrap_or(obj.model)
+            } else {
+                obj.model
+            };
+            // SAFETY: `for_each_runtime_record` caps `k < draw.n_runtime`, so
+            // `runtime_base + k < skinned_record_base()`, in range for `cull_count()`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &prev as *const [[f32; 4]; 4] as *const u8,
-                    ptr.add((chunk_base + k) * stride),
+                    ptr.add((runtime_base + k) * stride),
                     stride,
                 );
             }
@@ -1474,7 +824,7 @@ impl DxContext {
 mod tests {
     use super::*;
 
-    // The `GBufferView` / `GBufferModel` layout tests live with the structs in
+    // The `GBufferView` layout test lives with the struct in
     // `concinnity_core::render::directx::uniforms`. `GBufferView` fitting the
     // 256-aligned UBO allocation is checked here, where `align256` +
     // `GBUFFER_VIEW_UBO_SIZE` live.

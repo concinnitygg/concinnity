@@ -19,12 +19,12 @@
 // Which types get a page is discovered, not listed: every Component whose
 // `ORIGIN` is anything other than RuntimeOnly is an authorable asset and gets a
 // page. Nested objects a field embeds (a Prop's collider, the element type of
-// an array) and documented string enums a field uses (ShaderKind, AaMode, ...)
+// an array) and documented string enums a field uses (AaMode, ...)
 // each get their own page too and are linked from the fields that use them, the
 // way a JSON schema separates `$defs` from the objects that reference them.
 //
 // A documented page links cross-references as relative markdown:
-// `[ShaderKind](ShaderKind.md)`, so the docs cross-link correctly when browsed
+// `[AaMode](AaMode.md)`, so the docs cross-link correctly when browsed
 // as plain markdown. Hand-written `](#anchor)` links in the source rustdoc are
 // rewritten to the same relative form. A docs viewer rewrites the `.md` suffix
 // to its own routes at render time.

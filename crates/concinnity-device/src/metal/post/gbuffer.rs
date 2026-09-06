@@ -1,11 +1,11 @@
 // src/metal/post/gbuffer.rs
 //
-// The unified geometry G-buffer pre-pass. One jittered traversal of the visible
-// set (static + instanced + skinned) writes the view-space normal + linear
+// The unified geometry G-buffer pre-pass. One jittered traversal of the cull
+// records (static + instanced + skinned) writes the view-space normal + linear
 // depth, perceptual roughness, and screen-space motion vector that SSR, SSAO,
 // SSGI, RT reflections, TAA, and the MetalFX upscaler all consume, replacing
 // the three separate SSR / SSAO / velocity pre-passes that each re-rasterized
-// the same geometry. Pipelines, targets, and the encoder live together so the
+// the same geometry. Pipeline, targets, and the encoder live together so the
 // effect is a single unit the other backends can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -24,29 +24,18 @@ use crate::metal::context::MtlContext;
 use crate::metal::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::slang_shaders::{self, SlangLib};
-use crate::metal::uniforms::SsrPrepassMat;
-use concinnity_core::render::uniforms::GBufferModel;
+use crate::metal::slang_shaders;
 use concinnity_core::render::uniforms::GBufferView;
 
 // All unified-G-buffer pre-pass state grouped into one unit: the shared
-// targets (normal+depth / roughness / velocity / sampleable depth) plus the
-// per-geometry-kind pipelines. `targets`/`prepass_pipeline` are `Some` when
-// any consumer (SSR / SSGI / RT / SSAO / TAA / upscaler) is on;
-// `instanced_pipeline` only when the world has GPU-instanced clusters; and
-// `skinned_pipeline` is filled later by `upload_skinned` (80-byte layout).
+// targets (normal+depth / roughness / velocity / sampleable depth) and the one
+// pipeline that fills them. Both are `Some` when any consumer (SSR / SSGI / RT
+// / SSAO / TAA / upscaler) is on.
 pub(crate) struct GBufferState {
     pub targets: Option<GBufferTargets>,
-    pub prepass_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub instanced_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub skinned_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // GPU-driven bindless variant: one unified pipeline that draws the
-    // SAME per-frame indirect command set the bindless main pass executes, so the
-    // G-buffer feeder goes fully GPU-driven for static / instanced / chunk /
-    // skinned geometry (no CPU draw loop). `Some` only when the world is bindless
-    // and a G-buffer consumer is active (`bindless && targets.is_some()`);
-    // non-bindless / custom-shader worlds leave it `None` and keep the legacy
-    // per-geometry-kind CPU loops above. Rebuilt by `reload_shaders`.
+    // Draws the SAME per-frame indirect command set the bindless main pass
+    // executes, so the G-buffer feeder is fully GPU-driven for static /
+    // instanced / chunk / skinned geometry. Rebuilt by `reload_shaders`.
     pub bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
 }
 
@@ -97,48 +86,6 @@ pub(crate) fn create_gbuffer_targets(
 }
 
 // Pipeline
-
-// Build one G-buffer pre-pass pipeline for the given single-source vertex
-// variant (`GBUFFER_PREPASS_VERT{,_INSTANCED,_SKINNED}`). All three share
-// `GBUFFER_PREPASS_FRAG` and render to three single-sample MRT targets
-// (`RGBA16Float` normal+depth, `R8Unorm` roughness, `RG16Float` velocity) plus
-// a `Depth32Float` z-buffer. `vert_desc` selects the static (56-byte) or
-// skinned (80-byte) vertex layout. Each entry compiles to its own metallib, so
-// the two stages come from separate libraries and pair by semantic.
-pub(crate) fn build_gbuffer_prepass_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    vert_desc: &MTLVertexDescriptor,
-    vertex: &SlangLib,
-    hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_fn = slang_shaders::entry_function(device, vertex, hot_reload)?;
-    let frag_fn =
-        slang_shaders::entry_function(device, &slang_shaders::GBUFFER_PREPASS_FRAG, hot_reload)?;
-
-    let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexDescriptor(Some(vert_desc));
-    desc.setVertexFunction(Some(&vert_fn));
-    desc.setFragmentFunction(Some(&frag_fn));
-    desc.setRasterSampleCount(1);
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
-        ca0.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        ca0.setBlendingEnabled(false);
-        let ca1 = desc.colorAttachments().objectAtIndexedSubscript(1);
-        ca1.setPixelFormat(MTLPixelFormat::R8Unorm);
-        ca1.setBlendingEnabled(false);
-        let ca2 = desc.colorAttachments().objectAtIndexedSubscript(2);
-        ca2.setPixelFormat(MTLPixelFormat::RG16Float);
-        ca2.setBlendingEnabled(false);
-    }
-    desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-
-    device
-        .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create G-buffer pre-pass pipeline: {:?}", e))
-}
 
 // Two-stream vertex descriptor for the GPU-driven bindless G-buffer pipeline.
 // Stream 0 (buffer 1) is the standard 56-byte `Vertex` (pos / normal / tangent /
@@ -196,9 +143,10 @@ pub(crate) fn gbuffer_bindless_vertex_descriptor() -> Retained<MTLVertexDescript
 
 // Build the GPU-driven bindless G-buffer pre-pass pipeline:
 // `gbuffer_prepass_vertex_bindless` + `gbuffer_prepass_fragment_bindless`, the
-// same 3-MRT + Depth32 targets as the legacy pipeline, but with the two-stream
-// vertex descriptor and `supportIndirectCommandBuffers` so it can execute the
-// shared cull-produced indirect command buffer. Reads each record's model +
+// three single-sample MRT targets (`RGBA16Float` normal+depth, `R8Unorm`
+// roughness, `RG16Float` velocity) plus a `Depth32Float` z-buffer, the
+// two-stream vertex descriptor, and `supportIndirectCommandBuffers` so it can
+// execute the shared cull-produced indirect command buffer. Reads each record's model +
 // roughness from the GpuObjectData buffer by `[[base_instance]]`.
 pub(crate) fn build_gbuffer_bindless_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -244,22 +192,10 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
 
 // Encoder
 
-// The CPU draw-loop inputs the legacy (non-bindless) G-buffer pre-pass walks:
-// the visible set, the camera position for the LOD pick, the prepared instanced
-// clusters, and the skinned pose pair (current + previous-frame joint palettes;
-// the previous drives skinned motion vectors).
-pub(in crate::metal) struct GbufferSceneInputs<'a> {
-    pub visible: &'a [u32],
-    pub cam_pos: [f32; 3],
-    pub prepared_instances: &'a super::super::instanced::PreparedInstances,
-    pub cur_joint_bufs: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
-    pub prev_joint_bufs: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
-}
-
-// The GPU-driven per-frame buffers the bindless G-buffer pre-pass consumes: the
+// The GPU-driven per-frame buffers the G-buffer pre-pass consumes: the
 // cull-produced object records, the parallel previous-frame model matrices, and
-// the current + previous-frame deformed skinned vertices. All `Some` together on
-// the bindless path; the legacy path leaves them `None` and takes the CPU loop.
+// the current + previous-frame deformed skinned vertices. `None` for a world
+// with nothing in the cull records, which draws no geometry here.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct GbufferGpuBuffers<'a> {
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -269,12 +205,12 @@ pub(in crate::metal) struct GbufferGpuBuffers<'a> {
 }
 
 impl MtlContext {
-    // Encode the unified G-buffer pre-pass: one jittered traversal of the
-    // visible set (static, GPU-instanced, then skinned) writing view-space
-    // normal + linear depth at color(0), perceptual roughness at color(1), and
-    // screen-space motion at color(2), with a sampleable `Depth32Float`
-    // z-buffer. Replaces the separate SSR / SSAO / velocity pre-passes; runs
-    // before the main pass so the SSAO kernel and main pass can read its output.
+    // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
+    // records writing view-space normal + linear depth at color(0), perceptual
+    // roughness at color(1), and screen-space motion at color(2), with a
+    // sampleable `Depth32Float` z-buffer. Replaces the separate SSR / SSAO /
+    // velocity pre-passes; runs before the main pass so the SSAO kernel and main
+    // pass can read its output.
     //
     // Always writes all three color targets (the geometry traversal dominates,
     // so the extra R8 + RG16 stores are negligible). `velocity_active` selects
@@ -285,20 +221,11 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         view: &GBufferView,
-        scene: GbufferSceneInputs,
         gpu: GbufferGpuBuffers,
         velocity_active: bool,
     ) -> Result<u32, String> {
-        let GbufferSceneInputs {
-            visible,
-            cam_pos,
-            prepared_instances,
-            cur_joint_bufs,
-            prev_joint_bufs,
-        } = scene;
-        let (targets, static_ps) = match (&self.gbuffer.targets, &self.gbuffer.prepass_pipeline) {
-            (Some(t), Some(p)) => (t, p),
-            _ => return Ok(0),
+        let Some(targets) = &self.gbuffer.targets else {
+            return Ok(0);
         };
         // The colour channels are pool-owned; the pool is built under the same
         // gate as `targets`, so all three are present whenever it is. A missing
@@ -373,84 +300,10 @@ impl MtlContext {
             "g-buffer prepass",
         );
 
-        // GPU-driven path: when the world is bindless (the cull
-        // produced an object buffer) and the bindless G-buffer pipeline exists,
-        // draw the SAME per-frame indirect command set the main pass executes,
-        // with no CPU draw loop. Mirrors the main pass's two-range ICB split.
-        if self.gbuffer.bindless_pipeline.is_some() && gpu.object_buffer.is_some() {
-            let draws = self.encode_gbuffer_prepass_gpu_driven(&enc, view, gpu, velocity_active);
-            return Ok(draws);
-        }
-
-        enc.set_pipeline(static_ps);
-        enc.set_depth_stencil(&self.depth_state);
-        enc.set_vertex_value(view, 0);
-        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
-
-        // Static geometry: model (cur + prev for motion) at vertex(2), roughness
-        // at fragment(0). prev_model collapses to cur when velocity is inactive.
-        let mut draws = self.draw_static_objects(&enc, visible, cam_pos, |enc, obj, idx| {
-            let model = GBufferModel {
-                cur_model: obj.model,
-                prev_model: if velocity_active {
-                    self.prev_draw_models[idx]
-                } else {
-                    obj.model
-                },
-            };
-            let mat = SsrPrepassMat {
-                roughness: obj.material.roughness,
-                _pad: [0.0; 3],
-            };
-            enc.set_vertex_value(&model, 2);
-            enc.set_fragment_value(&mat, 0);
-        });
-
-        // GPU-instanced clusters: instance transforms are immutable, so binding
-        // the same buffer as cur + prev (`bind_prev`) yields zero motion;
-        // roughness is cluster-wide.
-        if let Some(inst_ps) = &self.gbuffer.instanced_pipeline
-            && !prepared_instances.clusters.is_empty()
-        {
-            enc.set_pipeline(inst_ps);
-            draws +=
-                self.draw_prepared_instances(&enc, prepared_instances, true, |enc, cluster| {
-                    let mat = SsrPrepassMat {
-                        roughness: cluster.material.roughness,
-                        _pad: [0.0; 3],
-                    };
-                    enc.set_fragment_value(&mat, 0);
-                });
-        }
-
-        // Skinned meshes: current pose at buffer(8), previous at buffer(9) (falls
-        // back to the current pose when no previous buffer exists -> zero motion).
-        // The model matrix is static, so cur == prev model.
-        if let (Some(skinned_ps), Some(svb), Some(sib)) = (
-            &self.gbuffer.skinned_pipeline,
-            &self.skinned.vertex_buffer,
-            &self.skinned.index_buffer,
-        ) && !self.skinned.draw_objects.is_empty()
-        {
-            enc.set_pipeline(skinned_ps);
-            enc.set_vertex_buffer(svb, 0, 1);
-            draws += self.draw_skinned_objects(&enc, sib, cam_pos, |enc, obj, i| {
-                let model = GBufferModel {
-                    cur_model: obj.model,
-                    prev_model: obj.model,
-                };
-                let mat = SsrPrepassMat {
-                    roughness: obj.material.roughness,
-                    _pad: [0.0; 3],
-                };
-                let prev = prev_joint_bufs.get(i).unwrap_or(&cur_joint_bufs[i]);
-                enc.set_vertex_value(&model, 2);
-                enc.set_fragment_value(&mat, 0);
-                enc.set_vertex_buffer(&cur_joint_bufs[i], 0, 8);
-                enc.set_vertex_buffer(prev, 0, 9);
-            });
-        }
-        Ok(draws)
+        // The encoder above cleared all four attachments, so a world with
+        // nothing in the cull records still leaves the consumers a clean
+        // "no geometry" G-buffer to read.
+        Ok(self.encode_gbuffer_prepass_gpu_driven(&enc, view, gpu, velocity_active))
     }
 
     // GPU-driven G-buffer pre-pass: draw the SAME per-frame indirect
@@ -580,8 +433,8 @@ impl MtlContext {
     // one column-major `float4x4` per cull record, indexed
     // identically to `build_object_buffer` (static + chunks + clones, then
     // instances, then skinned). The G-buffer VS reads it at `[[base_instance]]`
-    // to derive per-object motion. Returns `None` when there is no static
-    // geometry. Rebuilt every frame: the static + chunk region follows last
+    // to derive per-object motion. Returns `None` when the cull records are
+    // empty. Rebuilt every frame: the static + chunk region follows last
     // frame's model (or the current model when velocity is inactive), the
     // instance region is the immutable instance transforms (camera-only motion),
     // and the skinned region is the current model (per-vertex skin motion comes
@@ -591,7 +444,7 @@ impl MtlContext {
         ring_slot: usize,
         velocity_active: bool,
     ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
-        if self.draw.objects.is_empty() {
+        if self.cull_count() == 0 {
             return Ok(None);
         }
         let mut models = std::mem::take(&mut self.rings.prev_model_scratch);

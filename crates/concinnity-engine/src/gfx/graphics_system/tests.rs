@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use crate::blob::BlobData;
 use crate::components::{
     Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
-    ReparentRequest, Scene, SceneCommand, Shader, ShaderKind, SpawnRequest, Sprite,
-    StreamingConfig, TextLabel, Transform, Window,
+    ReparentRequest, Scene, SceneCommand, Shader, SpawnRequest, Sprite, StreamingConfig, TextLabel,
+    Transform, Window,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
@@ -106,11 +106,21 @@ impl WorldBuilder {
         self.components.push_typed(c);
     }
 
-    // One Shader whose payload container carries the given compiled stages.
-    // The stage bytes are opaque to the mock, so any bytes serve.
-    fn push_shader(&mut self, stages: &[(ShaderKind, &[u8])]) {
-        let container = crate::components::ShaderPayload {
-            stages: stages.iter().map(|(k, b)| (*k, b.to_vec())).collect(),
+    // One Shader whose payload carries the given compiled programs, one per
+    // entry. The artifact bytes are opaque to the mock, so any bytes serve.
+    fn push_shader(&mut self, entries: &[&str]) {
+        let container = crate::components::ShaderPrograms {
+            name: "shader".into(),
+            vertex: None,
+            fragment: "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }".into(),
+            programs: entries
+                .iter()
+                .map(|e| crate::components::compiled_programs::CompiledProgram {
+                    entries: vec![e.to_string()],
+                    source_digest: 1,
+                    artifact: b"program-bytes".to_vec(),
+                })
+                .collect(),
         };
         let locator = self.payload(&container.encode().expect("encode shader payload"));
         self.push(Shader {
@@ -119,12 +129,9 @@ impl WorldBuilder {
         });
     }
 
-    // The vertex + fragment Shader every renderable world needs.
+    // A Shader with the two programs a world default needs.
     fn push_shaders(&mut self) {
-        self.push_shader(&[
-            (ShaderKind::Vertex, b"vertex-shader-bytes"),
-            (ShaderKind::Fragment, b"fragment-shader-bytes"),
-        ]);
+        self.push_shader(&["vertex_main_bindless", "fragment_main_bindless"]);
     }
 
     // One quad Mesh + a Texture-backed Material + a Prop placing it.
@@ -738,9 +745,27 @@ fn a_world_without_a_shader_renders_with_the_engine_program() {
     assert!(!gs.failed, "no Shader is the common case, not a failure");
     let s = lock(&state);
     let init = s.init.as_ref().expect("backend constructed");
-    // One bucket carrying no bytes: every backend reads that as "use the
+    // One bucket carrying no programs: every backend reads that as "use the
     // engine's own main-pass program".
-    assert_eq!(init.shader_stage_lens, vec![(0, 0)]);
+    assert_eq!(init.shader_program_counts, vec![0]);
+}
+
+// A world with a Shader hands every program the cook emitted to the backend.
+#[test]
+fn a_world_with_a_shader_hands_its_programs_to_the_backend() {
+    let (state, hooks) = recording_hooks();
+    let mut b = WorldBuilder::new();
+    b.push(Window::default());
+    b.push(GraphicsConfig::default());
+    b.push_shaders();
+    b.push_textured_quad(MESH, TEX, MAT, PROP);
+    let mut world = b.build();
+    let gs = init_graphics(&mut world, hooks);
+
+    assert!(!gs.failed);
+    let s = lock(&state);
+    let init = s.init.as_ref().expect("backend constructed");
+    assert_eq!(init.shader_program_counts, vec![2]);
 }
 
 #[test]
@@ -3852,29 +3877,27 @@ impl WorldBuilder {
     }
 }
 
-// Every texture -- albedo, normal map, terrain secondaries, emissive, packed ORM
-// -- lives once in the shared pool at its own slot, so each reference resolves
-// through the same handle-indexed lookup rather than a per-role pool. An unset
-// reference falls back to its sentinel: slot 0 for the albedo-region maps (which
-// the shader gates on) and the flat-normal fallback for the normal maps.
+// Every texture -- albedo, normal map, emissive, packed ORM -- lives once in
+// the shared pool at its own slot, so each reference resolves through the same
+// handle-indexed lookup rather than a per-role pool. An unset reference falls
+// back to its sentinel: slot 0 for the albedo-region maps (which the shader
+// gates on) and the flat-normal fallback for the normal map.
 #[test]
 fn every_material_texture_reference_resolves_to_its_shared_pool_slot() {
     use concinnity_core::ecs::ResourceKind;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    // Four more textures beside the quad's albedo (handle 0), so each reference
+    // Three more textures beside the quad's albedo (handle 0), so each reference
     // below points at a distinct slot.
-    let slots: Vec<u32> = (0..5)
+    let slots: Vec<u32> = (0..4)
         .map(|_| b.push_resource(ResourceKind::Texture, &texture_payload(2, 2)))
         .collect();
     let mat = b.push_material(Material {
         albedo: Some(TextureHandle(slots[0])),
         normal_map: Some(TextureHandle(slots[1])),
-        albedo_secondary: Some(TextureHandle(slots[2])),
-        emissive_map: Some(TextureHandle(slots[3])),
-        orm_map: Some(TextureHandle(slots[4])),
-        terrain_blend: 0.5,
+        emissive_map: Some(TextureHandle(slots[2])),
+        orm_map: Some(TextureHandle(slots[3])),
         ..Default::default()
     });
     b.push(Prop {
@@ -3889,7 +3912,7 @@ fn every_material_texture_reference_resolves_to_its_shared_pool_slot() {
 
     let s = lock(&state);
     let init = s.init.as_ref().unwrap();
-    assert_eq!(init.texture_count, 6, "one pool holds every texture");
+    assert_eq!(init.texture_count, 5, "one pool holds every texture");
     let draw = init
         .draw_objects
         .iter()
@@ -3899,12 +3922,8 @@ fn every_material_texture_reference_resolves_to_its_shared_pool_slot() {
         draw.normal_map_slot, slots[1] as usize,
         "a normal map resolves to the same shared pool, not a separate one"
     );
-    assert_eq!(draw.material.albedo_secondary_index, slots[2]);
-    assert_eq!(draw.material.emissive_map_index, slots[3]);
-    assert_eq!(draw.material.orm_map_index, slots[4]);
-    // An unset secondary normal selects the flat-normal fallback, one past the
-    // last real texture, so a slope layer without its own map perturbs nothing.
-    assert_eq!(draw.material.normal_secondary_index, 6);
+    assert_eq!(draw.material.emissive_map_index, slots[2]);
+    assert_eq!(draw.material.orm_map_index, slots[3]);
 }
 
 // A material whose texture handle is past the end of the pool is a resolution
@@ -3926,13 +3945,6 @@ fn a_material_texture_handle_past_the_pool_fails_init() {
             "normal_map",
             Material {
                 normal_map: out_of_range,
-                ..Default::default()
-            },
-        ),
-        (
-            "albedo_secondary",
-            Material {
-                albedo_secondary: out_of_range,
                 ..Default::default()
             },
         ),
@@ -4004,14 +4016,7 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
         clear_color: [0.1, 0.2, 0.3, 1.0],
         ..Default::default()
     });
-    b.push_shader(&[
-        (ShaderKind::Vertex, b"vertex-shader-bytes"),
-        (ShaderKind::Fragment, b"fragment-shader-bytes"),
-        (
-            ShaderKind::VertexInstanced,
-            b"instanced-vertex-shader-bytes",
-        ),
-    ]);
+    b.push_shader(&["vertex_main_bindless", "fragment_main_bindless"]);
     b.push(Camera3D::bake(Default::default()));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     b.push(InstancedProp {

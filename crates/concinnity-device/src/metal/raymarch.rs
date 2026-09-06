@@ -31,10 +31,15 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLBlitCommandEncoder as _, MTLBuffer,
     MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCullMode, MTLDevice, MTLIndexType,
-    MTLLibrary as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
+    MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
     MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
     MTLResourceOptions, MTLStoreAction, MTLVertexFormat, MTLVertexStepFunction,
 };
+
+use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::platform::Platform;
+use concinnity_core::render::slang_programs::raymarch::{self, Family};
+use concinnity_slang::SlangTarget;
 
 use crate::components::sdf_volume::SdfVolume;
 use crate::gfx::mesh_payload::Vertex;
@@ -45,34 +50,22 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-// GPU-free repr(C) structs; live in `core::render` so their layout tests
-// count toward coverage. Re-exported at `pub(in crate::metal)` (as before) so the
-// graph executor, shadow pass, and this file keep their existing paths.
-pub(in crate::metal) use crate::metal::uniforms::RaymarchShadowCascade;
-pub(in crate::metal) use crate::metal::uniforms::RaymarchView;
-pub(in crate::metal) use crate::metal::uniforms::RaymarchVolumeUniforms;
+// One declaration for all three backends, in `core::render::uniforms`.
+// Re-exported at `pub(in crate::metal)` so the graph executor, the shadow pass
+// and this file keep their existing paths.
+pub(in crate::metal) use concinnity_core::render::uniforms::{
+    RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,
+};
 
-// Engine-shipped header / template prepended + appended around each
-// user shader. The helpers carry the IQ primitive library + the cone-
-// marcher + the PBR shading helpers; the template owns the vertex +
-// fragment_main that drive the pass. Forward declarations of `map` /
-// `shade` live in the helpers; the user shader sandwiched in the
-// middle provides their definitions; the template appended at the end
-// calls them.
-const RAYMARCH_HELPERS_MSL: &str = include_str!("shaders/raymarch_helpers.metal");
-const RAYMARCH_TEMPLATE_MSL: &str = include_str!("shaders/raymarch_template.metal");
-// Depth-only shadow-caster template. Wrapped around the user source the same
-// way as the main template (helpers → user → this), but compiled into a
-// separate per-volume pipeline that rasterises the proxy cube through a CSM
-// cascade's light VP and writes the cone-marched SDF hit depth. Mirrors
-// `directx/shaders/raymarch_shadow.hlsl`.
-const RAYMARCH_SHADOW_MSL: &str = include_str!("shaders/raymarch_shadow.metal");
-// Volumetric raymarching template. Wrapped the same way as the main template
-// (helpers → user → this) but the user provides `sampleVolume` instead of
-// `map`/`shade`. The volume marches in fixed steps through the box,
-// accumulating Beer-Lambert transmittance and in-scattered light. Output is
-// alpha-blended; no depth write. Mirrors `directx/shaders/raymarch_volumetric_template.hlsl`.
-const RAYMARCH_VOLUMETRIC_MSL: &str = include_str!("shaders/raymarch_volumetric_template.metal");
+// Metal buffer index for the proxy cube's vertex stream.
+//
+// Vertex streams and uniform buffers share one index space on Metal, and every
+// entry point compiled from the single source receives every global the file
+// declares -- so the vertex stage sees the light and cascade blocks it never
+// reads, at their own slots. The stream therefore sits past all of them. The
+// hand-written MSL could use a low index because its vertex stage declared only
+// the two buffers it read.
+const RAYMARCH_VERTEX_BUFFER: usize = 5;
 
 // `RaymarchLights` mirror of `crate::gfx::render_types::LightUniforms`.
 // The Rust struct already has the right layout; we just hand the
@@ -134,6 +127,53 @@ pub(in crate::metal) fn volume_in_frustum(
     frustum.intersects_aabb(min, max)
 }
 
+// The MTLLibrary for one family of a volume's field.
+//
+// slangc emits one MSL translation unit per family, so both stages come out of
+// one library and the cook stores it as one artifact. `msl_cache` turns that
+// text into a metallib where a Metal toolchain exists and hands it to
+// `newLibraryWithSource` where none does, which is every player machine.
+fn family_library(
+    device: &ProtocolObject<dyn MTLDevice>,
+    programs: &SdfPrograms,
+    family: Family,
+    hot_reload: bool,
+    asset_label: &str,
+) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+    let entries: Vec<&str> = raymarch::ALL
+        .iter()
+        .filter(|p| p.family == family)
+        .map(|p| p.entry)
+        .collect();
+    let msl = crate::raymarch_source::artifact(
+        programs,
+        &crate::raymarch_source::Request {
+            family,
+            platform: Platform::Metal,
+            entries: &entries,
+            target: SlangTarget::Metal,
+            hot_reload,
+            label: asset_label,
+        },
+    )?;
+    let text = std::str::from_utf8(&msl)
+        .map_err(|e| format!("SdfVolume '{asset_label}': compiled field is not MSL text: {e}"))?;
+    super::msl_cache::compiled_library(device, text, asset_label)
+        .map_err(|e| format!("raymarch shader compile error for SdfVolume '{asset_label}': {e}"))
+}
+
+// One entry point out of a family's library, named so a missing one points at
+// the volume rather than at the engine.
+fn entry_function(
+    library: &ProtocolObject<dyn MTLLibrary>,
+    entry: &str,
+    asset_label: &str,
+) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>, String> {
+    library.newFunctionWithName(&ns_str(entry)).ok_or_else(|| {
+        format!("{entry} entry not found in compiled library for SdfVolume '{asset_label}'")
+    })
+}
+
 // Compile + link a per-volume raymarch pipeline. Wraps the user
 // fragment source bytes between the engine-shipped helpers and the
 // engine-shipped fragment_main template, then compiles with
@@ -144,74 +184,26 @@ pub(in crate::metal) fn volume_in_frustum(
 // shader points at the right SdfVolume in the world.jsonl.
 pub(in crate::metal) fn build_raymarch_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
-    user_source: &str,
+    programs: &SdfPrograms,
+    hot_reload: bool,
     asset_label: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let wrapped = format!(
-        "{}\n// === user SdfVolume::fragment_shader: {} ===\n{}\n// === engine raymarch template ===\n{}\n",
-        RAYMARCH_HELPERS_MSL, asset_label, user_source, RAYMARCH_TEMPLATE_MSL
-    );
+    let library = family_library(device, programs, Family::Surface, hot_reload, asset_label)?;
+    let vert_fn = entry_function(&library, "raymarch_vertex", asset_label)?;
+    let frag_fn = entry_function(&library, "raymarch_fragment", asset_label)?;
 
-    let library = super::msl_cache::compiled_library(device, &wrapped, asset_label)
-        .map_err(|e| format!("raymarch shader compile error for SdfVolume '{asset_label}': {e}"))?;
-
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("raymarch_vertex"))
-        .ok_or_else(|| {
-            format!(
-                "raymarch_vertex entry not found in compiled library for SdfVolume '{}'",
-                asset_label
-            )
-        })?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("raymarch_fragment"))
-        .ok_or_else(|| {
-            format!(
-                "raymarch_fragment entry not found in compiled library for SdfVolume '{}'",
-                asset_label
-            )
-        })?;
-
-    // Standard 5-attribute mesh layout at buffer(2). The proxy cube
-    // ships only positions, but the vertex shader declares the full
-    // `Vertex` struct so the pipeline matches the engine's standard
-    // vertex descriptor: keeps the pass compatible with the same
-    // mesh format the rest of the engine uses.
+    // The proxy cube is stored as the engine's 56-byte `Vertex`, but the
+    // shared vertex entry reads position alone, so the descriptor declares that
+    // one attribute and strides over the rest.
     let vert_desc = vertex_descriptor(
-        &[
-            VertexAttr {
-                index: 0,
-                format: MTLVertexFormat::Float3,
-                offset: 0,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 1,
-                format: MTLVertexFormat::Float3,
-                offset: 12,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 2,
-                format: MTLVertexFormat::Float3,
-                offset: 24,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 3,
-                format: MTLVertexFormat::Float3,
-                offset: 36,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 4,
-                format: MTLVertexFormat::Float2,
-                offset: 48,
-                buffer_index: 2,
-            },
-        ],
+        &[VertexAttr {
+            index: 0,
+            format: MTLVertexFormat::Float3,
+            offset: 0,
+            buffer_index: RAYMARCH_VERTEX_BUFFER,
+        }],
         &[VertexLayout {
-            buffer_index: 2,
+            buffer_index: RAYMARCH_VERTEX_BUFFER,
             stride: std::mem::size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
@@ -256,72 +248,24 @@ pub(in crate::metal) fn build_raymarch_pipeline(
 // `shadow_map`. Mirrors `directx/raymarch.rs::compile_volume_shadow_pso`.
 pub(in crate::metal) fn build_raymarch_shadow_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
-    user_source: &str,
+    programs: &SdfPrograms,
+    hot_reload: bool,
     asset_label: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let wrapped = format!(
-        "{}\n// === user SdfVolume::fragment_shader (shadow): {} ===\n{}\n// === engine raymarch shadow template ===\n{}\n",
-        RAYMARCH_HELPERS_MSL, asset_label, user_source, RAYMARCH_SHADOW_MSL
-    );
+    let library = family_library(device, programs, Family::Shadow, hot_reload, asset_label)?;
+    let vert_fn = entry_function(&library, "raymarch_shadow_vertex", asset_label)?;
+    let frag_fn = entry_function(&library, "raymarch_shadow_fragment", asset_label)?;
 
-    let library =
-        super::msl_cache::compiled_library(device, &wrapped, asset_label).map_err(|e| {
-            format!("raymarch shadow shader compile error for SdfVolume '{asset_label}': {e}")
-        })?;
-
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("raymarch_shadow_vertex"))
-        .ok_or_else(|| {
-            format!(
-                "raymarch_shadow_vertex entry not found in compiled library for SdfVolume '{}'",
-                asset_label
-            )
-        })?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("raymarch_shadow_fragment"))
-        .ok_or_else(|| {
-            format!(
-                "raymarch_shadow_fragment entry not found in compiled library for SdfVolume '{}'",
-                asset_label
-            )
-        })?;
-
-    // Same proxy-cube vertex layout as the main pass (Vertex at buffer(2)).
+    // Same proxy-cube vertex layout as the main pass.
     let vert_desc = vertex_descriptor(
-        &[
-            VertexAttr {
-                index: 0,
-                format: MTLVertexFormat::Float3,
-                offset: 0,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 1,
-                format: MTLVertexFormat::Float3,
-                offset: 12,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 2,
-                format: MTLVertexFormat::Float3,
-                offset: 24,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 3,
-                format: MTLVertexFormat::Float3,
-                offset: 36,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 4,
-                format: MTLVertexFormat::Float2,
-                offset: 48,
-                buffer_index: 2,
-            },
-        ],
+        &[VertexAttr {
+            index: 0,
+            format: MTLVertexFormat::Float3,
+            offset: 0,
+            buffer_index: RAYMARCH_VERTEX_BUFFER,
+        }],
         &[VertexLayout {
-            buffer_index: 2,
+            buffer_index: RAYMARCH_VERTEX_BUFFER,
             stride: std::mem::size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
@@ -346,80 +290,35 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
         })
 }
 
-// Compile a per-volume volumetric raymarching pipeline. Wraps the user
-// source between the helpers and the volumetric template (the main template is
-// *not* included: this library defines only `raymarch_volumetric_vertex` /
-// `raymarch_volumetric_fragment`), then builds a render pipeline with alpha
-// blending and no depth write. The user shader provides `sampleVolume(p, params, time)`
-// returning density + scattering + emission instead of `map`/`shade`.
+// Compile a per-volume volumetric raymarching pipeline: alpha blended, no depth
+// write. The field provides `sampleVolume(p, params, time)` returning density,
+// scattering and emission rather than `map` and `shade`.
 pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
-    user_source: &str,
+    programs: &SdfPrograms,
+    hot_reload: bool,
     asset_label: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let wrapped = format!(
-        "{}\n// === user SdfVolume::fragment_shader (volumetric): {} ===\n{}\n// === engine raymarch volumetric template ===\n{}\n",
-        RAYMARCH_HELPERS_MSL, asset_label, user_source, RAYMARCH_VOLUMETRIC_MSL
-    );
+    let library = family_library(
+        device,
+        programs,
+        Family::Volumetric,
+        hot_reload,
+        asset_label,
+    )?;
+    let vert_fn = entry_function(&library, "raymarch_volumetric_vertex", asset_label)?;
+    let frag_fn = entry_function(&library, "raymarch_volumetric_fragment", asset_label)?;
 
-    let library =
-        super::msl_cache::compiled_library(device, &wrapped, asset_label).map_err(|e| {
-            format!("raymarch volumetric shader compile error for SdfVolume '{asset_label}': {e}")
-        })?;
-
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("raymarch_volumetric_vertex"))
-        .ok_or_else(|| {
-            format!(
-                "raymarch_volumetric_vertex entry not found in compiled library for SdfVolume '{}'",
-                asset_label
-            )
-        })?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("raymarch_volumetric_fragment"))
-        .ok_or_else(|| {
-            format!(
-                "raymarch_volumetric_fragment entry not found in compiled library for SdfVolume '{}'",
-                asset_label
-            )
-        })?;
-
-    // Same proxy-cube vertex layout as the main pass (Vertex at buffer(2)).
+    // Same proxy-cube vertex layout as the main pass.
     let vert_desc = vertex_descriptor(
-        &[
-            VertexAttr {
-                index: 0,
-                format: MTLVertexFormat::Float3,
-                offset: 0,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 1,
-                format: MTLVertexFormat::Float3,
-                offset: 12,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 2,
-                format: MTLVertexFormat::Float3,
-                offset: 24,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 3,
-                format: MTLVertexFormat::Float3,
-                offset: 36,
-                buffer_index: 2,
-            },
-            VertexAttr {
-                index: 4,
-                format: MTLVertexFormat::Float2,
-                offset: 48,
-                buffer_index: 2,
-            },
-        ],
+        &[VertexAttr {
+            index: 0,
+            format: MTLVertexFormat::Float3,
+            offset: 0,
+            buffer_index: RAYMARCH_VERTEX_BUFFER,
+        }],
         &[VertexLayout {
-            buffer_index: 2,
+            buffer_index: RAYMARCH_VERTEX_BUFFER,
             stride: std::mem::size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
@@ -459,39 +358,29 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
         })
 }
 
-// Build the per-volume record (PSO + per-volume uniforms) from one
-// declared `SdfVolume` + its compiled-payload source bytes (which the
-// build pipeline packed via `SdfVolume::compile_payload`).
+// Build the per-volume record (PSO + per-volume uniforms) from one declared
+// `SdfVolume` and the compiled field the build packed into its payload.
 pub(in crate::metal) fn build_raymarch_volume_record(
     device: &ProtocolObject<dyn MTLDevice>,
     volume: &SdfVolume,
-    user_source_bytes: &[u8],
+    payload: &[u8],
+    hot_reload: bool,
     asset_label: &str,
 ) -> Result<RaymarchVolumeRecord, String> {
-    let user_source = std::str::from_utf8(user_source_bytes).map_err(|e| {
-        format!(
-            "SdfVolume '{}': fragment shader payload is not valid UTF-8: {}",
-            asset_label, e
-        )
-    })?;
-    // A volumetric volume builds the alpha-blended Beer-Lambert pipeline;
-    // every other volume builds the opaque cone-marched surface pipeline.
-    // Only one is built: a volumetric user shader provides `sampleVolume`
-    // and omits `map`/`shade`, so wrapping it with the surface template
-    // would fail to link (`Undefined symbol(s) ... map / shade`).
+    let programs = crate::raymarch_source::decode(payload, asset_label)?;
+    // A medium is integrated rather than surfaced, so it builds the blended
+    // pipeline and nothing else: its field defines `sampleVolume` and no
+    // `map`, which the surface entries would fail to link against.
     let pipeline = if volume.volumetric {
-        build_raymarch_volumetric_pipeline(device, user_source, asset_label)?
+        build_raymarch_volumetric_pipeline(device, &programs, hot_reload, asset_label)?
     } else {
-        build_raymarch_pipeline(device, user_source, asset_label)?
+        build_raymarch_pipeline(device, &programs, hot_reload, asset_label)?
     };
-    // Build the depth-only shadow-caster pipeline only when the asset opts in.
-    // Reuses the same user source: the wrap just swaps the main template for
-    // the shadow template. Volumetrics never cast shadows (cast_shadows is
-    // force-disabled in SdfVolume::from_args when volumetric is true).
     let shadow_pipeline = if volume.cast_shadows {
         Some(build_raymarch_shadow_pipeline(
             device,
-            user_source,
+            &programs,
+            hot_reload,
             asset_label,
         )?)
     } else {
@@ -732,7 +621,7 @@ impl MtlContext {
         // Proxy-cube vertices at vertex buffer(2); index buffer
         // bound per-draw. The vertex descriptor declares the full
         // 56-byte Vertex layout at this binding.
-        enc.set_vertex_buffer(vbuf, 0, 2);
+        enc.set_vertex_buffer(vbuf, 0, RAYMARCH_VERTEX_BUFFER);
         // Main pass MSAA depth at fragment texture(0); sampled by
         // `main_depth.read(px, 0)` in the template fragment for
         // the shader-side cone-march early-out (separate texture
@@ -752,12 +641,15 @@ impl MtlContext {
         // Always bound (even when no shader uses it) so the per-
         // volume PSO doesn't need a "refraction enabled" variant.
         enc.set_fragment_texture(self.hdr_targets.hdr_resolve_copy.as_ref(), 4);
-        enc.set_fragment_sampler(depth_sampler, 0);
-        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), 1);
-        enc.set_fragment_sampler(self.cube_sampler.as_ref(), 2);
-        // Reuse the linear-clamp post sampler for the scene-copy
-        // tap: same filter the existing water + bloom passes use.
-        enc.set_fragment_sampler(depth_sampler, 3);
+        // Samplers in the order the single source declares them. The depth
+        // read needs none (`read` takes integer pixels), so there is no
+        // sampler(0) standing in for one, which is what the hand-written MSL
+        // used to leave bound and unused.
+        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), 0);
+        enc.set_fragment_sampler(self.cube_sampler.as_ref(), 1);
+        // The linear-clamp post sampler for the scene-copy tap: the same
+        // filter the water and bloom passes use.
+        enc.set_fragment_sampler(depth_sampler, 2);
 
         let mut draws: u32 = 0;
         for (i, vol) in self.raymarch.volumes.iter().enumerate() {
@@ -893,7 +785,7 @@ impl MtlContext {
             enc.set_fragment_value(&shadow_uniforms, 3);
             enc.set_vertex_value(&cascade, 4);
             enc.set_fragment_value(&cascade, 4);
-            enc.set_vertex_buffer(vbuf, 0, 2);
+            enc.set_vertex_buffer(vbuf, 0, RAYMARCH_VERTEX_BUFFER);
 
             for vol in &self.raymarch.volumes {
                 if !vol.visible || !vol.cast_shadows {

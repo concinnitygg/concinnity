@@ -97,11 +97,10 @@ impl DxContext {
                     ubo_gva,
                     // The shadow VS indexes `light_vps` by this; the spot
                     // slice's matrix lives in slot 0.
-                    slice_idx: 0,
                 },
                 cam_pos,
             );
-            self.encode_shadow_skinned_into(cmd, ubo_gva, 0, frame_idx, cam_pos);
+            self.encode_shadow_skinned_into(cmd, ubo_gva, frame_idx, cam_pos);
         }
     }
 }

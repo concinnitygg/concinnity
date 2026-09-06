@@ -20,6 +20,7 @@ include = [
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
+concinnity-slang = { workspace = true }
 
 bytemuck = "1"
 serde = { version = "1", features = ["derive"] }

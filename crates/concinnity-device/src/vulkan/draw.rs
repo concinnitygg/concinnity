@@ -63,7 +63,7 @@ impl VkContext {
     // Rebuild this frame's `GpuObjectData` storage buffer for the bindless
     // static pass: one 144-byte record per build-time `DrawObject`, indexed
     // by object id. Streamed `VoxelWorld` chunks (past `draw.n_objects`) are
-    // skipped: they render through the legacy pipeline. The pool indices
+    // skipped: they fill the runtime reserve instead. The pool indices
     // address the shared handle-indexed texture pool: albedo = `texture_slot`,
     // normal = the normal map's own handle (or the flat-normal fallback slot
     // for a normal-less draw). Rebuilt every frame so `update_model` /
@@ -104,19 +104,20 @@ impl VkContext {
             buf.write_val(i * stride, &rec);
         }
 
-        // Streamed chunks: one record each in the reserved region at
-        // `[chunk_record_base() + k]`, packed like a static object (chunk geometry
-        // already lives in the shared VB/IB with the chunk's `base_vertex`, so they
-        // ride the static + instance prefix indirect draw). Per-chunk flat-pool
-        // texture indices give per-chunk materials. A non-resident / unused slot's
-        // stale record here is never read -- `build_draw_args_buffer` disables it,
-        // and the cull kernel skips `objects[i]` for a disabled record.
-        let chunk_base = self.chunk_record_base();
-        self.for_each_chunk_record(|k, obj| {
+        // Runtime objects -- streamed chunks and spawned clones -- one record each
+        // in the reserved region at `[runtime_record_base() + k]`, packed like a
+        // static object (their geometry already lives in the shared VB/IB with
+        // their own `base_vertex`, so they ride the static + instance prefix
+        // indirect draw). Flat-pool texture indices give each its own material. A
+        // non-resident / unused slot's stale record here is never read --
+        // `build_draw_args_buffer` disables it, and the cull kernel skips
+        // `objects[i]` for a disabled record.
+        let runtime_base = self.runtime_record_base();
+        self.for_each_runtime_record(|k, _, obj| {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
-            buf.write_val((chunk_base + k) * stride, &rec);
+            buf.write_val((runtime_base + k) * stride, &rec);
         });
 
         // Skinned objects: one record each in the reserved tail at
@@ -153,6 +154,36 @@ impl VkContext {
             return;
         };
         self.build_draw_args_records_into(buf, cam_pos);
+        self.patch_instance_lod_into(buf, cam_pos);
+    }
+
+    // Overwrite the instance tail's `GpuDrawArgs` with each instance's active
+    // LOD slice, for the clusters that declare alternates. The init-time fill
+    // wrote every cluster's base slice into every frame's buffer, so this is a
+    // no-op for a world without alternates and touches only the instances of
+    // the clusters that have them. Not part of `build_draw_args_records_into`:
+    // the probe bake shares that body and deliberately leaves its instance tail
+    // zeroed, which disables instances in a bake.
+    fn patch_instance_lod_into(&self, buf: &super::allocator::PooledBuffer, cam_pos: [f32; 3]) {
+        use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+        if !self.instanced.any_lod {
+            return;
+        }
+        let stride = std::mem::size_of::<GpuDrawArgs>();
+        let base = self.draw.n_objects;
+        crate::gfx::lod::for_each_instance_lod(
+            &self.instanced.clusters,
+            cam_pos,
+            |record, index_offset, index_count| {
+                let rec = GpuDrawArgs {
+                    index_count: index_count as u32,
+                    index_offset: index_offset as u32,
+                    base_vertex: 0,
+                    flags: draw_args_flags(true, true, true),
+                };
+                buf.write_val((base + record) * stride, &rec);
+            },
+        );
     }
 
     // Write the GPU-cull `GpuDrawArgs` records (static + streamed-chunk +
@@ -200,26 +231,35 @@ impl VkContext {
             buf.write_val(i * stride, &rec);
         }
 
-        // Streamed chunks: one draw-arg each in the reserved region at
-        // `[chunk_record_base() + k]`. Chunk geometry lives in the shared VB/IB, so
-        // the args carry the chunk's own `base_vertex` + index slice and the chunk
-        // rides the static + instance prefix indirect draw. Chunks are non-cullable
-        // (NaN AABB), so a resident chunk draws unconditionally; a freed slot's
-        // `resident` clear disables it. The unused reserve tail is disabled.
-        let chunk_base = self.chunk_record_base();
-        let n_resident_chunks = self.for_each_chunk_record(|k, obj| {
-            // Chunks have no LOD alternates; `active_lod(0.0)` returns the base slice
-            // (and avoids a NaN camera distance from the chunk's NaN AABB).
-            let (index_offset, index_count) = obj.active_lod(0.0);
+        // Runtime objects -- streamed chunks and spawned clones -- one draw-arg
+        // each in the reserved region at `[runtime_record_base() + k]`. Their
+        // geometry lives in the shared VB/IB, so the args carry the object's own
+        // `base_vertex` + index slice and it rides the static + instance prefix
+        // indirect draw. Both kinds are non-cullable (NaN AABB, because the
+        // init-time BVH cannot refit to admit them), so a resident one draws
+        // unconditionally; a freed slot's `resident` clear disables it. The unused
+        // reserve tail is disabled.
+        let runtime_base = self.runtime_record_base();
+        let n_resident_runtime = self.for_each_runtime_record(|k, _, obj| {
+            // `camera_distance` falls back to the model translation for a
+            // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
+            // carry no alternates and land on LOD0 either way; a clone inherits
+            // its template's.
+            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let (index_offset, index_count) = obj.active_lod(d);
+            // A clone copies its template's material, so a see-through one
+            // leaves the opaque pass the way the static loop's does.
+            let opaque_visible =
+                obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
             let rec = GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
-                flags: draw_args_flags(obj.visible, obj.resident, obj.cullable()),
+                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable()),
             };
-            buf.write_val((chunk_base + k) * stride, &rec);
+            buf.write_val((runtime_base + k) * stride, &rec);
         });
-        // Disable the unused chunk reserve tail so vacated / never-used slots draw
+        // Disable the unused reserve tail so vacated / never-used slots draw
         // nothing (the cull kernel skips `objects[i]` for an ENABLED-clear record).
         let disabled = GpuDrawArgs {
             index_count: 0,
@@ -227,8 +267,8 @@ impl VkContext {
             base_vertex: 0,
             flags: 0,
         };
-        for k in n_resident_chunks..self.draw.n_chunk {
-            buf.write_val((chunk_base + k) * stride, &disabled);
+        for k in n_resident_runtime..self.draw.n_runtime {
+            buf.write_val((runtime_base + k) * stride, &disabled);
         }
 
         // Skinned objects: one record each in the reserved tail. The main pass's
@@ -663,24 +703,6 @@ impl VkContext {
             self.build_draw_args_buffer(frame_idx, cam_pos);
         }
 
-        // CPU visibility list (BVH-culled cullables + draw.always fallback).
-        // Computed before the main render pass so the SSAO pre-pass below can
-        // walk the same set, and so velocity / TAA later can reuse it without
-        // a second BVH walk. `mem::take` swaps out the persistent scratch
-        // buffer so its heap allocation is reused across frames; it's put
-        // back below before we return Ok (error path loses capacity, fine
-        // since record_frame errors are exceptional). Left empty when the world
-        // is hidden so the Main pass draws nothing behind the menu.
-        let mut visible = std::mem::take(&mut self.draw.visible_scratch);
-        visible.clear();
-        if !world_hidden {
-            self.draw
-                .bvh
-                .query(&frustum, cam_pos, |idx| visible.push(idx));
-            visible.sort_unstable();
-            visible.extend_from_slice(&self.draw.always);
-        }
-
         //  Single merged frame graph dispatched in one
         //  `execute_graph` call. The toposort orders Cull → Main via
         //  the `draw_args` buffer RAW edge, SsaoBlur / Shadow → Main
@@ -714,7 +736,6 @@ impl VkContext {
             text_calls,
             lines,
             world_hidden,
-            visible: &visible,
             frustum: &frustum,
             cam_pos,
             vp_mat,
@@ -773,8 +794,6 @@ impl VkContext {
             self.cull.hiz_prev_view_proj = cur_vp;
             self.cull.hiz_valid = true;
         }
-
-        self.draw.visible_scratch = visible;
 
         // Drain the parallel-safe draw-call accumulator (bumped by every pass
         // encoder, including those fanned onto rayon workers) into this frame's

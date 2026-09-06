@@ -127,12 +127,9 @@ impl PipelineResult {
 mod tests {
     use super::*;
     use crate::pipeline::build_pipeline_from_str;
-    use crate::pipeline::fixtures::SHADER_BUILD_LOCK;
 
     #[test]
     fn resource_payload_slices_the_named_resource() {
-        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::compile::shader::install_stub_toolchain();
         let world = concat!(
             r#"{"name":"prism","type":"SkinnedMesh","args":{"#,
             r#""vertices":[{"pos":[0,0,0]},{"pos":[1,0,0]},{"pos":[0,1,0]}],"#,

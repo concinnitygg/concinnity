@@ -15,5 +15,11 @@
 /// What the DirectX backend compiles to DXIL.
 pub mod dx;
 
+/// What every backend compiles for the raymarched SDF volume pass.
+pub mod raymarch;
+
+/// What every backend compiles for a world `Shader`.
+pub mod surface;
+
 /// What the Vulkan backend compiles to SPIR-V.
 pub mod vk;

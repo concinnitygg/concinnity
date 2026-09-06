@@ -173,30 +173,24 @@ pub(crate) fn resolve_runtime_source_path(
     concinnity_host::store::source::resolve_source_path(raw, assets_dir)
 }
 
-/// One world-loaded Shader stage reload entry. Captures
-/// the stage's kind + the resolved on-disk source path that the build
-/// pipeline read at compile time, so the hot-reload helper can rerun
-/// `concinnity_cook::compile::shader::compile_shader` on the same file and feed the
-/// fresh metallib / SPIR-V / DXBC bytes back to the backend for a pipeline
-/// rebuild. Stages whose source is the embedded GLSL fallback (Vulkan-only,
-/// no on-disk file) have an empty `resolved_path` and are filtered by the
-/// caller before reaching this map.
+/// One of the world default Shader's files, as a reload entry: which hook it
+/// defines plus the resolved on-disk path the build pipeline read, so the
+/// hot-reload helper can recompile the Shader through the cook's own compile
+/// and hand the fresh programs back to the backend for a pipeline rebuild.
 #[derive(Debug, Clone)]
 pub struct ShaderStageSourceEntry {
-    /// Which shader stage this entry compiles.
-    pub kind: crate::components::shader::ShaderKind,
+    /// Which of the Shader's files this is.
+    pub stage: crate::components::ShaderStage,
     /// Resolved on-disk path the build pipeline read at compile time. Stored
     /// resolved (not raw) so the watcher can subscribe to a real parent
     /// directory even when the asset declaration used a bare filename.
     pub resolved_path: String,
 }
 
-/// Catalogue of every world-loaded Shader stage whose source the renderer
-/// can hot-reload. Owned by `GraphicsSystem` under `cn debug` only; consumed
-/// by `reload_shader_stages` when the asset hot-reload watcher fires on a
-/// captured shader-source file. The map holds at most one entry per
-/// [`crate::components::shader::ShaderKind`] (vertex, fragment, shadow,
-/// vertex_instanced): the runtime drains one stage per kind at init.
+/// Catalogue of the world default Shader's files, which the renderer can
+/// hot-reload. Owned by `GraphicsSystem` under `cn debug` only; consumed by
+/// `reload_shader_stages` when the asset hot-reload watcher fires on one of
+/// them. At most one entry per [`crate::components::ShaderStage`].
 #[derive(Debug, Clone, Default)]
 pub struct ShaderStageSourceMap {
     /// One entry per reloadable shader stage.
@@ -230,9 +224,8 @@ impl ShaderStageSourceMap {
 /// fan-out across Props), so a single `skinned_index` identifies the slot to
 /// update. The vertex region is at `[vertex_base, vertex_base + vertex_count)`
 /// in the shared skinned vertex buffer; `joint_count` is snapshotted at init
-/// so the reload can reject skeleton-shape changes (which would require
-/// rebuilding the skinned pipeline state from shader-library bytes that
-/// `upload_skinned` consumes and drops).
+/// so the reload can reject skeleton-shape changes, which would need the
+/// skinned pipeline rebuilt.
 #[derive(Debug, Clone)]
 pub struct SkinnedMeshSourceEntry {
     /// Path string from the asset declaration. Used as-is by
@@ -392,8 +385,8 @@ mod tests {
         // itself is covered in `concinnity_host::store`, and the build-side
         // variant in concinnity-cook.
         assert_eq!(
-            resolve_runtime_source_path("shaders/x.metal", None),
-            "shaders/x.metal"
+            resolve_runtime_source_path("shaders/x.slang", None),
+            "shaders/x.slang"
         );
     }
 
@@ -512,39 +505,33 @@ mod tests {
         assert_eq!(dirs(&map.watch_dirs()), ["assets/chars"]);
     }
 
-    // Shader stages watch their resolved paths, one entry per kind.
+    // Shader files watch their resolved paths, one entry per stage.
     #[test]
     fn shader_stage_map_watches_resolved_parents() {
-        use crate::components::shader::ShaderKind;
+        use crate::components::ShaderStage;
 
         let mut map = ShaderStageSourceMap::new();
         assert!(map.is_empty());
-        for (kind, path) in [
-            (ShaderKind::Vertex, "shaders/scene.metal"),
-            (ShaderKind::Fragment, "shaders/scene.metal"),
-            (ShaderKind::VertexInstanced, "shaders/instanced/pass.metal"),
+        for (stage, path) in [
+            (ShaderStage::Vertex, "shaders/sway.slang"),
+            (ShaderStage::Fragment, "shaders/surface/scene.slang"),
         ] {
             map.entries.push(ShaderStageSourceEntry {
-                kind,
+                stage,
                 resolved_path: path.to_string(),
             });
         }
 
-        assert_eq!(map.len(), 3);
-        assert_eq!(
-            dirs(&map.watch_dirs()),
-            ["shaders", "shaders/instanced"],
-            "the two stages sharing a file collapse to one dir"
-        );
+        assert_eq!(map.len(), 2);
+        assert_eq!(dirs(&map.watch_dirs()), ["shaders", "shaders/surface"]);
     }
 
-    // A stage compiled from the embedded fallback has no on-disk file, so it
-    // contributes no subscription.
+    // An entry with no on-disk file contributes no subscription.
     #[test]
     fn shader_stage_map_skips_an_empty_resolved_path() {
         let mut map = ShaderStageSourceMap::new();
         map.entries.push(ShaderStageSourceEntry {
-            kind: crate::components::shader::ShaderKind::Fragment,
+            stage: crate::components::ShaderStage::Fragment,
             resolved_path: String::new(),
         });
         assert!(map.watch_dirs().is_empty());

@@ -17,7 +17,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;
-use super::init::pipelines::build_bucket_pipeline;
+use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
 
 impl DxContext {
     // Build the bindless main-pass pipeline for one shader bucket. Replaces
@@ -26,7 +26,7 @@ impl DxContext {
     pub(in crate::directx) fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+        shader: crate::gfx::backend_init::WorldShader<'_>,
     ) -> Result<(), String> {
         let slot = self.world_pipeline_slot(bucket)?;
         let root_sig = self
@@ -37,11 +37,14 @@ impl DxContext {
         let pso = build_bucket_pipeline(
             &self.device,
             self.diagnostics.info_queue.as_ref(),
-            &root_sig,
+            BucketPipelineTargets {
+                root_sig: &root_sig,
+                msaa_samples: self.hdr.msaa_samples,
+                engine_default: &self.bindless_main_shaders,
+                hot_reload: self.hot_reload.enabled,
+            },
             bucket as usize,
             shader,
-            self.hdr.msaa_samples,
-            &self.bindless_main_shaders,
         )?;
         // A re-pin over a slot that still holds a pipeline has the same in-flight
         // hazard as an evict, so retire the old one the same way.
@@ -101,6 +104,9 @@ impl DxContext {
             let Some(pso) = self.world_pipeline(bucket) else {
                 return;
             };
+            // Every bucket shares the bindless root signature, so the Wireframe
+            // twin stands in for each one while that view mode is on.
+            let pso = self.wireframe_or(pso, self.wireframe.bindless.as_ref());
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(pso) };

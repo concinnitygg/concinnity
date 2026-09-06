@@ -1161,9 +1161,6 @@ mod tests {
             _vertices: &[crate::gfx::mesh_payload::SkinnedVertex],
             _indices: &[u32],
             _draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject>,
-            _vert_bytes: &[u8],
-            _frag_bytes: &[u8],
-            _shadow_bytes: &[u8],
         ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
@@ -1194,8 +1191,6 @@ mod tests {
             &mut self,
             _chunk_vtx_bytes: usize,
             _chunk_idx_bytes: usize,
-            _texture_slot: usize,
-            _normal_map_slot: usize,
         ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }

@@ -54,16 +54,13 @@ impl EditorHook {
         entries: &[serde_json::Value],
     ) -> Result<concinnity_cook::build_only::LoadedWorld, String> {
         let content = crate::world::write_world_jsonl(entries).map_err(|e| e.to_string())?;
-        concinnity_cook::prepare_world(
-            &content,
-            crate::project::assets_dir().as_deref(),
-            crate::cook_platform(),
+        concinnity_cook::prepare_world(&content, crate::project::assets_dir().as_deref()).map_err(
+            |errs| {
+                errs.first()
+                    .cloned()
+                    .unwrap_or_else(|| "the world does not build".to_string())
+            },
         )
-        .map_err(|errs| {
-            errs.first()
-                .cloned()
-                .unwrap_or_else(|| "the world does not build".to_string())
-        })
     }
 
     // The flattened tree under the live search filter (read back from the

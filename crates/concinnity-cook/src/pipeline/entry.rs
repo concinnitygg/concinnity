@@ -31,7 +31,7 @@ pub fn build_from_path(
 ) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
     let assets_dir = tree.assets_dir();
-    let loaded = crate::build_only::prepare_world(&content, Some(&assets_dir), platform)
+    let loaded = crate::build_only::prepare_world(&content, Some(&assets_dir))
         .map_err(|errs| crate::check::report_validation_errors(&errs))?;
 
     let result = build_compiled(loaded.assets, Some(&assets_dir), None, platform)?;
@@ -135,8 +135,7 @@ pub fn build_pipeline_from_str(
     artifacts_dir: Option<&str>,
     platform: Platform,
 ) -> std::io::Result<PipelineResult> {
-    let loaded =
-        crate::build_only::prepare_world(content, assets_dir, platform).map_err(errors_to_io)?;
+    let loaded = crate::build_only::prepare_world(content, assets_dir).map_err(errors_to_io)?;
     build_compiled(loaded.assets, assets_dir, artifacts_dir, platform)
 }
 
@@ -275,7 +274,7 @@ pub fn build_compiled_with_progress(
             asset_type: asset.asset_type.clone(),
             args: Some(asset.args.clone()),
         };
-        let mut def = asset_api::create_asset_def(&req, platform).map_err(|e| {
+        let mut def = asset_api::create_asset_def(&req).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Asset '{}': {}", asset.name, e),
@@ -470,12 +469,10 @@ pub fn build_compiled_with_progress(
 mod tests {
     use super::*;
     use crate::pipeline::MESH_TYPE;
-    use crate::pipeline::fixtures::{SHADER_BUILD_LOCK, wja, write_fixture};
+    use crate::pipeline::fixtures::{wja, write_fixture};
 
     #[test]
     fn build_pipeline_interns_names_and_resolves_refs() {
-        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::compile::shader::install_stub_toolchain();
         // box=0, day=1, day_crate=2 in declaration order.
         let world = concat!(
             r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
@@ -507,8 +504,6 @@ mod tests {
     // budget is derived from the same defaults either way.
     #[test]
     fn a_physics_world_carries_no_config_into_the_blob() {
-        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::compile::shader::install_stub_toolchain();
         let world = concat!(
             r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
             "\n",
@@ -536,8 +531,6 @@ mod tests {
     // and reaches the world-start pass that reads it.
     #[test]
     fn engine_defaults_reach_the_blob_as_a_component() {
-        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::compile::shader::install_stub_toolchain();
         let world = concat!(
             r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
             "\n",
@@ -563,8 +556,6 @@ mod tests {
     // hash, and the blob its payload landed in.
     #[test]
     fn build_pipeline_records_resource_lock_provenance() {
-        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::compile::shader::install_stub_toolchain();
         let world = concat!(
             r#"{"name":"f","type":"Font","args":{"size_px":20}}"#,
             "\n",
@@ -638,8 +629,6 @@ mod tests {
     // root, and record every asset in the lock beside them.
     #[test]
     fn build_from_path_writes_the_blobs_and_the_lock_beside_them() {
-        let _shaders = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::compile::shader::install_stub_toolchain();
         let output = crate::blob::test_output::Output::new();
 
         let dir = concinnity_testing::TempTree::new();

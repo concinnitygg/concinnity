@@ -62,12 +62,9 @@ pub struct LoadedWorld {
 ///
 /// `assets_dir` is the asset search root the expansion passes resolve bare
 /// source filenames and preset names against; `None` leaves them unresolved.
-/// `platform` is the shader platform the world is cooked for; the shader-backed
-/// types are validated against it.
 pub fn prepare_world(
     content: &str,
     assets_dir: Option<&std::path::Path>,
-    platform: concinnity_core::platform::Platform,
 ) -> Result<LoadedWorld, Vec<String>> {
     let mut expanded = load_world(content)?;
     let authored: Vec<String> = expanded
@@ -83,7 +80,7 @@ pub fn prepare_world(
 
     let assets: Vec<WorldJsonlAsset> = expanded.iter().map(WorldJsonlAsset::from_value).collect();
 
-    crate::check::check_world(&assets, platform)?;
+    crate::check::check_world(&assets)?;
 
     Ok(LoadedWorld {
         assets,
@@ -97,7 +94,6 @@ pub fn prepare_world(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::platform::Platform;
 
     // The model-layer tests (load_world, resolve_includes, asset_name_from_path)
     // live in `crate::authoring::world` with the code; this covers cook's
@@ -105,7 +101,7 @@ mod tests {
     #[test]
     fn prepare_world_expands_and_validates() {
         let content = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#;
-        let loaded = prepare_world(content, None, Platform::Metal).unwrap();
+        let loaded = prepare_world(content, None).unwrap();
         // GraphicsConfig pulls in its companions, so the prepared world holds
         // more than the single declared asset.
         assert!(loaded.assets.len() > 1);
@@ -125,9 +121,7 @@ mod tests {
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
         let content = r#"{"name":"p","type":"Prop","args":{"prefab":"ghost"}}"#;
-        let errs = prepare_world(content, None, Platform::Metal)
-            .err()
-            .unwrap_or_default();
+        let errs = prepare_world(content, None).err().unwrap_or_default();
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("ghost"), "{errs:?}");
     }
@@ -137,9 +131,7 @@ mod tests {
     #[test]
     fn prepare_world_reports_semantic_errors() {
         let content = r#"{"name":"prop","type":"Prop","args":{"mesh":"nope"}}"#;
-        let errs = prepare_world(content, None, Platform::Metal)
-            .err()
-            .unwrap_or_default();
+        let errs = prepare_world(content, None).err().unwrap_or_default();
         assert!(!errs.is_empty());
         assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
     }
@@ -179,17 +171,14 @@ mod tests {
         let dim = rig_root(0.25);
 
         assert_eq!(
-            key_intensity(&prepare_world(content, Some(bright.path()), Platform::Metal).unwrap()),
+            key_intensity(&prepare_world(content, Some(bright.path())).unwrap()),
             Some(3.5)
         );
         assert_eq!(
-            key_intensity(&prepare_world(content, Some(dim.path()), Platform::Metal).unwrap()),
+            key_intensity(&prepare_world(content, Some(dim.path())).unwrap()),
             Some(0.25)
         );
         // No root: the preset is never found, so the rig expands to nothing.
-        assert_eq!(
-            key_intensity(&prepare_world(content, None, Platform::Metal).unwrap()),
-            None
-        );
+        assert_eq!(key_intensity(&prepare_world(content, None).unwrap()), None);
     }
 }

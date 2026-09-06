@@ -1,7 +1,6 @@
 //! Resolve the rendering backend once and expose it as a single cfg the crate
 //! gates on (`backend_metal` / `backend_dx` / `backend_vk`), via the shared
-//! `concinnity-toolchain` helper. The `#[cfg(backend_metal)] shader_reflect`
-//! module gates on it, as do the editor / debug modules.
+//! `concinnity-toolchain` helper. The editor / debug modules gate on it.
 //!
 //! Also stamps the version this build reports: `cn version` and `cn --version`
 //! read the commit and date baked in here.

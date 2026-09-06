@@ -46,8 +46,8 @@ pub(crate) fn take_pending_world() -> bool {
 static PENDING_STORIES: AtomicBool = AtomicBool::new(false);
 
 // Raise the "world-loaded Shader stage source changed" flag. Called by the
-// asset hot-reload watcher when a captured `.metal` / `.hlsl` / `.glsl` source
-// is saved and by the debug WS `reload-assets` handler.
+// asset hot-reload watcher when a captured `.slang` file is saved and by the
+// debug `reload-assets` handler.
 pub(crate) fn set_pending_shader_stages() {
     PENDING_SHADER_STAGES.store(true, Ordering::SeqCst);
 }

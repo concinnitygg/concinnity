@@ -57,10 +57,10 @@ pub(crate) struct InitSnapshot {
     pub(crate) rt_reflections_on: bool,
     pub(crate) rt_dynamic: concinnity_core::render::rt_geom::RtDynamicMode,
     pub(crate) rt_skinned_geometry: bool,
-    // Per shader bucket, the compiled (vertex, fragment) byte counts. A bucket
-    // of (0, 0) is a world that declared no Shader for it, which every backend
-    // reads as "use the engine's own main-pass program".
-    pub(crate) shader_stage_lens: Vec<(usize, usize)>,
+    // Per shader bucket, how many compiled programs the payload carries. A
+    // bucket with none is a world that declared no Shader for it, which every
+    // backend reads as "use the engine's own main-pass program".
+    pub(crate) shader_program_counts: Vec<usize>,
 }
 
 // One recorded backend call with the parameters tests assert on.
@@ -233,10 +233,10 @@ pub(crate) struct MockBackend {
 fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
     let mut s = state.lock().unwrap();
     s.init = Some(InitSnapshot {
-        shader_stage_lens: init
+        shader_program_counts: init
             .shaders
             .iter()
-            .map(|sh| (sh.vert.len(), sh.frag.len()))
+            .map(|sh| sh.programs.map_or(0, |p| p.programs.len()))
             .collect(),
         window_width: init.window.width,
         window_height: init.window.height,
@@ -419,9 +419,6 @@ impl RenderBackend for MockBackend {
         vertices: &[SkinnedVertex],
         _indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        _vert_bytes: &[u8],
-        _frag_bytes: &[u8],
-        _shadow_bytes: &[u8],
     ) -> RenderResult<()> {
         self.record(Call::UploadSkinned {
             vertices: vertices.len(),
@@ -490,8 +487,6 @@ impl RenderBackend for MockBackend {
         &mut self,
         _chunk_vtx_bytes: usize,
         _chunk_idx_bytes: usize,
-        _texture_slot: usize,
-        _normal_map_slot: usize,
     ) -> RenderResult<()> {
         self.record(Call::SetupChunkStreaming);
         Ok(())

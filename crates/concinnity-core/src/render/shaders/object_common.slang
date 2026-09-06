@@ -8,11 +8,11 @@
 // cache keys it. `slang_source::assemble` is the runtime half of the splice and
 // `SLANG_SHADER_FRAGMENTS` in the device build script the build-time half.
 //
-// This is the single-source counterpart of the per-language `object_common.msl`
-// / `.glsl` / `.hlsl` fragments, which stay until their remaining consumers
-// (the cull kernel, the legacy per-draw main pass) port.
+// This is the record's only declaration: `shader_layout` in concinnity-device
+// reflects it against `GpuObjectData` on every target, and its
+// `no_shader_redeclares_the_object_record` scan keeps it that way.
 
-// Mirrors `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (176 B).
+// Mirrors `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (144 B).
 // Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16
 // bytes in a structured buffer as well as in a constant buffer, so a literal
 // transcription pushes every following field four bytes late on Metal alone.
@@ -25,20 +25,12 @@ struct GpuObjectData
     float4 emissive_metallic;
     uint  albedo_index;
     uint  normal_index;
-    float macro_variation;
-    float terrain_blend;
-    // xyz = bounding-box minimum, w = cull distance.
-    float4 bb_min_cull_distance;
-    // xyz = bounding-box maximum, w = secondary blend sharpness.
-    float4 bb_max_blend_sharpness;
-    uint  albedo_secondary_index;
-    uint  normal_secondary_index;
     uint  emissive_map_index;
     uint  orm_map_index;
-    float alpha_cutoff;
-    float _pad0;
-    float _pad1;
-    float _pad2;
+    // xyz = bounding-box minimum, w = cull distance.
+    float4 bb_min_cull_distance;
+    // xyz = bounding-box maximum, w = alpha cutoff.
+    float4 bb_max_alpha_cutoff;
 };
 
 // The engine encodes the object id as the draw's first-instance value. The

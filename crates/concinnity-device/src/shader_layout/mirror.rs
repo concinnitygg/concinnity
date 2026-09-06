@@ -207,16 +207,20 @@ fn check_coverage(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>)
     }
 }
 
-// The CPU upload has to cover the block the shader binds. Two shapes pass: the
-// sizes match, or the shader stops at its declared extent -- because the
-// DirectX leg reports the block unrounded, or because the declaration is a
-// partial view -- and the Rust struct's uncovered tail makes up the difference.
+// The CPU upload has to cover the block the shader binds: no shader member may
+// sit past the bytes the CPU uploads. Two shapes pass besides an exact match:
+// the shader's declared extent stops short of a longer Rust struct (the DirectX
+// leg reports blocks unrounded, and some declarations are partial views), and
+// a Vulkan push constant whose block slangc rounded up to 16 bytes over a Rust
+// struct that is exactly the members' extent.
 fn check_size(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>) {
     let Some(block) = shader.block_size else {
         return;
     };
-    let rounds_up = block == shader.extent() && mirror.rust_size > block;
-    if mirror.rust_size != block && !rounds_up {
+    let extent = shader.extent();
+    let rounds_up = block == extent && mirror.rust_size > block;
+    let block_padded = block == extent.next_multiple_of(16) && mirror.rust_size == extent;
+    if mirror.rust_size != block && !rounds_up && !block_padded {
         out.push(format!(
             "{} is {} bytes but the shader binds {} as a {block}-byte block",
             mirror.rust_name, mirror.rust_size, mirror.shader_name,
@@ -244,4 +248,58 @@ pub(super) fn everywhere(mirror: Mirror) -> Case {
 // A mirror only some backends declare.
 pub(super) fn on(targets: &'static [Target], mirror: Mirror) -> Case {
     Case { mirror, targets }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shader_layout::reflect::{ShaderField, ShaderStruct};
+
+    fn rust(size: usize) -> Mirror {
+        Mirror {
+            rust_name: "T",
+            rust_size: size,
+            shader_name: "T",
+            lanes: Vec::new(),
+        }
+    }
+
+    fn shader(extent: usize, block: usize) -> ShaderStruct {
+        ShaderStruct {
+            fields: vec![ShaderField {
+                name: "a".to_string(),
+                offset: 0,
+                size: extent,
+            }],
+            block_size: Some(block),
+        }
+    }
+
+    fn size_findings(rust_size: usize, extent: usize, block: usize) -> Vec<String> {
+        let mut out = Vec::new();
+        check_size(&rust(rust_size), &shader(extent, block), &mut out);
+        out
+    }
+
+    // A Vulkan push constant: slangc rounds the block to 128 over 120 bytes of
+    // members, and the host pushes exactly the 120-byte Rust struct.
+    #[test]
+    fn a_block_rounded_over_an_exact_rust_struct_passes() {
+        assert!(size_findings(120, 120, 128).is_empty());
+        assert!(size_findings(128, 128, 128).is_empty());
+    }
+
+    // The rounding is trailing pad, not licence for the Rust side to drift:
+    // short of the members, or between the members and the block, both fail.
+    #[test]
+    fn a_rust_struct_that_does_not_end_at_the_members_fails() {
+        assert_eq!(size_findings(116, 120, 128).len(), 1);
+        assert_eq!(size_findings(124, 120, 128).len(), 1);
+    }
+
+    // A Rust struct longer than what the shader declares is a partial view.
+    #[test]
+    fn a_shader_that_stops_short_of_the_rust_struct_passes() {
+        assert!(size_findings(288, 276, 276).is_empty());
+    }
 }

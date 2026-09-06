@@ -1,10 +1,10 @@
 // Single-source engine shader programs for the DirectX backend.
 //
 // Each program compiles a `.slang` file under `src/shaders/` (the
-// backend-neutral single-source directory) to a signed DXIL container at
-// renderer init by invoking slangc, cached in the content-addressed shader
-// cache exactly like the HLSL programs in `builtins`. slangc resolves dxil.dll
-// itself, so the containers it emits are already signed for D3D12.
+// backend-neutral single-source directory) to a signed DXIL container, at
+// build time where the host can and at renderer init otherwise, cached in the
+// content-addressed shader cache. slangc resolves dxil.dll itself, so the
+// containers it emits are already signed for D3D12.
 //
 // The bindless main pair compiles the source's `DXIL_ABI` block, whose
 // register() annotations reproduce the bindless main root signature in
@@ -87,6 +87,36 @@ pub static MAIN_BINDLESS_FRAG: SlangProgram = SlangProgram {
     label: "frag_bindless.slang",
     defines: MAIN_DEFINES,
 };
+// The draw cull's host-shape gate. DirectX fuses the frustum/bucket constants
+// and the Hi-Z reprojection into one b0 root-constant block where Vulkan splits
+// them across a push constant and a set-1 uniform buffer.
+const CULL_DEFINES: &[(&str, &str)] = &[("DXIL_ABI", "1")];
+
+/// `cull_kernel` from `cull.slang`: phase-1 draw cull.
+pub static CULL: SlangProgram = SlangProgram {
+    file: "cull.slang",
+    entry: "cull_kernel",
+    profile: "cs_6_0",
+    label: "cull.slang",
+    defines: CULL_DEFINES,
+};
+/// `cull_kernel` from `cull.slang` under `CULL_PHASE2`: the two-pass occlusion
+/// re-test against the rebuilt Hi-Z pyramid.
+pub static CULL_PHASE2: SlangProgram = SlangProgram {
+    file: "cull.slang",
+    entry: "cull_kernel",
+    profile: "cs_6_0",
+    label: "cull_phase2.slang",
+    defines: &[("DXIL_ABI", "1"), ("CULL_PHASE2", "1")],
+};
+/// `cull_kernel` from `cull.slang` under `SHADOW_CULL`: light-frustum only.
+pub static CULL_SHADOW: SlangProgram = SlangProgram {
+    file: "cull.slang",
+    entry: "cull_kernel",
+    profile: "cs_6_0",
+    label: "cull_shadow.slang",
+    defines: &[("DXIL_ABI", "1"), ("SHADOW_CULL", "1")],
+};
 /// `light_cull_kernel` from `light_cull.slang`.
 pub static LIGHT_CULL: SlangProgram = SlangProgram {
     file: "light_cull.slang",
@@ -149,40 +179,12 @@ pub static PROBE_GGX: SlangProgram = SlangProgram {
 // each variant declares exactly the resources its root signature binds; the
 // `DXIL_ABI` gate pins those registers to the signatures in `post/gbuffer.rs`,
 // `init/pipelines.rs` and `resources.rs`.
-const GB_STATIC: &[(&str, &str)] = &[("GB_STATIC", "1"), ("DXIL_ABI", "1")];
-const GB_INSTANCED: &[(&str, &str)] = &[("GB_INSTANCED", "1"), ("DXIL_ABI", "1")];
-const GB_SKINNED: &[(&str, &str)] = &[("GB_SKINNED", "1"), ("DXIL_ABI", "1")];
 const GB_BINDLESS: &[(&str, &str)] = &[("GB_BINDLESS", "1"), ("DXIL_ABI", "1")];
-const GB_FRAGMENT: &[(&str, &str)] = &[("GB_FRAGMENT", "1"), ("DXIL_ABI", "1")];
 const GB_FRAGMENT_BINDLESS: &[(&str, &str)] = &[("GB_FRAGMENT_BINDLESS", "1"), ("DXIL_ABI", "1")];
 const SHADOW_STATIC: &[(&str, &str)] = &[("SHADOW_STATIC", "1"), ("DXIL_ABI", "1")];
 const SHADOW_SKINNED: &[(&str, &str)] = &[("SHADOW_SKINNED", "1"), ("DXIL_ABI", "1")];
 const SHADOW_BINDLESS: &[(&str, &str)] = &[("SHADOW_BINDLESS", "1"), ("DXIL_ABI", "1")];
 
-/// `gbuffer_prepass_vertex` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_VERT: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex",
-    profile: "vs_6_0",
-    label: "gbuffer_prepass_vert.slang",
-    defines: GB_STATIC,
-};
-/// `gbuffer_prepass_vertex_instanced` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_VERT_INSTANCED: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex_instanced",
-    profile: "vs_6_0",
-    label: "gbuffer_prepass_vert_instanced.slang",
-    defines: GB_INSTANCED,
-};
-/// `gbuffer_prepass_vertex_skinned` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_VERT_SKINNED: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex_skinned",
-    profile: "vs_6_0",
-    label: "gbuffer_prepass_vert_skinned.slang",
-    defines: GB_SKINNED,
-};
 /// `gbuffer_prepass_vertex_bindless` from `gbuffer_prepass.slang`.
 pub static GBUFFER_BINDLESS_VERT: SlangProgram = SlangProgram {
     file: "gbuffer_prepass.slang",
@@ -190,14 +192,6 @@ pub static GBUFFER_BINDLESS_VERT: SlangProgram = SlangProgram {
     profile: "vs_6_0",
     label: "gbuffer_prepass_vert_bindless.slang",
     defines: GB_BINDLESS,
-};
-/// `gbuffer_prepass_fragment` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_FRAG: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_fragment",
-    profile: "ps_6_0",
-    label: "gbuffer_prepass_frag.slang",
-    defines: GB_FRAGMENT,
 };
 /// `gbuffer_prepass_fragment_bindless` from `gbuffer_prepass.slang`.
 pub static GBUFFER_BINDLESS_FRAG: SlangProgram = SlangProgram {
@@ -797,6 +791,9 @@ pub static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &LIGHT_CULL,
+    &CULL,
+    &CULL_PHASE2,
+    &CULL_SHADOW,
     &RT_SKIN,
     &HIZ_INIT_SINGLE,
     &HIZ_INIT_MSAA,
@@ -804,11 +801,7 @@ pub static ALL: &[&SlangProgram] = &[
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,
     &PROBE_GGX,
-    &GBUFFER_PREPASS_VERT,
-    &GBUFFER_PREPASS_VERT_INSTANCED,
-    &GBUFFER_PREPASS_VERT_SKINNED,
     &GBUFFER_BINDLESS_VERT,
-    &GBUFFER_PREPASS_FRAG,
     &GBUFFER_BINDLESS_FRAG,
     &SHADOW_VERT,
     &SKINNED_SHADOW_VERT,

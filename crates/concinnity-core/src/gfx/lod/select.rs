@@ -50,6 +50,14 @@ pub fn skinned_camera_distance(obj: &SkinnedDrawObject, cam_pos: [f32; 3]) -> f3
     distance_to(obj.translation(), cam_pos)
 }
 
+/// Distance from `cam_pos` to a column-major model matrix's translation, the
+/// metric the per-instance LOD picks are keyed on. Instances share a mesh and
+/// differ only by transform, so the translation stands in for a per-instance
+/// AABB centre nobody wants to recompute per pass.
+pub fn instance_camera_distance(model: [[f32; 4]; 4], cam_pos: [f32; 3]) -> f32 {
+    distance_to([model[3][0], model[3][1], model[3][2]], cam_pos)
+}
+
 /// Distance from `cam_pos` to the centre of `obj`'s world AABB, used to pick
 /// the active LOD slice each frame. Dynamic props (sentinel non-finite AABB)
 /// fall back to the model-matrix translation so they still LOD by their
@@ -129,6 +137,13 @@ mod tests {
         assert!((camera_distance(&obj, [5.0, 0.0, 0.0]) - 5.0).abs() < 1e-4);
         obj.model[3] = [20.0, 0.0, 0.0, 1.0];
         assert!((camera_distance(&obj, [5.0, 0.0, 0.0]) - 15.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn instance_distance_measures_from_the_model_translation() {
+        let mut m = [[0.0f32; 4]; 4];
+        m[3] = [0.0, 3.0, 4.0, 1.0];
+        assert!((instance_camera_distance(m, [0.0; 3]) - 5.0).abs() < 1e-4);
     }
 
     #[test]

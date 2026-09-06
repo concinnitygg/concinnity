@@ -9,19 +9,15 @@ use concinnity_core::gfx::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer as _, MTLComputePipelineState, MTLDevice, MTLLibrary as _, MTLPixelFormat,
+    MTLBuffer as _, MTLComputePipelineState, MTLDevice, MTLPixelFormat,
     MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLVertexDescriptor,
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::SkinnedDrawObject;
-use crate::metal::context::{
-    HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice,
-};
+use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use crate::metal::pipeline::{ns_str, stage_library};
-use crate::metal::post::build_gbuffer_prepass_pipeline;
 
 // Upload a skinned index slice, sized by `skinned_index_buffer_bytes` (which
 // the DirectX and Vulkan hosts size the same buffer with).
@@ -40,16 +36,17 @@ fn upload_skinned_index_buffer(
     Ok(buffer)
 }
 
-// All skinned-mesh rendering state grouped into one feature unit: the main +
-// shadow pipelines, the shared skinned vertex / index buffers, the per-mesh
-// draw objects, and the current + previous joint-palette matrices. All
-// `None` / empty until `upload_skinned` runs; with no `SkinnedMesh` in the
-// world the skinned passes are skipped entirely. (The G-buffer pre-pass
-// skinned pipeline lives on `GBufferState` with its siblings.)
+// All skinned-mesh rendering state grouped into one feature unit: the shadow
+// pipeline, the shared skinned vertex / index buffers, the per-mesh draw
+// objects, and the current + previous joint-palette matrices. All `None` /
+// empty until `upload_skinned` runs; with no `SkinnedMesh` in the world the
+// skinned passes are skipped entirely. Skinned geometry draws through the
+// GPU-driven pass from the pre-skinned `deformed` buffer, so there is no
+// skinned main pipeline. (The G-buffer pre-pass skinned pipeline lives on
+// `GBufferState` with its siblings.)
 pub(crate) struct SkinnedState {
-    pub pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Depth-only skinned pipeline for the shadow pass. `None` when shadows are
-    // disabled even if `pipeline_state` is set.
+    // disabled.
     pub shadow_pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Shared vertex buffer holding every skinned mesh's `SkinnedVertex` data.
     pub vertex_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -60,9 +57,6 @@ pub(crate) struct SkinnedState {
     // Current skinning matrices per skinned object, parallel to `draw_objects`.
     // Rewritten each frame by `update_skinned_pose` and uploaded per frame.
     pub joint_matrices: Vec<Vec<[[f32; 4]; 4]>>,
-    // Previous frame's skinning matrices, parallel to `joint_matrices`. Lets
-    // the velocity pre-pass capture per-vertex skinned deformation.
-    pub prev_joint_matrices: Vec<Vec<[[f32; 4]; 4]>>,
     // GPU-driven fold: the `rt_skin` compute pipeline that deforms
     // bind-pose vertices into the per-frame `deformed` buffer, built here
     // independently of RT (which keeps its own pipeline) so a skinned world with
@@ -166,48 +160,6 @@ pub(crate) fn make_skinned_vertex_descriptor() -> Retained<MTLVertexDescriptor> 
             step: MTLVertexStepFunction::PerVertex,
         }],
     )
-}
-
-// Build the main skinned pipeline: pairs `vertex_main_skinned` (from the
-// world's vertex library bytes) with `fragment_main` (from the world's
-// fragment library bytes), targeting the off-screen HDR MSAA surface:
-// byte-for-byte identical state to the static main pipeline aside from the
-// vertex entry point + 80-byte vertex descriptor. Shared by
-// [`MtlContext::upload_skinned`] and the hot-reload pipeline rebuild path.
-pub(crate) fn build_skinned_main_pipeline(
-    device: &ProtocolObject<dyn MTLDevice>,
-    vdesc: &MTLVertexDescriptor,
-    vert_lib_bytes: &[u8],
-    frag_lib_bytes: &[u8],
-    hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_library = stage_library(device, hot_reload, vert_lib_bytes)
-        .map_err(|e| format!("skinned: failed to load vertex metallib: {}", e))?;
-    let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
-        .map_err(|e| format!("skinned: failed to load fragment metallib: {}", e))?;
-    let skinned_vert_fn = vert_library
-        .newFunctionWithName(&ns_str("vertex_main_skinned"))
-        .ok_or("vertex_main_skinned not found in metallib")?;
-    let frag_fn = frag_library
-        .newFunctionWithName(&ns_str("fragment_main"))
-        .ok_or("fragment_main not found in metallib")?;
-
-    let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexDescriptor(Some(vdesc));
-    desc.setVertexFunction(Some(&skinned_vert_fn));
-    desc.setFragmentFunction(Some(&frag_fn));
-    desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        desc.colorAttachments()
-            .objectAtIndexedSubscript(0)
-            .setPixelFormat(MTLPixelFormat::RGBA16Float);
-    }
-    desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-    device
-        .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create skinned pipeline state: {:?}", e))
 }
 
 // Build the skinned shadow pipeline: depth-only, no fragment function, no
@@ -515,36 +467,21 @@ impl MtlContext {
     // Build the GPU pipelines + buffers for skeletally animated meshes.
     //
     // Called once by `GraphicsSystem` after `MtlContext::new`, only when the
-    // world declares at least one `SkinnedMesh`. The skinned vertex shader
-    // (`vertex_main_skinned`) compiles from the same world vertex/fragment
-    // metallibs as the static main pipeline; the skinned shadow shader
-    // (`shadow_vertex_main_skinned`) compiles from the engine-internal
-    // `shadow.metal` source. With no skinned meshes this is never called
-    // and every skinned pass is skipped.
-    //
-    // `_shadow_lib_bytes` is retained for the cross-backend `RenderBackend`
-    // signature but unused on Metal: the shadow shader is engine-internal here.
+    // world declares at least one `SkinnedMesh`. Skinned geometry draws through
+    // the GPU-driven pass: the pre-skin kernel deforms it into a per-frame
+    // buffer and the cull records draw it as rigid geometry. With no skinned
+    // meshes this is never called and every skinned pass is skipped.
     pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        vert_lib_bytes: &[u8],
-        frag_lib_bytes: &[u8],
-        _shadow_lib_bytes: &[u8],
     ) -> Result<(), String> {
         if draw_objects.is_empty() || vertices.is_empty() || indices.is_empty() {
             return Ok(());
         }
 
         let vdesc = make_skinned_vertex_descriptor();
-        let skinned_ps = build_skinned_main_pipeline(
-            &self.device,
-            &vdesc,
-            vert_lib_bytes,
-            frag_lib_bytes,
-            self.hot_reload.enabled,
-        )?;
 
         // Skinned shadow pipeline: built only when the static shadow pass is
         // active, so a skinned mesh casts a correctly deformed shadow.
@@ -557,24 +494,6 @@ impl MtlContext {
         } else {
             None
         };
-
-        // Unified G-buffer pre-pass pipeline for skinned geometry. Built here for
-        // the same reason (80-byte skinned layout), when any consumer (SSR / SSGI
-        // / RT / SSAO / TAA / upscaler) is on.
-        if self.ssr.settings.is_some()
-            || self.ssgi.settings.is_some()
-            || self.rt.settings.is_some()
-            || self.ssao.settings.is_some()
-            || self.taa.enabled
-            || self.upscale.scaler.is_some()
-        {
-            self.gbuffer.skinned_pipeline = Some(build_gbuffer_prepass_pipeline(
-                &self.device,
-                &vdesc,
-                &crate::metal::slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
-                self.hot_reload.enabled,
-            )?);
-        }
 
         // SAFETY: the pointer and length describe the live `vertices` allocation, and Metal copies
         // those bytes into the new buffer before the call returns.
@@ -593,24 +512,18 @@ impl MtlContext {
             upload_skinned_index_buffer(&self.device, indices, "upload_skinned")?;
 
         // Seed each object's joint matrices to identity (bind pose) so the
-        // mesh renders undeformed until the first `update_skinned_pose`. The
-        // previous-frame copy starts identical so the velocity pre-pass sees
-        // zero skinned motion on the first frame.
+        // mesh renders undeformed until the first `update_skinned_pose`.
         self.skinned.joint_matrices = draw_objects
             .iter()
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
-        self.skinned.prev_joint_matrices = self.skinned.joint_matrices.clone();
 
-        // GPU-driven skinned fold: when bindless is active AND the
-        // world has static geometry (so the cull + bindless ICB run), build the
-        // per-frame pre-skin so skinned objects draw as rigid deformed geometry
-        // through the unified cull, exactly like DX/VK. A pure-skinned or
-        // non-bindless world leaves these unset and keeps the legacy skinned VS
-        // draw (the main-pass gate falls back when `!bindless || draw.objects
-        // empty`). The skin pipeline is built independently of RT; RT keeps its
-        // own skin pipeline + deformed buffer.
-        if self.bindless && !self.draw.objects.is_empty() {
+        // GPU-driven skinned fold: build the per-frame pre-skin so skinned
+        // objects draw as rigid deformed geometry through the unified cull.
+        // A build failure is a startup error rather than a degraded render,
+        // as on every host. The skin pipeline is built independently of RT;
+        // RT keeps its own skin pipeline + deformed buffer.
+        if self.bindless {
             let skin_pipeline = crate::metal::raytrace::build_rt_skin_pipeline(
                 &self.device,
                 self.hot_reload.enabled,
@@ -642,13 +555,11 @@ impl MtlContext {
             self.skinned
                 .deformed_primed
                 .store(false, std::sync::atomic::Ordering::Relaxed);
-            // The count `cull_count()` reads: now the skinned records ride the
-            // unified cull + bindless ICB, and the legacy skinned main draw is
-            // gated off.
+            // The count `cull_count()` reads: the skinned records ride the
+            // unified cull + bindless ICB.
             self.draw.n_skinned = draw_objects.len();
         }
 
-        self.skinned.pipeline_state = Some(skinned_ps);
         self.skinned.shadow_pipeline_state = skinned_shadow_ps;
         self.skinned.vertex_buffer = Some(skinned_vertex_buffer);
         self.skinned.index_buffer = Some(skinned_index_buffer);
@@ -769,9 +680,6 @@ impl MtlContext {
         if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
             slot.resize(size, IDENTITY);
         }
-        if let Some(slot) = self.skinned.prev_joint_matrices.get_mut(skinned_index) {
-            slot.resize(size, IDENTITY);
-        }
         Ok(())
     }
 
@@ -787,9 +695,6 @@ impl MtlContext {
         obj.model = model;
         obj.visible = true;
         if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
-            palette.iter_mut().for_each(|m| *m = IDENTITY);
-        }
-        if let Some(palette) = self.skinned.prev_joint_matrices.get_mut(instance_index) {
             palette.iter_mut().for_each(|m| *m = IDENTITY);
         }
     }

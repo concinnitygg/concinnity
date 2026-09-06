@@ -3,7 +3,7 @@
 // The DirectX and Vulkan backends compile every built-in shader from embedded
 // source at renderer init, and that compile dominates startup: 993 ms of a
 // 1.58 s release init on DirectX (45 FXC invocations), and 369 ms on Vulkan (53
-// shaderc invocations). Metal precompiles its built-ins into the binary but
+// slangc invocations). Metal precompiles its built-ins into the binary but
 // assembles the raymarch libraries around world-authored SdfVolume fragments
 // at init, and caches those metallibs here (see `metal::msl_cache`). The
 // output is a pure function of the source text, the entry point, the compile

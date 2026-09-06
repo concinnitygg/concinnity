@@ -1,10 +1,5 @@
-//! Shared scaffolding for the pipeline tests: the world-asset literal, the
-//! on-disk source fixture, and the lock that serialises default-shader builds.
-
-// Default-shader compilation writes intermediates to a shared
-// data path keyed by asset name, so tests whose worlds pull in
-// the default Shader (any rendering world) must not build concurrently.
-pub(super) static SHADER_BUILD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+//! Shared scaffolding for the pipeline tests: the world-asset literal and the
+//! on-disk source fixture.
 
 pub(super) fn wja(
     name: &str,

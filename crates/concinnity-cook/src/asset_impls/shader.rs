@@ -1,16 +1,14 @@
 // asset_impls/shader.rs
 
 use crate::asset::BuildCtx;
-use crate::authoring::source_args::stage_source_path;
-use concinnity_core::components::{Shader, ShaderKind, ShaderPayload};
-use concinnity_core::platform::Platform;
+use crate::compile::shader::{compile_world_shader, read_shader_source};
+use concinnity_core::components::{Shader, ShaderStage};
+use concinnity_core::render::slang_programs::surface::Sources;
 
-// Resolve a raw per-platform source string to the on-disk path the build will
-// read. A bare filename is looked up recursively under the build's asset search
-// root first, then under `<artifacts_dir>` when set, then directly under
-// `<assets>/<raw>`. A path with a directory component is used verbatim. Mirrors
-// the resolution `compile_payload` applies; built-in shaders short-circuit
-// upstream and never reach this.
+// Resolve a declared source path to the on-disk path the build will read. A
+// bare filename is looked up recursively under the build's asset search root
+// first, then under `<artifacts_dir>` when set, then directly under
+// `<assets>/<raw>`. A path with a directory component is used verbatim.
 pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     let p = std::path::Path::new(raw);
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
@@ -33,121 +31,65 @@ pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     raw.to_string()
 }
 
-// The stage slots a Shader declares, keyed by their args field.
-const STAGES: &[(&str, ShaderKind)] = &[
-    ("vertex", ShaderKind::Vertex),
-    ("fragment", ShaderKind::Fragment),
-    ("vertex_instanced", ShaderKind::VertexInstanced),
-];
-
-// The entry point a stage must define given the world it belongs to. A world
-// declaring more than one Shader renders every bucket through the GPU-driven
-// bindless main pass, so each fragment stage needs `fragment_main_bindless`;
-// a single-Shader world may still use the per-draw path and needs nothing.
-fn required_entry(kind: ShaderKind, ctx: &BuildCtx<'_>) -> Option<String> {
-    if kind != ShaderKind::Fragment || !multi_shader_world(ctx) {
-        return None;
-    }
-    Some("fragment_main_bindless".to_string())
-}
-
-fn multi_shader_world(ctx: &BuildCtx<'_>) -> bool {
-    ctx.all_assets
-        .iter()
-        .filter(|a| a.asset_type.to_lowercase().replace('_', "") == "shader")
-        .count()
-        > 1
-}
-
-// Compile one declared stage to backend bytecode. `None` when the stage
-// resolves no source for this platform (the Vulkan inline-GLSL carve-out).
-fn compile_stage(
-    stage_args: &serde_json::Value,
-    kind: ShaderKind,
-    ctx: &BuildCtx<'_>,
-) -> std::io::Result<Option<Vec<u8>>> {
-    let resolved = stage_source_path(stage_args, ctx.platform);
-
-    // On Vulkan, missing per-platform sources are not fatal: the Vulkan
-    // backend ships inline GLSL for every required stage and compiles it
-    // whenever the payload carries no bytes for that stage.
-    if resolved.is_none() && ctx.platform == Platform::Glsl {
-        tracing::warn!(
-            "Asset '{}': no shader source for platform \"glsl\", falling back to built-in GLSL",
-            ctx.name
-        );
-        return Ok(None);
-    }
-
-    let raw = resolved.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "Compiled asset '{}': no shader source for platform \"{}\"",
-                ctx.name,
-                ctx.platform.key()
-            ),
-        )
-    })?;
-
-    let source_path = resolve_source_path_for(&raw, ctx);
-
-    let compile_args = crate::compile::shader::ShaderCompileArgs {
-        source_path,
-        asset_name: ctx.name.to_string(),
-        kind: kind.compile_kind().to_string(),
-        required_entry: required_entry(kind, ctx),
+// The declared path of one of the Shader's files, straight from the args.
+fn declared_path(args: &serde_json::Value, stage: ShaderStage) -> Option<String> {
+    let field = match stage {
+        ShaderStage::Vertex => "vertex",
+        ShaderStage::Fragment => "fragment",
     };
-    crate::compile::shader::compile_shader(compile_args)
-        .map(Some)
-        .map_err(|e| std::io::Error::other(format!("Asset '{}' compile error: {}", ctx.name, e)))
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 impl crate::asset::BuildAsset for Shader {
-    // Compile every declared stage and pack them into one ShaderPayload
-    // container: a Shader is one asset with one payload, so its stages load
-    // and unload together.
+    // Read the declared files and compile every program this backend consumes
+    // into one container: a Shader is one asset with one payload, so its
+    // programs load and unload together.
     fn compile_payload(
         args: &serde_json::Value,
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> std::io::Result<Vec<u8>> {
-        let mut payload = ShaderPayload::default();
-        for (field, kind) in STAGES {
-            let Some(stage_args) = args.get(field) else {
-                continue;
-            };
-            if let Some(bytes) = compile_stage(stage_args, *kind, ctx)? {
-                payload.stages.push((*kind, bytes));
-            }
-        }
-        payload.encode().map_err(|e| {
+        let fragment_raw = declared_path(args, ShaderStage::Fragment).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Shader '{}': no `fragment` file declared (set it to a `.slang` path \
+                     defining `shade`)",
+                    ctx.name
+                ),
+            )
+        })?;
+        let fragment = read_shader_source(&resolve_source_path_for(&fragment_raw, ctx))?;
+        let vertex = declared_path(args, ShaderStage::Vertex)
+            .map(|raw| read_shader_source(&resolve_source_path_for(&raw, ctx)))
+            .transpose()?;
+        let sources = Sources {
+            vertex: vertex.as_deref(),
+            fragment: &fragment,
+        };
+        let programs = compile_world_shader(ctx.name, &sources, ctx.platform)?;
+        programs.encode().map_err(|e| {
             std::io::Error::other(format!("Asset '{}': shader payload encode: {e}", ctx.name))
         })
     }
 
-    // The same source can be selected by more than one backend and still
-    // compile to different bytecode, so the compile target is an input.
+    // The same files compile to SPIR-V on one backend, a DXIL container on
+    // another and MSL text on the third, so the target belongs in the cache key.
     const TARGET_DEPENDENT: bool = true;
 
-    // Each stage compiles exactly one source: the current backend's. Reporting
-    // those sources alone (rather than letting the cache's generic walk hash
-    // every path in every `sources` map) keeps an edit to the `.glsl` variant
-    // from invalidating the DirectX build's cached payload.
-    //
-    // A stage with no source for this backend contributes nothing: on Vulkan
-    // it compiles nothing and the payload carries no bytes for it, so there is
-    // no input to hash.
+    // Only the declared files are read. Reporting them covers the resolution
+    // the cache's generic walk misses: a bare filename found under the asset
+    // root, which the walk cannot see.
     fn source_files(
         args: &serde_json::Value,
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> crate::asset::SourceFiles {
         use crate::asset::SourceFiles;
         let mut inputs = Vec::new();
-        for (field, _) in STAGES {
-            let Some(stage_args) = args.get(field) else {
-                continue;
-            };
-            let Some(raw) = stage_source_path(stage_args, ctx.platform) else {
+        for stage in [ShaderStage::Vertex, ShaderStage::Fragment] {
+            let Some(raw) = declared_path(args, stage) else {
                 continue;
             };
             let path = resolve_source_path_for(&raw, ctx);
@@ -174,21 +116,15 @@ mod tests {
     ) -> BuildCtx<'a> {
         BuildCtx {
             name: "s",
-            platform: Platform::Metal,
+            platform: concinnity_core::platform::Platform::Metal,
             assets_dir,
             artifacts_dir,
             all_assets: &[],
         }
     }
 
-    // A shader whose stages declare a source for the platform the test
-    // contexts cook for.
-    fn args(vertex: &str, fragment: &str) -> serde_json::Value {
-        let key = Platform::Metal.key();
-        serde_json::json!({
-            "vertex": {"sources": {key: vertex}},
-            "fragment": {"sources": {key: fragment}},
-        })
+    fn args(fragment: &str) -> serde_json::Value {
+        serde_json::json!({ "fragment": fragment })
     }
 
     #[test]
@@ -197,12 +133,12 @@ mod tests {
         // search applies, with or without an asset root.
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_source_path_for("shaders/x.metal", &ctx(None)),
-            "shaders/x.metal"
+            resolve_source_path_for("shaders/x.slang", &ctx(None)),
+            "shaders/x.slang"
         );
         assert_eq!(
-            resolve_source_path_for("shaders/x.metal", &with_assets(Some(dir.path()), None)),
-            "shaders/x.metal"
+            resolve_source_path_for("shaders/x.slang", &with_assets(Some(dir.path()), None)),
+            "shaders/x.slang"
         );
     }
 
@@ -213,28 +149,28 @@ mod tests {
         let assets = tempfile::tempdir().unwrap();
         let nested = assets.path().join("shaders");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("user.metal"), "// msl").unwrap();
+        std::fs::write(nested.join("user.slang"), "// slang").unwrap();
         let artifact_dir = tempfile::tempdir().unwrap();
-        std::fs::write(artifact_dir.path().join("user.metal"), "// msl").unwrap();
+        std::fs::write(artifact_dir.path().join("user.slang"), "// slang").unwrap();
         let artifacts = artifact_dir.path().to_string_lossy().into_owned();
 
         assert_eq!(
             resolve_source_path_for(
-                "user.metal",
+                "user.slang",
                 &with_assets(Some(assets.path()), Some(&artifacts))
             ),
-            nested.join("user.metal").to_string_lossy()
+            nested.join("user.slang").to_string_lossy()
         );
     }
 
     #[test]
     fn resolve_source_path_for_prefers_an_artifact_over_the_assets_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("user.metal"), "// msl").unwrap();
+        std::fs::write(dir.path().join("user.slang"), "// slang").unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path_for("user.metal", &ctx(Some(&artifacts))),
-            format!("{artifacts}/user.metal")
+            resolve_source_path_for("user.slang", &ctx(Some(&artifacts))),
+            format!("{artifacts}/user.slang")
         );
     }
 
@@ -243,12 +179,12 @@ mod tests {
         let assets = tempfile::tempdir().unwrap();
         let expected = assets
             .path()
-            .join("cn_no_such.metal")
+            .join("cn_no_such.slang")
             .to_string_lossy()
             .into_owned();
         // No artifacts dir at all...
         assert_eq!(
-            resolve_source_path_for("cn_no_such.metal", &with_assets(Some(assets.path()), None)),
+            resolve_source_path_for("cn_no_such.slang", &with_assets(Some(assets.path()), None)),
             expected
         );
         // ...and an artifacts dir that doesn't hold the file both land there.
@@ -256,54 +192,86 @@ mod tests {
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
             resolve_source_path_for(
-                "cn_no_such.metal",
+                "cn_no_such.slang",
                 &with_assets(Some(assets.path()), Some(&artifacts))
             ),
             expected
         );
         // With no search root at all the bare name is left as it was authored.
         assert_eq!(
-            resolve_source_path_for("cn_no_such.metal", &ctx(None)),
-            "cn_no_such.metal"
+            resolve_source_path_for("cn_no_such.slang", &ctx(None)),
+            "cn_no_such.slang"
         );
     }
 
+    // The fragment file is the one required input: without it there is no
+    // `shade`, and the error says which field to set.
     #[test]
-    fn a_compile_failure_names_the_asset() {
-        // The vertex source resolves to a path that does not exist, so the
-        // compile fails while reading it and never reaches a shader toolchain.
-        let err =
-            Shader::compile_payload(&args("cn_no_such.metal", "cn_no_such.metal"), &ctx(None))
-                .unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.starts_with("Asset 's' compile error:"), "got: {msg}");
-        assert!(msg.contains("cn_no_such.metal"), "got: {msg}");
+    fn no_fragment_file_is_a_hard_error() {
+        let err = Shader::compile_payload(&serde_json::json!({}), &ctx(None)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("no `fragment` file declared"),
+            "got: {err}"
+        );
+        let err = Shader::compile_payload(&args(""), &ctx(None)).unwrap_err();
+        assert!(
+            err.to_string().contains("no `fragment` file declared"),
+            "got: {err}"
+        );
+    }
+
+    // A missing file fails at the read, naming the path, before any compiler
+    // runs.
+    #[test]
+    fn a_missing_file_names_the_path() {
+        let err = Shader::compile_payload(&args("/no/such/user.slang"), &ctx(None)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            err.to_string().contains("/no/such/user.slang"),
+            "got: {err}"
+        );
+
+        let both =
+            serde_json::json!({"vertex": "/no/such/v.slang", "fragment": "/no/such/f.slang"});
+        let dir = tempfile::tempdir().unwrap();
+        let frag = dir.path().join("f.slang");
+        std::fs::write(&frag, "// f").unwrap();
+        let mut both = both;
+        both["fragment"] = serde_json::Value::String(frag.to_string_lossy().into_owned());
+        let err = Shader::compile_payload(&both, &ctx(None)).unwrap_err();
+        assert!(err.to_string().contains("/no/such/v.slang"), "got: {err}");
     }
 
     #[test]
-    fn source_files_reports_a_user_shader_only_once_it_exists_on_disk() {
+    fn source_files_reports_the_declared_files_once_they_exist_on_disk() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("user.metal");
-        let raw = path.to_string_lossy().into_owned();
+        let frag = dir.path().join("f.slang");
+        let vert = dir.path().join("v.slang");
+        let raw_f = frag.to_string_lossy().into_owned();
+        let raw_v = vert.to_string_lossy().into_owned();
+        let both = serde_json::json!({"vertex": raw_v, "fragment": raw_f});
         // Nothing on disk yet: an empty set, since there is no input to hash.
         assert_eq!(
-            Shader::source_files(&args(&raw, &raw), &ctx(None)),
+            Shader::source_files(&both, &ctx(None)),
             SourceFiles::Only(Vec::new())
         );
-        std::fs::write(&path, "// msl").unwrap();
+        std::fs::write(&frag, "// f").unwrap();
         assert_eq!(
-            Shader::source_files(&args(&raw, &raw), &ctx(None)),
-            SourceFiles::Only(vec![raw.clone(), raw])
+            Shader::source_files(&both, &ctx(None)),
+            SourceFiles::Only(vec![raw_f.clone()])
         );
-        // A shader declaring no stage sources for this backend hashes nothing.
+        std::fs::write(&vert, "// v").unwrap();
         assert_eq!(
-            Shader::source_files(
-                &serde_json::json!({"vertex": {}, "fragment": {}}),
-                &ctx(None)
-            ),
+            Shader::source_files(&both, &ctx(None)),
+            SourceFiles::Only(vec![raw_v, raw_f])
+        );
+        // A Shader declaring nothing hashes nothing.
+        assert_eq!(
+            Shader::source_files(&serde_json::json!({}), &ctx(None)),
             SourceFiles::Only(Vec::new())
         );
-        // The same source compiles to different bytecode per backend.
+        // The same files compile to different artifacts per backend.
         const { assert!(Shader::TARGET_DEPENDENT) };
     }
 }

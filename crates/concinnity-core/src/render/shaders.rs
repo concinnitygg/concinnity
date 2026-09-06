@@ -12,6 +12,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("auto_exposure.slang", AUTO_EXPOSURE),
     ("bloom.slang", BLOOM),
     ("composite.slang", COMPOSITE),
+    ("cull.slang", CULL),
     ("decal.slang", DECAL),
     ("fog.slang", FOG),
     ("fullscreen.slang", FULLSCREEN),
@@ -20,8 +21,11 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("glass_mesh.slang", GLASS_MESH),
     ("hiz_build.slang", HIZ_BUILD),
     ("light_cull.slang", LIGHT_CULL),
+    ("light_types.slang", LIGHT_TYPES),
     ("line.slang", LINE),
     ("main_bindless.slang", MAIN_BINDLESS),
+    ("main_shading.slang", MAIN_SHADING),
+    ("main_types.slang", MAIN_TYPES),
     ("object_common.slang", OBJECT_COMMON),
     ("particle.slang", PARTICLE),
     ("particle_simulate.slang", PARTICLE_SIMULATE),
@@ -30,15 +34,21 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("probe_common.slang", PROBE_COMMON),
     ("probe_prefilter.slang", PROBE_PREFILTER),
     ("probe_types.slang", PROBE_TYPES),
+    ("raymarch.slang", RAYMARCH),
+    ("raymarch_common.slang", RAYMARCH_COMMON),
+    ("raymarch_types.slang", RAYMARCH_TYPES),
     ("reflection.slang", REFLECTION),
     ("rt_reflections.slang", RT_REFLECTIONS),
     ("rt_skin.slang", RT_SKIN),
     ("rt_trace.slang", RT_TRACE),
     ("rt_types.slang", RT_TYPES),
     ("shadow.slang", SHADOW),
+    ("shadow_bias.slang", SHADOW_BIAS),
     ("ssao.slang", SSAO),
     ("ssgi.slang", SSGI),
     ("ssr.slang", SSR),
+    ("surface_fragment_default.slang", SURFACE_FRAGMENT_DEFAULT),
+    ("surface_vertex_default.slang", SURFACE_VERTEX_DEFAULT),
     ("taa.slang", TAA),
     ("text.slang", TEXT),
     ("water.slang", WATER),
@@ -57,6 +67,8 @@ pub const AUTO_EXPOSURE: &str = include_str!("shaders/auto_exposure.slang");
 pub const BLOOM: &str = include_str!("shaders/bloom.slang");
 /// `composite.slang`.
 pub const COMPOSITE: &str = include_str!("shaders/composite.slang");
+/// `cull.slang`.
+pub const CULL: &str = include_str!("shaders/cull.slang");
 /// `decal.slang`.
 pub const DECAL: &str = include_str!("shaders/decal.slang");
 /// `fog.slang`.
@@ -73,10 +85,16 @@ pub const GLASS_MESH: &str = include_str!("shaders/glass_mesh.slang");
 pub const HIZ_BUILD: &str = include_str!("shaders/hiz_build.slang");
 /// `light_cull.slang`.
 pub const LIGHT_CULL: &str = include_str!("shaders/light_cull.slang");
+/// `light_types.slang`.
+pub const LIGHT_TYPES: &str = include_str!("shaders/light_types.slang");
 /// `line.slang`.
 pub const LINE: &str = include_str!("shaders/line.slang");
 /// `main_bindless.slang`.
 pub const MAIN_BINDLESS: &str = include_str!("shaders/main_bindless.slang");
+/// `main_shading.slang`.
+pub const MAIN_SHADING: &str = include_str!("shaders/main_shading.slang");
+/// `main_types.slang`.
+pub const MAIN_TYPES: &str = include_str!("shaders/main_types.slang");
 /// `object_common.slang`.
 pub const OBJECT_COMMON: &str = include_str!("shaders/object_common.slang");
 /// `particle.slang`.
@@ -93,6 +111,12 @@ pub const PROBE_COMMON: &str = include_str!("shaders/probe_common.slang");
 pub const PROBE_PREFILTER: &str = include_str!("shaders/probe_prefilter.slang");
 /// `probe_types.slang`.
 pub const PROBE_TYPES: &str = include_str!("shaders/probe_types.slang");
+/// `raymarch.slang`.
+pub const RAYMARCH: &str = include_str!("shaders/raymarch.slang");
+/// `raymarch_common.slang`.
+pub const RAYMARCH_COMMON: &str = include_str!("shaders/raymarch_common.slang");
+/// `raymarch_types.slang`.
+pub const RAYMARCH_TYPES: &str = include_str!("shaders/raymarch_types.slang");
 /// `reflection.slang`.
 pub const REFLECTION: &str = include_str!("shaders/reflection.slang");
 /// `rt_reflections.slang`.
@@ -105,12 +129,18 @@ pub const RT_TRACE: &str = include_str!("shaders/rt_trace.slang");
 pub const RT_TYPES: &str = include_str!("shaders/rt_types.slang");
 /// `shadow.slang`.
 pub const SHADOW: &str = include_str!("shaders/shadow.slang");
+/// `shadow_bias.slang`.
+pub const SHADOW_BIAS: &str = include_str!("shaders/shadow_bias.slang");
 /// `ssao.slang`.
 pub const SSAO: &str = include_str!("shaders/ssao.slang");
 /// `ssgi.slang`.
 pub const SSGI: &str = include_str!("shaders/ssgi.slang");
 /// `ssr.slang`.
 pub const SSR: &str = include_str!("shaders/ssr.slang");
+/// `surface_fragment_default.slang`.
+pub const SURFACE_FRAGMENT_DEFAULT: &str = include_str!("shaders/surface_fragment_default.slang");
+/// `surface_vertex_default.slang`.
+pub const SURFACE_VERTEX_DEFAULT: &str = include_str!("shaders/surface_vertex_default.slang");
 /// `taa.slang`.
 pub const TAA: &str = include_str!("shaders/taa.slang");
 /// `text.slang`.

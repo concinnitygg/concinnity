@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_payload_compiles_end_to_end() {
-        let world = r#"{"name":"scene_shader","type":"Shader","args":{"vertex":{"source":"x.metal"},"fragment":{"source":"x.metal"}}}
+        let world = r#"{"name":"scene_shader","type":"Shader","args":{"fragment":"x.slang"}}
 {"name":"air","type":"BlockType","args":{"solid":false}}
 {"name":"stone","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
 {"name":"chunk","type":"VoxelChunk","args":{"palette":["air","stone"],"dim":[2,1,1],"blocks":[1,1]}}
@@ -429,51 +429,62 @@ mod tests {
         assert!(!bytes.is_empty());
     }
 
-    // The SdfVolume wrapper transports the current backend's fragment shader
-    // bytes verbatim (no MSL/GLSL compilation); a missing source is a hard
-    // error rather than a silent empty payload.
+    // The SdfVolume wrapper compiles the world's distance field through slangc,
+    // so a field that does not compile fails the build here rather than a
+    // renderer's init. A missing source is a hard error, not an empty payload.
     #[test]
-    fn compile_by_type_sdf_volume_transports_shader_bytes() {
+    fn compile_by_type_sdf_volume_compiles_the_declared_field() {
+        use concinnity_core::components::sdf_programs::SdfPrograms;
+        if !crate::slangc_gate::slangc_available() {
+            return;
+        }
         let dir = tempfile::tempdir().expect("tempdir");
-        let shader = dir.path().join("blob.metal");
-        let source = b"// sdf fragment source\n";
-        std::fs::write(&shader, source).expect("write shader");
-        let path = shader.to_str().unwrap();
-        // Set every backend's key to the same file so the test is
-        // platform-independent: only the current backend's entry is read.
-        let args = serde_json::json!({
-            "fragment_shaders": {"metal": path, "hlsl": path, "glsl": path}
-        });
-        let bytes = compile_by_type(ct("SdfVolume"), &args, &ctx()).expect("sdf reads source");
-        assert_eq!(bytes, source);
+        let field = dir.path().join("blob.slang");
+        std::fs::write(
+            &field,
+            "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
+             SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\
+                 SdfSurface s; s.albedo = float3(1.0, 1.0, 1.0); s.roughness = 0.5;\n\
+                 s.metallic = 0.0; s.emissive = float3(0.0, 0.0, 0.0);\n\
+                 s.transmitted = float3(0.0, 0.0, 0.0); return s; }\n",
+        )
+        .expect("write field");
+        let args = serde_json::json!({ "fragment_shader": field.to_str().unwrap() });
+
+        let bytes = compile_by_type(ct("SdfVolume"), &args, &ctx()).expect("sdf compiles");
+        let programs: SdfPrograms = postcard::from_bytes(&bytes).expect("payload decodes");
+        // A surface volume that casts no shadow compiles its own pair only.
+        // How those two entries are grouped into artifacts is the backend's
+        // business, so the assertion is over the entries, not the artifacts.
+        let mut entries: Vec<&str> = programs
+            .programs
+            .iter()
+            .flat_map(|p| p.entries.iter().map(String::as_str))
+            .collect();
+        entries.sort_unstable();
+        assert_eq!(entries, ["raymarch_fragment", "raymarch_vertex"]);
+        assert!(programs.programs.iter().all(|p| !p.artifact.is_empty()));
+        assert!(programs.field.contains("float map("));
 
         let err = compile_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx())
-            .expect_err("no fragment shader source");
+            .expect_err("no distance field");
         assert!(
-            err.to_string().contains("no fragment shader source"),
+            err.to_string().contains("no distance field declared"),
             "got: {err}"
         );
     }
 
-    // The Shader wrapper's non-compiling arms: a missing stage source is
-    // either a hard error (Metal/HLSL) or the inline-GLSL stub (Vulkan).
-    // Neither shells out to a shader toolchain, so the test stays
+    // The Shader wrapper's non-compiling arm: a declaration with no fragment
+    // file is a hard error before any compiler runs, so the test stays
     // backend-agnostic.
     #[test]
-    fn compile_by_type_shader_missing_source_does_not_shell_out() {
-        let out = compile_by_type(
-            ct("Shader"),
-            &serde_json::json!({"vertex": {}, "fragment": {}}),
-            &ctx(),
+    fn compile_by_type_shader_without_a_fragment_file_does_not_shell_out() {
+        let err = compile_by_type(ct("Shader"), &serde_json::json!({}), &ctx())
+            .expect_err("no fragment file");
+        assert!(
+            err.to_string().contains("no `fragment` file declared"),
+            "got: {err}"
         );
-        match out {
-            Ok(bytes) => {
-                let payload = concinnity_core::components::ShaderPayload::decode(&bytes)
-                    .expect("empty container decodes");
-                assert!(payload.stages.is_empty(), "glsl stub compiles no stages");
-            }
-            Err(e) => assert!(e.to_string().contains("no shader source"), "got: {e}"),
-        }
     }
 
     // cache_inputs_by_type routes to the two overriding wrappers. Both report
@@ -483,24 +494,22 @@ mod tests {
     fn cache_inputs_by_type_covers_the_overriding_wrappers() {
         use crate::asset::SourceFiles;
         let dir = tempfile::tempdir().expect("tempdir");
-        let shader = dir.path().join("blob.metal");
-        std::fs::write(&shader, b"x").expect("write shader");
+        let shader = dir.path().join("blob.slang");
+        std::fs::write(&shader, b"x").expect("write field");
         let path = shader.to_str().unwrap();
 
-        // SdfVolume reports the resolved path for the current backend, and
-        // transports it verbatim, so the compile target is not an input.
-        let sdf_args = serde_json::json!({
-            "fragment_shaders": {"metal": path, "hlsl": path, "glsl": path}
-        });
+        // SdfVolume reports the one declared field, and compiles it to a
+        // different artifact per backend, so the target is an input too.
+        let sdf_args = serde_json::json!({ "fragment_shader": path });
         let sdf = cache_inputs_by_type(ct("SdfVolume"), &sdf_args, &ctx());
         assert_eq!(sdf.sources, SourceFiles::Only(vec![path.to_string()]));
-        assert!(!sdf.target_dependent);
+        assert!(sdf.target_dependent);
         assert_eq!(
             cache_inputs_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx()).sources,
             SourceFiles::Only(Vec::new())
         );
 
-        // Shader compiles its stage sources, so the target is an input.
+        // Shader compiles its files per backend, so the target is an input.
         let no_source = cache_inputs_by_type(ct("Shader"), &serde_json::json!({}), &ctx());
         assert_eq!(no_source.sources, SourceFiles::Only(Vec::new()));
         assert!(no_source.target_dependent);

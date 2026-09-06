@@ -462,77 +462,46 @@ pub(crate) struct ShaderStageReloadResult {
     pub pipelines_rebuilt: bool,
 }
 
-// Re-compile every captured world-loaded Shader stage source from disk and
-// hand the fresh bytes to the backend for a main / instanced / shadow
-// pipeline rebuild. Sibling of [`reload_shaders`] in
-// [`crate::metal::hot_reload`] (which targets the engine's bundled shader
-// directory) but driven by the asset hot-reload
-// watcher when one of the world's authored shader sources changes.
+// Recompile the world default Shader from its files and swap the live
+// pipelines. Fired by the asset watcher when one of the Shader's files
+// changes, or by the debug-WS `reload-assets` command.
 //
-// Each captured kind goes through
-// [`concinnity_cook::compile::shader::compile_shader`]; on any per-stage compile
-// failure the helper logs and aborts the whole pass without touching the
-// backend, so a typo in one shader never desyncs the others. When every
-// stage compiles cleanly the bytes are forwarded through
-// [`crate::gfx::backend::RenderBackend::update_world_shader_pipelines`],
-// which runs the rebuild-then-swap dance on Metal (and is a no-op on
-// Vulkan + DirectX until those backends grow an impl).
+// The files are read and compiled through the cook's own
+// [`concinnity_cook::compile::shader::compile_world_shader`], so a save
+// recompiles exactly the path `cn build` took. Any failure logs and aborts the
+// pass without touching the backend, so a typo never desyncs a live pipeline.
+// When the compile succeeds the programs go through
+// [`crate::gfx::backend::RenderBackend::update_world_shader_pipelines`], which
+// runs the rebuild-then-swap dance on every backend.
 //
-// Does not detect "unchanged source": every fire recompiles every
-// captured stage. A `.metal` save is rare enough (and the compile cheap
-// enough) that the savings from per-source mtime tracking would not be
-// worth the additional state.
+// Does not detect "unchanged source": every fire recompiles the whole Shader.
+// A save is rare enough, and the compile cheap enough, that per-file mtime
+// tracking would not be worth the state.
 pub(super) fn reload_shader_stages(
     shader_stages: &ShaderStageSourceMap,
     backend: &mut dyn crate::gfx::backend::RenderBackend,
 ) -> ShaderStageReloadResult {
-    use crate::components::ShaderKind;
+    use crate::components::ShaderStage;
+    use concinnity_core::render::slang_programs::surface::Sources;
 
     let mut result = ShaderStageReloadResult::default();
     if shader_stages.is_empty() {
         return result;
     }
 
-    let mut compiled: std::collections::HashMap<ShaderKind, Vec<u8>> =
+    let mut texts: std::collections::HashMap<ShaderStage, String> =
         std::collections::HashMap::new();
     for entry in &shader_stages.entries {
-        let compile_args = concinnity_cook::compile::shader::ShaderCompileArgs {
-            source_path: entry.resolved_path.clone(),
-            // Asset name is used by the metal compiler to derive temp paths
-            // for the `.air` / `.metallib` intermediates. The source's bare
-            // filename (without extension) is a stable per-stage identifier:
-            // two stages on different kinds with the same source file
-            // are rare in practice but the kind suffix keeps the paths
-            // disjoint if it ever happens.
-            asset_name: format!(
-                "{}_{}",
-                std::path::Path::new(&entry.resolved_path)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("shader_stage"),
-                match entry.kind {
-                    ShaderKind::Vertex => "vert",
-                    ShaderKind::Fragment => "frag",
-                    ShaderKind::VertexInstanced => "vert_inst",
-                }
-            ),
-            kind: entry.kind.compile_kind().to_string(),
-            // Hot reload only ever recompiles the world default Shader's
-            // captured stages; a world whose shader set forces the bindless
-            // entry point had that checked at `cn build`.
-            required_entry: None,
-        };
-        match concinnity_cook::compile::shader::compile_shader(compile_args) {
-            Ok(bytes) => {
-                compiled.insert(entry.kind, bytes);
-                result.recompiled += 1;
+        match concinnity_cook::compile::shader::read_shader_source(&entry.resolved_path) {
+            Ok(text) => {
+                texts.insert(entry.stage, text);
             }
             Err(e) => {
                 tracing::error!(
-                    "Shader hot-reload: failed to compile '{}' ({:?}): {} \
+                    "Shader hot-reload: failed to read '{}' ({:?}): {} \
                      (live pipelines kept their previous source)",
                     entry.resolved_path,
-                    entry.kind,
+                    entry.stage,
                     e
                 );
                 result.failed += 1;
@@ -542,15 +511,33 @@ pub(super) fn reload_shader_stages(
     if result.failed > 0 {
         return result;
     }
+    let Some(fragment) = texts.get(&ShaderStage::Fragment) else {
+        tracing::error!("Shader hot-reload: no fragment file was captured for the world Shader");
+        result.failed += 1;
+        return result;
+    };
+    let sources = Sources {
+        vertex: texts.get(&ShaderStage::Vertex).map(String::as_str),
+        fragment,
+    };
+    let programs = match concinnity_cook::compile::shader::compile_world_shader(
+        "world default",
+        &sources,
+        crate::cook_platform(),
+    ) {
+        Ok(programs) => programs,
+        Err(e) => {
+            tracing::error!(
+                "Shader hot-reload: compile failed: {} (live pipelines kept their previous source)",
+                e
+            );
+            result.failed += 1;
+            return result;
+        }
+    };
+    result.recompiled = texts.len();
 
-    let vert = compiled.get(&ShaderKind::Vertex).map(|v| v.as_slice());
-    let frag = compiled.get(&ShaderKind::Fragment).map(|v| v.as_slice());
-    let vert_inst = compiled
-        .get(&ShaderKind::VertexInstanced)
-        .map(|v| v.as_slice());
-
-    // Shadow shaders are engine-internal: never world-asset hot-reloaded here.
-    match backend.update_world_shader_pipelines(vert, frag, None, vert_inst) {
+    match backend.update_world_shader_pipelines(&programs) {
         Ok(()) => {
             result.pipelines_rebuilt = true;
         }

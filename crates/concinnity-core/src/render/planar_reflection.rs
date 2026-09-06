@@ -294,33 +294,11 @@ pub fn planar_matrices(
     }
 }
 
-/// Resolve the CPU visible set for a planar mirror render: BVH-cull the cullable
-/// draw objects against the reflected-camera frustum, then append the always-draw
-/// fallback (skybox, rooms) so it appears in the reflection too. Mirrors the main
-/// camera's visible-set resolution but against the reflected frustum, so geometry
-/// visible only in the reflection (behind or beside the main camera, outside its
-/// frustum) is captured instead of reusing the main camera's set. `eye` is the
-/// reflected camera position, consulted only for the leaves' distance-based cull.
-/// `out` is cleared then refilled, so a caller can reuse one buffer across planes.
-pub fn reflected_visible_set(
-    bvh: &crate::render::bvh::Bvh,
-    reflected_frustum: &crate::gfx::frustum::Frustum,
-    eye: [f32; 3],
-    always_draw: &[u32],
-    out: &mut Vec<u32>,
-) {
-    out.clear();
-    bvh.query(reflected_frustum, eye, |idx| out.push(idx));
-    out.sort_unstable();
-    out.extend_from_slice(always_draw);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::gfx::projection::perspective_rh;
 
-    use alloc::vec;
     // Apply a column-major transform to a homogeneous point.
     fn xform(m: Mat4, p: [f32; 4]) -> [f32; 4] {
         mat_vec(m, p)
@@ -526,62 +504,23 @@ mod tests {
         let cam_pos = [0.0, 0.0, 0.0];
         let m = planar_matrices(view, proj, cam_pos, plane, 0.0);
 
-        // One cullable object behind the camera.
-        let bvh = crate::render::bvh::Bvh::build(&[crate::render::bvh::BvhItem {
-            bb_min: [-0.5, -0.5, 2.5],
-            bb_max: [0.5, 0.5, 3.5],
-            cull_distance: 0.0,
-            index: 0,
-        }]);
+        // One object behind the camera.
+        let bb_min = [-0.5, -0.5, 2.5];
+        let bb_max = [0.5, 0.5, 3.5];
 
         // The main camera rejects it (behind the near plane).
         let main_frustum = crate::gfx::frustum::Frustum::from_view_projection(proj);
-        let mut main_visible = Vec::new();
-        bvh.query(&main_frustum, cam_pos, |i| main_visible.push(i));
         assert!(
-            !main_visible.contains(&0),
+            !main_frustum.intersects_aabb(bb_min, bb_max),
             "object behind the camera must be outside the main frustum"
         );
 
-        // The reflected frustum captures it, and the always-draw fallback is
-        // appended after the culled set.
+        // The reflected frustum captures it. This is the frustum the GPU mirror
+        // cull tests each record against.
         let reflected_frustum = crate::gfx::frustum::Frustum::from_view_projection(m.view_proj);
-        let always = [7u32];
-        let mut out = Vec::new();
-        reflected_visible_set(&bvh, &reflected_frustum, m.eye, &always, &mut out);
         assert!(
-            out.contains(&0),
+            reflected_frustum.intersects_aabb(bb_min, bb_max),
             "object behind the camera must be visible in the reflection"
-        );
-        assert_eq!(
-            out.last(),
-            Some(&7),
-            "always-draw fallback appended after the culled set"
-        );
-    }
-
-    #[test]
-    fn reflected_visible_set_reuses_the_output_buffer() {
-        // The buffer is cleared each call, so reusing it across planes never leaks
-        // a prior plane's culled indices.
-        let bvh = crate::render::bvh::Bvh::build(&[crate::render::bvh::BvhItem {
-            bb_min: [-0.5, -0.5, -0.5],
-            bb_max: [0.5, 0.5, 0.5],
-            cull_distance: 0.0,
-            index: 3,
-        }]);
-        // A frustum that rejects everything (identity clip cube, box far outside).
-        let empty_frustum = crate::gfx::frustum::Frustum::from_view_projection([
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [-100.0, 0.0, 0.0, 1.0],
-        ]);
-        let mut out = vec![99, 99, 99];
-        reflected_visible_set(&bvh, &empty_frustum, [0.0, 0.0, 0.0], &[], &mut out);
-        assert!(
-            out.is_empty(),
-            "stale indices must be cleared before refill"
         );
     }
 

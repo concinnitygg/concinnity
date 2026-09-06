@@ -38,7 +38,7 @@ pub(super) const HDR_SAMPLE_COUNT: u32 = 4;
 // Size of the bindless texture pool the static main pass samples. The pool
 // holds every albedo texture followed by every normal map; `GpuObjectData`
 // carries pool indices into it. Must match `BINDLESS_TEXTURE_COUNT` in
-// `main.metal`. Worlds with more than this many textures fall back to
+// `main_bindless.slang`. Worlds with more than this many textures fall back to
 // clamped indices (logged once at init).
 pub(super) const BINDLESS_TEXTURE_COUNT: usize = 1024;
 
@@ -88,27 +88,11 @@ pub(super) fn take_embedded_pump_events() -> bool {
     EMBEDDED_PUMP_EVENTS.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
-// The scene draw list plus the CPU cull inputs derived from it, and the record
-// counts that extend the GPU-driven cull past the static objects.
+// The scene draw list and the record counts that extend the GPU-driven cull
+// past the static objects.
 pub(super) struct DrawState {
     // One entry per renderable object.
     pub objects: Vec<DrawObject>,
-    // Spatial index over the cullable subset of `objects`, built once at init.
-    // The main pass queries it per frame to skip off-screen draws.
-    pub bvh: crate::gfx::bvh::Bvh,
-    // Indices into `objects` for non-cullable items (skybox, rooms, dynamic
-    // props). Drawn unconditionally after the BVH-visible set.
-    pub always: Vec<u32>,
-    // Parallel to `objects`: whether each slot is already in `always`. A slot
-    // vacated by a culled static prop and later recycled for a runtime clone
-    // must join `always` exactly once; this guards against a double push
-    // without an O(n) membership scan.
-    pub always_member: Vec<bool>,
-    // Per-frame scratch for the legacy CPU draw path's visible set (BVH-culled
-    // cullables + `always` fallback). `mem::take`d at the top of draw_frame and
-    // returned at the bottom so the heap allocation is reused across frames
-    // instead of `Vec::with_capacity`'d each tick.
-    pub visible_scratch: Vec<u32>,
     // The frame graph last compiled, keyed by the `FrameGraphInputs` it was
     // built from. `build_frame_graph` is a pure function of those inputs (which
     // change only when a feature toggles or a target resizes), so a frame whose
@@ -119,20 +103,16 @@ pub(super) struct DrawState {
         crate::gfx::render_graph::FrameGraphInputs,
         crate::gfx::render_graph::CompiledGraph,
     )>,
-    // Total instances across every cluster. When the bindless static pass is
-    // active (`bindless && !objects.is_empty()`), each instance is folded into
-    // the GPU-driven cull buffers as an extra `GpuObjectData` record after the
+    // Total instances across every cluster. Each instance is folded into the
+    // GPU-driven cull buffers as an extra `GpuObjectData` record after the
     // static objects, so the cull dispatch + indirect draw cover
-    // `cull_count() == objects.len() + draw.n_instances`. 0 leaves the static path
-    // identical and routes instances through the legacy instanced draw.
+    // `cull_count() == objects.len() + draw.n_instances`.
     pub n_instances: usize,
-    // Skinned draw objects folded into the GPU-driven cull. Set by
-    // `upload_skinned` ONLY when bindless + static geometry is present; 0
-    // otherwise (a pure-skinned or non-bindless world keeps the legacy skinned
-    // VS draw). When > 0, each skinned object is one extra `GpuObjectData`
-    // record after the static + instance records, so `cull_count()` extends to
-    // `objects.len() + draw.n_instances + draw.n_skinned` and the skinned tail draws the
-    // compute-deformed geometry through the skinned index buffer.
+    // Skinned draw objects folded into the GPU-driven cull, set by
+    // `upload_skinned`. Each is one extra `GpuObjectData` record after the
+    // static + instance records, so `cull_count()` extends to
+    // `objects.len() + draw.n_instances + draw.n_skinned` and the skinned tail
+    // draws the compute-deformed geometry through the skinned index buffer.
     pub n_skinned: usize,
 }
 
@@ -146,13 +126,14 @@ pub(super) struct InstancedState {
     // init (instances are placed at world load and never move).
     // `build_object_buffer` / `build_draw_args_buffer` append these after their
     // per-frame static fill, so the transient object / draw-args rings carry
-    // both. Per-instance LOD is deferred (every instance draws the cluster base
-    // LOD), so these stay static; supporting it would move the build per-frame.
+    // both. `draw_args` carries each cluster's base LOD slice; the per-frame
+    // build patches the instances of clusters that declare alternates.
     pub records: Vec<crate::gfx::render_types::GpuObjectData>,
     pub draw_args: Vec<crate::gfx::render_types::GpuDrawArgs>,
-    // PSO that pairs `vertex_main_instanced` with `fragment_main`. `None` when
-    // no clusters were provided or no instanced shader was compiled.
-    pub pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Whether any cluster declares LOD alternates. False skips the per-frame
+    // per-instance LOD pass entirely: without alternates the base slice above
+    // is the right answer for every instance, for the life of the world.
+    pub any_lod: bool,
 }
 
 // The frame's view state, snapped from `FrameParams` at the top of `draw_frame`.
@@ -298,14 +279,8 @@ pub(super) struct FrameRings {
     // `build_bindless_texture_args`.
     pub bindless_tex: super::transient::TransientRing,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
-    // object, for the current and previous (velocity) poses. Written by
-    // `build_joint_buffers`.
+    // object. Written by `build_joint_buffers`.
     pub joint: super::transient::JointRing,
-    pub prev_joint: super::transient::JointRing,
-    // Ring of per-cluster instance-matrix buffers. `prepare_instanced_draws`
-    // fills this frame's slot once; the main / SSR / SSAO / velocity passes share
-    // the result instead of each re-uploading the instance matrices.
-    pub instance: super::transient::InstanceRing,
     pub object_scratch: Vec<crate::gfx::render_types::GpuObjectData>,
     pub draw_args_scratch: Vec<crate::gfx::render_types::GpuDrawArgs>,
     pub prev_model_scratch: Vec<[[f32; 4]; 4]>,
@@ -557,19 +532,17 @@ pub(crate) struct MtlContext {
     // by a scene other than the start scene, and `install_world_shader` builds
     // it when that scene pins. Draws carrying a `None` bucket are skipped.
     pub(super) world_pipelines: super::init::pipelines::WorldPipelineTable,
-    // True when the static main-pass pipeline runs the bindless fragment
-    // shader (`fragment_main_bindless`). The static draw loop then reads each
-    // object from the per-frame `GpuObjectData` buffer and a bindless texture
-    // pool instead of rebinding model/material/textures per draw. False for
-    // shaders without that entry point (custom shaders), which
-    // use the legacy per-draw binding path.
+    // True when the GPU-driven main pass exists: a world with 3D scene
+    // content. The static draw loop then reads each object from the per-frame
+    // `GpuObjectData` buffer and the bindless texture pool. False for a world
+    // with no scene content, whose Main pass is a bare clear.
     pub(super) bindless: bool,
     // GPU-driven cull feature state: the phase-1/phase-2 cull pipelines,
     // their indirect command buffers + argument encoders/buffers, the
     // per-object status buffer, the two-pass-occlusion toggle, and the Hi-Z
     // pyramid + view-projection snapshots the occlusion test reprojects
-    // through. All `Some`/active only on the bindless path (non-bindless
-    // shaders keep the legacy per-draw CPU loop). See [`CullState`].
+    // through. All `Some`/active only when the world has 3D scene content.
+    // See [`CullState`].
     pub(super) cull: CullState,
     // Encoder that packs the bindless pass's textures into a per-frame
     // argument buffer (the `BindlessTextures` block). `Some` only
@@ -751,6 +724,10 @@ pub(crate) struct MtlContext {
     // and the per-frame timing bookkeeping. See [`AutoExposureGpu`].
     pub(super) auto_exposure: AutoExposureGpu,
     pub(super) hot_reload: HotReloadState,
+    // The world default Shader's compiled programs, `None` for the engine's
+    // own. Kept past init for the skinned pipeline built at upload and for the
+    // hot-reload rebuild.
+    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
     // Keep each presented drawable's texture retained so `screenshot` can
     // blit it back (the view is blit-readable under the same flag). On under
     // the dev loop and `cn run --screenshot`; false in plain production.
@@ -979,20 +956,12 @@ impl MtlContext {
 
         // Second-pass ICB + argument buffer, only when two-pass occlusion is on.
         if self.cull.two_pass_occlusion {
-            let arg_encoder2 = match &self.cull.icb_2_arg_encoder {
-                Some(e) => e.clone(),
-                None => {
-                    return Err(
-                        "two-pass occlusion on but phase-2 ICB argument encoder missing".into(),
-                    );
-                }
-            };
             let mut icbs_2 = Vec::with_capacity(bucket_count);
             for _ in 0..bucket_count {
                 icbs_2.push(self.build_cull_icb(new_cap)?);
             }
             if self.cull.icb_2_arg_buffer.is_none() {
-                let len = arg_encoder2.encodedLength().max(16);
+                let len = arg_encoder.encodedLength().max(16);
                 let buf = self
                     .device
                     .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
@@ -1004,12 +973,13 @@ impl MtlContext {
                 .icb_2_arg_buffer
                 .as_ref()
                 .expect("phase-2 ICB argument buffer was just ensured");
-            // SAFETY: same layout as the phase-1 encoder: each bucket's ICB at
-            // its index within the `icbs` `[[id(0)]]` array.
+            // SAFETY: same layout as the phase-1 set: each bucket's ICB at its
+            // index within the `icbs` `[[id(0)]]` array, and the argument
+            // buffer was sized to `encodedLength()`.
             unsafe {
-                arg_encoder2.setArgumentBuffer_offset(Some(arg_buf2), 0);
+                arg_encoder.setArgumentBuffer_offset(Some(arg_buf2), 0);
                 for (b, icb) in icbs_2.iter().enumerate() {
-                    arg_encoder2.setIndirectCommandBuffer_atIndex(Some(icb), b);
+                    arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b);
                 }
             }
             self.cull.icbs_2 = icbs_2;
@@ -1020,19 +990,19 @@ impl MtlContext {
         Ok(())
     }
 
-    // Ensure the GPU-driven cascaded-shadow ICB has a command slot
-    // for every cascade of every record: `NUM_SHADOW_CASCADES * count` total
-    // (cascade `c`'s commands live at `[c*count, (c+1)*count)`, the same stride
+    // Ensure the GPU-driven cascaded-shadow ICB and its status buffer have a
+    // slot for every cascade of every record: `NUM_SHADOW_CASCADES * count`
+    // total (cascade `c`'s live at `[c*count, (c+1)*count)`, the same stride
     // `encode_shadow_culls` writes at and the shadow render pass executes). A
-    // no-op for non-bindless / no-shadow contexts (no shadow cull arg encoder).
+    // no-op for non-bindless / no-shadow contexts (no shadow decision pipeline).
     // Rounded to the next power of two so a streamed chunk growing `cull_count()`
     // does not rebuild the ICB every frame. Called from `draw_frame` (where
     // `&mut self` is available) right after `ensure_icb_capacity`, so the encode
     // pass only ever reads the sized ICB.
     pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> Result<(), String> {
-        let arg_encoder = match &self.cull.shadow_icb_arg_encoder {
-            Some(e) => e.clone(),
-            None => return Ok(()),
+        let arg_encoder = match (&self.cull.shadow_pipeline, &self.cull.icb_arg_encoder) {
+            (Some(_), Some(e)) => e.clone(),
+            _ => return Ok(()),
         };
         let needed = count.saturating_mul(NUM_SHADOW_CASCADES);
         if self.cull.shadow_icb.is_some() && needed <= self.cull.shadow_icb_capacity {
@@ -1060,6 +1030,16 @@ impl MtlContext {
             arg_encoder.setArgumentBuffer_offset(Some(arg_buf), 0);
             arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0);
         }
+        // One status word per command slot: each cascade's decision dispatch
+        // writes its region, the encode dispatch reads them all back.
+        let status = self
+            .device
+            .newBufferWithLength_options(
+                new_cap * std::mem::size_of::<u32>(),
+                MTLResourceOptions::StorageModePrivate,
+            )
+            .ok_or("failed to create shadow cull status buffer")?;
+        self.cull.shadow_status = Some(status);
         self.cull.shadow_icb = Some(icb);
         self.cull.shadow_icb_capacity = new_cap;
         Ok(())
@@ -1269,20 +1249,8 @@ impl MtlContext {
                 );
                 self.draw.objects.push(obj);
                 self.prev_draw_models.push(model);
-                self.draw.always_member.push(false);
                 slot
             }
-        }
-    }
-
-    // Add a draw slot to `draw.always` if it is not already a member. Runtime
-    // draws (chunks, spawned clones) are drawn unconditionally because the
-    // init-time BVH cannot refit to admit them; a slot recycled from a culled
-    // static prop is not yet in `draw.always` and must be added.
-    pub(super) fn ensure_always_draw(&mut self, slot: usize) {
-        if !self.draw.always_member[slot] {
-            self.draw.always.push(slot as u32);
-            self.draw.always_member[slot] = true;
         }
     }
 
@@ -1297,9 +1265,8 @@ impl MtlContext {
     // base_vertex, LOD alternates) and copy its texture slots, material, and
     // cull distance, swapping only the model matrix. Driven by runtime entity
     // spawn (`SpawnRequest`); the destination slot comes from the engine's
-    // allocator. The copy is marked non-cullable (sentinel AABB) and joins
-    // `draw.always` since the init-time BVH cannot refit; it is drawn every
-    // frame like a streamed chunk.
+    // allocator. The copy is marked non-cullable (sentinel AABB), so the GPU
+    // cull admits it every frame like a streamed chunk.
     pub(crate) fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
@@ -1331,8 +1298,7 @@ impl MtlContext {
             cull_distance: src.cull_distance,
             lod_alternates: src.lod_alternates.clone(),
         };
-        let idx = self.place_draw_object(obj, model, dst);
-        self.ensure_always_draw(idx);
+        self.place_draw_object(obj, model, dst);
         // The cloned prop joins the RT-relevant draw set; the next RT update
         // folds it into the BVH (it reuses the source mesh's geometry slice, so
         // only this clone's BLAS is built).

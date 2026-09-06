@@ -83,12 +83,8 @@ pub fn export(
     // Read the app metadata from the expanded world. The build above already
     // validated it, so this cannot fail on validation; map any error plainly.
     let content = fs::read_to_string(&world_path)?;
-    let loaded = prepare_world(
-        &content,
-        crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
-    )
-    .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
+    let loaded = prepare_world(&content, crate::project::assets_dir().as_deref())
+        .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
     let meta = read_app_meta(name, version, &loaded.assets);
 
     let out_dir = Path::new(out);
@@ -471,8 +467,8 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // A human-facing label for a shader-platform key.
 fn backend_label(platform_key: &str) -> &str {
     match platform_key {
-        "metal" => "Metal (metallib)",
-        "hlsl" => "DirectX (DXBC)",
+        "metal" => "Metal (MSL)",
+        "hlsl" => "DirectX (DXIL)",
         "glsl" => "Vulkan (SPIR-V)",
         other => other,
     }
@@ -1175,8 +1171,8 @@ mod tests {
 
     #[test]
     fn backend_label_and_feature_hint_cover_each_platform() {
-        assert_eq!(backend_label("metal"), "Metal (metallib)");
-        assert_eq!(backend_label("hlsl"), "DirectX (DXBC)");
+        assert_eq!(backend_label("metal"), "Metal (MSL)");
+        assert_eq!(backend_label("hlsl"), "DirectX (DXIL)");
         assert_eq!(backend_label("glsl"), "Vulkan (SPIR-V)");
         assert_eq!(feature_hint("glsl"), ",vulkan");
         assert_eq!(feature_hint("hlsl"), "");

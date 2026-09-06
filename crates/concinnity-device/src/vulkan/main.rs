@@ -1,17 +1,12 @@
 // src/vulkan/main.rs
 //
 // Main scene pass for the Vulkan backend: linear-light HDR off-screen
-// render that draws every visible static / instanced / skinned object
-// into the multisampled HDR colour + depth attachments (resolved into
-// `hdr_resolve` for the post stack). One Vulkan render pass with three
-// sub-passes-by-pipeline:
-//
-//   1. Bindless build-time statics via `cmd_draw_indexed_indirect` over
-//      the GPU-cull-written indirect buffer.
-//   2. Legacy per-draw fallback (custom shaders + streamed `VoxelWorld`
-//      chunks past `draw.n_objects`).
-//   3. Instanced clusters via per-instance storage buffers.
-//   4. Skinned meshes via LBS vertex shader + per-object joint sets.
+// render that draws every static / instanced / skinned object into the
+// multisampled HDR colour + depth attachments (resolved into
+// `hdr_resolve` for the post stack). One Vulkan render pass, two indirect
+// draws over the GPU-cull-written indirect buffer per shader bucket: the
+// static + instance + runtime prefix against the shared VB/IB, then the skinned
+// tail against this frame's deformed vertices.
 //
 // The shape mirrors `metal/draw/main.rs::encode_main_pass`; the graph
 // executor in [`graph_exec.rs`](graph_exec.rs) dispatches
@@ -21,30 +16,16 @@
 
 use ash::vk;
 
-use crate::gfx::frustum::Frustum;
-use crate::vulkan::uniforms::MainPush;
-
 use super::context::VkContext;
 
 impl VkContext {
     // Recompute every instanced cluster's per-LOD-bucket partition for the
-    // current camera and memcpy the bucket-ordered instance matrices into this
-    // frame's mapped per-cluster SSBOs, storing the partition in
-    // `instanced.lod_buckets` for every instanced draw site to read.
-    //
-    // Run on `&mut self` from `execute_graph` BEFORE the render-graph fan-out,
-    // mirroring `prepare_particle_pass`: the SSAO / SSR / velocity pre-passes
-    // run earlier in the graph than Main but share the same per-cluster upload
-    // buffer, so the upload has to happen up front (every pre-pass + Main then
-    // see this frame's bucket order). With LOD bucketing the buffer order
-    // depends on `cam_pos`, so it cannot be deferred into the Main pass the way
-    // the old single-LOD upload was. Mirrors `DxContext::build_instance_upload`.
-    pub(in crate::vulkan) fn prepare_instanced_clusters(
-        &mut self,
-        frame_idx: usize,
-        cam_pos: [f32; 3],
-    ) {
-        if self.instanced.clusters.is_empty() || self.instanced.buffers.is_empty() {
+    // current camera into `instanced.lod_buckets`, which the spot shadow pass
+    // reads. Run on `&mut self` from `execute_graph` before the render-graph
+    // fan-out, mirroring `prepare_particle_pass`. Mirrors
+    // `DxContext::build_instance_upload`.
+    pub(in crate::vulkan) fn prepare_instanced_clusters(&mut self, cam_pos: [f32; 3]) {
+        if self.instanced.clusters.is_empty() {
             return;
         }
         // Re-shape on a runtime cluster-count change (asset hot-reload), then
@@ -54,44 +35,25 @@ impl VkContext {
                 .lod_buckets
                 .resize(self.instanced.clusters.len(), Vec::new());
         }
-        const STRIDE: usize = std::mem::size_of::<[[f32; 4]; 4]>();
         for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
             let row = &mut self.instanced.lod_buckets[cluster_idx];
             row.clear();
             if cluster.instances.is_empty() {
                 continue;
             }
-            let upload = &self.instanced.buffers[frame_idx][cluster_idx];
-            let buckets = cluster.lod_buckets(cam_pos);
-            row.reserve(buckets.len());
-            let mut prefix_instances: usize = 0;
-            for bucket in buckets {
-                let count = bucket.instances.len();
-                upload.write_slice(prefix_instances * STRIDE, &bucket.instances);
-                prefix_instances += count;
-                row.push(bucket);
-            }
+            row.extend(cluster.lod_buckets(cam_pos));
         }
     }
 
-    // Encode the main HDR scene pass for frame slot `frame_idx`. Draws
-    // every visible static / instanced / skinned object in the
-    // `visible` set into the multisampled colour + depth attachments
-    // of `framebuffers[frame_idx]`; the render pass resolves into
-    // `hdr_resolve` (the post-stack input) on `cmd_end_render_pass`.
-    //
-    // Bindless draws come from the GPU-culled indirect buffer the
-    // cull compute kernel wrote earlier this frame; legacy /
-    // instanced / skinned draws iterate the CPU-culled `visible`
-    // list. Cluster culling repeats the frustum / distance check
-    // here because instanced clusters aren't in the BVH.
+    // Encode the main HDR scene pass for frame slot `frame_idx` into the
+    // multisampled colour + depth attachments of `framebuffers[frame_idx]`; the
+    // render pass resolves into `hdr_resolve` (the post-stack input) on
+    // `cmd_end_render_pass`. Every draw comes from the GPU-culled indirect
+    // buffer the cull compute kernel wrote earlier this frame.
     pub(in crate::vulkan) fn encode_main_pass(
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        visible: &[u32],
-        frustum: &Frustum,
-        cam_pos: [f32; 3],
         world_hidden: bool,
     ) {
         let device = self.device.clone();
@@ -206,8 +168,7 @@ impl VkContext {
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
         }
 
-        // Geometry buffers, pipeline-layout-independent, so bound once for
-        // both the bindless and legacy main sub-passes below.
+        // Geometry buffers for the static + instance + runtime prefix.
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -228,8 +189,8 @@ impl VkContext {
         // stateless apart from the object id, which rides `first_instance`
         // (Vulkan's `gl_InstanceIndex` includes it); model/material/textures
         // are fetched from the per-frame GpuObjectData SSBO + the bindless
-        // texture pool. Streamed VoxelWorld chunks keep the legacy per-draw
-        // pipeline below.
+        // texture pool. Instances, streamed chunks and runtime clones are
+        // records of their own in the same buffer.
         let use_bindless = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
         if use_bindless {
             let pipeline = self.wireframe_or(
@@ -300,393 +261,67 @@ impl VkContext {
             }
         }
 
-        // Legacy per-draw main pass. Draws every visible object when the
-        // bindless pass is inactive (custom shader / no build-time geometry);
-        // otherwise only runtime clones (streamed VoxelWorld chunks now fold into
-        // the bindless indirect draw as their own records). Shared with the
-        // instanced + skinned passes' fragment shader.
-        let legacy_needed = !use_bindless || !self.clone.slot_by_draw_idx.is_empty();
-        let skip_seethrough = self.mesh_glass_active();
-        if legacy_needed {
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(&self.main_pipeline, self.wireframe.main.as_ref())
-                        .handle(),
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.main_pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
-                    &[],
-                );
-            }
-            for &draw_idx in visible {
-                let i = draw_idx as usize;
-                if use_bindless && i < self.draw.n_objects {
-                    continue; // build-time object, already drawn bindless
-                }
-                if use_bindless
-                    && i >= self.draw.n_objects
-                    && !self.clone.slot_by_draw_idx.contains_key(&i)
-                {
-                    continue; // streamed chunk, already drawn bindless (folded record)
-                }
-                let obj = &self.draw.objects[i];
-                if !obj.visible || !obj.resident {
-                    continue;
-                }
-                // See-through glass meshes (Layer 2) draw in the transparent
-                // pass when the RT path is live, so skip them here: leaving one in
-                // would both paint it opaque and stamp its depth over the scene
-                // the refraction tap reads.
-                if skip_seethrough && obj.material.see_through != 0 {
-                    continue;
-                }
-
-                // Per-object descriptor set (albedo + normal map). Streamed
-                // `VoxelWorld` chunks are appended past the build-time object
-                // count and share one descriptor set bound to the world's
-                // chunk material; build-time objects use their own baked
-                // (albedo, normal) set; runtime clones (from
-                // `clone_static_draw_object`) carry their own per-clone set
-                // stored in `clone.object_sets` and looked up via
-                // `clone.slot_by_draw_idx`.
-                let obj_set = if i >= self.draw.n_objects {
-                    if let Some(&offset) = self.clone.slot_by_draw_idx.get(&i) {
-                        match self.clone.object_sets.get(offset) {
-                            Some(&s) => s,
-                            None => continue,
-                        }
-                    } else {
-                        match self.chunk_stream.object_set {
-                            Some(s) => s,
-                            None => continue,
-                        }
-                    }
-                } else {
-                    self.descriptors.object_sets
-                        [i.min(self.descriptors.object_sets.len().saturating_sub(1))]
-                };
-
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.main_pipeline_layout.handle(),
-                        1,
-                        std::slice::from_ref(&obj_set),
-                        &[],
-                    );
-                }
-
-                // Per-frame active LOD pick. Streamed VoxelWorld chunks
-                // (past `draw.n_objects`) never declare LOD alternates, so the
-                // pick collapses to LOD0 for them.
-                let d = crate::gfx::lod::camera_distance(obj, cam_pos);
-                let (index_offset, index_count) = obj.active_lod(d);
-                let push = MainPush {
-                    model: obj.model,
-                    roughness: obj.material.roughness,
-                    metallic: obj.material.metallic,
-                    _mpad0: 0.0,
-                    _mpad1: 0.0,
-                    tint: obj.material.tint,
-                    _mpad2: 0.0,
-                    emissive: obj.material.emissive,
-                    _mpad3: 0.0,
-                };
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_push_constants(
-                        cmd,
-                        self.main_pipeline_layout.handle(),
-                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                        0,
-                        std::slice::from_raw_parts(
-                            &push as *const MainPush as *const u8,
-                            std::mem::size_of::<MainPush>(),
-                        ),
-                    );
-                    device.cmd_draw_indexed(
-                        cmd,
-                        index_count as u32,
-                        1,
-                        index_offset as u32,
-                        obj.base_vertex,
-                        0,
-                    );
-                }
-                self.inc_draw_calls(1);
-            }
-        }
-
-        // Instanced clusters main pass. Skipped when the bindless merge is active:
-        // each instance is then a `GpuObjectData` record at `draw.n_objects + k` in the
-        // cull buffers, drawn by the bindless `cmd_draw_indexed_indirect` above.
-        if let (Some(inst_pipeline), Some(inst_pipeline_layout)) = (
-            self.instanced.pipeline.as_ref(),
-            self.instanced.pipeline_layout.as_ref(),
-        ) && !self.instanced.clusters.is_empty()
-            && !use_bindless
-        {
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(inst_pipeline, self.wireframe.instanced.as_ref())
-                        .handle(),
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    inst_pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
-                    &[],
-                );
-            }
-
-            for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
-                if cluster.instances.is_empty() {
-                    continue;
-                }
-                if cluster.cullable() {
-                    if !frustum.intersects_aabb(cluster.cluster_bb_min, cluster.cluster_bb_max) {
-                        continue;
-                    }
-                    if cluster.cull_distance > 0.0 {
-                        let d2 = crate::gfx::frustum::aabb_distance_sq(
-                            cam_pos,
-                            cluster.cluster_bb_min,
-                            cluster.cluster_bb_max,
-                        );
-                        if d2 > cluster.cull_distance * cluster.cull_distance {
-                            continue;
-                        }
-                    }
-                }
-
-                // Per-cluster (albedo, normal) sampler + this frame's
-                // bucket-ordered instance SSBO. The matrices were uploaded by
-                // `prepare_instanced_clusters`; issue one draw per LOD bucket,
-                // offsetting into the SSBO via `first_instance` (the instanced
-                // VS reads `instances[gl_InstanceIndex]`).
-                let Some(buckets) = self.instanced.lod_buckets.get(cluster_idx) else {
-                    continue;
-                };
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    // Set 1: per-cluster (albedo, normal) sampler.
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        inst_pipeline_layout.handle(),
-                        1,
-                        std::slice::from_ref(&self.instanced.object_sets[cluster_idx]),
-                        &[],
-                    );
-                    // Set 2: per-instance storage buffer for this frame.
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        inst_pipeline_layout.handle(),
-                        2,
-                        std::slice::from_ref(&self.instanced.sets[frame_idx][cluster_idx]),
-                        &[],
-                    );
-
-                    let push = MainPush {
-                        model: [[0.0; 4]; 4], // ignored by instanced VS
-                        roughness: cluster.material.roughness,
-                        metallic: cluster.material.metallic,
-                        _mpad0: 0.0,
-                        _mpad1: 0.0,
-                        tint: cluster.material.tint,
-                        _mpad2: 0.0,
-                        emissive: cluster.material.emissive,
-                        _mpad3: 0.0,
-                    };
-                    device.cmd_push_constants(
-                        cmd,
-                        inst_pipeline_layout.handle(),
-                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                        0,
-                        std::slice::from_raw_parts(
-                            &push as *const MainPush as *const u8,
-                            std::mem::size_of::<MainPush>(),
-                        ),
-                    );
-                    let mut first_instance: u32 = 0;
-                    for bucket in buckets {
-                        let count = bucket.instances.len() as u32;
-                        device.cmd_draw_indexed(
-                            cmd,
-                            bucket.index_count as u32,
-                            count,
-                            bucket.index_offset as u32,
-                            0,
-                            first_instance,
-                        );
-                        first_instance += count;
-                    }
-                }
-                self.inc_draw_calls(buckets.len() as u32);
-            }
-        }
-
-        // Skinned meshes main pass. When the GPU-driven bindless fold is active,
-        // skinned objects ride the same cull buffers as static + instances and are
-        // drawn (as rigid deformed geometry) by a 2nd `cmd_draw_indexed_indirect`
-        // over this frame's deformed-vertex buffer + the skinned index buffer,
-        // reading the cull-written indirect buffer from `skinned_record_base()`. The
-        // `encode_skin` compute pass (Cull graph arm) has already posed the deformed
-        // buffer. Otherwise the legacy per-draw skinned pass runs (custom-shader
-        // worlds, or a pure-skinned world with no static geometry to engage bindless).
-        if use_bindless && self.draw.n_skinned > 0 {
-            if let (Some(bindless_pipeline), Some(bindless_layout), Some(deformed)) = (
+        // Skinned meshes main pass. Skinned objects ride the same cull buffers as
+        // static + instances and are drawn (as rigid deformed geometry) by a 2nd
+        // `cmd_draw_indexed_indirect` over this frame's deformed-vertex buffer +
+        // the skinned index buffer, reading the cull-written indirect buffer from
+        // `skinned_record_base()`. The `encode_skin` compute pass (Cull graph arm)
+        // has already posed the deformed buffer.
+        if use_bindless
+            && self.draw.n_skinned > 0
+            && let (Some(bindless_pipeline), Some(bindless_layout), Some(deformed)) = (
                 self.cull.bindless_pipeline.as_ref(),
                 self.cull.bindless_pipeline_layout.as_ref(),
                 self.skinned.deformed.get(frame_idx),
-            ) {
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.wireframe_or(bindless_pipeline, self.wireframe.bindless.as_ref())
-                            .handle(),
-                    );
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        bindless_layout.handle(),
-                        0,
-                        &[
-                            self.descriptors.global_sets[frame_idx],
-                            self.cull.bindless_sets[frame_idx],
-                        ],
-                        &[],
-                    );
-                    // Bind the deformed verts (base_vertex = 0, global skinned
-                    // indexing) + the skinned IB.
-                    device.cmd_bind_vertex_buffers(
-                        cmd,
-                        0,
-                        std::slice::from_ref(&deformed.buffer),
-                        &[0],
-                    );
-                    device.cmd_bind_index_buffer(
-                        cmd,
-                        self.skinned.index_buffer.buffer(),
-                        0,
-                        vk::IndexType::UINT32,
-                    );
-                    // Indirect draw #2: the skinned tail
-                    // `[skinned_record_base(), cull_count())`, byte-offset into the
-                    // same indirect command buffer.
-                    let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
-                    device.cmd_draw_indexed_indirect(
-                        cmd,
-                        self.cull.indirect_buffers[frame_idx].buffer(),
-                        (self.skinned_record_base() * cmd_stride) as u64,
-                        self.draw.n_skinned as u32,
-                        cmd_stride as u32,
-                    );
-                }
-                self.inc_draw_calls(1);
-            }
-        } else if let (Some(sk_pipeline), Some(sk_pl)) = (
-            self.skinned.pipeline.as_ref(),
-            self.skinned.pipeline_layout.as_ref(),
-        ) && !self.skinned.draw_objects.is_empty()
+            )
         {
-            let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+            // slice these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(sk_pipeline, self.wireframe.skinned.as_ref())
+                    self.wireframe_or(bindless_pipeline, self.wireframe.bindless.as_ref())
                         .handle(),
                 );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    sk_pl.handle(),
+                    bindless_layout.handle(),
                     0,
-                    std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
+                    &[
+                        self.descriptors.global_sets[frame_idx],
+                        self.cull.bindless_sets[frame_idx],
+                    ],
                     &[],
                 );
-                device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
-                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT32);
+                // Bind the deformed verts (base_vertex = 0, global skinned
+                // indexing) + the skinned IB.
+                device.cmd_bind_vertex_buffers(
+                    cmd,
+                    0,
+                    std::slice::from_ref(&deformed.buffer),
+                    &[0],
+                );
+                device.cmd_bind_index_buffer(
+                    cmd,
+                    self.skinned.index_buffer.buffer(),
+                    0,
+                    vk::IndexType::UINT32,
+                );
+                // Indirect draw #2: the skinned tail
+                // `[skinned_record_base(), cull_count())`, byte-offset into the
+                // same indirect command buffer.
+                let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
+                device.cmd_draw_indexed_indirect(
+                    cmd,
+                    self.cull.indirect_buffers[frame_idx].buffer(),
+                    (self.skinned_record_base() * cmd_stride) as u64,
+                    self.draw.n_skinned as u32,
+                    cmd_stride as u32,
+                );
             }
-            for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
-                if !obj.visible {
-                    continue;
-                }
-                // Pick the LOD by camera distance to the object's placement
-                // (skinned meshes deform every frame, so they have no static
-                // AABB); the shadow + SSR / SSAO pre-passes pick the same slice.
-                let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
-                let (index_offset, index_count) = obj.active_lod(d);
-                let push = MainPush {
-                    model: obj.model,
-                    roughness: obj.material.roughness,
-                    metallic: obj.material.metallic,
-                    _mpad0: 0.0,
-                    _mpad1: 0.0,
-                    tint: obj.material.tint,
-                    _mpad2: 0.0,
-                    emissive: obj.material.emissive,
-                    _mpad3: 0.0,
-                };
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        sk_pl.handle(),
-                        1,
-                        std::slice::from_ref(&self.skinned.object_sets[i]),
-                        &[],
-                    );
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        sk_pl.handle(),
-                        2,
-                        std::slice::from_ref(&self.skinned.joint_sets[frame_idx][i]),
-                        &[],
-                    );
-                    device.cmd_push_constants(
-                        cmd,
-                        sk_pl.handle(),
-                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                        0,
-                        std::slice::from_raw_parts(
-                            &push as *const MainPush as *const u8,
-                            std::mem::size_of::<MainPush>(),
-                        ),
-                    );
-                    device.cmd_draw_indexed(cmd, index_count as u32, 1, index_offset as u32, 0, 0);
-                }
-                self.inc_draw_calls(1);
-            }
+            self.inc_draw_calls(1);
         }
 
         // End the main scene pass. The render pass leaves the HDR resolve

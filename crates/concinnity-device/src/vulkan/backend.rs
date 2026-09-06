@@ -92,7 +92,7 @@ impl RenderBackend for VkContext {
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> crate::gfx::error::RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize, texture_slot: usize, normal_map_slot: usize) -> crate::gfx::error::RenderResult<()>;
+        fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> crate::gfx::error::RenderResult<()>;
         fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>, dst: crate::gfx::draw_slot::SlotAlloc) -> crate::gfx::error::RenderResult<()>;
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
@@ -105,7 +105,7 @@ impl RenderBackend for VkContext {
         fn top_content_inset(&self) -> f32;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
-        fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> Result<(), String>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
@@ -120,14 +120,9 @@ impl RenderBackend for VkContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-        _vert_bytes: &[u8],
-        frag_bytes: &[u8],
-        _shadow_bytes: &[u8],
     ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
-        // Vulkan compiles the vertex / shadow paths from inline GLSL; only the
-        // fragment shader is supplied as a precompiled SPIR-V payload.
-        Ok(self.upload_skinned(vertices, indices, draw_objects, frag_bytes)?)
+        Ok(self.upload_skinned(vertices, indices, draw_objects)?)
     }
 
     // Trait method returns unit; the inherent returns Result (buffer
@@ -221,7 +216,7 @@ impl RenderBackend for VkContext {
     fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+        shader: crate::gfx::backend_init::WorldShader<'_>,
     ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
         VkContext::install_world_shader(self, bucket, shader)

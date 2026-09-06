@@ -15,15 +15,7 @@ use concinnity_core::render::uniforms::{
     WaterWaveGpu,
 };
 
-use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
-use crate::shader_layout::programs::Target;
-
-// The ray-traced reflection resolve builds only where inline ray query does.
-// slangc rejects `TraceRayInline` on the Metal target in every stage, so the
-// MSL variant of `rt_reflections.slang` cannot be compiled and its structs
-// cannot be reflected there; the Metal renderer traces through its own
-// `.metal` sources instead.
-const VULKAN_AND_DIRECTX: &[Target] = &[Target::Vulkan, Target::DirectX];
+use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
 pub(in crate::shader_layout) fn glass() -> Vec<Case> {
     vec![
@@ -114,40 +106,34 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
 
 pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
     vec![
-        on(
-            VULKAN_AND_DIRECTX,
-            mirror!(RtParams => "RtParams" {
-                intensity,
-                max_distance,
-                tan_half_fov_y,
-                aspect,
-                prefilter_mip_count,
-                _pad0,
-                _pad1,
-                _pad2,
-                cam_pos,
-                sun_dir,
-                sun_color,
-                inv_view,
-                sky_rot,
-            }),
-        ),
-        on(
-            VULKAN_AND_DIRECTX,
-            mirror!(RtGeomEntry => "RtGeomEntry" {
-                index_offset,
-                base_vertex,
-                albedo_index,
-                normal_index,
-                [tint] => ["tint_r", "tint_g", "tint_b"],
-                roughness,
-                metallic,
-                [emissive] => ["emissive_r", "emissive_g", "emissive_b"],
-                model,
-                emissive_map_index,
-                [_pad] => ["_pad0", "_pad1", "_pad2"],
-            }),
-        ),
+        everywhere(mirror!(RtParams => "RtParams" {
+            intensity,
+            max_distance,
+            tan_half_fov_y,
+            aspect,
+            prefilter_mip_count,
+            _pad0,
+            _pad1,
+            _pad2,
+            cam_pos,
+            sun_dir,
+            sun_color,
+            inv_view,
+            sky_rot,
+        })),
+        everywhere(mirror!(RtGeomEntry => "RtGeomEntry" {
+            index_offset,
+            base_vertex,
+            albedo_index,
+            normal_index,
+            [tint] => ["tint_r", "tint_g", "tint_b"],
+            roughness,
+            metallic,
+            [emissive] => ["emissive_r", "emissive_g", "emissive_b"],
+            model,
+            emissive_map_index,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
+        })),
     ]
 }
 

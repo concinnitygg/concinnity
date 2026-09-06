@@ -1,8 +1,8 @@
 // src/directx/draw/main.rs
 //
-// Main HDR scene pass: SSAO pre-pass + GPU-driven bindless static draw +
-// legacy per-draw fallback + instanced clusters + skinned meshes. Renders
-// linear-light HDR into `hdr_color`; the composite pass tonemaps that down
+// Main HDR scene pass: two GPU-driven `ExecuteIndirect`s per shader bucket, the
+// static + instance + runtime prefix and the skinned tail. Renders linear-light
+// HDR into `hdr_color`; the composite pass tonemaps that down
 // onto the swapchain backbuffer. Ends by transitioning (or MSAA-resolving)
 // `hdr_color` to `PIXEL_SHADER_RESOURCE` so post-process passes can sample
 // it.
@@ -12,23 +12,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
-use crate::directx::graph_exec::{FrameGpuBuffers, MainPassCamera};
+use crate::directx::graph_exec::{FrameGpuBuffers, MainPassExtent};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
-
-// Root constants for the main pass (112 bytes = 28 DWORDs).
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct MainPush {
-    model: [[f32; 4]; 4],
-    roughness: f32,
-    metallic: f32,
-    _mpad0: f32,
-    _mpad1: f32,
-    tint: [f32; 3],
-    _mpad2: f32,
-    emissive: [f32; 3],
-    _mpad3: f32,
-}
 
 impl DxContext {
     // Bind the per-scene local-light side tables on whichever root signature is
@@ -58,9 +43,9 @@ impl DxContext {
     }
 
     // Rebuild this frame's `StructuredBuffer<GpuObjectData>` for the bindless
-    // static pass: one 144-byte record per build-time `DrawObject`, indexed by
-    // object id. Streamed `VoxelWorld` chunks (past `draw.n_objects`) are skipped;
-    // they render through the legacy pipeline. Rebuilt every frame so
+    // static pass: one record per `DrawObject`, indexed by object id. Everything
+    // past `draw.n_objects` -- streamed `VoxelWorld` chunks and spawned clones --
+    // folds into the runtime reserve below. Rebuilt every frame so
     // `update_model` / `update_visibility` edits are reflected; a no-op when
     // the bindless pass is inactive.
     pub(in crate::directx) fn build_object_buffer(&self, frame_idx: usize) {
@@ -98,25 +83,27 @@ impl DxContext {
             }
         }
 
-        // Streamed chunks: one record each in the reserved region at
-        // `[chunk_record_base() + k]`, packed exactly like a static object (chunk
-        // geometry already lives in the shared VB/IB with the chunk's `base_vertex`,
-        // so they ride the static + instance prefix `ExecuteIndirect`). Per-chunk
-        // flat-pool texture indices give per-chunk materials. A non-resident (freed)
-        // chunk slot's stale object record here is never read -- `build_draw_args_buffer`
-        // disables it (ENABLED clear), and the cull kernel skips `objects[i]` for a
-        // disabled record. The unused reserve tail is likewise never read.
-        let chunk_base = self.chunk_record_base();
-        self.for_each_chunk_record(|k, obj| {
+        // Runtime objects -- streamed chunks and spawned clones -- one record each
+        // in the reserved region at `[runtime_record_base() + k]`, packed exactly
+        // like a static object (their geometry already lives in the shared VB/IB
+        // with their own `base_vertex`, so they ride the static + instance prefix
+        // `ExecuteIndirect`). Flat-pool texture indices give each its own
+        // material. A non-resident (freed) slot's stale record here is never
+        // read -- `build_draw_args_buffer` disables it (ENABLED clear), and the
+        // cull kernel skips `objects[i]` for a disabled record. The unused
+        // reserve tail is likewise never read.
+        let runtime_base = self.runtime_record_base();
+        self.for_each_runtime_record(|k, _, obj| {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
-            // SAFETY: the chunk reserve is `[chunk_base, chunk_base + draw.n_chunk)` and
-            // `for_each_chunk_record` caps `k < draw.n_chunk`, so the write is in range.
+            // SAFETY: the reserve is `[runtime_base, runtime_base + draw.n_runtime)`
+            // and `for_each_runtime_record` caps `k < draw.n_runtime`, so the
+            // write is in range.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuObjectData as *const u8,
-                    ptr.add((chunk_base + k) * stride),
+                    ptr.add((runtime_base + k) * stride),
                     stride,
                 );
             }
@@ -152,22 +139,10 @@ impl DxContext {
     }
 
     // Recompute every instanced cluster's per-LOD-bucket partition for the
-    // current camera, memcpy bucket-ordered instance matrices into this
-    // frame's mapped upload buffers, and store the layout in
-    // `instance_bucket_layouts` so every instanced draw site (main,
-    // shadow's iter-per-instance path, SSAO / SSR / TAA-velocity
-    // pre-passes) reads the same partition.
-    //
-    // Called once per frame from `record_frame` BEFORE `execute_graph`
-    // dispatches any pass, because SSAO / SSR / TAA-velocity pre-passes
-    // run earlier in the graph than main but share the same per-frame
-    // upload buffer. Doing the upload here means every pre-pass + main
-    // see the **current** frame's bucket layout; the legacy code (which
-    // uploaded inside the main pass) only worked because instances didn't
-    // move frame-to-frame, so reading the previous frame's buffer
-    // happened to match. With LOD bucketing the buffer order depends on
-    // `cam_pos`, so we have to upload up-front.
-    pub(super) fn build_instance_upload(&self, frame_idx: usize, cam_pos: [f32; 3]) {
+    // current camera into `instanced.bucket_layouts`, which the spot shadow
+    // pass reads. Called once per frame from `record_frame` before
+    // `execute_graph` dispatches any pass.
+    pub(super) fn build_instance_upload(&self, cam_pos: [f32; 3]) {
         let mut layouts = self.instanced.bucket_layouts.write().unwrap();
         // Re-shape the outer Vec when cluster count changed (runtime asset
         // hot-reload), then clear every row in place to reuse heap.
@@ -183,60 +158,33 @@ impl DxContext {
             if cluster.instances.is_empty() {
                 continue;
             }
-            let upload_ptr = self.instanced.upload_ptrs[frame_idx][cluster_idx];
-            const STRIDE: usize = std::mem::size_of::<[[f32; 4]; 4]>();
-
             let buckets = cluster.lod_buckets(cam_pos);
             let row = &mut layouts[cluster_idx];
             row.reserve(buckets.len());
-            let mut prefix_instances: usize = 0;
             for bucket in buckets {
-                let count = bucket.instances.len();
-                let bucket_bytes = count * STRIDE;
-                let byte_offset = prefix_instances * STRIDE;
-                // SAFETY: the upload buffer was sized at init for every
-                // instance the cluster declared; the sum of bucket
-                // lengths matches that count, so the write stays in
-                // bounds.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bucket.instances.as_ptr() as *const u8,
-                        upload_ptr.add(byte_offset),
-                        bucket_bytes,
-                    );
-                }
                 row.push(crate::directx::context::InstanceBucketLayout {
-                    instance_byte_offset: byte_offset as u64,
-                    instance_count: count as u32,
                     index_offset: bucket.index_offset,
                     index_count: bucket.index_count,
                     instances: bucket.instances,
                 });
-                prefix_instances += count;
             }
         }
     }
 
-    // Encode the SSAO pre-pass (if enabled), the bindless + legacy main pass,
-    // the instanced clusters pass, and the skinned meshes pass into `cmd`.
-    // Finishes by resolving (MSAA) or transitioning (no MSAA) the HDR target
+    // Encode the GPU-driven main pass into `cmd`: the static + instance +
+    // runtime prefix, then the skinned tail, per shader bucket. Finishes by
+    // resolving (MSAA) or transitioning (no MSAA) the HDR target
     // to `PIXEL_SHADER_RESOURCE` so the velocity / TAA / bloom / composite
     // passes can sample it.
     pub(in crate::directx) fn encode_main_pass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        camera: MainPassCamera<'_>,
+        extent: MainPassExtent,
         gpu: FrameGpuBuffers,
-        visible: &[u32],
         world_hidden: bool,
     ) {
-        let MainPassCamera {
-            width,
-            height,
-            frustum,
-            cam_pos,
-        } = camera;
+        let MainPassExtent { width, height } = extent;
         let FrameGpuBuffers {
             view_gva,
             light_gva,
@@ -295,8 +243,6 @@ impl DxContext {
             ]);
         }
 
-        let last_obj = self.draw.objects.len().saturating_sub(1);
-
         // SSAO (GTAO) ran ahead of this pass via the pre-graph
         // (`PassId::SsaoBlur` dispatches the bundled prepass + kernel +
         // blur). The RAW edge `ao_output` → Main pins SsaoBlur → Main
@@ -314,8 +260,8 @@ impl DxContext {
         // ExecuteIndirect; the CPU never walks the static draw list. Each
         // draw is stateless apart from the per-command object-id b0 root
         // constant, with model/material/textures fetched from the per-frame
-        // GpuObjectData buffer + the bindless texture pool. Streamed
-        // VoxelWorld chunks keep the legacy per-draw pipeline below.
+        // GpuObjectData buffer + the bindless texture pool. Instances, streamed
+        // chunks and runtime clones are records of their own in the same buffer.
         let use_bindless = self.cull.main_bindless_pso.is_some() && self.cull_count() > 0;
         if use_bindless {
             // The per-frame per-object SRV-pool record buffer
@@ -425,344 +371,81 @@ impl DxContext {
             }
         }
 
-        // Legacy per-draw main pass. Draws every visible object when the
-        // bindless pass is inactive (custom shader / no build-time geometry);
-        // otherwise only runtime clones (streamed VoxelWorld chunks now fold into
-        // the bindless `ExecuteIndirect` as their own records). Also still used by
-        // the instanced + skinned passes below.
-        let legacy_needed = !use_bindless || !self.clone.slot_by_draw_idx.is_empty();
-        if legacy_needed {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetPipelineState(
-                    self.wireframe_or(&self.main_pso, self.wireframe.main.as_ref()),
-                );
-                cmd.SetGraphicsRootSignature(&self.main_root_sig);
-                cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-                cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-                // [9] root SRV: per-scene GpuLight storage buffer (t7).
-                cmd.SetGraphicsRootShaderResourceView(9, local_lights_gva);
-                // [10] ClusterParams (b4) + [11] the per-cluster light lists (t8).
-                cmd.SetGraphicsRootConstantBufferView(10, self.cluster_params_gva(frame_idx, true));
-                cmd.SetGraphicsRootShaderResourceView(11, self.cluster_list_gva());
-                self.bind_local_light_tables(cmd, super::LocalLightParams::MAIN);
-                cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-                cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
-                cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
-                // [8] SSAO occlusion SRV (or 1x1 white fallback).
-                cmd.SetGraphicsRootDescriptorTable(8, self.ssao_ao_srv_gpu());
-            }
-            // Shared static-object traversal (gate + LOD pick); the closure
-            // owns this pass's per-draw bindings + draw.
-            self.draw_static_objects(visible, cam_pos, |obj, i, index_offset, index_count| {
-                if use_bindless && i < self.draw.n_objects {
-                    return; // build-time object, already drawn bindless
-                }
-                let is_clone = self.clone.slot_by_draw_idx.contains_key(&i);
-                if use_bindless && i >= self.draw.n_objects && !is_clone {
-                    return; // streamed chunk, already drawn bindless (folded record)
-                }
-                // Descriptor table [5]: albedo + normal SRVs for this object.
-                // Three sources for runtime-added draws past `draw.n_objects`:
-                //   - Runtime clones (`clone_static_draw_object`) have their
-                //     own (albedo, normal) SRV pair baked into the clone pool
-                //     at init; the draw_idx → clone_offset lookup finds it.
-                //   - Streamed `VoxelWorld` chunks (only reached on a non-bindless
-                //     world) share one baked pair at `chunk_srv_base_slot`.
-                //   - Build-time draws use the pre-baked per-object pair.
-                let obj_srv_gpu = if let Some(&clone_offset) = self.clone.slot_by_draw_idx.get(&i) {
-                    self.clone_srv_gpu(clone_offset)
-                } else if i >= self.draw.n_objects {
-                    self.chunk_srv_gpu()
-                } else {
-                    self.object_srv_gpu(i.min(last_obj))
-                };
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.SetGraphicsRootDescriptorTable(5, obj_srv_gpu);
-
-                    let push = MainPush {
-                        model: obj.model,
-                        roughness: obj.material.roughness,
-                        metallic: obj.material.metallic,
-                        _mpad0: 0.0,
-                        _mpad1: 0.0,
-                        tint: obj.material.tint,
-                        _mpad2: 0.0,
-                        emissive: obj.material.emissive,
-                        _mpad3: 0.0,
-                    };
-                    cmd.SetGraphicsRoot32BitConstants(
-                        0,
-                        28,
-                        &push as *const MainPush as *const std::ffi::c_void,
-                        0,
-                    );
-                    cmd.DrawIndexedInstanced(
-                        index_count as u32,
-                        1,
-                        index_offset as u32,
-                        obj.base_vertex,
-                        0,
-                    );
-                }
-                self.inc_draw_calls(1);
-            });
-        }
-
-        // Instanced clusters main pass. Skipped when the bindless merge is active:
-        // each instance is folded into the GPU-driven `GpuObjectData` buffer as a
-        // record at `draw.n_objects + k` and drawn by the bindless `ExecuteIndirect`
-        // above (with per-instance culling). The gbuffer pre-pass + shadow still
-        // use this legacy path for instances.
-        if let (Some(inst_pso), Some(inst_root_sig)) = (
-            self.instanced.pso.as_ref(),
-            self.instanced.root_sig.as_ref(),
-        ) && !self.instanced.clusters.is_empty()
-            && !use_bindless
-        {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetPipelineState(
-                    self.wireframe_or(inst_pso, self.wireframe.instanced.as_ref()),
-                );
-                cmd.SetGraphicsRootSignature(inst_root_sig);
-
-                // Re-bind the per-frame CBVs since we switched root sig.
-                cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-                cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-                cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-
-                cmd.SetDescriptorHeaps(&[
-                    Some(self.descriptors.srv_heap.clone()),
-                    Some(self.descriptors.sampler_heap.clone()),
-                ]);
-                cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-                cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
-                cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
-                // [9] SSAO occlusion SRV (or 1x1 white fallback).
-                cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
-                // [10] root SRV: per-scene GpuLight storage buffer (t7).
-                cmd.SetGraphicsRootShaderResourceView(10, local_lights_gva);
-                // [11] ClusterParams (b4) + [12] the per-cluster light lists (t8).
-                cmd.SetGraphicsRootConstantBufferView(11, self.cluster_params_gva(frame_idx, true));
-                cmd.SetGraphicsRootShaderResourceView(12, self.cluster_list_gva());
-                self.bind_local_light_tables(cmd, super::LocalLightParams::INSTANCED);
-            }
-
-            // Shared cluster cull + bucket iteration; the closures own
-            // this pass's per-cluster material/SRV bind and per-bucket
-            // instance-SRV bump + draw. The shared layout means the bucket
-            // each instance lands in matches the other instanced passes.
-            self.draw_instanced_clusters(
-                frame_idx,
-                frustum,
-                cam_pos,
-                |cluster_idx, cluster| {
-                    // Per-cluster (albedo, normal) SRV pair allocated at init.
-                    let cluster_srv_gpu = self.cluster_srv_gpu(cluster_idx);
-                    // SAFETY: the command list is in the recording state, and every resource,
-                    // descriptor and slice these commands name is live for the call.
-                    unsafe {
-                        cmd.SetGraphicsRootDescriptorTable(5, cluster_srv_gpu);
-
-                        let push = MainPush {
-                            model: [[0.0; 4]; 4], // ignored by instanced VS
-                            roughness: cluster.material.roughness,
-                            metallic: cluster.material.metallic,
-                            _mpad0: 0.0,
-                            _mpad1: 0.0,
-                            tint: cluster.material.tint,
-                            _mpad2: 0.0,
-                            emissive: cluster.material.emissive,
-                            _mpad3: 0.0,
-                        };
-                        cmd.SetGraphicsRoot32BitConstants(
-                            0,
-                            28,
-                            &push as *const MainPush as *const std::ffi::c_void,
-                            0,
-                        );
-                    }
-                },
-                |bucket, inst_gva_base| {
-                    // SAFETY: the command list is in the recording state, and every resource,
-                    // descriptor and slice these commands name is live for the call.
-                    unsafe {
-                        // Root SRV at param [8]: per-instance matrices.
-                        // Bumping the GVA past prior buckets points the
-                        // structured-buffer SRV at this bucket's slice;
-                        // SV_InstanceID then indexes from 0 within it.
-                        cmd.SetGraphicsRootShaderResourceView(
-                            8,
-                            inst_gva_base + bucket.instance_byte_offset,
-                        );
-                        cmd.DrawIndexedInstanced(
-                            bucket.index_count as u32,
-                            bucket.instance_count,
-                            bucket.index_offset as u32,
-                            0,
-                            0,
-                        );
-                    }
-                    self.inc_draw_calls(1);
-                },
-            );
-        }
-
-        // Skinned meshes main pass. When the GPU-driven bindless fold is active,
-        // skinned objects ride the same cull buffers as static + instances and are
-        // drawn (as rigid deformed geometry) by a 2nd `ExecuteIndirect` over this
-        // frame's deformed-vertex buffer + the skinned index buffer, reading
-        // the cull-written indirect buffer from `skinned_record_base()`. The
-        // `encode_skin` compute pass (Cull graph arm) has already posed the
-        // deformed buffer and left it in VERTEX_AND_CONSTANT_BUFFER. Otherwise the
-        // legacy per-draw skinned pass runs (custom-shader worlds, or a
-        // pure-skinned world with no static geometry to engage bindless).
-        if use_bindless && self.draw.n_skinned > 0 {
-            if let (Some(bindless_pso), Some(bindless_root), Some(cull_sig), Some(deformed_vbv)) = (
+        // Skinned meshes main pass. Skinned objects ride the same cull buffers as
+        // static + instances and are drawn (as rigid deformed geometry) by a 2nd
+        // `ExecuteIndirect` over this frame's deformed-vertex buffer + the skinned
+        // index buffer, reading the cull-written indirect buffer from
+        // `skinned_record_base()`. The `encode_skin` compute pass (Cull graph arm)
+        // has already posed the deformed buffer and left it in
+        // VERTEX_AND_CONSTANT_BUFFER.
+        if use_bindless
+            && self.draw.n_skinned > 0
+            && let (Some(bindless_pso), Some(bindless_root), Some(cull_sig), Some(deformed_vbv)) = (
                 self.cull.main_bindless_pso.as_ref(),
                 self.cull.main_bindless_root_sig.as_ref(),
                 self.cull.cull_command_signature.as_ref(),
                 self.skinned.deformed_vbvs.get(frame_idx),
-            ) {
-                let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
-                let bindless_pso =
-                    self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
-                let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.SetPipelineState(bindless_pso);
-                    cmd.SetGraphicsRootSignature(bindless_root);
-                    cmd.IASetPrimitiveTopology(
-                        windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-                    );
-                    // Bind the deformed verts + skinned IB; the records carry
-                    // base_vertex = 0 (the deformed buffer mirrors global skinned
-                    // indexing) and index offsets into the skinned IB.
-                    cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                    cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
-                    cmd.SetDescriptorHeaps(&[
-                        Some(self.descriptors.srv_heap.clone()),
-                        Some(self.descriptors.sampler_heap.clone()),
-                    ]);
-                    cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-                    cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-                    // [12] root SRV: per-scene GpuLight storage buffer (t1).
-                    cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
-                    // [13] ClusterParams (b5) + [14] the per-cluster light lists
-                    // (t2). The main camera shades from its cluster's lights.
-                    cmd.SetGraphicsRootConstantBufferView(
-                        13,
-                        self.cluster_params_gva(frame_idx, true),
-                    );
-                    cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-                    self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
-                    cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                    cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-                    cmd.SetGraphicsRootDescriptorTable(
-                        5,
-                        self.cull.bindless_pool_gpu[self.current_frame],
-                    );
-                    cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
-                    cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
-                    cmd.SetGraphicsRootShaderResourceView(8, object_gva);
-                    cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
-                    cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
-                    cmd.SetGraphicsRootConstantBufferView(
-                        11,
-                        com::gpu_va(&self.probe.set_cbvs[frame_idx]),
-                    );
-                    // ExecuteIndirect #2: skinned tail
-                    // `[skinned_record_base(), cull_count())`, byte-offset into the
-                    // same indirect command buffer.
-                    cmd.ExecuteIndirect(
-                        cull_sig,
-                        self.draw.n_skinned as u32,
-                        indirect,
-                        (self.skinned_record_base()
-                            * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
-                            as u64,
-                        None::<&ID3D12Resource>,
-                        0,
-                    );
-                }
-                self.inc_draw_calls(1);
-            }
-        } else if let (Some(skinned_pso), Some(skinned_root_sig)) =
-            (self.skinned.pso.as_ref(), self.skinned.root_sig.as_ref())
-            && !self.skinned.draw_objects.is_empty()
+            )
         {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
+            let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
+            let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
+            // SAFETY: the command list is in the recording state, and every resource,
+            // descriptor and slice these commands name is live for the call.
             unsafe {
-                cmd.SetPipelineState(
-                    self.wireframe_or(skinned_pso, self.wireframe.skinned.as_ref()),
-                );
-                cmd.SetGraphicsRootSignature(skinned_root_sig);
+                cmd.SetPipelineState(bindless_pso);
+                cmd.SetGraphicsRootSignature(bindless_root);
                 cmd.IASetPrimitiveTopology(
                     windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
                 );
-                cmd.IASetVertexBuffers(0, Some(&[self.skinned.vertex_buffer_view]));
+                // Bind the deformed verts + skinned IB; the records carry
+                // base_vertex = 0 (the deformed buffer mirrors global skinned
+                // indexing) and index offsets into the skinned IB.
+                cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
                 cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
-
-                cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-                cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-                cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-
                 cmd.SetDescriptorHeaps(&[
                     Some(self.descriptors.srv_heap.clone()),
                     Some(self.descriptors.sampler_heap.clone()),
                 ]);
+                cmd.SetGraphicsRootConstantBufferView(1, view_gva);
+                cmd.SetGraphicsRootConstantBufferView(2, light_gva);
+                // [12] root SRV: per-scene GpuLight storage buffer (t1).
+                cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
+                // [13] ClusterParams (b5) + [14] the per-cluster light lists
+                // (t2). The main camera shades from its cluster's lights.
+                cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
+                cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
+                self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
+                cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
                 cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
+                cmd.SetGraphicsRootDescriptorTable(
+                    5,
+                    self.cull.bindless_pool_gpu[self.current_frame],
+                );
                 cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
                 cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
-                // [9] SSAO occlusion SRV (or 1x1 white fallback).
+                cmd.SetGraphicsRootShaderResourceView(8, object_gva);
                 cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
-                // [10] root SRV: per-scene GpuLight storage buffer (t7).
-                cmd.SetGraphicsRootShaderResourceView(10, local_lights_gva);
-                // [11] ClusterParams (b4) + [12] the per-cluster light lists (t8).
-                cmd.SetGraphicsRootConstantBufferView(11, self.cluster_params_gva(frame_idx, true));
-                cmd.SetGraphicsRootShaderResourceView(12, self.cluster_list_gva());
-                self.bind_local_light_tables(cmd, super::LocalLightParams::INSTANCED);
+                cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
+                cmd.SetGraphicsRootConstantBufferView(
+                    11,
+                    com::gpu_va(&self.probe.set_cbvs[frame_idx]),
+                );
+                // ExecuteIndirect #2: skinned tail
+                // `[skinned_record_base(), cull_count())`, byte-offset into the
+                // same indirect command buffer.
+                cmd.ExecuteIndirect(
+                    cull_sig,
+                    self.draw.n_skinned as u32,
+                    indirect,
+                    (self.skinned_record_base()
+                        * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
+                        as u64,
+                    None::<&ID3D12Resource>,
+                    0,
+                );
             }
-
-            // Shared skinned traversal (gate + LOD pick); the closure owns
-            // the per-object joint SRV + draw. Skinned meshes with no
-            // authored alternates collapse to LOD0.
-            self.draw_skinned_objects(cam_pos, |obj, i, index_offset, index_count| {
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.SetGraphicsRootDescriptorTable(5, self.skinned_srv_gpu(i));
-                    let push = MainPush {
-                        model: obj.model,
-                        roughness: obj.material.roughness,
-                        metallic: obj.material.metallic,
-                        _mpad0: 0.0,
-                        _mpad1: 0.0,
-                        tint: obj.material.tint,
-                        _mpad2: 0.0,
-                        emissive: obj.material.emissive,
-                        _mpad3: 0.0,
-                    };
-                    cmd.SetGraphicsRoot32BitConstants(
-                        0,
-                        28,
-                        &push as *const MainPush as *const std::ffi::c_void,
-                        0,
-                    );
-                    // Root SRV at param [8]: this object's joint matrices.
-                    cmd.SetGraphicsRootShaderResourceView(8, self.skinned_joint_gva(frame_idx, i));
-                    cmd.DrawIndexedInstanced(index_count as u32, 1, index_offset as u32, 0, 0);
-                }
-                self.inc_draw_calls(1);
-            });
+            self.inc_draw_calls(1);
         }
 
         // Resolve the HDR scene target so the post stack can sample it. Under

@@ -1,23 +1,21 @@
 // Single-source engine shader programs for the Vulkan backend.
 //
 // Each program compiles a `.slang` file under `src/shaders/` (the
-// backend-neutral single-source directory) to SPIR-V at renderer init by
-// invoking slangc through `concinnity-slang`, cached in the content-addressed
-// shader cache exactly like the GLSL programs in
-// `builtins`. The runtime `POOL_SIZE` / `MAX_PROBES` values are injected as
-// `#define` lines into the source text, so the cache keys them the same way
-// the GLSL `{POOL_SIZE}` substitution always has.
+// backend-neutral single-source directory) to SPIR-V, at build time where the
+// host has slangc and at renderer init otherwise, cached in the
+// content-addressed shader cache. The runtime `POOL_SIZE` / `MAX_PROBES`
+// values are injected as `#define` lines into the source text, so the cache
+// keys them.
 //
 // The `[[vk::binding]]` annotations (and ParameterBlock member order) in the
-// sources reproduce the engine's existing descriptor-set layouts, so these
-// programs are drop-in replacements for the GLSL they superseded. slangc
-// names every single-entry SPIR-V entry point `main`, so pipeline stage
-// creation is unchanged too.
+// sources are the engine's descriptor-set layouts. slangc names every
+// single-entry SPIR-V entry point `main`, which is what pipeline stage creation
+// asks for.
 
-// Which runtime capacities a program bakes in as `#define`s. They ride the
-// source text rather than a command line so the shader cache keys them.
+/// Which runtime capacities a program bakes into its source as `#define`s.
+/// They ride the source text rather than a command line so the shader cache
+/// keys them.
 #[derive(Clone, Copy, PartialEq, Eq)]
-/// Which runtime capacities a program bakes into its source.
 pub enum Sizes {
     /// No size defines.
     None,
@@ -66,6 +64,35 @@ pub static MAIN_BINDLESS_FRAG: SlangProgram = SlangProgram {
     label: "frag_bindless.slang",
     gates: &[],
     sizes: Sizes::PoolAndProbes,
+    msaa: false,
+};
+/// `cull_kernel` from `cull.slang`: phase-1 draw cull.
+pub static CULL: SlangProgram = SlangProgram {
+    file: "cull.slang",
+    entry: "cull_kernel",
+    label: "cull.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
+/// `cull_kernel` from `cull.slang` under `CULL_PHASE2`: the two-pass occlusion
+/// re-test against the rebuilt Hi-Z pyramid.
+pub static CULL_PHASE2: SlangProgram = SlangProgram {
+    file: "cull.slang",
+    entry: "cull_kernel",
+    label: "cull_phase2.slang",
+    gates: &["CULL_PHASE2"],
+    sizes: Sizes::None,
+    msaa: false,
+};
+/// `cull_kernel` from `cull.slang` under `SHADOW_CULL`: light-frustum only,
+/// against the lean three-binding shadow cull set.
+pub static CULL_SHADOW: SlangProgram = SlangProgram {
+    file: "cull.slang",
+    entry: "cull_kernel",
+    label: "cull_shadow.slang",
+    gates: &["SHADOW_CULL"],
+    sizes: Sizes::None,
     msaa: false,
 };
 /// `light_cull_kernel` from `light_cull.slang`.
@@ -137,48 +164,12 @@ pub static PROBE_GGX: SlangProgram = SlangProgram {
 // it declares only the resources it binds; the `[[vk::binding]]` annotations
 // reproduce the descriptor sets the GLSL declared, so the SPIR-V is a drop-in
 // against the untouched pipeline layouts.
-/// `gbuffer_prepass_vertex` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_VERT: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex",
-    label: "gbuffer_prepass_vert.slang",
-    gates: &["GB_STATIC"],
-    sizes: Sizes::None,
-    msaa: false,
-};
-/// `gbuffer_prepass_vertex_instanced` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_VERT_INSTANCED: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex_instanced",
-    label: "gbuffer_prepass_vert_instanced.slang",
-    gates: &["GB_INSTANCED"],
-    sizes: Sizes::None,
-    msaa: false,
-};
-/// `gbuffer_prepass_vertex_skinned` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_VERT_SKINNED: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex_skinned",
-    label: "gbuffer_prepass_vert_skinned.slang",
-    gates: &["GB_SKINNED"],
-    sizes: Sizes::None,
-    msaa: false,
-};
 /// `gbuffer_prepass_vertex_bindless` from `gbuffer_prepass.slang`.
 pub static GBUFFER_BINDLESS_VERT: SlangProgram = SlangProgram {
     file: "gbuffer_prepass.slang",
     entry: "gbuffer_prepass_vertex_bindless",
     label: "gbuffer_prepass_vert_bindless.slang",
     gates: &["GB_BINDLESS"],
-    sizes: Sizes::None,
-    msaa: false,
-};
-/// `gbuffer_prepass_fragment` from `gbuffer_prepass.slang`.
-pub static GBUFFER_PREPASS_FRAG: SlangProgram = SlangProgram {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_fragment",
-    label: "gbuffer_prepass_frag.slang",
-    gates: &["GB_FRAGMENT"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -616,6 +607,9 @@ pub static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &LIGHT_CULL,
+    &CULL,
+    &CULL_PHASE2,
+    &CULL_SHADOW,
     &RT_SKIN,
     &HIZ_INIT_MSAA,
     &HIZ_INIT_SINGLE,
@@ -623,11 +617,7 @@ pub static ALL: &[&SlangProgram] = &[
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,
     &PROBE_GGX,
-    &GBUFFER_PREPASS_VERT,
-    &GBUFFER_PREPASS_VERT_INSTANCED,
-    &GBUFFER_PREPASS_VERT_SKINNED,
     &GBUFFER_BINDLESS_VERT,
-    &GBUFFER_PREPASS_FRAG,
     &GBUFFER_BINDLESS_FRAG,
     &SHADOW_VERT,
     &SKINNED_SHADOW_VERT,

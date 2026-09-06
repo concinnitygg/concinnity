@@ -41,37 +41,22 @@ pub(super) const CB_ALIGN: u64 = 256;
 // this count.
 pub(super) const MAX_SKINNED_OBJECTS: usize = 64;
 
-// Upper bound on the number of runtime-cloned static draw objects produced by
-// `world.jsonl` hot-reload (`cn debug` only). Each clone reserves its own
-// (albedo, normal) SRV pair in the descriptor heap, so the heap is sized for
-// `MAX_CLONE_DRAWS * 2` extra slots at init. Editor-only; exhausting the
-// pool means a long editing session has added more new Props than the cap;
-// `clone_static_draw_object` errors out at that boundary.
-pub(super) const MAX_CLONE_DRAWS: usize = 128;
-
 pub(super) fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
 }
 
 // One LOD bucket of an instanced cluster for the current frame. Filled by
-// `build_instance_upload` once at the top of every frame; consumed by
-// every instanced draw site so all passes agree on the per-instance LOD
-// pick + the bucket-ordered byte layout in the cluster's upload buffer.
+// `build_instance_upload` once at the top of every frame; consumed by the spot
+// shadow pass, which pushes each transform as a root constant.
 #[derive(Clone, Debug)]
 pub(super) struct InstanceBucketLayout {
-    // Byte offset of this bucket's matrices within the cluster's per-frame
-    // upload buffer. Pair with the cluster's upload-buffer GPU virtual
-    // address to point a root SRV at the bucket's slice.
-    pub instance_byte_offset: u64,
-    // Number of instance matrices in this bucket.
-    pub instance_count: u32,
     // LOD slice's index-buffer offset (in u32 indices). Drives the
     // `StartIndexLocation` arg of `DrawIndexedInstanced`.
     pub index_offset: usize,
     // LOD slice's index count.
     pub index_count: usize,
     // Bucket-ordered model matrices, sourced from `InstancedCluster::lod_buckets(cam_pos)`.
-    // Cached here so the shadow pass's per-instance iteration can read the
+    // Cached here so the spot shadow pass's per-instance iteration can read the
     // same data without re-bucketing.
     pub instances: Vec<[[f32; 4]; 4]>,
 }
@@ -174,8 +159,6 @@ pub(super) struct BloomState {
 // root SRV at t3 carries the per-object joint matrices); the shadow pass uses a
 // dedicated skinned shadow root signature.
 pub(super) struct SkinnedState {
-    pub pso: Option<ID3D12PipelineState>,
-    pub root_sig: Option<ID3D12RootSignature>,
     pub shadow_pso: Option<ID3D12PipelineState>,
     pub shadow_root_sig: Option<ID3D12RootSignature>,
     // Shared skinned vertex/index buffers. Kept alive for the GPU; referenced
@@ -192,8 +175,6 @@ pub(super) struct SkinnedState {
     pub joint_ptrs: Vec<Vec<*mut u8>>,
     // Current skinning matrices per skinned object, parallel to `draw_objects`.
     pub joint_matrices: Vec<Vec<[[f32; 4]; 4]>>,
-    // SRV-heap base slot of the skinned (albedo, normal) descriptor block.
-    pub srv_base_slot: usize,
     // GPU-driven main-pass skinning. `skin_pipeline` is the `rt_skin` compute
     // kernel reused to deform the bind-pose verts into a per-frame buffer for the
     // bindless main pass (independent of RT, which keeps its own skin dispatch);
@@ -236,16 +217,13 @@ pub(super) struct SkinnedState {
     pub deformed_primed: std::sync::atomic::AtomicBool,
 }
 
-// GPU-driven cull + bindless static main pass. A compute kernel
-// frustum/distance-tests the build-time static objects and writes one
-// `ExecuteIndirect` command per object; the bindless main pass issues the whole
-// buffer with one `ExecuteIndirect`. All `Some`/non-empty only when the world
-// uses the built-in bindless shader with build-time geometry; non-bindless
-// shaders keep the legacy per-draw CPU loop.
+// GPU-driven cull + main pass. A compute kernel frustum/distance-tests every
+// record and writes one `ExecuteIndirect` command per object; the main pass
+// issues each bucket's region with one `ExecuteIndirect`. All `Some`/non-empty
+// only when the world has anything to drive.
 pub(super) struct CullState {
-    // Bindless static main pass. `Some` only on the built-in shader; `None`
-    // keeps the legacy per-draw main pass. Streamed `VoxelWorld` chunks always
-    // keep the legacy pipeline.
+    // The main pass's root signature and bucket 0's PSO: the world default
+    // Shader's pair where the world declares one, the engine's pair otherwise.
     pub main_bindless_root_sig: Option<ID3D12RootSignature>,
     pub main_bindless_pso: Option<ID3D12PipelineState>,
     // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
@@ -371,13 +349,10 @@ pub(super) struct MeshStreamState {
 // chunks, disjoint from the build-time geometry and the mesh-streaming
 // allocators. `draw.objects` slots vacated by removed chunks are recycled
 // through the shared `DrawSlotAllocator` (`draw_slots`), so the draw list does
-// not grow without bound as the camera roams an infinite world. `srv_base_slot`
-// is the shared chunk (albedo, normal) pair's SRV-heap base, written by
-// `setup_chunk_streaming`. Empty until that runs.
+// not grow without bound as the camera roams an infinite world.
 pub(super) struct ChunkStreamState {
     pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    pub srv_base_slot: usize,
 }
 
 // Off-screen HDR scene target. The main + instanced passes render linear-light
@@ -443,24 +418,6 @@ pub(super) struct DecalState {
     pub state: Option<DecalResources>,
     pub records: Vec<Option<crate::gfx::decal::DecalRecord>>,
     pub free_slots: Vec<usize>,
-}
-
-// Runtime-clone (albedo, normal) descriptor pool for `clone_static_draw_object`
-// (runtime entity spawn + `world.jsonl` hot-reload). `MAX_CLONE_DRAWS` SRV pairs
-// are reserved at init starting at `srv_base_slot`; `count` is the high-water
-// mark of distinct pool offsets ever handed out (capped by `MAX_CLONE_DRAWS`).
-// A clone writes its pair at `srv_base_slot + offset * 2`. `slot_by_draw_idx`
-// maps a live clone's `draw_idx` to its pool offset so the legacy draw loop and
-// `rewrite_albedo_slot` / `rewrite_normal_slot` can find its descriptors. When a
-// clone is retired its offset returns to `free_offsets` for the next clone to
-// reuse (the clone re-points the offset's SRV pair before drawing), so steady
-// spawn/despawn churn does not exhaust the pool. Empty until the first clone
-// fires.
-pub(super) struct CloneState {
-    pub srv_base_slot: usize,
-    pub count: usize,
-    pub slot_by_draw_idx: std::collections::HashMap<usize, usize>,
-    pub free_offsets: Vec<usize>,
 }
 
 // Temporal upscaling (AMD FidelityFX FSR3 / DLSS / XeSS). `backend` is `Some`
@@ -732,41 +689,32 @@ pub(super) struct DxGeometry {
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
 }
 
-// Instanced-prop rendering (drawIndexedInstanced over `InstancedProp` clusters),
-// grouped off the flat `DxContext`. Mirrors Vulkan's `VkInstanced`. `root_sig` /
-// `pso` are `None` when no cluster was declared; the prefixes
-// (`main_instanced_` / `instanced_` / `instance_`) are dropped inside the struct.
+// Instanced-prop clusters, grouped off the flat `DxContext`. Mirrors Vulkan's
+// `VkInstanced`. Every instance folds into the GPU-driven cull records, so the
+// only per-instance walk left is the spot shadow pass.
 pub(super) struct DxInstanced {
-    pub root_sig: Option<ID3D12RootSignature>,
-    pub pso: Option<ID3D12PipelineState>,
     pub clusters: Vec<InstancedCluster>,
-    // Per-frame upload buffers holding the per-instance matrices for each
-    // cluster, indexed [frame_idx][cluster_idx]. Each row owns one buffer
-    // per cluster, sized to hold its instance count. Persistently mapped.
-    pub upload_buffers: Vec<Vec<PooledBuffer>>,
-    pub upload_ptrs: Vec<Vec<*mut u8>>,
+    // Whether any cluster declares LOD alternates. False skips the per-frame
+    // per-instance LOD patch: without alternates the base slice written into
+    // every frame's draw-args buffer at init is right for the world's life.
+    pub any_lod: bool,
     // Per-cluster LOD-bucket layout for the current frame. Filled at the top of
     // `record_frame` by `build_instance_upload`. `RwLock` (not `RefCell`)
-    // because the parallel-encoding executor fans the shadow / main / SSAO /
-    // SSR / TAA-velocity passes onto rayon workers that all `read()` this slice
-    // while encoding; the single writer runs on the main thread before fan-out.
+    // because the parallel-encoding executor fans the passes onto rayon workers
+    // that all `read()` this slice while encoding; the single writer runs on the
+    // main thread before fan-out.
     pub bucket_layouts: std::sync::RwLock<Vec<Vec<InstanceBucketLayout>>>,
 }
 
 // Shader-visible descriptor heaps + samplers + the scene texture pools, grouped
 // off the flat `DxContext`. DirectX's binding model couples these: the SRV heap
-// holds the per-object/per-cluster texture SRVs whose layout the `textures` /
-// `fallback_textures` pools feed, and the sampler heap holds the static
-// samplers. No direct Vulkan single-struct equivalent (VK keeps its textures +
-// samplers flat), so this is DX progress toward Metal's struct-of-structs. The
-// `draw.n_objects` / `draw.n_clusters` heap-layout counts stay flat on `DxContext` (read
-// widely; `draw.n_objects` also gates the cull path).
+// holds the flat texture pool the `textures` / `_fallback_textures` pools feed,
+// and the sampler heap holds the static samplers. No direct Vulkan
+// single-struct equivalent (VK keeps its textures + samplers flat), so this is
+// DX progress toward Metal's struct-of-structs.
 pub(super) struct DxDescriptors {
-    // CBV/SRV/UAV descriptor heap (shader-visible).
-    // Layout: [0]=shadow_map_array, [1]=irradiance_cube, [2]=prefilter_cube,
-    //         [3..3+2N]=per-object (albedo,normal) pairs,
-    //         [3+2N..3+2N+2C]=per-cluster pairs, then text atlases, the HDR
-    //         scene SRV, the bloom mip SRVs, and the 3D colour-grading LUT SRV.
+    // CBV/SRV/UAV descriptor heap (shader-visible). The slot map is
+    // `init/heap_layout.rs`.
     pub srv_heap: ID3D12DescriptorHeap,
     pub srv_descriptor_size: usize,
     // Base slot of the flat deduplicated bindless pool: `[albedo SRVs..] ++
@@ -774,7 +722,7 @@ pub(super) struct DxDescriptors {
     // slots per copy). The bindless main pass and the RT hit shader address
     // the current frame's copy by a flat index; the streaming-residency
     // rewrite re-points the one SRV per swapped pool slot in each copy as its
-    // frame fence-waits (in addition to the legacy per-object pairs).
+    // frame fence-waits.
     pub flat_pool_base_slot: usize,
     pub flat_pool_len: usize,
     // Base slot of the contiguous MAX_PROBES reflection-probe cube SRV block (the
@@ -799,12 +747,13 @@ pub(super) struct DxDescriptors {
     // Shared texture pool (kept alive). Every texture -- albedo, normal map,
     // emissive/ORM, terrain secondary -- lives here once at its handle, matching
     // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
-    // index directly into it. `fallback_textures` holds only the reserved
+    // index directly into it. `_fallback_textures` holds only the reserved
     // pair past the last real texture -- flat-normal for a normal-less draw,
     // then white for an albedo-less one; real normal maps and albedos are
-    // entries in `textures`.
+    // entries in `textures`. Held so the flat pool's fallback SRVs stay
+    // resident; nothing reads the resources back.
     pub textures: Vec<PooledTexture>,
-    pub fallback_textures: Vec<PooledTexture>,
+    pub _fallback_textures: Vec<PooledTexture>,
     // Held only to keep the text-atlas textures resident; the SRV handles
     // below are what the text pass actually binds.
     #[expect(
@@ -815,31 +764,17 @@ pub(super) struct DxDescriptors {
     pub text_atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
 }
 
-// The scene draw list plus the CPU cull inputs derived from it, and the record
-// counts that partition the GPU-driven bindless buffers.
+// The scene draw list plus the record counts that partition the GPU-driven
+// bindless buffers.
 pub(super) struct DrawState {
     pub objects: Vec<DrawObject>,
-    pub bvh: crate::gfx::bvh::Bvh,
-    pub always: Vec<u32>,
-    // Parallel to `objects`: true where that slot is a member of `always`, so
-    // `ensure_always_draw` adds a recycled slot at most once. A slot vacated by a
-    // culled static prop is not yet in `always`; one recycled from a chunk /
-    // clone already is.
-    pub always_member: Vec<bool>,
-    // Per-frame scratch for the legacy CPU draw path's visible set (BVH-culled
-    // cullables + `always` fallback). Wrapped in a RefCell because `record_frame`
-    // is &self (matches the existing per-frame interior-mutability pattern).
-    // Swapped out via `replace(Vec::new())` at the top of record_frame and put
-    // back at the bottom so the heap allocation is reused across frames instead
-    // of `Vec::with_capacity`'d each tick.
-    pub visible_scratch: RefCell<Vec<u32>>,
     // The last compiled frame graph, keyed by the `FrameGraphInputs` it was built
     // from. `build_frame_graph` is a pure function of those inputs (which change
     // only when a feature toggles or a target resizes), so a frame whose inputs
     // match the cached key reuses the compiled graph instead of rebuilding it.
-    // `RefCell` because `record_frame` is &self (matches `draw.visible_scratch`);
-    // taken out before `execute_graph` and put back after so a steady scene
-    // compiles the graph once and reuses it thereafter.
+    // `RefCell` because `record_frame` is &self; taken out before
+    // `execute_graph` and put back after so a steady scene compiles the graph
+    // once and reuses it thereafter.
     pub graph_cache: RefCell<
         Option<(
             crate::gfx::render_graph::FrameGraphInputs,
@@ -852,25 +787,27 @@ pub(super) struct DrawState {
     // Instanced-cluster instances folded into the GPU-driven bindless pass as
     // per-object `GpuObjectData` records after the `draw.n_objects` static records.
     pub n_instances: usize,
-    // Streamed-chunk record reserve folded into the GPU-driven bindless pass
-    // BETWEEN the instances and the skinned tail: the cull buffers reserve
-    // `[draw.n_objects + draw.n_instances, +draw.n_chunk)` at init (capacity = the worst-case
-    // resident chunk window). Resident chunks are packed into this region each
-    // frame (`build_object_buffer` / `build_draw_args_buffer`) and drawn by the
-    // static+instance prefix `ExecuteIndirect` (chunk geometry already lives in
-    // the shared VB/IB); the unused tail is disabled. 0 for a non-voxel world.
-    // Fixed at init, unlike `draw.n_skinned` (whose tail base sits past this reserve).
-    pub n_chunk: usize,
+    // Runtime record reserve folded into the GPU-driven bindless pass BETWEEN the
+    // instances and the skinned tail: the cull buffers reserve
+    // `[draw.n_objects + draw.n_instances, +draw.n_runtime)` at init. It holds
+    // both kinds of object that appear after init -- streamed `VoxelWorld` chunks
+    // (capacity = the worst-case resident window) and spawned clones (capacity =
+    // `MAX_CLONE_DRAWS`) -- because neither can join the build-time BVH and both
+    // already have their geometry in the shared VB/IB. Resident ones are packed
+    // into this region each frame (`build_object_buffer` / `build_draw_args_buffer`)
+    // and drawn by the static+instance prefix `ExecuteIndirect`; the unused tail
+    // is disabled. Fixed at init, unlike `draw.n_skinned` (whose tail base sits
+    // past this reserve).
+    pub n_runtime: usize,
     // Skinned draw objects folded into the GPU-driven bindless pass: each
     // occupies a `GpuObjectData` / `GpuDrawArgs` record at buffer index
-    // `draw.n_objects + draw.n_instances + k`, drawn (as rigid deformed geometry) by the
+    // `skinned_record_base() + k`, past the runtime reserve, drawn (as rigid deformed geometry) by the
     // main pass's 2nd `ExecuteIndirect`. The cull / object / draw-args / indirect
     // buffers reserve these slots at init (capacity threaded through `new`); this
     // count is set in `upload_skinned` once the skinned geometry is resident, so
     // it stays 0 (and `cull_count()` excludes the reserved tail) when no skinned
     // mesh loads.
     pub n_skinned: usize,
-    pub n_clusters: usize,
 }
 
 // The frame's view state, snapped from `FrameParams` at the top of `draw_frame`.
@@ -1129,10 +1066,8 @@ pub(crate) struct DxContext {
     pub(super) uniforms: DxUniforms,
 
     // Root signatures + PSOs
-    pub(super) main_root_sig: ID3D12RootSignature,
-    pub(super) main_pso: ID3D12PipelineState,
-    // GPU-driven cull + bindless static main pass. All `Some`/non-empty only
-    // on the bindless path with build-time geometry. See [`CullState`].
+    // GPU-driven cull + main pass. All `Some`/non-empty only when the world has
+    // anything to drive. See [`CullState`].
     pub(super) cull: CullState,
     // Clustered light binning: the compute pipeline (built only when the world
     // has local lights), the per-cluster light-index buffer, and the per-frame
@@ -1277,11 +1212,10 @@ pub(crate) struct DxContext {
 
     pub(super) stream: StreamState,
 
-    // Instanced-prop pipeline + per-frame upload buffers + LOD buckets. See
-    // `DxInstanced`.
+    // Instanced-prop per-frame upload buffers + LOD buckets. See `DxInstanced`.
     pub(super) instanced: DxInstanced,
     pub(super) view: ViewState,
-    // Lazily-built wireframe twins of the main-pass pipelines; empty until the
+    // Lazily-built wireframe twin of the main-pass pipeline; empty until the
     // first Wireframe frame. See [`super::wireframe`].
     pub(super) wireframe: super::wireframe::DxWireframe,
 
@@ -1307,9 +1241,6 @@ pub(crate) struct DxContext {
     // ×X.X` chip. Mirrors `MtlContext.max_edr`.
     pub(super) max_edr: Option<f32>,
 
-    // Runtime-clone (albedo, normal) descriptor pool. See [`CloneState`].
-    pub(super) clone: CloneState,
-
     // Per-pass GPU timestamp queries. Read at the top of `draw_frame` after
     // the matching fence wait so the CPU sees a fully committed block.
     pub(super) timestamps: TimestampState,
@@ -1322,6 +1253,10 @@ pub(crate) struct DxContext {
 
     // Shader hot-reload state. See [`HotReloadState`].
     pub(super) hot_reload: HotReloadState,
+    // The world default Shader's compiled programs, `None` for the engine's
+    // own. Kept past init so the built-in shader reload rebuilds bucket 0 from
+    // the world's pair rather than the engine's.
+    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
 
     // Fixed descriptor-heap slots for the live-toggleable Quality effects (TAA /
     // SSAO / SSR / SSGI / RT-reflection output). Minted once at init (the slots
@@ -1980,33 +1915,16 @@ impl DxContext {
     // from the main / shadow / velocity passes) and `resident` (drops it from
     // the ray-tracing BLAS / geometry-table rebuild), so it leaves no ghost in
     // any pass, then return its slot to the free list so the next runtime clone
-    // (or streamed chunk) recycles it. The geometry buffers stay allocated. If
-    // the slot held a runtime clone, its descriptor-pool offset is freed too so
-    // a steady spawn/despawn cadence does not exhaust the clone pool. No-op if
-    // the index is out of range.
+    // (or streamed chunk) recycles it. The geometry buffers stay allocated.
+    // No-op if the index is out of range.
     pub(crate) fn retire_draw_object(&mut self, index: usize) {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = false;
             obj.resident = false;
-            if let Some(offset) = self.clone.slot_by_draw_idx.remove(&index) {
-                self.clone.free_offsets.push(offset);
-            }
             // Slot recycling lives in the engine's draw-slot allocator; only
             // the runtime-append region recycles here (`reuses_build_slots` is
             // false because the init-time cull BVH and RT `object_indices` key
             // fixed build-time slots and cannot refit).
-        }
-    }
-
-    // Add a draw slot to `draw.always` if it is not already a member. Runtime
-    // draws (chunks, spawned clones) are drawn unconditionally because the
-    // init-time BVH cannot refit to admit them; a slot recycled from a culled
-    // static prop is not yet in `draw.always` and must be added, while one
-    // recycled from another chunk / clone already is.
-    pub(super) fn ensure_always_draw(&mut self, slot: usize) {
-        if !self.draw.always_member[slot] {
-            self.draw.always.push(slot as u32);
-            self.draw.always_member[slot] = true;
         }
     }
 
@@ -2506,49 +2424,6 @@ impl DxContext {
             memory_budget_bytes: dedicated,
             unified_memory: !discrete,
             discrete,
-        }
-    }
-
-    // GPU descriptor handle for the per-object (albedo, normal) SRV pair.
-    pub(super) fn object_srv_gpu(&self, obj_idx: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        // albedo slot = 1 + obj_idx*2; descriptor table covers 2 SRVs from there.
-        let slot = 3 + obj_idx * 2;
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu_base.ptr + (slot * self.descriptors.srv_descriptor_size) as u64,
-        }
-    }
-
-    // GPU descriptor handle for the per-cluster (albedo, normal) SRV pair.
-    pub(super) fn cluster_srv_gpu(&self, cluster_idx: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        let slot = 3 + self.draw.n_objects * 2 + cluster_idx * 2;
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu_base.ptr + (slot * self.descriptors.srv_descriptor_size) as u64,
-        }
-    }
-
-    // GPU descriptor handle for skinned object `i`'s (albedo, normal) SRV pair.
-    pub(super) fn skinned_srv_gpu(&self, i: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        let slot = self.skinned.srv_base_slot + i * 2;
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu_base.ptr + (slot * self.descriptors.srv_descriptor_size) as u64,
         }
     }
 }

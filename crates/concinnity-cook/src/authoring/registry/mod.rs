@@ -16,7 +16,6 @@
 pub mod build_only;
 
 use crate::result::CnResult;
-use concinnity_core::platform::Platform;
 
 pub use build_only::BuildOnlyAsset;
 pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
@@ -143,17 +142,13 @@ macro_rules! __meta_args_name {
 
 // Apply the entry's bake-time validator (`validate: <fn>`, from
 // `crate::authoring::validate`) to a typed value; identity when the entry
-// declares none. A `validate_for: <fn>` entry takes the cooked shader platform
-// alongside the value.
+// declares none.
 macro_rules! __meta_validate {
-    ($val:expr, $p:expr;) => { $val };
-    ($val:expr, $p:expr; validate: $f:ident $($r:tt)*) => {
+    ($val:expr;) => { $val };
+    ($val:expr; validate: $f:ident $($r:tt)*) => {
         crate::authoring::validate::$f($val)
     };
-    ($val:expr, $p:expr; validate_for: $f:ident $($r:tt)*) => {
-        crate::authoring::validate::$f($val, $p)
-    };
-    ($val:expr, $p:expr; $t:tt $($r:tt)*) => { __meta_validate!($val, $p; $($r)*) };
+    ($val:expr; $t:tt $($r:tt)*) => { __meta_validate!($val; $($r)*) };
 }
 
 // The `refs: [ ... ]` reference-field list; empty when absent.
@@ -396,11 +391,7 @@ macro_rules! define_registered_type {
             /// type the args ARE the component; a divergent type (`args:`
             /// metadata) routes through its `bake` translation in
             /// `bake_divergent`.
-            pub fn reserialize_args(
-                self,
-                args: &serde_json::Value,
-                platform: Platform,
-            ) -> Result<Vec<u8>, CnResult> {
+            pub fn reserialize_args(self, args: &serde_json::Value) -> Result<Vec<u8>, CnResult> {
                 // Deserializing the args interns any name-string cross-reference,
                 // which needs the name resolver installed. The build pipeline
                 // resets the interner before it gets here; installing it again is
@@ -415,7 +406,7 @@ macro_rules! define_registered_type {
                             )
                             .map_err(json_args_err)?;
                             Ok(postcard::to_allocvec(
-                                &__meta_validate!(typed, platform; $($meta)*),
+                                &__meta_validate!(typed; $($meta)*),
                             )?)
                         }
                     ),+
@@ -429,7 +420,6 @@ macro_rules! define_registered_type {
             pub fn normalized_args(
                 self,
                 args: &serde_json::Value,
-                platform: Platform,
             ) -> Result<serde_json::Value, CnResult> {
                 crate::ecs::asset_id::ensure_name_resolver();
                 match self {
@@ -439,7 +429,7 @@ macro_rules! define_registered_type {
                                 args.clone(),
                             )
                             .map_err(json_args_err)?;
-                            serde_json::to_value(&__meta_validate!(typed, platform; $($meta)*))
+                            serde_json::to_value(&__meta_validate!(typed; $($meta)*))
                                 .map_err(json_args_err)
                         }
                     ),+
@@ -931,12 +921,12 @@ mod tests {
     fn reserialize_args_round_trips_and_rejects_bad_types() {
         let ty = RegisteredType::parse("ProceduralMesh").unwrap();
         let bytes = ty
-            .reserialize_args(&serde_json::json!({ "source": "a.glb" }), Platform::Metal)
+            .reserialize_args(&serde_json::json!({ "source": "a.glb" }))
             .unwrap();
         let back: crate::components::ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.source.as_deref(), Some("a.glb"));
         assert_eq!(
-            ty.reserialize_args(&serde_json::json!({ "source": 42 }), Platform::Metal)
+            ty.reserialize_args(&serde_json::json!({ "source": 42 }))
                 .unwrap_err(),
             CnResult::InvalidArgument
         );
@@ -946,12 +936,12 @@ mod tests {
     fn normalized_args_fills_defaults_and_rejects_bad_types() {
         let ty = RegisteredType::parse("ProceduralMesh").unwrap();
         let back = ty
-            .normalized_args(&serde_json::json!({ "generator": "box" }), Platform::Metal)
+            .normalized_args(&serde_json::json!({ "generator": "box" }))
             .unwrap();
         assert_eq!(back["generator"], "box");
         assert!(back.get("half_width").is_some(), "defaults fill in");
         assert_eq!(
-            ty.normalized_args(&serde_json::json!({ "generator": 42 }), Platform::Metal)
+            ty.normalized_args(&serde_json::json!({ "generator": 42 }))
                 .unwrap_err(),
             CnResult::InvalidArgument
         );

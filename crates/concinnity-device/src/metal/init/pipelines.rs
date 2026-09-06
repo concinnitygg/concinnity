@@ -2,44 +2,36 @@
 //
 // Core render-pipeline construction extracted from MtlContext::new:
 //   * The shared vertex descriptor (interleaved [pos, normal, tangent, color, uv]).
-//   * The main static pipeline (with optional bindless fragment + GPU-driven
-//     cull pipeline + bindless texture argument encoder).
-//   * The optional instanced pipeline.
+//   * The main static pipeline (with its GPU-driven cull pipeline and the
+//     bindless texture argument encoder).
 //   * The shared depth-stencil state used by main + shadow passes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLArgumentEncoder, MTLCompareFunction, MTLComputePipelineState, MTLDepthStencilDescriptor,
-    MTLDepthStencilState, MTLDevice, MTLFunction as _, MTLLibrary as _, MTLPixelFormat,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat,
-    MTLVertexStepFunction,
+    MTLArgumentEncoder, MTLCompareFunction, MTLDepthStencilDescriptor, MTLDepthStencilState,
+    MTLDevice, MTLFunction as _, MTLLibrary as _, MTLPixelFormat, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use crate::gfx::mesh_payload::Vertex;
 use crate::metal::context::{
     BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT,
 };
-use crate::metal::cull::build_cull_pipeline;
+use crate::metal::cull::{CullPipeline, build_cull_pipeline};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use crate::metal::pipeline::{load_library, ns_str, stage_library};
+use crate::metal::pipeline::{ns_str, world_library};
+use concinnity_core::components::ShaderPrograms;
 
 pub(crate) struct MainPipelineBundle {
     pub pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    pub bindless: bool,
-    pub cull_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    pub cull_icb_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
-    // Phase-2 cull pipeline + its ICB argument encoder for two-pass
-    // occlusion. Built alongside the phase-1 cull pipeline whenever the
-    // bindless path is active (cheap: one extra compute pipeline from the
-    // same library); only used when `occlusion_two_pass` is on at runtime.
-    pub cull_pipeline_phase2: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    pub cull_icb2_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+    // The GPU-driven cull's pipelines, phase 2 included: it is built whenever
+    // the bindless path is active (cheap: one extra compute pipeline) and only
+    // used when `occlusion_two_pass` is on at runtime.
+    pub cull: CullPipeline,
     pub bindless_tex_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
-    // Encoder for the engine sampler block at buffer(10). `Some` only for the
-    // engine's single-source program: world-authored bindless fragments keep
-    // their own inline samplers and declare no sampler block.
+    // Encoder for the engine sampler block at buffer(10).
     pub bindless_sampler_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
 }
 
@@ -88,64 +80,50 @@ pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     )
 }
 
-// Build the main static pipeline together with everything it implies:
-//
-//   * If the fragment library exposes `fragment_main_bindless`, the static main
-//     pass is GPU-driven. That requires:
-//       - the pipeline to opt into indirect command buffers
-//       - a compute cull pipeline + ICB argument encoder
-//       - an argument encoder for the BindlessTextures argument buffer
-//   * Otherwise the pipeline pairs with the per-draw `fragment_main` and the
-//     three Optional fields are `None`.
+// Build the main static pipeline together with everything the GPU-driven pass
+// implies: the pipeline opts into indirect command buffers, and a compute cull
+// pipeline, an ICB argument encoder and the BindlessTextures argument encoder
+// come with it. The pair is the engine's own, or the world Shader's compile of
+// the same source.
 pub(crate) fn build_main_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
-    vert_lib_bytes: &[u8],
-    frag_lib_bytes: &[u8],
+    world: Option<&ShaderPrograms>,
     hot_reload: bool,
 ) -> Result<MainPipelineBundle, String> {
-    // Fully engine-supplied stages ship from the single-source Slang program,
-    // which is always bindless (the engine has no per-draw static path of its
-    // own any more). A world-authored stage keeps the legacy detection: a
-    // fragment exposing `fragment_main_bindless` picks the GPU-driven path,
-    // anything else the per-draw one. A world vertex paired with the engine
-    // fragment stays on the per-draw pairing: the Slang fragment's varying
-    // names cannot interface-match a hand-written vertex stage.
-    let engine_stages = vert_lib_bytes.is_empty() && frag_lib_bytes.is_empty();
-
-    let (vert_fn, main_frag_fn, bindless, engine_single_source) = if engine_stages {
-        let vert_library = super::super::slang_shaders::MAIN_BINDLESS_VERT
-            .library(device, hot_reload)
-            .map_err(|e| format!("failed to load engine vertex library: {e}"))?;
-        let frag_library = super::super::slang_shaders::MAIN_BINDLESS_FRAG
-            .library(device, hot_reload)
-            .map_err(|e| format!("failed to load engine fragment library: {e}"))?;
-        let vert_fn = vert_library
-            .newFunctionWithName(&ns_str("vertex_main_bindless"))
-            .ok_or("vertex_main_bindless not found in engine library")?;
-        let frag_fn = frag_library
-            .newFunctionWithName(&ns_str("fragment_main_bindless"))
-            .ok_or("fragment_main_bindless not found in engine library")?;
-        (vert_fn, frag_fn, true, true)
-    } else {
-        let vert_library = stage_library(device, hot_reload, vert_lib_bytes)
-            .map_err(|e| format!("failed to load vertex metallib: {}", e))?;
-        let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
-            .map_err(|e| format!("failed to load fragment metallib: {}", e))?;
-        let vert_fn = vert_library
-            .newFunctionWithName(&ns_str("vertex_main"))
-            .ok_or("vertex_main not found in metallib")?;
-        let bindless_frag_fn = frag_library.newFunctionWithName(&ns_str("fragment_main_bindless"));
-        let bindless = bindless_frag_fn.is_some();
-        let frag_fn = match bindless_frag_fn {
-            Some(f) => f,
-            None => frag_library
-                .newFunctionWithName(&ns_str("fragment_main"))
-                .ok_or("fragment_main not found in metallib")?,
-        };
-        (vert_fn, frag_fn, bindless, false)
+    // Both pairs come from the single-source bindless program: the engine's
+    // own, or the world's compile of the same file with its hooks spliced in.
+    // The static pass is always GPU-driven now.
+    let (vert_fn, main_frag_fn) = match world {
+        None => {
+            let vert_library = super::super::slang_shaders::MAIN_BINDLESS_VERT
+                .library(device, hot_reload)
+                .map_err(|e| format!("failed to load engine vertex library: {e}"))?;
+            let frag_library = super::super::slang_shaders::MAIN_BINDLESS_FRAG
+                .library(device, hot_reload)
+                .map_err(|e| format!("failed to load engine fragment library: {e}"))?;
+            let vert_fn = vert_library
+                .newFunctionWithName(&ns_str("vertex_main_bindless"))
+                .ok_or("vertex_main_bindless not found in engine library")?;
+            let frag_fn = frag_library
+                .newFunctionWithName(&ns_str("fragment_main_bindless"))
+                .ok_or("fragment_main_bindless not found in engine library")?;
+            (vert_fn, frag_fn)
+        }
+        Some(programs) => {
+            // One library holds the pair: the cook groups the bindless
+            // entries into one MSL translation unit on this host.
+            let library = world_library(device, hot_reload, programs, "fragment_main_bindless")
+                .map_err(|e| format!("failed to load the world's main library: {e}"))?;
+            let vert_fn = library
+                .newFunctionWithName(&ns_str("vertex_main_bindless"))
+                .ok_or("vertex_main_bindless not found in the world's main library")?;
+            let frag_fn = library
+                .newFunctionWithName(&ns_str("fragment_main_bindless"))
+                .ok_or("fragment_main_bindless not found in the world's main library")?;
+            (vert_fn, frag_fn)
+        }
     };
-
     let pipeline_desc = MTLRenderPipelineDescriptor::new();
     pipeline_desc.setVertexDescriptor(Some(vert_desc));
     pipeline_desc.setVertexFunction(Some(&vert_fn));
@@ -162,68 +140,54 @@ pub(crate) fn build_main_pipeline(
             .setPixelFormat(MTLPixelFormat::RGBA16Float);
     }
     pipeline_desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-    if bindless {
-        pipeline_desc.setSupportIndirectCommandBuffers(true);
-    }
+    pipeline_desc.setSupportIndirectCommandBuffers(true);
 
     let pipeline_state = device
         .newRenderPipelineStateWithDescriptor_error(&pipeline_desc)
         .map_err(|e| format!("failed to create pipeline state: {:?}", e))?;
 
-    let (cull_pipeline, cull_icb_arg_encoder, cull_pipeline_phase2, cull_icb2_arg_encoder) =
-        if bindless {
-            let cull = build_cull_pipeline(device, hot_reload)?;
-            (
-                Some(cull.state),
-                Some(cull.icb_arg_encoder),
-                Some(cull.state_phase2),
-                Some(cull.icb2_arg_encoder),
-            )
-        } else {
-            (None, None, None, None)
-        };
+    let cull = build_cull_pipeline(device, hot_reload)?;
 
-    // Argument encoder for the bindless pass's `BindlessTextures` buffer.
-    // Derived from `fragment_main_bindless`'s buffer(7) parameter.
-    let bindless_tex_arg_encoder = if bindless {
-        // SAFETY: BINDLESS_TEXTURE_ARG_BUFFER_INDEX is the static buffer
-        // index `fragment_main_bindless` declares its argument buffer at.
-        Some(unsafe {
-            main_frag_fn.newArgumentEncoderWithBufferIndex(BINDLESS_TEXTURE_ARG_BUFFER_INDEX)
-        })
-    } else {
-        None
+    // The argument encoders for the `BindlessTextures` buffer at buffer(7) and
+    // the sampler block at buffer(10) describe the engine's layouts, so they
+    // come from the engine's own fragment. A world's compile of the same file
+    // declares the same blocks, but a `shade` that samples nothing lets the
+    // compiler drop them, and an encoder cannot be derived from a parameter
+    // that is not there.
+    let encoder_frag_fn = match world {
+        None => main_frag_fn.clone(),
+        Some(_) => super::super::slang_shaders::entry_function(
+            device,
+            &super::super::slang_shaders::MAIN_BINDLESS_FRAG,
+            hot_reload,
+        )?,
     };
-
-    // The engine's single-source fragment reaches its samplers through the
-    // block at buffer(10) (indirect-command execution cannot see encoder-bound
-    // sampler state); world-authored fragments keep inline samplers instead.
-    let bindless_sampler_arg_encoder = if engine_single_source {
-        // SAFETY: BINDLESS_SAMPLER_ARG_BUFFER_INDEX is the static buffer index
-        // the engine fragment declares its sampler block at (locked by the
-        // build script's ABI assertion).
-        Some(unsafe {
-            main_frag_fn.newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX)
-        })
-    } else {
-        None
+    // SAFETY: both indices are the static buffer indices the engine fragment
+    // declares its argument buffers at (locked by the build script's ABI
+    // assertion).
+    let (bindless_tex_arg_encoder, bindless_sampler_arg_encoder) = unsafe {
+        (
+            Some(
+                encoder_frag_fn
+                    .newArgumentEncoderWithBufferIndex(BINDLESS_TEXTURE_ARG_BUFFER_INDEX),
+            ),
+            Some(
+                encoder_frag_fn
+                    .newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX),
+            ),
+        )
     };
 
     Ok(MainPipelineBundle {
         pipeline_state,
-        bindless,
-        cull_pipeline,
-        cull_icb_arg_encoder,
-        cull_pipeline_phase2,
-        cull_icb2_arg_encoder,
+        cull,
         bindless_tex_arg_encoder,
         bindless_sampler_arg_encoder,
     })
 }
 
 // Write the engine sampler block once: the pool sampler (trilinear +
-// anisotropic + repeat, the same object the legacy path binds), the shadow
-// compare sampler, and the cube sampler. Member order mirrors EngineSamplers
+// anisotropic + repeat), the shadow compare sampler, and the cube sampler. Member order mirrors EngineSamplers
 // in `src/shaders/main_bindless.slang`. Samplers never stream, so unlike the
 // texture argument buffer this is written a single time at init.
 pub(crate) fn build_bindless_sampler_args(
@@ -257,9 +221,7 @@ pub(crate) type WorldPipelineTable =
 // Pipelines for the material-referenced world shaders past the default
 // (ShaderHandle 1..), in bucket order. Extra world shaders render only through
 // the GPU-driven bindless path (the cull kernel routes their draws into
-// per-bucket ICBs), so each fragment library must expose
-// `fragment_main_bindless` with the engine's BindlessTextures layout; a shader
-// without it is a hard error rather than a silently default-shaded bucket.
+// per-bucket ICBs), from the bindless pair the cook compiled for each.
 //
 // A bucket flagged `deferred` (its Shader is owned by a scene that has not
 // pinned) stays `None` until
@@ -267,22 +229,23 @@ pub(crate) type WorldPipelineTable =
 pub(crate) fn build_world_pipeline_table(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
-    extra_shaders: &[crate::gfx::backend_init::ShaderBytes<'_>],
+    extra_shaders: &[crate::gfx::backend_init::WorldShader<'_>],
+    hot_reload: bool,
 ) -> Result<WorldPipelineTable, String> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
         // A bucket whose Shader a non-start scene owns has no payload yet; the
         // streaming pump installs it when that scene pins.
-        if shader.deferred {
+        let Some(programs) = shader.programs.filter(|_| !shader.deferred) else {
             table.push(None);
             continue;
-        }
+        };
         table.push(Some(build_bucket_pipeline(
             device,
             vert_desc,
             i + 1,
-            shader.vert,
-            shader.frag,
+            programs,
+            hot_reload,
         )?));
     }
     Ok(table)
@@ -293,24 +256,17 @@ pub(crate) fn build_bucket_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     bucket: usize,
-    vert_bytes: &[u8],
-    frag_bytes: &[u8],
+    programs: &ShaderPrograms,
+    hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_library = load_library(device, vert_bytes)
-        .map_err(|e| format!("shader bucket {bucket}: failed to load vertex metallib: {e}"))?;
-    let frag_library = load_library(device, frag_bytes)
-        .map_err(|e| format!("shader bucket {bucket}: failed to load fragment metallib: {e}"))?;
-    let vert_fn = vert_library
-        .newFunctionWithName(&ns_str("vertex_main"))
-        .ok_or_else(|| format!("shader bucket {bucket}: vertex_main not found in metallib"))?;
-    let frag_fn = frag_library
+    let library = world_library(device, hot_reload, programs, "fragment_main_bindless")
+        .map_err(|e| format!("shader bucket {bucket}: {e}"))?;
+    let vert_fn = library
+        .newFunctionWithName(&ns_str("vertex_main_bindless"))
+        .ok_or_else(|| format!("shader bucket {bucket}: vertex_main_bindless not found"))?;
+    let frag_fn = library
         .newFunctionWithName(&ns_str("fragment_main_bindless"))
-        .ok_or_else(|| {
-            format!(
-                "shader bucket {bucket}: fragment_main_bindless not found in metallib -- a \
-                 material-referenced Shader must define the bindless entry points"
-            )
-        })?;
+        .ok_or_else(|| format!("shader bucket {bucket}: fragment_main_bindless not found"))?;
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(vert_desc));
@@ -330,56 +286,6 @@ pub(crate) fn build_bucket_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| format!("shader bucket {bucket}: failed to create pipeline: {e:?}"))
-}
-
-// Optional instanced pipeline: pairs vertex_main_instanced with the existing
-// fragment_main. Built only when both an instanced vertex shader payload is
-// supplied AND at least one cluster needs to render.
-pub(crate) fn build_instanced_pipeline(
-    device: &ProtocolObject<dyn MTLDevice>,
-    vert_desc: &MTLVertexDescriptor,
-    vert_instanced_lib_bytes: &[u8],
-    frag_lib_bytes: &[u8],
-    has_clusters: bool,
-    hot_reload: bool,
-) -> Result<Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>, String> {
-    if !has_clusters {
-        return Ok(None);
-    }
-
-    let inst_library = stage_library(device, hot_reload, vert_instanced_lib_bytes)
-        .map_err(|e| format!("failed to load instanced vertex metallib: {}", e))?;
-    let inst_vert_fn = inst_library
-        .newFunctionWithName(&ns_str("vertex_main_instanced"))
-        .ok_or("vertex_main_instanced not found in instanced metallib")?;
-
-    // The instanced pipeline always pairs with the per-draw fragment_main
-    // (bindless is static-only).
-    let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
-        .map_err(|e| format!("failed to load fragment metallib: {}", e))?;
-    let frag_fn = frag_library
-        .newFunctionWithName(&ns_str("fragment_main"))
-        .ok_or("fragment_main not found in metallib")?;
-
-    let inst_pipeline_desc = MTLRenderPipelineDescriptor::new();
-    inst_pipeline_desc.setVertexDescriptor(Some(vert_desc));
-    inst_pipeline_desc.setVertexFunction(Some(&inst_vert_fn));
-    inst_pipeline_desc.setFragmentFunction(Some(&frag_fn));
-    inst_pipeline_desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        inst_pipeline_desc
-            .colorAttachments()
-            .objectAtIndexedSubscript(0)
-            .setPixelFormat(MTLPixelFormat::RGBA16Float);
-    }
-    inst_pipeline_desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-
-    let ps = device
-        .newRenderPipelineStateWithDescriptor_error(&inst_pipeline_desc)
-        .map_err(|e| format!("failed to create instanced pipeline state: {:?}", e))?;
-    Ok(Some(ps))
 }
 
 // Shadow pipeline: depth-only, no fragment function, no MSAA. Compiled from the
@@ -408,7 +314,7 @@ pub(crate) fn build_shadow_pipeline(
 
 // GPU-driven cascaded-shadow render pipeline: depth-only, no
 // fragment, no MSAA, but `supportIndirectCommandBuffers` so each cascade's
-// casters can draw through the shadow ICB the `cull_encode_shadow` kernel
+// casters can draw through the shadow ICB the shadow cull's encode dispatch
 // fills. Entry `shadow_vertex_bindless` reads the per-object model matrix from
 // the GpuObjectData buffer at buffer(9) by `[[base_instance]]` (the record id
 // the cull baked), exactly like the main bindless `vertex_main`. Reuses the

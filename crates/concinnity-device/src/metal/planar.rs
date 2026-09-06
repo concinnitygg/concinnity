@@ -19,12 +19,10 @@
 // so geometry visible only in the reflection (behind or beside the main camera,
 // outside its frustum) is captured, not just the main camera's visible set. The
 // reflected view-proj carries the oblique near-plane clip, so the extracted
-// frustum also rejects geometry behind the reflector. On the bindless path the GPU
-// cull kernel re-runs into that plane's own mirror ICB (`encode_mirror_cull`),
-// which the face render executes; on the non-bindless path the CPU cull re-runs
-// against the reflected frustum (`reflected_visible_set`) into a per-frame scratch
-// list the legacy face render draws. The matrices + frustum come from the pure,
-// unit-tested `gfx::planar_reflection` + `gfx::frustum`.
+// frustum also rejects geometry behind the reflector. The GPU cull kernel
+// re-runs into that plane's own mirror ICB (`encode_mirror_cull`), which the
+// face render executes. The matrices + frustum come from the pure, unit-tested
+// `gfx::planar_reflection` + `gfx::frustum`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -173,11 +171,6 @@ impl MtlContext {
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
         let proj = mat4_mul(params.vp, mat4_inverse(self.view.matrix));
-        // Reused across planes for the non-bindless CPU reflected-frustum cull:
-        // `reflected_visible_set` clears it each plane, so one allocation serves
-        // the whole frame. Unused on the bindless path (the GPU mirror cull drives
-        // the face render through the mirror ICB instead).
-        let mut reflected_visible: Vec<u32> = Vec::new();
         for (slot, (plane, targets)) in set.planes.iter().zip(set.targets.iter()).enumerate() {
             let oriented =
                 crate::gfx::planar_reflection::orient_plane_toward(*plane, params.cam_pos);
@@ -195,39 +188,22 @@ impl MtlContext {
             // carries the oblique near-plane clip, so its extracted frustum also
             // rejects geometry behind the reflector.
             let mirror_frustum = crate::gfx::frustum::Frustum::from_view_projection(m.view_proj);
-            let (icb_override, visible): (
-                Option<&ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
-                &[u32],
-            ) = if let (Some(object_buffer), Some(draw_args)) =
-                (params.object_buffer, params.draw_args_buffer)
-            {
-                // Bindless path: the GPU cull kernel re-runs into this plane's
-                // mirror ICB, which the face render executes (`icb_override`); the
-                // CPU `visible` slice is unused on the bindless static path.
-                self.encode_mirror_cull(
-                    cmd_buf,
-                    object_buffer,
-                    draw_args,
-                    &mirror_frustum,
-                    m.eye,
-                    slot,
-                )?;
-                (
-                    self.cull.mirror_slots.get(slot).map(|s| s.icb.as_ref()),
-                    params.visible,
-                )
-            } else {
-                // Non-bindless path: no GPU cull to mirror. Re-cull the CPU visible
-                // set against the reflected frustum so the legacy face render draws
-                // the reflection's geometry instead of the main camera's set.
-                crate::gfx::planar_reflection::reflected_visible_set(
-                    &self.draw.bvh,
-                    &mirror_frustum,
-                    m.eye,
-                    &self.draw.always,
-                    &mut reflected_visible,
-                );
-                (None, reflected_visible.as_slice())
+            // The GPU cull kernel re-runs into this plane's mirror ICB, which
+            // the face render executes. A frame with no cull records has no
+            // mirror to fill, and the face render then draws nothing.
+            let icb_override = match (params.object_buffer, params.draw_args_buffer) {
+                (Some(object_buffer), Some(draw_args)) => {
+                    self.encode_mirror_cull(
+                        cmd_buf,
+                        object_buffer,
+                        draw_args,
+                        &mirror_frustum,
+                        m.eye,
+                        slot,
+                    )?;
+                    self.cull.mirror_slots.get(slot).map(|s| s.icb.as_ref())
+                }
+                _ => None,
             };
 
             self.encode_main_into_face(
@@ -243,11 +219,6 @@ impl MtlContext {
                     vp: m.view_proj,
                     view: m.view,
                     cam_pos: m.eye,
-                },
-                crate::metal::draw::main::DrawInputs {
-                    visible,
-                    prepared_instances: params.prepared_instances,
-                    skinned_joint_bufs: params.skinned_joint_bufs,
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
                     object_buffer: params.object_buffer,

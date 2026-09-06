@@ -6,12 +6,8 @@
 /// every draw in it. `view` is the standalone view matrix the vertex shader uses
 /// to compute view-space depth for cascade selection in the fragment shader.
 ///
-/// **The field names are a published contract.** A world-authored Metal shader
-/// declares its own `ViewUniforms` and binds it at Metal buffer(0); the runtime
-/// validator (`metal::shader_layout`) compares that declaration against this
-/// struct field by field, by name. Renaming one here rejects every world shader
-/// that spells it the old way. The `.slang` source declares the same bytes with
-/// its own spelling (`view_mat`, and `cam_x`/`cam_y`/`cam_z` in place of
+/// The `.slang` source declares the same bytes with its own spelling
+/// (`view_mat`, and `cam_x`/`cam_y`/`cam_z` in place of
 /// `cam_pos`), which is why the two are checked as byte ranges rather than by
 /// name.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
@@ -71,29 +67,14 @@ pub struct GBufferView {
     pub view: [[f32; 4]; 4],
 }
 
-/// Per-draw model matrices for the G-buffer pre-pass. Matches `GbModel` in
-/// `shaders/gbuffer_prepass.slang`, which Metal and DirectX bind as a constant
-/// buffer; Vulkan carries the same pair plus the roughness in one push-constant
-/// block (`vulkan::uniforms::GbModelPush`), because a pipeline layout may declare
-/// only one. For a static or skinned object with no motion the caller sets
-/// `prev == cur`.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-pub struct GBufferModel {
-    /// This frame's model matrix, column-major.
-    pub cur_model: [[f32; 4]; 4],
-    /// The previous frame's model matrix, for velocity.
-    pub prev_model: [[f32; 4]; 4],
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
 
-    // The published binding contract for a world-authored Metal shader: every
-    // offset here is a byte position that shader reads through. `sky_rot`
-    // lands past the block's own end padding, so nothing before it moved.
+    // Every offset here is a byte position the main pass reads through.
+    // `sky_rot` lands past the block's own end padding, so nothing before it
+    // moved.
     #[test]
     fn view_uniforms_layout_matches_msl() {
         assert_eq!(size_of::<ViewUniforms>(), 208);
@@ -118,12 +99,5 @@ mod tests {
         assert_eq!(offset_of!(GBufferView, cur_vp), 64);
         assert_eq!(offset_of!(GBufferView, prev_vp), 128);
         assert_eq!(offset_of!(GBufferView, view), 192);
-    }
-
-    #[test]
-    fn gbuffer_model_layout_matches_the_shader() {
-        assert_eq!(size_of::<GBufferModel>(), 128);
-        assert_eq!(offset_of!(GBufferModel, cur_model), 0);
-        assert_eq!(offset_of!(GBufferModel, prev_model), 64);
     }
 }

@@ -125,17 +125,10 @@ impl DxContext {
                 .gbuffer_pooled()
                 .ok_or("transient pool missing the gbuffer colour targets after enable")?;
             let gbuffer = super::post::gbuffer::GbufferResources::new(
-                super::post::gbuffer::GbufferDeviceCtx {
-                    alloc: &self.alloc,
-                    info_queue: self.diagnostics.info_queue.as_ref(),
-                },
+                super::post::gbuffer::GbufferDeviceCtx { alloc: &self.alloc },
                 super::post::gbuffer::GbufferExtent {
                     width: render_w,
                     height: render_h,
-                    need_instanced: self.draw.n_clusters > 0,
-                    // Skinned variant builds lazily in `upload_skinned`, as at init.
-                    need_skinned: false,
-                    hot_reload,
                 },
                 slots.gbuffer,
                 &pooled,

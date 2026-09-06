@@ -3,7 +3,7 @@
 // The closed-form clamped-cosine polygon integral that area-light shading is
 // built on, plus the horizon clipping it needs.
 //
-// This is the CPU twin of the shader code in `main.metal`. It exists so the
+// This is the CPU twin of the shader code in `main_shading.slang`. It exists so the
 // integral can be checked against brute-force Monte Carlo in a unit test: the
 // clipping in particular is easy to get subtly wrong in a way that still renders
 // a plausible-looking highlight, and shader code cannot be tested directly.

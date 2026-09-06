@@ -3,67 +3,34 @@
 // The G-buffer pre-pass, the shadow pass, and the passes that draw their own
 // geometry: decals, world-space lines, particles and the text overlay.
 //
-// The pre-pass and the shadow pass are the two places where the hosts still
-// diverge: Vulkan carries the per-draw constants in one push-constant block,
-// while Metal and DirectX split them across separate buffers. Each leg mirrors
-// the struct its own host binds; everything else is one declaration for all
-// three.
+// The shadow pass is where the hosts still diverge: Vulkan carries the per-draw
+// constants in one push-constant block, while Metal and DirectX split them
+// across separate buffers. Each leg mirrors the struct its own host binds;
+// everything else is one declaration for all three.
 
 use concinnity_core::gfx::render_types::{ParticleParams, ShadowPassPush, TextUniforms};
-use concinnity_core::render::metal::uniforms::{ModelUniforms, SsrPrepassMat};
+use concinnity_core::render::directx::uniforms::CullParams as DxCullParams;
+use concinnity_core::render::metal::uniforms::{CullUniforms as MetalCullParams, ModelUniforms};
 use concinnity_core::render::uniforms::{
-    DecalParams, DecalView, GBufferModel, GBufferView, GpuParticle, LineView, ParticleView,
-    SkinParams,
+    DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
 };
-use concinnity_core::render::vulkan::uniforms::GbModelPush;
+use concinnity_core::render::vulkan::uniforms::{CullHizParams, CullParams as VkCullParams};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
 use crate::shader_layout::programs::Target;
 
 const METAL: &[Target] = &[Target::Metal];
 const VULKAN: &[Target] = &[Target::Vulkan];
+const DIRECTX: &[Target] = &[Target::DirectX];
 const METAL_AND_DIRECTX: &[Target] = &[Target::Metal, Target::DirectX];
 
 pub(in crate::shader_layout) fn gbuffer_vertex() -> Vec<Case> {
-    vec![
-        everywhere(mirror!(GBufferView => "GbView" {
-            jittered_vp,
-            cur_vp,
-            prev_vp,
-            [view] => ["view_mat"],
-        })),
-        // The model pair is a constant buffer on Metal and DirectX; Vulkan puts
-        // it in the push-constant block alongside the roughness.
-        on(
-            METAL_AND_DIRECTX,
-            mirror!(GBufferModel => "GbModel" { cur_model, prev_model, }),
-        ),
-        on(VULKAN, vulkan_model_push()),
-    ]
-}
-
-pub(in crate::shader_layout) fn gbuffer_fragment() -> Vec<Case> {
-    vec![
-        on(
-            METAL,
-            mirror!(SsrPrepassMat => "GbMat" {
-                roughness,
-                [_pad] => ["_pad0", "_pad1", "_pad2"],
-            }),
-        ),
-        on(VULKAN, vulkan_model_push()),
-    ]
-}
-
-// Both pre-pass stages see the whole Vulkan push block: the vertex reads the
-// model pair, the fragment only the roughness.
-fn vulkan_model_push() -> crate::shader_layout::mirror::Mirror {
-    mirror!(GbModelPush => "GbModelPush" {
-        cur_model,
-        prev_model,
-        roughness,
-        [_pad] => ["_pad0", "_pad1", "_pad2"],
-    })
+    vec![everywhere(mirror!(GBufferView => "GbView" {
+        jittered_vp,
+        cur_vp,
+        prev_vp,
+        [view] => ["view_mat"],
+    }))]
 }
 
 pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
@@ -152,4 +119,64 @@ pub(in crate::shader_layout) fn rt_skin() -> Vec<Case> {
         joint_count,
         target_count,
     }))]
+}
+
+// The GPU draw cull. The three hosts group the same fields differently: Vulkan
+// splits the frustum and bucket routing (a push constant) from the Hi-Z
+// reprojection (a set-1 uniform buffer, owned by `vulkan/hiz.rs`), DirectX
+// fuses both into one b0 root-constant block, and Metal's one block also
+// carries what its ICB encode dispatch reads. Each leg mirrors the struct its
+// own host binds.
+pub(in crate::shader_layout) fn cull() -> Vec<Case> {
+    vec![
+        on(
+            METAL,
+            mirror!(MetalCullParams => "CullParams" {
+                planes,
+                cam_pos,
+                prev_view_proj,
+                hiz_size,
+                hiz_mip_count,
+                hiz_enabled,
+                object_count,
+                skinned_base,
+                cascade_base,
+                bucket_count,
+            }),
+        ),
+        on(
+            VULKAN,
+            mirror!(VkCullParams => "CullParams" {
+                planes,
+                cam_pos,
+                object_count,
+                bucket_count,
+                bucket_stride,
+            }),
+        ),
+        on(
+            VULKAN,
+            mirror!(CullHizParams => "CullHizParams" {
+                prev_view_proj,
+                hiz_size,
+                hiz_mip_count,
+                hiz_enabled,
+            }),
+        ),
+        on(
+            DIRECTX,
+            mirror!(DxCullParams => "CullParams" {
+                planes,
+                cam_pos,
+                object_count,
+                prev_view_proj,
+                hiz_size,
+                hiz_mip_count,
+                hiz_enabled,
+                bucket_count,
+                bucket_stride,
+                [_pad] => ["_pad0", "_pad1"],
+            }),
+        ),
+    ]
 }

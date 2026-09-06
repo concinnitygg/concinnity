@@ -135,10 +135,7 @@ mod tests {
     fn normalized_args_fills_defaults_and_rejects_bad_types() {
         let env = RegisteredType::parse("EnvironmentMap").expect("registered");
         let out = env
-            .normalized_args(
-                &serde_json::json!({"source": "studio.hdr"}),
-                concinnity_core::platform::Platform::Metal,
-            )
+            .normalized_args(&serde_json::json!({"source": "studio.hdr"}))
             .expect("a source-only EnvironmentMap round-trips");
         assert_eq!(out["source"], "studio.hdr");
         assert_eq!(out["prefilter_face_size"], 512, "defaults are materialized");
@@ -146,10 +143,7 @@ mod tests {
         // A negative value cannot land in a u32 field.
         RegisteredType::parse("Font")
             .expect("registered")
-            .normalized_args(
-                &serde_json::json!({"size_px": -5}),
-                concinnity_core::platform::Platform::Metal,
-            )
+            .normalized_args(&serde_json::json!({"size_px": -5}))
             .expect_err("a negative u32 must be rejected");
     }
 

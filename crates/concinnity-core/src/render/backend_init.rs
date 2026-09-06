@@ -6,7 +6,7 @@
 //! the same struct; each reads the fields its feature set consumes.
 
 use crate::components::{
-    GlassPanel, SdfVolume, ShadowUpdate, UpscalerBackend, WaterSurface, Window,
+    GlassPanel, SdfVolume, ShaderPrograms, ShadowUpdate, UpscalerBackend, WaterSurface, Window,
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::mesh_payload::Vertex;
@@ -49,25 +49,18 @@ pub struct SceneData<'a> {
     pub n_chunk_max: usize,
 }
 
-/// Compiled shader payloads. Each backend loads the format its toolchain
-/// produced (metallib / DXBC / SPIR-V).
+/// One world Shader as the backend receives it: the cook's compiled programs,
+/// which the backend resolves per entry against the source it assembles (see
+/// each backend's surface-source lookup), or nothing for the engine's own
+/// program.
 #[derive(Clone, Copy)]
-pub struct ShaderBytes<'a> {
-    /// Compiled main-pass vertex shader.
-    pub vert: &'a [u8],
-    /// Compiled main-pass fragment shader.
-    pub frag: &'a [u8],
-    /// Compiled shadow-pass vertex shader; consumed by DirectX / Vulkan. Metal
-    /// compiles its shadow shader internally (shadow.metal) and ignores it.
-    pub shadow: &'a [u8],
-    /// Compiled GPU-instanced vertex shader; empty slice = no instanced
-    /// pipeline (any InstancedProp in the world will fail to render).
-    pub vert_instanced: &'a [u8],
+pub struct WorldShader<'a> {
+    /// The decoded payload; `None` for the engine's own main-pass program,
+    /// which every backend compiles from its embedded source.
+    pub programs: Option<&'a ShaderPrograms>,
     /// This entry's payload was not decoded because a scene other than the start
     /// scene owns it: the backend leaves the bucket's pipeline unbuilt and the
-    /// streaming pump installs it when that scene pins. Distinct from empty stage
-    /// bytes, which a backend whose built-in default ships no compiled payload
-    /// (Vulkan's inline GLSL) also sees for an engine-default program.
+    /// streaming pump installs it when that scene pins.
     pub deferred: bool,
 }
 
@@ -198,7 +191,7 @@ pub struct BackendInit<'a> {
     /// One entry per world Shader, indexed by the dense ShaderHandle value a
     /// DrawObject's `shader_bucket` carries; entry 0 is the world default
     /// program. Never empty for a rendering world.
-    pub shaders: Vec<ShaderBytes<'a>>,
+    pub shaders: Vec<WorldShader<'a>>,
     /// Compiled media payloads (textures, fonts, environment maps).
     pub media: MediaPayloads<'a>,
     /// The fixed directional / point light arrays.
@@ -310,11 +303,8 @@ impl<'a> BackendInit<'a> {
                 n_skinned: 0,
                 n_chunk_max: 0,
             },
-            shaders: vec![ShaderBytes {
-                vert: &[],
-                frag: &[],
-                shadow: &[],
-                vert_instanced: &[],
+            shaders: vec![WorldShader {
+                programs: None,
                 deferred: false,
             }],
             media: MediaPayloads {
@@ -486,10 +476,10 @@ mod tests {
         // The text pipeline is the one thing it keeps: backends gate that pass
         // on a non-empty atlas list.
         assert_eq!(init.media.text_atlases.len(), 1);
-        // One shader entry with empty stage bytes, so every backend resolves it
+        // One shader entry carrying no payload, so every backend resolves it
         // to its built-in default program rather than leaving bucket 0 unbuilt.
         assert_eq!(init.shaders.len(), 1);
-        assert!(init.shaders[0].vert.is_empty());
+        assert!(init.shaders[0].programs.is_none());
         assert!(!init.shaders[0].deferred);
         // No scene content, so `resolve_requirements` ran and trimmed the
         // scene-scoped features.

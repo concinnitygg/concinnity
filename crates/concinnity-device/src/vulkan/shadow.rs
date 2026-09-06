@@ -10,13 +10,13 @@
 // letting the main pass sample the cascades) before the Main pass. The map rests
 // sampled between frames, so there is no inline reset.
 //
-// When the bindless GPU-cull path is active (`shadow_bindless_pipeline` built +
-// build-time geometry present) the pass is GPU-driven: a per-cascade cull
-// dispatch writes one indirect buffer per cascade and each cascade is issued
-// with one `cmd_draw_indexed_indirect` (static + instance prefix) + one for the
-// skinned tail, instead of the CPU per-object loop. Streamed chunks / runtime
-// clones (records past `draw.n_objects`) keep the legacy per-object loop; a
-// non-bindless world (custom shader) keeps the legacy path entirely.
+// The cascades are GPU-driven: a per-cascade cull dispatch writes one indirect
+// buffer per cascade and each cascade is issued with one
+// `cmd_draw_indexed_indirect` (static + instance prefix) + one for the skinned
+// tail. Streamed chunks and runtime clones ride the same records, so the CPU
+// never walks a caster list here. Spot slices keep their own per-object encoder
+// in [`spot_shadow.rs`](spot_shadow.rs): the indirect buffer is laid out per
+// cascade and has no slots for them.
 //
 // The shape mirrors `metal/draw/shadow.rs::encode_shadow_pass`; the
 // graph executor in [`graph_exec.rs`](graph_exec.rs) dispatches
@@ -27,31 +27,6 @@ use ash::vk;
 use crate::vulkan::owned::VkDevice;
 
 use super::context::VkContext;
-
-// Push constants for the legacy shadow pass (80 bytes): model matrix + cascade
-// index. The runtime loops the shadow pass once per cascade and pushes a
-// different `cascade_idx` each iteration; the shader uses it to index
-// `sg.light_vps[push.cascade_idx]`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct ShadowPush {
-    model: [[f32; 4]; 4],
-    cascade_idx: u32,
-    _pad: [u32; 3],
-}
-
-// One shadow slice's draw state: the depth-only pipeline and its layout, the
-// descriptor set holding that slice's `ShadowUniforms`, and which `light_vps`
-// entry the vertex shader projects through. Grouping them lets the cascade pass
-// and the spot shadow pass share the legacy caster body: a spot slice is just a
-// binding whose set carries its own matrix in slot 0.
-#[derive(Clone, Copy)]
-pub(in crate::vulkan) struct ShadowSliceBinding {
-    pub pipeline: vk::Pipeline,
-    pub layout: vk::PipelineLayout,
-    pub set: vk::DescriptorSet,
-    pub slice_idx: u32,
-}
 
 impl VkContext {
     // Encode the cascaded-shadow-map render passes for frame slot
@@ -73,12 +48,11 @@ impl VkContext {
         cam_pos: [f32; 3],
         elapsed: f32,
     ) {
-        let (Some(shadow_pipeline), Some(shadow_pl)) = (
-            self.shadow.pipeline.as_ref(),
-            self.shadow.pipeline_layout.as_ref(),
-        ) else {
+        // The depth-only pipeline is the spot pass's; its absence still means
+        // shadows are not configured, so there is nothing to render here either.
+        if self.shadow.pipeline.is_none() {
             return;
-        };
+        }
 
         // Raymarched SDF shadow casters share these cascade DSVs: upload this
         // frame's animation time once (no-op without casters) so the from-light
@@ -112,6 +86,9 @@ impl VkContext {
             self.shadow.render_mask
         };
 
+        // Nothing to cull means nothing to draw: the render passes below still
+        // run, so every re-rendered cascade is cleared for the raymarched
+        // casters that follow the rasterised ones.
         let gpu_driven = self.cull.shadow_bindless_pipeline.is_some() && self.cull_count() > 0;
 
         // GPU-driven cull prologue: dispatch every re-rendered cascade's cull
@@ -151,19 +128,7 @@ impl VkContext {
             }
 
             if gpu_driven {
-                self.encode_shadow_cascade_indirect(device, cmd, frame_idx, cascade_idx, cam_pos);
-            } else {
-                self.encode_shadow_slice_legacy(
-                    cmd,
-                    ShadowSliceBinding {
-                        pipeline: shadow_pipeline.handle(),
-                        layout: shadow_pl.handle(),
-                        set: self.shadow.global_sets[frame_idx],
-                        slice_idx: cascade_idx as u32,
-                    },
-                    frame_idx,
-                    cam_pos,
-                );
+                self.encode_shadow_cascade_indirect(device, cmd, frame_idx, cascade_idx);
             }
 
             // Raymarched SDF shadow casters into this cascade's DSV, after the
@@ -188,14 +153,13 @@ impl VkContext {
     // GPU-driven cascade body (inside the cascade's render pass): the depth-only
     // bindless pipeline issues this cascade's static + instance prefix and the
     // skinned tail with two `cmd_draw_indexed_indirect` calls over the cascade's
-    // cull-written indirect buffer, then the legacy chunk/clone casters.
+    // cull-written indirect buffer. The CPU never walks the caster lists.
     fn encode_shadow_cascade_indirect(
         &self,
         device: &VkDevice,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         cascade_idx: usize,
-        cam_pos: [f32; 3],
     ) {
         let (Some(sb_pipeline), Some(sb_layout)) = (
             self.cull.shadow_bindless_pipeline.as_ref(),
@@ -275,286 +239,6 @@ impl VkContext {
                     stride,
                 );
                 self.inc_draw_calls(1);
-            }
-        }
-
-        // Legacy depth-only casters for draws past the bindless record range
-        // (streamed chunks + runtime clones, not in the GpuObjectData buffer).
-        self.encode_shadow_legacy_extra(device, cmd, frame_idx, cascade_idx, cam_pos);
-    }
-
-    // Legacy per-object casters for runtime clones past the bindless record range
-    // (`i >= draw.n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
-    // now fold into the GPU-driven cull records (drawn by the per-cascade indirect
-    // draw), so they are skipped here. Mirrors the legacy static loop, appending
-    // into this cascade's depth (no re-clear). A no-op for worlds with no clones.
-    fn encode_shadow_legacy_extra(
-        &self,
-        device: &VkDevice,
-        cmd: vk::CommandBuffer,
-        frame_idx: usize,
-        cascade_idx: usize,
-        cam_pos: [f32; 3],
-    ) {
-        // See-through glass (Layer 2) casts no shadow: it is rerouted out of every
-        // opaque rasterisation while RT is live, and the GPU-driven cascade takes
-        // the same decision through the cull kernel's ENABLED bit.
-        let skip_seethrough = self.mesh_glass_active();
-        if self.clone.slot_by_draw_idx.is_empty() {
-            return;
-        }
-        let (Some(shadow_pipeline), Some(shadow_pl)) = (
-            self.shadow.pipeline.as_ref(),
-            self.shadow.pipeline_layout.as_ref(),
-        ) else {
-            return;
-        };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                shadow_pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                shadow_pl.handle(),
-                0,
-                std::slice::from_ref(&self.shadow.global_sets[frame_idx]),
-                &[],
-            );
-            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
-            for (i, obj) in self.draw.objects.iter().enumerate() {
-                if i < self.draw.n_objects || !obj.visible || !obj.resident {
-                    continue;
-                }
-                if skip_seethrough && obj.material.see_through != 0 {
-                    continue; // see-through glass casts no shadow (Layer 2)
-                }
-                if !self.clone.slot_by_draw_idx.contains_key(&i) {
-                    continue; // streamed chunk -> folded into the cull records
-                }
-                let d = crate::gfx::lod::camera_distance(obj, cam_pos);
-                let (index_offset, index_count) = obj.active_lod(d);
-                let push = ShadowPush {
-                    model: obj.model,
-                    cascade_idx: cascade_idx as u32,
-                    _pad: [0; 3],
-                };
-                device.cmd_push_constants(
-                    cmd,
-                    shadow_pl.handle(),
-                    vk::ShaderStageFlags::VERTEX,
-                    0,
-                    std::slice::from_raw_parts(
-                        &push as *const ShadowPush as *const u8,
-                        std::mem::size_of::<ShadowPush>(),
-                    ),
-                );
-                device.cmd_draw_indexed(
-                    cmd,
-                    index_count as u32,
-                    1,
-                    index_offset as u32,
-                    obj.base_vertex,
-                    0,
-                );
-                self.inc_draw_calls(1);
-            }
-        }
-    }
-
-    // Legacy CPU-driven cascade body (inside the cascade's render pass): per-object
-    // `cmd_draw_indexed` for static + instanced (iterated per instance) + skinned
-    // casters. Used for non-bindless worlds (custom shader) or worlds with no
-    // build-time geometry.
-    pub(in crate::vulkan) fn encode_shadow_slice_legacy(
-        &self,
-        cmd: vk::CommandBuffer,
-        bind: ShadowSliceBinding,
-        frame_idx: usize,
-        cam_pos: [f32; 3],
-    ) {
-        // See-through glass (Layer 2) casts no shadow: it is rerouted out of every
-        // opaque rasterisation while RT is live, and the GPU-driven cascade takes
-        // the same decision through the cull kernel's ENABLED bit.
-        let skip_seethrough = self.mesh_glass_active();
-        let device = &self.device;
-        let ShadowSliceBinding {
-            pipeline: shadow_pipeline,
-            layout: shadow_pl,
-            set: shadow_set,
-            slice_idx,
-        } = bind;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, shadow_pipeline);
-
-            // Global shadow descriptor: ShadowUniforms UBO.
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                shadow_pl,
-                0,
-                std::slice::from_ref(&shadow_set),
-                &[],
-            );
-
-            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
-
-            for obj in &self.draw.objects {
-                // A non-resident streamed mesh has no geometry in the
-                // shared buffers yet -- skip it everywhere.
-                if !obj.visible || !obj.resident {
-                    continue;
-                }
-                if skip_seethrough && obj.material.see_through != 0 {
-                    continue; // see-through glass casts no shadow (Layer 2)
-                }
-                // Pick the LOD by camera distance: the shadow pass uses
-                // the same slice the main pass will, so silhouettes track
-                // when the runtime swaps to a coarser LOD.
-                let d = crate::gfx::lod::camera_distance(obj, cam_pos);
-                let (index_offset, index_count) = obj.active_lod(d);
-                let push = ShadowPush {
-                    model: obj.model,
-                    cascade_idx: slice_idx,
-                    _pad: [0; 3],
-                };
-                device.cmd_push_constants(
-                    cmd,
-                    shadow_pl,
-                    vk::ShaderStageFlags::VERTEX,
-                    0,
-                    std::slice::from_raw_parts(
-                        &push as *const ShadowPush as *const u8,
-                        std::mem::size_of::<ShadowPush>(),
-                    ),
-                );
-                device.cmd_draw_indexed(
-                    cmd,
-                    index_count as u32,
-                    1,
-                    index_offset as u32,
-                    obj.base_vertex,
-                    0,
-                );
-                self.inc_draw_calls(1);
-            }
-
-            // Instanced clusters in the shadow pass: iterate instances
-            // individually using the regular shadow pipeline. Cheap to
-            // ship; visually identical to an instanced shadow shader. Walk
-            // the same per-LOD buckets the Main pass uses (computed by
-            // `prepare_instanced_clusters`) so shadow silhouettes track the
-            // per-instance LOD the camera picked.
-            for cluster_idx in 0..self.instanced.clusters.len() {
-                let Some(buckets) = self.instanced.lod_buckets.get(cluster_idx) else {
-                    continue;
-                };
-                for bucket in buckets {
-                    for &model in &bucket.instances {
-                        let push = ShadowPush {
-                            model,
-                            cascade_idx: slice_idx,
-                            _pad: [0; 3],
-                        };
-                        device.cmd_push_constants(
-                            cmd,
-                            shadow_pl,
-                            vk::ShaderStageFlags::VERTEX,
-                            0,
-                            std::slice::from_raw_parts(
-                                &push as *const ShadowPush as *const u8,
-                                std::mem::size_of::<ShadowPush>(),
-                            ),
-                        );
-                        device.cmd_draw_indexed(
-                            cmd,
-                            bucket.index_count as u32,
-                            1,
-                            bucket.index_offset as u32,
-                            0,
-                            0,
-                        );
-                        self.inc_draw_calls(1);
-                    }
-                }
-            }
-
-            // Skinned meshes: deformed depth, drawn after the static
-            // and instanced casters within the same cascade render
-            // pass (no re-clear, so skinned depth appends).
-            if let (Some(sk_pipeline), Some(sk_pl)) = (
-                self.shadow.skinned_pipeline.as_ref(),
-                self.shadow.skinned_pipeline_layout.as_ref(),
-            ) && !self.skinned.draw_objects.is_empty()
-            {
-                let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    sk_pipeline.handle(),
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    sk_pl.handle(),
-                    0,
-                    std::slice::from_ref(&shadow_set),
-                    &[],
-                );
-                device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
-                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT32);
-                for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
-                    if !obj.visible {
-                        continue;
-                    }
-                    // Match the Main pass's per-object LOD pick so shadow
-                    // silhouettes track the active skinned LOD.
-                    let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
-                    let (index_offset, index_count) = obj.active_lod(d);
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        sk_pl.handle(),
-                        1,
-                        std::slice::from_ref(&self.skinned.joint_sets[frame_idx][i]),
-                        &[],
-                    );
-                    let push = ShadowPush {
-                        model: obj.model,
-                        cascade_idx: slice_idx,
-                        _pad: [0; 3],
-                    };
-                    device.cmd_push_constants(
-                        cmd,
-                        sk_pl.handle(),
-                        vk::ShaderStageFlags::VERTEX,
-                        0,
-                        std::slice::from_raw_parts(
-                            &push as *const ShadowPush as *const u8,
-                            std::mem::size_of::<ShadowPush>(),
-                        ),
-                    );
-                    device.cmd_draw_indexed(cmd, index_count as u32, 1, index_offset as u32, 0, 0);
-                    self.inc_draw_calls(1);
-                }
             }
         }
     }

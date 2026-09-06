@@ -20,8 +20,7 @@ impl MtlContext {
     pub(super) fn install_world_shader(
         &mut self,
         bucket: u32,
-        vert_bytes: &[u8],
-        frag_bytes: &[u8],
+        programs: &concinnity_core::components::ShaderPrograms,
     ) -> Result<(), String> {
         let slot = self.world_pipeline_slot(bucket)?;
         let vert_desc = make_vertex_descriptor();
@@ -29,8 +28,8 @@ impl MtlContext {
             &self.device,
             &vert_desc,
             bucket as usize,
-            vert_bytes,
-            frag_bytes,
+            programs,
+            self.hot_reload.enabled,
         )?;
         self.world_pipelines[slot] = Some(pso);
         Ok(())

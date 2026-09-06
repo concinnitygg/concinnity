@@ -254,10 +254,8 @@ impl MtlContext {
         // the 1x1 grey fallback has no prefilter chain). The environment is built at
         // init, so its readiness never changes for a world. None of these can become
         // eligible later, so abandon the queue rather than re-checking it forever.
-        // Under normal play no bake is in flight here (the gate is stable from the
-        // first frame), but a debug shader hot-reload can flip `self.bindless` false
-        // after a bake started, so park any in-flight work behind the fence rather
-        // than leaking it (its command buffers may still be reading those resources).
+        // Any in-flight work is parked behind the fence rather than leaked (its
+        // command buffers may still be reading those resources).
         if !self.bindless
             || self.geometry_less
             || self.env_map.prefilter_mip_count <= 1
@@ -542,15 +540,11 @@ impl MtlContext {
         )?;
         cull_cb.commit();
 
-        // Render command buffer: reads the ICB into this face. Instances fold into
-        // the bindless ICB, so the legacy prepared set draws nothing here (empty).
+        // Render command buffer: reads the ICB into this face.
         let render_cb = self
             .command_queue
             .commandBuffer()
             .ok_or("probe: failed to get render command buffer")?;
-        let prepared = super::instanced::PreparedInstances {
-            clusters: Vec::new(),
-        };
         self.encode_main_into_face(
             &render_cb,
             crate::metal::draw::main::FaceTargets {
@@ -564,11 +558,6 @@ impl MtlContext {
                 vp,
                 view,
                 cam_pos: eye,
-            },
-            crate::metal::draw::main::DrawInputs {
-                visible: &[],
-                prepared_instances: &prepared,
-                skinned_joint_bufs: &gpu.joint_bufs,
             },
             crate::metal::draw::main::GpuFrameBuffers {
                 object_buffer: Some(&gpu.object_buffer),

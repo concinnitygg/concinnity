@@ -9,7 +9,7 @@
 // with several shaders spreads its warmup across the loading screen instead of
 // building every pipeline in one frame.
 
-use crate::components::{ShaderKind, ShaderPayload};
+use crate::components::ShaderPrograms;
 
 // Where a deferred bucket's compiled stage container is read from.
 pub(crate) enum ShaderPayloadSource {
@@ -17,15 +17,6 @@ pub(crate) enum ShaderPayloadSource {
     Bytes(Vec<u8>),
     // Disk-backed world (`cn run`): the payload's absolute range in its blob.
     Disk { path: String, offset: u64, len: u64 },
-}
-
-// One bucket's compiled stage bytes, ready for the backend's pipeline build.
-// A stage the cook compiled nothing for reads as empty, matching the init path.
-#[derive(Default)]
-pub(crate) struct ShaderStages {
-    pub vert: Vec<u8>,
-    pub frag: Vec<u8>,
-    pub(crate) vert_instanced: Vec<u8>,
 }
 
 // One deferred bucket as init recorded it.
@@ -83,8 +74,8 @@ impl ShaderWarmup {
             .map(|e| (e.bucket, !e.blocked))
     }
 
-    // Read and decode one bucket's stage container.
-    pub(crate) fn load(&self, bucket: u32) -> Result<ShaderStages, String> {
+    // Read and decode one bucket's compiled programs.
+    pub(crate) fn load(&self, bucket: u32) -> Result<ShaderPrograms, String> {
         let entry = self
             .entries
             .iter()
@@ -96,14 +87,8 @@ impl ShaderWarmup {
                 super::file_range::read_at(path, *offset, *len)?
             }
         };
-        let payload = ShaderPayload::decode(&bytes)
-            .map_err(|e| format!("shader bucket {bucket}: payload decode: {e:?}"))?;
-        let stage = |kind| payload.stage(kind).map(<[u8]>::to_vec).unwrap_or_default();
-        Ok(ShaderStages {
-            vert: stage(ShaderKind::Vertex),
-            frag: stage(ShaderKind::Fragment),
-            vert_instanced: stage(ShaderKind::VertexInstanced),
-        })
+        ShaderPrograms::decode(&bytes)
+            .map_err(|e| format!("shader bucket {bucket}: payload decode: {e:?}"))
     }
 
     pub(crate) fn note_resident(&mut self, bucket: u32, resident: bool) {
@@ -119,11 +104,15 @@ mod tests {
     use std::io::Write;
 
     fn payload_bytes() -> Vec<u8> {
-        ShaderPayload {
-            stages: vec![
-                (ShaderKind::Vertex, vec![1, 2, 3]),
-                (ShaderKind::Fragment, vec![4, 5]),
-            ],
+        ShaderPrograms {
+            name: "wall".into(),
+            vertex: None,
+            fragment: "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }".into(),
+            programs: vec![crate::components::compiled_programs::CompiledProgram {
+                entries: vec!["fragment_main_bindless".into()],
+                source_digest: 1,
+                artifact: vec![4, 5],
+            }],
         }
         .encode()
         .expect("encode")
@@ -178,11 +167,14 @@ mod tests {
     }
 
     #[test]
-    fn load_decodes_the_stage_container() {
-        let stages = warmup().load(1).expect("load");
-        assert_eq!(stages.vert, vec![1, 2, 3]);
-        assert_eq!(stages.frag, vec![4, 5]);
-        assert!(stages.vert_instanced.is_empty());
+    fn load_decodes_the_programs() {
+        let programs = warmup().load(1).expect("load");
+        assert_eq!(programs.programs.len(), 1);
+        assert_eq!(
+            programs.artifact("fragment_main_bindless", 1),
+            Some(&[4u8, 5][..])
+        );
+        assert!(programs.vertex.is_none());
     }
 
     #[test]
@@ -201,7 +193,12 @@ mod tests {
                 len: bytes.len() as u64,
             },
         )]);
-        assert_eq!(w.load(3).expect("load").vert, vec![1, 2, 3]);
+        assert_eq!(
+            w.load(3)
+                .expect("load")
+                .artifact("fragment_main_bindless", 1),
+            Some(&[4u8, 5][..])
+        );
     }
 
     #[test]

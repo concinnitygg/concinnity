@@ -64,9 +64,9 @@ impl MtlContext {
     // Place one streamed chunk's geometry in the chunk headroom region and
     // write its `DrawObject` at the engine-allocated destination slot.
     //
-    // The chunk is non-cullable and joins the `draw.always` set: the streaming
-    // window already bounds the resident chunk count, so the renderer draws
-    // every resident chunk. `frame` reclaims retired deferred frees first.
+    // The chunk is non-cullable (sentinel AABB): the streaming window already
+    // bounds the resident chunk count, so the renderer draws every resident
+    // chunk. `frame` reclaims retired deferred frees first.
     pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
@@ -155,11 +155,7 @@ impl MtlContext {
             lod_alternates: Vec::new(),
         };
 
-        // ensure_always_draw adds a slot recycled from a culled static prop
-        // (not yet a member); a slot reused from another chunk is already in
-        // draw.always and is left alone.
-        let draw_idx = self.place_draw_object(obj, model, dst);
-        self.ensure_always_draw(draw_idx);
+        self.place_draw_object(obj, model, dst);
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
         self.rt.topology_dirty = true;
@@ -171,8 +167,8 @@ impl MtlContext {
     //
     // `retire_frame` is `current_frame + frames_in_flight` so an in-flight
     // command buffer never has the freed region overwritten by a later
-    // `add_chunk_mesh`. The slot stays in `draw.objects` / `draw.always` but
-    // is marked non-resident and invisible, so every pass skips it.
+    // `add_chunk_mesh`. The slot stays in `draw.objects` but is marked
+    // non-resident and invisible, so every pass skips it.
     pub(crate) fn remove_chunk_mesh(
         &mut self,
         draw_idx: usize,

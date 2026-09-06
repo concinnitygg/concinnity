@@ -23,11 +23,9 @@ use ash::vk;
 use super::auto_exposure::{AutoExposureResources, compile_auto_exposure_shaders};
 use super::context::VkContext;
 use super::pipeline::{
-    MeshPipelineTargets, compile_bindless_shaders, compile_composite_shaders, compile_cull_shader,
-    compile_cull_shader_phase2, compile_skinned_shaders, compile_text_shaders,
-    create_composite_pipeline, create_cull_pipeline, create_instanced_pipeline,
-    create_main_pipeline, create_skinned_pipeline, create_text_pipeline, resolve_instanced_shader,
-    resolve_main_shaders,
+    BucketPipelineTargets, build_bucket_pipeline, compile_bindless_shaders,
+    compile_composite_shaders, compile_cull_shader, compile_cull_shader_phase2,
+    compile_text_shaders, create_composite_pipeline, create_cull_pipeline, create_text_pipeline,
 };
 use super::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
 use super::post::ssao::rebuild_ssao_pipelines;
@@ -47,11 +45,10 @@ macro_rules! rebuild_if_live {
     };
 }
 
-// Shader-source extensions the watcher reacts to. GLSL sources land as
-// `.vert` / `.frag` / `.comp`, the single-source programs as `.slang`; the
-// helper rejects every other event so editor swap files, README updates, and
-// tmp files don't trigger a rebuild.
-const SHADER_EXTENSIONS: &[&str] = &["vert", "frag", "comp", "slang"];
+// Shader-source extensions the watcher reacts to: every program is a `.slang`
+// now. The helper rejects every other event so editor swap files, README
+// updates, and tmp files don't trigger a rebuild.
+const SHADER_EXTENSIONS: &[&str] = &["slang"];
 
 // Live watcher handle. Held by `VkContext` purely to keep the watcher
 // thread alive; dropping it stops the watcher. The flag itself is shared
@@ -276,31 +273,20 @@ impl VkContext {
             true,
         )?;
 
-        // Bindless main + cull (when the world drives the built-in shader).
+        // Bucket 0 of the GPU-driven main pass, from the engine's freshly
+        // compiled pair; a world default Shader's own pair is spliced into the
+        // same templates, so it is rebuilt against them too.
         let bindless_main_pipeline = rebuild_if_live!(
             self.cull.bindless_pipeline_layout.is_some() && self.cull.bindless_pipeline.is_some(),
             {
-                let (bvs, bps) = compile_bindless_shaders(
+                let engine_pair = compile_bindless_shaders(
                     hr,
                     self.cull.bindless_pool_size,
                     self.descriptors.probe_cube_count,
                 )?;
-                create_main_pipeline(
-                    device,
-                    MeshPipelineTargets {
-                        render_pass: self.main_render_pass.handle(),
-                        layout: self
-                            .cull
-                            .bindless_pipeline_layout
-                            .as_ref()
-                            .expect("bindless pipeline layout is live alongside its pipeline")
-                            .handle(),
-                        vert_spv: &bvs,
-                        frag_spv: &bps,
-                    },
-                    self.msaa_samples,
-                    self.swapchain.format,
-                )
+                let pipeline =
+                    self.build_world_main_pipeline(self.world_shader.as_ref(), &engine_pair)?;
+                Ok::<_, String>((pipeline, engine_pair))
             }
         );
         let cull_pipeline = rebuild_if_live!(
@@ -477,18 +463,6 @@ impl VkContext {
             )
         );
 
-        // Unified G-buffer pre-pass (only when any screen-space consumer is on).
-        // Rebuilds prepass static / instanced / skinned in one shot (the skinned
-        // variant only when a `SkinnedMesh` is live).
-        let gbuffer_rebuilt = rebuild_if_live!(
-            self.gbuffer.is_some(),
-            crate::vulkan::post::gbuffer::rebuild_gbuffer_pipelines(
-                device,
-                self.gbuffer.as_ref().expect("G-buffer resources are live"),
-                hr,
-            )
-        );
-
         // Particles (only when ≥1 emitter is live or has ever been
         // added at runtime). Rebuilds the compute + render pipelines in
         // one shot.
@@ -515,8 +489,9 @@ impl VkContext {
         self.bloom.pipeline_downsample = bloom_downsample;
         self.bloom.pipeline_upsample = bloom_upsample;
 
-        if let Some(new_pipeline) = bindless_main_pipeline {
+        if let Some((new_pipeline, engine_pair)) = bindless_main_pipeline {
             self.cull.bindless_pipeline = Some(new_pipeline);
+            self.cull.bindless_main_spv = engine_pair;
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
@@ -570,144 +545,76 @@ impl VkContext {
         if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
             taa.swap_pipelines(rebuilt);
         }
-        if let (Some(rebuilt), Some(gb)) = (gbuffer_rebuilt, self.gbuffer.as_mut()) {
-            gb.swap_pipelines(rebuilt);
-        }
         if let (Some((cp, rp)), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
             p.swap_pipelines(cp, rp);
         }
         Ok(())
     }
 
-    // Rebuild the world-loaded shader pipelines (legacy main, optional
-    // instanced, optional skinned main) from freshly compiled SPIR-V bytes.
-    // Driven by asset hot-reload (`cn debug` only) when a captured
-    // Shader stage source file is saved or the debug-WS `reload-assets`
+    // Rebuild bucket 0 of the GPU-driven main pass from a freshly compiled world
+    // Shader and hot-swap it. Driven by asset hot-reload (`cn debug` only) when
+    // one of the Shader's files is saved or the debug-WS `reload-assets`
     // command fires. Mirrors the rebuild-then-swap safety pattern of
-    // `reload_shaders`: every replacement is constructed into a temporary
-    // first and the swap (destroy displaced + store fresh) only runs when
-    // every build succeeds, so a typo in a shader edit leaves the live
-    // pipelines untouched and the session keeps rendering. Sibling of
+    // `reload_shaders`: the replacement is constructed first and the swap only
+    // runs when the build succeeds, so a typo in a shader edit leaves the live
+    // pipeline untouched and the session keeps rendering. Sibling of
     // `DxContext::update_world_shader_pipelines` /
     // `MtlContext::update_world_shader_pipelines`.
     //
-    // `vert_bytes` + `frag_bytes` are always required: a custom-shader world
-    // renders through the legacy per-draw `main_pipeline` (the bindless
-    // variant is forced off at init when the world supplies SPIR-V, and stays
-    // engine-internal, rebuilt by `reload_shaders`). The instanced pipeline is
-    // rebuilt only when one is live, pairing the world's instanced vertex
-    // stage with the fresh fragment. The skinned main pipeline keeps its
-    // engine-internal 80-byte vertex shader and only swaps the fragment
-    // (`compile_skinned_shaders` compiles the skinned VS from inline GLSL and
-    // treats the supplied bytes as the fragment, exactly as `upload_skinned`
-    // does at init). The shadow pipelines (static + skinned) are
-    // engine-internal GLSL, reloaded by `reload_shaders`, so `_shadow_bytes`
-    // is unused, same as Metal / DirectX.
+    // Buckets past 0 and the shadow / G-buffer / cull pipelines are
+    // engine-internal or scene-owned and are not rebuilt here.
     //
     // Reached only through the bin's `cn debug` runtime-mutation path (dead
     // from the FFI lib crate's roots, live in the concinnity binary), like the
     // other runtime-mutation methods on `VkContext`.
     pub(crate) fn update_world_shader_pipelines(
         &mut self,
-        vert_bytes: Option<&[u8]>,
-        frag_bytes: Option<&[u8]>,
-        _shadow_bytes: Option<&[u8]>,
-        vert_instanced_bytes: Option<&[u8]>,
+        programs: &concinnity_core::components::ShaderPrograms,
     ) -> Result<(), String> {
-        let vert = vert_bytes.ok_or_else(|| {
-            "update_world_shader_pipelines: vertex shader bytes are required".to_string()
-        })?;
-        let frag = frag_bytes.ok_or_else(|| {
-            "update_world_shader_pipelines: fragment shader bytes are required".to_string()
-        })?;
-
-        let device = self.device.clone();
-        let device = &device;
-        let hr = self.hot_reload.enabled;
-
-        // Resolve the world bytes to SPIR-V. The hot-reload recompile always
-        // hands us SPIR-V, so `resolve_main_shaders` passes them through; the
-        // GLSL fallback only matters at init. Build every replacement into a
-        // temporary first so a `?` early-return leaves the live pipelines
-        // untouched, mirroring `reload_shaders`.
-        let (vert_spv, frag_spv) = resolve_main_shaders(hr, vert, frag)?;
-        let new_main = create_main_pipeline(
-            device,
-            MeshPipelineTargets {
-                render_pass: self.main_render_pass.handle(),
-                layout: self.main_pipeline_layout.handle(),
-                vert_spv: &vert_spv,
-                frag_spv: &frag_spv,
-            },
-            self.msaa_samples,
-            self.swapchain.format,
-        )?;
-
-        // Instanced pipeline: rebuilt only when one is live. Needs the world's
-        // instanced vertex stage paired with the fresh fragment, reusing the
-        // live instanced pipeline layout.
-        let new_instanced = if let (Some(_), Some(layout)) = (
-            self.instanced.pipeline.as_ref(),
-            self.instanced.pipeline_layout.as_ref(),
-        ) {
-            let inst = vert_instanced_bytes.ok_or_else(|| {
-                "update_world_shader_pipelines: instanced vertex shader bytes are required \
-                 when an instanced pipeline is live"
-                    .to_string()
-            })?;
-            let inst_spv = resolve_instanced_shader(hr, inst, true)?.ok_or_else(|| {
-                "update_world_shader_pipelines: instanced shader payload missing".to_string()
-            })?;
-            Some(create_instanced_pipeline(
-                device,
-                MeshPipelineTargets {
-                    render_pass: self.main_render_pass.handle(),
-                    layout: layout.handle(),
-                    vert_spv: &inst_spv,
-                    frag_spv: &frag_spv,
-                },
-                self.msaa_samples,
-                self.swapchain.format,
-            )?)
-        } else {
-            None
-        };
-
-        // Skinned main pipeline: rebuilt only when one is live. Keeps its
-        // engine-internal skinned vertex shader; only the fragment changes.
-        let new_skinned = if let (Some(_), Some(layout)) = (
-            self.skinned.pipeline.as_ref(),
-            self.skinned.pipeline_layout.as_ref(),
-        ) {
-            let (skinned_vs, _skinned_shadow_vs, frag_ps) = compile_skinned_shaders(hr, frag)?;
-            Some(create_skinned_pipeline(
-                device,
-                MeshPipelineTargets {
-                    render_pass: self.main_render_pass.handle(),
-                    layout: layout.handle(),
-                    vert_spv: &skinned_vs,
-                    frag_spv: &frag_ps,
-                },
-                self.msaa_samples,
-            )?)
-        } else {
-            None
-        };
-
-        // All builds succeeded. Drain the GPU before destroying the displaced
-        // pipelines so no in-flight command buffer still references them: the
-        // debug hot-reload drive does not `wait_idle` for us, unlike the
-        // built-in `reload_shaders` path the draw loop guards. Mirrors the
-        // internal `wait_idle` in `upload_skinned` / `update_skinned_mesh_geometry`.
+        let new_main =
+            self.build_world_main_pipeline(Some(programs), &self.cull.bindless_main_spv)?;
+        // Drain the GPU before destroying the displaced pipeline so no in-flight
+        // command buffer still references it: the debug hot-reload drive does
+        // not `wait_idle` for us, unlike the built-in `reload_shaders` path the
+        // draw loop guards.
         self.wait_idle();
-        self.main_pipeline = new_main;
-        if let Some(p) = new_instanced {
-            self.instanced.pipeline = Some(p);
-        }
-        if let Some(p) = new_skinned {
-            self.skinned.pipeline = Some(p);
-        }
+        self.cull.bindless_pipeline = Some(new_main);
+        self.world_shader = Some(programs.clone());
         self.invalidate_wireframe_pipelines();
         Ok(())
+    }
+
+    // Bucket 0's pipeline against the live bindless layout: the world default
+    // Shader's pair where `world` declares one, `engine_pair` otherwise. Errors
+    // when the GPU-driven pass is not live, which means the world has nothing
+    // to draw.
+    fn build_world_main_pipeline(
+        &self,
+        world: Option<&concinnity_core::components::ShaderPrograms>,
+        engine_pair: &(Vec<u8>, Vec<u8>),
+    ) -> Result<crate::vulkan::owned::OwnedPipeline, String> {
+        let layout = self
+            .cull
+            .bindless_pipeline_layout
+            .as_ref()
+            .ok_or_else(|| "the GPU-driven main pass is not live".to_string())?;
+        build_bucket_pipeline(
+            &self.device,
+            BucketPipelineTargets {
+                render_pass: self.main_render_pass.handle(),
+                layout: layout.handle(),
+                msaa_samples: self.msaa_samples,
+                swapchain_format: self.swapchain.format,
+                hot_reload: self.hot_reload.enabled,
+                pool_size: self.cull.bindless_pool_size,
+                probe_count: self.descriptors.probe_cube_count as usize,
+            },
+            0,
+            crate::gfx::backend_init::WorldShader {
+                programs: world,
+                deferred: false,
+            },
+            engine_pair,
+        )
     }
 }

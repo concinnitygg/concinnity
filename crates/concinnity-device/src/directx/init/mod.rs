@@ -18,7 +18,7 @@
 //   * Descriptor heap creation (RTV / DSV / CBV+SRV+UAV / sampler) with
 //     the cross-cutting slot layout.
 //   * Sampler creation.
-//   * Texture pool uploads, per-object + per-cluster SRV pair writes,
+//   * Texture pool uploads, flat bindless pool SRV writes,
 //     text atlas uploads, shadow map array, IBL cubes, colour LUT,
 //     main-depth + HDR scene targets.
 //   * Geometry + per-frame view / light / shadow constant buffers.
@@ -71,7 +71,7 @@ impl DxContext {
         reuse: Option<window::DeviceAndWindow>,
     ) -> Result<Self, String> {
         use crate::gfx::backend_init::{
-            BackendInit, MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
+            BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx, WorldShader,
         };
         let BackendInit {
             window,
@@ -97,10 +97,10 @@ impl DxContext {
                     // n_skinned`); the skinned geometry itself is uploaded later
                     // by `upload_skinned`, which sets the live `self.draw.n_skinned`.
                     n_skinned,
-                    // Reserves a chunk record region in the shared cull buffers
-                    // at init (`[n_objects + n_instances, +n_chunk_max)`);
-                    // resident chunks fold into the indirect path each frame.
-                    // Sets the live `self.draw.n_chunk`.
+                    // Sizes the runtime record region in the shared cull buffers
+                    // at init, alongside the runtime-clone cap; resident chunks
+                    // and spawned clones fold into the indirect path each frame.
+                    // Sets the live `self.draw.n_runtime`.
                     n_chunk_max,
                 },
             shaders: world_shaders,
@@ -158,11 +158,8 @@ impl DxContext {
         } = init;
         // Entry 0 is the world default program; entries 1.. are the
         // material-referenced shader buckets (see `world_shaders.rs`).
-        let &ShaderBytes {
-            vert: vert_bytes,
-            frag: frag_bytes,
-            shadow: shadow_bytes,
-            vert_instanced: vert_instanced_bytes,
+        let &WorldShader {
+            programs: world_programs,
             // The world default program is never deferred (bucket 0 always
             // decodes at init); only the material-referenced buckets can be.
             deferred: _,
@@ -349,7 +346,7 @@ impl DxContext {
                     + decal_rtv_extra as u32
                     + gbuffer_rtv_extra as u32
                     + rt_rtv_extra as u32
-                    + refl_composite_rtv_extra as u32,
+                    + refl_composite_rtv_extra,
                 ..Default::default()
             })
         }
@@ -393,7 +390,7 @@ impl DxContext {
                 NumDescriptors: 1
                     + NUM_SHADOW_CASCADES as u32
                     + MAX_SHADOWED_SPOTS as u32
-                    + gbuffer_dsv_extra as u32,
+                    + gbuffer_dsv_extra,
                 ..Default::default()
             })
         }
@@ -456,7 +453,7 @@ impl DxContext {
         let planar_resolve_srv_extra = planar_assignment.representatives.len();
 
         let heap_layout::SrvHeapLayout {
-            object_base_slot,
+            atlas_base_slot,
             hdr_srv_slot,
             bloom_srv_base_slot,
             lut_srv_slot,
@@ -466,10 +463,7 @@ impl DxContext {
             ssr_srv_base_slot,
             decal_depth_srv_slot,
             decal_srv_base_slot,
-            chunk_srv_base_slot,
-            skinned_srv_base_slot,
             particle_srv_base_slot,
-            clone_srv_base_slot,
             fog_froxel_uav_slot,
             fog_froxel_srv_slot,
             upscale_uav_slot,
@@ -493,8 +487,6 @@ impl DxContext {
             ltc_srv_base_slot,
             srv_slots,
         } = heap_layout::SrvHeapLayout::compute(&heap_layout::SrvHeapParams {
-            n_objects,
-            n_clusters,
             n_atlases,
             bloom_count,
             taa_srv_extra,
@@ -633,10 +625,9 @@ impl DxContext {
         // always passes → fully lit), declared as Texture2DArray so the shader's
         // binding type stays identical between disabled and enabled cases.
         // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
-        // shadows). The shadow vertex shader is engine-internal (the baked
-        // `builtins::SHADOW_VERT`), so an empty `shadow_bytes` override no longer means
-        // "no shadows": it just selects the built-in shader. Mirrors the Metal
-        // internal-shadow path.
+        // shadows). The shadow vertex shader is engine-internal
+        // (`slang_builtins::SHADOW_VERT`). Mirrors the Metal internal-shadow
+        // path.
         let effective_shadow_size = shadow_map_size;
         let (shadow_resource_opt, shadow_dsvs, shadow_srv_gpu) = if effective_shadow_size > 0 {
             let (sm, dsvs) = create_shadow_map_array(
@@ -932,11 +923,9 @@ impl DxContext {
         // the RT hit shader bind this region's base and index it by a flat slot
         // (`albedo = texture_slot` or the white slot when the draw has none,
         // `normal = normal's own handle` or the flat-normal slot), mirroring
-        // Vulkan/Metal. A shared texture resolves to ONE descriptor here, unlike
-        // the per-object pairs below which bake a copy per draw.
+        // Vulkan/Metal. A shared texture resolves to ONE descriptor here.
         debug_assert_eq!(gpu_textures.len(), flat_albedo_count);
         debug_assert_eq!(gpu_fallbacks.len(), flat_fallback_count);
-        let last_tex = gpu_textures.len() - 1;
         let flat_pool_len = flat_albedo_count + flat_fallback_count;
         for f in 0..FRAMES {
             let copy_base = flat_pool_base_slot + f * flat_pool_len;
@@ -948,73 +937,7 @@ impl DxContext {
             }
         }
 
-        // Resolve the pool resource a `normal_map_slot` samples for the legacy
-        // per-object / per-cluster SRV pairs: a real normal map is a texture in
-        // the shared pool at its own slot; `NO_NORMAL_MAP_SLOT` selects the
-        // flat-normal fallback.
-        let normal_resource = |slot: usize| -> &ID3D12Resource {
-            if slot == NO_NORMAL_MAP_SLOT {
-                &gpu_fallbacks[0]
-            } else {
-                &gpu_textures[slot.min(last_tex)]
-            }
-        };
-
-        // The same for an albedo `texture_slot`: a real albedo is a texture at
-        // its own slot; `NO_ALBEDO_SLOT` selects the white fallback, so an
-        // untextured material shows its tint rather than texture 0.
-        let albedo_resource = |slot: usize| -> &ID3D12Resource {
-            if slot == NO_ALBEDO_SLOT {
-                &gpu_fallbacks[1]
-            } else {
-                &gpu_textures[slot.min(last_tex)]
-            }
-        };
-
-        // Per-object albedo + normal SRV pairs
-        // Layout: slot object_base_slot+obj_idx*2 = albedo, +1 = normal.
-        // Each object's SRVs are CreateShaderResourceView'd from the pool
-        // resource selected by texture_slot / normal_map_slot, clamped to the
-        // pool length so out-of-range slots fall back to the last valid entry.
-        if n_objects > 0 {
-            for (obj_idx, obj) in draw_objects.iter().enumerate() {
-                let albedo_slot_idx = object_base_slot + obj_idx * 2;
-                let normal_slot_idx = albedo_slot_idx + 1;
-                write_texture_srv(
-                    &device,
-                    albedo_resource(obj.texture_slot),
-                    slot_cpu(albedo_slot_idx),
-                );
-                write_texture_srv(
-                    &device,
-                    normal_resource(obj.normal_map_slot),
-                    slot_cpu(normal_slot_idx),
-                );
-            }
-        }
-
-        // Per-cluster albedo + normal SRV pairs
-        // Layout: slot (object_base_slot + n_objects*2 + cluster_idx*2) = albedo, +1 = normal.
-        if n_clusters > 0 {
-            let cluster_base_slot = object_base_slot + n_objects * 2;
-            for (cluster_idx, cluster) in instanced_clusters.iter().enumerate() {
-                let albedo_slot_idx = cluster_base_slot + cluster_idx * 2;
-                let normal_slot_idx = albedo_slot_idx + 1;
-                write_texture_srv(
-                    &device,
-                    albedo_resource(cluster.texture_slot),
-                    slot_cpu(albedo_slot_idx),
-                );
-                write_texture_srv(
-                    &device,
-                    normal_resource(cluster.normal_map_slot),
-                    slot_cpu(normal_slot_idx),
-                );
-            }
-        }
-
         // Text atlas textures
-        let atlas_base_slot = object_base_slot + n_objects * 2 + n_clusters * 2;
         let mut gpu_text_atlases: Vec<GpuResource> = Vec::new();
         let mut text_atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> = Vec::new();
         for (i, (w, h, px)) in text_atlases.iter().enumerate() {
@@ -1294,30 +1217,18 @@ impl DxContext {
             }
         };
 
-        // Shaders + root sigs + PSOs (main / shadow / instanced / text /
-        // composite + bindless static main + GPU-cull compute). See
-        // init/pipelines.rs.
-        let need_instanced = !instanced_clusters.is_empty();
+        // Shaders + root sigs + PSOs (GPU-driven main + GPU-cull compute /
+        // shadow / text / composite). See init/pipelines.rs.
         // Total instances across all clusters, folded into the GPU-driven bindless
         // pass as `GpuObjectData` records after the `n_objects` static objects.
         let n_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
-        let shaders = pipelines::compile_all_shaders(
-            vert_bytes,
-            frag_bytes,
-            shadow_bytes,
-            vert_instanced_bytes,
-            need_instanced,
-            hot_reload,
-        )?;
+        let shaders = pipelines::compile_all_shaders(hot_reload)?;
 
         let main_pipelines = pipelines::build_main_pipelines(
             &alloc,
             info_queue.as_ref(),
             pipelines::MainPipelineShaders {
-                shaders: &shaders,
-                vert_bytes,
-                frag_bytes,
-                bucket_shaders: world_shaders.get(1..).unwrap_or(&[]),
+                world_shaders: &world_shaders,
             },
             pipelines::MainPipelineConfig {
                 n_objects,
@@ -1334,8 +1245,6 @@ impl DxContext {
             },
         )?;
         let pipelines::MainPipelines {
-            main_root_sig,
-            main_pso,
             main_bindless_root_sig,
             main_bindless_pso,
             world_pipelines,
@@ -1379,7 +1288,8 @@ impl DxContext {
             };
             let records = instance_object_records(&instanced_clusters, flat_albedo_count as u32);
             // Cluster base index range (cluster indices are absolute, so
-            // base_vertex = 0); per-instance LOD is a follow-up. Every instance is
+            // base_vertex = 0), which `build_draw_args_buffer` patches per frame
+            // for the clusters that declare alternates. Every instance is
             // visible + resident + cullable, so its finite per-instance world AABB
             // is frustum/distance/Hi-Z tested independently by the cull kernel.
             let mut draw_args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
@@ -1457,15 +1367,6 @@ impl DxContext {
         };
         let (shadow_root_sig, shadow_pso) =
             pipelines::build_shadow_pipeline(&device, info_queue.as_ref(), shadow_vs_for_pso)?;
-
-        let (main_instanced_root_sig, main_instanced_pso) =
-            pipelines::build_main_instanced_pipeline(
-                &device,
-                info_queue.as_ref(),
-                shaders.main_vs_instanced.as_deref(),
-                &shaders.main_ps,
-                msaa_samples,
-            )?;
 
         let (text_root_sig, text_pso) = pipelines::build_text_pipeline(
             &device,
@@ -1730,16 +1631,10 @@ impl DxContext {
                 .gbuffer_pooled()
                 .ok_or("transient pool missing the gbuffer colour targets")?;
             Some(crate::directx::post::gbuffer::GbufferResources::new(
-                crate::directx::post::gbuffer::GbufferDeviceCtx {
-                    alloc: &alloc,
-                    info_queue: info_queue.as_ref(),
-                },
+                crate::directx::post::gbuffer::GbufferDeviceCtx { alloc: &alloc },
                 crate::directx::post::gbuffer::GbufferExtent {
                     width: render_w,
                     height: render_h,
-                    need_instanced,
-                    need_skinned: false,
-                    hot_reload,
                 },
                 gbuffer_slots,
                 &pooled,
@@ -1962,52 +1857,6 @@ impl DxContext {
             (None, None)
         };
 
-        let (cull_bvh, always_draw) = crate::gfx::bvh::partition_draw_objects(&draw_objects);
-
-        // Membership flags parallel to `draw_objects` so a recycled draw slot is
-        // added to `always_draw` at most once. The free-list allocator starts
-        // with every build-time slot already in use; runtime spawns and streamed
-        // chunks pop a vacated slot before appending past this count.
-        let always_draw_member = {
-            let mut member = vec![false; draw_objects.len()];
-            for &i in &always_draw {
-                member[i as usize] = true;
-            }
-            member
-        };
-
-        // Per-frame instance upload buffers. One persistently-mapped buffer
-        // per (frame, cluster). Sized to hold cluster.instances.len() float4x4
-        // matrices, which is fixed at init time.
-        let mut instance_upload_buffers: Vec<Vec<PooledBuffer>> = Vec::with_capacity(FRAMES);
-        let mut instance_upload_ptrs: Vec<Vec<*mut u8>> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let mut frame_bufs: Vec<PooledBuffer> = Vec::with_capacity(instanced_clusters.len());
-            let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(instanced_clusters.len());
-            for cluster in &instanced_clusters {
-                let bytes =
-                    (cluster.instances.len().max(1) * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
-                let buf = create_buffer(
-                    &alloc,
-                    bytes,
-                    D3D12_HEAP_TYPE_UPLOAD,
-                    D3D12_RESOURCE_STATE_GENERIC_READ,
-                )
-                .map_err(|e| format!("instance upload buf: {e}"))?;
-                let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-                // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a
-                // live local that receives the mapping.
-                unsafe {
-                    buf.Map(0, None, Some(&mut ptr))
-                        .map_err(|e| format!("map instance buf: {e}"))?;
-                }
-                frame_bufs.push(buf);
-                frame_ptrs.push(ptr as *mut u8);
-            }
-            instance_upload_buffers.push(frame_bufs);
-            instance_upload_ptrs.push(frame_ptrs);
-        }
-
         // Auto-exposure: build the histogram + average compute pipelines plus
         // the GPU buffers (histogram UAV, output UAV, per-frame readback)
         // only when the world's PostProcessConfig opted in. With auto-exposure
@@ -2134,7 +1983,8 @@ impl DxContext {
         } else {
             // Build-time draw-record count (matches `DxContext::cull_count`): sizes
             // each plane's region of the mirror-cull indirect buffer.
-            let planar_n_cull = n_objects + n_instances + n_chunk_max + n_skinned;
+            let planar_n_cull =
+                n_objects + n_instances + n_chunk_max + clone_reserve(n_objects) + n_skinned;
             let resolve_srv_cpu: Vec<_> = (0..planar_assignment.representatives.len())
                 .map(|i| slot_cpu(planar_resolve_srv_base_slot + i))
                 .collect();
@@ -2369,7 +2219,7 @@ impl DxContext {
                 linear_sampler_gpu,
                 text_sampler_gpu,
                 textures: gpu_textures,
-                fallback_textures: gpu_fallbacks,
+                _fallback_textures: gpu_fallbacks,
                 text_atlas_textures: gpu_text_atlases,
                 text_atlas_srv_gpus,
             },
@@ -2386,11 +2236,8 @@ impl DxContext {
             chunk_stream: super::context::ChunkStreamState {
                 vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
                 idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-                srv_base_slot: chunk_srv_base_slot,
             },
             skinned: SkinnedState {
-                pso: None,
-                root_sig: None,
                 shadow_pso: None,
                 shadow_root_sig: None,
                 vertex_buffer: None,
@@ -2401,7 +2248,6 @@ impl DxContext {
                 joint_buffers: Vec::new(),
                 joint_ptrs: Vec::new(),
                 joint_matrices: Vec::new(),
-                srv_base_slot: skinned_srv_base_slot,
                 skin_pipeline: None,
                 deformed_primed: std::sync::atomic::AtomicBool::new(false),
                 deformed_buffers: Vec::new(),
@@ -2425,8 +2271,6 @@ impl DxContext {
                 shadow_ubo_resources,
                 shadow_ubo_ptrs,
             },
-            main_root_sig,
-            main_pso,
             light_cull,
             cull: CullState {
                 main_bindless_root_sig,
@@ -2524,12 +2368,6 @@ impl DxContext {
                 last_elapsed: std::cell::Cell::new(0.0),
                 frame_index: std::cell::Cell::new(0),
             },
-            clone: super::context::CloneState {
-                srv_base_slot: clone_srv_base_slot,
-                count: 0,
-                slot_by_draw_idx: std::collections::HashMap::new(),
-                free_offsets: Vec::new(),
-            },
             commands: DxCommands {
                 command_allocators,
                 command_lists,
@@ -2553,31 +2391,23 @@ impl DxContext {
             draw: super::context::DrawState {
                 n_objects,
                 objects: draw_objects,
-                bvh: cull_bvh,
-                always: always_draw,
-                always_member: always_draw_member,
-                visible_scratch: RefCell::new(Vec::new()),
                 graph_cache: RefCell::new(None),
                 n_instances,
-                // Streamed-chunk record reserve (fixed at init = the worst-case
-                // resident chunk window). The cull buffers reserve
-                // `[n_objects + n_instances, +n_chunk)`; resident chunks are
-                // folded in per frame and the unused tail is disabled. 0 for a
-                // non-voxel world.
-                n_chunk: n_chunk_max,
+                // Runtime record reserve (fixed at init): the worst-case
+                // resident streamed-chunk window plus the runtime-clone cap. The
+                // cull buffers reserve `[n_objects + n_instances, +n_runtime)`;
+                // resident chunks and spawned clones are folded in per frame and
+                // the unused tail is disabled.
+                n_runtime: n_chunk_max + clone_reserve(n_objects),
                 // Set in `upload_skinned` once skinned geometry is resident; the
                 // cull buffers reserve the tail at init via the threaded
                 // `n_skinned` capacity, but `cull_count()` reads this runtime
                 // count.
                 n_skinned: 0,
-                n_clusters,
             },
             instanced: DxInstanced {
-                root_sig: main_instanced_root_sig,
-                pso: main_instanced_pso,
+                any_lod: crate::gfx::lod::any_cluster_has_lod(&instanced_clusters),
                 clusters: instanced_clusters,
-                upload_buffers: instance_upload_buffers,
-                upload_ptrs: instance_upload_ptrs,
                 // One outer Vec entry per cluster; populated each frame by
                 // `build_instance_upload` from `lod_buckets(cam_pos)`. The
                 // inner Vec is the bucket order (LOD0 → LODN) for that
@@ -2628,6 +2458,7 @@ impl DxContext {
                 reload_pending: shader_reload_pending,
                 watcher: shader_watcher,
             },
+            world_shader: world_programs.cloned(),
             quality_slots,
             rt_capable: raytracing_supported,
             rt_static_vertex_count: vertices.len(),
