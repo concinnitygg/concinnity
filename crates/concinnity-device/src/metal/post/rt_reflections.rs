@@ -30,9 +30,9 @@ use crate::metal::slang_shaders::SlangLib;
 
 // Fragment sampler index the textured variant reads the bindless pool through.
 // slangc splits the combined screen sources into texture + sampler pairs at
-// 0..3 and reserves 4..3+MAX_PROBES for the probe cube array, so the pool's own
-// sampler lands past both runs; the emitted `[[sampler(12)]]` is what pins it.
-const RT_POOL_SAMPLER_INDEX: usize = 12;
+// 0..3, then the probe block's sampler takes 4, so the pool's own sampler lands
+// after them; the emitted `[[sampler(5)]]` is what pins it.
+const RT_POOL_SAMPLER_INDEX: usize = 5;
 
 // Build one RT-reflection pipeline from the given single-source variant: a
 // fullscreen-triangle pass that traces a reflection ray and writes reflected
@@ -125,26 +125,17 @@ impl MtlContext {
         enc.set_fragment_texture(gb_normal_depth, 1);
         enc.set_fragment_texture(gb_roughness, 2);
         enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
-        // Local reflection-probe cubes at texture(4..4+MAX_PROBES): a missed
+        // Local reflection-probe cubes, through their argument buffer: a missed
         // reflection ray reflects the box-projected scene capture instead of
         // the foreign sky HDR (the source the forward IBL specular term uses).
-        // probe_cube_or_sky returns the sky for unbaked slots, so binding all
-        // MAX_PROBES is always valid; the ProbeSet's count gates use.
-        for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
-            enc.set_fragment_texture(self.probe_cube_or_sky(i), 4 + i);
-        }
-        // The screen sources take the post sampler at 0..2; the prefilter
-        // cube and every probe cube take the cube sampler at 3..4+MAX_PROBES,
-        // one per texture slangc split the combined declarations into. The
-        // textured variant reads the bindless pool through the repeat-address
-        // pool sampler, which lands past the probe run.
+        // The ProbeSet's count gates use.
+        self.bind_probe_cubes(&enc);
+        // The screen sources take the post sampler at 0..2; the prefilter cube
+        // at sampler(3) and the probe block's own sampler at sampler(4) take
+        // the cube sampler. The textured variant reads the bindless pool
+        // through the repeat-address pool sampler after those.
         set_fragment_sampler_range(&enc, &self.post_sampler, 0, 3);
-        set_fragment_sampler_range(
-            &enc,
-            self.cube_sampler.as_ref(),
-            3,
-            1 + concinnity_core::render::uniforms::MAX_PROBES,
-        );
+        set_fragment_sampler_range(&enc, self.cube_sampler.as_ref(), 3, 2);
         set_fragment_sampler_range(&enc, self.sampler.as_ref(), RT_POOL_SAMPLER_INDEX, 1);
         // buffer(0) params; buffers 1..3 the shared geometry the kernel
         // fetches the hit triangle from; the TLAS at buffer(4).

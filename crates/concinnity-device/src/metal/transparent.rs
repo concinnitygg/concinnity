@@ -77,13 +77,14 @@ pub(in crate::metal) fn bytes_of<T: bytemuck::NoUninit>(value: &T) -> Vec<u8> {
     bytemuck::bytes_of(value).to_vec()
 }
 
-// Fragment sampler indices past the transparent pass's cube-sampler run, which
-// slangc assigns to `glass.slang`'s two remaining combined declarations: the
-// planar resolve (declared after the probe array) and, on the textured RT
-// variant, the bindless pool. Pinned here because the emitted MSL is what
-// numbers them.
-const GLASS_PLANAR_SAMPLER_INDEX: usize = 10;
-const GLASS_POOL_SAMPLER_INDEX: usize = 11;
+// The planar reflection resolve, declared after the probe block in every
+// transparent shader that samples it. Pinned here because the emitted MSL is
+// what numbers them.
+pub(in crate::metal) const GLASS_PLANAR_TEXTURE_INDEX: usize = 3;
+const GLASS_PLANAR_SAMPLER_INDEX: usize = 3;
+// Fragment sampler index the textured RT variants read the bindless pool
+// through, past the planar resolve's.
+const GLASS_POOL_SAMPLER_INDEX: usize = 4;
 
 impl MtlContext {
     // True when the transparent pass traces a per-pixel RT reflection this frame:
@@ -169,31 +170,18 @@ impl MtlContext {
 
         // Reflection sources shared by every transparent shader that samples
         // them (glass + water): the sky prefilter cube at texture(2), the local
-        // reflection-probe cubes at texture(3..3+MAX_PROBES), the cube sampler
-        // at sampler(1), and the probe set (parallax boxes + count) at fragment
-        // buffer(7). Frame-constant, so bound once before the draw loop; a probe
-        // count of 0 keeps the sky-only fallback. `probe_cube_or_sky` returns the
-        // sky for unbaked slots, so binding all MAX_PROBES is always valid. The
-        // per-draw bindings below never touch these slots, so the state persists.
+        // reflection-probe cubes through their argument buffer, the cube
+        // sampler at sampler(1), and the probe set (parallax boxes + count) at
+        // fragment buffer(7). Frame-constant, so bound once before the draw
+        // loop; a probe count of 0 keeps the sky-only fallback. The per-draw
+        // bindings below never touch these slots, so the state persists.
         enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 2);
-        for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
-            enc.set_fragment_texture(self.probe_cube_or_sky(i), 3 + i);
-        }
-        // The cube sampler covers the prefilter cube and every probe cube.
-        // The single-source glass fragment declares those as combined
-        // texture-samplers, which slangc lowers to one sampler per texture
-        // (prefilter at 1, the probe array at 2..1+MAX_PROBES); the
-        // hand-written water and glass-mesh shaders read the same cube
-        // sampler at 1, so one contiguous run serves both.
-        super::post::fullscreen::set_fragment_sampler_range(
-            &enc,
-            self.cube_sampler.as_ref(),
-            1,
-            1 + concinnity_core::render::uniforms::MAX_PROBES,
-        );
-        // The planar resolve at texture(11) takes the post sampler at the
-        // slot after the probe run, and the bindless pool the RT variants
-        // read takes the repeat-address sampler after that.
+        self.bind_probe_cubes(&enc);
+        // The cube sampler covers the prefilter cube's own sampler at 1 and the
+        // probe block's at 2; the planar resolve takes the post sampler after
+        // them, and the bindless pool the RT variants read takes the
+        // repeat-address sampler after that.
+        super::post::fullscreen::set_fragment_sampler_range(&enc, self.cube_sampler.as_ref(), 1, 2);
         super::post::fullscreen::set_fragment_sampler_range(
             &enc,
             &self.post_sampler,
@@ -207,16 +195,17 @@ impl MtlContext {
             1,
         );
         enc.set_fragment_value(&self.probe.set, 7);
-        // A planar reflection resolve at texture(11), the default for every
-        // transparent draw so the slot is always bound (validation-safe) even
-        // for slotless / probe-path draws. water.slang + glass.slang sample it
-        // when their `planar.x` flag is set; a planar draw overrides this with
-        // ITS plane's resolve per-draw (see the collect paths). The first
-        // slot's resolve is a valid stand-in for draws that do not sample it.
+        // A planar reflection resolve at the planar texture slot, the default
+        // for every transparent draw so the slot is always bound
+        // (validation-safe) even for slotless / probe-path draws. water.slang +
+        // glass.slang sample it when their `planar.x` flag is set; a planar
+        // draw overrides this with ITS plane's resolve per-draw (see the
+        // collect paths). The first slot's resolve is a valid stand-in for
+        // draws that do not sample it.
         if let Some(planar) = self.planar_reflection.as_ref()
             && let Some(first) = planar.targets.first()
         {
-            enc.set_fragment_texture(first.resolve.as_ref(), 11);
+            enc.set_fragment_texture(first.resolve.as_ref(), GLASS_PLANAR_TEXTURE_INDEX);
         }
 
         // Ray-traced glass + water inputs. When the acceleration structure is

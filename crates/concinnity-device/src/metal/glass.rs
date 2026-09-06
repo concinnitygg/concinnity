@@ -328,7 +328,7 @@ impl MtlContext {
             ];
             // Select the sharp planar reflection when the planar pass ran this
             // frame and this pane was assigned a slot; bind that slot's resolve at
-            // texture(11) (overriding the global default). Otherwise the shader
+            // the planar slot (overriding the global default). Otherwise the shader
             // keeps the probe / sky path.
             if planar_live
                 && let Some(targets) = panel
@@ -336,7 +336,10 @@ impl MtlContext {
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
                 params.planar = 1.0;
-                fragment_textures.push((11, targets.resolve.clone()));
+                fragment_textures.push((
+                    super::transparent::GLASS_PLANAR_TEXTURE_INDEX,
+                    targets.resolve.clone(),
+                ));
             }
             let c = panel.centre;
             let sort_distance =

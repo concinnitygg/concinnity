@@ -62,11 +62,9 @@ ConstantBuffer<CompositeParams> post;
 // linear-to-PQ mapping reference.
 static const float PQ_SDR_REFERENCE_NITS = 203.0;
 
-// Width of the colour-grading LUT along one axis.
-//
-// The same slangc GetDimensions mis-lowering `combined_size` works around for
-// Sampler2D applies to a top-level Sampler3D, so this is the three-dimensional
-// twin of that pair rather than a plain call.
+// Dimensions of a combined 3D texture-sampler, the three-dimensional twin of
+// `combined_dims` and spelled out for the same reason: slangc passes the
+// sampler as HLSL's first argument, where no overload takes it.
 void combined_dims_3d(Sampler3D<float4> s, out uint w, out uint h, out uint d)
 {
     __target_switch
@@ -78,17 +76,12 @@ void combined_dims_3d(Sampler3D<float4> s, out uint w, out uint h, out uint d)
     }
 }
 
+// Width of the colour-grading LUT along one axis.
 float lut_axis_size(Sampler3D<float4> s)
 {
-    __target_switch
-    {
-    case metal:
-        __intrinsic_asm "float($0.get_width())";
-    default:
-        uint w, h, d;
-        combined_dims_3d(s, w, h, d);
-        return float(w);
-    }
+    uint w, h, d;
+    combined_dims_3d(s, w, h, d);
+    return float(w);
 }
 
 // PQ inverse-EOTF (PQ OETF / encode). Constants from SMPTE ST 2084 / ITU-R

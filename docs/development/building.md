@@ -11,7 +11,7 @@ which is whatever the target renders with:
 
 ## Cargo features
 
-The `concinnity` facade crate, which is what an application depends on, has
+The `concinnity` crate, which is what an application depends on, has
 these:
 
 | Feature   | Default | What it adds                                                                |
@@ -96,32 +96,19 @@ needed for an SDK installed somewhere `vendor.py` did not put it.
 | `CN_STREAMLINE_SDK` | build       | `vendor/streamline-*`                                                               | NVIDIA Streamline, for DLSS                                                                                      |
 | `CN_DXC_SDK`        | build       | the Windows SDK's `bin`, under `%ProgramFiles(x86)%`                                | A standalone DirectX Shader Compiler, over the Windows SDK's                                                     |
 
-A vendored SDK needs no variable set. There is no third fallback to a stock
-install path: these unpack wherever their user puts them, so any hardcoded
-location would only be right by accident and would report a path nobody has
-instead of saying nothing was found. The engine's
-shaders are written once as `.slang` and compiled at build time, so a binary
-built with `slangc` present carries them wherever it goes; one built without it
-compiles them at renderer init instead and then needs `slangc` on every host
-that runs it. Hot-reload (`cn debug`, `cn editor`) and a macOS Vulkan build
-recompile shaders at runtime, so both need it present then too. The floor is
-release **2026.1** -- earlier ones emit SPIR-V declaring capabilities the shaders
-never use, which Vulkan rejects. The Windows Vulkan SDK bundles a new enough
-one; the LunarG Linux packages have not.
-
 ### Turning a feature off
 
 Each of these defaults to on and is disabled with `=0`. They gate whether the
 build links or bundles the SDK at all, so they take effect at build time, not at
 launch.
 
-| Variable                | Default | Effect when off                                     |
-| ----------------------- | ------- | --------------------------------------------------- |
-| `CN_ENABLE_FFX_FSR3`    | on      | No FSR 3; upscaling falls back to native resolution |
-| `CN_ENABLE_XESS`        | on      | No XeSS                                             |
-| `CN_ENABLE_DLSS`        | on      | No DLSS                                             |
+| Variable                | Default | Effect when off                                        |
+| ----------------------- | ------- | ------------------------------------------------------ |
+| `CN_ENABLE_FFX_FSR3`    | on      | No FSR 3; upscaling falls back to native resolution    |
+| `CN_ENABLE_XESS`        | on      | No XeSS                                                |
+| `CN_ENABLE_DLSS`        | on      | No DLSS                                                |
 | `CN_ENABLE_DXC`         | on      | No bundled DXC; hardware ray tracing needs one on PATH |
-| `CN_ENABLE_AGILITY_SDK` | **off** | Not applicable; this one is opt-_in_, see below     |
+| `CN_ENABLE_AGILITY_SDK` | **off** | Not applicable; this one is opt-_in_, see below        |
 
 The three upscalers are loaded with `LoadLibrary` at runtime and degrade to a
 fallback when their DLL is absent, so a build that includes one still runs on a

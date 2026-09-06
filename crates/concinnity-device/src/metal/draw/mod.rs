@@ -4,8 +4,7 @@
 // encoders live in sibling files:
 //
 //   shadow.rs    cascaded shadow map (depth-only, one render pass per cascade)
-//   main.rs      main HDR pass + bindless/legacy/instanced/skinned static
-//                geometry
+//   main.rs      main HDR pass, GPU-driven bindless geometry
 //   composite.rs ACES tonemap + FXAA composite + text overlay
 //
 // Other passes (SSAO, SSR pre + resolve, decals, fog, velocity, TAA, bloom,
@@ -352,6 +351,13 @@ impl MtlContext {
         let inv_vp = mat4_inverse(vp);
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
 
+        // The probe cube handles, for every pass that samples the set. Built
+        // ahead of the bindless prep below and outside its world-hidden gate:
+        // the transparent and post passes read the set without a static draw
+        // list of their own, and a slot left holding last frame's ring buffer
+        // would outlive the frame that wrote it.
+        self.probe.cube_args = Some(self.build_probe_cube_args(ring_slot)?);
+
         // While the world is hidden behind an opaque menu, the surviving Main
         // pass is fed an empty scene -- no bindless object / cull / texture
         // buffers, no instanced clusters, and no acceleration-structure refresh
@@ -398,7 +404,6 @@ impl MtlContext {
             } else {
                 None
             };
-
             // Keep the RT acceleration structure current with this frame's
             // transforms before any pass reads `rt_accel`. The default `Auto` mode
             // rebuilds the TLAS only when a participating prop actually moved; a

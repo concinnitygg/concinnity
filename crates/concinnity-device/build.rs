@@ -41,8 +41,9 @@ const SLANG_MAIN_DEFINES: &[(&str, &str)] = &[
 const SLANG_DXIL_MAIN_DEFINES: &[(&str, &str)] = &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")];
 
 // The SSR resolve is the one post pass that reads the reflection-probe array,
-// so it needs the same probe count the main pass bakes in.
-const SLANG_PROBE_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8")];
+// so it needs the same probe count the main pass bakes in. `METAL_ABI` selects
+// the argument-buffer form of that array.
+const SLANG_PROBE_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
 
 // Every register the bindless main root signature in
 // `src/directx/init/pipelines.rs` declares, as (parameter, HLSL register). The
@@ -1031,6 +1032,7 @@ fn assert_slang_metal_abi() {
         };
         let msl = slang::compile(&job, &out_dir).expect("slang ABI check compile");
         let msl = String::from_utf8_lossy(&msl);
+        assert_every_param_is_attributed(abi, &msl_entry_params(&msl, abi.entry));
         for (param, attribute) in abi.slots {
             assert!(
                 msl_binds(&msl, param, attribute),
@@ -1046,6 +1048,32 @@ fn assert_slang_metal_abi() {
     }
 }
 
+// slangc emits a resource array declared at *global* scope with no
+// `[[texture(n)]]` / `[[sampler(n)]]` at all, leaving the Metal compiler to
+// place it at whatever slot happens to be unused -- a placement the emitted MSL
+// cannot be read for, and one an unrelated declaration silently moves. Nothing
+// in the tree may take that shape: the reflection-probe cube arrays that used
+// to are `ParameterBlock`s now, one pinned buffer slot each, which the rows
+// above assert like any other.
+fn assert_every_param_is_attributed(abi: &MetalAbi, params: &[String]) {
+    let unattributed: Vec<&str> = params
+        .iter()
+        .filter(|p| !p.contains("[["))
+        .map(|p| msl_param_name(p))
+        .collect();
+    assert!(
+        unattributed.is_empty(),
+        "{} ({}): the emitted MSL has entry parameters with no binding attribute: \
+         {unattributed:?}. slangc gives a global-scope resource array no [[texture(n)]] / \
+         [[sampler(n)]], so the Metal compiler places it at the next unused slot and no host \
+         binding can be checked against it. Declare it inside a ParameterBlock instead (see \
+         main_bindless.slang's METAL_ABI block, or `ProbeCubes` in this file's five \
+         probe-sampling shaders).",
+        abi.file,
+        abi.entry,
+    );
+}
+
 // Whether the emitted MSL binds `param` at `attribute`. Emitted parameter names
 // carry a `_<n>` suffix whose number is the compiler's own (`joints_3`), so the
 // name is matched up to it.
@@ -1058,6 +1086,59 @@ fn msl_binds(msl: &str, param: &str, attribute: &str) -> bool {
             .and_then(|name| name.rsplit_once('_'))
             .is_some_and(|(head, tail)| head == param && tail.chars().all(|c| c.is_ascii_digit()))
     })
+}
+
+// The parameter list of the one entry point in an emitted MSL translation unit,
+// split at top-level commas.
+fn msl_entry_params(msl: &str, entry: &str) -> Vec<String> {
+    let stage = ["[[fragment]]", "[[vertex]]", "[[kernel]]"]
+        .iter()
+        .find_map(|tag| msl.find(tag))
+        .unwrap_or_else(|| panic!("emitted MSL declares no entry point for `{entry}`"));
+    let open = stage
+        + msl[stage..]
+            .find('(')
+            .unwrap_or_else(|| panic!("emitted MSL entry point `{entry}` has no parameter list"));
+    assert!(
+        msl[stage..open].trim_end().ends_with(entry),
+        "emitted MSL entry point is not `{entry}`: {}",
+        &msl[stage..open]
+    );
+
+    let mut params = Vec::new();
+    let mut depth = 0i32;
+    let mut start = open + 1;
+    for (at, ch) in msl[open..].char_indices().map(|(i, c)| (open + i, c)) {
+        match ch {
+            '(' | '<' | '[' => depth += 1,
+            ')' | '>' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    params.push(msl[start..at].trim().to_string());
+                    break;
+                }
+            }
+            ',' if depth == 1 => {
+                params.push(msl[start..at].trim().to_string());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    params
+}
+
+// An emitted parameter's source name. The `_<n>` suffix is the compiler's own
+// (`probe_cubes_texture_1`), so it is trimmed off.
+fn msl_param_name(param: &str) -> &str {
+    let name = param
+        .rsplit(|c: char| c.is_whitespace())
+        .next()
+        .unwrap_or(param);
+    match name.rsplit_once('_') {
+        Some((head, tail)) if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) => head,
+        _ => name,
+    }
 }
 
 // One entry point and the Metal slots its host encoder writes, as
@@ -1127,6 +1208,276 @@ const SLANG_METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("cluster_list_sb", "buffer(12)"),
             ("spot_shadows_sb", "buffer(13)"),
             ("area_lights_sb", "buffer(14)"),
+        ],
+    },
+    // The five shaders that sample the reflection-probe cube set. Every slot
+    // here is what `metal/post/ssr.rs`, `metal/post/rt_reflections.rs` and
+    // `metal/transparent.rs` bind, and all of them are order-assigned rather
+    // than pinned in the source -- only the buffers carry register() numbers.
+    // The probe block is the exception and the reason these rows exist: it is
+    // the one array in the set, and putting it at a pinned buffer slot is what
+    // keeps it out of the texture namespace entirely.
+    MetalAbi {
+        file: "ssr.slang",
+        entry: "ssr_resolve_fragment",
+        defines: SLANG_PROBE_DEFINES,
+        slots: &[
+            ("params", "buffer(0)"),
+            ("probe_set", "buffer(1)"),
+            ("scene_texture", "texture(0)"),
+            ("scene_sampler", "sampler(0)"),
+            ("gbuffer_texture", "texture(1)"),
+            ("gbuffer_sampler", "sampler(1)"),
+            ("rough_tex_texture", "texture(2)"),
+            ("rough_tex_sampler", "sampler(2)"),
+            ("prefilter_texture", "texture(3)"),
+            ("prefilter_sampler", "sampler(3)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(4)"),
+        ],
+    },
+    MetalAbi {
+        file: "rt_reflections.slang",
+        entry: "rt_reflections_fragment",
+        defines: SLANG_RT_DEFINES,
+        slots: &[
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(5)"),
+            ("sidx", "buffer(6)"),
+            ("probe_set", "buffer(8)"),
+            ("scene_tex_texture", "texture(0)"),
+            ("scene_tex_sampler", "sampler(0)"),
+            ("gbuffer_texture", "texture(1)"),
+            ("gbuffer_sampler", "sampler(1)"),
+            ("rough_tex_texture", "texture(2)"),
+            ("rough_tex_sampler", "sampler(2)"),
+            ("prefilter_texture", "texture(3)"),
+            ("prefilter_sampler", "sampler(3)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(4)"),
+        ],
+    },
+    MetalAbi {
+        file: "rt_reflections.slang",
+        entry: "rt_reflections_fragment",
+        defines: SLANG_RT_TEXTURED_DEFINES,
+        slots: &[
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(5)"),
+            ("sidx", "buffer(6)"),
+            ("pool", "buffer(7)"),
+            ("pool_sampler", "sampler(5)"),
+            ("probe_set", "buffer(8)"),
+            ("scene_tex_texture", "texture(0)"),
+            ("scene_tex_sampler", "sampler(0)"),
+            ("gbuffer_texture", "texture(1)"),
+            ("gbuffer_sampler", "sampler(1)"),
+            ("rough_tex_texture", "texture(2)"),
+            ("rough_tex_sampler", "sampler(2)"),
+            ("prefilter_texture", "texture(3)"),
+            ("prefilter_sampler", "sampler(3)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(4)"),
+        ],
+    },
+    MetalAbi {
+        file: "glass.slang",
+        entry: "glass_fragment",
+        defines: SLANG_GLASS_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("planar_reflection_texture", "texture(3)"),
+            ("planar_reflection_sampler", "sampler(3)"),
+        ],
+    },
+    MetalAbi {
+        file: "glass.slang",
+        entry: "glass_rt_fragment",
+        defines: SLANG_GLASS_RT_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(8)"),
+            ("sidx", "buffer(9)"),
+        ],
+    },
+    MetalAbi {
+        file: "glass.slang",
+        entry: "glass_rt_fragment",
+        defines: SLANG_GLASS_RT_TEXTURED_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(8)"),
+            ("sidx", "buffer(9)"),
+            ("pool", "buffer(10)"),
+            ("pool_sampler", "sampler(4)"),
+        ],
+    },
+    MetalAbi {
+        file: "glass_mesh.slang",
+        entry: "glass_mesh_rt_fragment",
+        defines: SLANG_GLASS_MESH_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(8)"),
+            ("sidx", "buffer(9)"),
+        ],
+    },
+    MetalAbi {
+        file: "glass_mesh.slang",
+        entry: "glass_mesh_rt_fragment",
+        defines: SLANG_GLASS_MESH_TEXTURED_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(8)"),
+            ("sidx", "buffer(9)"),
+            ("pool", "buffer(10)"),
+            ("pool_sampler", "sampler(4)"),
+        ],
+    },
+    MetalAbi {
+        file: "water.slang",
+        entry: "water_fragment",
+        defines: SLANG_WATER_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("planar_reflection_texture", "texture(3)"),
+            ("planar_reflection_sampler", "sampler(3)"),
+        ],
+    },
+    MetalAbi {
+        file: "water.slang",
+        entry: "water_rt_fragment",
+        defines: SLANG_WATER_RT_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("planar_reflection_texture", "texture(3)"),
+            ("planar_reflection_sampler", "sampler(3)"),
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(8)"),
+            ("sidx", "buffer(9)"),
+        ],
+    },
+    MetalAbi {
+        file: "water.slang",
+        entry: "water_rt_fragment",
+        defines: SLANG_WATER_RT_TEXTURED_DEFINES,
+        slots: &[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("probe_set", "buffer(7)"),
+            ("scene_color_texture", "texture(0)"),
+            ("scene_color_sampler", "sampler(0)"),
+            ("scene_depth", "texture(1)"),
+            ("prefilter_cube_texture", "texture(2)"),
+            ("prefilter_cube_sampler", "sampler(1)"),
+            ("probe_cube_set", "buffer(11)"),
+            ("probe_cube_sampler", "sampler(2)"),
+            ("planar_reflection_texture", "texture(3)"),
+            ("planar_reflection_sampler", "sampler(3)"),
+            ("rt_params", "buffer(0)"),
+            ("verts", "buffer(1)"),
+            ("indices", "buffer(2)"),
+            ("geom", "buffer(3)"),
+            ("scene_tlas", "buffer(4)"),
+            ("sverts", "buffer(8)"),
+            ("sidx", "buffer(9)"),
+            ("pool", "buffer(10)"),
+            ("pool_sampler", "sampler(4)"),
         ],
     },
 ];

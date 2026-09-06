@@ -9,9 +9,13 @@ property of the revision rather than of the host.
     vendor.py fetch [component ...]     download the pinned release
     vendor.py build [component ...]     build what no upstream publishes
     vendor.py status [component ...]    report what the build would pick
+    vendor.py selftest                  check the digest gate, downloading nothing
 
 With no component named, every one applies, and a component the verb does not
 apply to is skipped: most are downloaded, `fidelityfx-vk` is built.
+
+A downloaded archive is checked against a pinned sha256 before it is unpacked,
+so a release re-tagged in place fails the fetch rather than reaching a build.
 
 Nothing here runs during `cargo build`: a build script that reached the network
 could not build offline, could not build on docs.rs, and would pull a dependency
@@ -65,6 +69,17 @@ class Slang:
         ("Windows", "ARM64"): "windows-aarch64",
         ("Windows", "AMD64"): "windows-x86_64",
     }
+    # sha256 of each published archive, taken from the release's own asset
+    # digests. Raising `release` means replacing every one of these: a pin that
+    # outlives its version accepts nothing, which is the intended failure.
+    sha256 = {
+        "macos-aarch64": "31bb295d0ead64f5906ae140fb42067029412ca02330c11ff8ea63986560216a",
+        "macos-x86_64": "ced9cd7f3773cdf1cb083bab96a806942d16d139614be104de47492253a38621",
+        "linux-aarch64": "ce0f5a1a0dc1824aa4d89b17df22c8c06911dc37b31a75cadb50850f97bd4bea",
+        "linux-x86_64": "6c271f69309af124cf948a9f442b813fec190feb46ff7a883e11001d29df005f",
+        "windows-aarch64": "315a18a2ee56803bf558778d91481b47cefb51df14207342afdc9a4d9166c588",
+        "windows-x86_64": "0fd3e6a9a5d05ed4cdd000d467f1ffb5d9701b827e83bfb428902a45c37ef8a5",
+    }
 
     @staticmethod
     def payload():
@@ -112,6 +127,8 @@ class WindowsSdk:
     reports_version = False
     build_payload = None
     slugs = WINDOWS_X64
+    # No pinned digest yet, so `fetch` reports what it got and unpacks it.
+    sha256 = None
     watchers = ("build.rs", "crates/concinnity-device/build.rs",
                 "crates/concinnity-engine/build.rs", "crates/concinnity-dev/build.rs")
 
@@ -310,6 +327,28 @@ def install_dir(component, slug, release=None):
     return VENDOR / f"{component.name}-{release or component.release}-{slug}"
 
 
+def digest_error(pins, slug, digest):
+    """Why `digest` is not the archive `slug` was pinned to, or None if it is."""
+    if pins is None:
+        return None
+    expected = pins.get(slug)
+    if expected is None:
+        return f"no pinned sha256 for {slug}; add one before fetching it"
+    if digest != expected:
+        return f"sha256 {digest} does not match the pinned {expected}"
+    return None
+
+
+def verify(component, slug, archive, url):
+    """Refuse an archive that is not what the pin names, before it is unpacked."""
+    digest = hashlib.sha256(archive).hexdigest()
+    reason = digest_error(component.sha256, slug, digest)
+    if reason is not None:
+        sys.exit(f"{url}: {reason}")
+    state = "unpinned" if component.sha256 is None else "pinned"
+    print(f"  {len(archive) / 1e6:.1f} MB, sha256 {digest} ({state})")
+
+
 def fetch(component, args):
     if component.url is None:
         if args.named:
@@ -335,7 +374,7 @@ def fetch(component, args):
         sys.exit(f"{url}: HTTP {e.code} {e.reason}")
     except urllib.error.URLError as e:
         sys.exit(f"{url}: {e.reason}")
-    print(f"  {len(archive) / 1e6:.1f} MB, sha256 {hashlib.sha256(archive).hexdigest()}")
+    verify(component, slug, archive, url)
 
     version = unpack(component, archive, url, target)
     touch_watchers(component)
@@ -452,6 +491,7 @@ def status(component, args):
         return 0
     print(f"  host      {slug}")
     print(f"  pinned    {component.release}")
+    print(f"  digest    {(component.sha256 or {}).get(slug) or 'unpinned'}")
 
     vendored = sorted(
         p
@@ -470,6 +510,34 @@ def status(component, args):
         found = component.version(payload) if payload.is_file() else None
         print(f"  {label:<9} {payload}  {found or 'unusable'}")
 
+    return 0
+
+
+def selftest():
+    """Exercise the digest gate. Downloads nothing."""
+    pins = {"linux-x86_64": "a" * 64}
+    cases = [
+        (None, "linux-x86_64", "b" * 64, None),
+        (pins, "linux-x86_64", "a" * 64, None),
+        (pins, "linux-x86_64", "b" * 64, "does not match the pinned"),
+        (pins, "macos-aarch64", "a" * 64, "no pinned sha256"),
+    ]
+    for component_pins, slug, digest, want in cases:
+        got = digest_error(component_pins, slug, digest)
+        ok = got is None if want is None else got is not None and want in got
+        if not ok:
+            sys.exit(f"selftest: {slug} {digest[:8]} gave {got!r}, wanted {want!r}")
+
+    missing = [
+        f"{c.name}/{slug}"
+        for c in COMPONENTS.values()
+        if c.sha256 is not None
+        for slug in c.slugs.values()
+        if slug not in c.sha256
+    ]
+    if missing:
+        sys.exit(f"selftest: pinned component(s) missing a digest: {', '.join(missing)}")
+    print(f"vendor selftest: digest gate OK, {len(cases)} cases")
     return 0
 
 
@@ -492,8 +560,11 @@ def main(argv=None):
         "--generator", default="Visual Studio 18 2026", help="CMake generator to build with"
     )
     add("status", "report what the build would pick", status)
+    sub.add_parser("selftest", help="check the digest gate, downloading nothing")
 
     args = parser.parse_args(argv)
+    if args.command == "selftest":
+        return selftest()
     if args.command is None:
         parser.print_help()
         print("\ncomponents:")

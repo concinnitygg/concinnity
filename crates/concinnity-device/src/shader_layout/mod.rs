@@ -140,6 +140,45 @@ fn main_bindless_layouts_match_the_shader() {
     );
 }
 
+// The Metal main pass reaches every texture and sampler through the argument
+// buffers at buffer(7) and buffer(10), never through a discrete slot: an
+// indirect command carries no texture binding, so a discrete one would be
+// unreachable from the ICB-executed draws the pass is made of. The Metal
+// encoder binds buffers only (`bind_main_pass_shared` in metal/draw/main.rs),
+// so a texture or sampler added to the METAL_ABI block would compile to a
+// parameter nothing fills and sample undefined contents.
+#[test]
+fn the_metal_main_pass_declares_no_discrete_texture_or_sampler() {
+    if !crate::slangc_gate::slangc_available() {
+        return;
+    }
+    let json = programs::reflection(&programs::MAIN_BINDLESS_VERT, Target::Metal)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let params = reflect::global_params(&json).unwrap_or_else(|e| panic!("{e}"));
+    let discrete: Vec<&str> = params
+        .iter()
+        .filter(|p| {
+            p.kinds
+                .iter()
+                .any(|k| k == "shaderResource" || k == "samplerState")
+        })
+        .map(|p| p.name.as_str())
+        .collect();
+    assert!(
+        discrete.is_empty(),
+        "main_bindless.slang binds {discrete:?} to a discrete Metal texture or sampler slot; \
+         put it in BindlessTextures or EngineSamplers, which the ICB draws can reach"
+    );
+    // The check is only meaningful if the reflection is the Metal one and it
+    // saw the argument buffers at all.
+    for block in ["tex", "samps"] {
+        assert!(
+            params.iter().any(|p| p.name == block),
+            "the Metal reflection declares no `{block}` parameter block"
+        );
+    }
+}
+
 #[test]
 fn cull_layouts_match_the_shader() {
     check(&programs::CULL_KERNEL, &mirrors::geometry::cull());

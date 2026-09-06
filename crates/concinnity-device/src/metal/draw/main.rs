@@ -234,8 +234,6 @@ impl MtlContext {
         // Bindless ICB to execute instead of the main cull's. The planar mirror
         // render passes its slot's mirror ICB (culled against the reflected
         // frustum); the probe capture passes `None` (reuses the main cull ICB).
-        // Only consulted on the bindless static path; the legacy fallback uses
-        // `visible` regardless.
         icb_override: Option<&ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
     ) -> Result<u32, String> {
         let FaceTargets {
@@ -521,13 +519,6 @@ impl MtlContext {
         draw_calls
     }
 
-    // Apply the bindings every main-pass sub-path needs (view uniforms,
-    // lights, shadow + IBL + SSAO bindings, the shared vertex buffer at
-    // binding 1). With the serial encoder this is re-applied on each
-    // sub-path entry (duplicating some state writes) so the per-path
-    // helpers stay shape-compatible with a future parallel-encoder retry.
-    // Returns false without touching the encoder when the world has no main
-    // pipeline (no 3D scene content); the caller then skips its draws.
     // Bind the clustered-lighting inputs the forward pass reads: the params at
     // fragment buffer(11) + the per-cluster light-index list at buffer(12). Bound
     // once per pass (the value is pass-level, shared by every geometry sub-path)
@@ -552,6 +543,14 @@ impl MtlContext {
         enc.set_fragment_buffer(&self.light_cull.cluster_buffer, 0, 12);
     }
 
+    // Apply the encoder state every main-pass encode needs: the pipeline and
+    // depth state, the view uniforms, the shared vertex buffer at binding 1,
+    // and the light / shadow / probe records the fragment stage reads. All of
+    // it is buffers, because the ICB-executed draws inherit encoder buffer
+    // bindings but reach every texture and sampler through the argument
+    // buffers `execute_bindless_static_icb` binds instead.
+    // Returns false without touching the encoder when the world has no main
+    // pipeline (no 3D scene content); the caller then skips its draws.
     fn bind_main_pass_shared(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -570,51 +569,22 @@ impl MtlContext {
         // Local-light storage buffer at fragment buffer(8). Encoder-bound
         // buffers are inherited by the ICB-executed bindless draws (the same
         // way the object buffer at binding 9 is), so this single bind covers
-        // the legacy and GPU-driven paths and the planar / probe re-renders.
+        // the main pass and the planar / probe re-renders.
         enc.set_fragment_buffer(&self.local_light_buffer, 0, 8);
         // Per-slice spot shadow projections at fragment buffer(13), inherited
         // by the ICB draws like the local lights above. The matching depth
-        // array is a discrete texture on the legacy path only; the bindless
-        // path reaches it through the BindlessTextures argument buffer,
-        // because discrete texture bindings break ICB compatibility.
+        // array is not bound here: every texture the pass samples travels in
+        // the BindlessTextures argument buffer, because discrete texture
+        // bindings break ICB compatibility.
         enc.set_fragment_buffer(&self.spot_shadow.buffer, 0, 13);
         // Rect area-light extents at fragment buffer(14), indexed by
         // GpuLight.data_index. Inherited by the ICB draws like the buffers
         // above, so this one bind covers every main-pass variant.
         enc.set_fragment_buffer(&self.area_light_buffer, 0, 14);
         enc.set_fragment_value(&self.shadow.uniforms, 5);
-        enc.set_fragment_texture(self.shadow.map.as_ref(), 2);
-        enc.set_fragment_texture(self.spot_shadow.map.as_ref(), 14);
-        // Area-light LTC tables. The cube sampler at sampler(2) is a plain
-        // linear clamp-to-edge, which is what the lookup wants, so no extra
-        // sampler slot is needed.
-        enc.set_fragment_texture(self.ltc_matrix_texture.as_ref(), 15);
-        enc.set_fragment_texture(self.ltc_magnitude_texture.as_ref(), 16);
-        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), 1);
-        // IBL bindings: irradiance + prefilter cubes at texture(3) / texture(4)
-        // and a shared linear-clamp sampler at sampler(2). Always bound; the
-        // shader uses prefilter_mip_count == 0 to detect the fallback case.
-        enc.set_fragment_texture(self.env_map.irradiance.as_ref(), 3);
-        enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 4);
-        enc.set_fragment_sampler(self.cube_sampler.as_ref(), 2);
-        // SSAO occlusion at texture(5): the blurred AO when SSAO is on,
-        // else a 1x1 white texture so shade_surface samples a constant 1.0
-        // and the ambient term is left untouched. (The bindless static
-        // pass instead reaches it through the BindlessTextures argument
-        // buffer; see build_bindless_texture_args.)
-        enc.set_fragment_texture(self.ao_output_texture(), 5);
-        // Reflection-probe cube array at texture(6 .. 6+MAX_PROBES): the legacy
-        // path now selects + blends per-surface from the same probe set as the
-        // bindless path (which reaches the cubes through the BindlessTextures arg
-        // buffer instead, ICB-incompatible discrete binds being the reason).
-        // probe_cube_or_sky returns the sky prefilter for unbaked slots, so all
-        // MAX_PROBES are always valid. Skybox + diffuse keep texture 3/4.
-        for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
-            enc.set_fragment_texture(self.probe_cube_or_sky(i), 6 + i);
-        }
         // Reflection-probe set (count + per-probe parallax boxes) at fragment
-        // buffer(6) (a buffer slot, distinct from the texture(6) array). `EMPTY`
-        // until a bake; the shader weights every box covering the surface.
+        // buffer(6). `EMPTY` until a bake; the shader weights every box
+        // covering the surface.
         enc.set_fragment_value(&self.probe.set, 6);
         true
     }

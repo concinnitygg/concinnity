@@ -191,6 +191,10 @@ pub(super) struct ProbeState {
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
     pub retire_pool: super::transient::RetirePool<super::probe::RetiredBake>,
+    // This frame's `ProbeCubes` argument buffer, written by
+    // `build_probe_cube_args` and bound by every pass that samples the cubes.
+    // `None` before the first frame builds one.
+    pub cube_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
 // One baked reflection probe: the prefiltered radiance cube the specular term
@@ -278,6 +282,9 @@ pub(super) struct FrameRings {
     // encoder fills the slot in place each frame; see
     // `build_bindless_texture_args`.
     pub bindless_tex: super::transient::TransientRing,
+    // Ring of per-frame `ProbeCubes` argument buffers, written by
+    // `build_probe_cube_args`.
+    pub probe_cube: super::transient::TransientRing,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
     pub joint: super::transient::JointRing,
@@ -550,6 +557,9 @@ pub(crate) struct MtlContext {
     // streamed texture swaps are picked up and the GPU never reads a buffer
     // the CPU is mid-rewrite. (A main-pass resource, not part of `cull`.)
     pub(super) bindless_tex_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+    // Argument encoder for the `ProbeCubes` block the five probe-sampling
+    // fragments declare; see `probe_cubes::probe_cube_arg_encoder`.
+    pub(super) probe_cube_arg_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
     // The engine sampler block bound at fragment buffer(10) for the
     // single-source main program: three static samplers written once at init
     // (samplers never stream, so no per-frame ring is needed). `None` when a

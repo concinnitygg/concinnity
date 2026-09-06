@@ -73,9 +73,9 @@ ConstantBuffer<SsrParams> params;
 // them still leave s4..s11 "not fully bound". SPLIT_PROBE_SAMPLER therefore
 // declares the array separated, with one sampler the root signature hands out
 // statically, the same shape the bindless main pass uses for the same array.
-// Metal and Vulkan keep the combined form: it lands on texture(4..11) /
-// sampler(4..11) and on the forward global set's binding 8 respectively, which
-// is what both hosts already bind.
+// Metal takes an argument buffer, which is what keeps the array out of the
+// texture namespace slangc numbers by declaration order. Vulkan keeps the
+// combined form on the forward global set's binding 8, which is what it binds.
 #if defined(SPLIT_PROBE_SAMPLER)
 TextureCube<float4> probe_cubes[MAX_PROBES];
 SamplerState probe_cube_sampler;
@@ -83,6 +83,21 @@ SamplerState probe_cube_sampler;
 float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
 {
     return probe_cubes[i].SampleBias(probe_cube_sampler, dir, lod).rgb;
+}
+#elif defined(METAL_ABI)
+// Metal reaches the cubes through an argument buffer: a resource array at
+// global scope emits with no [[texture(n)]], and the compiler then places it
+// at whatever slot happens to be unused.
+struct ProbeCubes
+{
+    TextureCube<float4> probe_cubes[MAX_PROBES];
+};
+ParameterBlock<ProbeCubes> probe_cube_set : register(b11);
+SamplerState probe_cube_sampler;
+
+float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
+{
+    return probe_cube_set.probe_cubes[i].SampleBias(probe_cube_sampler, dir, lod).rgb;
 }
 #else
 [[vk::binding(8, 1)]] SamplerCube<float4> probe_cubes[MAX_PROBES];

@@ -215,6 +215,11 @@ impl MtlContext {
             } else {
                 (None, None, None, None)
             };
+        // The probe cube argument encoder is world-independent: every pass that
+        // samples the set declares the same block, and the layout is fixed by
+        // MAX_PROBES rather than by world content.
+        let probe_cube_arg_encoder =
+            super::probe_cubes::probe_cube_arg_encoder(&device, hot_reload)?;
         let (cull_pipeline, cull_pipeline_phase2, cull_encode_pipeline, cull_icb_arg_encoder) =
             match cull {
                 Some(c) => (
@@ -1181,6 +1186,7 @@ impl MtlContext {
                 mirror_icb_capacity: 0,
             },
             bindless_tex_arg_encoder,
+            probe_cube_arg_encoder,
             bindless_sampler_args,
             depth_state,
             depth_state_read_only,
@@ -1250,6 +1256,7 @@ impl MtlContext {
                 prefiltering: None,
                 prefilter: probe_prefilter,
                 retire_pool: super::transient::RetirePool::new(),
+                cube_args: None,
             },
             cube_sampler,
             text: super::context::TextState {
@@ -1409,6 +1416,7 @@ impl MtlContext {
                 draw_args: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
                 prev_model: super::transient::TransientRing::new(frames_in_flight),
                 bindless_tex: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
+                probe_cube: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
                 joint: super::transient::JointRing::new(frames_in_flight.max(1) + 1),
                 object_scratch: Vec::new(),
                 draw_args_scratch: Vec::new(),

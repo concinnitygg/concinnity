@@ -338,6 +338,10 @@ impl MtlContext {
             self.ssr.resolve_pipeline.is_some(),
             build_ssr_pipeline(device, hr)
         );
+        // The probe cube argument encoder is read off the SSR resolve fragment,
+        // so an edit to that shader's block has to reach it whether or not the
+        // world runs SSR.
+        let probe_cube_arg_encoder = super::probe_cubes::probe_cube_arg_encoder(device, hr)?;
         let reflection_composite = rebuild_if_live!(
             self.ssr.composite_pipeline.is_some(),
             build_reflection_composite_pipeline(device, hr)
@@ -471,6 +475,7 @@ impl MtlContext {
         if let Some(p) = ssr_resolve {
             self.ssr.resolve_pipeline = Some(p);
         }
+        self.probe_cube_arg_encoder = probe_cube_arg_encoder;
         if let Some(p) = reflection_composite {
             self.ssr.composite_pipeline = Some(p);
         }

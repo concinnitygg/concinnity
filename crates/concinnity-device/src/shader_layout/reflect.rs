@@ -130,6 +130,42 @@ fn block(map: &serde_json::Map<String, Value>) -> Option<(String, usize)> {
     Some((name, size))
 }
 
+// One global-scope shader parameter and the slot kinds it binds. A discrete
+// texture reports `shaderResource`, a discrete sampler `samplerState`; a
+// buffer, a constant buffer and a parameter block all report `constantBuffer`
+// (the Metal buffer slot they occupy).
+pub(super) struct GlobalParam {
+    pub name: String,
+    pub kinds: Vec<String>,
+}
+
+// The global parameters of a reflection, in declaration order. Entry-point
+// parameters are not included: they bind by varying index, not by slot.
+pub(super) fn global_params(json: &str) -> Result<Vec<GlobalParam>, String> {
+    let root: Value = serde_json::from_str(json).map_err(|e| format!("reflection json: {e}"))?;
+    let params = root
+        .get("parameters")
+        .and_then(Value::as_array)
+        .ok_or("reflection json: no global parameters")?;
+    Ok(params
+        .iter()
+        .filter_map(|param| {
+            let name = param.get("name")?.as_str()?.to_string();
+            let kinds = param
+                .get("bindings")
+                .and_then(Value::as_array)
+                .map(|bindings| {
+                    bindings
+                        .iter()
+                        .filter_map(|b| Some(b.get("kind")?.as_str()?.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(GlobalParam { name, kinds })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +224,40 @@ mod tests {
     #[test]
     fn malformed_json_reports_rather_than_panics() {
         assert!(structs("{ not json").is_err());
+        assert!(global_params("{ not json").is_err());
+    }
+
+    const BOUND: &str = r#"{
+        "parameters": [
+            {"name": "cb", "bindings": [{"kind": "constantBuffer", "index": 0}]},
+            {"name": "tex", "bindings": [
+                {"kind": "shaderResource", "index": 2},
+                {"kind": "descriptorTableSlot", "index": 2}
+            ]},
+            {"name": "samp", "bindings": [{"kind": "samplerState", "index": 1}]},
+            {"name": "unbound"}
+        ]
+    }"#;
+
+    #[test]
+    fn global_params_carry_every_slot_kind_they_bind() {
+        let found = global_params(BOUND).expect("parse");
+        let by_name: Vec<_> = found
+            .iter()
+            .map(|p| (p.name.as_str(), p.kinds.clone()))
+            .collect();
+        assert_eq!(by_name[0], ("cb", vec!["constantBuffer".to_string()]));
+        assert_eq!(
+            by_name[1],
+            (
+                "tex",
+                vec![
+                    "shaderResource".to_string(),
+                    "descriptorTableSlot".to_string()
+                ]
+            )
+        );
+        assert_eq!(by_name[2], ("samp", vec!["samplerState".to_string()]));
+        assert_eq!(by_name[3], ("unbound", Vec::new()));
     }
 }

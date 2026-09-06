@@ -105,10 +105,15 @@ pub struct SlangJob<'a> {
 }
 
 // The oldest slangc release the engine's shader output is validated against.
-// 2025.x emits SPIR-V declaring `StorageImageMultisample` for an ordinary
+// The binding constraint is Metal: through 2026.13.1, `GetDimensions` on a
+// top-level combined texture-sampler emitted an assignment into the sampler
+// half of the split pair, which the Metal compiler rejects, and the post and
+// composite passes call it. 2026.16.1 is the oldest release it is known to
+// compile on. 2025.x is excluded for a second reason that still stands: it
+// emits SPIR-V declaring `StorageImageMultisample` for an ordinary
 // multisampled sampled texture, a capability the shaders never use and that
 // Vulkan rejects unless the matching device feature is enabled.
-const MIN_SLANGC: (u32, u32) = (2026, 1);
+const MIN_SLANGC: (u32, u32) = (2026, 16);
 
 // A usable compiler: the binary to invoke and the release it reports.
 struct Slangc {
@@ -120,7 +125,7 @@ struct Slangc {
 // the compiler is known to predate the floor, the other that its `-version`
 // carried no release number to compare at all. Distribution builds do the
 // latter -- the LunarG Ubuntu package answers `lunarg-ubuntu-noble-package` --
-// and reporting that as "older than 2026.1" names a version the string never
+// and reporting that as older than the floor names a version the string never
 // stated.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Rejected {
@@ -382,8 +387,9 @@ fn unusable_message(u: &Unusable) -> String {
     match u.why {
         Rejected::Older => format!(
             "slangc {} ({origin}) is older than {}.{}, the oldest release the \
-             engine's shaders are validated against: earlier ones emit SPIR-V \
-             declaring capabilities the shaders never use. {}",
+             engine's shaders are validated against: earlier ones mis-compile \
+             the post and composite passes for Metal, and older ones still \
+             emit SPIR-V declaring capabilities the shaders never use. {}",
             u.found.version,
             MIN_SLANGC.0,
             MIN_SLANGC.1,
@@ -417,7 +423,7 @@ mod tests {
     }
 
     // A release string with no number in it is not evidence of an old
-    // compiler, and saying "older than 2026.1" about one names a version it
+    // compiler, and calling one older than the floor names a version it
     // never stated. The LunarG Ubuntu package is the case in hand: `slangc
     // -version` answers with its package tag and nothing else.
     #[test]
@@ -492,13 +498,15 @@ mod tests {
     }
 
     // The floor exists to reject the releases that miscompile the engine's
-    // shaders; 2025.17.2 is the one that was caught doing it.
+    // shaders. 2025.17.2 was caught emitting the unusable SPIR-V capability,
+    // and 2026.13.1 the Metal dimension query the post passes make.
     #[test]
     fn the_floor_rejects_a_known_bad_release() {
         let meets = |v: &str| parse_version(v).is_some_and(|v| v >= MIN_SLANGC);
         assert!(!meets("2025.17.2"));
-        assert!(meets("2026.1-52-gc8ddf20bb"));
-        assert!(meets("2026.2"));
+        assert!(!meets("2026.1-52-gc8ddf20bb"));
+        assert!(!meets("2026.13.1"));
+        assert!(meets("2026.16.1"));
         assert!(meets("2027.0"));
     }
 

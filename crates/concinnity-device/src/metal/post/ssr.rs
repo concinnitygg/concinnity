@@ -203,26 +203,17 @@ impl MtlContext {
                 // bound); `SsrParams.prefilter_mip_count == 0` tells the shader to
                 // ignore it in that case.
                 enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
-                // Local reflection-probe cubes at texture(4..4+MAX_PROBES): when a
-                // probe is baked a missed/edge ray reflects its box-projected scene
-                // capture instead of the foreign sky HDR (the source the forward IBL
-                // specular term uses). `probe_cube_or_sky` returns the sky for
-                // unbaked slots, so binding all MAX_PROBES is always valid; the
+                // Local reflection-probe cubes, through their argument buffer:
+                // when a probe is baked a missed/edge ray reflects its
+                // box-projected scene capture instead of the foreign sky HDR
+                // (the source the forward IBL specular term uses). The
                 // ProbeSet's `count` gates whether the shader samples them.
-                for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
-                    enc.set_fragment_texture(self.probe_cube_or_sky(i), 4 + i);
-                }
+                self.bind_probe_cubes(enc);
                 // The screen sources take the post sampler at 0..2; the
-                // prefilter cube and every probe cube take the cube sampler at
-                // 3..4+MAX_PROBES, one per texture slangc split the combined
-                // declarations into.
+                // prefilter cube at sampler(3) and the probe block's own
+                // sampler at sampler(4) take the cube sampler.
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 3);
-                set_fragment_sampler_range(
-                    enc,
-                    self.cube_sampler.as_ref(),
-                    3,
-                    1 + concinnity_core::render::uniforms::MAX_PROBES,
-                );
+                set_fragment_sampler_range(enc, self.cube_sampler.as_ref(), 3, 2);
                 enc.set_fragment_value(ssr_params, 0);
                 // Reflection-probe set (count + per-probe parallax boxes) at
                 // buffer(1); count == 0 keeps the sky fallback above.

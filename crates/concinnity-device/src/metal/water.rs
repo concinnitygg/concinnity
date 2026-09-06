@@ -219,15 +219,15 @@ impl MtlContext {
             let mut params = surface.params;
             let mut fragment_textures = vec![
                 // The refraction snapshot (texture 0) + resolved main depth
-                // (texture 1). The IBL prefilter cube (texture 2), probe cubes
-                // (texture 3..), cube sampler (sampler 1), and probe set are bound
-                // globally by `encode_transparent` (shared with glass).
+                // (texture 1). The IBL prefilter cube (texture 2), the probe cube
+                // argument buffer, cube sampler (sampler 1) and probe set are
+                // bound globally by `encode_transparent` (shared with glass).
                 (0, self.hdr_targets.transparent_scene_copy.clone()),
                 (1, self.hdr_targets.depth_resolve.clone()),
             ];
             // Select the sharp planar reflection when the planar pass ran this
             // frame and this surface was assigned a slot; bind that slot's resolve
-            // at texture(11). Both fragments honour the flag, so this outranks the
+            // at the planar slot. Both fragments honour the flag, so this outranks the
             // trace as well. Otherwise the shader keeps the trace / probe / sky path.
             if planar_live
                 && let Some(targets) = surface
@@ -235,7 +235,10 @@ impl MtlContext {
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
                 params.planar = WaterParams::planar_lane(surface.params.roughness, true);
-                fragment_textures.push((11, targets.resolve.clone()));
+                fragment_textures.push((
+                    super::transparent::GLASS_PLANAR_TEXTURE_INDEX,
+                    targets.resolve.clone(),
+                ));
             }
             let c = surface.centre;
             let sort_distance =

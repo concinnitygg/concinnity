@@ -162,12 +162,29 @@ float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
 }
 #else
 [[vk::binding(7, 2)]] ConstantBuffer<ProbeSet> probe_set : register(b7);
+#ifdef METAL_ABI
+// Metal reaches the cubes through an argument buffer: a resource array at
+// global scope emits with no [[texture(n)]], and the compiler then places it
+// at whatever slot happens to be unused.
+struct ProbeCubes
+{
+    TextureCube<float4> probe_cubes[MAX_PROBES];
+};
+ParameterBlock<ProbeCubes> probe_cube_set : register(b11);
+SamplerState probe_cube_sampler;
+
+float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
+{
+    return probe_cube_set.probe_cubes[i].SampleBias(probe_cube_sampler, dir, lod).rgb;
+}
+#else
 [[vk::binding(8, 2)]] SamplerCube<float4> probe_cubes[MAX_PROBES];
 
 float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
 {
     return probe_cubes[i].SampleBias(dir, lod).rgb;
 }
+#endif
 #endif
 #define PROBE_SET probe_set
 

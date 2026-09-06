@@ -46,9 +46,10 @@ const MAIN_DEFINES: &[(&str, &str)] = &[
 ];
 
 // The SSR resolve reads the reflection-probe array, so it bakes in the same
-// probe count the main pass does.
+// probe count the main pass does. `METAL_ABI` selects the argument-buffer form
+// of that array.
 const PROBES: (&str, &str) = ("MAX_PROBES", "8");
-const PROBE_DEFINES: &[(&str, &str)] = &[PROBES];
+const PROBE_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), PROBES];
 
 pub(super) static MAIN_BINDLESS_VERT: SlangLib = SlangLib {
     name: "main_bindless_vert.slang",

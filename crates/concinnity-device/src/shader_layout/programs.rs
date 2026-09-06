@@ -89,11 +89,8 @@ impl Program {
     }
 }
 
-// Every struct `program` declares, laid out the way `target` lays it out.
-pub(super) fn layouts(
-    program: &Program,
-    target: Target,
-) -> Result<BTreeMap<String, ShaderStruct>, String> {
+// slangc's reflection of `program` under `target`'s layout rules.
+pub(super) fn reflection(program: &Program, target: Target) -> Result<String, String> {
     let source = program.source(target);
     let job = slang::SlangJob {
         source: &source,
@@ -102,9 +99,16 @@ pub(super) fn layouts(
         target: target.slang_target(program.profile),
     };
     let work = crate::compiler_work::dir()?;
-    let json = slang::reflect(&job, work.path())
-        .map_err(|e| format!("{} ({}): {e}", program.entry, target.label()))?;
-    reflect::structs(&json)
+    slang::reflect(&job, work.path())
+        .map_err(|e| format!("{} ({}): {e}", program.entry, target.label()))
+}
+
+// Every struct `program` declares, laid out the way `target` lays it out.
+pub(super) fn layouts(
+    program: &Program,
+    target: Target,
+) -> Result<BTreeMap<String, ShaderStruct>, String> {
+    reflect::structs(&reflection(program, target)?)
 }
 
 // The reflection-probe array length and the bindless texture-pool capacity, as

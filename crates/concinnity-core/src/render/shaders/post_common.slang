@@ -23,22 +23,10 @@ void combined_dims(Sampler2D<float4> s, out uint w, out uint h)
     }
 }
 
-// Texture dimensions of a combined texture-sampler.
-//
-// The Metal target reads them through inline MSL because slangc mis-lowers
-// GetDimensions on a combined type there too, in its own way: it emits an
-// assignment into the sampler operand (`(*(src_sampler)) =
-// src_texture.get_width(0)`), which the Metal compiler rejects outright. The
-// resource rides as a parameter so the inline form can reference it.
+// Texture dimensions of a combined texture-sampler, as floats.
 float2 combined_size(Sampler2D<float4> s)
 {
-    __target_switch
-    {
-    case metal:
-        __intrinsic_asm "float2($0.get_width(), $0.get_height())";
-    default:
-        uint w, h;
-        combined_dims(s, w, h);
-        return float2(float(w), float(h));
-    }
+    uint w, h;
+    combined_dims(s, w, h);
+    return float2(float(w), float(h));
 }
