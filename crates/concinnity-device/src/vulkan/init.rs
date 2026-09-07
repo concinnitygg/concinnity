@@ -3787,8 +3787,9 @@ impl VkContext {
             rt_static_vertex_count: vertices.len(),
             decal: super::context::DecalState {
                 resources: decals_state,
-                records: Vec::new(),
-                free_slots: Vec::new(),
+                // Authored decals land in the table through `add_decal`, which
+                // also writes each one's albedo descriptor.
+                set: crate::gfx::decal::DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
             },
             lines: crate::vulkan::line::LineState::empty(),
             hdr_mode,

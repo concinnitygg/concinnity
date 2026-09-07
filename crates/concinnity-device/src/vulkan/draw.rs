@@ -511,8 +511,7 @@ impl VkContext {
             // `update_fog_settings(None)` drops the FogFroxel + Fog passes from
             // the graph entirely. Mirrors Metal's `pipeline && settings` gate.
             fog_enabled: self.fog.resources.is_some() && self.fog.settings.is_some(),
-            decals_enabled: self.decal.resources.is_some()
-                && self.decal.records.iter().any(|d| d.is_some()),
+            decals_enabled: self.decal.resources.is_some() && !self.decal.set.is_empty(),
             // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
             // `self.ssr` exists (built for SSR resolve *or* SSGI).
             ssr_prepass_enabled: self.ssr.is_some(),

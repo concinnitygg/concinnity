@@ -269,8 +269,8 @@ fn create_decal_pso(
 
 // Owned by `DxContext` exactly once: the decal pipeline, the unit-cube
 // vertex / index buffers, and the per-frame uniform ring (one big upload
-// buffer per frame split into per-decal regions). `decals` plus the freelist
-// live on `DxContext` itself (mirroring the Metal context layout).
+// buffer per frame split into per-decal regions). The decal slot table lives on
+// `DxContext` itself (mirroring the Metal context layout).
 pub(in crate::directx) struct DecalResources {
     pub(in crate::directx) root_sig: ID3D12RootSignature,
     pub(in crate::directx) pso: ID3D12PipelineState,
@@ -469,26 +469,11 @@ impl DxContext {
             Some(s) => s,
             None => return,
         };
-        if self.decal.records.iter().all(|slot| slot.is_none()) {
-            return;
-        }
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
-        // barriers. Tombstoned (None) slots are always invisible.
-        let visible_count = self
-            .decal
-            .records
-            .iter()
-            .filter(|slot| {
-                slot.as_ref()
-                    .map(|d| {
-                        let (mn, mx) = d.aabb();
-                        frustum.intersects_aabb(mn, mx)
-                    })
-                    .unwrap_or(false)
-            })
-            .count();
-        if visible_count == 0 {
+        // barriers. Peeking answers that without testing any decal twice.
+        let mut visible = self.decal.set.visible(frustum).peekable();
+        if visible.peek().is_none() {
             return;
         }
 
@@ -561,53 +546,44 @@ impl DxContext {
             cmd.SetGraphicsRootDescriptorTable(2, decals.depth_srv_gpu);
         }
 
-        let last_tex = self.descriptors.textures.len().saturating_sub(1);
-        for (i, slot) in self.decal.records.iter().enumerate() {
-            let d = match slot {
-                Some(d) => d,
-                None => continue,
-            };
-            let (mn, mx) = d.aabb();
-            if !frustum.intersects_aabb(mn, mx) {
-                continue;
+        // Base of this pass's per-decal albedo SRVs, written into the heap at
+        // `decal_srv_base_slot + id` by `add_decal`. The heap start is fixed
+        // for the heap's lifetime, so the COM query is hoisted out of the draw
+        // loop and each decal's handle is a stride from here.
+        // SAFETY: a property query on a live descriptor heap; it only reads.
+        let srv_gpu_base = unsafe {
+            self.descriptors
+                .srv_heap
+                .GetGPUDescriptorHandleForHeapStart()
+        };
+        let albedo_base_ptr = srv_gpu_base.ptr
+            + (decals.decal_srv_base_slot * self.descriptors.srv_descriptor_size) as u64;
+
+        for decal in visible {
+            // This frame's ring slot keeps what an earlier frame wrote, so a
+            // decal whose record has not changed since is already uploaded.
+            if decal.take_upload(frame_idx) {
+                // SAFETY: each ring slot is `params_stride * MAX_DECALS` bytes and `add_decal`
+                // refuses records past `MAX_DECALS`, so `id * params_stride` stays inside this
+                // frame's mapping.
+                let dst = unsafe {
+                    decals.params_ubo_ptrs[frame_idx]
+                        .add((decal.id as u64 * decals.params_stride) as usize)
+                };
+                // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
+                // and the source is a separate allocation, so the ranges cannot overlap.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        decal.params as *const DecalParams as *const u8,
+                        dst,
+                        std::mem::size_of::<DecalParams>(),
+                    );
+                }
             }
-            let params = DecalParams {
-                model: d.model,
-                inv_model: d.inv_model,
-                tint: d.tint,
-                fade_pow: 2.0,
-                _pad0: 0.0,
-                _pad1: 0.0,
-                _pad2: 0.0,
+            let params_gva = params_base_gva + decal.id as u64 * decals.params_stride;
+            let albedo_srv_gpu = D3D12_GPU_DESCRIPTOR_HANDLE {
+                ptr: albedo_base_ptr + (decal.id * self.descriptors.srv_descriptor_size) as u64,
             };
-            // Upload into this frame's per-decal slot.
-            // SAFETY: each ring slot is `params_stride * MAX_DECALS` bytes and `add_decal` refuses
-            // records past `MAX_DECALS`, so `i * params_stride` stays inside this frame's mapping.
-            let dst = unsafe {
-                decals.params_ubo_ptrs[frame_idx].add((i as u64 * decals.params_stride) as usize)
-            };
-            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
-            // the source is a separate allocation, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &params as *const DecalParams as *const u8,
-                    dst,
-                    std::mem::size_of::<DecalParams>(),
-                );
-            }
-            let params_gva = params_base_gva + i as u64 * decals.params_stride;
-            let tex_slot = d.texture_slot.min(last_tex);
-            // The decal's albedo SRV was written into the heap at
-            // `decal_srv_base_slot + i` by `add_decal`, pointing at the
-            // texture-pool resource referenced by `tex_slot`. Bind that
-            // descriptor for t1.
-            let albedo_srv_gpu = self.decal_albedo_srv_gpu(i);
-            // tex_slot is consumed by add_decal when it writes the SRV; the
-            // local clamp here only guards against a record whose authored
-            // slot escapes the pool length (e.g. a decal authored after a
-            // texture eviction). Drop tex_slot from the iteration since the
-            // SRV already encodes the right resource.
-            let _ = tex_slot;
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
@@ -616,26 +592,6 @@ impl DxContext {
                 cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
             }
             self.inc_draw_calls(1);
-        }
-    }
-
-    // GPU descriptor handle for decal `i`'s albedo SRV (written into the
-    // SRV heap at `decals_state.decal_srv_base_slot + i` by `add_decal`).
-    pub(in crate::directx) fn decal_albedo_srv_gpu(&self, i: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        let base = self
-            .decal
-            .state
-            .as_ref()
-            .map(|s| s.decal_srv_base_slot)
-            .unwrap_or(0);
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu_base.ptr + ((base + i) * self.descriptors.srv_descriptor_size) as u64,
         }
     }
 }
@@ -649,7 +605,7 @@ impl DxContext {
 // (FFI) roots, so dead-code flags these in the lib build. Not backend-specific.
 // `allow` (not `expect`) because the same source is live in the binary, where
 // an `expect` would be unfulfilled. Suppressing the methods also marks them live
-// roots, so the freelist / SRV-slot fields they touch stay un-flagged on their
+// roots, so the slot-table / SRV-slot fields they touch stay un-flagged on their
 // own.
 impl DxContext {
     // Append a runtime decal. Writes the per-decal albedo SRV into the
@@ -669,16 +625,11 @@ impl DxContext {
         // Write the SRV for the chosen texture into this decal's heap slot.
         // The slot may be reused from a prior tombstone, in which case the
         // old descriptor is just overwritten.
-        let id = if let Some(slot) = self.decal.free_slots.pop() {
-            self.decal.records[slot] = Some(record);
-            slot
-        } else {
-            if self.decal.records.len() >= MAX_DECALS {
-                return Err(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"));
-            }
-            self.decal.records.push(Some(record));
-            self.decal.records.len() - 1
-        };
+        let id = self
+            .decal
+            .set
+            .insert(record)
+            .map_err(|_| format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))?;
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             // SAFETY: a property query on a live descriptor heap; it only reads.
             ptr: unsafe {
@@ -696,16 +647,9 @@ impl DxContext {
     // `add_decal` may reuse it. Returns an error when the id is out of
     // range or already tombstoned.
     pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
-        let slot = self
-            .decal
-            .records
-            .get_mut(decal_id)
-            .ok_or_else(|| format!("remove_decal: id {decal_id} out of range"))?;
-        if slot.is_none() {
-            return Err(format!("remove_decal: id {decal_id} already removed"));
-        }
-        *slot = None;
-        self.decal.free_slots.push(decal_id);
-        Ok(())
+        self.decal
+            .set
+            .remove(decal_id)
+            .map_err(|e| format!("remove_decal: id {decal_id} {e}"))
     }
 }

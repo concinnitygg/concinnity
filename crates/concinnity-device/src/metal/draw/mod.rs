@@ -676,7 +676,7 @@ impl MtlContext {
                 && !self.particle.records.is_empty()
                 && !self.particle.emitter_state.is_empty(),
             fog_enabled: self.fog.pipeline.is_some() && self.fog.settings.is_some(),
-            decals_enabled: self.decal.pipeline.is_some() && !self.decal.records.is_empty(),
+            decals_enabled: self.decal.pipeline.is_some() && !self.decal.set.is_empty(),
             // The SSR depth + normal + roughness pre-pass also feeds SSGI and
             // the RT-reflection kernel, so it runs when SSR, SSGI, *or* RT
             // reflections are on (RT keys off the live acceleration structure).

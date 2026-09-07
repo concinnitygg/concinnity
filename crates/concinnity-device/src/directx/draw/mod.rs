@@ -247,7 +247,12 @@ impl DxContext {
             // consumer barrier would transition the volume with no encoder to
             // reset it.
             fog_enabled: self.fog.resources.is_some() && self.fog.settings.is_some(),
-            decals_enabled: self.decal.state.is_some(),
+            // `DecalState` is built at init unconditionally so a runtime
+            // `add_decal` works from a world that declared none, so the
+            // resources half alone is always true. The live half drops the
+            // pass (and its depth-read transition) from the graph until a
+            // decal exists. Mirrors Vulkan + Metal.
+            decals_enabled: self.decal.state.is_some() && !self.decal.set.is_empty(),
             ssao_enabled: self.ssao.resources.is_some(),
             // FSR3 upscaling (runs at native resolution as a TAA
             // replacement). `Some` only when the FFX DLL loaded;

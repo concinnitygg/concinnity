@@ -653,13 +653,12 @@ impl VkUniforms {
 
 // Projected decals. `resources` (pipeline + unit-cube buffers + per-frame
 // uniforms + per-decal albedo sets) is always built so runtime `add_decal`
-// works from a world that started empty; the encoder simply skips when every
-// slot is `None` or every live decal culls. `records` and `free_slots` mirror
-// Metal / DirectX's freelist pattern so id reuse stays bounded.
+// works from a world that started empty; the encoder simply skips when no slot
+// is live or every live decal culls. `set` is the shared slot table, indexing
+// the per-decal albedo sets and the per-frame params ring by decal id.
 pub(super) struct DecalState {
     pub resources: Option<crate::vulkan::decal::DecalResources>,
-    pub records: Vec<Option<crate::gfx::decal::DecalRecord>>,
-    pub free_slots: Vec<usize>,
+    pub set: crate::gfx::decal::DecalSet,
 }
 
 // Volumetric fog. `resources` is `Some` only when the world declared a

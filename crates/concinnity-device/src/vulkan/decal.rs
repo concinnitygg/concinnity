@@ -24,6 +24,10 @@ use crate::vulkan::owned::{
 };
 
 use crate::gfx::decal::DecalRecord;
+// `DecalView` (per-frame, 144 bytes) is the layout struct shared with the other
+// backends; the per-decal `DecalParams` (160 bytes, inside the 256-byte stride
+// slot) rides the set's slots. Both mirror `shaders/decal.slang`.
+use concinnity_core::render::uniforms::DecalView;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -60,32 +64,9 @@ const CUBE_INDICES: [u16; 36] = [
 // without querying the device.
 const PARAMS_STRIDE: u64 = 256;
 
-// Per-frame view inputs to the decal pass. Mirrors the `DecalViewBlock`
-// uniform in `shaders/decal.slang`. 144 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct DecalView {
-    vp: [[f32; 4]; 4],
-    inv_vp: [[f32; 4]; 4],
-    viewport: [f32; 2],
-    _pad: [f32; 2],
-}
-
-// Per-decal uniforms uploaded into the per-frame params ring before
-// each draw. Mirrors `DecalParamsBlock` in the shaders. 160 bytes
-// (within the 256-byte stride slot).
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct DecalParams {
-    model: [[f32; 4]; 4],
-    inv_model: [[f32; 4]; 4],
-    tint: [f32; 4],
-    fade: [f32; 4], // .x = fade_pow, .yzw padding
-}
-
 // Owned by `VkContext` exactly once: the decal pipeline + its dependent
-// resources. `decals` plus the freelist live on `VkContext` itself
-// (mirroring the DirectX / Metal layout).
+// resources. The decal slot table lives on `VkContext` itself (mirroring the
+// DirectX / Metal layout).
 //
 // Decal-pass descriptor sets follow a two-set layout:
 //   * **set 0** (per-frame, FRAMES sets):
@@ -745,26 +726,11 @@ impl VkContext {
             Some(s) => s,
             None => return,
         };
-        if self.decal.records.iter().all(|slot| slot.is_none()) {
-            return;
-        }
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
-        // barriers. Tombstoned (None) slots are always invisible.
-        let visible_count = self
-            .decal
-            .records
-            .iter()
-            .filter(|slot| {
-                slot.as_ref()
-                    .map(|d| {
-                        let (mn, mx) = d.aabb();
-                        frustum.intersects_aabb(mn, mx)
-                    })
-                    .unwrap_or(false)
-            })
-            .count();
-        if visible_count == 0 {
+        // barriers. Peeking answers that without testing any decal twice.
+        let mut visible = self.decal.set.visible(frustum).peekable();
+        if visible.peek().is_none() {
             return;
         }
 
@@ -781,23 +747,6 @@ impl VkContext {
             _pad: [0.0; 2],
         };
         decals.view_ubos[frame_idx].write_val(0, &view_uni);
-
-        // Upload per-decal params slots for every live record (visible or
-        // not; easier to skip the visibility check here and pay one
-        // 160-byte write per slot).
-        for (i, slot) in self.decal.records.iter().enumerate() {
-            let d = match slot {
-                Some(d) => d,
-                None => continue,
-            };
-            let params = DecalParams {
-                model: d.model,
-                inv_model: d.inv_model,
-                tint: d.tint,
-                fade: [2.0, 0.0, 0.0, 0.0],
-            };
-            decals.params_ubos[frame_idx].write_val(i * PARAMS_STRIDE as usize, &params);
-        }
 
         // Main depth is already in SHADER_READ_ONLY for the fragment's sample:
         // the graph declares this pass's depth read and the executor emits the
@@ -841,16 +790,14 @@ impl VkContext {
             );
         }
 
-        for (i, slot) in self.decal.records.iter().enumerate() {
-            let d = match slot {
-                Some(d) => d,
-                None => continue,
-            };
-            let (mn, mx) = d.aabb();
-            if !frustum.intersects_aabb(mn, mx) {
-                continue;
+        for decal in visible {
+            // This frame's ring slot keeps what an earlier frame wrote, so a
+            // decal whose record has not changed since is already uploaded.
+            if decal.take_upload(frame_idx) {
+                decals.params_ubos[frame_idx]
+                    .write_val(decal.id * PARAMS_STRIDE as usize, decal.params);
             }
-            let dynamic_offset = (i as u64 * PARAMS_STRIDE) as u32;
+            let dynamic_offset = (decal.id as u64 * PARAMS_STRIDE) as u32;
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -867,7 +814,7 @@ impl VkContext {
                     vk::PipelineBindPoint::GRAPHICS,
                     decals.pipeline_layout.handle(),
                     1,
-                    std::slice::from_ref(&decals.albedo_sets[i]),
+                    std::slice::from_ref(&decals.albedo_sets[decal.id]),
                     &[],
                 );
                 device.cmd_draw_indexed(cmd, 36, 1, 0, 0, 0);
@@ -894,16 +841,11 @@ impl VkContext {
         let last_tex = self.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
-        let id = if let Some(slot) = self.decal.free_slots.pop() {
-            self.decal.records[slot] = Some(record);
-            slot
-        } else {
-            if self.decal.records.len() >= MAX_DECALS {
-                return Err(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"));
-            }
-            self.decal.records.push(Some(record));
-            self.decal.records.len() - 1
-        };
+        let id = self
+            .decal
+            .set
+            .insert(record)
+            .map_err(|_| format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))?;
 
         // Write the albedo descriptor for this slot. The texture pool
         // entry is referenced live; a future eviction routes through
@@ -929,16 +871,10 @@ impl VkContext {
     // `add_decal` may reuse it. Reached only through the bin's `cn debug`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
     pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
-        let slot = self
-            .decal
-            .records
-            .get_mut(decal_id)
-            .ok_or_else(|| format!("remove_decal: id {decal_id} out of range"))?;
-        if slot.is_none() {
-            return Err(format!("remove_decal: id {decal_id} already removed"));
-        }
-        *slot = None;
-        self.decal.free_slots.push(decal_id);
+        self.decal
+            .set
+            .remove(decal_id)
+            .map_err(|e| format!("remove_decal: id {decal_id} {e}"))?;
         if let Some(decals) = &self.decal.resources {
             let mut slots = decals.decal_texture_slots.get();
             slots[decal_id] = usize::MAX;

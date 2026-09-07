@@ -833,6 +833,16 @@ impl MtlContext {
             },
         )?;
 
+        // The slot table the decal pass draws from: authored decals seed it in
+        // order, and a runtime add reuses whatever `remove_decal` freed. Metal
+        // reserves no per-decal descriptors, so the table is uncapped.
+        let mut decal_set = crate::gfx::decal::DecalSet::new(usize::MAX, frames_in_flight);
+        for record in decals {
+            decal_set
+                .insert(record)
+                .map_err(|_| "decals: decal slot table is full".to_string())?;
+        }
+
         // Transparent water surfaces. Built only when the world declared
         // ≥1 `WaterSurface`; the transparent-pass executor stays a no-op
         // otherwise. Per-surface tessellated grids upload once at init.
@@ -1304,8 +1314,7 @@ impl MtlContext {
                 build_failed: false,
             },
             decal: super::decal::DecalState {
-                records: decals.into_iter().map(Some).collect(),
-                free_slots: Vec::new(),
+                set: decal_set,
                 pipeline: decal_pipeline,
                 cube_vertex_buffer: decal_cube_vertex_buffer,
                 cube_index_buffer: decal_cube_index_buffer,

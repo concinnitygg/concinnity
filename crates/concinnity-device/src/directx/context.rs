@@ -416,13 +416,12 @@ pub(super) struct ParticleState {
 
 // Projected decals. `state` (pipeline + unit-cube buffers + per-frame uniform
 // rings) is always built so runtime `add_decal` works from a world that started
-// empty; the encoder skips the pass when every slot is `None` or every live
-// decal culls. `records` and `free_slots` mirror Metal's freelist pattern so id
-// reuse stays bounded.
+// empty; the encoder skips the pass when no slot is live or every live decal
+// culls. `set` is the shared slot table, indexing the per-decal albedo SRVs and
+// the per-frame params ring by decal id.
 pub(super) struct DecalState {
     pub state: Option<DecalResources>,
-    pub records: Vec<Option<crate::gfx::decal::DecalRecord>>,
-    pub free_slots: Vec<usize>,
+    pub set: crate::gfx::decal::DecalSet,
 }
 
 // Temporal upscaling (AMD FidelityFX FSR3 / DLSS / XeSS). `backend` is `Some`

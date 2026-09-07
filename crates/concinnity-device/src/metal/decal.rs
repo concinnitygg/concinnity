@@ -26,23 +26,17 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 
 use super::scoped_encoder::ScopedEncoder;
-use crate::gfx::decal::DecalRecord;
-use concinnity_core::render::uniforms::DecalParams;
+use crate::gfx::decal::DecalSet;
 use concinnity_core::render::uniforms::DecalView;
 
-// All projected-decal state grouped into one feature unit: the decal records
-// (with their tombstone free-list), the pipeline, the shared unit-cube
-// geometry, and the sampler. The pipeline / cube buffers / sampler are built
-// lazily either at init (≥1 declared decal) or on the first runtime
-// [`MtlContext::add_decal`]; they stay `None` only when the world has never
-// had a decal, in which case the pass is skipped before iteration.
+// All projected-decal state grouped into one feature unit: the decal slot
+// table, the pipeline, the shared unit-cube geometry, and the sampler. The
+// pipeline / cube buffers / sampler are built lazily either at init (≥1
+// declared decal) or on the first runtime [`MtlContext::add_decal`]; they stay
+// `None` only when the world has never had a decal, in which case the pass is
+// skipped before iteration.
 pub(crate) struct DecalState {
-    // One slot per decal; `None` slots are tombstones from
-    // [`MtlContext::remove_decal`], reused by the next add via `free_slots`.
-    pub records: Vec<Option<DecalRecord>>,
-    // Tombstoned slot indices, reused by the next add so a spawn/despawn
-    // cycle does not grow `records` without bound.
-    pub free_slots: Vec<usize>,
+    pub set: DecalSet,
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub cube_vertex_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     pub cube_index_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -73,26 +67,11 @@ impl MtlContext {
             Some(p) => p,
             None => return Ok(0),
         };
-        if self.decal.records.is_empty() {
-            return Ok(0);
-        }
         // Visibility-cull first so a world where every decal lands off-screen
-        // skips the whole pass, including opening the render encoder. We
-        // pre-compute the visible mask and bail when nothing is left.
-        // Tombstoned (None) slots are always invisible.
-        let visible: Vec<bool> = self
-            .decal
-            .records
-            .iter()
-            .map(|slot| match slot {
-                Some(d) => {
-                    let (mn, mx) = d.aabb();
-                    frustum.intersects_aabb(mn, mx)
-                }
-                None => false,
-            })
-            .collect();
-        if !visible.iter().any(|v| *v) {
+        // skips the whole pass, including opening the render encoder. Peeking
+        // answers that without testing any decal twice.
+        let mut visible = self.decal.set.visible(frustum).peekable();
+        if visible.peek().is_none() {
             return Ok(0);
         }
         let vbuf = self
@@ -157,26 +136,12 @@ impl MtlContext {
 
         let last_tex = self.textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
-        for (i, slot) in self.decal.records.iter().enumerate() {
-            if !visible[i] {
-                continue;
-            }
-            let d = match slot {
-                Some(d) => d,
-                None => continue,
-            };
-            let params = DecalParams {
-                model: d.model,
-                inv_model: d.inv_model,
-                tint: d.tint,
-                fade_pow: 2.0,
-                _pad0: 0.0,
-                _pad1: 0.0,
-                _pad2: 0.0,
-            };
-            let slot = d.texture_slot.min(last_tex);
-            enc.set_vertex_value(&params, 1);
-            enc.set_fragment_value(&params, 1);
+        // The params block rides the command buffer inline, so every draw
+        // re-supplies it; the set's copy is prebuilt, not rebuilt here.
+        for decal in visible {
+            let slot = decal.record.texture_slot.min(last_tex);
+            enc.set_vertex_value(decal.params, 1);
+            enc.set_fragment_value(decal.params, 1);
             enc.set_fragment_texture(self.textures[slot].as_ref(), 1);
             // SAFETY: the draw's index range is this decal cube's own slice of the bound index
             // buffer.

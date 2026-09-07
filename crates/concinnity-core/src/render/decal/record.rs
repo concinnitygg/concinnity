@@ -1,9 +1,7 @@
-//! Backend-agnostic decal helpers. Owns the per-decal model / inverse-model
-//! matrix math the projected-decal pass needs at runtime, plus the `DecalRecord`
-//! the backends consume. Decals are stamped onto the scene depth buffer by
-//! drawing a unit-box volume per decal: the fragment shader reconstructs the
-//! world-space point of each rasterised pixel from depth and tests whether it
-//! lies inside the box.
+//! The per-decal record the backends consume, and the matrix math behind it.
+//! A record is a unit cube spanning `[-0.5, 0.5]^3` placed by a TRS model
+//! matrix; the fragment shader pulls each reconstructed world-space sample
+//! back through the inverse and tests it against that box.
 
 use crate::components::Decal;
 use crate::gfx::transform::trs_matrix;
@@ -31,9 +29,10 @@ pub struct DecalRecord {
 }
 
 impl DecalRecord {
-    /// World-space AABB enclosing the decal's unit-cube volume. Used by the
-    /// per-frame frustum-cull skip so a record that lands fully outside the
-    /// camera frustum costs no draw call. The AABB is the transform of
+    /// World-space AABB enclosing the decal's unit-cube volume. Cached by
+    /// [`DecalSet`](super::DecalSet) at insert and tested against the camera
+    /// frustum each frame, so a decal fully outside it costs no draw call. The
+    /// AABB is the transform of
     /// `[-0.5, 0.5]^3` by `model`; for a non-rotated decal this exactly
     /// matches the authored `size`, and for a rotated decal it is the
     /// minimum AABB enclosing the rotated box.

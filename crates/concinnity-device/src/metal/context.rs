@@ -707,9 +707,8 @@ pub(crate) struct MtlContext {
     // the pipeline, built on the first frame that publishes lines. See
     // [`LineState`].
     pub(super) lines: LineState,
-    // Projected-decal feature state: the decal records (+ tombstone
-    // free-list), the pipeline, the shared unit-cube geometry, and the
-    // sampler. See [`DecalState`]. The pipeline / cube buffers / sampler are
+    // Projected-decal feature state: the decal slot table, the pipeline, the
+    // shared unit-cube geometry, and the sampler. See [`DecalState`]. The pipeline / cube buffers / sampler are
     // built lazily at init (≥1 declared decal) or on the first runtime
     // [`MtlContext::add_decal`].
     pub(super) decal: DecalState,
@@ -1351,8 +1350,8 @@ impl MtlContext {
     // decal pipeline + unit-cube buffers on first use so a world that never
     // declared a decal still pays zero pipeline cost until the first add.
     // A vacated slot from [`Self::remove_decal`] is reused before growing
-    // the vec so a steady-state spawn/despawn pattern (bullet holes,
-    // footprints) does not grow `decals` without bound.
+    // the slot table so a steady-state spawn/despawn pattern (bullet holes,
+    // footprints) stays bounded.
     pub(crate) fn add_decal(
         &mut self,
         record: crate::gfx::decal::DecalRecord,
@@ -1367,14 +1366,10 @@ impl MtlContext {
             self.decal.cube_index_buffer = Some(ibuf);
             self.decal.sampler = Some(samp);
         }
-        let idx = if let Some(slot) = self.decal.free_slots.pop() {
-            self.decal.records[slot] = Some(record);
-            slot
-        } else {
-            self.decal.records.push(Some(record));
-            self.decal.records.len() - 1
-        };
-        Ok(idx)
+        self.decal
+            .set
+            .insert(record)
+            .map_err(|_| "add_decal: decal set is full".to_string())
     }
 
     // Tombstone a runtime decal slot. The slot index returned by
@@ -1383,17 +1378,10 @@ impl MtlContext {
     // The decal pipeline + unit-cube buffers are kept around so a later add
     // does not pay the rebuild cost.
     pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
-        let slot = self
-            .decal
-            .records
-            .get_mut(decal_id)
-            .ok_or_else(|| format!("remove_decal: id {} out of range", decal_id))?;
-        if slot.is_none() {
-            return Err(format!("remove_decal: id {} already removed", decal_id));
-        }
-        *slot = None;
-        self.decal.free_slots.push(decal_id);
-        Ok(())
+        self.decal
+            .set
+            .remove(decal_id)
+            .map_err(|e| format!("remove_decal: id {decal_id} {e}"))
     }
 
     // Append a particle-emitter record at runtime, returning a stable slot

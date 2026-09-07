@@ -1651,8 +1651,15 @@ impl DxContext {
                 slot_cpu(decal_srv_base_slot + i),
             );
         }
-        let decals_init: Vec<Option<crate::gfx::decal::DecalRecord>> =
-            decals.into_iter().map(Some).collect();
+        // The slot table the decal pass draws from. Each authored decal takes
+        // the slot whose albedo SRV was just written above, in the same order.
+        let mut decal_set =
+            crate::gfx::decal::DecalSet::new(crate::directx::decal::MAX_DECALS, FRAMES);
+        for record in decals {
+            decal_set
+                .insert(record)
+                .map_err(|_| "decals: authored decals exceed MAX_DECALS".to_string())?;
+        }
 
         // Volumetric fog: pipeline + per-frame uniform ring. Built only when
         // the world declared a `VolumetricFog`; the encoder simply skips the
@@ -2325,8 +2332,7 @@ impl DxContext {
             rt_topology_dirty: false,
             decal: super::context::DecalState {
                 state: decals_state,
-                records: decals_init,
-                free_slots: Vec::new(),
+                set: decal_set,
             },
             lines: super::line::LineState::empty(),
             main_depth_srv_gpu: decal_depth_srv_gpu,
