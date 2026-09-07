@@ -79,7 +79,8 @@ pub(crate) fn artifact<'a>(
         entries: &entries,
         target: target(req.platform, program.stage),
     };
-    let work = crate::compiler_work::dir()?;
+    let work = crate::compiler_work::dir()
+        .map_err(|e| format!("Shader '{label}': no scratch directory: {e}"))?;
     concinnity_slang::compile(&job, work.path())
         .map(Cow::Owned)
         .map_err(|e| format!("Shader '{label}': compiling '{entry}': {e}"))

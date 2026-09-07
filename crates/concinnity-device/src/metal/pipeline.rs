@@ -72,18 +72,26 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
 
 // Produce the MTLLibrary for a built-in renderer shader. The fast path loads
 // the metallib precompiled by the build script; source compilation remains for
-// hot-reload (disk edits must win) and for binaries built without the Metal
-// toolchain, whose embedded lookup is empty.
+// an edited shader and for binaries built without the Metal toolchain, whose
+// embedded lookup is empty.
+//
+// The match is on the source digest rather than on hot-reload being off, as it
+// is on Vulkan and DirectX. `cn debug` and `cn editor` both run with hot-reload
+// on, and a mode check left them compiling every shader at startup, which needs
+// slangc installed -- so an installed editor failed init where the player it
+// ships beside started fine.
 pub(super) fn shader_library(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
     name: &str,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
-    if !hot_reload && let Some(bytes) = crate::metal::metallib::embedded_metallib(name) {
+    let msl = shader_source(hot_reload, name);
+    if let Some((digest, bytes)) = crate::metal::metallib::embedded_metallib(name)
+        && digest == concinnity_core::render::slang_source::source_digest(&msl)
+    {
         return load_library(device, bytes)
             .map_err(|e| format!("{name}: failed to load precompiled metallib: {e}"));
     }
-    let msl = shader_source(hot_reload, name);
     let options = objc2_metal::MTLCompileOptions::new();
     device
         .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))

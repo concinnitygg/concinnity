@@ -12,6 +12,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 
+use crate::gfx::fullscreen::TextBindCache;
 use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
 
 use crate::directx::context::DxContext;
@@ -77,6 +78,13 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
                 bottom: args.height as i32,
             };
             cmd.RSSetScissorRects(&[scissor]);
+            // The SRV + sampler heaps both the composite and the text pipeline
+            // draw from. Heap binding is command-list state independent of the
+            // root signature, so one bind covers the whole pass.
+            cmd.SetDescriptorHeaps(&[
+                Some(self.descriptors.srv_heap.clone()),
+                Some(self.descriptors.sampler_heap.clone()),
+            ]);
         }
     }
 
@@ -86,10 +94,6 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         unsafe {
             cmd.SetPipelineState(&self.composite.pso);
             cmd.SetGraphicsRootSignature(&self.composite.root_sig);
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
             // Root param [0]: scene SRV (t0): the TAA output when TAA is on,
             // the HDR scene target otherwise.
             cmd.SetGraphicsRootDescriptorTable(0, args.scene_srv);
@@ -153,10 +157,6 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         unsafe {
             cmd.SetPipelineState(text_pso);
             cmd.SetGraphicsRootSignature(&self.text.root_sig);
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
             cmd.SetGraphicsRoot32BitConstants(
                 0,
                 4,
@@ -173,6 +173,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         cmd: &Self::Rec,
         args: &Self::Args,
         call: &TextDrawCall,
+        binds: &mut TextBindCache,
     ) -> Result<(), String> {
         if call.vertices.is_empty() || self.descriptors.text_atlas_srv_gpus.is_empty() {
             return Ok(());
@@ -191,24 +192,11 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
                 ) {
                     // Row scrolled fully out of its band: nothing to draw.
                     None => return Ok(()),
-                    Some((x, y, w, h)) => RECT {
-                        left: x,
-                        top: y,
-                        right: x + w as i32,
-                        bottom: y + h as i32,
-                    },
+                    Some(rect) => rect,
                 }
             }
-            None => RECT {
-                left: 0,
-                top: 0,
-                right: args.width as i32,
-                bottom: args.height as i32,
-            },
+            None => (0, 0, args.width, args.height),
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.RSSetScissorRects(&[scissor]) };
 
         let atlas_idx = call
             .atlas_slot
@@ -237,7 +225,21 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.SetGraphicsRootDescriptorTable(1, self.descriptors.text_atlas_srv_gpus[atlas_idx]);
+            if binds.scissor_changed(scissor) {
+                let (x, y, w, h) = scissor;
+                cmd.RSSetScissorRects(&[RECT {
+                    left: x,
+                    top: y,
+                    right: x + w as i32,
+                    bottom: y + h as i32,
+                }]);
+            }
+            if binds.atlas_changed(atlas_idx) {
+                cmd.SetGraphicsRootDescriptorTable(
+                    1,
+                    self.descriptors.text_atlas_srv_gpus[atlas_idx],
+                );
+            }
             cmd.IASetVertexBuffers(0, Some(&[vbv]));
             cmd.IASetIndexBuffer(Some(&ibv));
             cmd.DrawIndexedInstanced(call.indices.len() as u32, 1, 0, 0, 0);

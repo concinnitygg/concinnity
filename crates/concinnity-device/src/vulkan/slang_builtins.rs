@@ -82,6 +82,7 @@ impl SlangCompile for SlangProgram {
         }
         let key = self.cache_key(&source);
         crate::shader_cache::cached(&key, self.label, || compile_uncached(self, &source))
+            .map_err(|e| format!("{}: {e}", self.label))
     }
 }
 

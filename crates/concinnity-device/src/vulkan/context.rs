@@ -793,6 +793,13 @@ pub(super) struct DrawState {
         crate::gfx::render_graph::FrameGraphInputs,
         crate::gfx::render_graph::CompiledGraph,
     )>,
+    // Scratch the graph executor refills each frame: the per-resource barrier
+    // targets and the per-pass aliasing barriers. Their contents are derived from
+    // live state every frame (so no handle can go stale here); only the
+    // allocations are carried over, which is what the per-frame `Vec` builds were
+    // actually costing. Taken during `execute_graph` and put back after, like
+    // `graph_cache` above.
+    pub barrier_scratch: Option<super::graph_exec::VkBarrierScratch>,
     // Build-time `objects` count. Streamed chunks are appended past this, so a
     // draw index >= `n_objects` identifies a chunk -- which binds the shared
     // `chunk_object_set` rather than a per-object descriptor set.

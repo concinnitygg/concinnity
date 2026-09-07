@@ -121,6 +121,45 @@ pub fn encode_bloom_chain<E: BloomEncoder>(enc: &E, rec: &E::Rec, args: E::Args)
     }
 }
 
+/// The text-overlay state one draw call would set that the previous call in the
+/// same pass already left bound. A heads-up display is overwhelmingly many labels
+/// sharing one atlas and one full-window scissor, so tracking the last value bound
+/// turns a per-label bind into a per-change bind.
+///
+/// The scissor is the canonical `(x, y, w, h)` in attachment pixels that
+/// [`clip_rect_to_scissor`] returns and every backend's own rect type converts
+/// from, so one cache serves all three backends.
+///
+/// A cache starts empty rather than seeded with whatever the pass began with, so
+/// the first call of each kind always binds and the cache never has to assume what
+/// the surrounding pass left in place.
+///
+/// Both queries record as they answer, so a caller must ask only where it goes on
+/// to bind: asking and then skipping the bind desynchronises the cache from the
+/// recorder.
+#[derive(Default)]
+pub struct TextBindCache {
+    atlas: Option<usize>,
+    scissor: Option<(i32, i32, u32, u32)>,
+}
+
+impl TextBindCache {
+    /// An empty cache: the first query of each kind reports a change.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the atlas at `idx` still needs binding, recording it as bound.
+    pub fn atlas_changed(&mut self, idx: usize) -> bool {
+        self.atlas.replace(idx) != Some(idx)
+    }
+
+    /// Whether `rect` still needs setting as the scissor, recording it as set.
+    pub fn scissor_changed(&mut self, rect: (i32, i32, u32, u32)) -> bool {
+        self.scissor.replace(rect) != Some(rect)
+    }
+}
+
 /// The composite pass: tonemap (+ optional LUT grade) the post-stack scene onto
 /// the swapchain image, then layer the text overlay on top in the same pass. Its
 /// begin -> composite-draw -> text-loop -> end shape is identical on every
@@ -154,12 +193,15 @@ pub trait CompositeEncoder {
     fn begin_text(&self, rec: &Self::Rec, args: &Self::Args) -> bool;
     /// Encode one text draw call: append its vertex/index geometry to this frame
     /// slot's persistent upload buffer, bind the atlas plus the two sub-ranges,
-    /// and draw.
+    /// and draw. `cache` carries what the previous call in this pass left bound;
+    /// consult it for the atlas and the scissor so a run of labels sharing either
+    /// binds it once (see [`TextBindCache`]).
     fn text_draw(
         &self,
         rec: &Self::Rec,
         args: &Self::Args,
         call: &TextDrawCall,
+        cache: &mut TextBindCache,
     ) -> Result<(), String>;
     /// End the pass: DX transitions the back-buffer back to PRESENT; VK ends the
     /// render pass.
@@ -183,8 +225,11 @@ pub fn encode_composite_chain<E: CompositeEncoder>(
     enc.begin_composite(rec, args);
     enc.composite_draw(rec, args);
     if !text_calls.is_empty() && enc.begin_text(rec, args) {
+        // One cache per pass: the text calls are encoded back to back into the
+        // same recorder, so what one call binds is still bound for the next.
+        let mut cache = TextBindCache::new();
         for call in text_calls {
-            enc.text_draw(rec, args, call)?;
+            enc.text_draw(rec, args, call, &mut cache)?;
         }
     }
     enc.end_composite(rec, args);
@@ -461,12 +506,15 @@ mod tests {
     }
 
     // A mock composite encoder. `text_ready` is the `begin_text` return; when
-    // `fail_at` matches a text-draw index that draw returns an error.
+    // `fail_at` matches a text-draw index that draw returns an error. `binds`
+    // records what the cache answered per call, so a test can see which calls
+    // would have rebound the atlas.
     struct MockComposite {
         text_ready: bool,
         fail_at: Option<usize>,
         log: RefCell<Vec<String>>,
         text_seen: RefCell<usize>,
+        binds: RefCell<Vec<bool>>,
     }
 
     impl MockComposite {
@@ -476,6 +524,7 @@ mod tests {
                 fail_at,
                 log: RefCell::new(Vec::new()),
                 text_seen: RefCell::new(0),
+                binds: RefCell::new(Vec::new()),
             }
         }
     }
@@ -494,8 +543,17 @@ mod tests {
             self.log.borrow_mut().push("begin_text".into());
             self.text_ready
         }
-        fn text_draw(&self, _rec: &(), _args: &(), _call: &TextDrawCall) -> Result<(), String> {
+        fn text_draw(
+            &self,
+            _rec: &(),
+            _args: &(),
+            _call: &TextDrawCall,
+            _cache: &mut TextBindCache,
+        ) -> Result<(), String> {
             let mut n = self.text_seen.borrow_mut();
+            self.binds
+                .borrow_mut()
+                .push(_cache.atlas_changed(_call.atlas_slot));
             self.log.borrow_mut().push(format!("text{}", *n));
             let fail = self.fail_at == Some(*n);
             *n += 1;
@@ -553,6 +611,80 @@ mod tests {
         let r = encode_composite_chain(&enc, &(), &(), &calls);
         assert!(r.is_ok());
         assert_eq!(*enc.log.borrow(), ["begin", "draw", "begin_text", "end"]);
+    }
+
+    #[test]
+    fn an_empty_cache_reports_the_first_bind_of_each_kind() {
+        let mut cache = TextBindCache::new();
+        assert!(cache.atlas_changed(0));
+        assert!(cache.scissor_changed((0, 0, 1280, 720)));
+    }
+
+    #[test]
+    fn a_repeated_value_is_not_rebound() {
+        // The heads-up-display case: every label on one atlas, none clipped, so
+        // only the first call of the run binds either.
+        let mut cache = TextBindCache::new();
+        let full = (0, 0, 1280, 720);
+        assert!(cache.atlas_changed(2));
+        assert!(cache.scissor_changed(full));
+        for _ in 0..100 {
+            assert!(!cache.atlas_changed(2));
+            assert!(!cache.scissor_changed(full));
+        }
+    }
+
+    #[test]
+    fn a_changed_value_rebinds_and_then_settles() {
+        // A clipped call in the middle of a run sets its own band and the next
+        // unclipped call restores the full-window rect; a third unclipped call
+        // then rides the restored one.
+        let mut cache = TextBindCache::new();
+        let full = (0, 0, 1280, 720);
+        let band = (10, 20, 300, 100);
+        assert!(cache.scissor_changed(full));
+        assert!(cache.scissor_changed(band));
+        assert!(cache.scissor_changed(full));
+        assert!(!cache.scissor_changed(full));
+        // The two kinds are tracked independently.
+        assert!(cache.atlas_changed(0));
+        assert!(!cache.atlas_changed(0));
+        assert!(cache.atlas_changed(1));
+        assert!(cache.atlas_changed(0));
+    }
+
+    #[test]
+    fn a_cache_distinguishes_rects_that_differ_in_one_field() {
+        let mut cache = TextBindCache::new();
+        assert!(cache.scissor_changed((0, 0, 100, 100)));
+        assert!(cache.scissor_changed((1, 0, 100, 100)));
+        assert!(cache.scissor_changed((1, 2, 100, 100)));
+        assert!(cache.scissor_changed((1, 2, 101, 100)));
+        assert!(cache.scissor_changed((1, 2, 101, 99)));
+        assert!(!cache.scissor_changed((1, 2, 101, 99)));
+    }
+
+    #[test]
+    fn one_cache_spans_the_whole_text_loop() {
+        // The driver must hand every call in a pass the same cache, or nothing
+        // is ever deduplicated: three calls on one atlas bind it once.
+        let enc = MockComposite::new(true, None);
+        let calls = [text_call(), text_call(), text_call()];
+        let r = encode_composite_chain(&enc, &(), &(), &calls);
+        assert!(r.is_ok());
+        assert_eq!(*enc.binds.borrow(), [true, false, false]);
+    }
+
+    #[test]
+    fn each_pass_starts_from_an_empty_cache() {
+        // A cache must not outlive its pass: the next frame records into a fresh
+        // recorder that has none of the previous frame's state bound.
+        for _ in 0..2 {
+            let enc = MockComposite::new(true, None);
+            let calls = [text_call(), text_call()];
+            assert!(encode_composite_chain(&enc, &(), &(), &calls).is_ok());
+            assert_eq!(*enc.binds.borrow(), [true, false]);
+        }
     }
 
     // A mock single-draw fullscreen pass recording its lifecycle.

@@ -3902,6 +3902,7 @@ impl VkContext {
                     n_objects,
                     objects: draw_objects,
                     graph_cache: None,
+                    barrier_scratch: None,
                     n_instances,
                     // Runtime record reserve (fixed at init): the worst-case
                     // resident streamed-chunk window plus the runtime-clone budget.

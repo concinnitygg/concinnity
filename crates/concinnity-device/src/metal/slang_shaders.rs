@@ -546,18 +546,26 @@ impl SlangLib {
     }
 
     // Produce this variant's MTLLibrary. Fast path: the metallib the build
-    // script precompiled and embedded. Fallback (hot-reload, or a build host
+    // script precompiled and embedded, taken whenever its digest matches the
+    // source just assembled. Fallback (an edited shader, or a build host
     // without slangc): compile at runtime through the shader cache.
+    //
+    // Digest rather than hot-reload, matching Vulkan and DirectX: the editor
+    // runs with hot-reload on, so a mode check made it recompile every engine
+    // shader at startup and demand slangc to do it, even where the disk copy it
+    // reads is the one the binary already carries.
     pub(super) fn library(
         &self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
         hot_reload: bool,
     ) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
-        if !hot_reload && let Some(bytes) = super::metallib::embedded_metallib(self.name) {
+        let source = self.source(hot_reload);
+        if let Some((digest, bytes)) = super::metallib::embedded_metallib(self.name)
+            && digest == concinnity_core::render::slang_source::source_digest(&source)
+        {
             return load_library(device, bytes)
                 .map_err(|e| format!("{}: failed to load precompiled metallib: {e}", self.name));
         }
-        let source = self.source(hot_reload);
         let entry = self.entries.join("+");
         let key = crate::shader_cache::Key {
             compiler: "slang",
@@ -575,7 +583,8 @@ impl SlangLib {
             };
             let work = crate::compiler_work::dir()?;
             slang::compile(&job, work.path())
-        })?;
+        })
+        .map_err(|e| format!("{}: {e}", self.name))?;
         load_library(device, &bytes)
             .map_err(|e| format!("{}: metallib load failed: {e}", self.name))
     }

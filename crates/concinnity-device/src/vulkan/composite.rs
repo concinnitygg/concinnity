@@ -15,6 +15,7 @@
 
 use ash::vk;
 
+use crate::gfx::fullscreen::TextBindCache;
 use crate::gfx::render_types::{CompositeParams, TextDrawCall};
 use concinnity_core::gfx::render_types::TextUniforms;
 
@@ -121,6 +122,16 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         if self.text.atlas_textures.is_empty() {
             return false;
         }
+        // The overlay size every call divides by: one value for the frame, so it
+        // is pushed here rather than per label. The push follows the pipeline
+        // bind, and the loop only ever binds descriptor sets with this same
+        // layout, so nothing below invalidates it.
+        let ui = self.logical_size();
+        let text_push = TextUniforms {
+            win_width: ui.0,
+            win_height: ui.1,
+            _pad: [0.0; 2],
+        };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -128,6 +139,16 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 text_pipeline.handle(),
+            );
+            self.device.cmd_push_constants(
+                *cmd,
+                self.text.pipeline_layout.handle(),
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                std::slice::from_raw_parts(
+                    &text_push as *const TextUniforms as *const u8,
+                    std::mem::size_of::<TextUniforms>(),
+                ),
             );
         }
         true
@@ -138,6 +159,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         cmd: &Self::Rec,
         args: &Self::Args,
         call: &TextDrawCall,
+        binds: &mut TextBindCache,
     ) -> Result<(), String> {
         if call.vertices.is_empty() || self.descriptors.text_atlas_sets.is_empty() {
             return Ok(());
@@ -161,23 +183,12 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
                     (extent.width, extent.height),
                 ) {
                     None => return Ok(()),
-                    Some((x, y, w, h)) => vk::Rect2D {
-                        offset: vk::Offset2D { x, y },
-                        extent: vk::Extent2D {
-                            width: w,
-                            height: h,
-                        },
-                    },
+                    Some(rect) => rect,
                 }
             }
-            None => vk::Rect2D::default().extent(extent),
+            None => (0, 0, extent.width, extent.height),
         };
 
-        let text_push = TextUniforms {
-            win_width: ui.0,
-            win_height: ui.1,
-            _pad: [0.0; 2],
-        };
         let atlas_idx = call
             .atlas_slot
             .min(self.descriptors.text_atlas_sets.len() - 1);
@@ -197,25 +208,24 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
         // live for the call.
         unsafe {
-            device.cmd_bind_descriptor_sets(
-                *cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.text.pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&self.descriptors.text_atlas_sets[atlas_idx]),
-                &[],
-            );
-            device.cmd_push_constants(
-                *cmd,
-                self.text.pipeline_layout.handle(),
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                std::slice::from_raw_parts(
-                    &text_push as *const TextUniforms as *const u8,
-                    std::mem::size_of::<TextUniforms>(),
-                ),
-            );
-            device.cmd_set_scissor(*cmd, 0, std::slice::from_ref(&scissor));
+            if binds.atlas_changed(atlas_idx) {
+                device.cmd_bind_descriptor_sets(
+                    *cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.text.pipeline_layout.handle(),
+                    0,
+                    std::slice::from_ref(&self.descriptors.text_atlas_sets[atlas_idx]),
+                    &[],
+                );
+            }
+            if binds.scissor_changed(scissor) {
+                let (x, y, width, height) = scissor;
+                let rect = vk::Rect2D {
+                    offset: vk::Offset2D { x, y },
+                    extent: vk::Extent2D { width, height },
+                };
+                device.cmd_set_scissor(*cmd, 0, std::slice::from_ref(&rect));
+            }
             device.cmd_bind_vertex_buffers(*cmd, 0, &[vert_buf], &[vert_offset]);
             device.cmd_bind_index_buffer(*cmd, idx_buf, idx_offset, vk::IndexType::UINT16);
             device.cmd_draw_indexed(*cmd, call.indices.len() as u32, 1, 0, 0, 0);

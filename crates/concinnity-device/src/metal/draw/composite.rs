@@ -146,6 +146,15 @@ impl MtlContext {
             };
 
             post_encoder.set_pipeline(&text_ps);
+            // Frame-invariant text state, set once for the whole run of labels:
+            // the encoder keeps it bound across the draws below, and nothing in
+            // the loop switches pipeline.
+            post_encoder.set_fragment_sampler(&self.text.sampler, 0);
+            post_encoder.set_vertex_value(&text_uniforms, 0);
+            // What the loop already left bound. The encoder's default scissor is
+            // the full attachment, but the cache starts empty and so re-sets it
+            // once rather than assuming that.
+            let mut binds = crate::gfx::fullscreen::TextBindCache::new();
 
             for (call, range) in text_calls.iter().zip(text_ranges) {
                 if call.vertices.is_empty() {
@@ -155,37 +164,35 @@ impl MtlContext {
                 // to the full drawable (chrome / HUD). A clip rect that scales to
                 // an empty rectangle means the element scrolled fully out of its
                 // band: skip the draw entirely.
-                match call.clip_rect {
+                let scissor = match call.clip_rect {
                     Some(clip) => {
                         let scissor = crate::gfx::fullscreen::clip_rect_to_scissor(
                             clip,
                             (win_w, win_h),
                             (fb_w as u32, fb_h as u32),
                         );
-                        let Some((x, y, w, h)) = scissor else {
+                        let Some(rect) = scissor else {
                             continue;
                         };
-                        post_encoder.setScissorRect(MTLScissorRect {
-                            x: x as usize,
-                            y: y as usize,
-                            width: w as usize,
-                            height: h as usize,
-                        });
+                        rect
                     }
-                    None => {
-                        post_encoder.setScissorRect(MTLScissorRect {
-                            x: 0,
-                            y: 0,
-                            width: fb_w,
-                            height: fb_h,
-                        });
-                    }
+                    None => (0, 0, fb_w as u32, fb_h as u32),
+                };
+                if binds.scissor_changed(scissor) {
+                    let (x, y, w, h) = scissor;
+                    post_encoder.setScissorRect(MTLScissorRect {
+                        x: x as usize,
+                        y: y as usize,
+                        width: w as usize,
+                        height: h as usize,
+                    });
                 }
                 let atlas_idx = call.atlas_slot.min(self.text.atlas_textures.len() - 1);
-                post_encoder.set_fragment_texture(self.text.atlas_textures[atlas_idx].as_ref(), 0);
-                post_encoder.set_fragment_sampler(&self.text.sampler, 0);
+                if binds.atlas_changed(atlas_idx) {
+                    post_encoder
+                        .set_fragment_texture(self.text.atlas_textures[atlas_idx].as_ref(), 0);
+                }
 
-                post_encoder.set_vertex_value(&text_uniforms, 0);
                 post_encoder.set_vertex_buffer(text_buffer, range.vertex_offset, 1);
                 // SAFETY: `text_buffer` is owned by the ring and outlives the encoder, and this
                 // call's blocks were written at `range`'s offsets from this same call's vertex /

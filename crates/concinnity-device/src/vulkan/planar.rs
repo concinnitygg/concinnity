@@ -979,27 +979,28 @@ impl VkContext {
         // The main render pass leaves them in SHADER_READ_ONLY (final layout) but
         // adds no output-side dependency, so order the colour writes before the
         // sample explicitly. Layout is unchanged (SHADER_READ_ONLY -> same).
-        let barriers: Vec<vk::ImageMemoryBarrier> = set
-            .targets
-            .iter()
-            .map(|t| {
-                vk::ImageMemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .image(t.image)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    })
-            })
-            .collect();
+        // One barrier per plane, and the plane count is capped at
+        // `MAX_PLANAR_PLANES` where the set is built, so this fits on the stack.
+        let mut barriers = [vk::ImageMemoryBarrier::default(); MAX_PLANAR_PLANES];
+        debug_assert!(set.targets.len() <= MAX_PLANAR_PLANES);
+        let n = set.targets.len().min(MAX_PLANAR_PLANES);
+        for (slot, t) in set.targets.iter().take(n).enumerate() {
+            barriers[slot] = vk::ImageMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(t.image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
+        }
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -1010,7 +1011,7 @@ impl VkContext {
                 vk::DependencyFlags::empty(),
                 &[],
                 &[],
-                &barriers,
+                &barriers[..n],
             );
         }
         Ok(())

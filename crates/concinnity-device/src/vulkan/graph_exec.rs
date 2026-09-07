@@ -80,6 +80,31 @@ struct VkBarrierTarget {
 // migrated resources lives; the parallel emit path stays field-agnostic.
 struct VkBarrierRegistry(Vec<Option<VkBarrierTarget>>);
 
+// The two per-frame tables the executor builds, kept across frames on `VkContext`
+// so their backing allocations are reused. Only the allocations survive: both are
+// cleared and refilled from live state at the start of every `execute_graph`, so
+// nothing here can outlive the object it names. That matters because the barrier
+// targets are raw `vk::Image` / `vk::Buffer` handles: caching their *contents*
+// would mean tracking every event that rebuilds one of the ~10 fields
+// `barrier_object_for_label` reads, and a missed one would put a destroyed handle
+// in a barrier. Refilling is cheap now that the pool resolves a label in O(1).
+pub(in crate::vulkan) struct VkBarrierScratch {
+    registry: VkBarrierRegistry,
+    // `alias[i]` holds the pooled images to alias-barrier before graph pass `i`.
+    // The inner `Vec`s are cleared rather than dropped, so their allocations are
+    // reused too; the outer one is resized to the pass count.
+    alias: Vec<Vec<vk::Image>>,
+}
+
+impl VkBarrierScratch {
+    fn new() -> Self {
+        Self {
+            registry: VkBarrierRegistry(Vec::new()),
+            alias: Vec::new(),
+        }
+    }
+}
+
 // Emit the explicit image-layout transitions for the migrated graph resources
 // from a pass's `barriers_before`, resolved through the registry. Called at the
 // start of each pass's own command buffer, before the pass encodes, so the
@@ -454,9 +479,14 @@ impl VkContext {
 
         // Resolve every migrated resource's barrier target once, on the main
         // thread, then share the table read-only into the parallel pass workers.
-        let registry = self.build_barrier_registry(graph, frame_idx);
+        let mut scratch = self
+            .draw
+            .barrier_scratch
+            .take()
+            .unwrap_or_else(VkBarrierScratch::new);
+        self.refill_barrier_registry(&mut scratch.registry, graph, frame_idx);
         #[cfg(debug_assertions)]
-        debug_assert_graph_drives(graph, &registry);
+        debug_assert_graph_drives(graph, &scratch.registry);
         #[cfg(debug_assertions)]
         crate::gfx::render_graph::assert_slot_aliasing_sound(
             graph,
@@ -466,14 +496,18 @@ impl VkContext {
         // Per-pass aliasing barriers for the pooled transients that share memory
         // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
         // slot is shared.
-        let alias_barriers = self.build_alias_barriers(graph, frame_idx);
+        self.refill_alias_barriers(&mut scratch.alias, graph, frame_idx);
+        let VkBarrierScratch {
+            registry,
+            alias: alias_barriers,
+        } = &scratch;
         let ctx_ref = ParallelCtxRef::new(self);
         let particle_ref = particle_frame.as_ref();
         let device_ref = &device;
         let worker_slots_ref = &worker_slots;
         let first_error_ref = &first_error;
-        let registry_ref = &registry;
-        let alias_barriers_ref = &alias_barriers;
+        let registry_ref = registry;
+        let alias_barriers_ref = alias_barriers;
 
         crate::jobs::pool().install(|| {
             rayon::scope(|scope| {
@@ -583,7 +617,7 @@ impl VkContext {
             emit_pass_prologue(
                 &self.device,
                 params.cmd,
-                &registry,
+                registry,
                 &alias_barriers[idx],
                 &graph.passes[idx],
             );
@@ -611,7 +645,7 @@ impl VkContext {
         // Return every driven resource the frame left off its resting layout.
         // Recorded last into the outer "end" buffer, which is submitted after
         // every pass buffer.
-        emit_graph_restores(&self.device, params.cmd, &registry, graph);
+        emit_graph_restores(&self.device, params.cmd, registry, graph);
 
         // Collect the per-pass buffers in ascending graph index = toposort
         // order (the `None` Composite slot is skipped). Never sort: the submit
@@ -623,6 +657,10 @@ impl VkContext {
             .into_iter()
             .flatten()
             .collect();
+        // Hand the tables' allocations back for the next frame to refill. An
+        // error path above skips this and the next frame allocates fresh, which
+        // is immaterial: that frame already failed.
+        self.draw.barrier_scratch = Some(scratch);
         Ok(ordered)
     }
 
@@ -633,22 +671,22 @@ impl VkContext {
     // field-grouping re-cuts here, not in the executor. A resource the owning
     // feature disabled (or one never migrated) gets `None`, and the graph carries
     // no barrier for it either.
-    fn build_barrier_registry(&self, graph: &CompiledGraph, frame_idx: usize) -> VkBarrierRegistry {
-        VkBarrierRegistry(
-            graph
-                .resources
-                .iter()
-                .map(|res| {
-                    let class = res.class()?;
-                    let (object, resting) = self.barrier_object_for_label(res.label, frame_idx)?;
-                    Some(VkBarrierTarget {
-                        object,
-                        class,
-                        resting,
-                    })
-                })
-                .collect(),
-        )
+    fn refill_barrier_registry(
+        &self,
+        registry: &mut VkBarrierRegistry,
+        graph: &CompiledGraph,
+        frame_idx: usize,
+    ) {
+        registry.0.clear();
+        registry.0.extend(graph.resources.iter().map(|res| {
+            let class = res.class()?;
+            let (object, resting) = self.barrier_object_for_label(res.label, frame_idx)?;
+            Some(VkBarrierTarget {
+                object,
+                class,
+                resting,
+            })
+        }));
     }
 
     // Build the per-pass aliasing-barrier table for this frame: `table[i]` holds
@@ -658,8 +696,18 @@ impl VkContext {
     // the barrier lands before the pass that first writes it (`lifetime.first`).
     // Empty for every resource the pool does not alias (no predecessor), so the
     // table is empty whenever no slot is shared this frame.
-    fn build_alias_barriers(&self, graph: &CompiledGraph, frame_idx: usize) -> Vec<Vec<vk::Image>> {
-        let mut table = vec![Vec::new(); graph.passes.len()];
+    fn refill_alias_barriers(
+        &self,
+        table: &mut Vec<Vec<vk::Image>>,
+        graph: &CompiledGraph,
+        frame_idx: usize,
+    ) {
+        // Clear each row rather than the table, so a row that carried barriers
+        // last frame keeps its allocation.
+        for row in table.iter_mut() {
+            row.clear();
+        }
+        table.resize_with(graph.passes.len(), Vec::new);
         for res in &graph.resources {
             if self.transient_pool.alias_predecessor(res.label).is_none() {
                 continue;
@@ -671,7 +719,6 @@ impl VkContext {
                 }
             }
         }
-        table
     }
 
     // Map one graph resource label to its backing GPU object and the layout it

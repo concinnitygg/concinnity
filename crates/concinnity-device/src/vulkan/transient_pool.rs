@@ -23,6 +23,7 @@
 // otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
+use std::collections::HashMap;
 
 use crate::vulkan::owned::VkDevice;
 
@@ -43,6 +44,17 @@ pub(super) struct TransientPoolGpu<'a> {
     pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
+}
+
+// Everything about one label that is fixed once the pool is built: where its
+// per-frame images sit in `images`, and which member it reuses slot memory from.
+// The executor walks every graph resource twice a frame looking both up, so they
+// are resolved here rather than re-scanned per frame.
+struct LabelEntry {
+    // Index into `images` per frame in flight, in frame order.
+    frames: Vec<usize>,
+    // The member immediately before this one in its slot's lifetime order.
+    alias_predecessor: Option<&'static str>,
 }
 
 // One managed image, resolved for one frame in flight.
@@ -66,6 +78,9 @@ pub(super) struct TransientImagePool {
     // slot's memory). Drives the executor's aliasing barriers: a member's
     // predecessor in this list is the resource it reuses memory from.
     slot_labels: Vec<Vec<&'static str>>,
+    // Per-label lookup, resolved at build from `images` + `slot_labels`, so the
+    // executor's per-frame walk indexes instead of scanning for a string match.
+    by_label: HashMap<&'static str, LabelEntry>,
     // The pool's aliased footprint: the sum of its slot allocations across every
     // frame in flight. Reported to the memory ledger, which would otherwise not
     // see this pool at all -- it deliberately sits off the device allocator.
@@ -192,10 +207,12 @@ impl TransientImagePool {
             aliased_bytes / 1024,
             unaliased_bytes.saturating_sub(aliased_bytes) / 1024,
         );
+        let by_label = index_labels(&images, &slot_labels);
         Ok(Self {
             slot_memories,
             images,
             slot_labels,
+            by_label,
             allocated_bytes: aliased_bytes,
         })
     }
@@ -206,16 +223,7 @@ impl TransientImagePool {
     // aliasing barrier on `label` against this predecessor before `label`'s
     // first write, since they share one allocation.
     pub(super) fn alias_predecessor(&self, label: &str) -> Option<&'static str> {
-        for members in &self.slot_labels {
-            if let Some(pos) = members.iter().position(|&l| l == label) {
-                return if pos == 0 {
-                    None
-                } else {
-                    Some(members[pos - 1])
-                };
-            }
-        }
-        None
+        self.by_label.get(label)?.alias_predecessor
     }
 
     // The pool's aliased footprint in bytes, for the memory ledger.
@@ -285,9 +293,8 @@ impl TransientImagePool {
     }
 
     fn lookup(&self, label: &str, frame: usize) -> Option<&TransientImage> {
-        self.images
-            .iter()
-            .find(|p| p.label == label && p.frame == frame)
+        let idx = *self.by_label.get(label)?.frames.get(frame)?;
+        self.images.get(idx)
     }
 
     // Rebuild every managed image at a new extent / frame count. The caller has
@@ -323,8 +330,38 @@ impl TransientImagePool {
         self.images.clear();
         self.slot_memories.clear();
         self.slot_labels.clear();
+        self.by_label.clear();
         self.allocated_bytes = 0;
     }
+}
+
+// Resolve each label's per-frame `images` indices and its slot predecessor.
+// `images` is built slot-major then frame-major, so a label's entries arrive in
+// ascending frame order and `frames[f]` is that label's image for frame `f`. A
+// label appearing in no slot (or in none of `images`) simply gets no entry, which
+// is what the `*_for` lookups report as unmanaged.
+fn index_labels(
+    images: &[TransientImage],
+    slot_labels: &[Vec<&'static str>],
+) -> HashMap<&'static str, LabelEntry> {
+    let mut by_label: HashMap<&'static str, LabelEntry> = HashMap::new();
+    for members in slot_labels {
+        for (pos, &label) in members.iter().enumerate() {
+            by_label.entry(label).or_insert_with(|| LabelEntry {
+                frames: Vec::new(),
+                alias_predecessor: (pos > 0).then(|| members[pos - 1]),
+            });
+        }
+    }
+    for (idx, p) in images.iter().enumerate() {
+        if let Some(entry) = by_label.get_mut(p.label) {
+            // The pool holds one image per (label, frame) and builds them in
+            // frame order, so appending keeps `frames` indexed by frame.
+            debug_assert_eq!(entry.frames.len(), p.frame, "images not in frame order");
+            entry.frames.push(idx);
+        }
+    }
+    by_label
 }
 
 // Create a `VkImage` without backing memory: the pool binds it into a slot
@@ -617,5 +654,84 @@ mod tests {
         assert_eq!(sample_count(4), vk::SampleCountFlags::TYPE_4);
         assert_eq!(sample_count(1), vk::SampleCountFlags::TYPE_1);
         assert_eq!(sample_count(0), vk::SampleCountFlags::TYPE_1);
+    }
+
+    // A synthetic `images` list in the order `build` pushes: slot-major, then
+    // frame, then member. No device is touched -- the handles are null.
+    fn images_for(slot_labels: &[Vec<&'static str>], frames: usize) -> Vec<TransientImage> {
+        let mut images = Vec::new();
+        for members in slot_labels {
+            for frame in 0..frames {
+                for &label in members {
+                    images.push(TransientImage {
+                        label,
+                        frame,
+                        image: vk::Image::null(),
+                        view: vk::ImageView::null(),
+                        aspect: vk::ImageAspectFlags::COLOR,
+                    });
+                }
+            }
+        }
+        images
+    }
+
+    #[test]
+    fn label_index_maps_every_frame_of_every_member() {
+        let slots = vec![vec!["ao_output", "bloom_top"], vec!["gbuffer_velocity"]];
+        let images = images_for(&slots, 3);
+        let by_label = index_labels(&images, &slots);
+        assert_eq!(by_label.len(), 3);
+        for label in ["ao_output", "bloom_top", "gbuffer_velocity"] {
+            let entry = &by_label[label];
+            assert_eq!(entry.frames.len(), 3, "{label}");
+            // Each recorded index must point back at that label + frame.
+            for (frame, &idx) in entry.frames.iter().enumerate() {
+                assert_eq!(images[idx].label, label);
+                assert_eq!(images[idx].frame, frame);
+            }
+        }
+    }
+
+    #[test]
+    fn label_index_records_the_slot_predecessor() {
+        // Lifetime order within a slot: the first member aliases nothing, each
+        // later one reuses the memory of the member before it.
+        let slots = vec![vec!["ao_output", "bloom_top", "scene_pre_taa"]];
+        let by_label = index_labels(&images_for(&slots, 2), &slots);
+        assert_eq!(by_label["ao_output"].alias_predecessor, None);
+        assert_eq!(by_label["bloom_top"].alias_predecessor, Some("ao_output"));
+        assert_eq!(
+            by_label["scene_pre_taa"].alias_predecessor,
+            Some("bloom_top")
+        );
+    }
+
+    #[test]
+    fn a_lone_slot_member_aliases_nothing() {
+        let slots = vec![vec!["ao_output"], vec!["hiz_pyramid"]];
+        let by_label = index_labels(&images_for(&slots, 1), &slots);
+        assert_eq!(by_label["ao_output"].alias_predecessor, None);
+        assert_eq!(by_label["hiz_pyramid"].alias_predecessor, None);
+    }
+
+    #[test]
+    fn an_unmanaged_label_gets_no_entry() {
+        // A feature disabled at build time contributes no slot, so the label the
+        // graph still names resolves to nothing and the `*_for` lookups say so.
+        let slots = vec![vec!["ao_output"]];
+        let by_label = index_labels(&images_for(&slots, 2), &slots);
+        assert!(!by_label.contains_key("fog_froxel_volume"));
+    }
+
+    #[test]
+    fn a_slot_with_no_allocated_images_still_reports_its_predecessor() {
+        // `slot_labels` is the plan and `images` the realisation; with no frames
+        // allocated the entries exist with empty frame lists, so a lookup finds
+        // no image while `alias_predecessor` still answers.
+        let slots = vec![vec!["ao_output", "bloom_top"]];
+        let by_label = index_labels(&[], &slots);
+        assert!(by_label["ao_output"].frames.is_empty());
+        assert_eq!(by_label["bloom_top"].alias_predecessor, Some("ao_output"));
     }
 }
