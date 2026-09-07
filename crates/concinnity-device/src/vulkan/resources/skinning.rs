@@ -175,6 +175,9 @@ impl VkContext {
         self.skinned.joint_buffers = joint_buffers;
         self.skinned.joint_sets = joint_sets;
         self.skinned.draw_objects = draw_objects;
+        // A whole new skinned set: nothing in the model-history ring was written
+        // for these records.
+        self.model_history.borrow_mut().reset(self.cull_count());
 
         // Morph targets are attached by a later `upload_skinned_morphs`; until
         // then every object is morphless (a re-upload resets here).
@@ -330,6 +333,11 @@ impl VkContext {
         };
         obj.model = model;
         obj.visible = true;
+        // The slot's model-history entry belongs to the previous occupant, so
+        // the next pre-pass must reproject through the revealed model instead.
+        self.model_history
+            .borrow_mut()
+            .reoccupy_skinned(instance_index);
         if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
             palette.iter_mut().for_each(|m| *m = IDENTITY);
         }

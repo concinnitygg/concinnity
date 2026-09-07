@@ -414,16 +414,10 @@ impl VkContext {
         match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
-                // Seed the velocity prepass's previous-model snapshot so a
-                // recycled slot does not ghost from the prior occupant's
-                // transform for one frame. A slot past the snapshot's end (one
-                // appended beyond the build-time object count) falls back to its
-                // own current model in the prepass, so the guard is enough.
-                if let Some(gb) = &mut self.gbuffer
-                    && slot < gb.prev_models.len()
-                {
-                    gb.prev_models[slot] = model;
-                }
+                // The slot's model-history entry belongs to the prior occupant,
+                // so the clone reprojects through its own transform for one
+                // frame rather than ghosting from that occupant's.
+                self.model_history.borrow_mut().reoccupy_draw(slot);
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
@@ -432,6 +426,7 @@ impl VkContext {
                     "appended draw slot must match the draw-object count"
                 );
                 self.draw.objects.push(obj);
+                self.model_history.borrow_mut().reoccupy_draw(slot);
             }
         }
         // The cloned prop joins the RT-relevant draw set; the next RT update folds

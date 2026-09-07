@@ -440,7 +440,11 @@ impl DxContext {
         // and the draw-args buffer (LOD by distance from the probe eye). Both are
         // frustum-independent, reused by every face's cull.
         self.build_object_buffer(slot);
-        self.build_draw_args_buffer(slot, eye);
+        self.build_draw_args_buffer(
+            slot,
+            eye,
+            concinnity_core::render::model_history::HistoryMode::Untracked,
+        );
 
         let alloc = &self.alloc;
         let device = &self.device;

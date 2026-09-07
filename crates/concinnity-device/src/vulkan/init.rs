@@ -1619,7 +1619,6 @@ impl VkContext {
                     height: render_extent.height,
                     frames,
                 },
-                draw_objects.len(),
                 &gbuffer_pooled,
             )?)
         } else {
@@ -1749,12 +1748,15 @@ impl VkContext {
         let n_atlas = gpu_text_atlases.len().max(1) as u32;
         let n_frames = frames as u32;
         let bindless_sets_count = if bindless_active { n_frames } else { 0 };
-        // GPU-driven G-buffer pre-pass: one set 0 per frame (1 UBO + 1 SSBO),
+        // GPU-driven G-buffer pre-pass: one set 0 per frame (1 UBO + 2 SSBOs: the
+        // previous frame's model-history slot and this frame's draw args),
         // allocated only when the bindless cull path is active AND the G-buffer is
         // enabled. The depth/MRT draw reuses the bindless GpuObjectData set (set 1),
-        // so it adds no further sets here.
+        // so it adds no further sets here. The snapshot kernel that fills the ring
+        // takes a square (frame, slot) table of its own, each set 1 UBO + 2 SSBOs.
         let gbuffer_active = bindless_active && gbuffer_opt.is_some();
         let gbuffer_sets_count = if gbuffer_active { n_frames } else { 0 };
+        let history_sets_count = gbuffer_sets_count * n_frames;
 
         // A pool size with descriptorCount 0 is invalid, so the storage-buffer
         // entry is only added when there are instanced clusters / bindless sets
@@ -1765,7 +1767,9 @@ impl VkContext {
                 // global (5 per frame: view + light + shadow + ProbeSet +
                 // ClusterParams) + shadow global (1 per frame) + gbuffer bindless
                 // GbView UBO (1 per frame).
-                .descriptor_count(n_frames * 5 + n_frames + gbuffer_sets_count),
+                .descriptor_count(
+                    n_frames * 5 + n_frames + gbuffer_sets_count + history_sets_count,
+                ),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 // per-frame {shadow + spot shadow + IBL irradiance + IBL
@@ -1801,8 +1805,10 @@ impl VkContext {
             + bindless_sets_count
             + 4 * bindless_sets_count
             + 3 * shadow_cull_set_count
-            // GPU-driven G-buffer: one prev_model SSBO per frame.
-            + gbuffer_sets_count
+            // GPU-driven G-buffer: the model-history slot + the draw args per
+            // frame, and the object buffer + history slot per snapshot set.
+            + 2 * gbuffer_sets_count
+            + 2 * history_sets_count
             // Per-scene local-light SSBO, the per-cluster light-list SSBO, the
             // spot shadow projections SSBO, and the area-light table: one of each
             // per global set (per frame).
@@ -1828,7 +1834,8 @@ impl VkContext {
             + bindless_sets_count
             + bindless_sets_count
             + shadow_cull_set_count
-            + gbuffer_sets_count;
+            + gbuffer_sets_count
+            + history_sets_count;
         // An update-after-bind set layout can only be allocated from a pool that
         // declares the same. This pool allocates both the global sets and the
         // bindless set, so either opting in forces the flag.
@@ -2807,16 +2814,16 @@ impl VkContext {
 
         // GPU-driven G-buffer pre-pass resources. Built when the bindless cull
         // path is active AND the G-buffer is enabled: a 3-MRT bindless pipeline +
-        // per-frame previous-frame model SSBOs, drawn by reusing the main pass's
-        // per-frame indirect buffer (camera frustum, NO extra cull dispatch). The
-        // prev_model buffers' instance region is init-written inside the helper;
-        // the static + skinned regions are rewritten each frame.
+        // the per-frame model-history ring and the snapshot kernel that fills it,
+        // drawn by reusing the main pass's per-frame indirect buffer (camera
+        // frustum, NO extra cull dispatch).
         type GbufferBindlessResources = (
             Option<OwnedPipeline>,
             Option<OwnedPipelineLayout>,
             Option<OwnedSetLayout>,
             Vec<vk::DescriptorSet>,
             Vec<super::allocator::PooledBuffer>,
+            Option<super::post::gbuffer::ModelHistoryPipeline>,
         );
         let (
             gbuffer_bindless_pipeline,
@@ -2824,18 +2831,12 @@ impl VkContext {
             gbuffer_set_layout,
             gbuffer_sets,
             prev_model_buffers,
+            model_history,
         ): GbufferBindlessResources = if let (true, Some(gb), Some(bl_set_layout)) = (
             gbuffer_active,
             gbuffer_opt.as_ref(),
             bindless_set_layout.as_ref(),
         ) {
-            // Per-instance models in cluster-then-instance order (matches the
-            // GpuObjectData instance records); the helper init-writes them into the
-            // prev_model buffers' instance region for camera-only velocity.
-            let inst_models: Vec<[[f32; 4]; 4]> = instanced_clusters
-                .iter()
-                .flat_map(|c| c.instances.iter().copied())
-                .collect();
             let gbb = super::post::gbuffer::build_gbuffer_bindless(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &alloc,
@@ -2845,13 +2846,12 @@ impl VkContext {
                     descriptor_pool: descriptor_pool.handle(),
                     bindless_set_layout: bl_set_layout.handle(),
                 },
-                gb,
-                super::post::gbuffer::GbufferBindlessScene {
-                    instance_models: &inst_models,
-                    n_objects: draw_objects.len(),
-                    n_cull,
-                    frames,
+                super::post::gbuffer::GbufferBindlessRecords {
+                    object_buffers: &object_buffers,
+                    draw_args_buffers: &draw_args_buffers,
                 },
+                gb,
+                super::post::gbuffer::GbufferBindlessScene { n_cull, frames },
                 hot_reload,
             )?;
             (
@@ -2860,9 +2860,10 @@ impl VkContext {
                 Some(gbb.set_layout),
                 gbb.sets,
                 gbb.prev_model_buffers,
+                Some(gbb.history),
             )
         } else {
-            (None, None, None, Vec::new(), Vec::new())
+            (None, None, None, Vec::new(), Vec::new(), None)
         };
 
         // The reflection-probe convolution kernels, under the same gate the bake
@@ -3724,6 +3725,7 @@ impl VkContext {
                 _gbuffer_set_layout: gbuffer_set_layout,
                 gbuffer_sets,
                 prev_model_buffers,
+                model_history,
             },
             text: super::context::TextState {
                 atlas_textures: gpu_text_atlases,
@@ -3774,6 +3776,7 @@ impl VkContext {
             reflection_composite: composite_opt,
             ssgi: ssgi_opt,
             gbuffer: gbuffer_opt,
+            model_history: Default::default(),
             rt_reflections: rt_opt,
             rt_accel: rt_accel_opt,
             rt_dynamic_mode,

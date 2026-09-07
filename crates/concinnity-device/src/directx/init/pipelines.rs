@@ -820,8 +820,9 @@ pub(super) struct MainPipelines {
     pub gbuffer_bindless_root_sig: Option<ID3D12RootSignature>,
     pub gbuffer_bindless_pso: Option<ID3D12PipelineState>,
     pub gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature>,
-    pub prev_model_buffer_resources: Vec<PooledBuffer>,
-    pub prev_model_buffer_ptrs: Vec<*mut u8>,
+    pub prev_model_buffer_resources: Vec<ID3D12Resource>,
+    pub model_history_root_sig: Option<ID3D12RootSignature>,
+    pub model_history_pso: Option<ID3D12PipelineState>,
 }
 
 // The world's Shaders, one per bucket (`BackendInit::shaders`): entry 0 is the
@@ -994,8 +995,9 @@ pub(super) fn build_main_pipelines(
     let mut gbuffer_bindless_root_sig: Option<ID3D12RootSignature> = None;
     let mut gbuffer_bindless_pso: Option<ID3D12PipelineState> = None;
     let mut gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature> = None;
-    let mut prev_model_buffer_resources: Vec<PooledBuffer> = Vec::new();
-    let mut prev_model_buffer_ptrs: Vec<*mut u8> = Vec::new();
+    let mut prev_model_buffer_resources: Vec<ID3D12Resource> = Vec::new();
+    let mut model_history_root_sig: Option<ID3D12RootSignature> = None;
+    let mut model_history_pso: Option<ID3D12PipelineState> = None;
     if let (Some(bindless_root), true) = (
         main_bindless_root_sig.as_ref(),
         main_bindless_pso.is_some() && n_cull > 0,
@@ -1112,35 +1114,32 @@ pub(super) fn build_main_pipelines(
         }
 
         // GPU-driven G-buffer pre-pass: a 3-MRT bindless pipeline whose VS reads
-        // model + roughness from `GpuObjectData[object_id]` + the previous-frame
-        // model from a parallel buffer, drawn by reusing the main pass's per-frame
-        // indirect command buffer (NO new cull -- the camera-frustum cull already
-        // ran). Plus the per-frame `prev_model` upload buffers (one column-major
-        // `float4x4` per cull record): the instance region is init-written, the
-        // static + skinned regions rewritten each frame.
+        // model + roughness from `GpuObjectData[object_id]` + the previous frame's
+        // model from the model-history ring, drawn by reusing the main pass's
+        // per-frame indirect command buffer (NO new cull -- the camera-frustum
+        // cull already ran). Plus that ring (one column-major `float4x4` per cull
+        // record per frame) and the snapshot kernel that fills it: device-local,
+        // resting as a shader resource between the dispatch that writes a slot
+        // and the pre-pass that reads it a frame later.
         if gbuffer_enabled {
             let (grs, gpso, gsig) = crate::directx::post::gbuffer::build_gbuffer_bindless(
                 device, info_queue, hot_reload,
             )?;
+            let (mhrs, mhpso) =
+                crate::directx::post::gbuffer::build_model_history(device, info_queue, hot_reload)?;
             let prev_model_size = align256((n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64);
             for _ in 0..FRAMES {
-                let buf = create_buffer(
-                    alloc,
+                prev_model_buffer_resources.push(create_uav_buffer(
+                    device,
                     prev_model_size,
-                    D3D12_HEAP_TYPE_UPLOAD,
-                    D3D12_RESOURCE_STATE_GENERIC_READ,
-                )?;
-                let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-                // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a
-                // live local that receives the mapping.
-                unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                    .map_err(|e| format!("map prev_model buffer: {e}"))?;
-                prev_model_buffer_ptrs.push(ptr as *mut u8);
-                prev_model_buffer_resources.push(buf);
+                    D3D12_RESOURCE_STATE_COMMON,
+                )?);
             }
             gbuffer_bindless_root_sig = Some(grs);
             gbuffer_bindless_pso = Some(gpso);
             gbuffer_bindless_cmd_sig = Some(gsig);
+            model_history_root_sig = Some(mhrs);
+            model_history_pso = Some(mhpso);
         }
 
         cull_root_sig = Some(crs);
@@ -1175,7 +1174,8 @@ pub(super) fn build_main_pipelines(
         gbuffer_bindless_pso,
         gbuffer_bindless_cmd_sig,
         prev_model_buffer_resources,
-        prev_model_buffer_ptrs,
+        model_history_root_sig,
+        model_history_pso,
     })
 }
 

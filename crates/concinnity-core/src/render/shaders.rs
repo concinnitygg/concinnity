@@ -26,6 +26,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("main_bindless.slang", MAIN_BINDLESS),
     ("main_shading.slang", MAIN_SHADING),
     ("main_types.slang", MAIN_TYPES),
+    ("model_history.slang", MODEL_HISTORY),
     ("object_common.slang", OBJECT_COMMON),
     ("particle.slang", PARTICLE),
     ("particle_simulate.slang", PARTICLE_SIMULATE),
@@ -95,6 +96,8 @@ pub const MAIN_BINDLESS: &str = include_str!("shaders/main_bindless.slang");
 pub const MAIN_SHADING: &str = include_str!("shaders/main_shading.slang");
 /// `main_types.slang`.
 pub const MAIN_TYPES: &str = include_str!("shaders/main_types.slang");
+/// `model_history.slang`.
+pub const MODEL_HISTORY: &str = include_str!("shaders/model_history.slang");
 /// `object_common.slang`.
 pub const OBJECT_COMMON: &str = include_str!("shaders/object_common.slang");
 /// `particle.slang`.

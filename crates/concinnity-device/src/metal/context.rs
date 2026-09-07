@@ -274,10 +274,11 @@ pub(super) struct FrameRings {
     // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass. Written by
     // `build_draw_args_buffer`.
     pub draw_args: super::transient::TransientRing,
-    // Ring of per-frame `prev_model` buffers for the GPU-driven G-buffer /
+    // Ring of per-frame model-history buffers for the GPU-driven G-buffer /
     // velocity pre-pass: one column-major `float4x4` per cull record, indexed
-    // identically to the object buffer. Written by `build_gbuffer_prev_models`.
-    pub prev_model: super::transient::TransientRing,
+    // identically to the object buffer. Filled on the GPU by
+    // `encode_model_history`; frame `R` reads the slot frame `R - 1` wrote.
+    pub model_history: super::transient::TransientRing,
     // Ring of per-frame `BindlessTextures` argument buffers. The argument
     // encoder fills the slot in place each frame; see
     // `build_bindless_texture_args`.
@@ -290,7 +291,6 @@ pub(super) struct FrameRings {
     pub joint: super::transient::JointRing,
     pub object_scratch: Vec<crate::gfx::render_types::GpuObjectData>,
     pub draw_args_scratch: Vec<crate::gfx::render_types::GpuDrawArgs>,
-    pub prev_model_scratch: Vec<[[f32; 4]; 4]>,
 }
 
 // Transparent water surfaces and the pipelines that draw them. The RT variants
@@ -742,10 +742,10 @@ pub(crate) struct MtlContext {
     // blit it back (the view is blit-readable under the same flag). On under
     // the dev loop and `cn run --screenshot`; false in plain production.
     pub(super) capture: bool,
-    // Previous frame's model matrix for every `draw.objects` entry, parallel
-    // to it. The velocity pre-pass diffs current against previous so props
-    // moved via `update_model` produce a correct motion vector.
-    pub(super) prev_draw_models: Vec<[[f32; 4]; 4]>,
+    // Per-record validity of the GPU-filled model-history ring. A record whose
+    // occupant changed carries `NO_HISTORY` in its draw args, which sends the
+    // G-buffer pre-pass to its current model instead of a stranger's.
+    pub(super) model_history: concinnity_core::render::model_history::ModelHistory,
     // Skinned-mesh rendering feature state: the main + shadow pipelines, the
     // shared skinned vertex / index buffers, the per-mesh draw objects, and
     // the current + previous joint-palette matrices. See [`SkinnedState`].
@@ -1242,13 +1242,12 @@ impl MtlContext {
     pub(super) fn place_draw_object(
         &mut self,
         obj: DrawObject,
-        model: [[f32; 4]; 4],
         dst: crate::gfx::draw_slot::SlotAlloc,
     ) -> usize {
         match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
-                self.prev_draw_models[slot] = model;
+                self.model_history.reoccupy_draw(slot);
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
@@ -1258,7 +1257,7 @@ impl MtlContext {
                     "appended draw slot must match the draw-object count"
                 );
                 self.draw.objects.push(obj);
-                self.prev_draw_models.push(model);
+                self.model_history.reoccupy_draw(slot);
                 slot
             }
         }
@@ -1308,7 +1307,7 @@ impl MtlContext {
             cull_distance: src.cull_distance,
             lod_alternates: src.lod_alternates.clone(),
         };
-        self.place_draw_object(obj, model, dst);
+        self.place_draw_object(obj, dst);
         // The cloned prop joins the RT-relevant draw set; the next RT update
         // folds it into the BVH (it reuses the source mesh's geometry slice, so
         // only this clone's BLAS is built).

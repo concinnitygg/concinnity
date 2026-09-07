@@ -136,6 +136,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // one `float4x4` per cull record, read by the bindless G-buffer
     // VS at `[[base_instance]]`. `Some` only when the GPU-driven pre-pass runs.
     pub prev_model_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
+    // Model-history ring slots this frame's snapshot fills, after the pre-pass
+    // has read `prev_model_buffer`.
+    pub history_targets: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // GPU-cull output the bindless Main pass consumes via
     // executeCommandsInBuffer. `Some` only when bindless cull ran this
     // frame (i.e. matches `FrameGraphInputs::bindless_cull_enabled`).
@@ -557,6 +560,8 @@ impl MtlContext {
                     crate::metal::post::gbuffer::GbufferGpuBuffers {
                         object_buffer: params.object_buffer,
                         prev_model_buffer: params.prev_model_buffer,
+                        draw_args_buffer: params.draw_args_buffer,
+                        history_targets: params.history_targets,
                         deformed_current: params.deformed_skinned,
                         deformed_prev: params.deformed_prev,
                     },

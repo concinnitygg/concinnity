@@ -1012,10 +1012,6 @@ impl MtlContext {
                 (records, Some(vb), Some(ib))
             };
 
-        // Snapshot each object's initial model matrix as its "previous" frame
-        // so the velocity pre-pass sees zero motion until the first update.
-        let prev_draw_models: Vec<[[f32; 4]; 4]> = draw_objects.iter().map(|o| o.model).collect();
-
         // Shader hot-reload wiring. The atomic flag is shared between the
         // notify watcher thread and `draw_frame`, plus (eventually) the
         // debug WS `reload-shaders` command path via `GraphicsSystem`.
@@ -1351,7 +1347,7 @@ impl MtlContext {
             },
             world_shader: world_shaders[0].programs.cloned(),
             capture,
-            prev_draw_models,
+            model_history: concinnity_core::render::model_history::ModelHistory::new(),
             skinned: super::resources::skinning::SkinnedState {
                 shadow_pipeline_state: None,
                 vertex_buffer: None,
@@ -1414,13 +1410,12 @@ impl MtlContext {
             rings: super::context::FrameRings {
                 object: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
                 draw_args: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-                prev_model: super::transient::TransientRing::new(frames_in_flight),
+                model_history: super::transient::TransientRing::new(frames_in_flight),
                 bindless_tex: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
                 probe_cube: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
                 joint: super::transient::JointRing::new(frames_in_flight.max(1) + 1),
                 object_scratch: Vec::new(),
                 draw_args_scratch: Vec::new(),
-                prev_model_scratch: Vec::new(),
             },
             water: super::context::WaterState {
                 pipeline: water_pipeline,

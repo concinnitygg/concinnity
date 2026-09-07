@@ -52,17 +52,32 @@ ConstantBuffer<GbView> gb_view : register(b1);
 
 #ifdef GB_BINDLESS
 // The cull-produced per-frame records, indexed by the object id the cull baked
-// into each indirect command's first-instance value, and the parallel
-// previous-frame model matrices indexed identically.
+// into each indirect command's first-instance value; the model-history ring
+// slot the PREVIOUS frame's `model_history.slang` dispatch filled, indexed
+// identically; and this frame's draw args, read only for `DRAW_NO_HISTORY`.
 #ifdef DXIL_ABI
 struct ObjectId { uint value; };
 ConstantBuffer<ObjectId> objid_cb : register(b0);
 StructuredBuffer<GpuObjectData> objects : register(t0);
 StructuredBuffer<float4x4> prev_models : register(t1);
+StructuredBuffer<GpuDrawArgs> draw_args : register(t2);
 #else
 [[vk::binding(0, 1)]] StructuredBuffer<GpuObjectData> objects : register(t9);
 [[vk::binding(1, 0)]] StructuredBuffer<float4x4> prev_models : register(t10);
+[[vk::binding(2, 0)]] StructuredBuffer<GpuDrawArgs> draw_args : register(t11);
 #endif
+
+// The transform to reproject last frame's position through: the history entry,
+// or this frame's own model where no history exists, which collapses the motion
+// vector to the camera's own (and to exactly zero when `prev_vp == cur_vp`).
+float4x4 gb_prev_model(uint oid, float4x4 cur_model)
+{
+    if ((draw_args[oid].flags & DRAW_NO_HISTORY) != 0u)
+    {
+        return cur_model;
+    }
+    return prev_models[oid];
+}
 #endif
 
 // ---- Stage interfaces ----
@@ -170,7 +185,7 @@ GbVertexOut gbuffer_prepass_vertex_bindless(
 #endif
     GpuObjectData obj = objects[oid];
     float4 cur_world  = mul(obj.model, float4(v.pos, 1.0));
-    float4 prev_world = mul(prev_models[oid], float4(v.prev_pos, 1.0));
+    float4 prev_world = mul(gb_prev_model(oid, obj.model), float4(v.prev_pos, 1.0));
     GbVertexOut o = gb_project(obj.model, cur_world, prev_world, v.normal);
     o.position  = gb_sky_pin(o.position, v.color);
     o.roughness = obj.tint_roughness.w;

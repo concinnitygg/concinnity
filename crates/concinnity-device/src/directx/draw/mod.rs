@@ -533,15 +533,13 @@ impl DxContext {
         if let Some(taa) = &self.taa {
             taa.frame.set(taa.frame.get().wrapping_add(1));
         }
-        // Snapshot this frame's un-jittered VP + per-draw transforms so next
-        // frame's G-buffer pre-pass can derive motion vectors. Owned by the
-        // G-buffer now (decoupled from TAA, so FSR-without-engine-TAA also gets
+        // Snapshot this frame's un-jittered VP so next frame's G-buffer pre-pass
+        // can derive motion vectors. The per-draw half of the same history was
+        // snapshotted on the GPU by the pre-pass's own dispatch. Owned by the
+        // G-buffer (decoupled from TAA, so FSR-without-engine-TAA also gets
         // correct motion).
         if let Some(gb) = &self.gbuffer {
             *gb.prev_view_proj.borrow_mut() = cur_vp;
-            let mut prev_models = gb.prev_models.borrow_mut();
-            prev_models.clear();
-            prev_models.extend(self.draw.objects.iter().map(|o| o.model));
         }
 
         Ok(pass_cmd_lists)

@@ -21,6 +21,7 @@ mod shadow;
 mod spot_shadow;
 
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::model_history::HistoryMode;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _};
@@ -364,6 +365,14 @@ impl MtlContext {
         // -- so it runs as a bare clear that the opaque overlay then covers. The
         // masked graph drops every other world pass, so none of this work would
         // be consumed anyway.
+        // The GPU-driven G-buffer pre-pass both fills and reads the model-history
+        // ring. With no consumer of motion, or with the pre-pass not running,
+        // the ring goes stale, so the draw-args build marks every record
+        // `NO_HISTORY` and the tracker re-primes when the pre-pass returns.
+        let history_live = !world_hidden
+            && (self.taa.enabled || self.upscale.scaler.is_some())
+            && self.gbuffer.targets.is_some()
+            && self.gbuffer.bindless_pipeline.is_some();
         let (object_buffer, cull_draw_args, bindless_tex_args) = if world_hidden {
             (None, None, None)
         } else {
@@ -378,7 +387,15 @@ impl MtlContext {
                 None
             };
             let cull_draw_args = if object_buffer.is_some() {
-                let draw_args = self.build_draw_args_buffer(cam_pos, ring_slot)?;
+                let draw_args = self.build_draw_args_buffer(
+                    cam_pos,
+                    ring_slot,
+                    if history_live {
+                        HistoryMode::Track
+                    } else {
+                        HistoryMode::Stale
+                    },
+                )?;
                 if draw_args.is_some() {
                     self.ensure_icb_capacity(self.cull_count())?;
                     // GPU-driven cascaded shadow: size the per-cascade
@@ -758,17 +775,39 @@ impl MtlContext {
         } else {
             None
         };
-        // Per-frame parallel prev_model buffer for the GPU-driven G-buffer pass.
-        // Built only when that path will run (cull object buffer + a G-buffer
-        // consumer + the bindless G-buffer pipeline), indexed identically to
-        // the object buffer.
-        let prev_model_buffer = if object_buffer.is_some()
+        // Model-history ring slots for the GPU-driven G-buffer pass: the one the
+        // previous frame's snapshot filled, which this frame reprojects through,
+        // and the one(s) this frame's snapshot fills. Both are bound whenever the
+        // pre-pass runs, motion consumer or not -- the pass still writes the
+        // normals and depth every screen-space consumer reads. Priming writes
+        // every slot, so the first pre-pass after a rebuild reads this frame's
+        // models rather than an unwritten buffer.
+        let (prev_model_buffer, history_targets) = if object_buffer.is_some()
             && self.gbuffer.targets.is_some()
             && self.gbuffer.bindless_pipeline.is_some()
         {
-            self.build_gbuffer_prev_models(ring_slot, velocity_active)?
+            let bytes = self.cull_count() * std::mem::size_of::<[[f32; 4]; 4]>();
+            let prime = self.model_history.take_prime();
+            let read_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
+            let mut targets = Vec::new();
+            if prime {
+                for slot in 0..self.frames_in_flight {
+                    targets.push(self.rings.model_history.slot(&self.device, slot, bytes)?);
+                }
+            } else {
+                targets.push(
+                    self.rings
+                        .model_history
+                        .slot(&self.device, ring_slot, bytes)?,
+                );
+            }
+            let read = self
+                .rings
+                .model_history
+                .slot(&self.device, read_slot, bytes)?;
+            (Some(read), targets)
         } else {
-            None
+            (None, Vec::new())
         };
         // This frame's HUD text geometry, written into this slot's persistent
         // upload buffer up front so the composite pass binds sub-ranges of one
@@ -797,6 +836,7 @@ impl MtlContext {
             deformed_skinned: deformed_this_frame.as_ref(),
             deformed_prev: deformed_prev_frame.as_ref(),
             prev_model_buffer: prev_model_buffer.as_ref(),
+            history_targets: &history_targets,
             draw_args_buffer: cull_draw_args.as_ref(),
             vel_uniforms: vel_uniforms.as_ref(),
             taa_uniforms: taa_uniforms.as_ref(),
@@ -963,23 +1003,15 @@ impl MtlContext {
         // Advance temporal state for the next frame whenever the velocity
         // pre-pass runs: that's TAA *or* the MetalFX upscaler. The
         // un-jittered VP becomes `prev_vp` so the velocity shader can
-        // diff against it; this frame's per-object transforms are
-        // snapshotted so per-object motion vectors stay correct after a
-        // prop update. TAA-specific bookkeeping (history-target ping-pong)
-        // only runs when TAA itself is on.
+        // diff against it; the per-object transforms were snapshotted on the
+        // GPU by the pre-pass's own history dispatch. TAA-specific bookkeeping
+        // (history-target ping-pong) only runs when TAA itself is on.
         if velocity_active {
             self.prev_view_proj = mat4_mul(proj, self.view.matrix);
             self.taa.frame = self.taa.frame.wrapping_add(1);
             if self.taa.enabled {
                 self.taa.dst = 1 - self.taa.dst;
                 self.taa.history_valid = true;
-            }
-            for (prev, obj) in self
-                .prev_draw_models
-                .iter_mut()
-                .zip(self.draw.objects.iter())
-            {
-                *prev = obj.model;
             }
         }
 

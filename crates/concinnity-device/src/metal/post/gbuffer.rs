@@ -37,6 +37,11 @@ pub(crate) struct GBufferState {
     // executes, so the G-buffer feeder is fully GPU-driven for static /
     // instanced / chunk / skinned geometry. Rebuilt by `reload_shaders`.
     pub bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Snapshot kernel filling this frame's model-history ring slot from the
+    // object buffer, for the next frame's motion vectors. Built under the same
+    // gate as `bindless_pipeline`.
+    pub history_pipeline:
+        Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
 }
 
 // Targets
@@ -199,7 +204,13 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct GbufferGpuBuffers<'a> {
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // The model-history slot the PREVIOUS frame's snapshot filled.
     pub prev_model_buffer: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // This frame's draw args, read by the pre-pass only for `NO_HISTORY`.
+    pub draw_args_buffer: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // The model-history slots this frame's snapshot fills: this frame's alone
+    // in steady state, every slot on the frame a rebuild primes the ring.
+    pub history_targets: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
     pub deformed_current: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     pub deformed_prev: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
 }
@@ -293,17 +304,28 @@ impl MtlContext {
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&desc, crate::metal::pass_timing::PassId::GBufferPrepass);
         }
-        let enc = ScopedEncoder::new(
-            cmd_buf
-                .renderCommandEncoderWithDescriptor(&desc)
-                .ok_or("failed to get G-buffer pre-pass encoder")?,
-            "g-buffer prepass",
-        );
+        // Kept past the encode below, which consumes `gpu`: the snapshot that
+        // fills the next frame's history runs after this frame has read the
+        // previous one, so a single frame in flight reads before it overwrites.
+        let snapshot = gpu.object_buffer.cloned();
+        let history_targets = gpu.history_targets;
+        let draw_calls = {
+            let enc = ScopedEncoder::new(
+                cmd_buf
+                    .renderCommandEncoderWithDescriptor(&desc)
+                    .ok_or("failed to get G-buffer pre-pass encoder")?,
+                "g-buffer prepass",
+            );
 
-        // The encoder above cleared all four attachments, so a world with
-        // nothing in the cull records still leaves the consumers a clean
-        // "no geometry" G-buffer to read.
-        Ok(self.encode_gbuffer_prepass_gpu_driven(&enc, view, gpu, velocity_active))
+            // The encoder above cleared all four attachments, so a world with
+            // nothing in the cull records still leaves the consumers a clean
+            // "no geometry" G-buffer to read.
+            self.encode_gbuffer_prepass_gpu_driven(&enc, view, gpu, velocity_active)
+        };
+        if let Some(objects) = snapshot.as_ref() {
+            self.encode_model_history(cmd_buf, objects, history_targets, self.cull_count())?;
+        }
+        Ok(draw_calls)
     }
 
     // GPU-driven G-buffer pre-pass: draw the SAME per-frame indirect
@@ -331,13 +353,16 @@ impl MtlContext {
         let GbufferGpuBuffers {
             object_buffer,
             prev_model_buffer,
+            draw_args_buffer,
+            history_targets: _,
             deformed_current,
             deformed_prev,
         } = gpu;
-        let (Some(pipeline), Some(object_buffer), Some(prev_models)) = (
+        let (Some(pipeline), Some(object_buffer), Some(prev_models), Some(draw_args)) = (
             self.gbuffer.bindless_pipeline.as_ref(),
             object_buffer,
             prev_model_buffer,
+            draw_args_buffer,
         ) else {
             return 0;
         };
@@ -347,14 +372,16 @@ impl MtlContext {
         enc.set_pipeline(pipeline);
         enc.set_depth_stencil(&self.depth_state);
         // GBufferView (vbuf 0), current vertex stream (vbuf 1), previous
-        // vertex stream (vbuf 2), object records (vbuf 9), prev_model parallel
-        // buffer (vbuf 10). The ICB commands inherit these bindings; the cull
-        // baked base_instance = record id, so the VS reads objects[id].model
-        // + prev_models[id]. The prefix binds the static VB to BOTH streams
-        // (prev_pos == cur_pos), so its motion is purely the model delta.
+        // vertex stream (vbuf 2), object records (vbuf 9), model history
+        // (vbuf 10), draw args (vbuf 11). The ICB commands inherit these
+        // bindings; the cull baked base_instance = record id, so the VS reads
+        // objects[id].model + prev_models[id]. The prefix binds the static VB
+        // to BOTH streams (prev_pos == cur_pos), so its motion is purely the
+        // model delta.
         enc.set_vertex_value(view, 0);
         enc.set_vertex_buffer(object_buffer, 0, 9);
         enc.set_vertex_buffer(prev_models, 0, 10);
+        enc.set_vertex_buffer(draw_args, 0, 11);
         enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
         enc.set_vertex_buffer(&self.vertex_buffer, 0, 2);
 
@@ -427,53 +454,5 @@ impl MtlContext {
             self.skinned.deformed_primed.store(true, Ordering::Relaxed);
         }
         draw_calls
-    }
-
-    // Build the per-frame `prev_model` buffer for the GPU-driven G-buffer pass:
-    // one column-major `float4x4` per cull record, indexed
-    // identically to `build_object_buffer` (static + chunks + clones, then
-    // instances, then skinned). The G-buffer VS reads it at `[[base_instance]]`
-    // to derive per-object motion. Returns `None` when the cull records are
-    // empty. Rebuilt every frame: the static + chunk region follows last
-    // frame's model (or the current model when velocity is inactive), the
-    // instance region is the immutable instance transforms (camera-only motion),
-    // and the skinned region is the current model (per-vertex skin motion comes
-    // from the previous-frame deformed buffer, not the model matrix).
-    pub(in crate::metal) fn build_gbuffer_prev_models(
-        &mut self,
-        ring_slot: usize,
-        velocity_active: bool,
-    ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
-        if self.cull_count() == 0 {
-            return Ok(None);
-        }
-        let mut models = std::mem::take(&mut self.rings.prev_model_scratch);
-        models.clear();
-        // Static + chunks + clones: index-parallel to build_object_buffer's
-        // draw.objects loop. `velocity_active` gates last-frame vs current model
-        // (current -> zero model-delta motion, a harmless zero no consumer reads).
-        for (i, obj) in self.draw.objects.iter().enumerate() {
-            models.push(if velocity_active {
-                self.prev_draw_models[i]
-            } else {
-                obj.model
-            });
-        }
-        // Instances: transforms are immutable, so cur == prev (camera-only motion).
-        if self.draw.n_instances > 0 {
-            models.extend(self.instanced.records.iter().map(|r| r.model));
-        }
-        // Skinned: the model matrix is static (cur == prev); per-vertex motion
-        // comes from the previous-frame deformed buffer, not the model.
-        if self.draw.n_skinned > 0 {
-            models.extend(self.skinned.draw_objects.iter().map(|o| o.model));
-        }
-        let result = self.rings.prev_model.write(
-            &self.device,
-            ring_slot,
-            crate::metal::context::bytes_of_slice(&models),
-        );
-        self.rings.prev_model_scratch = models;
-        result.map(Some)
     }
 }

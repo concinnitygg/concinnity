@@ -16,6 +16,7 @@
 // object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
 // signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
 
+use concinnity_core::render::model_history::HistoryMode;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
@@ -317,12 +318,26 @@ impl DxContext {
     // inactive. The per-object `(index_offset, index_count)` is the active LOD
     // slice picked by camera distance, so the bindless main pass renders the
     // chosen LOD with no shader-side change. Mirrors `metal/cull.rs`.
-    pub(in crate::directx) fn build_draw_args_buffer(&self, frame_idx: usize, cam_pos: [f32; 3]) {
+    pub(in crate::directx) fn build_draw_args_buffer(
+        &self,
+        frame_idx: usize,
+        cam_pos: [f32; 3],
+        history: HistoryMode,
+    ) {
         use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
         let Some(&ptr) = self.cull.draw_args_buffer_ptrs.get(frame_idx) else {
             return;
         };
         let stride = std::mem::size_of::<GpuDrawArgs>();
+        let mut model_history = self.model_history.borrow_mut();
+        model_history.begin(history, self.cull_count());
+        // Hand the dispatch the rebuild's prime request here, on the one thread
+        // that owns the tracker; the encode runs on a worker.
+        if model_history.take_prime() {
+            self.cull
+                .model_history_prime
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead. Clearing
         // ENABLED makes the cull kernel reset its command to a no-op (the same
@@ -350,7 +365,8 @@ impl DxContext {
                 // The record's shader bucket rides the upper flag bits so the
                 // cull kernel can route its command into that bucket's region.
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(obj.shader_bucket),
+                    | draw_args_bucket_bits(obj.shader_bucket)
+                    | model_history.draw_flags(i, i),
             };
             // SAFETY: the buffer was sized for `draw.n_objects` records and the
             // loop is bounded by `take(draw.n_objects)`, so `i * stride` is in range.
@@ -374,7 +390,7 @@ impl DxContext {
         // (ENABLED clear -> the cull kernel emits a no-op and never reads its
         // stale object record).
         let runtime_base = self.runtime_record_base();
-        let n_resident_runtime = self.for_each_runtime_record(|k, _, obj| {
+        let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits
@@ -390,7 +406,8 @@ impl DxContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(obj.shader_bucket),
+                    | draw_args_bucket_bits(obj.shader_bucket)
+                    | model_history.draw_flags(runtime_base + k, i),
             };
             // SAFETY: the reserve is `[runtime_base, runtime_base + draw.n_runtime)`
             // and `for_each_runtime_record` caps `k < draw.n_runtime`, so the
@@ -445,7 +462,8 @@ impl DxContext {
                 // Skinned objects always carry a finite padded bind-pose AABB
                 // (`pack_skinned_record`), so they are cullable + resident; the
                 // cull kernel frustum/Hi-Z tests them like any static object.
-                flags: draw_args_flags(obj.visible, true, true),
+                flags: draw_args_flags(obj.visible, true, true)
+                    | model_history.skinned_flags(base + k, k),
             };
             // SAFETY: the buffers reserved `draw.n_skinned` records past
             // `skinned_record_base()` at init (threaded capacity), and the loop
@@ -508,7 +526,18 @@ impl DxContext {
         frustum: &crate::gfx::frustum::Frustum,
         cam_pos: [f32; 3],
     ) {
-        self.build_draw_args_buffer(frame_idx, cam_pos);
+        // The GPU-driven pre-pass both fills and reads the model-history ring.
+        // With no consumer of motion, or with the pre-pass not built, the ring
+        // goes stale, so every record is marked `NO_HISTORY` and the tracker
+        // re-primes when the pre-pass returns.
+        let history = match self.gbuffer.is_some()
+            && self.cull.model_history_pso.is_some()
+            && (self.taa.is_some() || self.upscale.backend.is_some())
+        {
+            true => HistoryMode::Track,
+            false => HistoryMode::Stale,
+        };
+        self.build_draw_args_buffer(frame_idx, cam_pos, history);
 
         let cull_pso = self
             .cull

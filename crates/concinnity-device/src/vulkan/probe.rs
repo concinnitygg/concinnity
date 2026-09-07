@@ -383,7 +383,11 @@ impl VkContext {
         bake.object_buf.zero_bytes(0, object_size);
         bake.draw_args_buf.zero_bytes(0, args_size);
         self.build_object_records_into(&bake.object_buf);
-        self.build_draw_args_records_into(&bake.draw_args_buf, eye);
+        self.build_draw_args_records_into(
+            &bake.draw_args_buf,
+            eye,
+            concinnity_core::render::model_history::HistoryMode::Untracked,
+        );
 
         // Per-face view uniforms (the only per-face binding), all six filled once.
         // reflections_enabled stays 0: no resolve runs over a probe face, so the bake

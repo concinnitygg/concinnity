@@ -26,6 +26,7 @@ mod light_cull;
 mod lights;
 mod line;
 mod metallib;
+mod model_history;
 mod msl_cache;
 mod parallel_encoder;
 mod particle;

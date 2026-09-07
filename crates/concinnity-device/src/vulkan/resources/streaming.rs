@@ -182,14 +182,10 @@ impl VkContext {
                 slot
             }
         };
-        // Seed the streamed-chunk previous transform onto the unified G-buffer's
-        // velocity bookkeeping so a chunk that streams in does not ghost from
-        // IDENTITY on its first frame.
-        if let Some(gb) = &mut self.gbuffer
-            && draw_idx < gb.prev_models.len()
-        {
-            gb.prev_models[draw_idx] = model;
-        }
+        // The slot's model-history entry belongs to whatever held it before, so
+        // a chunk that streams in reprojects through its own transform for one
+        // frame rather than ghosting from the previous occupant's.
+        self.model_history.borrow_mut().reoccupy_draw(draw_idx);
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
         self.rt_topology_dirty = true;

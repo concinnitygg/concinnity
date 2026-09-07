@@ -324,13 +324,16 @@ pub(crate) fn build_quality_effects(
     // independent of the world's fragment, so it builds the same in init and the
     // runtime quality rebuild; the encode gates on the cull-produced object
     // buffer, so a world with nothing in the cull records draws nothing here.
-    let (gbuffer_targets, gbuffer_bindless_pipeline) = if needs_gbuffer {
+    let (gbuffer_targets, gbuffer_bindless_pipeline, gbuffer_history_pipeline) = if needs_gbuffer {
         (
             Some(create_gbuffer_targets(device, render_w, render_h)?),
             Some(build_gbuffer_bindless_pipeline(device, hot_reload)?),
+            Some(crate::metal::model_history::build_model_history_pipeline(
+                device, hot_reload,
+            )?),
         )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     // SSGI: the hemisphere-gather + depth-aware-blur composite pipelines and
@@ -361,6 +364,7 @@ pub(crate) fn build_quality_effects(
     let gbuffer = GBufferState {
         targets: gbuffer_targets,
         bindless_pipeline: gbuffer_bindless_pipeline,
+        history_pipeline: gbuffer_history_pipeline,
     };
     let ssgi = SsgiState {
         settings: *ssgi_settings,

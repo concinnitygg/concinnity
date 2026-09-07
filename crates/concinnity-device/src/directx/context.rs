@@ -284,8 +284,8 @@ pub(super) struct CullState {
     pub shadow_cull_status_buffers: Vec<ID3D12Resource>,
     // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
     // reads `model` + `roughness` from `GpuObjectData[object_id]` (root SRV) and
-    // the previous-frame model from `prev_model_buffers` (a parallel per-frame
-    // buffer, one column-major `float4x4` per cull record); `gbuffer_bindless_cmd_sig`
+    // the previous-frame model from the model-history ring below;
+    // `gbuffer_bindless_cmd_sig`
     // is the shared cull command signature rebuilt against its root sig. The pass
     // reuses the main pass's `indirect_cmd_buffers` (camera frustum, no extra cull
     // dispatch). All `Some`/non-empty only when the bindless cull path is active
@@ -293,12 +293,17 @@ pub(super) struct CullState {
     pub gbuffer_bindless_root_sig: Option<ID3D12RootSignature>,
     pub gbuffer_bindless_pso: Option<ID3D12PipelineState>,
     pub gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature>,
-    // Per-frame previous-frame model upload buffers (one column-major `float4x4`
-    // per cull record), persistently mapped. The static + skinned regions are
-    // rewritten each frame in `build_gbuffer_prev_models`; the instance region is
-    // init-written + immutable (camera-only motion).
-    pub prev_model_buffers: Vec<PooledBuffer>,
-    pub prev_model_buffer_ptrs: Vec<*mut u8>,
+    // Per-frame model-history buffers (one column-major `float4x4` per cull
+    // record), device-local: only the snapshot kernel writes them and only the
+    // pre-pass reads them, so the host never touches their bytes. Frame `R`
+    // reads the slot frame `R - 1` filled.
+    pub prev_model_buffers: Vec<ID3D12Resource>,
+    // The snapshot kernel that fills them from the object buffer, and the
+    // rebuild's request that it fill every slot before one is read. An atomic
+    // rather than a borrow of the tracker: passes encode on worker threads.
+    pub model_history_root_sig: Option<ID3D12RootSignature>,
+    pub model_history_pso: Option<ID3D12PipelineState>,
+    pub model_history_prime: std::sync::atomic::AtomicBool,
     // `PostProcessConfig.occlusion_two_pass`, as requested by the world.
     pub occlusion_two_pass: bool,
     // Hi-Z (depth-mip pyramid) used by the cull kernel for occlusion culling.
@@ -1092,6 +1097,11 @@ pub(crate) struct DxContext {
     // one MRT that all those consumers read, replacing the separate SSR / SSAO
     // / velocity geometry pre-passes. See [`GbufferResources`].
     pub(super) gbuffer: Option<GbufferResources>,
+    // Per-record validity of the GPU-filled model-history ring. A record whose
+    // occupant changed carries `NO_HISTORY` in its draw args, which sends the
+    // G-buffer pre-pass to its current model instead of a stranger's.
+    // `RefCell` because the draw-args build runs off `&self`.
+    pub(super) model_history: RefCell<concinnity_core::render::model_history::ModelHistory>,
 
     // Temporal anti-aliasing. `Some` only when `PostProcessConfig.aa_mode` is set;
     // when `None` the history resolve and the projection jitter are skipped and

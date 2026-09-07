@@ -6,6 +6,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::model_history::HistoryMode;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -428,11 +429,13 @@ impl MtlContext {
         &mut self,
         cam_pos: [f32; 3],
         ring_slot: usize,
+        history: HistoryMode,
     ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
         use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if self.cull_count() == 0 {
             return Ok(None);
         }
+        self.model_history.begin(history, self.cull_count());
         // A transparent glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead. Clearing
         // ENABLED makes the cull kernel reset its ICB slot to a no-op (the same
@@ -442,7 +445,7 @@ impl MtlContext {
         let mesh_glass_active = self.mesh_glass_active();
         let mut args = std::mem::take(&mut self.rings.draw_args_scratch);
         args.clear();
-        for obj in &self.draw.objects {
+        for (i, obj) in self.draw.objects.iter().enumerate() {
             // Pick this frame's active LOD by camera distance: the bindless
             // main pass then renders the chosen slice with no shader-side
             // change. Objects with no alternates fall straight through to LOD0.
@@ -450,6 +453,7 @@ impl MtlContext {
             let (index_offset, index_count) = obj.active_lod(d);
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
+
             args.push(GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
@@ -457,7 +461,8 @@ impl MtlContext {
                 // The record's shader bucket rides the upper flag bits so the
                 // cull kernel can route its command into that bucket's ICB.
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | crate::gfx::render_types::draw_args_bucket_bits(obj.shader_bucket),
+                    | crate::gfx::render_types::draw_args_bucket_bits(obj.shader_bucket)
+                    | self.model_history.draw_flags(i, i),
             });
         }
         // Append the instances' draw args in the SAME cluster-then-instance
@@ -487,14 +492,16 @@ impl MtlContext {
         // cull kernel routes records at/after `skinned_record_base()` through the
         // skinned index buffer (see encode_cull's `skinned_base`).
         if self.draw.n_skinned > 0 {
-            for obj in &self.skinned.draw_objects {
+            let base = args.len();
+            for (k, obj) in self.skinned.draw_objects.iter().enumerate() {
                 let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
                 args.push(GpuDrawArgs {
                     index_count: index_count as u32,
                     index_offset: index_offset as u32,
                     base_vertex: 0,
-                    flags: draw_args_flags(obj.visible, true, true),
+                    flags: draw_args_flags(obj.visible, true, true)
+                        | self.model_history.skinned_flags(base + k, k),
                 });
             }
         }

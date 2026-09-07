@@ -155,7 +155,7 @@ impl MtlContext {
             lod_alternates: Vec::new(),
         };
 
-        self.place_draw_object(obj, model, dst);
+        self.place_draw_object(obj, dst);
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
         self.rt.topology_dirty = true;

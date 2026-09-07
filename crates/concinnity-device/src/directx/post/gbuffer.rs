@@ -235,7 +235,7 @@ fn create_gbuffer_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
         },
-        // [3] Root SRV t1: per-frame previous-frame model buffer.
+        // [3] Root SRV t1: the previous frame's model-history slot.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -246,8 +246,96 @@ fn create_gbuffer_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
         },
+        // [4] Root SRV t2: this frame's draw args, read for `NO_HISTORY`.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 2,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
+        },
     ];
     serialize_and_create_root_sig(device, &params, "gbuffer bindless root sig")
+}
+
+// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
+const MODEL_HISTORY_THREADGROUP: u32 = 64;
+
+// A UAV barrier over one buffer: orders its shader writes against later
+// accesses without claiming a state transition a buffer does not have.
+fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
+    D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                pResource: com::borrowed(resource),
+            }),
+        },
+    }
+}
+
+// Root signature for the model-history snapshot kernel. slangc assigns
+// b0/t0/u0 from declaration order, which is what these three parameters bind.
+fn create_model_history_root_signature(
+    device: &ID3D12Device,
+) -> Result<ID3D12RootSignature, String> {
+    let params = [
+        // [0] Root constants b0: ModelHistoryParams (record count + padding).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Constants: D3D12_ROOT_CONSTANTS {
+                    ShaderRegister: 0,
+                    RegisterSpace: 0,
+                    Num32BitValues: 4,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        },
+        // [1] Root SRV t0: this frame's StructuredBuffer<GpuObjectData>.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 0,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        },
+        // [2] Root UAV u0: this frame's model-history slot.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 0,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        },
+    ];
+    serialize_and_create_root_sig(device, &params, "model history root sig")
+}
+
+// Build the model-history snapshot kernel: the compute PSO and its root
+// signature. Called under the same gate as the pre-pass it feeds.
+pub(in crate::directx) fn build_model_history(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    hot_reload: bool,
+) -> Result<(ID3D12RootSignature, ID3D12PipelineState), String> {
+    let cs = slang_builtins::MODEL_HISTORY.compile(hot_reload)?;
+    let root_sig = dump_on_err(info_queue, create_model_history_root_signature(device))?;
+    let pso = dump_on_err(
+        info_queue,
+        crate::directx::cull::create_cull_pso(device, &root_sig, &cs),
+    )?;
+    Ok((root_sig, pso))
 }
 
 // Build the GPU-driven G-buffer pre-pass pipeline: the bindless VS/FS, its root
@@ -319,12 +407,10 @@ pub(in crate::directx) struct GbufferResources {
     pub(in crate::directx) view_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) view_ubo_ptrs: Vec<*mut u8>,
 
-    // Previous-frame motion state, owned here so the velocity channel works for
-    // any consumer (TAA or FSR) independent of whether engine-TAA is on.
-    // `prev_view_proj` is last frame's un-jittered VP; `prev_models` is each
-    // draw's previous transform. Both advance once per frame in `record_frame`.
+    // Last frame's un-jittered VP, owned here so the velocity channel works for
+    // any consumer (TAA or FSR) independent of whether engine-TAA is on. The
+    // per-object half of the same history is the GPU-filled model-history ring.
     pub(in crate::directx) prev_view_proj: RefCell<[[f32; 4]; 4]>,
-    pub(in crate::directx) prev_models: RefCell<Vec<[[f32; 4]; 4]>>,
 }
 
 // The device the G-buffer builder allocates against.
@@ -447,7 +533,6 @@ impl GbufferResources {
             view_ubo_resources,
             view_ubo_ptrs,
             prev_view_proj: RefCell::new(IDENTITY),
-            prev_models: RefCell::new(Vec::new()),
         })
     }
 
@@ -599,6 +684,69 @@ impl DxContext {
         // tail over the deformed VB). With nothing to draw the pass is the
         // clears above, which is what "no geometry" means to every reader.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, view_gva, velocity_active);
+
+        // Snapshot this frame's models into this frame's history slot, AFTER the
+        // pass above read the previous one -- which is what keeps a single frame
+        // in flight (one slot, read then rewritten) correct.
+        self.encode_model_history(cmd, frame_idx);
+    }
+
+    // Dispatch the model-history snapshot: one thread per cull record copying
+    // `objects[i].model` into this frame's history slot. The slot rests as a
+    // shader resource (the pre-pass reads it through a root SRV) and is
+    // transitioned to a UAV for the write and back.
+    fn encode_model_history(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
+        let (Some(root_sig), Some(pso), true) = (
+            self.cull.model_history_root_sig.as_ref(),
+            self.cull.model_history_pso.as_ref(),
+            frame_idx < self.cull.prev_model_buffers.len(),
+        ) else {
+            return;
+        };
+        let records = self.cull_count();
+        if records == 0 {
+            return;
+        }
+        // A rebuilt ring holds nothing these records were written for, so the
+        // priming frame fills every slot rather than only its own: the instance
+        // region is the one the draw args cannot flag, being init-written. The
+        // request arrives through an atomic because passes encode on worker
+        // threads and the tracker belongs to the draw-args build.
+        let slots = match self
+            .cull
+            .model_history_prime
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            true => 0..self.cull.prev_model_buffers.len(),
+            false => frame_idx..frame_idx + 1,
+        };
+        let params = concinnity_core::render::uniforms::ModelHistoryParams {
+            record_count: records as u32,
+            _pad: [0; 3],
+        };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
+        // SAFETY: the command list is in the recording state, and every resource and slice these
+        // commands name is live for the call.
+        unsafe {
+            cmd.SetPipelineState(pso);
+            cmd.SetComputeRootSignature(root_sig);
+            cmd.SetComputeRoot32BitConstants(
+                0,
+                4,
+                &params as *const _ as *const std::ffi::c_void,
+                0,
+            );
+            cmd.SetComputeRootShaderResourceView(1, object_gva);
+            for slot in slots {
+                let history = &self.cull.prev_model_buffers[slot];
+                cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(history));
+                cmd.Dispatch((records as u32).div_ceil(MODEL_HISTORY_THREADGROUP), 1, 1);
+                // A UAV barrier, not a transition: a buffer lives in COMMON and
+                // is promoted implicitly at each use, so this only has to order
+                // the write against the next frame's read of the same slot.
+                cmd.ResourceBarrier(&[uav_barrier(history)]);
+            }
+        }
     }
 
     // GPU-driven G-buffer pre-pass raster. Reuses the main pass's per-frame
@@ -619,11 +767,11 @@ impl DxContext {
         view_gva: u64,
         velocity_active: bool,
     ) {
-        let (Some(pso), Some(root_sig), Some(cmd_sig), Some(prev_model_res)) = (
+        let (Some(pso), Some(root_sig), Some(cmd_sig), true) = (
             self.cull.gbuffer_bindless_pso.as_ref(),
             self.cull.gbuffer_bindless_root_sig.as_ref(),
             self.cull.gbuffer_bindless_cmd_sig.as_ref(),
-            self.cull.prev_model_buffers.get(frame_idx),
+            frame_idx < self.cull.prev_model_buffers.len(),
         ) else {
             return;
         };
@@ -632,10 +780,12 @@ impl DxContext {
         let prefix = self.skinned_record_base();
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
 
-        // Build this frame's previous-frame model buffer (static + skinned regions;
-        // the instance region is init-written + immutable). Honours velocity_active.
-        self.build_gbuffer_prev_models(frame_idx, velocity_active);
-        let prev_model_gva = com::gpu_va(prev_model_res);
+        // The history slot the PREVIOUS frame's snapshot filled; this frame's
+        // own snapshot runs after the pass below has read it.
+        let frames = self.cull.prev_model_buffers.len();
+        let prev_model_gva =
+            com::gpu_va(&self.cull.prev_model_buffers[(frame_idx + frames - 1) % frames]);
+        let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
 
         // Static + instance prefix: bind the static VB to BOTH vertex streams
         // (prev_pos == cur_pos) + the static u32 IB, then one `ExecuteIndirect`
@@ -653,10 +803,11 @@ impl DxContext {
                 ]),
             );
             cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
-            // [1] GbView, [2] GpuObjectData, [3] previous-frame models.
+            // [1] GbView, [2] GpuObjectData, [3] model history, [4] draw args.
             cmd.SetGraphicsRootConstantBufferView(1, view_gva);
             cmd.SetGraphicsRootShaderResourceView(2, object_gva);
             cmd.SetGraphicsRootShaderResourceView(3, prev_model_gva);
+            cmd.SetGraphicsRootShaderResourceView(4, draw_args_gva);
             cmd.ExecuteIndirect(
                 cmd_sig,
                 prefix as u32,
@@ -729,93 +880,6 @@ impl DxContext {
             self.skinned
                 .deformed_primed
                 .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    // Fill this frame's previous-frame model buffer for the GPU-driven G-buffer
-    // velocity. Indexed by cull record id, parallel to the GpuObjectData buffer:
-    // the static prefix `[0, draw.n_objects)` and the runtime region
-    // `[runtime_record_base(), +draw.n_runtime)` get last frame's model (so a
-    // moving static object or a moving spawned clone reprojects correctly; a
-    // chunk never moves and reads the same either way), the
-    // skinned tail `[skinned_record_base(), cull_count())` gets the current model
-    // (skinned deformation motion comes from the previous-frame deformed buffer).
-    // The instance region `[draw.n_objects, runtime_record_base())` is init-written +
-    // immutable. When velocity is inactive every written record gets its current
-    // model, so the motion channel stays zero (GbView prev_vp also equals cur_vp).
-    // Mirrors build_object_buffer's record indexing.
-    fn build_gbuffer_prev_models(&self, frame_idx: usize, velocity_active: bool) {
-        let Some(&ptr) = self.cull.prev_model_buffer_ptrs.get(frame_idx) else {
-            return;
-        };
-        let Some(gb) = self.gbuffer.as_ref() else {
-            return;
-        };
-        let stride = std::mem::size_of::<[[f32; 4]; 4]>();
-        let prev_models = gb.prev_models.borrow();
-        for (i, obj) in self
-            .draw
-            .objects
-            .iter()
-            .take(self.draw.n_objects)
-            .enumerate()
-        {
-            let prev = if velocity_active {
-                prev_models.get(i).copied().unwrap_or(obj.model)
-            } else {
-                obj.model
-            };
-            // SAFETY: the buffer was sized for `cull_count()` records and the loop
-            // is bounded by `take(draw.n_objects)`, so `i * stride` is in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &prev as *const [[f32; 4]; 4] as *const u8,
-                    ptr.add(i * stride),
-                    stride,
-                );
-            }
-        }
-        // Runtime objects: last frame's model, keyed by draw index like the
-        // static prefix. (Unused reserve slots keep stale prev_models, but their
-        // draw-args are disabled, so the gbuffer never rasterises them.)
-        let runtime_base = self.runtime_record_base();
-        self.for_each_runtime_record(|k, i, obj| {
-            let prev = if velocity_active {
-                prev_models.get(i).copied().unwrap_or(obj.model)
-            } else {
-                obj.model
-            };
-            // SAFETY: `for_each_runtime_record` caps `k < draw.n_runtime`, so
-            // `runtime_base + k < skinned_record_base()`, in range for `cull_count()`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &prev as *const [[f32; 4]; 4] as *const u8,
-                    ptr.add((runtime_base + k) * stride),
-                    stride,
-                );
-            }
-        });
-        let base = self.skinned_record_base();
-        for (k, obj) in self
-            .skinned
-            .draw_objects
-            .iter()
-            .take(self.draw.n_skinned)
-            .enumerate()
-        {
-            // Skinned motion is per-vertex (previous deformed buffer), so the model
-            // matrix is the current one (cur == prev model, like the legacy path).
-            let prev = obj.model;
-            // SAFETY: the buffer reserved `draw.n_skinned` records past
-            // `skinned_record_base()` at init; the loop is bounded by
-            // `self.skinned.draw_objects.len() == self.draw.n_skinned`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &prev as *const [[f32; 4]; 4] as *const u8,
-                    ptr.add((base + k) * stride),
-                    stride,
-                );
-            }
         }
     }
 }

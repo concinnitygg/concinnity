@@ -83,6 +83,15 @@ pub(super) static CULL_SHADOW: SlangLib = SlangLib {
     entries: &["cull_kernel"],
     defines: &[("SHADOW_CULL", "1"), ("METAL_BINDINGS", "1")],
 };
+// This frame's model snapshot for the next frame's motion vectors. Params at
+// buffer(0), objects at buffer(1), the history slot at buffer(2), from
+// declaration order.
+pub(super) static MODEL_HISTORY: SlangLib = SlangLib {
+    name: "model_history.slang",
+    file: "model_history.slang",
+    entries: &["model_history_kernel"],
+    defines: &[],
+};
 pub(super) static LIGHT_CULL: SlangLib = SlangLib {
     name: "light_cull.slang",
     file: "light_cull.slang",
@@ -476,6 +485,7 @@ pub(super) static ALL: &[&SlangLib] = &[
     &CULL_PHASE2,
     &CULL_SHADOW,
     &LIGHT_CULL,
+    &MODEL_HISTORY,
     &RT_SKIN,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,

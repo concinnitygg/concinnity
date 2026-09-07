@@ -147,6 +147,7 @@ const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("gb_view", "b1"),
             ("objects", "t0"),
             ("prev_models", "t1"),
+            ("draw_args", "t2"),
         ],
     },
     DxilAbi {
@@ -522,6 +523,12 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         name: "light_cull.slang",
         file: "light_cull.slang",
         entries: &["light_cull_kernel"],
+        defines: &[],
+    },
+    SlangLibSpec {
+        name: "model_history.slang",
+        file: "model_history.slang",
+        entries: &["model_history_kernel"],
         defines: &[],
     },
     SlangLibSpec {
@@ -1189,6 +1196,34 @@ const SLANG_METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("draw_args", "buffer(1)"),
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
+        ],
+    },
+    // The model-history snapshot: params, the object buffer it reads and the
+    // ring slot it writes take buffer(0..2) from declaration order, which is
+    // what `metal/model_history.rs` binds.
+    MetalAbi {
+        file: "model_history.slang",
+        entry: "model_history_kernel",
+        defines: &[],
+        slots: &[
+            ("params", "buffer(0)"),
+            ("objects", "buffer(1)"),
+            ("history", "buffer(2)"),
+        ],
+    },
+    // The GPU-driven G-buffer pre-pass vertex. Its buffers are pinned by
+    // register() numbers so they clear the vertex descriptor's streams at
+    // buffer(1) and buffer(2); the slots are what `metal/post/gbuffer.rs`
+    // binds once for every ICB-executed draw.
+    MetalAbi {
+        file: "gbuffer_prepass.slang",
+        entry: "gbuffer_prepass_vertex_bindless",
+        defines: &[("GB_BINDLESS", "1")],
+        slots: &[
+            ("gb_view", "buffer(0)"),
+            ("objects", "buffer(9)"),
+            ("prev_models", "buffer(10)"),
+            ("draw_args", "buffer(11)"),
         ],
     },
     MetalAbi {

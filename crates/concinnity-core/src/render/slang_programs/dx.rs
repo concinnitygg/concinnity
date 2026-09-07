@@ -117,6 +117,17 @@ pub static CULL_SHADOW: SlangProgram = SlangProgram {
     label: "cull_shadow.slang",
     defines: &[("DXIL_ABI", "1"), ("SHADOW_CULL", "1")],
 };
+/// `model_history_kernel` from `model_history.slang`: this frame's model
+/// snapshot for the next frame's motion vectors. Needs no ABI block -- slangc
+/// assigns b0/t0/u0 from declaration order, which is what its root signature
+/// binds.
+pub static MODEL_HISTORY: SlangProgram = SlangProgram {
+    file: "model_history.slang",
+    entry: "model_history_kernel",
+    profile: "cs_6_0",
+    label: "model_history.slang",
+    defines: &[],
+};
 /// `light_cull_kernel` from `light_cull.slang`.
 pub static LIGHT_CULL: SlangProgram = SlangProgram {
     file: "light_cull.slang",
@@ -791,6 +802,7 @@ pub static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &LIGHT_CULL,
+    &MODEL_HISTORY,
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,

@@ -29,6 +29,7 @@ pub mod keymap;
 pub mod lights;
 pub mod ltc;
 pub mod mipmap;
+pub mod model_history;
 pub mod ops;
 pub mod overlay_maps;
 pub mod parallel_ctx;

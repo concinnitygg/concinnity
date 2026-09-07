@@ -33,6 +33,30 @@ struct GpuObjectData
     float4 bb_max_alpha_cutoff;
 };
 
+// Mirrors `GpuDrawArgs` in concinnity-core/src/gfx/render_types.rs (16 B): the
+// per-frame cull decision + indexed-draw slice for the record at the same index
+// as the `GpuObjectData` above. Declared here rather than in the cull, because
+// the G-buffer pre-pass reads `flags` too.
+struct GpuDrawArgs
+{
+    uint index_count;
+    uint index_offset;
+    uint base_vertex;
+    uint flags;
+};
+
+// `GpuDrawArgs::flags` bits, locked to gfx::render_types::DrawArgsFlags.
+static const uint DRAW_ENABLED    = 1u;
+static const uint DRAW_CULLABLE   = 2u;
+// The record's history entry in the model-history ring belongs to a different
+// occupant, so a motion vector must fall back to the current model.
+static const uint DRAW_NO_HISTORY = 4u;
+
+// The record's shader bucket rides the upper flag bits; values and layout are
+// locked to gfx::render_types::{DrawArgsFlags::BUCKET_SHIFT, MAX_SHADER_BUCKETS}.
+static const uint DRAW_BUCKET_SHIFT = 8u;
+static const uint DRAW_BUCKET_MASK  = 0xFFu;
+
 // The engine encodes the object id as the draw's first-instance value. The
 // targets disagree on what an instance-id builtin contains: SPIR-V's
 // InstanceIndex and Metal's instance_id include the base instance, while

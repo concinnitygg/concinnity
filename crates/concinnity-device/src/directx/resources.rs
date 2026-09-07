@@ -389,17 +389,10 @@ impl DxContext {
         match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
-                // Seed the velocity prepass's previous-model snapshot so a
-                // recycled slot does not ghost from the prior occupant's
-                // transform for one frame. A slot past the snapshot's end (one
-                // appended beyond the build-time object count) falls back to its
-                // own current model in the prepass, so the guard is enough.
-                if let Some(gbuffer) = &self.gbuffer {
-                    let mut prev = gbuffer.prev_models.borrow_mut();
-                    if slot < prev.len() {
-                        prev[slot] = model;
-                    }
-                }
+                // The slot's model-history entry belongs to the prior occupant,
+                // so the clone reprojects through its own transform for one
+                // frame rather than ghosting from that occupant's.
+                self.model_history.borrow_mut().reoccupy_draw(slot);
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
@@ -408,6 +401,7 @@ impl DxContext {
                     "appended draw slot must match the draw-object count"
                 );
                 self.draw.objects.push(obj);
+                self.model_history.borrow_mut().reoccupy_draw(slot);
             }
         }
         // The cloned prop joins the RT-relevant draw set; the next RT update folds
@@ -973,19 +967,14 @@ impl DxContext {
                     "appended draw slot must match the draw-object count"
                 );
                 self.draw.objects.push(obj);
+                self.model_history.borrow_mut().reoccupy_draw(slot);
                 slot
             }
         };
-        // Seed the G-buffer pre-pass's previous-model snapshot for a recycled
-        // slot so a fresh chunk does not inherit the removed chunk's transform
-        // and ghost for one frame. A fresh append is past the snapshot's end
-        // and the pre-pass falls back to the current model itself.
-        if let Some(gbuffer) = &self.gbuffer {
-            let mut prev = gbuffer.prev_models.borrow_mut();
-            if draw_idx < prev.len() {
-                prev[draw_idx] = model;
-            }
-        }
+        // The slot's model-history entry belongs to whatever held it before, so
+        // a chunk that streams in reprojects through its own transform for one
+        // frame rather than ghosting from the previous occupant's.
+        self.model_history.borrow_mut().reoccupy_draw(draw_idx);
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
         self.rt_topology_dirty = true;
@@ -1181,6 +1170,9 @@ impl DxContext {
         self.skinned.joint_buffers = joint_buffers;
         self.skinned.joint_ptrs = joint_ptrs;
         self.skinned.draw_objects = draw_objects;
+        // A whole new skinned set: nothing in the model-history ring was written
+        // for these records.
+        self.model_history.borrow_mut().reset(self.cull_count());
 
         // Morph targets are attached by a later `upload_skinned_morphs`; until
         // then every object is morphless (a re-upload / hot-reload resets here).
@@ -1405,6 +1397,11 @@ impl DxContext {
         };
         obj.model = model;
         obj.visible = true;
+        // The slot's model-history entry belongs to the previous occupant, so
+        // the next pre-pass must reproject through the revealed model instead.
+        self.model_history
+            .borrow_mut()
+            .reoccupy_skinned(instance_index);
         if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
             palette.iter_mut().for_each(|m| *m = IDENTITY);
         }

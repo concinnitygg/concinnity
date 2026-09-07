@@ -466,16 +466,20 @@ pub(super) struct VkCull {
     // and the previous-frame model from `prev_model_buffers`; the velocity history
     // for the skinned tail rides the previous-frame deformed buffer. The pass
     // reuses the main pass's `indirect_buffers` (camera frustum, no extra cull).
-    // Set 0 (`gbuffer_set_layout`) = GbView UBO + prev_model SSBO; set 1 = the
-    // shared bindless set. `gbuffer_sets` is one set 0 per frame; the per-frame
-    // `prev_model_*` buffers are host-mapped (instance region init-written, static
-    // + skinned regions rewritten each frame). All `Some`/non-empty only when the
-    // bindless cull path is active AND the G-buffer is enabled.
+    // Set 0 (`gbuffer_set_layout`) = GbView UBO + the PREVIOUS frame's history
+    // slot + this frame's draw args; set 1 = the shared bindless set.
+    // `gbuffer_sets` is one set 0 per frame; the per-frame `prev_model_*` buffers
+    // are device-local, written only by `model_history`'s snapshot dispatch. All
+    // `Some`/non-empty only when the bindless cull path is active AND the
+    // G-buffer is enabled.
     pub(super) gbuffer_bindless_pipeline: Option<OwnedPipeline>,
     pub(super) gbuffer_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) _gbuffer_set_layout: Option<OwnedSetLayout>,
     pub(super) gbuffer_sets: Vec<vk::DescriptorSet>,
     pub(super) prev_model_buffers: Vec<PooledBuffer>,
+    // The snapshot kernel that fills `prev_model_buffers`, and the per-frame
+    // sets pairing each object buffer with its history slot.
+    pub(super) model_history: Option<super::post::gbuffer::ModelHistoryPipeline>,
 }
 
 impl VkCull {
@@ -493,9 +497,10 @@ impl VkCull {
         // GPU-driven shadow pass. The per-(frame, cascade) `shadow_cull_sets`
         // are freed with the shared descriptor pool, so only the pipelines,
         // the set layout, and the per-cascade indirect buffers are destroyed.
-        // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` are freed
-        // with the shared descriptor pool, so only the pipeline, layout, set
-        // layout, and the per-frame prev_model buffers are destroyed here.
+        // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` and the
+        // snapshot kernel's sets are freed with the shared descriptor pool, so
+        // only the pipelines, layouts, and the per-frame model-history buffers
+        // are destroyed here.
         self.object_buffers.clear();
         self.draw_args_buffers.clear();
         self.indirect_buffers.clear();
@@ -503,6 +508,7 @@ impl VkCull {
         self.indirect_buffers2.clear();
         self.shadow_indirect_buffers.clear();
         self.prev_model_buffers.clear();
+        self.model_history = None;
     }
 }
 
@@ -1072,6 +1078,12 @@ pub(crate) struct VkContext {
     // the separate SSR / SSAO / velocity pre-passes (the `PassId::GBufferPrepass`
     // node). Mirrors `DxContext::gbuffer`.
     pub(super) gbuffer: Option<GbufferResources>,
+    // Per-record validity of the GPU-filled model-history ring. A record whose
+    // occupant changed carries `NO_HISTORY` in its draw args, which sends the
+    // G-buffer pre-pass to its current model instead of a stranger's.
+    // `RefCell` because the draw-args build runs off `&self`.
+    pub(super) model_history:
+        core::cell::RefCell<concinnity_core::render::model_history::ModelHistory>,
 
     // Hardware ray-traced reflections (`VK_KHR_ray_query`). `rt_reflections` (the
     // fullscreen inline-`rayQueryEXT` pass + its output target) and `rt_accel`

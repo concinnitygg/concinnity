@@ -130,6 +130,17 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::Ungraphed,
             ),
             ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
+            // The model-history ring: the snapshot dispatch writes the slot a
+            // pre-pass `frames_in_flight - 1` frames ago read, so the write is
+            // fenced behind those vertex reads and released to the next frame's.
+            // The graph models neither the ring nor the dispatch, which is
+            // bundled inside the G-buffer pre-pass node.
+            (
+                "post/gbuffer.rs",
+                "cmd_pipeline_barrier",
+                1,
+                Reason::Ungraphed,
+            ),
             // One orders each plane's mirror render behind the previous
             // render's attachment writes, which the shared main render pass
             // declares `UNDEFINED` and so transitions without a dependency;
@@ -235,6 +246,10 @@ const AUDITS: &[BackendAudit] = &[
             // occlusion, which its own blur consumes, and the RT reflection
             // radiance the roughness composite consumes.
             ("post/ssao.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // The model-history ring's snapshot dispatch: a UAV barrier over a
+            // buffer, which lives in COMMON and is promoted implicitly at each
+            // use, so it claims no state and crosses no node boundary.
+            ("post/gbuffer.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             (
                 "post/rt_reflections.rs",
                 ".ResourceBarrier(",

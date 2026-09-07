@@ -564,6 +564,9 @@ impl MtlContext {
         self.skinned.vertex_buffer = Some(skinned_vertex_buffer);
         self.skinned.index_buffer = Some(skinned_index_buffer);
         self.skinned.draw_objects = draw_objects;
+        // A whole new skinned set: nothing in the model-history ring was
+        // written for these records.
+        self.model_history.reset(self.cull_count());
         Ok(())
     }
 
@@ -694,6 +697,9 @@ impl MtlContext {
         };
         obj.model = model;
         obj.visible = true;
+        // The slot's model-history entry belongs to the previous occupant, so
+        // the next pre-pass must reproject through the revealed model instead.
+        self.model_history.reoccupy_skinned(instance_index);
         if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
             palette.iter_mut().for_each(|m| *m = IDENTITY);
         }

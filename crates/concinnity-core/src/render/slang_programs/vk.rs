@@ -95,6 +95,16 @@ pub static CULL_SHADOW: SlangProgram = SlangProgram {
     sizes: Sizes::None,
     msaa: false,
 };
+/// `model_history_kernel` from `model_history.slang`: this frame's model
+/// snapshot for the next frame's motion vectors.
+pub static MODEL_HISTORY: SlangProgram = SlangProgram {
+    file: "model_history.slang",
+    entry: "model_history_kernel",
+    label: "model_history.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
 /// `light_cull_kernel` from `light_cull.slang`.
 pub static LIGHT_CULL: SlangProgram = SlangProgram {
     file: "light_cull.slang",
@@ -607,6 +617,7 @@ pub static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &LIGHT_CULL,
+    &MODEL_HISTORY,
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,

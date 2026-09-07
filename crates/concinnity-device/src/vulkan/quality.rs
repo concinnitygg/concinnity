@@ -120,7 +120,6 @@ impl VkContext {
                     height: self.render_extent.height,
                     frames: self.frames_in_flight,
                 },
-                self.draw.objects.len(),
                 &pooled,
             )?;
             self.gbuffer = Some(gb);

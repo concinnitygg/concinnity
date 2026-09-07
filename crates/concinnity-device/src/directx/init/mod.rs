@@ -1271,7 +1271,8 @@ impl DxContext {
             gbuffer_bindless_pso,
             gbuffer_bindless_cmd_sig,
             prev_model_buffer_resources,
-            prev_model_buffer_ptrs,
+            model_history_root_sig,
+            model_history_pso,
         } = main_pipelines;
 
         // GPU-driven instanced merge: write each instance's `GpuObjectData` record
@@ -1320,30 +1321,6 @@ impl DxContext {
                         da_ptr.add(n_objects * da_stride),
                         draw_args.len() * da_stride,
                     );
-                }
-            }
-
-            // GPU-driven G-buffer velocity: the instance region of the parallel
-            // `prev_model` buffer is the instances' current models (immutable, so
-            // motion is camera-only). Written once into every frame buffer after
-            // the static prefix, exactly like the instance object records; the
-            // per-frame `build_gbuffer_prev_models` fill writes only the static +
-            // skinned regions, leaving this intact. A no-op when the G-buffer path
-            // is inactive (the buffers were not allocated).
-            if !prev_model_buffer_ptrs.is_empty() {
-                let models: Vec<[[f32; 4]; 4]> = records.iter().map(|r| r.model).collect();
-                let m_stride = std::mem::size_of::<[[f32; 4]; 4]>();
-                for pm_ptr in prev_model_buffer_ptrs.iter() {
-                    // SAFETY: the prev_model buffer was sized for
-                    // `n_objects + n_instances + n_skinned` records, so writing
-                    // `models.len()` past the `n_objects` offset stays in bounds.
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            models.as_ptr() as *const u8,
-                            pm_ptr.add(n_objects * m_stride),
-                            models.len() * m_stride,
-                        );
-                    }
                 }
             }
         }
@@ -2299,7 +2276,9 @@ impl DxContext {
                 gbuffer_bindless_pso,
                 gbuffer_bindless_cmd_sig,
                 prev_model_buffers: prev_model_buffer_resources,
-                prev_model_buffer_ptrs,
+                model_history_root_sig,
+                model_history_pso,
+                model_history_prime: std::sync::atomic::AtomicBool::new(false),
                 occlusion_two_pass,
                 hiz,
                 prev_view_proj: std::cell::Cell::new(IDENTITY),
@@ -2328,6 +2307,7 @@ impl DxContext {
             },
             post_process,
             gbuffer,
+            model_history: Default::default(),
             taa,
             ssao: super::context::SsaoState {
                 resources: ssao,

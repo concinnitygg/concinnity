@@ -5,8 +5,8 @@
 // `vulkan/graph_exec.rs` and `vulkan/composite.rs`.
 
 use ash::vk;
-use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::model_history::HistoryMode;
 
 use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
 use crate::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
@@ -149,11 +149,11 @@ impl VkContext {
     // The per-object `(index_offset, index_count)` is the active LOD slice
     // picked by camera distance, so the bindless main pass renders the
     // chosen LOD with no shader-side change. Mirrors `directx/cull.rs`.
-    fn build_draw_args_buffer(&self, frame_idx: usize, cam_pos: [f32; 3]) {
+    fn build_draw_args_buffer(&self, frame_idx: usize, cam_pos: [f32; 3], history: HistoryMode) {
         let Some(buf) = self.cull.draw_args_buffers.get(frame_idx) else {
             return;
         };
-        self.build_draw_args_records_into(buf, cam_pos);
+        self.build_draw_args_records_into(buf, cam_pos, history);
         self.patch_instance_lod_into(buf, cam_pos);
     }
 
@@ -196,9 +196,19 @@ impl VkContext {
         &self,
         buf: &super::allocator::PooledBuffer,
         cam_pos: [f32; 3],
+        history: HistoryMode,
     ) {
         use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
         let stride = std::mem::size_of::<GpuDrawArgs>();
+        let mut model_history = self.model_history.borrow_mut();
+        model_history.begin(history, self.cull_count());
+        // Hand the dispatch the rebuild's prime request here, on the one thread
+        // that owns the tracker; the encode runs on a worker.
+        if model_history.take_prime()
+            && let Some(mh) = self.cull.model_history.as_ref()
+        {
+            mh.prime.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead. Clearing
         // ENABLED makes the cull kernel reset its command to a no-op (the same
@@ -226,7 +236,8 @@ impl VkContext {
                 // The record's shader bucket rides the upper flag bits so the
                 // cull kernel can route its command into that bucket's region.
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(obj.shader_bucket),
+                    | draw_args_bucket_bits(obj.shader_bucket)
+                    | model_history.draw_flags(i, i),
             };
             buf.write_val(i * stride, &rec);
         }
@@ -240,7 +251,7 @@ impl VkContext {
         // unconditionally; a freed slot's `resident` clear disables it. The unused
         // reserve tail is disabled.
         let runtime_base = self.runtime_record_base();
-        let n_resident_runtime = self.for_each_runtime_record(|k, _, obj| {
+        let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits
@@ -255,7 +266,8 @@ impl VkContext {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
-                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable()),
+                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
+                    | model_history.draw_flags(runtime_base + k, i),
             };
             buf.write_val((runtime_base + k) * stride, &rec);
         });
@@ -291,7 +303,8 @@ impl VkContext {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: 0,
-                flags: draw_args_flags(obj.visible, true, true),
+                flags: draw_args_flags(obj.visible, true, true)
+                    | model_history.skinned_flags(skinned_base + k, k),
             };
             buf.write_val((skinned_base + k) * stride, &rec);
         }
@@ -699,8 +712,19 @@ impl VkContext {
         // graph drops the Cull pass and Main runs as a bare clear, so this
         // per-object buffer prep would feed nothing.
         if !world_hidden && seed_inputs.bindless_cull_enabled {
+            // The GPU-driven pre-pass both fills and reads the model-history
+            // ring. With no consumer of motion, or with the pre-pass not built,
+            // the ring goes stale, so every record is marked `NO_HISTORY` and
+            // the tracker re-primes when the pre-pass returns.
+            let history = match self.gbuffer.is_some()
+                && self.cull.model_history.is_some()
+                && (self.taa.is_some() || self.upscale.is_some())
+            {
+                true => HistoryMode::Track,
+                false => HistoryMode::Stale,
+            };
             self.build_object_buffer(frame_idx);
-            self.build_draw_args_buffer(frame_idx, cam_pos);
+            self.build_draw_args_buffer(frame_idx, cam_pos, history);
         }
 
         //  Single merged frame graph dispatched in one
@@ -773,17 +797,12 @@ impl VkContext {
 
         // Advance the unified G-buffer's velocity-channel temporal state in
         // lockstep with TAA's: this frame's un-jittered VP becomes next frame's
-        // `prev_vp`, and every object transform is snapshotted so the next
-        // GBufferPrepass can diff against it. Owned by `GbufferResources` so the
-        // motion vector works for any consumer (TAA or FSR), exactly mirroring
-        // the TAA advance above. Mirrors DirectX's `prev_view_proj`/`prev_models`
-        // bookkeeping in `record_frame`.
+        // `prev_vp`. The per-object half of the same history was snapshotted on
+        // the GPU by the pre-pass's own dispatch. Owned by `GbufferResources` so
+        // the motion vector works for any consumer (TAA or FSR), exactly
+        // mirroring the TAA advance above.
         if let Some(gb) = &mut self.gbuffer {
             gb.prev_view_proj = cur_vp;
-            gb.prev_models.resize(self.draw.objects.len(), IDENTITY);
-            for (prev, obj) in gb.prev_models.iter_mut().zip(self.draw.objects.iter()) {
-                *prev = obj.model;
-            }
         }
 
         // Advance Hi-Z temporal state: this frame's un-jittered VP becomes next

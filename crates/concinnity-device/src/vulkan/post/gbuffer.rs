@@ -29,7 +29,8 @@ use crate::vulkan::owned::{
     OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
 };
 
-use concinnity_core::render::uniforms::GBufferView;
+use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
@@ -37,6 +38,9 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 use crate::vulkan::slang_builtins::SlangCompile;
+
+// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
+const MODEL_HISTORY_THREADGROUP: usize = 64;
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
 // depth (-view_z). Alpha 0 (cleared background) marks "no geometry". Matches
@@ -297,16 +301,39 @@ fn vertex_56_dual_input() -> (
 
 // GPU-driven G-buffer pre-pass resources, built when the bindless cull path is
 // active AND the G-buffer is enabled. Stored on `VkCull`. The pipeline reuses the
-// G-buffer render pass; the per-frame `prev_model` SSBOs supply the velocity
-// history (instance region init-written, static + skinned rewritten each frame);
-// the per-frame set 0 binds the G-buffer view UBO + that frame's prev_model SSBO,
-// and set 1 reuses the bindless GpuObjectData set.
+// G-buffer render pass; the per-frame model-history SSBOs supply the velocity
+// history, filled on the GPU by the snapshot kernel below; the per-frame set 0
+// binds the G-buffer view UBO, the PREVIOUS frame's history slot and this
+// frame's draw args, and set 1 reuses the bindless GpuObjectData set.
 pub(in crate::vulkan) struct GbufferBindless {
     pub(in crate::vulkan) pipeline: OwnedPipeline,
     pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
     pub(in crate::vulkan) set_layout: OwnedSetLayout,
     pub(in crate::vulkan) sets: Vec<vk::DescriptorSet>,
     pub(in crate::vulkan) prev_model_buffers: Vec<PooledBuffer>,
+    pub(in crate::vulkan) history: ModelHistoryPipeline,
+}
+
+// The model-history snapshot kernel: one thread per cull record copying this
+// frame's model matrix out of the object buffer into a history slot, which a
+// later frame's pre-pass reprojects through. `sets` is a square table indexed
+// `[frame * frames + slot]`, binding the record-count UBO, that frame's object
+// buffer and that slot's history buffer: a normal frame takes the diagonal, and
+// the frame that primes a rebuilt ring walks its row to fill every slot at once.
+// Every buffer is stable for the world's lifetime, so the sets are written once
+// at build.
+pub(in crate::vulkan) struct ModelHistoryPipeline {
+    pub(in crate::vulkan) pipeline: OwnedPipeline,
+    pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
+    // Owners only: the sets above are written once at build and the params are
+    // a build-time constant, but both must outlive every frame that binds them.
+    pub(in crate::vulkan) _set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) sets: Vec<vk::DescriptorSet>,
+    // Set by the draw-args build when the ring was rebuilt, consumed by the
+    // dispatch. An atomic rather than a borrow of the tracker: passes encode on
+    // worker threads, and this is the one piece of that state the encode reads.
+    pub(in crate::vulkan) prime: std::sync::atomic::AtomicBool,
+    pub(in crate::vulkan) _params: PooledBuffer,
 }
 
 // Vulkan device handles every G-buffer builder threads through: the instance,
@@ -326,27 +353,32 @@ pub(in crate::vulkan) struct GbufferBindlessDescriptors {
     pub bindless_set_layout: vk::DescriptorSetLayout,
 }
 
-// Scene sizing that dimensions the per-frame prev_model SSBOs. `instance_models`
-// are the per-instance current transforms written once into the immutable
-// instance region; `draw.n_objects` is the static prefix length that region starts
-// after; `n_cull` is the total cull-record count (the SSBO stride); `frames` is
-// the number of frames in flight.
-pub(in crate::vulkan) struct GbufferBindlessScene<'a> {
-    pub instance_models: &'a [[[f32; 4]; 4]],
-    pub n_objects: usize,
+// The per-frame record buffers the pre-pass and its snapshot kernel read: the
+// object buffer the snapshot copies models out of, and the draw args the
+// pre-pass reads `NO_HISTORY` from.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GbufferBindlessRecords<'a> {
+    pub object_buffers: &'a [PooledBuffer],
+    pub draw_args_buffers: &'a [PooledBuffer],
+}
+
+// Scene sizing that dimensions the per-frame model-history SSBOs: `n_cull` is
+// the cull-record count they hold one matrix each for, and `frames` the number
+// of frames in flight the ring is deep.
+pub(in crate::vulkan) struct GbufferBindlessScene {
     pub n_cull: usize,
     pub frames: usize,
 }
 
-// Build the GPU-driven G-buffer pre-pass pipeline + its per-frame previous-frame
-// model SSBOs + descriptor sets. The previous-frame model buffers' instance
-// region `[draw.n_objects, draw.n_objects + n_instances)` is written once here (immutable,
-// camera-only motion); the static + skinned regions are rewritten each frame by
-// `build_gbuffer_prev_models`. Set 0 = G-buffer view UBO + prev_model SSBO; set 1
-// = the shared bindless GpuObjectData set (object id via gl_InstanceIndex).
+// Build the GPU-driven G-buffer pre-pass pipeline, the model-history ring it
+// reprojects through, the snapshot kernel that fills that ring, and the
+// descriptor sets for both. Set 0 = G-buffer view UBO + the previous frame's
+// history slot + this frame's draw args; set 1 = the shared bindless
+// GpuObjectData set (object id via gl_InstanceIndex).
 pub(in crate::vulkan) fn build_gbuffer_bindless(
     ctx: GbufferDeviceCtx,
     descriptors: GbufferBindlessDescriptors,
+    records: GbufferBindlessRecords,
     gb: &GbufferResources,
     scene: GbufferBindlessScene,
     hot_reload: bool,
@@ -358,18 +390,18 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         descriptor_pool,
         bindless_set_layout,
     } = descriptors;
-    let GbufferBindlessScene {
-        instance_models,
-        n_objects,
-        n_cull,
-        frames,
-    } = scene;
+    let GbufferBindlessScene { n_cull, frames } = scene;
+    let GbufferBindlessRecords {
+        object_buffers,
+        draw_args_buffers,
+    } = records;
 
     let compile_ctx = builtins::Ctx::plain(hot_reload);
     let vs = super::super::slang_builtins::GBUFFER_BINDLESS_VERT.compile(&compile_ctx)?;
     let fs = super::super::slang_builtins::GBUFFER_BINDLESS_FRAG.compile(&compile_ctx)?;
 
-    // Set 0: GbView UBO (binding 0) + prev_model SSBO (binding 1), both VERTEX.
+    // Set 0: GbView UBO (binding 0), the previous frame's model-history slot
+    // (binding 1) and this frame's draw args (binding 2), all VERTEX.
     let set_layout = create_descriptor_set_layout(
         device,
         &[
@@ -380,6 +412,11 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
             ),
             (
                 1,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::VERTEX,
+            ),
+            (
+                2,
                 vk::DescriptorType::STORAGE_BUFFER,
                 vk::ShaderStageFlags::VERTEX,
             ),
@@ -405,29 +442,25 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         },
     )?;
 
-    // Per-frame prev_model SSBOs (host-visible, persistently mapped), sized for
-    // `n_cull` column-major `float4x4` records, parallel to the object buffer.
+    // Per-frame model-history SSBOs, sized for `n_cull` column-major `float4x4`
+    // records, parallel to the object buffer. Device-local: only the snapshot
+    // kernel writes them and only the pre-pass reads them, so the host never
+    // touches their bytes.
     let buf_size = (n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
     let mut prev_model_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
-        let buf = alloc.create_buffer(
+        prev_model_buffers.push(alloc.create_buffer(
             buf_size,
             vk::BufferUsageFlags::STORAGE_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        // Instance region: the instances' current models (immutable, camera-only
-        // motion). Written once into every frame buffer after the static prefix;
-        // the per-frame fill rewrites only the static + skinned regions.
-        if !instance_models.is_empty() {
-            let stride = std::mem::size_of::<[[f32; 4]; 4]>();
-            buf.write_slice(n_objects * stride, instance_models);
-        }
-        prev_model_buffers.push(buf);
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?);
     }
 
-    // One set 0 per frame: binding 0 = that frame's GbView UBO, binding 1 = that
-    // frame's prev_model SSBO. Both buffers are stable for the world's lifetime,
-    // so the sets are written once here.
+    // One set 0 per frame: binding 0 = that frame's GbView UBO, binding 1 = the
+    // history slot the PREVIOUS frame filled, binding 2 = that frame's draw
+    // args. The frame index cycles, so the previous slot is a fixed offset and
+    // every set can be written once here.
+    let draw_args_size = (n_cull * std::mem::size_of::<GpuDrawArgs>()) as u64;
     let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (f, &set) in sets.iter().enumerate() {
@@ -436,9 +469,13 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
             .offset(0)
             .range(GBUFFER_VIEW_UBO_SIZE);
         let pm_info = vk::DescriptorBufferInfo::default()
-            .buffer(prev_model_buffers[f].buffer())
+            .buffer(prev_model_buffers[(f + frames - 1) % frames].buffer())
             .offset(0)
             .range(buf_size);
+        let da_info = vk::DescriptorBufferInfo::default()
+            .buffer(draw_args_buffers[f].buffer())
+            .offset(0)
+            .range(draw_args_size);
         let writes = [
             vk::WriteDescriptorSet::default()
                 .dst_set(set)
@@ -450,11 +487,25 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
                 .dst_binding(1)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(std::slice::from_ref(&pm_info)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&da_info)),
         ];
         // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
         // set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
+
+    let history = build_model_history(
+        ctx,
+        descriptor_pool,
+        &prev_model_buffers,
+        object_buffers,
+        ModelHistoryScene { n_cull, frames },
+        hot_reload,
+    )?;
 
     Ok(GbufferBindless {
         pipeline,
@@ -462,6 +513,120 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         set_layout,
         sets,
         prev_model_buffers,
+        history,
+    })
+}
+
+// Sizing for the snapshot kernel's per-frame sets.
+#[derive(Clone, Copy)]
+struct ModelHistoryScene {
+    n_cull: usize,
+    frames: usize,
+}
+
+// Build the model-history snapshot kernel: set 0 binds the record-count UBO at
+// binding 0, the frame's object buffer at 1 and the frame's history slot at 2,
+// which is the declaration order `model_history.slang` fixes.
+fn build_model_history(
+    ctx: GbufferDeviceCtx,
+    descriptor_pool: vk::DescriptorPool,
+    history_buffers: &[PooledBuffer],
+    object_buffers: &[PooledBuffer],
+    scene: ModelHistoryScene,
+    hot_reload: bool,
+) -> Result<ModelHistoryPipeline, String> {
+    let GbufferDeviceCtx { alloc, device } = ctx;
+    let ModelHistoryScene { n_cull, frames } = scene;
+    let compile_ctx = super::super::builtins::Ctx::plain(hot_reload);
+    let cs = super::super::slang_builtins::MODEL_HISTORY.compile(&compile_ctx)?;
+
+    let set_layout = create_descriptor_set_layout(
+        device,
+        &[
+            (
+                0,
+                vk::DescriptorType::UNIFORM_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            (
+                1,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            (
+                2,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+        ],
+    )?;
+    let layouts = [set_layout.handle()];
+    let pipeline_layout = device
+        .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
+        .map_err(|e| format!("model history pipeline layout: {e}"))?;
+    let pipeline = create_cull_pipeline(device, pipeline_layout.handle(), &cs)?;
+
+    // The record count never moves for a built world, so one host-visible UBO
+    // serves every frame's set.
+    let params = ModelHistoryParams {
+        record_count: n_cull as u32,
+        _pad: [0; 3],
+    };
+    let params_size = std::mem::size_of::<ModelHistoryParams>() as u64;
+    let params_buf = alloc.create_buffer(
+        params_size,
+        vk::BufferUsageFlags::UNIFORM_BUFFER,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )?;
+    params_buf.write_val(0, &params);
+
+    let object_size = (n_cull * std::mem::size_of::<GpuObjectData>()) as u64;
+    let history_size = (n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
+    let set_layouts: Vec<_> = (0..frames * frames).map(|_| set_layout.handle()).collect();
+    let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
+    for (i, &set) in sets.iter().enumerate() {
+        let (f, slot) = (i / frames, i % frames);
+        let p_info = vk::DescriptorBufferInfo::default()
+            .buffer(params_buf.buffer())
+            .offset(0)
+            .range(params_size);
+        let o_info = vk::DescriptorBufferInfo::default()
+            .buffer(object_buffers[f].buffer())
+            .offset(0)
+            .range(object_size);
+        let h_info = vk::DescriptorBufferInfo::default()
+            .buffer(history_buffers[slot].buffer())
+            .offset(0)
+            .range(history_size);
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(std::slice::from_ref(&p_info)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&o_info)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&h_info)),
+        ];
+        // SAFETY: `writes` and the buffer infos it borrows are live for the call, and every set
+        // and resource it names belongs to this device.
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
+    }
+
+    Ok(ModelHistoryPipeline {
+        pipeline,
+        pipeline_layout,
+        _set_layout: set_layout,
+        sets,
+        prime: std::sync::atomic::AtomicBool::new(false),
+        _params: params_buf,
     })
 }
 
@@ -514,12 +679,10 @@ pub(in crate::vulkan) struct GbufferResources {
     pub(in crate::vulkan) depth_images: Vec<GpuImage>,
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
-    // Previous-frame motion state, owned here so the velocity channel works for
-    // any consumer (TAA or FSR) independent of whether engine-TAA is on.
-    // `prev_view_proj` is last frame's un-jittered VP; `prev_models` is each
-    // draw's previous transform. Both advance once per frame.
+    // Last frame's un-jittered VP, owned here so the velocity channel works for
+    // any consumer (TAA or FSR) independent of whether engine-TAA is on. The
+    // per-object half of the same history is the GPU-filled model-history ring.
     pub(in crate::vulkan) prev_view_proj: [[f32; 4]; 4],
-    pub(in crate::vulkan) prev_models: Vec<[[f32; 4]; 4]>,
 }
 
 // Command pool + queue the target builders use to lay out the private depth
@@ -546,7 +709,6 @@ impl GbufferResources {
         ctx: GbufferDeviceCtx,
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
-        object_count: usize,
         pooled: &GbufferPooled,
     ) -> Result<Self, String> {
         let GbufferDeviceCtx { alloc, device } = ctx;
@@ -576,7 +738,6 @@ impl GbufferResources {
             depth_images: Vec::new(),
             framebuffers: Vec::new(),
             prev_view_proj: IDENTITY,
-            prev_models: vec![IDENTITY; object_count],
         };
         me.build_targets(ctx, queue, extent, pooled)?;
         Ok(me)
@@ -837,11 +998,128 @@ impl VkContext {
         // skinned tail over the deformed VB); streamed chunks and runtime clones
         // ride the cull records' runtime reserve. With nothing to draw the pass
         // is the clears above, which is what "no geometry" means to every reader.
-        self.encode_gbuffer_prepass_gpu_driven(gb, cmd, frame_idx, velocity_active);
+        self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, velocity_active);
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe { device.cmd_end_render_pass(cmd) };
+
+        // Snapshot this frame's models into this frame's history slot, AFTER the
+        // pass above read the previous one -- which is what keeps a single frame
+        // in flight (one slot, read then rewritten) correct.
+        self.encode_model_history(cmd, frame_idx);
+    }
+
+    // Dispatch the model-history snapshot: one thread per cull record copying
+    // `objects[i].model` into this frame's history slot. The slot is the one a
+    // pre-pass `frames_in_flight - 1` frames ago also read, and that frame may
+    // still be in flight, so the write is fenced behind its vertex reads; the
+    // matching release makes it visible to the next frame's pre-pass.
+    fn encode_model_history(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
+        let Some(history) = self.cull.model_history.as_ref() else {
+            return;
+        };
+        let records = self.cull_count();
+        if records == 0 {
+            return;
+        }
+        // A rebuilt ring holds nothing these records were written for, so the
+        // priming frame fills every slot rather than only its own: the instance
+        // region is the one the draw args cannot flag, being init-written.
+        let frames = self.cull.prev_model_buffers.len();
+        let slots = match history
+            .prime
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            true => 0..frames,
+            false => frame_idx..frame_idx + 1,
+        };
+        let device = &self.device;
+        let groups = records.div_ceil(MODEL_HISTORY_THREADGROUP) as u32;
+        for slot in slots {
+            let Some(&set) = history.sets.get(frame_idx * frames + slot) else {
+                continue;
+            };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
+            unsafe {
+                self.model_history_barrier(
+                    cmd,
+                    slot,
+                    (
+                        vk::AccessFlags::SHADER_READ,
+                        vk::AccessFlags::SHADER_WRITE,
+                        vk::PipelineStageFlags::VERTEX_SHADER,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                    ),
+                );
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::COMPUTE,
+                    history.pipeline.handle(),
+                );
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::COMPUTE,
+                    history.pipeline_layout.handle(),
+                    0,
+                    &[set],
+                    &[],
+                );
+                device.cmd_dispatch(cmd, groups, 1, 1);
+                self.model_history_barrier(
+                    cmd,
+                    slot,
+                    (
+                        vk::AccessFlags::SHADER_WRITE,
+                        vk::AccessFlags::SHADER_READ,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::VERTEX_SHADER,
+                    ),
+                );
+            }
+        }
+    }
+
+    // One access/stage dependency over a whole model-history slot.
+    //
+    // SAFETY: the caller must pass a command buffer in the recording state.
+    unsafe fn model_history_barrier(
+        &self,
+        cmd: vk::CommandBuffer,
+        slot: usize,
+        deps: (
+            vk::AccessFlags,
+            vk::AccessFlags,
+            vk::PipelineStageFlags,
+            vk::PipelineStageFlags,
+        ),
+    ) {
+        let Some(buf) = self.cull.prev_model_buffers.get(slot) else {
+            return;
+        };
+        let (src_access, dst_access, src_stage, dst_stage) = deps;
+        let barrier = vk::BufferMemoryBarrier::default()
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(buf.buffer())
+            .offset(0)
+            .size(vk::WHOLE_SIZE)
+            .src_access_mask(src_access)
+            .dst_access_mask(dst_access);
+        // SAFETY: the caller guarantees `cmd` is recording, and the barrier and the buffer it
+        // names are live for the call and belong to this device.
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                cmd,
+                src_stage,
+                dst_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                std::slice::from_ref(&barrier),
+                &[],
+            )
+        };
     }
 
     // GPU-driven G-buffer pre-pass raster (inside the render pass the caller
@@ -856,7 +1134,6 @@ impl VkContext {
     // SSBO. The CPU never walks the draw lists.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
-        gb: &GbufferResources,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         velocity_active: bool,
@@ -881,10 +1158,6 @@ impl VkContext {
         };
         let stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
         let prefix = self.skinned_record_base() as u32;
-
-        // Build this frame's previous-frame model buffer (static + skinned regions;
-        // the instance region is init-written + immutable). Honours velocity_active.
-        self.build_gbuffer_prev_models(gb, frame_idx, velocity_active);
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -976,66 +1249,6 @@ impl VkContext {
             self.skinned
                 .deformed_primed
                 .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    // Fill this frame's previous-frame model SSBO for the GPU-driven G-buffer
-    // velocity. Indexed by cull record id, parallel to the GpuObjectData buffer:
-    // the static prefix `[0, draw.n_objects)` gets last frame's model (so a moving
-    // static object reprojects correctly), the skinned tail gets the current model
-    // (skinned deformation motion comes from the previous-frame deformed buffer,
-    // not the model matrix). The instance region is init-written + immutable
-    // (camera-only motion), so it is left untouched. When velocity is inactive
-    // every written record gets its current model, so the motion stays zero (GbView
-    // prev_vp also equals cur_vp). Mirrors build_object_buffer's record indexing.
-    fn build_gbuffer_prev_models(
-        &self,
-        gb: &GbufferResources,
-        frame_idx: usize,
-        velocity_active: bool,
-    ) {
-        let Some(buf) = self.cull.prev_model_buffers.get(frame_idx) else {
-            return;
-        };
-        let stride = std::mem::size_of::<[[f32; 4]; 4]>();
-        for (i, obj) in self
-            .draw
-            .objects
-            .iter()
-            .take(self.draw.n_objects)
-            .enumerate()
-        {
-            let prev = if velocity_active {
-                gb.prev_models.get(i).copied().unwrap_or(obj.model)
-            } else {
-                obj.model
-            };
-            buf.write_val(i * stride, &prev);
-        }
-        // Runtime objects: last frame's model, keyed by draw index like the
-        // static prefix, so a moving spawned clone reprojects (a chunk never
-        // moves). The unused reserve slots keep stale prev_models but their
-        // draw-args are disabled, so the gbuffer never rasterises them.
-        let runtime_base = self.runtime_record_base();
-        self.for_each_runtime_record(|k, i, obj| {
-            let prev = if velocity_active {
-                gb.prev_models.get(i).copied().unwrap_or(obj.model)
-            } else {
-                obj.model
-            };
-            buf.write_val((runtime_base + k) * stride, &prev);
-        });
-        let base = self.skinned_record_base();
-        for (k, obj) in self
-            .skinned
-            .draw_objects
-            .iter()
-            .take(self.draw.n_skinned)
-            .enumerate()
-        {
-            // Skinned motion is per-vertex (previous deformed buffer), so the model
-            // matrix is the current one (cur == prev model, like the legacy path).
-            buf.write_val((base + k) * stride, &obj.model);
         }
     }
 }

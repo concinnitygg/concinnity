@@ -104,3 +104,33 @@ pub struct SkinParams {
     /// Morph targets in the delta buffer; zero when the object has none.
     pub target_count: u32,
 }
+
+/// Per-dispatch parameters for the `model_history` compute kernel, which
+/// snapshots this frame's model matrices out of the bindless object buffer into
+/// the frame's model-history ring slot. Matches `ModelHistoryParams` in
+/// `model_history.slang`.
+///
+/// Every backend binds it at the kernel's first slot: Metal at buffer(0),
+/// Vulkan as set 0 binding 0, DirectX as root constants at b0.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
+pub struct ModelHistoryParams {
+    /// Cull records to snapshot: the object buffer's whole length.
+    pub record_count: u32,
+    /// Pads the block to the 16-byte floor a constant buffer binds at.
+    pub _pad: [u32; 3],
+}
+
+#[cfg(test)]
+mod model_history_tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    // One uint padded to the 16-byte constant-buffer floor.
+    #[test]
+    fn model_history_params_layout_matches_the_shader() {
+        assert_eq!(size_of::<ModelHistoryParams>(), 16);
+        assert_eq!(offset_of!(ModelHistoryParams, record_count), 0);
+        assert_eq!(offset_of!(ModelHistoryParams, _pad), 4);
+    }
+}

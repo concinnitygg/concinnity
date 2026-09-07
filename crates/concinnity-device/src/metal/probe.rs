@@ -416,7 +416,11 @@ impl MtlContext {
             .build_object_buffer(slot)?
             .ok_or("probe: no static geometry to bake")?;
         let draw_args = self
-            .build_draw_args_buffer(eye, slot)?
+            .build_draw_args_buffer(
+                eye,
+                slot,
+                concinnity_core::render::model_history::HistoryMode::Untracked,
+            )?
             .ok_or("probe: no draw args to bake")?;
         let counts = self.draw_record_counts();
         let tex_args = self

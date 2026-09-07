@@ -1440,6 +1440,10 @@ impl DrawArgsFlags {
     // The object has a finite AABB and should be frustum/distance-culled.
     // When clear the object always draws (subject to `ENABLED`).
     pub(crate) const CULLABLE: u32 = 2;
+    // The record's entry in the model-history ring was written for a different
+    // occupant, so the G-buffer pre-pass must reproject through the current
+    // model instead. Mirrored by DRAW_NO_HISTORY in object_common.slang.
+    pub(crate) const NO_HISTORY: u32 = 4;
     // The record's shader bucket rides bits 8..16: the cull kernel routes the
     // record's indirect command into that bucket's ICB. Values and layout are
     // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.slang and
@@ -1482,6 +1486,15 @@ pub fn draw_args_flags(visible: bool, resident: bool, cullable: bool) -> u32 {
         flags |= DrawArgsFlags::CULLABLE;
     }
     flags
+}
+
+/// The `GpuDrawArgs::flags` bit that sends the G-buffer pre-pass to a record's
+/// current model rather than its model-history entry. Set for a record whose
+/// history entry was written for a different occupant, and for every record
+/// while no consumer reads motion (which collapses the motion vector to zero,
+/// since the pre-pass is handed `prev_vp == cur_vp` then).
+pub fn draw_args_no_history() -> u32 {
+    DrawArgsFlags::NO_HISTORY
 }
 
 /// Pack a `DrawObject`'s shader bucket into the `GpuDrawArgs::flags` upper bits,
@@ -2290,6 +2303,15 @@ mod tests {
         assert_eq!(draw_args_flags(false, true, true), DrawArgsFlags::CULLABLE);
         assert_eq!(draw_args_flags(true, false, true), DrawArgsFlags::CULLABLE);
         assert_eq!(draw_args_flags(false, false, false), 0);
+        // The history bit is packed by the caller, never by the cull-decision
+        // helper, and collides with neither decision bit nor the bucket field.
+        assert_eq!(draw_args_no_history(), 4);
+        let flags =
+            draw_args_flags(true, true, true) | draw_args_no_history() | draw_args_bucket_bits(3);
+        assert_eq!(flags & DrawArgsFlags::NO_HISTORY, DrawArgsFlags::NO_HISTORY);
+        assert_eq!(flags & DrawArgsFlags::ENABLED, DrawArgsFlags::ENABLED);
+        assert_eq!(flags & DrawArgsFlags::CULLABLE, DrawArgsFlags::CULLABLE);
+        assert_eq!((flags >> DrawArgsFlags::BUCKET_SHIFT) & 0xFF, 3);
     }
 
     // The bucket rides bits 8..16 and never collides with the cull-decision bits,

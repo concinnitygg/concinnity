@@ -36,23 +36,6 @@
 
 {OBJECT_COMMON}
 
-// Mirrors `GpuDrawArgs` in render_types.rs (16 B).
-struct GpuDrawArgs
-{
-    uint index_count;
-    uint index_offset;
-    uint base_vertex;
-    uint flags;
-};
-
-static const uint DRAW_ENABLED  = 1u;
-static const uint DRAW_CULLABLE = 2u;
-
-// The record's shader bucket rides the upper flag bits; values and layout are
-// locked to gfx::render_types::{DrawArgsFlags::BUCKET_SHIFT, MAX_SHADER_BUCKETS}.
-static const uint DRAW_BUCKET_SHIFT = 8u;
-static const uint DRAW_BUCKET_MASK  = 0xFFu;
-
 // `cull_status` values. STATUS_HIZ_CANDIDATE is the only outcome phase 2
 // re-tests against the rebuilt pyramid; the others are settled by phase 1.
 static const uint STATUS_DRAWN         = 0u; // visible in phase 1 -> never re-tested
