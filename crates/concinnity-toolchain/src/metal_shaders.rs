@@ -51,6 +51,13 @@ pub fn precompile_metal_shaders(
     let generated = out_dir.join("engine_metallibs.rs");
 
     let shaders = eligible_shaders(shaders_dir, source_only);
+    // Demanded before the toolchain check, which stubs the `.slang` libraries
+    // too: those are the ones that need slangc on the host that runs the
+    // binary, and a host missing both compilers must not slip past on the
+    // Metal one.
+    if !slang_libs.is_empty() {
+        crate::embedded_shaders::require_slangc();
+    }
     if !metal_toolchain_present() {
         println!(
             "cargo:warning=Metal compiler not found (full Xcode required); engine shaders \
@@ -78,21 +85,9 @@ pub fn precompile_metal_shaders(
         .expect("write engine_metallibs.rs");
 }
 
-// Compile each single-source spec to a metallib via slangc. With slangc absent
-// the specs are skipped behind a cargo warning: their names miss the generated
-// lookup and the renderer compiles them at startup instead (which needs slangc
-// at runtime and errors clearly when it is missing there too).
+// Compile each single-source spec to a metallib via slangc. Only called once
+// `embedded_shaders::slangc_ready` has answered for the whole build.
 fn precompile_slang_libs(specs: &[SlangLibSpec], lib_dir: &Path) -> Vec<(String, PathBuf)> {
-    if specs.is_empty() {
-        return Vec::new();
-    }
-    if slang::slangc_path().is_none() {
-        println!(
-            "cargo:warning=slangc not found; single-source engine shaders will compile at \
-             startup (install the Vulkan SDK or a standalone Slang release)"
-        );
-        return Vec::new();
-    }
     specs
         .iter()
         .map(|spec| {

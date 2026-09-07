@@ -49,15 +49,14 @@ pub fn precompile_slang_artifacts(artifacts: &[SlangArtifact<'_>], generated: &s
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let generated = out_dir.join(generated);
 
-    if slang::slangc_path().is_none() {
-        println!(
-            "cargo:warning=slangc not found; the engine's single-source shaders will compile \
-             at startup, which needs slangc on every host that runs this binary. Install a \
-             Slang release (https://github.com/shader-slang/slang/releases) to embed them."
-        );
+    // Before the compiler is demanded: a leg with nothing to compile embeds
+    // nothing by design, which is what the DirectX one does off Windows.
+    if artifacts.is_empty() {
         std::fs::write(&generated, stub_lookup_source(lookup)).expect("write shader lookup");
         return;
     }
+
+    crate::embedded_shaders::require_slangc();
 
     let art_dir = out_dir.join("engine_slang");
     std::fs::create_dir_all(&art_dir).expect("create engine_slang dir");

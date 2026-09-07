@@ -1,5 +1,7 @@
 /assets/
+/private/
 /target*/
+/vendor/
 /worlds/
 
 /world.jsonl
@@ -22,9 +24,7 @@ dist/
 logs/
 node_modules/
 out/
-private/
 tmp/
-vendor/
 venv/
 xcuserdata/
 

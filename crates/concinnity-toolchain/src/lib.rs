@@ -34,6 +34,7 @@
 
 use std::path::{Path, PathBuf};
 
+mod embedded_shaders;
 mod metal_shaders;
 mod sdks;
 mod slang_artifacts;

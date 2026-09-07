@@ -151,6 +151,13 @@ pub fn slangc_path() -> Option<&'static Path> {
     resolved().as_ref().ok().map(|s| s.path.as_path())
 }
 
+/// Why no candidate qualified, or `None` when one did. It names the compiler it
+/// rejected and what to install, so a caller reporting the absence does not
+/// compose its own wording and cannot report an old slangc as a missing one.
+pub fn unavailable_reason() -> Option<&'static str> {
+    resolved().as_ref().err().map(String::as_str)
+}
+
 /// Identifies the compiler for the renderer's content-addressed shader cache.
 /// Two slangc releases can emit different bytes for identical source, so an
 /// artifact keyed without the version outlives the toolchain that produced it
@@ -662,5 +669,12 @@ mod tests {
             err.contains("broken.slang"),
             "diagnostic names the file: {err}"
         );
+    }
+
+    // A caller that reports the absence reads the reason and the path off the
+    // same resolution, so exactly one of them must answer on any host.
+    #[test]
+    fn a_reason_is_present_exactly_when_no_compiler_is() {
+        assert_eq!(slangc_path().is_none(), unavailable_reason().is_some());
     }
 }
