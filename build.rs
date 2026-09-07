@@ -27,10 +27,7 @@
 
 #[cfg(feature = "std")]
 fn main() {
-    use concinnity_toolchain::{emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
-
-    emit_check_cfgs();
-    setup_graphics_sdks(emit_backend_cfg());
+    concinnity_toolchain::setup_graphics_backend();
 }
 
 #[cfg(not(feature = "std"))]

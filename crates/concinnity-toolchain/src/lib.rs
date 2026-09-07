@@ -18,14 +18,18 @@
 //!    binaries land, is read off the calling package by `targets` -- a build
 //!    script declares nothing about its own target list.
 //!
-//! The public entry points emit `cargo::` directives on stdout, which Cargo
-//! attributes to the build script of whichever package called in. That is what
-//! lets an example binary's build script pick up the same NGX link and DLL
-//! bundling the CLI's does, without duplicating any of this logic. It is also
-//! what a package outside this workspace needs, since the NGX link reaches only
-//! the package that emits it: `setup_graphics_sdks_for_consumer` is the whole
-//! setup behind one call for a build script that has no backend features of its
-//! own to read.
+//! Both are one call: [`setup_graphics_backend`] for a package in this
+//! workspace, [`setup_graphics_sdks_for_consumer`] for one outside it that has
+//! no backend features of its own to read. The steps they assemble are private,
+//! so the four build scripts here cannot drift into declaring the cfgs, gating
+//! on a backend and probing the SDKs in three different orders.
+//!
+//! The entry points emit `cargo::` directives on stdout, which Cargo attributes
+//! to the build script of whichever package called in. That is what lets an
+//! example binary's build script pick up the same NGX link and DLL bundling the
+//! CLI's does, without duplicating any of this logic. It is also what a package
+//! outside this workspace needs, since the NGX link reaches only the package
+//! that emits it.
 //!
 //! This file is the thin environment-reading layer: it snapshots everything the
 //! setup needs from the process environment into an `SdkEnv` and prints the
@@ -160,44 +164,53 @@ pub(crate) fn resolve_backend(target_os: &str, features: BackendFeatures) -> Opt
     }
 }
 
-/// Declare every cfg the renderer source gates on so `--check-cfg` does not warn.
-/// A package only needs this if its own source references one of these cfgs.
-pub fn emit_check_cfgs() {
+// Declare every cfg the renderer source gates on so `--check-cfg` does not warn.
+fn emit_check_cfgs() {
     for line in sdks::check_cfg_directives() {
         println!("{line}");
     }
 }
 
-/// Resolve the backend from the Cargo-provided environment, emitting nothing.
-/// For a package that needs the backend only to pick its SDK setup and never
-/// gates its own source on one, so has no reason to carry the cfg. `None` is a
-/// build with no backend: a CPU-only runtime with no GPU code in it.
-pub fn backend_from_cargo() -> Option<Backend> {
+// The whole setup over an already-resolved feature set: declare the cfgs, emit
+// the backend cfg, then set up the SDKs. The two entry points differ only in
+// how they read those features.
+fn setup_for(features: BackendFeatures) -> Option<Backend> {
+    emit_check_cfgs();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    resolve_backend(&target_os, BackendFeatures::from_cargo())
-}
-
-/// Resolve the backend from the Cargo-provided environment and emit the
-/// `rustc-cfg` for it, returning the choice so the caller can branch. A build
-/// with no backend emits no cfg; `emit_check_cfgs` still declares all three, so
-/// the source gating on them compiles.
-pub fn emit_backend_cfg() -> Option<Backend> {
-    let backend = backend_from_cargo();
+    let backend = resolve_backend(&target_os, features);
     if let Some(backend) = backend {
         println!("{}", sdks::backend_cfg_directive(backend));
     }
+    setup_graphics_sdks(backend);
     backend
 }
 
-/// Set up the optional graphics SDKs for the given backend. On a non-Windows
-/// target (or the Metal backend) this is a no-op: none of these SDKs apply.
+/// The whole build-script graphics setup for a package in this workspace:
+/// declares the cfgs the renderer source gates on, resolves the backend from
+/// the calling package's own features and emits its cfg (`backend_metal` /
+/// `backend_dx` / `backend_vk`), then sets up the optional graphics SDKs.
+/// Returns the backend so a build script with steps of its own can branch.
 ///
-/// Which kinds of final binary the calling package builds is read from that
-/// package, not passed in: a package can build both bins and examples, and each
-/// kind takes its own linker-argument key and its own directory for the bundled
-/// DLLs, so the setup runs once per kind. A directive both kinds produce --
-/// every cfg, every warning -- is emitted once.
-pub fn setup_graphics_sdks(backend: Option<Backend>) {
+/// `None` is a build with no backend: a CPU-only runtime with no GPU code in
+/// it. That emits no backend cfg, and the check-cfg list still declares all
+/// three, so the source gating on them compiles.
+///
+/// ```no_run
+/// concinnity_toolchain::setup_graphics_backend();
+/// ```
+pub fn setup_graphics_backend() -> Option<Backend> {
+    setup_for(BackendFeatures::from_cargo())
+}
+
+// Set up the optional graphics SDKs for the given backend. On a non-Windows
+// target (or the Metal backend) this is a no-op: none of these SDKs apply.
+//
+// Which kinds of final binary the calling package builds is read from that
+// package, not passed in: a package can build both bins and examples, and each
+// kind takes its own linker-argument key and its own directory for the bundled
+// DLLs, so the setup runs once per kind. A directive both kinds produce --
+// every cfg, every warning -- is emitted once.
+fn setup_graphics_sdks(backend: Option<Backend>) {
     let env = sdk_env_from_cargo();
     if let Some(dir) = manifest_dir() {
         for path in targets::watched_inputs(&dir) {
@@ -212,9 +225,8 @@ pub fn setup_graphics_sdks(backend: Option<Backend>) {
     }
 }
 
-/// The whole build-script setup for a package outside this workspace that links
-/// the engine: declares the cfgs, emits the backend cfg, and runs
-/// [`setup_graphics_sdks`], returning the backend it resolved.
+/// [`setup_graphics_backend`] for a package outside this workspace that links
+/// the engine, resolving the backend as that package sees it.
 ///
 /// A package depending on `concinnity` needs this because the NGX link
 /// directive is scoped to the package that emits it. When the runtime is built
@@ -239,14 +251,7 @@ pub fn setup_graphics_sdks(backend: Option<Backend>) {
 /// A missing SDK is reported as a `cargo::warning` naming the root it was
 /// looked for under, and costs that upscaler rather than the build.
 pub fn setup_graphics_sdks_for_consumer() -> Option<Backend> {
-    emit_check_cfgs();
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let backend = resolve_backend(&target_os, consumer_features(BackendFeatures::from_cargo()));
-    if let Some(backend) = backend {
-        println!("{}", sdks::backend_cfg_directive(backend));
-    }
-    setup_graphics_sdks(backend);
-    backend
+    setup_for(consumer_features(BackendFeatures::from_cargo()))
 }
 
 // What a consuming package's backend features mean: `native` on top of whatever
@@ -623,6 +628,30 @@ mod tests {
         setup_graphics_sdks(None);
         // The check-cfg list is emitted unconditionally and must not panic.
         emit_check_cfgs();
+    }
+
+    #[test]
+    fn the_shared_setup_returns_the_backend_it_resolved() {
+        // Both entry points assemble the same three steps over a feature set,
+        // and the one thing a caller reads back is the resolved backend.
+        // CARGO_CFG_TARGET_OS is unset outside a build script, so every arm
+        // here also covers the no-backend case not panicking.
+        let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+        for names in [
+            &[][..],
+            &["native"],
+            &["metal"],
+            &["directx"],
+            &["vulkan"],
+            &["native", "vulkan"],
+        ] {
+            let named = features(names);
+            assert_eq!(
+                setup_for(named),
+                resolve_backend(&target_os, named),
+                "{names:?}"
+            );
+        }
     }
 
     #[test]

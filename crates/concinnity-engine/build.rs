@@ -1,5 +1,5 @@
-//! The runtime crate (rlib). Two jobs, both delegated to the shared
-//! `concinnity-toolchain` build helper:
+//! The runtime crate (rlib). Two jobs behind one `setup_graphics_backend` call
+//! into the shared `concinnity-toolchain` helper:
 //!
 //! 1. Resolve the rendering backend once and expose it as a single cfg the crate
 //!    gates on (`backend_metal` / `backend_dx` / `backend_vk`).
@@ -17,7 +17,7 @@
 //    when loading that data is what failed, and any TextLabel or TextInput naming
 //    no Font.
 
-use concinnity_toolchain::{emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
+use concinnity_toolchain::setup_graphics_backend;
 
 // Native size of the built-in face: what text naming no Font lays out at before
 // its own `scale`. The field is signed-distance and the atlas supersamples, so
@@ -26,8 +26,7 @@ use concinnity_toolchain::{emit_backend_cfg, emit_check_cfgs, setup_graphics_sdk
 const BUILTIN_FONT_PX: u32 = 24;
 
 fn main() {
-    emit_check_cfgs();
-    setup_graphics_sdks(emit_backend_cfg());
+    setup_graphics_backend();
     bake_builtin_font();
 }
 

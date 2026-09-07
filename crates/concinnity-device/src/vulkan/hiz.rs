@@ -616,7 +616,21 @@ impl crate::vulkan::context::VkContext {
         // 2. Downsample chain. Each step reads the prior mip and writes the
         //    next, with a compute write -> read barrier between dispatches.
         //    Finer than the graph's one-state-per-resource granularity, so this
-        //    one stays inline.
+        //    one stays inline. Every mip stays in `GENERAL`, so the dependency
+        //    needs no layout transition and no per-image state: a global memory
+        //    barrier carries it. The pipeline is the same at every step; only
+        //    the descriptor set and the push constants are per-mip.
+        if hiz.mip_count > 1 {
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
+            unsafe {
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::COMPUTE,
+                    hiz.downsample_pipeline.handle(),
+                );
+            }
+        }
         let mut cur_w = hiz.width;
         let mut cur_h = hiz.height;
         for mip in 1..hiz.mip_count {
@@ -628,16 +642,11 @@ impl crate::vulkan::context::VkContext {
                     vk::PipelineStageFlags::COMPUTE_SHADER,
                     vk::PipelineStageFlags::COMPUTE_SHADER,
                     vk::DependencyFlags::empty(),
+                    &[vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)],
                     &[],
                     &[],
-                    &[hiz_image_barrier(
-                        hiz.pyramid.image(),
-                        hiz.mip_count,
-                        vk::ImageLayout::GENERAL,
-                        vk::ImageLayout::GENERAL,
-                        vk::AccessFlags::SHADER_WRITE,
-                        vk::AccessFlags::SHADER_READ,
-                    )],
                 );
             }
             let next_w = (cur_w / 2).max(1);
@@ -651,11 +660,6 @@ impl crate::vulkan::context::VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    hiz.downsample_pipeline.handle(),
-                );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
@@ -681,31 +685,6 @@ impl crate::vulkan::context::VkContext {
 
 fn as_bytes<T: bytemuck::NoUninit>(v: &T) -> &[u8] {
     bytemuck::bytes_of(v)
-}
-
-fn hiz_image_barrier(
-    image: vk::Image,
-    mip_count: u32,
-    old: vk::ImageLayout,
-    new: vk::ImageLayout,
-    src: vk::AccessFlags,
-    dst: vk::AccessFlags,
-) -> vk::ImageMemoryBarrier<'static> {
-    vk::ImageMemoryBarrier::default()
-        .src_access_mask(src)
-        .dst_access_mask(dst)
-        .old_layout(old)
-        .new_layout(new)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: mip_count,
-            base_array_layer: 0,
-            layer_count: 1,
-        })
 }
 
 fn create_set_layout(

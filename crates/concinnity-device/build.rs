@@ -1,5 +1,5 @@
-//! The device-backend crate (rlib). Three jobs, all delegated to the shared
-//! concinnity-toolchain build helper:
+//! The device-backend crate (rlib). Three jobs, the first two behind one
+//! `setup_graphics_backend` call into the shared concinnity-toolchain helper:
 //!
 //! 1. Resolve the rendering backend once and expose it as a single cfg the crate
 //!    gates on (backend_metal / backend_dx / backend_vk).
@@ -14,8 +14,7 @@
 
 use concinnity_slang as slang;
 use concinnity_toolchain::{
-    Backend, SlangLibSpec, emit_backend_cfg, emit_check_cfgs, hash_sources,
-    precompile_metal_shaders, setup_graphics_sdks,
+    Backend, SlangLibSpec, hash_sources, precompile_metal_shaders, setup_graphics_backend,
 };
 use std::path::PathBuf;
 
@@ -995,9 +994,7 @@ fn precompile_dxil() {
 }
 
 fn main() {
-    emit_check_cfgs();
-    let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend);
+    let backend = setup_graphics_backend();
     if backend == Some(Backend::Metal) {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");

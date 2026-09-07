@@ -46,7 +46,7 @@ struct BackendRegistry {
     root: &'static str,
     // (graph label, the text a barrier on that resource contains). The token is
     // how an *encoder* names the target, which is not always how the resolver
-    // does: an encoder usually binds a local first (`hiz.pyramid`) where the
+    // does: an encoder usually binds a local first (`hiz.texture`) where the
     // resolver walks from `self` (`self.cull.hiz`). It has to be distinctive
     // enough not to match unrelated code -- a bare field name like `resource`
     // matches half the backend.
@@ -70,7 +70,7 @@ const REGISTRIES: &[BackendRegistry] = &[
             ("spot_shadow_map", "spot_shadow.map.image"),
             ("fog_froxel_volume", "volume.image"),
             ("hdr_depth", "depth_images"),
-            ("hiz_pyramid", "hiz.pyramid"),
+            ("hiz_pyramid", ".pyramid.image()"),
         ],
         // A Vulkan barrier names its target inside the builder chain, or through
         // one of the file-local helpers that take the handle as their first
@@ -79,7 +79,6 @@ const REGISTRIES: &[BackendRegistry] = &[
         markers: &[
             "vk::ImageMemoryBarrier::default()",
             "vk::BufferMemoryBarrier::default()",
-            "hiz_image_barrier(",
             "depth_barrier(",
             "color_barrier(",
         ],
@@ -121,9 +120,9 @@ const REGISTRIES: &[BackendRegistry] = &[
 // no derived transition can replace it.
 const ALLOWED: &[(&str, &str, &str)] = &[
     // The Hi-Z reduction writes mip N while sampling mip N-1. The graph drives the
-    // pyramid's open and close around the whole chain; these order the steps
-    // within it.
-    ("vulkan", "hiz.rs", "hiz.pyramid"),
+    // pyramid's open and close around the whole chain; this orders the steps
+    // within it. Vulkan has no entry: every mip rests in `GENERAL` there, so the
+    // step dependency is a global memory barrier that names no resource.
     ("directx", "hiz.rs", "hiz.texture"),
     // The MSAA resolve step. The graph rests both HDR targets in RENDER_TARGET
     // and `ResolveSubresource` needs RESOLVE_SOURCE / RESOLVE_DEST for the

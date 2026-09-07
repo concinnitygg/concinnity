@@ -451,7 +451,16 @@ impl crate::directx::context::DxContext {
         //    next, both as single-level UAV views: the table base is the source
         //    mip's descriptor, so the destination is the one that follows it.
         //    Finer than the graph's one-state-per-resource granularity, so it
-        //    stays inline.
+        //    stays inline. The PSO and the source table are the same at every
+        //    step; only the root constants and the destination table are per-mip.
+        if hiz.mip_count > 1 {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
+            unsafe {
+                cmd.SetPipelineState(&hiz.downsample_pso);
+                cmd.SetComputeRootDescriptorTable(1, hiz.srv_gpu);
+            }
+        }
         let mut cur_w = hiz.width;
         let mut cur_h = hiz.height;
         for mip in 1..hiz.mip_count {
@@ -466,14 +475,12 @@ impl crate::directx::context::DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.SetPipelineState(&hiz.downsample_pso);
                 cmd.SetComputeRoot32BitConstants(
                     0,
                     HIZ_PARAMS_DWORDS,
                     &params as *const HizParams as *const std::ffi::c_void,
                     0,
                 );
-                cmd.SetComputeRootDescriptorTable(1, hiz.srv_gpu);
                 cmd.SetComputeRootDescriptorTable(2, hiz.mip_uav_gpus[(mip - 1) as usize]);
                 cmd.Dispatch(next_w.div_ceil(8), next_h.div_ceil(8), 1);
                 cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]);

@@ -87,7 +87,10 @@ pub trait BloomEncoder {
 
     /// Number of bloom mips; zero means bloom is off and the driver no-ops.
     fn bloom_mip_count(&self) -> usize;
-    /// One-time per-encode preamble (DX root signature / heap / IA state; VK no-op).
+    /// One-time per-encode preamble, run once before the sub-passes and on the
+    /// same recorder: state every sub-pass shares belongs here, not in the
+    /// per-mip hooks (DX root signature / heap / IA state and the post-process
+    /// root constants; VK the post-process push constants).
     fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args);
     /// Prefilter: scene colour -> mip 0 (soft-knee threshold + Karis average).
     fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args);
@@ -427,6 +430,23 @@ mod tests {
             *enc.log.borrow(),
             ["begin", "prefilter", "down1", "down2", "up1", "up0"]
         );
+    }
+
+    #[test]
+    fn bloom_chain_begins_once_whatever_the_mip_count() {
+        // Backends push the shared post-process constants in `begin_bloom` and
+        // rely on them surviving every sub-pass, so the preamble must run
+        // exactly once per chain, ahead of the first draw.
+        for mips in 1..8 {
+            let enc = MockBloom {
+                mips,
+                log: RefCell::new(Vec::new()),
+            };
+            encode_bloom_chain(&enc, &(), ());
+            let log = enc.log.borrow();
+            assert_eq!(log.iter().filter(|e| *e == "begin").count(), 1);
+            assert_eq!(log[0], "begin");
+        }
     }
 
     #[test]

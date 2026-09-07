@@ -321,6 +321,7 @@ impl crate::gfx::fullscreen::BloomEncoder for DxContext {
     }
 
     fn begin_bloom(&self, cmd: &Self::Rec, _scene_srv: &Self::Args) {
+        let post = self.post_process;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -332,6 +333,15 @@ impl crate::gfx::fullscreen::BloomEncoder for DxContext {
             // The bloom shaders build the fullscreen triangle from SV_VertexID.
             cmd.IASetVertexBuffers(0, None);
             cmd.IASetIndexBuffer(None);
+            // Root arguments survive the PSO switches between sub-passes, and
+            // the root signature bound just above is the chain's only one, so
+            // the tunables are pushed once here rather than per sub-pass.
+            cmd.SetGraphicsRoot32BitConstants(
+                1,
+                6,
+                &post as *const PostProcessParams as *const std::ffi::c_void,
+                0,
+            );
         }
     }
 
@@ -430,7 +440,6 @@ impl DxContext {
             after,
         } = pass;
         let (mw, mh) = self.bloom.mip_extents[dst];
-        let post = self.post_process;
         if before != D3D12_RESOURCE_STATE_RENDER_TARGET {
             let to_rt = transition_barrier(
                 &self.bloom.mips[dst],
@@ -463,12 +472,6 @@ impl DxContext {
             cmd.RSSetScissorRects(&[scissor]);
             cmd.SetPipelineState(pso);
             cmd.SetGraphicsRootDescriptorTable(0, src_srv);
-            cmd.SetGraphicsRoot32BitConstants(
-                1,
-                6,
-                &post as *const PostProcessParams as *const std::ffi::c_void,
-                0,
-            );
             cmd.DrawInstanced(3, 1, 0, 0);
         }
         if after != D3D12_RESOURCE_STATE_RENDER_TARGET {

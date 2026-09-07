@@ -9,8 +9,6 @@ use ash::vk;
 
 use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
 
-use crate::gfx::render_types::PostProcessParams;
-
 use super::super::allocator::DeviceAllocator;
 use super::super::context::*;
 use super::super::pipeline::spv_module;
@@ -381,8 +379,22 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
         self.bloom.mip_extents.len()
     }
 
-    // Vulkan has no per-encode preamble; render-pass state is set per sub-pass.
-    fn begin_bloom(&self, _cmd: &Self::Rec, _frame_idx: &Self::Args) {}
+    // All three bloom pipelines share one layout, so the tunables pushed here
+    // survive the pipeline switches and the render-pass boundaries between the
+    // sub-passes; the rest of the render-pass state is set per sub-pass.
+    fn begin_bloom(&self, cmd: &Self::Rec, _frame_idx: &Self::Args) {
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
+        unsafe {
+            self.device.cmd_push_constants(
+                *cmd,
+                self.bloom.pipeline_layout.handle(),
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                bytemuck::bytes_of(&self.post_process),
+            );
+        }
+    }
 
     // Prefilter: HDR resolve (input set 0) -> mip 0 (soft-knee + Karis).
     fn bloom_prefilter(&self, cmd: &Self::Rec, frame_idx: &Self::Args) {
@@ -445,16 +457,6 @@ impl VkContext {
         input_set: vk::DescriptorSet,
     ) {
         let device = &self.device;
-        let push = self.post_process;
-        // SAFETY: `PostProcessParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
-        // padding and all 36 of its bytes are initialised; the slice borrows it and does not
-        // outlive it.
-        let push_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &push as *const PostProcessParams as *const u8,
-                std::mem::size_of::<PostProcessParams>(),
-            )
-        };
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(render_pass)
             .framebuffer(framebuffer)
@@ -482,13 +484,6 @@ impl VkContext {
                 0,
                 std::slice::from_ref(&input_set),
                 &[],
-            );
-            device.cmd_push_constants(
-                cmd,
-                self.bloom.pipeline_layout.handle(),
-                vk::ShaderStageFlags::FRAGMENT,
-                0,
-                push_bytes,
             );
             device.cmd_draw(cmd, 3, 1, 0, 0);
             device.cmd_end_render_pass(cmd);
