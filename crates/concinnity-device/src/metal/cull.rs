@@ -15,7 +15,7 @@ use objc2_metal::{
     MTLRenderPipelineState,
 };
 
-use concinnity_core::gfx::render_types::CullStatus;
+use concinnity_core::gfx::cull_status::CullStatus;
 
 use super::context::*;
 use super::encode::ComputeEncode;

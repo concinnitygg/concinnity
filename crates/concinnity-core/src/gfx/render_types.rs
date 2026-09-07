@@ -1451,22 +1451,6 @@ impl DrawArgsFlags {
     pub(crate) const BUCKET_SHIFT: u32 = 8;
 }
 
-/// The per-object outcomes the GPU cull records in its status buffer. Values
-/// mirror the `STATUS_*` constants in `cull.slang`; Metal's ICB encode kernel
-/// is told which one to draw rather than declaring them itself.
-pub struct CullStatus;
-
-impl CullStatus {
-    /// Visible in phase 1, drawn by the main pass.
-    pub const DRAWN: u32 = 0;
-    /// Hi-Z-occluded in phase 1; the only outcome phase 2 re-tests.
-    pub const HIZ_CANDIDATE: u32 = 1;
-    /// Frustum-, distance- or disabled-culled; settled.
-    pub const CULLED: u32 = 2;
-    /// A candidate phase 2 found visible, drawn by the disocclusion pass.
-    pub const REDRAW: u32 = 3;
-}
-
 /// Upper bound on world shader buckets a cull dispatch can route between (the
 /// ICB argument-buffer array length in the Metal encode kernel). Mirrored by
 /// MAX_SHADER_BUCKETS in cull_encode.metal, enforced by the world-shape check,

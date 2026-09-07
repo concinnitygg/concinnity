@@ -244,6 +244,12 @@ pub(crate) enum RuntimeCommand {
         path: String,
         reply: std::sync::mpsc::SyncSender<Result<String, String>>,
     },
+    // Read the GPU-driven cull's per-object status buffer back to the host; the
+    // reply carries one `CullStatus` value per live cull record. Routed to
+    // `RenderBackend::read_cull_status` on the render thread.
+    CullStatus {
+        reply: std::sync::mpsc::SyncSender<Result<Vec<u32>, String>>,
+    },
     // Teleport the active `Camera3D` to a new pose. Applied against the ECS by
     // `apply_camera_set`, not the backend, so the per-frame drive routes it to
     // `dispatch_camera_set` (which holds the `World`) rather than
@@ -442,6 +448,9 @@ pub(crate) fn dispatch_runtime_spawn(
         }
         RuntimeCommand::Screenshot { path, reply } => {
             let _ = reply.send(backend.screenshot(&path));
+        }
+        RuntimeCommand::CullStatus { reply } => {
+            let _ = reply.send(backend.read_cull_status());
         }
         RuntimeCommand::CameraSet { reply, .. } => {
             // CameraSet mutates the ECS, not the backend; the per-frame drive
@@ -1426,6 +1435,18 @@ mod tests {
         let err = rx.recv().unwrap().unwrap_err();
         assert!(
             err.contains("screenshot capture not supported"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn backend_dispatch_cull_status_surfaces_backend_err() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut backend = StubBackend;
+        dispatch_runtime_spawn(RuntimeCommand::CullStatus { reply: tx }, None, &mut backend);
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(
+            err.contains("cull-status readback not supported"),
             "got: {err}"
         );
     }

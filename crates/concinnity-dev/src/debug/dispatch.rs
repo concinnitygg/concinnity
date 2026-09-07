@@ -12,9 +12,10 @@ use std::sync::{Arc, Mutex};
 
 use super::commands::{
     error_reply, handle_anim_crossfade, handle_anim_param, handle_anim_state, handle_camera_move,
-    handle_camera_set, handle_camera_stop, handle_decal_add, handle_decal_remove, handle_despawn,
-    handle_emitter_add, handle_emitter_remove, handle_quality_set, handle_rebind, handle_reparent,
-    handle_screenshot, handle_spawn, handle_story,
+    handle_camera_set, handle_camera_stop, handle_cull_status, handle_decal_add,
+    handle_decal_remove, handle_despawn, handle_emitter_add, handle_emitter_remove,
+    handle_quality_set, handle_rebind, handle_reparent, handle_screenshot, handle_spawn,
+    handle_story,
 };
 use super::hot_reload;
 use super::state::DebugState;
@@ -295,6 +296,12 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
             // capture).
             drop(state);
             return handle_screenshot(text);
+        }
+        "cull-status" => {
+            // Same as screenshot: the readback happens on the render thread and
+            // idles the device, so release the snapshot lock before blocking.
+            drop(state);
+            return handle_cull_status();
         }
         "camera-set" => {
             // Runtime mutation: drop the snapshot lock before blocking on the

@@ -392,6 +392,47 @@ pub(super) fn handle_screenshot(text: &str) -> String {
     )
 }
 
+// Read back the GPU cull's per-object status buffer and report the outcome
+// histogram. Takes no parameters: the reply is the whole live cull list tallied
+// by `concinnity_core::gfx::cull_status`.
+//
+// The readback idles the device, so it gets the screenshot timeout rather than
+// the one-frame spawn timeout.
+pub(super) fn handle_cull_status() -> String {
+    run_with_reply(
+        "cull-status",
+        SCREENSHOT_REPLY_TIMEOUT,
+        |reply| {
+            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CullStatus {
+                reply,
+            });
+        },
+        |raw| cull_status_reply(&raw),
+    )
+}
+
+// Shape one raw cull-status readback into the command's JSON reply. Split out
+// from the queueing so the reply shape is testable without an engine.
+fn cull_status_reply(raw: &[u32]) -> String {
+    let c = concinnity_core::gfx::cull_status::tally(raw);
+    serde_json::json!({
+        "ok": true,
+        "objects": c.total(),
+        "drawn": c.drawn,
+        "frustum_culled": c.frustum_culled,
+        "hiz_candidate": c.hiz_candidate,
+        "hiz_culled": c.hiz_culled,
+        "redrawn": c.redrawn,
+        "unknown": c.unknown,
+        // The two derived numbers a Hi-Z A/B actually compares: everything the
+        // cull let through, and everything the Hi-Z test rejected across both
+        // phases.
+        "visible": c.visible(),
+        "hiz_rejected": c.hiz_rejected(),
+    })
+    .to_string()
+}
+
 // Teleport the active camera. `position` / `yaw` / `pitch` are required in
 // practice (the probe always sends them); missing fields fall back to the
 // defaults below, matching the decal / emitter request shape. `yaw` / `pitch`
@@ -1073,6 +1114,47 @@ mod tests {
         assert_eq!(id, crate::ecs::asset_id::AssetId(1));
     }
 
+    // The reply shape a Hi-Z A/B reads: every outcome counted, plus the two
+    // derived numbers (`visible`, `hiz_rejected`) that survive the phase-2
+    // rewrite of a candidate.
+    #[test]
+    fn cull_status_reply_reports_every_outcome() {
+        use concinnity_core::gfx::cull_status::CullStatus;
+        let raw = [
+            CullStatus::DRAWN,
+            CullStatus::DRAWN,
+            CullStatus::CULLED,
+            CullStatus::HIZ_CANDIDATE,
+            CullStatus::REDRAW,
+            CullStatus::HIZ_CULLED,
+        ];
+        let r: serde_json::Value =
+            serde_json::from_str(&cull_status_reply(&raw)).expect("valid JSON");
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["objects"], 6);
+        assert_eq!(r["drawn"], 2);
+        assert_eq!(r["frustum_culled"], 1);
+        assert_eq!(r["hiz_candidate"], 1);
+        assert_eq!(r["redrawn"], 1);
+        assert_eq!(r["hiz_culled"], 1);
+        assert_eq!(r["unknown"], 0);
+        assert_eq!(r["visible"], 3);
+        assert_eq!(r["hiz_rejected"], 2);
+    }
+
+    // A world whose cull never ran reads back nothing; the reply must be a
+    // clean all-zero histogram rather than an error, so a probe can tell "no
+    // objects" from "the command failed".
+    #[test]
+    fn cull_status_reply_of_an_empty_readback_is_all_zero() {
+        let r: serde_json::Value =
+            serde_json::from_str(&cull_status_reply(&[])).expect("valid JSON");
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["objects"], 0);
+        assert_eq!(r["visible"], 0);
+        assert_eq!(r["hiz_rejected"], 0);
+    }
+
     #[test]
     fn screenshot_rejects_malformed_json() {
         assert_err_reply(&handle_screenshot("not json"), "screenshot");
@@ -1283,6 +1365,7 @@ mod tests {
             RuntimeCommand::EmitterAdd { reply, .. } => drop(reply.send(Err("boom".into()))),
             RuntimeCommand::EmitterRemove { reply, .. } => drop(reply.send(Err("boom".into()))),
             RuntimeCommand::Screenshot { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::CullStatus { reply } => drop(reply.send(Err("boom".into()))),
             RuntimeCommand::CameraSet { reply, .. } => drop(reply.send(Err("boom".into()))),
             RuntimeCommand::CameraMove { reply, .. } => drop(reply.send(Err("boom".into()))),
             RuntimeCommand::CameraStop { reply } => drop(reply.send(Err("boom".into()))),
@@ -1318,6 +1401,7 @@ mod tests {
                 "screenshot",
                 Box::new(|| handle_screenshot(r#"{"path":"x.png"}"#)),
             ),
+            ("cull-status", Box::new(handle_cull_status)),
             ("camera-set", Box::new(|| handle_camera_set("{}"))),
             ("camera-move", Box::new(|| handle_camera_move("{}"))),
             ("camera-stop", Box::new(handle_camera_stop)),

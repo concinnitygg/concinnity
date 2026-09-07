@@ -259,6 +259,14 @@ impl RenderBackend for MtlContext {
         self.capture_screenshot(path)
     }
 
+    // Inherent method is named `read_cull_status_buffer` for the same reason
+    // `capture_screenshot` is: an inherent `read_cull_status` would shadow the
+    // trait method and recurse.
+    fn read_cull_status(&mut self) -> Result<Vec<u32>, String> {
+        debug_assert_main_thread("read_cull_status");
+        self.read_cull_status_buffer()
+    }
+
     fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,

@@ -971,6 +971,22 @@ pub trait RenderBackend: SceneControl + Send {
         Err("screenshot capture not supported on this backend".to_string())
     }
 
+    /// Read the GPU-driven cull's per-object status buffer back to the host,
+    /// one [`crate::gfx::cull_status::CullStatus`] value per live cull record,
+    /// for the most recently submitted frame.
+    ///
+    /// The submitted draw-call count is a CPU-side number that does not move
+    /// when the GPU rejects an object, and an object the Hi-Z test correctly
+    /// occluded leaves no trace in the presented pixels, so this buffer is the
+    /// only observable record of what the cull decided. Driven by the `cn
+    /// debug` WS `cull-status` command; synchronous (it idles the device).
+    ///
+    /// Default `Err`: a backend with no GPU-driven cull, or one whose readback
+    /// path is not implemented, reports it unsupported.
+    fn read_cull_status(&mut self) -> Result<Vec<u32>, String> {
+        Err("cull-status readback not supported on this backend".to_string())
+    }
+
     /// Instantiate a runtime copy of an existing draw object at a new transform:
     /// re-use the source slot's geometry region (`vertex_offset` / `vertex_count`
     /// / `index_offset` / `index_count` / `base_vertex` / `lod_alternates`) and

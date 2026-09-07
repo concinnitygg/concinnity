@@ -9,6 +9,7 @@ mod barrier_translate;
 mod com;
 mod context;
 mod cull;
+mod cull_readback;
 mod decal;
 mod draw;
 mod error;

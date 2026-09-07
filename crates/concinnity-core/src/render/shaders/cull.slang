@@ -42,6 +42,7 @@ static const uint STATUS_DRAWN         = 0u; // visible in phase 1 -> never re-t
 static const uint STATUS_HIZ_CANDIDATE = 1u; // Hi-Z-occluded in phase 1 -> candidate
 static const uint STATUS_CULLED        = 2u; // frustum/distance/disabled -> settled
 static const uint STATUS_REDRAW        = 3u; // candidate found visible in phase 2
+static const uint STATUS_HIZ_CULLED    = 4u; // candidate still occluded in phase 2
 
 // ---- Per-host constants ----
 
@@ -435,7 +436,7 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID)
         {
             redraw = false;
         }
-        cull_status[i] = redraw ? STATUS_REDRAW : STATUS_CULLED;
+        cull_status[i] = redraw ? STATUS_REDRAW : STATUS_HIZ_CULLED;
     }
 #ifndef METAL_BINDINGS
     GpuDrawArgs a = draw_args[i];

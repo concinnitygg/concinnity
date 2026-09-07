@@ -390,6 +390,12 @@ const COMMANDS: &[Command] = &[
         params: &[required("path", Kind::Text, "Destination PNG path.")],
     },
     Command {
+        name: "cull-status",
+        description: "Read the GPU cull's per-object status buffer back and report how many objects were drawn, frustum-culled, Hi-Z-rejected, or redrawn by the disocclusion pass.",
+        access: Access::Mutating,
+        params: &[],
+    },
+    Command {
         name: "camera-set",
         description: "Teleport the active camera to a pose, optionally changing its field of view.",
         access: Access::Mutating,

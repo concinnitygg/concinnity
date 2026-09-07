@@ -13,6 +13,7 @@ pub mod auto_exposure;
 pub mod camera;
 pub mod chunk_coord;
 pub mod cubemap;
+pub mod cull_status;
 pub mod font;
 pub mod frustum;
 pub mod ik;

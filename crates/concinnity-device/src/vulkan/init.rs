@@ -2427,7 +2427,8 @@ impl VkContext {
         // on the bindless cull path: phase-1 cull writes them (binding 3 of the
         // cull set), and phase-2 cull (two-pass occlusion) reads them. Always
         // present so the phase-1 kernel always has a valid binding; under
-        // single-pass occlusion the values are simply never read. Device-local.
+        // single-pass occlusion the values are simply never read. Device-local,
+        // with TRANSFER_SRC so `cull_readback` can copy one back to the host.
         // Mirrors `directx/cull.rs`.
         let cull_status_buffers = if bindless_active {
             let status_size = n_cull as u64 * std::mem::size_of::<u32>() as u64;
@@ -2435,7 +2436,7 @@ impl VkContext {
             for _ in 0..frames {
                 bufs.push(alloc.create_buffer(
                     status_size,
-                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
                     vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 )?);
             }
