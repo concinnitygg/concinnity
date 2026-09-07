@@ -226,7 +226,9 @@ const AUDITS: &[BackendAudit] = &[
         calls: &[".ResourceBarrier("],
         sites: &[
             ("graph_exec.rs", ".ResourceBarrier(", 5, Reason::GraphDriven),
-            ("hiz.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // The single-pass downsampler takes one barrier, between the
+            // dispatch that writes mip 5 and the tail that reduces it.
+            ("hiz.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             ("particle.rs", ".ResourceBarrier(", 6, Reason::IntraPass),
             // The MSAA resolve step: the graph rests both HDR targets in
             // RENDER_TARGET, and `ResolveSubresource` needs them in the resolve

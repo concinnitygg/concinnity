@@ -31,7 +31,7 @@ pub use bindless::BINDLESS_POOL_SIZE;
 pub use geometry::{
     DecalParams, DecalView, GpuParticle, LineView, ModelHistoryParams, ParticleView, SkinParams,
 };
-pub use post::{AutoExposureParams, HizParams, TaaParams};
+pub use post::{AutoExposureParams, HizParams, HizSpdParams, TaaParams};
 pub use probe::{MAX_PROBES, ProbePrefilterParams, ProbeSet, ProbeUniforms};
 pub use raymarch::{RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms};
 pub use transparent::{

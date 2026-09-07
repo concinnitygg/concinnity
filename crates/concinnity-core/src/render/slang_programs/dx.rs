@@ -160,6 +160,30 @@ pub static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     label: "hiz_downsample.slang",
     defines: &[("HIZ_DOWNSAMPLE", "1")],
 };
+/// `hiz_spd_msaa` from `hiz_build.slang`.
+pub static HIZ_SPD_MSAA: SlangProgram = SlangProgram {
+    file: "hiz_build.slang",
+    entry: "hiz_spd_msaa",
+    profile: "cs_6_0",
+    label: "hiz_spd_msaa.slang",
+    defines: &[("HIZ_SPD_MSAA", "1")],
+};
+/// `hiz_spd_single` from `hiz_build.slang`.
+pub static HIZ_SPD_SINGLE: SlangProgram = SlangProgram {
+    file: "hiz_build.slang",
+    entry: "hiz_spd_single",
+    profile: "cs_6_0",
+    label: "hiz_spd_single.slang",
+    defines: &[("HIZ_SPD_SINGLE", "1")],
+};
+/// `hiz_spd_tail` from `hiz_build.slang`.
+pub static HIZ_SPD_TAIL: SlangProgram = SlangProgram {
+    file: "hiz_build.slang",
+    entry: "hiz_spd_tail",
+    profile: "cs_6_0",
+    label: "hiz_spd_tail.slang",
+    defines: &[("HIZ_SPD_TAIL", "1")],
+};
 
 /// `probe_mip0` from `probe_prefilter.slang`.
 pub static PROBE_MIP0: SlangProgram = SlangProgram {

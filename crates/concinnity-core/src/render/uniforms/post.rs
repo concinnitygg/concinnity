@@ -41,3 +41,44 @@ pub struct HizParams {
     /// MSAA sample count of the source.
     pub sample_count: u32,
 }
+
+/// Per-dispatch params for the single-pass Hi-Z downsampler.
+/// Matches `HizSpdParams` in `shaders/hiz_build.slang`. 16 bytes.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct HizSpdParams {
+    /// Width of this dispatch's base level: mip 0 for phase 1, mip 6 for the tail.
+    pub base_width: u32,
+    /// Height of this dispatch's base level.
+    pub base_height: u32,
+    /// Levels this dispatch writes, counting the base as one.
+    pub level_count: u32,
+    /// MSAA sample count of the depth source. Unused by the tail.
+    pub sample_count: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    // Both Hi-Z param blocks are four tightly-packed uints, which is what the
+    // shader's push-constant / root-constant block expects.
+    #[test]
+    fn hiz_params_layout_matches_shader() {
+        assert_eq!(size_of::<HizParams>(), 16);
+        assert_eq!(offset_of!(HizParams, dst_width), 0);
+        assert_eq!(offset_of!(HizParams, dst_height), 4);
+        assert_eq!(offset_of!(HizParams, src_mip), 8);
+        assert_eq!(offset_of!(HizParams, sample_count), 12);
+    }
+
+    #[test]
+    fn hiz_spd_params_layout_matches_shader() {
+        assert_eq!(size_of::<HizSpdParams>(), 16);
+        assert_eq!(offset_of!(HizSpdParams, base_width), 0);
+        assert_eq!(offset_of!(HizSpdParams, base_height), 4);
+        assert_eq!(offset_of!(HizSpdParams, level_count), 8);
+        assert_eq!(offset_of!(HizSpdParams, sample_count), 12);
+    }
+}

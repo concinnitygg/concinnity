@@ -141,6 +141,33 @@ pub static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     sizes: Sizes::None,
     msaa: false,
 };
+/// `hiz_spd_msaa` from `hiz_build.slang`.
+pub static HIZ_SPD_MSAA: SlangProgram = SlangProgram {
+    file: "hiz_build.slang",
+    entry: "hiz_spd_msaa",
+    label: "hiz_spd_msaa.slang",
+    gates: &["HIZ_SPD_MSAA"],
+    sizes: Sizes::None,
+    msaa: false,
+};
+/// `hiz_spd_single` from `hiz_build.slang`.
+pub static HIZ_SPD_SINGLE: SlangProgram = SlangProgram {
+    file: "hiz_build.slang",
+    entry: "hiz_spd_single",
+    label: "hiz_spd_single.slang",
+    gates: &["HIZ_SPD_SINGLE"],
+    sizes: Sizes::None,
+    msaa: false,
+};
+/// `hiz_spd_tail` from `hiz_build.slang`.
+pub static HIZ_SPD_TAIL: SlangProgram = SlangProgram {
+    file: "hiz_build.slang",
+    entry: "hiz_spd_tail",
+    label: "hiz_spd_tail.slang",
+    gates: &["HIZ_SPD_TAIL"],
+    sizes: Sizes::None,
+    msaa: false,
+};
 
 /// `probe_mip0` from `probe_prefilter.slang`.
 pub static PROBE_MIP0: SlangProgram = SlangProgram {

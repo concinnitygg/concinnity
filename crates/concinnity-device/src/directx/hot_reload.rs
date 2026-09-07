@@ -325,40 +325,39 @@ impl DxContext {
         );
 
         // Hi-Z (only when cull pipeline is live; same gating condition).
-        // Rebuilds all three compute kernels (init_single, init_msaa,
-        // downsample) against the existing root signature so the live cull
-        // root binding stays valid.
+        // Rebuilds all three SPD kernels against the existing root signatures
+        // so the live cull root binding stays valid. The tail takes the
+        // signature without the depth SRV table.
         let hiz_rebuilt = if let Some(hiz) = self.cull.hiz.as_ref() {
-            let (init_single_cs, init_msaa_cs, downsample_cs) =
-                super::hiz::compile_hiz_shaders(hr)?;
-            let init_single_pso = super::context::dump_on_err(
+            let (spd_single_cs, spd_msaa_cs, spd_tail_cs) = super::hiz::compile_hiz_shaders(hr)?;
+            let spd_single_pso = super::context::dump_on_err(
                 info_queue,
                 super::auto_exposure::create_compute_pso(
                     device,
                     &hiz.root_sig,
-                    &init_single_cs,
-                    "hiz init_single",
+                    &spd_single_cs,
+                    "hiz spd_single",
                 ),
             )?;
-            let init_msaa_pso = super::context::dump_on_err(
+            let spd_msaa_pso = super::context::dump_on_err(
                 info_queue,
                 super::auto_exposure::create_compute_pso(
                     device,
                     &hiz.root_sig,
-                    &init_msaa_cs,
-                    "hiz init_msaa",
+                    &spd_msaa_cs,
+                    "hiz spd_msaa",
                 ),
             )?;
-            let downsample_pso = super::context::dump_on_err(
+            let spd_tail_pso = super::context::dump_on_err(
                 info_queue,
                 super::auto_exposure::create_compute_pso(
                     device,
-                    &hiz.root_sig,
-                    &downsample_cs,
-                    "hiz downsample",
+                    &hiz.tail_root_sig,
+                    &spd_tail_cs,
+                    "hiz spd_tail",
                 ),
             )?;
-            Some((init_single_pso, init_msaa_pso, downsample_pso))
+            Some((spd_single_pso, spd_msaa_pso, spd_tail_pso))
         } else {
             None
         };
@@ -583,8 +582,8 @@ impl DxContext {
         if let Some(p) = cull_pso_phase2 {
             self.cull.cull_pso_phase2 = Some(p);
         }
-        if let (Some((init_s, init_m, ds)), Some(hiz)) = (hiz_rebuilt, self.cull.hiz.as_mut()) {
-            hiz.swap_pipelines(init_s, init_m, ds);
+        if let (Some((single, msaa, tail)), Some(hiz)) = (hiz_rebuilt, self.cull.hiz.as_mut()) {
+            hiz.swap_pipelines(single, msaa, tail);
         }
         if let (Some(build), Some(average), Some(ae)) = (
             auto_exp_build,

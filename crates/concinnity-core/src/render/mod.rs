@@ -24,6 +24,7 @@ pub mod feedback;
 pub mod frame_dirty;
 pub mod fullscreen;
 pub mod hdr_output;
+pub mod hiz_spd;
 pub mod input;
 pub mod keymap;
 pub mod lights;
