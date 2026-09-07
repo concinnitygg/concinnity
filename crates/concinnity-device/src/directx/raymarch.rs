@@ -39,9 +39,6 @@
 //     out (hardware depth test still composites correctly: see the
 //     template's caveat). Volumes whose bbox sits fully behind
 //     rasterised geometry pay the full march cost.
-//   * No `hdr_resolve_copy` snapshot, so `scene_color` is a 1×1 black
-//     fallback: refractive user shaders (water, glass) get zero from
-//     their `sampleSceneRefracted` call.
 
 use std::ffi::c_void;
 
@@ -110,6 +107,11 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     pub(in crate::directx) volume_cbuffer_gva: u64,
     pub(in crate::directx) visible: bool,
     pub(in crate::directx) cast_shadows: bool,
+    // Whether the authored field samples the scene behind the surface. The
+    // pass copies the scene spine into `hdr_resolve_copy` only when some
+    // visible volume does; the `scene_color` SRV stands either way, so this
+    // selects no PSO variant.
+    pub(in crate::directx) refractive: bool,
 }
 
 // Engine-side raymarch resources: shared cube buffers, per-frame view
@@ -1012,10 +1014,10 @@ impl RaymarchResources {
         let scene_color_fallback = create_fallback_white_resource(alloc)?;
 
         // Pre-raymarch HDR scene snapshot; `encode_raymarch` copies
-        // `hdr_resolve` / `hdr_color` into this resource each frame
-        // before binding the SRV. Sized to render dims; created in
-        // COPY_DEST so the first frame's `CopyResource` doesn't need
-        // a leading transition.
+        // `hdr_resolve` / `hdr_color` into this resource on a frame some
+        // visible volume taps the scene. Sized to render dims; created in
+        // PIXEL_SHADER_RESOURCE, which is where it rests between copies and
+        // where a frame that skips the copy leaves it.
         let hdr_resolve_copy = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
 
         // Build per-volume records. Any failure here aborts init:
@@ -1094,6 +1096,7 @@ impl RaymarchResources {
                 volume_cbuffer_gva: gva,
                 visible: vol.visible,
                 cast_shadows: vol.cast_shadows,
+                refractive: crate::raymarch_source::taps_scene(&programs),
             });
         }
 
@@ -1154,6 +1157,13 @@ impl RaymarchResources {
     // `record_frame` to flip `FrameGraphInputs::raymarch_enabled`.
     pub(in crate::directx) fn any_visible(&self) -> bool {
         self.volumes.iter().any(|v| v.visible)
+    }
+
+    // True when a visible volume reads the scene behind its surface, which is
+    // the only thing `hdr_resolve_copy` feeds. A world of opaque volumes skips
+    // the full-target copy and the four transitions that bracket it.
+    fn any_refractive_visible(&self) -> bool {
+        self.volumes.iter().any(|v| v.visible && v.refractive)
     }
 }
 
@@ -1235,35 +1245,40 @@ impl DxContext {
         // writing, so the copy and its restore both live inside this node and
         // leave no net state at the boundary. The spine is graph-driven and
         // enters in RENDER_TARGET (this pass declares its read-modify-write).
-        let snapshot_src_to_copy = transition_barrier(
-            self.hdr_scene_target(),
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-        );
-        let snapshot_dst_to_copy = transition_barrier(
-            &rm.hdr_resolve_copy,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-        );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[snapshot_src_to_copy, snapshot_dst_to_copy]) };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.CopyResource(&rm.hdr_resolve_copy, self.hdr_scene_target()) };
-        let snapshot_src_back = transition_barrier(
-            self.hdr_scene_target(),
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
-        let snapshot_dst_to_psr = transition_barrier(
-            &rm.hdr_resolve_copy,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[snapshot_src_back, snapshot_dst_to_psr]) };
+        //
+        // The copy feeds the scene tap and nothing else, so a frame whose
+        // visible volumes never call it skips the copy and all four
+        // transitions; `hdr_resolve_copy` stays rested in PIXEL_SHADER_RESOURCE
+        // where its SRV expects it, holding an earlier frame nothing reads.
+        if rm.any_refractive_visible() {
+            let snapshot_src_to_copy = transition_barrier(
+                self.hdr_scene_target(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            );
+            let snapshot_dst_to_copy = transition_barrier(
+                &rm.hdr_resolve_copy,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            );
+            let snapshot_src_back = transition_barrier(
+                self.hdr_scene_target(),
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            let snapshot_dst_to_psr = transition_barrier(
+                &rm.hdr_resolve_copy,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
+            unsafe {
+                cmd.ResourceBarrier(&[snapshot_src_to_copy, snapshot_dst_to_copy]);
+                cmd.CopyResource(&rm.hdr_resolve_copy, self.hdr_scene_target());
+                cmd.ResourceBarrier(&[snapshot_src_back, snapshot_dst_to_psr]);
+            }
+        }
 
         // hdr_color is already in RENDER_TARGET: with MSAA on the graph rests it
         // there, and with MSAA off it is the spine this pass declares a write

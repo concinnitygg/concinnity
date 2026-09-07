@@ -17,6 +17,23 @@ pub const FILE: &str = "raymarch.slang";
 /// The marker a volume's authored distance field is spliced at.
 pub const BODY_MARKER: &str = "{SDF_BODY}";
 
+/// The helper an authored `shade` calls to read the scene behind the surface.
+pub const SCENE_TAP: &str = "sampleSceneRefracted";
+
+/// Whether an authored distance field reads the scene behind the surface.
+///
+/// The tap is the only way in: the scene snapshot is reached through this
+/// helper and is named by no other declaration a field can see. A renderer
+/// copies the frame's colour target for the pass only when some visible volume
+/// answers `true` here, so a world of opaque volumes pays nothing.
+///
+/// A field that spells the name in a comment reads as tapping. That is the
+/// conservative direction, and the cost of being wrong is the copy this
+/// existed to skip rather than a black refraction.
+pub fn field_taps_scene(field: &str) -> bool {
+    field.contains(SCENE_TAP)
+}
+
 /// Which of the three draws an entry belongs to. A volume compiles one of the
 /// first two, plus the third when it casts shadows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +243,37 @@ mod tests {
             );
         }
         assert!(text.contains(BODY_MARKER), "{FILE} carries no body marker");
+    }
+
+    // The tap the detection looks for is the one the helpers declare, so a
+    // rename in the shader fails here rather than by silently making every
+    // refractive volume read a stale scene.
+    #[test]
+    fn the_scene_tap_is_declared_by_the_helpers() {
+        let text =
+            crate::render::shaders::embedded("raymarch_common.slang").expect("raymarch_common");
+        assert!(text.contains(SCENE_TAP), "{SCENE_TAP} declares nothing");
+    }
+
+    // A field that never names the tap is a field the scene copy can skip,
+    // which is the whole of the saving.
+    #[test]
+    fn only_a_field_naming_the_tap_reads_as_tapping() {
+        let opaque = "float map(float3 p, SdfParams q, float t) { return 1.0; }";
+        assert!(!field_taps_scene(opaque));
+        let refractive = "s.transmitted = sampleSceneRefracted(frag_uv, normal, 0.05);";
+        assert!(field_taps_scene(refractive));
+    }
+
+    // The engine template names the tap in its own declaration, so the flag
+    // has to come from the authored field alone: assembled source would read
+    // as tapping for every volume in every world.
+    #[test]
+    fn the_assembled_source_is_not_what_the_flag_reads() {
+        let opaque = "float map(float3 p, SdfParams q, float t) { return 1.0; }";
+        let src = source(Family::Surface, Platform::Metal, opaque);
+        assert!(src.contains(SCENE_TAP), "the template declares the tap");
+        assert!(!field_taps_scene(opaque));
     }
 
     // The field reaches the assembled source and the defines lead it, on every

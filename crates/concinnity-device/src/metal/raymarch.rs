@@ -100,6 +100,11 @@ pub(in crate::metal) struct RaymarchVolumeRecord {
     // asset flag; paired with `shadow_pipeline` so the shadow encoder can skip
     // non-casters without inspecting the pipeline option.
     pub(in crate::metal) cast_shadows: bool,
+    // Whether the authored field samples the scene behind the surface. The
+    // pass copies `hdr_resolve` into `hdr_resolve_copy` only when some volume
+    // drawing this frame does; the binding at fragment texture(4) stands
+    // either way, so this selects no pipeline variant.
+    pub(in crate::metal) refractive: bool,
     // Asset-side AABB centre / half-widths. `encode_raymarch` derives the
     // world-space AABB from these to frustum-cull the volume each frame.
     pub(in crate::metal) world_centre: [f32; 3],
@@ -393,6 +398,7 @@ pub(in crate::metal) fn build_raymarch_volume_record(
         visible: volume.visible,
         volumetric: volume.volumetric,
         cast_shadows: volume.cast_shadows,
+        refractive: crate::raymarch_source::taps_scene(&programs),
         world_centre: volume.centre,
         world_extent: volume.extent,
     })
@@ -546,20 +552,32 @@ impl MtlContext {
         // Single full-screen blit per frame; AutoExposure has already
         // sampled `hdr_resolve_v1`, so this captures the same un-
         // decorated scene the next post-Main pass starts with.
-        let blit = cmd_buf
-            .blitCommandEncoder()
-            .ok_or("failed to get raymarch scene-copy blit encoder")?;
-        blit.pushDebugGroup(&NSString::from_str("raymarch_scene_copy"));
-        // SAFETY: both textures are `hdr_targets`-owned and were created with the same format and
-        // dimensions, which is what a whole-texture blit copy requires.
-        unsafe {
-            blit.copyFromTexture_toTexture(
-                self.hdr_targets.hdr_resolve.as_ref(),
-                self.hdr_targets.hdr_resolve_copy.as_ref(),
-            );
+        //
+        // Only a volume whose field calls the scene tap reads the result, so a
+        // frame drawing none skips the blit entirely and leaves the copy
+        // holding whatever an earlier frame put there. Nothing samples it.
+        if self
+            .raymarch
+            .volumes
+            .iter()
+            .zip(&visible)
+            .any(|(v, &vis)| vis && v.refractive)
+        {
+            let blit = cmd_buf
+                .blitCommandEncoder()
+                .ok_or("failed to get raymarch scene-copy blit encoder")?;
+            blit.pushDebugGroup(&NSString::from_str("raymarch_scene_copy"));
+            // SAFETY: both textures are `hdr_targets`-owned and were created with the same format
+            // and dimensions, which is what a whole-texture blit copy requires.
+            unsafe {
+                blit.copyFromTexture_toTexture(
+                    self.hdr_targets.hdr_resolve.as_ref(),
+                    self.hdr_targets.hdr_resolve_copy.as_ref(),
+                );
+            }
+            blit.popDebugGroup();
+            blit.endEncoding();
         }
-        blit.popDebugGroup();
-        blit.endEncoding();
 
         let pass_desc = MTLRenderPassDescriptor::new();
         // SAFETY: plain descriptor property setters; attachment 0 is the only colour attachment
@@ -585,8 +603,8 @@ impl MtlContext {
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::Raymarch);
         }
-        // Blit above is ended explicitly; this render encoder spans to the end
-        // of the function, so the guard ends it on drop.
+        // Any blit above is ended explicitly; this render encoder spans to the
+        // end of the function, so the guard ends it on drop.
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
@@ -636,10 +654,11 @@ impl MtlContext {
         enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
         // Pre-raymarch scene snapshot for refraction
         // sampling. The blit at the top of this function populated
-        // `hdr_resolve_copy` from `hdr_resolve`; user shaders that
-        // care call `sampleSceneRefracted` against this binding.
-        // Always bound (even when no shader uses it) so the per-
-        // volume PSO doesn't need a "refraction enabled" variant.
+        // `hdr_resolve_copy` from `hdr_resolve` when some volume
+        // drawing this frame calls `sampleSceneRefracted`. Always
+        // bound (even when no shader uses it, and even when the blit
+        // was skipped) so the per-volume PSO doesn't need a
+        // "refraction enabled" variant.
         enc.set_fragment_texture(self.hdr_targets.hdr_resolve_copy.as_ref(), 4);
         // Samplers in the order the single source declares them. The depth
         // read needs none (`read` takes integer pixels), so there is no

@@ -82,6 +82,82 @@ pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUn
     }
 }
 
+// Copy the resolved scene into the refraction snapshot, opening both images for
+// the transfer and leaving the source in TRANSFER_SRC for the caller's step-2
+// barrier to close. Only a frame drawing a volume that taps the scene runs it.
+fn copy_scene_snapshot(
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    hdr_resolve: vk::Image,
+    snapshot: vk::Image,
+    extent: vk::Extent2D,
+) {
+    let color_aspect = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let open = |image: vk::Image, new: vk::ImageLayout, dst: vk::AccessFlags| {
+        vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_READ)
+            .dst_access_mask(dst)
+            .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .new_layout(new)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(color_aspect)
+    };
+    let layers = vk::ImageSubresourceLayers {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        mip_level: 0,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let region = vk::ImageCopy::default()
+        .src_subresource(layers)
+        .dst_subresource(layers)
+        .extent(vk::Extent3D {
+            width: extent.width,
+            height: extent.height,
+            depth: 1,
+        });
+    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
+    // commands name is live for the call.
+    unsafe {
+        device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[
+                open(
+                    hdr_resolve,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    vk::AccessFlags::TRANSFER_READ,
+                ),
+                open(
+                    snapshot,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    vk::AccessFlags::TRANSFER_WRITE,
+                ),
+            ],
+        );
+        device.cmd_copy_image(
+            cmd,
+            hdr_resolve,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            snapshot,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            std::slice::from_ref(&region),
+        );
+    }
+}
+
 // Per-`SdfVolume` GPU state: the compiled render pipeline, the static per-volume
 // UBO (uploaded once at init), its descriptor set, and the visibility flag the
 // encoder + `any_visible` read.
@@ -98,6 +174,11 @@ struct RaymarchVolumeRecord {
     _volume_ubo: PooledBuffer,
     volume_set: vk::DescriptorSet,
     visible: bool,
+    // Whether the authored field samples the scene behind the surface. The
+    // pass copies hdr_resolve into `snapshot` only when some visible volume
+    // does; the descriptor at set 0 binding 6 stands either way, so this
+    // selects no pipeline variant.
+    refractive: bool,
 }
 
 // Engine-side raymarch resources. Built only when at least one `.glsl`
@@ -1134,6 +1215,7 @@ impl RaymarchResources {
                 _volume_ubo: volume_ubo,
                 volume_set,
                 visible: vol.visible,
+                refractive: crate::raymarch_source::taps_scene(&programs),
             });
         }
 
@@ -1163,6 +1245,13 @@ impl RaymarchResources {
     // `FrameGraphInputs::raymarch_enabled` and the encoder early-out.
     pub(in crate::vulkan) fn any_visible(&self) -> bool {
         self.volumes.iter().any(|v| v.visible)
+    }
+
+    // True when a visible volume reads the scene behind its surface, which is
+    // the only thing the per-frame snapshot copy feeds. A world of opaque
+    // volumes skips the copy and the layout transitions that bracket it.
+    fn any_refractive_visible(&self) -> bool {
+        self.volumes.iter().any(|v| v.visible && v.refractive)
     }
 
     // True when at least one visible volume opted into shadow casting (so its
@@ -1413,6 +1502,10 @@ impl VkContext {
             .ok_or("raymarch: hdr_resolve index OOB")?
             .image;
         let snapshot = rm.snapshot.image;
+        // The snapshot feeds the scene tap and nothing else. Skipping it leaves
+        // `snapshot` resting in SHADER_READ_ONLY, which is where its descriptor
+        // already expects it, and leaves hdr_resolve untouched.
+        let refract = rm.any_refractive_visible();
 
         // Upload this frame's view.
         rm.view_ubos
@@ -1427,11 +1520,11 @@ impl VkContext {
             base_array_layer: 0,
             layer_count: 1,
         };
-        let image_barrier = |image: vk::Image,
-                             old: vk::ImageLayout,
-                             new: vk::ImageLayout,
-                             src: vk::AccessFlags,
-                             dst: vk::AccessFlags| {
+        let barrier = |image: vk::Image,
+                       old: vk::ImageLayout,
+                       new: vk::ImageLayout,
+                       src: vk::AccessFlags,
+                       dst: vk::AccessFlags| {
             vk::ImageMemoryBarrier::default()
                 .src_access_mask(src)
                 .dst_access_mask(dst)
@@ -1443,61 +1536,11 @@ impl VkContext {
                 .subresource_range(color_aspect)
         };
 
-        // 1) Open hdr_resolve + snapshot for the refraction snapshot copy. The
-        // src scopes order AutoExposure's compute read + the previous frame's
-        // fragment read ahead of the transfer.
-        let to_src = image_barrier(
-            hdr_resolve,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            vk::AccessFlags::SHADER_READ,
-            vk::AccessFlags::TRANSFER_READ,
-        );
-        let to_dst = image_barrier(
-            snapshot,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::AccessFlags::SHADER_READ,
-            vk::AccessFlags::TRANSFER_WRITE,
-        );
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[to_src, to_dst],
-            );
-            let region = vk::ImageCopy::default()
-                .src_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .dst_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .extent(vk::Extent3D {
-                    width: extent.width,
-                    height: extent.height,
-                    depth: 1,
-                });
-            device.cmd_copy_image(
-                cmd,
-                hdr_resolve,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                snapshot,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&region),
-            );
+        // 1) Snapshot the resolved scene for the refraction tap. The src scopes
+        // order AutoExposure's compute read + the previous frame's fragment
+        // read ahead of the transfer.
+        if refract {
+            copy_scene_snapshot(device, cmd, hdr_resolve, snapshot, extent);
         }
 
         // 2) Close the snapshot for the fragment read, order the main pass's
@@ -1505,7 +1548,7 @@ impl VkContext {
         // render pass's attachment load + resolve, and (single-sample only)
         // restore hdr_resolve to SHADER_READ_ONLY so the render pass's colour
         // load matches its declared initial layout.
-        let snapshot_to_read = image_barrier(
+        let snapshot_to_read = barrier(
             snapshot,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -1526,9 +1569,9 @@ impl VkContext {
             );
         // Single-sample also restores hdr_resolve to SHADER_READ_ONLY for the
         // render pass's colour load; MSAA leaves it as the resolve target, so
-        // only the snapshot barrier applies. Build both on the stack and slice
-        // off the second when MSAA is on, avoiding a per-frame heap allocation.
-        let hdr_to_read = image_barrier(
+        // only the snapshot barrier applies, and a skipped copy needs neither.
+        // Build both on the stack and slice, avoiding a per-frame allocation.
+        let hdr_to_read = barrier(
             hdr_resolve,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -1536,10 +1579,11 @@ impl VkContext {
             vk::AccessFlags::COLOR_ATTACHMENT_READ,
         );
         let image_barriers = [snapshot_to_read, hdr_to_read];
-        let image_barriers = if rm.msaa {
-            &image_barriers[..1]
-        } else {
-            &image_barriers[..]
+        let image_barriers = match (refract, rm.msaa) {
+            // No copy ran, so neither image left the layout it rests in.
+            (false, _) => &image_barriers[..0],
+            (true, true) => &image_barriers[..1],
+            (true, false) => &image_barriers[..],
         };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.

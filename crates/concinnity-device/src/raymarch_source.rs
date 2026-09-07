@@ -26,6 +26,16 @@ pub(crate) fn decode(payload: &[u8], label: &str) -> Result<SdfPrograms, String>
         .map_err(|e| format!("SdfVolume '{label}': compiled field does not decode: {e}"))
 }
 
+/// Whether a volume's authored field reads the scene behind its surface.
+///
+/// Every backend carries this on its per-volume record and gates the frame's
+/// scene-colour copy on some visible volume answering `true`. The copy is a
+/// full read plus a full write of the HDR target, so a world whose volumes are
+/// all opaque skips an encoder and its barriers outright.
+pub(crate) fn taps_scene(programs: &SdfPrograms) -> bool {
+    raymarch::field_taps_scene(&programs.field)
+}
+
 /// Which artifact a host wants, and what to emit if it has to be compiled.
 ///
 /// `entries` is what one artifact holds: both of a family's stages where the
@@ -172,6 +182,21 @@ mod tests {
                 .artifact("raymarch_shadow_vertex", digest)
                 .is_none()
         );
+    }
+
+    // The flag every backend gates its scene copy on reads the authored field,
+    // not the artifact: a volume whose field never calls the tap costs no copy.
+    #[test]
+    fn only_a_volume_whose_field_taps_the_scene_reads_as_refractive() {
+        let mut programs = stored(
+            Family::Surface,
+            Platform::Metal,
+            &["raymarch_vertex"],
+            b"stored bytes",
+        );
+        assert!(!taps_scene(&programs), "'{FIELD}' calls nothing");
+        programs.field = SURFACE_FIELD.to_string();
+        assert!(taps_scene(&programs), "the surface field calls the tap");
     }
 
     // A payload that does not decode names the volume, which is the only thing
