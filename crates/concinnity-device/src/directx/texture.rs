@@ -1025,16 +1025,29 @@ pub(super) fn create_hdr_resolve_target(
     width: u32,
     height: u32,
 ) -> Result<ID3D12Resource, String> {
+    create_hdr_sampled_target(device, width, height, [0.0; 4])
+}
+
+// Create a single-sample HDR target that is both rendered into and sampled,
+// committed with the `clear_color` its pass clears to so the clear takes the
+// fast path (and the debug layer sees no mismatch). `create_hdr_resolve_target`
+// is the same texture for a resolve destination, which is never cleared.
+pub(super) fn create_hdr_sampled_target(
+    device: &ID3D12Device,
+    width: u32,
+    height: u32,
+    clear_color: [f32; 4],
+) -> Result<ID3D12Resource, String> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
     // `ALLOW_RENDER_TARGET` so the projected-decal pass can flip the
     // resolved target back to RENDER_TARGET to stamp decals onto the
-    // scene; the resolve copy still works as before.
+    // scene, and so a single-sampled planar mirror can render straight into it.
     let clear_value = D3D12_CLEAR_VALUE {
         Format: HDR_FORMAT,
-        Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] },
+        Anonymous: D3D12_CLEAR_VALUE_0 { Color: clear_color },
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -1063,8 +1076,8 @@ pub(super) fn create_hdr_resolve_target(
             &mut res_opt,
         )
     }
-    .map_err(|e| format!("create hdr resolve target: {e}"))?;
-    res_opt.ok_or_else(|| "create hdr resolve returned None".to_string())
+    .map_err(|e| format!("create hdr sampled target: {e}"))?;
+    res_opt.ok_or_else(|| "create hdr sampled target returned None".to_string())
 }
 
 // Write an `HDR_FORMAT` Texture2D SRV at the given heap slot so the composite

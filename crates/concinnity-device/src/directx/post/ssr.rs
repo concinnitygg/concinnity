@@ -19,6 +19,7 @@ use crate::gfx::render_types::SsrParams;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::gbuffer::GbufferResources;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
@@ -607,8 +608,15 @@ impl FullscreenPass for SsrResolvePass<'_> {
     type Rec = ID3D12GraphicsCommandList;
 
     fn begin(&self, cmd: &Self::Rec) {
-        self.ctx
-            .begin_fullscreen_rt(cmd, &self.resolve.output, self.resolve.output_rtv);
+        self.ctx.begin_fullscreen_rt(
+            cmd,
+            &self.resolve.output,
+            self.resolve.output_rtv,
+            FullscreenExtent {
+                width: self.ctx.extent.render_width,
+                height: self.ctx.extent.render_height,
+            },
+        );
     }
 
     fn draw(&self, cmd: &Self::Rec) {

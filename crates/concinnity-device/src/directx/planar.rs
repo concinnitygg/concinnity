@@ -37,8 +37,8 @@ use super::cull::INDIRECT_COMMAND_STRIDE;
 use super::draw::ViewUniforms;
 use super::graph_exec::GraphFrameParams;
 use super::texture::{
-    HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
-    create_uav_buffer, transition_barrier, write_hdr_srv,
+    HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_sampled_target,
+    create_uav_buffer, transition_barrier, write_format_rtv, write_hdr_srv,
 };
 use concinnity_core::gfx::transform::mat4_mul;
 
@@ -68,9 +68,23 @@ pub(in crate::directx) fn pane_plane(normal: [f32; 3], centre: [f32; 3]) -> [f32
     ]
 }
 
+// Where a plane's mirror render lands. Multisampled planes share one MSAA colour
+// target and resolve out of it a plane at a time, the way the probe shares one
+// face target across its six faces. Single-sampled planes have nothing to resolve,
+// so each renders straight into its own resolve through a render-target view of
+// it: no shared target, and no full-target copy per plane. Mirrors the Vulkan
+// planar set, whose shared colour is likewise `Some` only under MSAA.
+enum PlanarColor {
+    // The shared target every plane renders into, resolved into the plane's own
+    // resolve before the next plane overwrites it.
+    Multisampled(ID3D12Resource),
+    // Nothing shared: each plane renders through an RTV of its own resolve.
+    PerPlane,
+}
+
 // The set of distinct reflection planes for the world, each rendering its mirror
-// into the shared MSAA colour + depth then resolving into its own shader-readable
-// resolve. A pane samples the resolve of the slot it was assigned at init (see
+// into its own shader-readable resolve (directly, or through the shared MSAA
+// colour). A pane samples the resolve of the slot it was assigned at init (see
 // `gfx::planar_reflection::assign_planar_slots`). Rebuilt on resize alongside the
 // HDR targets; the planes + slot assignment are fixed at init.
 pub(in crate::directx) struct PlanarReflectionSet {
@@ -80,14 +94,15 @@ pub(in crate::directx) struct PlanarReflectionSet {
     sample_count: u32,
     clear_color: [f32; 4],
 
-    // Shared colour + depth, reused across planes (rendered then resolved one
-    // plane at a time, exactly like the probe shares one face target across its
-    // six faces). Own non-shader-visible RTV / DSV heaps.
-    color: ID3D12Resource,
+    // The mirror render's colour attachment(s) plus the depth shared across
+    // planes. Own non-shader-visible RTV / DSV heaps: RTV slot 0 is the shared
+    // MSAA target, or slot `i` is plane `i`'s resolve when single-sampled.
+    color: PlanarColor,
     _depth: ID3D12Resource,
     _rtv_heap: ID3D12DescriptorHeap,
     _dsv_heap: ID3D12DescriptorHeap,
-    color_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    rtv_base: D3D12_CPU_DESCRIPTOR_HANDLE,
+    rtv_stride: usize,
     depth_dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
 
     // Per-plane shader-readable resolve + its SRV (CPU handle for the resize
@@ -176,30 +191,40 @@ impl PlanarReflectionSet {
             resolve_srv_gpu,
             clear_color,
         } = targets;
-        let rtv_heap = create_rtv_heap(device)?;
+        let rtv_heap = create_rtv_heap(device, planes.len())?;
         let dsv_heap = create_dsv_heap(device)?;
         // SAFETY: a property query on a live descriptor heap; it only reads.
-        let color_rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+        let rtv_base = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let depth_dsv = unsafe { dsv_heap.GetCPUDescriptorHandleForHeapStart() };
+        // SAFETY: a property query on a live device; it only reads.
+        let rtv_stride =
+            unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) }
+                as usize;
 
-        let color = create_hdr_color_target(
-            device,
-            width.max(1),
-            height.max(1),
-            sample_count,
-            color_rtv,
-            clear_color,
-        )?;
         let depth =
             create_planar_depth(device, width.max(1), height.max(1), sample_count, depth_dsv)?;
 
         let mut resolves = Vec::with_capacity(planes.len());
         for (i, _) in planes.iter().enumerate() {
-            let resolve = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
+            let resolve =
+                create_hdr_sampled_target(device, width.max(1), height.max(1), clear_color)?;
             write_hdr_srv(device, &resolve, resolve_srv_cpu[i]);
             resolves.push(resolve);
         }
+
+        let color = create_planar_color(
+            device,
+            PlanarColorBuild {
+                width: width.max(1),
+                height: height.max(1),
+                sample_count,
+                clear_color,
+                resolves: &resolves,
+                rtv_base,
+                rtv_stride,
+            },
+        )?;
 
         let mut view_cbvs = Vec::with_capacity(planes.len() * FRAMES);
         let mut view_ptrs = Vec::with_capacity(planes.len() * FRAMES);
@@ -250,7 +275,8 @@ impl PlanarReflectionSet {
             _depth: depth,
             _rtv_heap: rtv_heap,
             _dsv_heap: dsv_heap,
-            color_rtv,
+            rtv_base,
+            rtv_stride,
             depth_dsv,
             resolves,
             resolve_srv_cpu: resolve_srv_cpu.to_vec(),
@@ -264,10 +290,10 @@ impl PlanarReflectionSet {
         })
     }
 
-    // Recreate the shared colour + depth + per-plane resolves at new render-target
-    // dimensions and rewrite the RTV / DSV / resolve SRVs in place. The descriptor
-    // slots do not move, so the glass pass's GPU handles stay valid. Mirrors the
-    // other `resize_to` resources.
+    // Recreate the depth + per-plane resolves + colour attachment(s) at new
+    // render-target dimensions and rewrite the RTV / DSV / resolve SRVs in place.
+    // The descriptor slots do not move, so the glass pass's GPU handles stay valid.
+    // Mirrors the other `resize_to` resources.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
@@ -275,20 +301,24 @@ impl PlanarReflectionSet {
         height: u32,
     ) -> Result<(), String> {
         let (w, h) = (width.max(1), height.max(1));
-        self.color = create_hdr_color_target(
-            device,
-            w,
-            h,
-            self.sample_count,
-            self.color_rtv,
-            self.clear_color,
-        )?;
         self._depth = create_planar_depth(device, w, h, self.sample_count, self.depth_dsv)?;
         for i in 0..self.resolves.len() {
-            let resolve = create_hdr_resolve_target(device, w, h)?;
+            let resolve = create_hdr_sampled_target(device, w, h, self.clear_color)?;
             write_hdr_srv(device, &resolve, self.resolve_srv_cpu[i]);
             self.resolves[i] = resolve;
         }
+        self.color = create_planar_color(
+            device,
+            PlanarColorBuild {
+                width: w,
+                height: h,
+                sample_count: self.sample_count,
+                clear_color: self.clear_color,
+                resolves: &self.resolves,
+                rtv_base: self.rtv_base,
+                rtv_stride: self.rtv_stride,
+            },
+        )?;
         Ok(())
     }
 
@@ -320,72 +350,80 @@ impl PlanarReflectionSet {
         (slot * self.n_cull * INDIRECT_COMMAND_STRIDE as usize) as u32
     }
 
-    // Resolve the shared colour (just rendered for plane `slot`) into that plane's
-    // shader-readable resolve, leaving the resolve in PIXEL_SHADER_RESOURCE and the
-    // colour back in RENDER_TARGET for the next plane. MSAA resolves; a
-    // single-sample target copies.
-    fn resolve_into(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
+    // RTV plane `slot`'s mirror render draws through: the shared MSAA target, or
+    // the plane's own resolve when single-sampled.
+    fn face_rtv(&self, slot: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        let index = rtv_slot_index(matches!(self.color, PlanarColor::Multisampled(_)), slot);
+        D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: self.rtv_base.ptr + index * self.rtv_stride,
+        }
+    }
+
+    // Open plane `slot`'s mirror render. Only the single-sampled path renders into
+    // the resolve itself, so only it needs the state flip; under MSAA the render
+    // targets the shared colour, which never leaves RENDER_TARGET.
+    fn begin_plane(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
+        if !matches!(self.color, PlanarColor::PerPlane) {
+            return;
+        }
+        // SAFETY: the command list is in the recording state, and every resource, descriptor
+        // and slice these commands name is live for the call.
+        unsafe {
+            cmd.ResourceBarrier(&[transition_barrier(
+                &self.resolves[slot],
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            )]);
+        }
+    }
+
+    // Close plane `slot`'s mirror render, leaving its resolve in
+    // PIXEL_SHADER_RESOURCE for the glass sample. A multisampled render resolves
+    // the shared colour into it and puts the colour back in RENDER_TARGET for the
+    // next plane; a single-sampled one already wrote the resolve and only flips it
+    // back.
+    fn end_plane(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
         let resolve = &self.resolves[slot];
-        if self.sample_count > 1 {
+        let PlanarColor::Multisampled(color) = &self.color else {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        &self.color,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                    ),
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                    ),
-                ]);
-                cmd.ResolveSubresource(resolve, 0, &self.color, 0, HDR_FORMAT);
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    ),
-                    transition_barrier(
-                        &self.color,
-                        D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    ),
-                ]);
+                cmd.ResourceBarrier(&[transition_barrier(
+                    resolve,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                )]);
             }
-        } else {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        &self.color,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    ),
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_COPY_DEST,
-                    ),
-                ]);
-                cmd.CopyResource(resolve, &self.color);
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_COPY_DEST,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    ),
-                    transition_barrier(
-                        &self.color,
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    ),
-                ]);
-            }
+            return;
+        };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor
+        // and slice these commands name is live for the call.
+        unsafe {
+            cmd.ResourceBarrier(&[
+                transition_barrier(
+                    color,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                ),
+                transition_barrier(
+                    resolve,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                ),
+            ]);
+            cmd.ResolveSubresource(resolve, 0, color, 0, HDR_FORMAT);
+            cmd.ResourceBarrier(&[
+                transition_barrier(
+                    resolve,
+                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                ),
+                transition_barrier(
+                    color,
+                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                ),
+            ]);
         }
     }
 }
@@ -477,15 +515,17 @@ impl DxContext {
         );
 
         // Per plane: render the culled region from the reflected view into the
-        // shared colour + depth (against the frame's object buffer), then resolve.
+        // plane's colour attachment + the shared depth (against the frame's object
+        // buffer), then leave the plane's resolve shader-readable.
         let frame_object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
         let indirect = set.indirect(params.frame_idx);
         for slot in 0..set.plane_count() {
             let ring = slot * FRAMES + params.frame_idx;
+            set.begin_plane(cmd, slot);
             self.encode_main_into_face(
                 cmd,
                 crate::directx::probe::FaceTargets {
-                    rtv: set.color_rtv,
+                    rtv: set.face_rtv(slot),
                     dsv: set.depth_dsv,
                 },
                 crate::directx::probe::FaceUniforms {
@@ -503,23 +543,85 @@ impl DxContext {
                     height: h,
                 },
             );
-            set.resolve_into(cmd, slot);
+            set.end_plane(cmd, slot);
         }
         Ok(())
     }
 }
 
-// A one-entry non-shader-visible RTV heap for the shared planar colour target.
-fn create_rtv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String> {
+// The non-shader-visible RTV heap for the planar colour attachments: slot 0 is
+// the shared MSAA target, or slot `i` is plane `i`'s resolve when single-sampled.
+// Sized for the wider case so the sample count can pick either.
+fn create_rtv_heap(
+    device: &ID3D12Device,
+    plane_count: usize,
+) -> Result<ID3D12DescriptorHeap, String> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-        NumDescriptors: 1,
+        NumDescriptors: plane_count.max(1) as u32,
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("planar: rtv heap: {e}"))
+}
+
+// Render dimensions, sample count and RTV heap slots for building the planar
+// colour attachment(s) over a set's per-plane resolves.
+struct PlanarColorBuild<'a> {
+    width: u32,
+    height: u32,
+    sample_count: u32,
+    clear_color: [f32; 4],
+    resolves: &'a [ID3D12Resource],
+    rtv_base: D3D12_CPU_DESCRIPTOR_HANDLE,
+    rtv_stride: usize,
+}
+
+// Which RTV heap slot plane `slot` renders through. A multisampled set shares one
+// colour target in slot 0; a single-sampled one gives each plane the slot holding
+// the view of its own resolve, so the slot IS the plane. Getting this wrong points
+// every plane at one target, which reads as every mirror showing the first plane's
+// reflection.
+fn rtv_slot_index(multisampled: bool, slot: usize) -> usize {
+    if multisampled { 0 } else { slot }
+}
+
+// Build the colour attachment(s) and write their RTVs: one shared MSAA target in
+// slot 0 when multisampled, else a view of each plane's resolve so the mirror
+// render lands there directly. Called at init and again on resize, where the
+// descriptor slots stay put and only the resources behind them change.
+fn create_planar_color(
+    device: &ID3D12Device,
+    build: PlanarColorBuild<'_>,
+) -> Result<PlanarColor, String> {
+    let PlanarColorBuild {
+        width,
+        height,
+        sample_count,
+        clear_color,
+        resolves,
+        rtv_base,
+        rtv_stride,
+    } = build;
+    if sample_count > 1 {
+        return Ok(PlanarColor::Multisampled(create_hdr_color_target(
+            device,
+            width,
+            height,
+            sample_count,
+            rtv_base,
+            clear_color,
+        )?));
+    }
+    for (i, resolve) in resolves.iter().enumerate() {
+        let rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: rtv_base.ptr + i * rtv_stride,
+        };
+        write_format_rtv(device, resolve, rtv, HDR_FORMAT);
+    }
+    Ok(PlanarColor::PerPlane)
 }
 
 // A one-entry non-shader-visible DSV heap for the shared planar depth target.
@@ -626,6 +728,23 @@ mod tests {
         let p = pane_plane(n, c);
         let expect_d = -(n[0] * c[0] + n[1] * c[1] + n[2] * c[2]);
         assert!((p[3] - expect_d).abs() < 1e-5);
+    }
+
+    #[test]
+    fn multisampled_planes_share_rtv_slot_zero() {
+        // One shared colour target, so every plane renders through the same view.
+        for slot in 0..MAX_PLANAR_PLANES {
+            assert_eq!(rtv_slot_index(true, slot), 0);
+        }
+    }
+
+    #[test]
+    fn single_sampled_planes_get_their_own_rtv_slot() {
+        // Each plane renders straight into its own resolve, so the slot is the
+        // plane. A collapse to 0 here would show plane 0's reflection everywhere.
+        for slot in 0..MAX_PLANAR_PLANES {
+            assert_eq!(rtv_slot_index(false, slot), slot);
+        }
     }
 
     #[test]

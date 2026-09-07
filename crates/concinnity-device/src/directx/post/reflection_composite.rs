@@ -22,6 +22,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::com;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
@@ -197,6 +198,9 @@ pub(in crate::directx) struct ReflectionCompositeResources {
     blur: ID3D12Resource,
     blur_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     blur_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    // `blur`'s own dimensions, the blur pass's viewport. Kept in step with `blur`
+    // at create and resize so the pass does not query the resource for them.
+    blur_extent: FullscreenExtent,
 
     // Per-axis divisor the blur target is sized by, resolved from the world's
     // `reflection_blur_resolution`. Held so `resize_to` reuses the same scale.
@@ -236,6 +240,10 @@ impl ReflectionCompositeResources {
 
         let bw = (width / blur_scale).max(1);
         let bh = (height / blur_scale).max(1);
+        let blur_extent = FullscreenExtent {
+            width: bw,
+            height: bh,
+        };
         let blur = create_rt_target(device, bw, bh, SSR_OUTPUT_FORMAT)?;
         write_format_rtv(device, &blur, slots.blur_rtv, SSR_OUTPUT_FORMAT);
         write_format_srv(device, &blur, slots.blur_srv.0, SSR_OUTPUT_FORMAT);
@@ -273,6 +281,7 @@ impl ReflectionCompositeResources {
             blur,
             blur_rtv: slots.blur_rtv,
             blur_srv_gpu: slots.blur_srv.1,
+            blur_extent,
             blur_scale,
             blur_root_sig,
             blur_pso,
@@ -306,6 +315,10 @@ impl ReflectionCompositeResources {
 
         let bw = (width / self.blur_scale).max(1);
         let bh = (height / self.blur_scale).max(1);
+        self.blur_extent = FullscreenExtent {
+            width: bw,
+            height: bh,
+        };
         self.blur = create_rt_target(device, bw, bh, SSR_OUTPUT_FORMAT)?;
         write_format_rtv(device, &self.blur, self.blur_rtv, SSR_OUTPUT_FORMAT);
         write_format_srv(
@@ -378,9 +391,9 @@ impl DxContext {
             return;
         };
 
-        // Pass 1: the roughness blur into the reduced-resolution `blur` target
-        // (begin_fullscreen_rt sizes the viewport to the target's own dimensions).
-        self.begin_fullscreen_rt(cmd, &rc.blur, rc.blur_rtv);
+        // Pass 1: the roughness blur into the reduced-resolution `blur` target,
+        // whose own dimensions are the viewport.
+        self.begin_fullscreen_rt(cmd, &rc.blur, rc.blur_rtv, rc.blur_extent);
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -402,7 +415,14 @@ impl DxContext {
         // `scene_pre_taa`, which the executor has already put in RENDER_TARGET
         // for this pass's declared write, and which the next consumer's barrier
         // takes back out.
-        self.bind_fullscreen_rt(cmd, &rc.output, rc.output_rtv);
+        self.bind_fullscreen_rt(
+            cmd,
+            rc.output_rtv,
+            FullscreenExtent {
+                width: self.extent.render_width,
+                height: self.extent.render_height,
+            },
+        );
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

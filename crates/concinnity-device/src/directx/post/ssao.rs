@@ -485,6 +485,8 @@ impl DxContext {
         // scissor / primitive topology the (now removed) geometry pre-pass used
         // to leave bound. This pass records into its own command list, where the
         // topology starts UNDEFINED, so it must be set here for the draws below.
+        // The descriptor heaps are list state too, so both are bound once here and
+        // never rebound between the two draws.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -507,6 +509,10 @@ impl DxContext {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
+            cmd.SetDescriptorHeaps(&[
+                Some(self.descriptors.srv_heap.clone()),
+                Some(self.descriptors.sampler_heap.clone()),
+            ]);
         }
 
         // Kernel: GTAO horizon search over the G-buffer → raw occlusion.
@@ -524,7 +530,6 @@ impl DxContext {
             cmd.OMSetRenderTargets(1, Some(&ssao.ao_raw_rtv), false, None);
             cmd.SetPipelineState(&ssao.kernel_pso);
             cmd.SetGraphicsRootSignature(&ssao.kernel_root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetGraphicsRoot32BitConstants(
                 0,
                 4,
@@ -562,16 +567,6 @@ impl DxContext {
             cmd.IASetVertexBuffers(0, None);
             cmd.IASetIndexBuffer(None);
             cmd.DrawInstanced(3, 1, 0, 0);
-        }
-
-        // Restore the SRV + sampler heaps the main pass expects.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
         }
     }
 }

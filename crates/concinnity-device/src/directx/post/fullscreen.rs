@@ -13,23 +13,32 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::directx::context::DxContext;
 use crate::directx::texture::transition_barrier;
 
+// Pixel dimensions of the target a fullscreen pass writes, which are its
+// viewport and scissor. The caller owns the target and so already knows them;
+// reading them back off the resource would be a COM round trip per pass.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FullscreenExtent {
+    pub width: u32,
+    pub height: u32,
+}
+
 impl DxContext {
     // Begin a fullscreen render-target pass: transition `output` from its sampled
     // resting state into RENDER_TARGET, bind it as the sole RTV, set the
-    // viewport / scissor to `output`'s own dimensions, and bind the SRV heap the
-    // pass's root tables index. Paired with `end_fullscreen_rt`.
+    // viewport / scissor to `extent`, and bind the SRV heap the pass's root tables
+    // index. Paired with `end_fullscreen_rt`.
     //
-    // The viewport tracks the target size (not a fixed render resolution) so a
-    // pass writing a reduced-resolution target -- the SSGI gather's `gi_scale`
-    // gather, which the composite then bilateral-upsamples -- rasterizes the full
+    // The viewport is the target size (not a fixed render resolution) so a pass
+    // writing a reduced-resolution target -- the SSGI gather's `gi_scale` gather,
+    // which the composite then bilateral-upsamples -- rasterizes the full
     // fullscreen triangle across its smaller target. Every other caller (SSR /
-    // TAA resolve, the SSGI composite) writes a full-resolution target, so their
-    // viewport is unchanged.
+    // TAA resolve, the SSGI composite) writes a full-resolution target.
     pub(in crate::directx) fn begin_fullscreen_rt(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         output: &ID3D12Resource,
         output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+        extent: FullscreenExtent,
     ) {
         let to_rt = transition_barrier(
             output,
@@ -39,7 +48,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_rt]) };
-        self.bind_fullscreen_rt(cmd, output, output_rtv);
+        self.bind_fullscreen_rt(cmd, output_rtv, extent);
     }
 
     // The bind half of `begin_fullscreen_rt`, without the transition: for a
@@ -49,13 +58,13 @@ impl DxContext {
     pub(in crate::directx) fn bind_fullscreen_rt(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        output: &ID3D12Resource,
         output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+        extent: FullscreenExtent,
     ) {
-        // SAFETY: a property query on a live COM object; it only reads.
-        let desc = unsafe { output.GetDesc() };
-        let w = desc.Width as u32;
-        let h = desc.Height;
+        let FullscreenExtent {
+            width: w,
+            height: h,
+        } = extent;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

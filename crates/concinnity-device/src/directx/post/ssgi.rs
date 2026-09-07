@@ -27,6 +27,7 @@ use crate::gfx::ssgi::SsgiSettings;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
@@ -237,6 +238,9 @@ pub(in crate::directx) struct SsgiResources {
     gi: ID3D12Resource,
     gi_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     gi_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    // `gi`'s own dimensions, the gather's viewport. Kept in step with `gi` at
+    // create and resize so the pass does not query the resource for them.
+    gi_extent: FullscreenExtent,
 
     // Per-frame params UBO (32-byte SsgiParams), persistently mapped.
     params_ubo_resources: Vec<PooledBuffer>,
@@ -283,6 +287,10 @@ impl SsgiResources {
         // bilateral-upsamples it back to full resolution (it reads the gi
         // texture's own dimensions for the tap stride). Mirrors metal/post/ssgi.
         let (gw, gh) = settings.gi_dimensions(width, height);
+        let gi_extent = FullscreenExtent {
+            width: gw,
+            height: gh,
+        };
         let gi = create_rt_target(device, gw, gh, HDR_FORMAT)?;
         write_format_rtv(device, &gi, gi_rtv, HDR_FORMAT);
         write_format_srv(device, &gi, gi_srv.0, HDR_FORMAT);
@@ -322,6 +330,7 @@ impl SsgiResources {
             gi,
             gi_rtv,
             gi_srv_gpu: gi_srv.1,
+            gi_extent,
             params_ubo_resources,
             params_ubo_ptrs,
             root_sig,
@@ -346,6 +355,10 @@ impl SsgiResources {
         };
         // Reduced-res gather target (see `new`); the composite upsamples it.
         let (gw, gh) = self.settings.gi_dimensions(width, height);
+        self.gi_extent = FullscreenExtent {
+            width: gw,
+            height: gh,
+        };
         self.gi = create_rt_target(device, gw, gh, HDR_FORMAT)?;
         write_format_rtv(device, &self.gi, self.gi_rtv, HDR_FORMAT);
         write_format_srv(device, &self.gi, srv_cpu(self.gi_srv_gpu), HDR_FORMAT);
@@ -473,6 +486,7 @@ impl DxContext {
                 ssgi,
                 output: &ssgi.gi,
                 output_rtv: ssgi.gi_rtv,
+                output_extent: ssgi.gi_extent,
                 graph_driven: false,
                 pso: &ssgi.gather_pso,
                 source_srv: self.hdr.srv_gpu,
@@ -500,6 +514,10 @@ impl DxContext {
                 ssgi,
                 output: self.hdr_scene_target(),
                 output_rtv: self.hdr_scene_rtv(),
+                output_extent: FullscreenExtent {
+                    width: self.extent.render_width,
+                    height: self.extent.render_height,
+                },
                 graph_driven: true,
                 pso: &ssgi.composite_pso,
                 source_srv: ssgi.gi_srv_gpu,
@@ -523,6 +541,7 @@ struct SsgiPass<'a> {
     // Target this sub-pass writes (gi for the gather, the scene for the composite).
     output: &'a ID3D12Resource,
     output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    output_extent: FullscreenExtent,
     // Whether the executor owns `output`'s transitions. True for the composite
     // (the scene spine is a graph resource); false for the gather, whose `gi`
     // target lives entirely inside this node and so keeps its own bracket.
@@ -541,10 +560,10 @@ impl FullscreenPass for SsgiPass<'_> {
     fn begin(&self, cmd: &Self::Rec) {
         if self.graph_driven {
             self.ctx
-                .bind_fullscreen_rt(cmd, self.output, self.output_rtv);
+                .bind_fullscreen_rt(cmd, self.output_rtv, self.output_extent);
         } else {
             self.ctx
-                .begin_fullscreen_rt(cmd, self.output, self.output_rtv);
+                .begin_fullscreen_rt(cmd, self.output, self.output_rtv, self.output_extent);
         }
     }
 

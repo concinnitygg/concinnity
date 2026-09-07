@@ -16,6 +16,7 @@ use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::{create_composite_pso, serialize_desc_and_create};
+use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::gbuffer::GbufferResources;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
@@ -324,8 +325,11 @@ impl FullscreenPass for TaaResolvePass<'_> {
         // consumers' barrier takes it back out.
         self.ctx.bind_fullscreen_rt(
             cmd,
-            &self.taa.history[self.cur],
             self.taa.history_rtv[self.cur],
+            FullscreenExtent {
+                width: self.ctx.extent.render_width,
+                height: self.ctx.extent.render_height,
+            },
         );
     }
 
