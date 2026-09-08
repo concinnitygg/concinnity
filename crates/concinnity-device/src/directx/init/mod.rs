@@ -129,6 +129,7 @@ impl DxContext {
                 PostSettings {
                     post_process: post_tunables,
                     taa_enabled,
+                    hdr_samples,
                     ssao: ssao_settings,
                     ssr: ssr_settings,
                     ssgi: ssgi_settings,
@@ -192,7 +193,7 @@ impl DxContext {
             swapchain,
             swapchain_format,
             allow_tearing,
-            msaa_samples,
+            max_msaa_samples,
             adapter,
             hdr_mode,
         } = match reuse {
@@ -213,6 +214,12 @@ impl DxContext {
                 hdr_pq,
             )?,
         };
+        // The adapter ceiling clamped to what the world asks for. A temporal
+        // technique resolves it to one sample, which drops the resolve step and
+        // makes `hdr.color` the scene spine; every PSO below bakes the result
+        // into its `SampleDesc`.
+        let msaa_samples = window::resolve_sample_count(max_msaa_samples, hdr_samples);
+
         // Persisted pipeline library: seeded from disk when a blob for this
         // adapter exists, consulted by every PSO creation below. No-op on the
         // reload path, where it is already installed.
@@ -975,12 +982,11 @@ impl DxContext {
             hdr_color_rtv,
             clear_color,
         )?;
-        // The sample count is a hardware query with no authored knob, and it
-        // decides which of two shapes the frame has: with MSAA the main pass
-        // resolves `hdr_color` into a separate single-sample spine (and the
-        // render graph carries both as resources), without it `hdr_color` is the
-        // spine and there is no resolve step at all. Log it so a verification
-        // run can say which shape it exercised.
+        // The resolved sample count decides which of two shapes the frame has:
+        // with MSAA the main pass resolves `hdr_color` into a separate
+        // single-sample spine (and the render graph carries both as resources),
+        // without it `hdr_color` is the spine and there is no resolve step at
+        // all. Log it so a verification run can say which shape it exercised.
         tracing::info!("d3d12 HDR target: {msaa_samples}x MSAA");
         let hdr_resolve = if msaa_samples > 1 {
             Some(create_hdr_resolve_target(&device, render_w, render_h)?)
@@ -2499,7 +2505,10 @@ impl DxContext {
             swapchain: self.swapchain.handle.clone(),
             swapchain_format: self.swapchain.format,
             allow_tearing: self.swapchain.allow_tearing,
-            msaa_samples: self.hdr.msaa_samples,
+            // Re-queried rather than carried: `self.hdr.msaa_samples` is the
+            // count this world resolved to, and the incoming world's AA mode
+            // may differ.
+            max_msaa_samples: window::query_msaa_samples(&self.device),
             adapter: self.adapter.clone(),
             hdr_mode: self.hdr_mode,
         };

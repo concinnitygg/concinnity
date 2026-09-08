@@ -30,11 +30,6 @@ use super::resources::skinning::SkinnedState;
 use super::texture::{EnvironmentMapTextures, HdrTargets};
 use super::transient_pool::TransientTexturePool;
 
-// MSAA sample count for the off-screen HDR target. Matches the sample
-// count used pre-post-process (4×). Kept explicit here so all the
-// pipelines that target the HDR buffer can reference the same constant.
-pub(super) const HDR_SAMPLE_COUNT: u32 = 4;
-
 // Size of the bindless texture pool the static main pass samples. The pool
 // holds every albedo texture followed by every normal map; `GpuObjectData`
 // carries pool indices into it. Must match `BINDLESS_TEXTURE_COUNT` in

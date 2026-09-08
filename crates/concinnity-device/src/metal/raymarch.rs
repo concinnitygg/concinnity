@@ -503,7 +503,7 @@ fn v(pos: [f32; 3]) -> Vertex {
 
 impl MtlContext {
     // Encode the raymarched SDF volume pass. Caller has ended the main
-    // pass (so `hdr_targets.depth` carries scene depth) and the
+    // pass (so `hdr_targets.depth_resolve` carries scene depth) and the
     // post-Main hdr_resolve writes from Decals / Fog / ParticlesDraw
     // have not yet fired. Each visible `SdfVolume` issues one indexed
     // draw of the proxy cube; the user's `map` + `shade` run per
@@ -557,23 +557,33 @@ impl MtlContext {
         // Only a volume whose field calls the scene tap reads the result, so a
         // frame drawing none skips the blit entirely and leaves the copy
         // holding whatever an earlier frame put there. Nothing samples it.
-        if self
+        let refractive = self
             .raymarch
             .volumes
             .iter()
             .zip(&visible)
-            .any(|(v, &vis)| vis && v.refractive)
+            .any(|(v, &vis)| vis && v.refractive);
+        // The scene-depth snapshot the cone-march early-out reads. Unlike the
+        // colour copy it is unconditional: every visible volume's fragment
+        // clips against the rasterised surface, and the pass writes the depth
+        // target it would otherwise sample.
         {
             let blit = cmd_buf
                 .blitCommandEncoder()
                 .ok_or("failed to get raymarch scene-copy blit encoder")?;
             blit.pushDebugGroup(&NSString::from_str("raymarch_scene_copy"));
-            // SAFETY: both textures are `hdr_targets`-owned and were created with the same format
-            // and dimensions, which is what a whole-texture blit copy requires.
+            // SAFETY: each pair is `hdr_targets`-owned and created with the same format and
+            // dimensions, which is what a whole-texture blit copy requires.
             unsafe {
+                if refractive {
+                    blit.copyFromTexture_toTexture(
+                        self.hdr_targets.hdr_resolve.as_ref(),
+                        self.hdr_targets.hdr_resolve_copy.as_ref(),
+                    );
+                }
                 blit.copyFromTexture_toTexture(
-                    self.hdr_targets.hdr_resolve.as_ref(),
-                    self.hdr_targets.hdr_resolve_copy.as_ref(),
+                    self.hdr_targets.depth_resolve.as_ref(),
+                    self.hdr_targets.depth_copy.as_ref(),
                 );
             }
             blit.popDebugGroup();
@@ -641,12 +651,11 @@ impl MtlContext {
         // bound per-draw. The vertex descriptor declares the full
         // 56-byte Vertex layout at this binding.
         enc.set_vertex_buffer(vbuf, 0, RAYMARCH_VERTEX_BUFFER);
-        // Main pass MSAA depth at fragment texture(0); sampled by
-        // `main_depth.read(px, 0)` in the template fragment for
-        // the shader-side cone-march early-out (separate texture
-        // from the writable `depth_resolve` attachment so no
-        // aliasing).
-        enc.set_fragment_texture(self.hdr_targets.depth.as_ref(), 0);
+        // The scene-depth snapshot at fragment texture(0); sampled by
+        // `main_depth.Load` in the template fragment for the shader-side
+        // cone-march early-out. A separate texture from the writable
+        // `depth_resolve` attachment, so no aliasing.
+        enc.set_fragment_texture(self.hdr_targets.depth_copy.as_ref(), 0);
         // CSM shadow map array + IBL cubes.
         // Always bound (1×1 fallback when the world has no shadow
         // stage / no EnvironmentMap), matching the Main pass.

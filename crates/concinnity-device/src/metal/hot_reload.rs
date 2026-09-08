@@ -287,6 +287,7 @@ impl MtlContext {
                 &make_vertex_descriptor(),
                 self.world_shader.as_ref(),
                 hr,
+                self.hdr_targets.sample_count,
             )
         );
         // The engine sampler block rides the fresh fragment's encoder.
@@ -307,7 +308,11 @@ impl MtlContext {
         // shader); rebuild them whenever a Hi-Z resource exists so a saved
         // edit to `hiz_build.slang` is picked up. The texture + mip views are
         // kept: only the pipelines swap.
-        let hiz = rebuild_if_live!(self.cull.hiz.is_some(), build_hiz_pipelines(device, hr));
+        let hiz_samples = self.hdr_targets.sample_count;
+        let hiz = rebuild_if_live!(
+            self.cull.hiz.is_some(),
+            build_hiz_pipelines(device, hr, hiz_samples)
+        );
         let auto_ev = rebuild_if_live!(
             self.auto_exposure.pipelines.is_some(),
             build_auto_exposure_pipelines(device, hr)
@@ -538,6 +543,7 @@ impl MtlContext {
                 &vert_desc,
                 world,
                 self.hot_reload.enabled,
+                self.hdr_targets.sample_count,
             )?)
         } else {
             None

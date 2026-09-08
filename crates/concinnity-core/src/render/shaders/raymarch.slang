@@ -31,7 +31,7 @@ ConstantBuffer<LightUniforms> lights_cb;
 ConstantBuffer<ShadowUniforms> shadow_cb;
 ConstantBuffer<RaymarchShadowCascade> cascade_cb;
 
-Texture2DMS<float> main_depth;
+Texture2D<float> main_depth;
 Texture2DArray<float> shadow_map;
 TextureCube<float4> irradiance_cube;
 TextureCube<float4> prefilter_cube;
@@ -62,24 +62,18 @@ float3 scene_sample(float2 uv) { return scene_color.SampleLevel(scene_samp, uv, 
 // can clip the march to the rasterised surface instead of paying for a march
 // the depth test would discard. The other two return a distance past any
 // `max_distance`, which makes the clip a no-op there.
+//
+// The bound texture is a single-sample copy of the scene depth, not the Main
+// pass's attachment: the pass writes the canonical depth target, so the read
+// needs a texture the write cannot alias. That is a copy either way -- with
+// multisampling the resolve is a second texture only because the resolve step
+// produces one -- so the host blits one at the head of the pass and this
+// declaration stays single-sample whatever the frame's sample count is.
 #define RAYMARCH_READS_SCENE_DEPTH 1
-
-// Slang lowers `Texture2DMS.Load` to an MSL `read` taking `int2`, which the
-// Metal compiler rejects because it wants `uint2` (upstream bug 1). The
-// mis-lowering only reaches a metallib, so emitting MSL text hides it; this is
-// the one construct in the pass that has to be spelled per target.
-float ms_depth_read(Texture2DMS<float> t, uint2 px)
-{
-    __target_switch
-    {
-    case metal: __intrinsic_asm "($0).read($1, 0).x";
-    default: return t.Load(int2(px), 0);
-    }
-}
 
 float rasterised_distance(float2 px, float3 cam, float4 sv_pos)
 {
-    float depth_ndc = ms_depth_read(main_depth, uint2(px));
+    float depth_ndc = main_depth.Load(int3(int2(px), 0));
     float2 ndc_xy = (sv_pos.xy / view_cb.viewport) * 2.0 - 1.0;
     // Metal clip space is y-down after the projection flip the engine applies,
     // so re-mirror Y to match the inv_vp the CPU built from the unflipped one.

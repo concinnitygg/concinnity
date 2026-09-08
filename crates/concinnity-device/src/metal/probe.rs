@@ -67,7 +67,7 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
-use super::context::{HDR_SAMPLE_COUNT, MtlContext};
+use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::probe_prefilter::{PrefilterGpu, create_capture_cube};
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, BakeSignals, PrefilterPlan};
@@ -143,8 +143,9 @@ pub(in crate::metal) enum RetiredBake {
 // resident for the whole asynchronous capture; the cube outlives it, moving into
 // the prefiltering slot as the convolution's source.
 pub(in crate::metal) struct BakeGpu {
-    msaa_color: Retained<ProtocolObject<dyn MTLTexture>>,
-    msaa_depth: Retained<ProtocolObject<dyn MTLTexture>>,
+    // `None` at one sample, where each face draws straight into its cube slice.
+    msaa_color: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    depth: Retained<ProtocolObject<dyn MTLTexture>>,
     capture: Retained<ProtocolObject<dyn MTLTexture>>,
     object_buffer: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     draw_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
@@ -448,10 +449,15 @@ impl MtlContext {
                 None
             };
 
-        // One reused MSAA colour + depth pair (faces render serially across frames),
-        // and the capture cube each face resolves its own slice of.
-        let msaa_color = make_msaa_color(&self.device, PLAN.face_size())?;
-        let msaa_depth = make_msaa_depth(&self.device, PLAN.face_size())?;
+        // One reused colour + depth pair (faces render serially across frames),
+        // and the capture cube each face resolves its own slice of. The sample
+        // count is the main pipelines' -- a face binds them -- so a
+        // single-sample world skips the colour attachment entirely.
+        let samples = self.hdr_targets.sample_count;
+        let msaa_color = (samples > 1)
+            .then(|| make_face_color(&self.device, PLAN.face_size(), samples))
+            .transpose()?;
+        let depth = make_face_depth(&self.device, PLAN.face_size(), samples)?;
         let capture = create_capture_cube(&self.device, &PLAN)?;
 
         self.probe.rendering = Some(RenderingBake {
@@ -465,7 +471,7 @@ impl MtlContext {
             elapsed,
             gpu: BakeGpu {
                 msaa_color,
-                msaa_depth,
+                depth,
                 capture,
                 object_buffer,
                 draw_args,
@@ -557,8 +563,8 @@ impl MtlContext {
         self.encode_main_into_face(
             &render_cb,
             crate::metal::draw::main::FaceTargets {
-                color_msaa: &gpu.msaa_color,
-                depth_msaa: &gpu.msaa_depth,
+                color_msaa: gpu.msaa_color.as_deref(),
+                depth: &gpu.depth,
                 resolve: &gpu.capture,
                 resolve_slice: face,
             },
@@ -718,44 +724,51 @@ impl MtlContext {
     }
 }
 
-// MSAA HDR colour face: RGBA16Float, 4x, render-target only -- matches the main
-// pipeline's attachment format + sample count so `self.pipeline_state` binds.
-fn make_msaa_color(
+// Multisample HDR colour face: RGBA16Float, render-target only -- matches the
+// main pipeline's attachment format + sample count so `self.pipeline_state`
+// binds. Built only when the world resolved to more than one sample.
+fn make_face_color(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
+    sample_count: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
     let desc = TextureDesc {
         kind: MTLTextureType::Type2DMultisample,
         format: MTLPixelFormat::RGBA16Float,
         width: size as usize,
         height: size as usize,
-        sample_count: HDR_SAMPLE_COUNT as usize,
+        sample_count: sample_count as usize,
         usage: MTLTextureUsage::RenderTarget,
         ..Default::default()
     }
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or_else(|| "probe: failed to create MSAA colour face".into())
+        .ok_or_else(|| "probe: failed to create colour face".into())
 }
 
-// MSAA depth face: Depth32Float, 4x, render-target only. Cleared per face and
-// discarded -- the probe consumes only the resolved colour.
-fn make_msaa_depth(
+// Depth face: Depth32Float, render-target only, at the main pipelines' sample
+// count. Cleared per face and discarded -- the probe consumes only the colour.
+fn make_face_depth(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
+    sample_count: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
     let desc = TextureDesc {
-        kind: MTLTextureType::Type2DMultisample,
+        kind: if sample_count > 1 {
+            MTLTextureType::Type2DMultisample
+        } else {
+            MTLTextureType::Type2D
+        },
         format: MTLPixelFormat::Depth32Float,
         width: size as usize,
         height: size as usize,
-        sample_count: HDR_SAMPLE_COUNT as usize,
+        sample_count: sample_count as usize,
         usage: MTLTextureUsage::RenderTarget,
         ..Default::default()
     }
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or_else(|| "probe: failed to create MSAA depth face".into())
+        .ok_or_else(|| "probe: failed to create depth face".into())
 }

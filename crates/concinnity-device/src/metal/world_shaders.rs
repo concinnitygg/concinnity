@@ -30,6 +30,7 @@ impl MtlContext {
             bucket as usize,
             programs,
             self.hot_reload.enabled,
+            self.hdr_targets.sample_count,
         )?;
         self.world_pipelines[slot] = Some(pso);
         Ok(())

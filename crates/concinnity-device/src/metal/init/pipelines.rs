@@ -16,9 +16,7 @@ use objc2_metal::{
 };
 
 use crate::gfx::mesh_payload::Vertex;
-use crate::metal::context::{
-    BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT,
-};
+use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
 use crate::metal::cull::{CullPipeline, build_cull_pipeline};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::pipeline::{ns_str, world_library};
@@ -90,6 +88,7 @@ pub(crate) fn build_main_pipeline(
     vert_desc: &MTLVertexDescriptor,
     world: Option<&ShaderPrograms>,
     hot_reload: bool,
+    sample_count: u32,
 ) -> Result<MainPipelineBundle, String> {
     // Both pairs come from the single-source bindless program: the engine's
     // own, or the world's compile of the same file with its hooks spliced in.
@@ -128,9 +127,10 @@ pub(crate) fn build_main_pipeline(
     pipeline_desc.setVertexDescriptor(Some(vert_desc));
     pipeline_desc.setVertexFunction(Some(&vert_fn));
     pipeline_desc.setFragmentFunction(Some(&main_frag_fn));
-    // Off-screen HDR pass: RGBA16Float colour + 4x MSAA. Output is linear
-    // light; ACES tonemap + gamma + FXAA run in the composite pass.
-    pipeline_desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
+    // Off-screen HDR pass: RGBA16Float colour at the world's resolved sample
+    // count. Output is linear light; ACES tonemap + gamma + FXAA run in the
+    // composite pass.
+    pipeline_desc.setRasterSampleCount(sample_count as usize);
     // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
     // declares.
     unsafe {
@@ -231,6 +231,7 @@ pub(crate) fn build_world_pipeline_table(
     vert_desc: &MTLVertexDescriptor,
     extra_shaders: &[crate::gfx::backend_init::WorldShader<'_>],
     hot_reload: bool,
+    sample_count: u32,
 ) -> Result<WorldPipelineTable, String> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
@@ -246,6 +247,7 @@ pub(crate) fn build_world_pipeline_table(
             i + 1,
             programs,
             hot_reload,
+            sample_count,
         )?));
     }
     Ok(table)
@@ -258,6 +260,7 @@ pub(crate) fn build_bucket_pipeline(
     bucket: usize,
     programs: &ShaderPrograms,
     hot_reload: bool,
+    sample_count: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     let library = world_library(device, hot_reload, programs, "fragment_main_bindless")
         .map_err(|e| format!("shader bucket {bucket}: {e}"))?;
@@ -272,7 +275,7 @@ pub(crate) fn build_bucket_pipeline(
     desc.setVertexDescriptor(Some(vert_desc));
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
-    desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
+    desc.setRasterSampleCount(sample_count as usize);
     // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
     // declares.
     unsafe {

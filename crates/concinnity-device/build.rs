@@ -537,6 +537,12 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         defines: &[("HIZ_INIT_MSAA", "1")],
     },
     SlangLibSpec {
+        name: "hiz_init_single.slang",
+        file: "hiz_build.slang",
+        entries: &["hiz_init_single"],
+        defines: &[("HIZ_INIT_SINGLE", "1")],
+    },
+    SlangLibSpec {
         name: "hiz_downsample.slang",
         file: "hiz_build.slang",
         entries: &["hiz_downsample"],

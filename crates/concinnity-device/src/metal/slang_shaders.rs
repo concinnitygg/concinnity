@@ -110,6 +110,12 @@ pub(super) static HIZ_INIT_MSAA: SlangLib = SlangLib {
     entries: &["hiz_init_msaa"],
     defines: &[("HIZ_INIT_MSAA", "1")],
 };
+pub(super) static HIZ_INIT_SINGLE: SlangLib = SlangLib {
+    name: "hiz_init_single.slang",
+    file: "hiz_build.slang",
+    entries: &["hiz_init_single"],
+    defines: &[("HIZ_INIT_SINGLE", "1")],
+};
 pub(super) static HIZ_DOWNSAMPLE: SlangLib = SlangLib {
     name: "hiz_downsample.slang",
     file: "hiz_build.slang",
@@ -488,6 +494,7 @@ pub(super) static ALL: &[&SlangLib] = &[
     &MODEL_HISTORY,
     &RT_SKIN,
     &HIZ_INIT_MSAA,
+    &HIZ_INIT_SINGLE,
     &HIZ_DOWNSAMPLE,
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,

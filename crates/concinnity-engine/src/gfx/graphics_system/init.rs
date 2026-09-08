@@ -714,9 +714,19 @@ impl GraphicsSystem {
         // XeSS); Metal always uses MetalFX, so it ignores the selector.
         let upscale_backend = self.upscale_backend;
 
+        // Off-screen HDR sample count, resolved from the ceiling-clamped AA
+        // mode and the resolved upscaling preference. Restart-class like
+        // `temporal_upscaling`, its other input: the main-pass pipelines, the
+        // render targets and the planar / probe faces all bake the count, so a
+        // live AA toggle keeps the count this launch resolved and the next
+        // launch picks up the change.
+        let hdr_samples =
+            crate::components::hdr_sample_count(self.post_config.aa_mode, temporal_upscaling);
+
         let post = crate::gfx::backend_init::PostSettings {
             post_process,
             taa_enabled,
+            hdr_samples,
             ssao: ssao_settings,
             ssr: ssr_settings,
             ssgi: ssgi_settings,

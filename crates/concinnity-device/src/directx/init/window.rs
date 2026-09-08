@@ -27,7 +27,9 @@ pub(super) struct DeviceAndWindow {
     // (vsync off + tearing supported). Drives the present sync interval / flags
     // and must be mirrored in every `ResizeBuffers` call.
     pub allow_tearing: bool,
-    pub msaa_samples: u32,
+    // This adapter's ceiling for the HDR format, not the count the world runs
+    // at: `resolve_sample_count` clamps the world's request against it.
+    pub max_msaa_samples: u32,
     // Adapter cast to `IDXGIAdapter3` so the profiler overlay can call
     // `QueryVideoMemoryInfo` for the VRAM chip. `None` on adapters that don't
     // expose the v3 interface (very old WDDM 1.x drivers); the HUD then reads
@@ -175,8 +177,8 @@ pub(super) fn setup(
     let command_queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }
         .map_err(|e| format!("CreateCommandQueue: {e}"))?;
 
-    // MSAA support check (queried against HDR_FORMAT; the swapchain is always 1x).
-    let msaa_samples = query_msaa_samples(&device);
+    // MSAA ceiling (queried against HDR_FORMAT; the swapchain is always 1x).
+    let max_msaa_samples = query_msaa_samples(&device);
 
     // HDR-output detection. Walk the adapter's outputs, find the highest
     // max-EDR multiplier reported by any HDR-capable output, and feed it
@@ -383,7 +385,7 @@ pub(super) fn setup(
         swapchain,
         swapchain_format,
         allow_tearing,
-        msaa_samples,
+        max_msaa_samples,
         adapter: adapter3,
         hdr_mode,
     })
@@ -508,7 +510,7 @@ fn no_adapter_message() -> String {
     message
 }
 
-fn query_msaa_samples(device: &ID3D12Device) -> u32 {
+pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {
     // Queried against the off-screen HDR target's format: that is the only
     // multisampled render target; the swapchain backbuffer is always 1x.
     for &count in &[4u32, 2] {
@@ -534,4 +536,39 @@ fn query_msaa_samples(device: &ID3D12Device) -> u32 {
         }
     }
     1
+}
+
+// The requested HDR sample count clamped to this adapter's ceiling. `requested`
+// is 1 whenever a temporal technique is active (see
+// `concinnity_core::components::hdr_sample_count`), which collapses the main
+// pass to the single-sample path: no resolve step, and `hdr.color` is the
+// scene spine.
+pub(super) fn resolve_sample_count(supported: u32, requested: u32) -> u32 {
+    for candidate in [4u32, 2] {
+        if supported >= candidate && requested >= candidate {
+            return candidate;
+        }
+    }
+    1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_sample_count;
+
+    #[test]
+    fn a_temporal_request_collapses_to_one_sample() {
+        for supported in [4, 2, 1] {
+            assert_eq!(resolve_sample_count(supported, 1), 1);
+        }
+    }
+
+    #[test]
+    fn a_multisample_request_clamps_to_adapter_support() {
+        assert_eq!(resolve_sample_count(4, 4), 4);
+        // An adapter that only reaches 2x still honours a 4x request at 2x,
+        // the behaviour `query_msaa_samples` had on its own.
+        assert_eq!(resolve_sample_count(2, 4), 2);
+        assert_eq!(resolve_sample_count(1, 4), 1);
+    }
 }

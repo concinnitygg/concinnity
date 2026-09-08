@@ -109,6 +109,12 @@ pub struct PostSettings {
     pub post_process: PostProcessTunables,
     /// Whether the temporal anti-aliasing pass runs.
     pub taa_enabled: bool,
+    /// Sample count for the off-screen HDR colour + depth attachments, resolved
+    /// by [`crate::components::hdr_sample_count`] from the anti-aliasing mode
+    /// and the upscaling request. `1` means no multisampling: the colour target
+    /// is the scene spine and no resolve step runs. Each backend clamps it to
+    /// what the device reports for the HDR format.
+    pub hdr_samples: u32,
     /// Screen-space ambient occlusion, or `None` when off.
     pub ssao: Option<SsaoSettings>,
     /// Screen-space reflections, or `None` when off.
@@ -328,6 +334,7 @@ impl<'a> BackendInit<'a> {
             post: PostSettings {
                 post_process: PostProcessTunables::DEFAULT,
                 taa_enabled: false,
+                hdr_samples: crate::components::HDR_MULTISAMPLE_COUNT,
                 ssao: None,
                 ssr: None,
                 ssgi: None,
@@ -443,6 +450,9 @@ mod tests {
         PostSettings {
             post_process: PostProcessTunables::DEFAULT,
             taa_enabled: true,
+            // Temporal: `hdr_sample_count` resolves both of this world's
+            // temporal flags to a single-sample target.
+            hdr_samples: 1,
             ssao: Some(SsaoSettings::resolve(0.5, 1.0)),
             ssr: None,
             ssgi: None,

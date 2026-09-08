@@ -51,10 +51,12 @@ pub(in crate::metal) const MAX_PLANAR_PLANES: usize =
 
 // Per-frame planar reflection render targets for one plane, sized to the render
 // resolution. MSAA colour + depth (rendered into, then resolved) plus a
-// single-sample resolve the reflective shader samples.
+// single-sample resolve the reflective shader samples. The mirror pass reuses
+// the main pipelines, so it carries their sample count: at one sample there is
+// no `msaa_color` and the pass draws straight into `resolve`.
 pub(in crate::metal) struct PlanarReflectionTargets {
-    pub(in crate::metal) msaa_color: Retained<ProtocolObject<dyn MTLTexture>>,
-    pub(in crate::metal) msaa_depth: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub(in crate::metal) msaa_color: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub(in crate::metal) depth: Retained<ProtocolObject<dyn MTLTexture>>,
     pub(in crate::metal) resolve: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
@@ -79,7 +81,8 @@ pub(in crate::metal) fn create_planar_targets(
     height: u32,
     sample_count: u32,
 ) -> Result<PlanarReflectionTargets, String> {
-    let color = {
+    let multisampled = sample_count > 1;
+    let color = if multisampled {
         let desc = TextureDesc {
             kind: MTLTextureType::Type2DMultisample,
             format: MTLPixelFormat::RGBA16Float,
@@ -90,13 +93,21 @@ pub(in crate::metal) fn create_planar_targets(
             ..Default::default()
         }
         .build();
-        device
-            .newTextureWithDescriptor(&desc)
-            .ok_or("planar: failed to create MSAA colour target")?
+        Some(
+            device
+                .newTextureWithDescriptor(&desc)
+                .ok_or("planar: failed to create MSAA colour target")?,
+        )
+    } else {
+        None
     };
     let depth = {
         let desc = TextureDesc {
-            kind: MTLTextureType::Type2DMultisample,
+            kind: if multisampled {
+                MTLTextureType::Type2DMultisample
+            } else {
+                MTLTextureType::Type2D
+            },
             format: MTLPixelFormat::Depth32Float,
             width: width as usize,
             height: height as usize,
@@ -107,7 +118,7 @@ pub(in crate::metal) fn create_planar_targets(
         .build();
         device
             .newTextureWithDescriptor(&desc)
-            .ok_or("planar: failed to create MSAA depth target")?
+            .ok_or("planar: failed to create depth target")?
     };
     let resolve = {
         let desc = TextureDesc {
@@ -124,7 +135,7 @@ pub(in crate::metal) fn create_planar_targets(
     };
     Ok(PlanarReflectionTargets {
         msaa_color: color,
-        msaa_depth: depth,
+        depth,
         resolve,
     })
 }
@@ -209,8 +220,8 @@ impl MtlContext {
             self.encode_main_into_face(
                 cmd_buf,
                 crate::metal::draw::main::FaceTargets {
-                    color_msaa: &targets.msaa_color,
-                    depth_msaa: &targets.msaa_depth,
+                    color_msaa: targets.msaa_color.as_deref(),
+                    depth: &targets.depth,
                     resolve: &targets.resolve,
                     resolve_slice: 0,
                 },

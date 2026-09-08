@@ -61,11 +61,13 @@ pub(in crate::metal) struct GpuFrameBuffers<'a> {
 
 // The reflection-probe face attachments `encode_main_into_face` renders into
 // instead of the HDR targets: a square MSAA colour + depth, resolving colour
-// into `resolve`.
+// into `resolve`. A face reuses the main pipelines, so it carries whatever
+// sample count they were built at: at one sample `color_msaa` is `None` and the
+// pass draws straight into `resolve`.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct FaceTargets<'a> {
-    pub color_msaa: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
-    pub depth_msaa: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
+    pub color_msaa: Option<&'a ProtocolObject<dyn objc2_metal::MTLTexture>>,
+    pub depth: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
     pub resolve: &'a ProtocolObject<dyn objc2_metal::MTLTexture>,
     // Array slice of `resolve` this face resolves into. The probe capture passes
     // the cube face it is rendering; the planar mirror's target is a plain 2D
@@ -136,14 +138,20 @@ impl MtlContext {
             let ca = main_pass_desc
                 .colorAttachments()
                 .objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.hdr_color.as_ref()));
-            ca.setResolveTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            ca.setTexture(Some(self.hdr_targets.color_attachment()));
             ca.setLoadAction(MTLLoadAction::Clear);
-            ca.setStoreAction(if store_msaa_color {
-                MTLStoreAction::StoreAndMultisampleResolve
+            if self.hdr_targets.multisampled() {
+                ca.setResolveTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+                ca.setStoreAction(if store_msaa_color {
+                    MTLStoreAction::StoreAndMultisampleResolve
+                } else {
+                    MTLStoreAction::MultisampleResolve
+                });
             } else {
-                MTLStoreAction::MultisampleResolve
-            });
+                // The colour attachment *is* the spine, so there is nothing to
+                // resolve and the pass just stores what it drew.
+                ca.setStoreAction(MTLStoreAction::Store);
+            }
             ca.setClearColor(MTLClearColor {
                 red: r as f64,
                 green: g as f64,
@@ -152,23 +160,23 @@ impl MtlContext {
             });
 
             let da = main_pass_desc.depthAttachment();
-            da.setTexture(Some(self.hdr_targets.depth.as_ref()));
+            da.setTexture(Some(self.hdr_targets.depth_attachment()));
             da.setLoadAction(MTLLoadAction::Clear);
             da.setClearDepth(1.0);
-            // Always resolve depth into the single-sample
-            // `hdr_targets.depth_resolve` sibling. This is the canonical
-            // post-rasterise scene depth that the post chain consumes:
-            // raymarch writes hit depth into it; water / decal / fog
-            // sample it (single-sample is enough since they only ever
-            // read sample 0 anyway). `Sample0` filter matches the
-            // existing MSAA-sample-0 read pattern bit-for-bit. The MSAA
-            // attachment also stays alive (`StoreAndMultisampleResolve`):
-            // the raymarch fragment shader samples it as a read-only
-            // snapshot to drive the cone-march early-out without
-            // aliasing the writable depth target.
-            da.setResolveTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
-            da.setDepthResolveFilter(objc2_metal::MTLMultisampleDepthResolveFilter::Sample0);
-            da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
+            // `depth_resolve` is the canonical post-rasterise scene depth the
+            // post chain consumes: raymarch writes hit depth into it, and
+            // water / decal / fog sample it. Multisampled, the Main pass
+            // produces it by resolving with the `Sample0` filter (single-sample
+            // is enough -- those passes only ever read sample 0) and keeps the
+            // MSAA attachment alive for the Hi-Z build; without MSAA it is the
+            // attachment, and the store is the whole of it.
+            if self.hdr_targets.multisampled() {
+                da.setResolveTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
+                da.setDepthResolveFilter(objc2_metal::MTLMultisampleDepthResolveFilter::Sample0);
+                da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
+            } else {
+                da.setStoreAction(MTLStoreAction::Store);
+            }
         }
 
         if let Some(t) = &self.diagnostics.pass_timing {
@@ -239,7 +247,7 @@ impl MtlContext {
     ) -> Result<u32, String> {
         let FaceTargets {
             color_msaa: face_color_msaa,
-            depth_msaa: face_depth_msaa,
+            depth: face_depth,
             resolve: face_resolve,
             resolve_slice,
         } = face_targets;
@@ -255,11 +263,22 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(face_color_msaa));
-            ca.setResolveTexture(Some(face_resolve));
-            ca.setResolveSlice(resolve_slice);
+            match face_color_msaa {
+                Some(msaa) => {
+                    ca.setTexture(Some(msaa));
+                    ca.setResolveTexture(Some(face_resolve));
+                    ca.setResolveSlice(resolve_slice);
+                    ca.setStoreAction(MTLStoreAction::MultisampleResolve);
+                }
+                // Single-sampled: the face draws into the destination slice
+                // itself, so the slice moves from the resolve to the attachment.
+                None => {
+                    ca.setTexture(Some(face_resolve));
+                    ca.setSlice(resolve_slice);
+                    ca.setStoreAction(MTLStoreAction::Store);
+                }
+            }
             ca.setLoadAction(MTLLoadAction::Clear);
-            ca.setStoreAction(MTLStoreAction::MultisampleResolve);
             ca.setClearColor(MTLClearColor {
                 red: r as f64,
                 green: g as f64,
@@ -268,7 +287,7 @@ impl MtlContext {
             });
 
             let da = desc.depthAttachment();
-            da.setTexture(Some(face_depth_msaa));
+            da.setTexture(Some(face_depth));
             da.setLoadAction(MTLLoadAction::Clear);
             da.setClearDepth(1.0);
             da.setStoreAction(MTLStoreAction::DontCare);
@@ -353,17 +372,23 @@ impl MtlContext {
             let ca = main_pass_desc
                 .colorAttachments()
                 .objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.hdr_color.as_ref()));
-            ca.setResolveTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            ca.setTexture(Some(self.hdr_targets.color_attachment()));
             ca.setLoadAction(MTLLoadAction::Load);
-            ca.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
 
             let da = main_pass_desc.depthAttachment();
-            da.setTexture(Some(self.hdr_targets.depth.as_ref()));
+            da.setTexture(Some(self.hdr_targets.depth_attachment()));
             da.setLoadAction(MTLLoadAction::Load);
-            da.setResolveTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
-            da.setDepthResolveFilter(objc2_metal::MTLMultisampleDepthResolveFilter::Sample0);
-            da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
+
+            if self.hdr_targets.multisampled() {
+                ca.setResolveTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+                ca.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
+                da.setResolveTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
+                da.setDepthResolveFilter(objc2_metal::MTLMultisampleDepthResolveFilter::Sample0);
+                da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
+            } else {
+                ca.setStoreAction(MTLStoreAction::Store);
+                da.setStoreAction(MTLStoreAction::Store);
+            }
         }
 
         if let Some(t) = &self.diagnostics.pass_timing {

@@ -129,6 +129,7 @@ impl MtlContext {
                 PostSettings {
                     post_process: post_tunables,
                     taa_enabled,
+                    hdr_samples,
                     ssao: ssao_settings,
                     ssr: ssr_settings,
                     ssgi: ssgi_settings,
@@ -187,6 +188,12 @@ impl MtlContext {
         // outgoing context's heaps go with it.
         let allocator = DeviceAllocator::new(&device, frames_in_flight);
 
+        // The sample count every main-pass pipeline, HDR target, planar mirror
+        // and probe face below is built at. One whenever a temporal technique
+        // runs, which drops the MSAA attachments and the resolve entirely.
+        let hdr_samples = hdr_samples.max(1);
+        tracing::info!("metal HDR target: {hdr_samples}x MSAA");
+
         // Main + cull + bindless argument encoder. A world with no
         // 3D scene content skips the main PBR pipeline and the whole GPU-cull
         // path: the Main pass then survives as a bare clear the composite pass
@@ -205,6 +212,7 @@ impl MtlContext {
                     &vert_desc,
                     world_shaders[0].programs,
                     hot_reload,
+                    hdr_samples,
                 )?;
                 (
                     Some(pipeline_state),
@@ -258,6 +266,7 @@ impl MtlContext {
                 &vert_desc,
                 &world_shaders[1..],
                 hot_reload,
+                hdr_samples,
             )?
         } else {
             Vec::new()
@@ -745,7 +754,7 @@ impl MtlContext {
         let effective_taa_enabled = taa_enabled && !upscaling_active;
         let velocity_needed = effective_taa_enabled || upscaling_active;
 
-        let hdr_targets = create_hdr_targets(&device, render_w, render_h, HDR_SAMPLE_COUNT)?;
+        let hdr_targets = create_hdr_targets(&device, render_w, render_h, hdr_samples)?;
 
         // Hi-Z depth pyramid for GPU-driven occlusion culling. Built exactly
         // when the bindless cull pipeline is active and sized to the render
@@ -754,7 +763,11 @@ impl MtlContext {
         // previous frame's depth pyramid and culls fully-occluded objects.
         let hiz = if cull_pipeline.is_some() {
             Some(super::hiz::HiZResources::new(
-                &device, render_w, render_h, hot_reload,
+                &device,
+                render_w,
+                render_h,
+                hot_reload,
+                hdr_samples,
             )?)
         } else {
             None
@@ -998,7 +1011,7 @@ impl MtlContext {
                     &device,
                     render_w,
                     render_h,
-                    HDR_SAMPLE_COUNT,
+                    hdr_samples,
                     &assignment.representatives,
                 )?)
             }

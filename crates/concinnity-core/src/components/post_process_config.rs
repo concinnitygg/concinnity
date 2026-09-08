@@ -232,6 +232,11 @@ pub enum UpscalerBackend {
 /// filter, which is nearly free; `Taa` adds a temporal pass that jitters the
 /// projection and reprojects detail across frames for the cleanest edges, at
 /// the cost of a velocity pre-pass and a per-frame history buffer.
+///
+/// The mode also decides whether the scene renders multisampled: `Off` and
+/// `Fxaa` keep the multisampled target, `Taa` renders single-sampled because
+/// the temporal filter reconstructs the same edges. Temporal upscaling does
+/// the same. See `hdr_sample_count`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -264,6 +269,33 @@ impl AaMode {
     /// carries to the shader.
     pub fn fxaa_flag(self) -> f32 {
         if self.fxaa_enabled() { 1.0 } else { 0.0 }
+    }
+}
+
+/// Sample count the off-screen HDR render target uses when no temporal
+/// technique is active. The pre-post-process colour and depth attachments, the
+/// pipelines that write them, and the planar-mirror and probe-bake faces that
+/// reuse those pipelines all carry this count.
+pub const HDR_MULTISAMPLE_COUNT: u32 = 4;
+
+/// Sample count for the off-screen HDR render target, resolved from the
+/// anti-aliasing mode and whether temporal upscaling runs.
+///
+/// Temporal anti-aliasing and temporal upscaling both jitter the projection and
+/// accumulate sub-pixel coverage across frames, so multisampling the pass they
+/// consume pays sample-rate depth, sample-rate coverage and a full resolve for
+/// edge quality the temporal filter reconstructs anyway. Both therefore render
+/// single-sampled; every other mode keeps the multisampled target.
+///
+/// This is the *requested* count: a backend clamps it to what the device
+/// reports for the HDR format, and a backend whose temporal upscaler fails to
+/// initialise keeps the single-sample target rather than rebuilding every
+/// pipeline that baked the count.
+pub fn hdr_sample_count(aa_mode: AaMode, temporal_upscaling: bool) -> u32 {
+    if aa_mode.taa_enabled() || temporal_upscaling {
+        1
+    } else {
+        HDR_MULTISAMPLE_COUNT
     }
 }
 
@@ -820,6 +852,24 @@ mod runtime_tests {
             ..Default::default()
         };
         assert!(ssgi.ssgi_settings().is_none());
+    }
+
+    #[test]
+    fn temporal_modes_resolve_to_a_single_sample_hdr_target() {
+        // Both temporal techniques reconstruct edges from a jittered history,
+        // so neither pays for multisampling. Upscaling wins even when the AA
+        // mode is not TAA: the scaler jitters the projection either way.
+        assert_eq!(hdr_sample_count(AaMode::Taa, false), 1);
+        assert_eq!(hdr_sample_count(AaMode::Off, true), 1);
+        assert_eq!(hdr_sample_count(AaMode::Fxaa, true), 1);
+        assert_eq!(hdr_sample_count(AaMode::Taa, true), 1);
+    }
+
+    #[test]
+    fn non_temporal_modes_keep_the_multisampled_hdr_target() {
+        assert_eq!(hdr_sample_count(AaMode::Off, false), HDR_MULTISAMPLE_COUNT);
+        assert_eq!(hdr_sample_count(AaMode::Fxaa, false), HDR_MULTISAMPLE_COUNT);
+        const { assert!(HDR_MULTISAMPLE_COUNT > 1) };
     }
 
     #[test]

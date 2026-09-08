@@ -110,6 +110,7 @@ impl VkContext {
                 PostSettings {
                     post_process: post_tunables,
                     taa_enabled,
+                    hdr_samples,
                     ssao: ssao_settings,
                     ssr: ssr_settings,
                     ssgi: ssgi_settings,
@@ -187,7 +188,7 @@ impl VkContext {
             swapchain_format,
             swapchain_extent,
             swapchain_image_views,
-            msaa_samples,
+            max_msaa_samples,
             hdr_mode,
             memory_budget_supported,
             rt_capable,
@@ -474,8 +475,8 @@ impl VkContext {
                     Vec::new()
                 };
 
-                //  MSAA sample count
-                let msaa_samples = get_max_usable_sample_count(&instance, physical_device);
+                //  MSAA ceiling for the HDR format
+                let max_msaa_samples = get_max_usable_sample_count(&instance, physical_device);
 
                 // HDR-output resolve. The world's `hdr_display` toggle is the
                 // gate; even on a capable display, no HDR unless the asset opts
@@ -607,7 +608,7 @@ impl VkContext {
                     swapchain_format,
                     swapchain_extent,
                     swapchain_image_views,
-                    msaa_samples,
+                    max_msaa_samples,
                     hdr_mode,
                     memory_budget_supported,
                     rt_capable,
@@ -619,6 +620,15 @@ impl VkContext {
                 }
             }
         };
+
+        // `msaa_samples` off the shared hardware is the device's ceiling for the
+        // HDR format; the resolved setting is what the world actually asks for.
+        // A temporal technique resolves it to one sample, which drops the
+        // resolve attachment from every render pass and makes the colour image
+        // the scene spine. Applied after the reuse branch so a live editor
+        // reload picks up a world whose AA mode differs from the outgoing one.
+        let msaa_samples = super::device::resolve_sample_count(max_msaa_samples, hdr_samples);
+        tracing::info!("vulkan HDR target: {}x MSAA", msaa_samples.as_raw().max(1));
 
         // Pair the authored tunables with the resolved HDR mode (freshly
         // negotiated or inherited on a reload), which drives the composite
@@ -4035,7 +4045,6 @@ impl VkContext {
             swapchain_images: self.swapchain.images.clone(),
             swapchain_format: self.swapchain.format,
             swapchain_extent: self.swapchain.extent,
-            msaa_samples: self.msaa_samples,
             hdr_mode: self.hdr_mode,
             memory_budget_supported: self.memory_budget_supported,
             rt_capable: self.rt_capable,
@@ -4095,7 +4104,9 @@ struct SharedHardware {
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
     swapchain_image_views: Vec<vk::ImageView>,
-    msaa_samples: vk::SampleCountFlags,
+    // This device's ceiling for the HDR format, not the count the world runs
+    // at: `resolve_sample_count` clamps the world's request against it.
+    max_msaa_samples: vk::SampleCountFlags,
     hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
     memory_budget_supported: bool,
     rt_capable: bool,
@@ -4133,7 +4144,6 @@ pub(in crate::vulkan) struct VkReuse {
     swapchain_images: Vec<vk::Image>,
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
-    msaa_samples: vk::SampleCountFlags,
     hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
     memory_budget_supported: bool,
     rt_capable: bool,
@@ -4154,6 +4164,9 @@ impl VkReuse {
             &self.swapchain_images,
             self.swapchain_format,
         )?;
+        // Re-queried rather than carried: the outgoing context holds the count
+        // its world resolved to, and the incoming world's AA mode may differ.
+        let max_msaa_samples = get_max_usable_sample_count(&self.instance, self.physical_device);
         Ok(SharedHardware {
             window: self.window,
             entry: self.entry,
@@ -4171,7 +4184,7 @@ impl VkReuse {
             swapchain_format: self.swapchain_format,
             swapchain_extent: self.swapchain_extent,
             swapchain_image_views,
-            msaa_samples: self.msaa_samples,
+            max_msaa_samples,
             hdr_mode: self.hdr_mode,
             memory_budget_supported: self.memory_budget_supported,
             rt_capable: self.rt_capable,

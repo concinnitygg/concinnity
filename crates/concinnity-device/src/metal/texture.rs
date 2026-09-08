@@ -518,17 +518,23 @@ pub(super) fn create_shadow_map_array(
 // Off-screen HDR render targets for the post-process pipeline. The main pass
 // renders linear-light RGBA16Float into `hdr_color` (MSAA) which resolves
 // into `hdr_resolve` at end-of-pass; the composite pass then samples
-// `hdr_resolve` for tonemap + FXAA. `depth` is the matching MSAA depth,
-// kept alive after the Main pass so post-passes (decals/fog/water/raymarch
-// early-out) can sample it as a read-only snapshot of the rasterised
-// scene depth. `depth_resolve` is the single-sample sibling (populated by
-// the Main pass via a `MultisampleResolve` store action with
-// `MTLMultisampleDepthResolveFilter::Sample0`) that the raymarch pass
-// uses as a writable depth attachment (and that post-Raymarch passes like
+// `hdr_resolve` for tonemap + FXAA.
+//
+// A world that resolved to one sample (temporal anti-aliasing or temporal
+// upscaling: see `concinnity_core::components::hdr_sample_count`) has no
+// `hdr_color` and no `depth`. The Main pass then writes `hdr_resolve` and
+// `depth_resolve` directly and stores rather than resolving, which is why every
+// consumer below reads the resolve pair either way.
+//
+// `depth` is the matching MSAA depth, kept alive after the Main pass so the
+// Hi-Z build can reduce it. `depth_resolve` is the single-sample sibling
+// (populated by the Main pass via a `MultisampleResolve` store action with
+// `MTLMultisampleDepthResolveFilter::Sample0`) that the raymarch pass uses as
+// a writable depth attachment, and that post-Raymarch passes like
 // water/decal/fog sample so they "see" raymarched surface depth alongside
-// rasterised depth). The canonical post-rasterise scene depth target
-// going forward; any future post-pass that needs to write depth should
-// bind this rather than introduce its own depth target.
+// rasterised depth. The canonical post-rasterise scene depth target going
+// forward; any future post-pass that needs to write depth should bind this
+// rather than introduce its own depth target.
 //
 // `hdr_resolve_copy` is a single-sample sibling of `hdr_resolve` reserved
 // for the raymarch pass's scene-copy refraction path: at the start of
@@ -542,7 +548,10 @@ pub(super) fn create_shadow_map_array(
 // 1440p) is small relative to the existing HDR target footprint and
 // keeps the allocation logic branch-free.
 pub(super) struct HdrTargets {
-    pub hdr_color: Retained<ProtocolObject<dyn MTLTexture>>,
+    // The multisample colour attachment, or `None` when the world resolved to
+    // one sample: there is then no resolve step and `hdr_resolve` is both the
+    // Main pass's colour attachment and the scene spine.
+    pub hdr_color: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     pub hdr_resolve: Retained<ProtocolObject<dyn MTLTexture>>,
     pub hdr_resolve_copy: Retained<ProtocolObject<dyn MTLTexture>>,
     // Scene snapshot taken at the head of the transparent pass. A blit copies
@@ -552,10 +561,45 @@ pub(super) struct HdrTargets {
     // `hdr_resolve`. Distinct from `hdr_resolve_copy`, which the raymarch pass
     // fills earlier in the frame for SDF refraction.
     pub transparent_scene_copy: Retained<ProtocolObject<dyn MTLTexture>>,
-    pub depth: Retained<ProtocolObject<dyn MTLTexture>>,
+    // The multisample depth attachment, or `None` at one sample, where
+    // `depth_resolve` is the Main pass's depth attachment directly.
+    pub depth: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     pub depth_resolve: Retained<ProtocolObject<dyn MTLTexture>>,
+    // Read-only scene-depth snapshot for the raymarch cone-march early-out.
+    // The raymarch pass writes `depth_resolve`, so its shader-side read needs a
+    // texture the write cannot alias; a blit at the head of that encoder fills
+    // this one, beside the existing `hdr_resolve_copy` scene blit. Single-sample
+    // whatever the frame's sample count is, so the volume shaders compile
+    // against one declaration.
+    pub depth_copy: Retained<ProtocolObject<dyn MTLTexture>>,
     pub width: u32,
     pub height: u32,
+    // Sample count these targets were built at, and the count every pipeline
+    // that writes them was created with.
+    pub sample_count: u32,
+}
+
+impl HdrTargets {
+    // Whether the Main pass runs multisampled, and so resolves.
+    pub(super) fn multisampled(&self) -> bool {
+        self.hdr_color.is_some()
+    }
+
+    // The Main pass's colour attachment.
+    pub(super) fn color_attachment(&self) -> &ProtocolObject<dyn MTLTexture> {
+        match &self.hdr_color {
+            Some(c) => c.as_ref(),
+            None => self.hdr_resolve.as_ref(),
+        }
+    }
+
+    // The Main pass's depth attachment.
+    pub(super) fn depth_attachment(&self) -> &ProtocolObject<dyn MTLTexture> {
+        match &self.depth {
+            Some(d) => d.as_ref(),
+            None => self.depth_resolve.as_ref(),
+        }
+    }
 }
 
 // Create or recreate the HDR off-screen targets at `width`x`height`. The
@@ -571,20 +615,29 @@ pub(super) fn create_hdr_targets(
     let w = width.max(1) as usize;
     let h = height.max(1) as usize;
 
-    // MSAA HDR color: RGBA16Float, multi-sample 2D, render-target only.
-    let color_desc = TextureDesc {
-        kind: MTLTextureType::Type2DMultisample,
-        format: MTLPixelFormat::RGBA16Float,
-        width: w,
-        height: h,
-        sample_count: sample_count as usize,
-        usage: MTLTextureUsage::RenderTarget,
-        ..Default::default()
-    }
-    .build();
-    let hdr_color = device
-        .newTextureWithDescriptor(&color_desc)
-        .ok_or("failed to create MSAA HDR color texture")?;
+    let multisampled = sample_count > 1;
+
+    // MSAA HDR color: RGBA16Float, multi-sample 2D, render-target only. Absent
+    // at one sample, where `hdr_resolve` is the Main pass's colour attachment.
+    let hdr_color = if multisampled {
+        let color_desc = TextureDesc {
+            kind: MTLTextureType::Type2DMultisample,
+            format: MTLPixelFormat::RGBA16Float,
+            width: w,
+            height: h,
+            sample_count: sample_count as usize,
+            usage: MTLTextureUsage::RenderTarget,
+            ..Default::default()
+        }
+        .build();
+        Some(
+            device
+                .newTextureWithDescriptor(&color_desc)
+                .ok_or("failed to create MSAA HDR color texture")?,
+        )
+    } else {
+        None
+    };
 
     // Single-sample resolve target: same RGBA16Float; sampled by the post pass.
     let resolve_desc = TextureDesc {
@@ -617,21 +670,28 @@ pub(super) fn create_hdr_targets(
         .ok_or("failed to create transparent scene-copy texture")?;
 
     // MSAA depth: matches the color sample count. `ShaderRead` is enabled so
-    // the decal pass (and any future post-pass that needs scene depth) can
-    // sample it as a `depth2d_ms<float>` after the main pass stores it.
-    let depth_desc = TextureDesc {
-        kind: MTLTextureType::Type2DMultisample,
-        format: MTLPixelFormat::Depth32Float,
-        width: w,
-        height: h,
-        sample_count: sample_count as usize,
-        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
-        ..Default::default()
-    }
-    .build();
-    let depth = device
-        .newTextureWithDescriptor(&depth_desc)
-        .ok_or("failed to create MSAA depth texture")?;
+    // the Hi-Z build and the raymarch early-out can sample it after the main
+    // pass stores it. Absent at one sample, where `depth_resolve` is the Main
+    // pass's depth attachment.
+    let depth = if multisampled {
+        let depth_desc = TextureDesc {
+            kind: MTLTextureType::Type2DMultisample,
+            format: MTLPixelFormat::Depth32Float,
+            width: w,
+            height: h,
+            sample_count: sample_count as usize,
+            usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+            ..Default::default()
+        }
+        .build();
+        Some(
+            device
+                .newTextureWithDescriptor(&depth_desc)
+                .ok_or("failed to create MSAA depth texture")?,
+        )
+    } else {
+        None
+    };
 
     // Single-sample depth resolve: populated by the Main pass via a
     // `MTLStoreAction::MultisampleResolve` with depth filter Sample0. The
@@ -650,6 +710,12 @@ pub(super) fn create_hdr_targets(
         .newTextureWithDescriptor(&depth_resolve_desc)
         .ok_or("failed to create single-sample depth resolve texture")?;
 
+    // Raymarch's read-only depth snapshot. Same descriptor as `depth_resolve`
+    // so the blit is a plain copy_from_texture.
+    let depth_copy = device
+        .newTextureWithDescriptor(&depth_resolve_desc)
+        .ok_or("failed to create depth-copy texture")?;
+
     Ok(HdrTargets {
         hdr_color,
         hdr_resolve,
@@ -657,8 +723,10 @@ pub(super) fn create_hdr_targets(
         transparent_scene_copy,
         depth,
         depth_resolve,
+        depth_copy,
         width: w as u32,
         height: h as u32,
+        sample_count: sample_count.max(1),
     })
 }
 

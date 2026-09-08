@@ -13,8 +13,11 @@
 // Two compute kernels come from the single-source `src/shaders/hiz_build.slang`
 // (one precompiled variant library each):
 //
-//   * `hiz_init_msaa`: reduce the MSAA main-depth resource into mip 0, taking
-//                      the MAX over every sample so the result is conservative.
+//   * `hiz_init_msaa` / `hiz_init_single`: reduce the main-depth resource into
+//                      mip 0. The multisample variant takes the MAX over every
+//                      sample so the result is conservative; a world that
+//                      resolved to one sample builds the single-sample variant
+//                      instead.
 //   * `hiz_downsample`: MAX-reduce 2x2 source texels into the next mip.
 //
 // The pyramid is *not* a graph node: it runs inline on the outer command
@@ -38,7 +41,7 @@ use objc2_metal::{
     MTLLibrary as _, MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
-use super::context::{HDR_SAMPLE_COUNT, MtlContext};
+use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
@@ -91,18 +94,29 @@ type HizPipelines = (
 pub(super) fn build_hiz_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
+    sample_count: u32,
 ) -> Result<HizPipelines, String> {
-    let init_lib = super::slang_shaders::HIZ_INIT_MSAA.library(device, hot_reload)?;
+    let (init_lib, init_entry) = if sample_count > 1 {
+        (
+            super::slang_shaders::HIZ_INIT_MSAA.library(device, hot_reload)?,
+            "hiz_init_msaa",
+        )
+    } else {
+        (
+            super::slang_shaders::HIZ_INIT_SINGLE.library(device, hot_reload)?,
+            "hiz_init_single",
+        )
+    };
     let downsample_lib = super::slang_shaders::HIZ_DOWNSAMPLE.library(device, hot_reload)?;
     let init_fn = init_lib
-        .newFunctionWithName(&ns_str("hiz_init_msaa"))
-        .ok_or("hiz_init_msaa not found in hiz library")?;
+        .newFunctionWithName(&ns_str(init_entry))
+        .ok_or("hiz init entry not found in hiz library")?;
     let downsample_fn = downsample_lib
         .newFunctionWithName(&ns_str("hiz_downsample"))
         .ok_or("hiz_downsample not found in hiz library")?;
     let init_pipeline = device
         .newComputePipelineStateWithFunction_error(&init_fn)
-        .map_err(|e| format!("failed to create hiz_init_msaa pipeline: {:?}", e))?;
+        .map_err(|e| format!("failed to create {init_entry} pipeline: {:?}", e))?;
     let downsample_pipeline = device
         .newComputePipelineStateWithFunction_error(&downsample_fn)
         .map_err(|e| format!("failed to create hiz_downsample pipeline: {:?}", e))?;
@@ -165,9 +179,11 @@ impl HiZResources {
         width: u32,
         height: u32,
         hot_reload: bool,
+        sample_count: u32,
     ) -> Result<Self, String> {
         let mip_count = hiz_mip_count(width, height);
-        let (init_pipeline, downsample_pipeline) = build_hiz_pipelines(device, hot_reload)?;
+        let (init_pipeline, downsample_pipeline) =
+            build_hiz_pipelines(device, hot_reload, sample_count)?;
         let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
         Ok(Self {
             init_pipeline,
@@ -228,7 +244,11 @@ impl MtlContext {
         if hiz.mip_count == 0 || hiz.mip_views.is_empty() {
             return;
         }
-        let depth: &ProtocolObject<dyn MTLTexture> = self.hdr_targets.depth.as_ref();
+        // Without MSAA the attachment is the resolve target, which the raymarch
+        // pass also writes, so the pyramid then covers raymarched surfaces too.
+        // A nearer occluder only lowers the MAX, which makes the cull more
+        // permissive, never wrong.
+        let depth: &ProtocolObject<dyn MTLTexture> = self.hdr_targets.depth_attachment();
 
         let Some(enc) = cmd_buf.computeCommandEncoder() else {
             tracing::error!("hiz: failed to get compute encoder");
@@ -236,12 +256,13 @@ impl MtlContext {
         };
         let enc = ScopedEncoder::new(enc, ns_string!("hiz-build"));
 
-        // Init: mip 0 from the MSAA main depth, MAX over samples.
+        // Init: mip 0 from the main depth, MAX over samples where there is more
+        // than one (the single-sample kernel ignores the count).
         let init_params = HizParams {
             dst_width: hiz.width,
             dst_height: hiz.height,
             src_mip: 0,
-            sample_count: HDR_SAMPLE_COUNT,
+            sample_count: self.hdr_targets.sample_count,
         };
         enc.set_pipeline(&hiz.init_pipeline);
         enc.set_value(&init_params, 0);

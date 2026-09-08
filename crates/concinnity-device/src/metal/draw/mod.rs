@@ -687,7 +687,7 @@ impl MtlContext {
             shadow_map_size: self.shadow.map_size,
             hdr_width: self.hdr_targets.width,
             hdr_height: self.hdr_targets.height,
-            hdr_sample_count: super::context::HDR_SAMPLE_COUNT,
+            hdr_sample_count: self.hdr_targets.sample_count,
             bindless_cull_enabled: object_buffer.is_some() && cull_draw_args.is_some(),
             auto_exposure_enabled: self.auto_exposure.pipelines.is_some(),
             // Gated on the pipelines existing: a scene-less world builds none
@@ -1440,7 +1440,7 @@ impl MtlContext {
                 &self.device,
                 render_w,
                 render_h,
-                super::context::HDR_SAMPLE_COUNT,
+                self.hdr_targets.sample_count,
             )?;
         }
         // The planar reflection targets are render-resolution (they re-render the
@@ -1452,7 +1452,7 @@ impl MtlContext {
                 &self.device,
                 render_w,
                 render_h,
-                super::context::HDR_SAMPLE_COUNT,
+                self.hdr_targets.sample_count,
                 &planes,
             )?);
         }

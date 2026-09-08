@@ -510,6 +510,23 @@ pub(super) fn create_logical_device(
     })
 }
 
+// The requested HDR sample count clamped to what this device reports for the
+// HDR format. `requested` is 1 whenever a temporal technique is active (see
+// `concinnity_core::components::hdr_sample_count`), which collapses the whole
+// main pass to the single-sample path: no resolve attachment, and the colour
+// image is the scene spine.
+pub(super) fn resolve_sample_count(
+    supported: vk::SampleCountFlags,
+    requested: u32,
+) -> vk::SampleCountFlags {
+    for &candidate in &[vk::SampleCountFlags::TYPE_4, vk::SampleCountFlags::TYPE_2] {
+        if supported.contains(candidate) && requested >= candidate.as_raw() {
+            return candidate;
+        }
+    }
+    vk::SampleCountFlags::TYPE_1
+}
+
 pub(super) fn get_max_usable_sample_count(
     instance: &ash::Instance,
     pd: vk::PhysicalDevice,
@@ -524,4 +541,41 @@ pub(super) fn get_max_usable_sample_count(
         }
     }
     vk::SampleCountFlags::TYPE_1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_temporal_request_collapses_to_one_sample() {
+        for supported in [
+            vk::SampleCountFlags::TYPE_4,
+            vk::SampleCountFlags::TYPE_2,
+            vk::SampleCountFlags::TYPE_1,
+        ] {
+            assert_eq!(
+                resolve_sample_count(supported, 1),
+                vk::SampleCountFlags::TYPE_1
+            );
+        }
+    }
+
+    #[test]
+    fn a_multisample_request_clamps_to_device_support() {
+        assert_eq!(
+            resolve_sample_count(vk::SampleCountFlags::TYPE_4, 4),
+            vk::SampleCountFlags::TYPE_4
+        );
+        // A device that only reaches 2x still honours a 4x request at 2x, the
+        // behaviour `get_max_usable_sample_count` had on its own.
+        assert_eq!(
+            resolve_sample_count(vk::SampleCountFlags::TYPE_2, 4),
+            vk::SampleCountFlags::TYPE_2
+        );
+        assert_eq!(
+            resolve_sample_count(vk::SampleCountFlags::TYPE_1, 4),
+            vk::SampleCountFlags::TYPE_1
+        );
+    }
 }
