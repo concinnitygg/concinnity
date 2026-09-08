@@ -87,9 +87,11 @@ pub(super) fn d3d12_state(
 // (created / cross-frame-restored) state is `resting`, into the concrete
 // `(before, after)` D3D12 states the executor passes to `transition_barrier`. A
 // first-use `Undefined` source resolves to `resting` so the before-state matches
-// the resource's real state (the debug layer rejects a mismatch). Returns `None`
-// when before == after: a no-op the executor skips, e.g. a depth or storage
-// producer whose resting state already equals its write state.
+// the resource's real state (the debug layer rejects a mismatch); a caller that
+// has just re-initialized an aliased resource passes the state that discard left
+// it in instead, which is the same contract. Returns `None` when before ==
+// after: a no-op the executor skips, e.g. a depth or storage producer whose
+// resting state already equals its write state.
 //
 // `read_stages` is the barrier's consuming-stage union (see `ReadStages`); it
 // applies to whichever side is `Read` (the `to` of a consumer transition or the
@@ -262,6 +264,55 @@ mod tests {
                 ReadStages::empty()
             ),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        );
+    }
+
+    #[test]
+    fn a_discarded_alias_needs_no_further_transition() {
+        // What lets the executor leave a reclaimed transient in RENDER_TARGET
+        // after the discard that re-initializes it, instead of returning it to
+        // rest for the producing pass to open again: the pass's own first-write
+        // transition, opened from the discard state rather than from rest,
+        // collapses to nothing for a colour target.
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::ColorTarget,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                ResourceState::Undefined,
+                ResourceState::Write,
+                FRAG,
+            ),
+            None
+        );
+        // From rest it is a real transition, which is the round trip the discard
+        // now subsumes.
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::ColorTarget,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                ResourceState::Undefined,
+                ResourceState::Write,
+                FRAG,
+            ),
+            Some(DxBarrier::Transition(
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET
+            ))
+        );
+        // A reclaimed member whose first write is a compute one still needs its
+        // own transition, and it opens from the discard state.
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::StorageImage,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                ResourceState::Undefined,
+                ResourceState::Write,
+                FRAG,
+            ),
+            Some(DxBarrier::Transition(
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+            ))
         );
     }
 

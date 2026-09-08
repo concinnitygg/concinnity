@@ -179,6 +179,13 @@ impl PlanarReflectionSet {
         planes: &[[f32; 4]],
         targets: PlanarTargets,
     ) -> Result<Self, String> {
+        if planes.len() > MAX_PLANAR_PLANES {
+            return Err(format!(
+                "planar reflection: {} planes exceeds the {MAX_PLANAR_PLANES}-plane ceiling the \
+                 reserved resolve descriptors are sized to",
+                planes.len()
+            ));
+        }
         let device = alloc.device();
         let PlanarConfig {
             sample_count,
@@ -456,10 +463,20 @@ impl DxContext {
         let (w, h) = (self.extent.render_width, self.extent.render_height);
 
         // Per plane: compute the reflected matrices, write the reflected view CBV,
-        // and collect the reflected frustum + eye for the mirror cull.
-        let mut cull_planes: Vec<(crate::gfx::frustum::Frustum, [f32; 3])> =
-            Vec::with_capacity(set.plane_count());
-        for slot in 0..set.plane_count() {
+        // and collect the reflected frustum + eye for the mirror cull. Inline,
+        // since the set never holds more planes than the engine ceiling; the
+        // filler entries past `plane_count` are never read.
+        const NO_PLANE: (crate::gfx::frustum::Frustum, [f32; 3]) = (
+            crate::gfx::frustum::Frustum {
+                planes: [crate::gfx::frustum::Plane {
+                    normal: [0.0; 3],
+                    d: 0.0,
+                }; 6],
+            },
+            [0.0; 3],
+        );
+        let mut cull_planes = [NO_PLANE; MAX_PLANAR_PLANES];
+        for (slot, cull_plane) in cull_planes.iter_mut().enumerate().take(set.plane_count()) {
             let oriented = crate::gfx::planar_reflection::orient_plane_toward(
                 set.planes[slot],
                 params.cam_pos,
@@ -496,10 +513,10 @@ impl DxContext {
                     std::mem::size_of::<ViewUniforms>(),
                 );
             }
-            cull_planes.push((
+            *cull_plane = (
                 crate::gfx::frustum::Frustum::from_view_projection(m.view_proj),
                 m.eye,
-            ));
+            );
         }
 
         // Reflected-frustum mirror cull into the per-plane regions of this frame's
@@ -507,7 +524,7 @@ impl DxContext {
         self.encode_planar_culls(
             cmd,
             params.frame_idx,
-            &cull_planes,
+            &cull_planes[..set.plane_count()],
             set.indirect(params.frame_idx),
             set.status_gva(params.frame_idx),
             // Stride regions by the SAME fixed capacity `region_offset` reads with.

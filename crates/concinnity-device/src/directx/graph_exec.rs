@@ -19,11 +19,12 @@
 // `metal/graph_exec.rs`.
 //
 // Per-pass `barriers_before` is consumed for every resource the barrier registry
-// resolves: `emit_graph_barriers` translates their graph state transitions into
+// resolves: `emit_pass_prologue` translates their graph state transitions into
 // `D3D12_RESOURCE_BARRIER` transitions at the start of each pass's own command
-// list, and `emit_graph_restores` returns any that the frame left off their
-// resting state at the end of the outer "end" list. Every other resource still
-// owns its transitions inline in its encoder; `barrier_audit.rs` classifies each
+// list -- batched, so a pass costs one `ResourceBarrier` call -- and
+// `emit_graph_restores` returns any that the frame left off their resting state
+// at the end of the outer "end" list. Every other resource still owns its
+// transitions inline in its encoder; `barrier_audit.rs` classifies each
 // remaining site.
 //
 // The registry decides two things per resource: which D3D12 resource backs it,
@@ -47,7 +48,7 @@ use std::sync::Mutex;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::render_graph::{
-    CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
+    BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
 };
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
 
@@ -56,19 +57,16 @@ use super::context::DxContext;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdList, pool_index};
 use super::texture::{aliasing_barrier, transition_barrier, uav_barrier};
 
-// One resolved barrier target: the D3D12 resources a graph resource backs, its
+// One resolved barrier target: the D3D12 resource a graph resource backs, its
 // class, and its resting state (created / cross-frame-restored). Built once per
-// frame by `build_barrier_registry`; the resources are refcount clones, read only
-// to record transitions into a worker's command list.
+// frame by `build_barrier_registry`.
 //
-// `resources` is a list because a graph resource may stand for several GPU
-// objects that are always in the same state, transitioned in one
-// `ResourceBarrier`. Nothing uses that today -- the G-buffer pre-pass's
-// attachments are separate graph resources, since their consumers differ -- but
-// the shape is what keeps one timeline per object available when a future
-// resource genuinely needs it.
-struct DxBarrierTarget {
-    resources: Vec<ID3D12Resource>,
+// The resource is borrowed from `DxContext`, not refcount-cloned: the registry is
+// a frame-path local that every worker joins before it drops, so a borrow both
+// keeps the per-frame path free of `AddRef` / `Release` traffic and makes it
+// impossible for a target to outlive the field it was resolved from.
+struct DxBarrierTarget<'a> {
+    resource: &'a ID3D12Resource,
     class: GraphResourceClass,
     resting: D3D12_RESOURCE_STATES,
 }
@@ -80,101 +78,164 @@ struct DxBarrierTarget {
 // main thread by `build_barrier_registry`, where the only field-naming of the
 // migrated resources lives (so it is what re-cuts when those fields move into
 // sub-structs); the parallel emit path stays field-agnostic.
-struct DxBarrierRegistry(Vec<Option<DxBarrierTarget>>);
+struct DxBarrierRegistry<'a>(Vec<Option<DxBarrierTarget<'a>>>);
 
 // SAFETY: same read-only contract as `ParallelCtxRef` / `SendableCmdList` (see
-// `parallel_encoder.rs`). The registry holds refcount clones of D3D12 resource
-// handles that workers only read, to record `ResourceBarrier` calls into their
-// own command lists; every worker joins before the borrow that built the
-// registry ends. D3D12 device-derived objects are thread-safe for shared read
-// per Microsoft's free-threading rules.
-unsafe impl Sync for DxBarrierRegistry {}
+// `parallel_encoder.rs`). The registry holds borrows of D3D12 resource handles
+// that workers only read, to record `ResourceBarrier` calls into their own
+// command lists; every worker joins before the borrow that built the registry
+// ends. D3D12 device-derived objects are thread-safe for shared read per
+// Microsoft's free-threading rules.
+unsafe impl Sync for DxBarrierRegistry<'_> {}
 
-// Per-pass aliasing barriers, indexed by topological pass position: the pooled
-// transients this pass first-writes that reclaim a shared heap region from an
-// earlier transient. Built once per frame on the main thread; the resources are
-// refcount clones workers only read.
-struct DxAliasBarriers(Vec<Vec<ID3D12Resource>>);
+// One pooled transient a pass reclaims a shared heap region for, resolved once
+// per frame on the main thread.
+struct DxAliasBarrier<'a> {
+    // Topological position of the pass that first-writes it, i.e. where the
+    // aliasing barrier and the re-initializing discard belong.
+    pass: usize,
+    // Its `ResourceId`, so the prologue can recognise the pass's own transition
+    // for it and open that from the discard state instead of from rest.
+    resource_index: usize,
+    resource: &'a ID3D12Resource,
+    // Where it sits between frames: the state the discard opens from, and the
+    // one it is put back in when the graph drives it no further.
+    resting: D3D12_RESOURCE_STATES,
+}
+
+// Every aliasing barrier the frame owes, sorted by pass so a pass's own are one
+// subslice. Flat rather than a `Vec` per pass: at most a handful of transients
+// alias in a frame, and the whole table is one allocation.
+struct DxAliasBarriers<'a>(Vec<DxAliasBarrier<'a>>);
 
 // SAFETY: same read-only contract as `DxBarrierRegistry` above.
-unsafe impl Sync for DxAliasBarriers {}
+unsafe impl Sync for DxAliasBarriers<'_> {}
 
-// Emit the aliasing barriers for a pass: for each pooled transient that reclaims
-// a shared heap region here, announce the reuse, then re-initialize the resource
-// so its first write is legal. The aliasing barrier leaves the memory's contents
-// undefined and D3D12 rejects a placed render target's use until a
-// Clear/Discard/Copy initializes it, so Discard each (in RENDER_TARGET, then
-// back to its resting PIXEL_SHADER_RESOURCE state) before the producing pass's
-// own resting -> RENDER_TARGET transition runs. The pass then fully overwrites
-// it. Both managed transients rest sampled; a future non-sampled aliased member
-// would need its resting state threaded through here.
-fn emit_alias_barriers(cmd: &ID3D12GraphicsCommandList, resources: &[ID3D12Resource]) {
-    const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    for res in resources {
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[aliasing_barrier(res)]);
-            cmd.ResourceBarrier(&[transition_barrier(
-                res,
-                RESTING,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            )]);
-            cmd.DiscardResource(res, None);
-            cmd.ResourceBarrier(&[transition_barrier(
-                res,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                RESTING,
-            )]);
-        }
+impl<'a> DxAliasBarriers<'a> {
+    fn for_pass(&self, pass: usize) -> &[DxAliasBarrier<'a>] {
+        let start = self.0.partition_point(|a| a.pass < pass);
+        let end = self.0.partition_point(|a| a.pass <= pass);
+        &self.0[start..end]
     }
 }
 
-// Emit the native transitions for the migrated graph resources from a pass's
-// `barriers_before`, resolved through the registry. Called at the start of each
-// pass's own command list, before the pass encodes, so the transition lands in
-// the same submission slot the prior inline barrier used to. A resource with no
-// registry entry is skipped and keeps its inline barriers. Takes no `DxContext`:
-// the field-to-resource mapping was already resolved into the registry, so this
-// parallel path is field-agnostic.
-fn emit_graph_barriers(
-    cmd: &ID3D12GraphicsCommandList,
-    registry: &DxBarrierRegistry,
-    pass: &CompiledPass,
-) {
-    for op in &pass.barriers_before {
-        let Some(Some(target)) = registry.0.get(op.resource_index()) else {
-            continue;
-        };
-        let Some(barrier) = d3d12_barrier(
-            target.class,
-            target.resting,
-            op.source_state(),
-            op.to_state(),
-            op.read_stages(),
-        ) else {
-            continue;
-        };
-        let native: Vec<D3D12_RESOURCE_BARRIER> = target
-            .resources
-            .iter()
-            .map(|r| match barrier {
-                DxBarrier::Transition(before, after) => transition_barrier(r, before, after),
-                DxBarrier::Uav => uav_barrier(r),
-            })
-            .collect();
+// The state a placed resource must be in for `DiscardResource` to re-initialize
+// it once an aliasing barrier has claimed its heap region.
+const DISCARD_STATE: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+// How many barriers one `ResourceBarrier` call carries. A pass declares far
+// fewer, so this is a cap rather than a budget: a batch that fills flushes and
+// keeps filling, which costs an extra call and stays correct.
+const BARRIER_BATCH: usize = 16;
+
+// Barriers accumulated for one `ResourceBarrier` call. D3D12 charges per call
+// (each is a driver round trip that can split the command list), so the frame
+// path fills one of these per pass instead of issuing a call per resource.
+//
+// Fixed capacity, so a pass costs no allocation. The barriers hold borrowed
+// resource pointers (`com::borrowed`), which is why the batch is a short-lived
+// local: it must not outlive the registry the pointers came from.
+struct BarrierBatch<'a> {
+    cmd: &'a ID3D12GraphicsCommandList,
+    entries: [D3D12_RESOURCE_BARRIER; BARRIER_BATCH],
+    len: usize,
+}
+
+impl<'a> BarrierBatch<'a> {
+    fn new(cmd: &'a ID3D12GraphicsCommandList) -> Self {
+        Self {
+            cmd,
+            entries: std::array::from_fn(|_| D3D12_RESOURCE_BARRIER::default()),
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, barrier: D3D12_RESOURCE_BARRIER) {
+        if self.len == BARRIER_BATCH {
+            self.flush();
+        }
+        self.entries[self.len] = barrier;
+        self.len += 1;
+    }
+
+    fn flush(&mut self) {
+        if self.len == 0 {
+            return;
+        }
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.ResourceBarrier(&native);
+            self.cmd.ResourceBarrier(&self.entries[..self.len]);
         }
+        self.len = 0;
     }
+}
+
+// Translate one of a pass's `barriers_before` through the registry and stage it.
+// A resource with no registry entry is skipped and keeps its inline barriers, as
+// is a transition D3D12 needs nothing for. `opened_at` overrides the state a
+// first use (`Undefined` source) starts from, which is how a resource this pass
+// has just discarded is taken on from `DISCARD_STATE` rather than from rest.
+fn stage_graph_barrier(
+    batch: &mut BarrierBatch,
+    registry: &DxBarrierRegistry,
+    op: &BarrierOp,
+    opened_at: Option<D3D12_RESOURCE_STATES>,
+) {
+    let Some(Some(target)) = registry.0.get(op.resource_index()) else {
+        return;
+    };
+    let Some(barrier) = d3d12_barrier(
+        target.class,
+        opened_at.unwrap_or(target.resting),
+        op.source_state(),
+        op.to_state(),
+        op.read_stages(),
+    ) else {
+        return;
+    };
+    batch.push(match barrier {
+        DxBarrier::Transition(before, after) => transition_barrier(target.resource, before, after),
+        DxBarrier::Uav => uav_barrier(target.resource),
+    });
+}
+
+// One slot of a per-frame buffer ring, as a barrier target: the slot for the
+// frame being recorded. A free function rather than a closure so the borrow it
+// returns is tied to the ring, not to the resolver's own frame.
+fn frame_slot(
+    slots: &[ID3D12Resource],
+    frame_idx: usize,
+    resting: D3D12_RESOURCE_STATES,
+) -> Option<(&ID3D12Resource, D3D12_RESOURCE_STATES)> {
+    Some((slots.get(frame_idx)?, resting))
+}
+
+// Whether the pass's own graph transition takes a reclaimed resource on from the
+// discard, so the prologue does not have to put it back at rest itself.
+fn graph_takes_over(
+    registry: &DxBarrierRegistry,
+    pass: &CompiledPass,
+    resource_index: usize,
+) -> bool {
+    matches!(registry.0.get(resource_index), Some(Some(_)))
+        && pass
+            .barriers_before
+            .iter()
+            .any(|op| op.resource_index() == resource_index)
 }
 
 // Everything a pass owes its command list before its body: the aliasing barriers
-// for any pooled transient it first-writes (which must precede the resting ->
-// RENDER_TARGET transition below), then its graph-derived transitions. Vulkan
-// emits the two halves in the same order, for the same reason.
+// for any pooled transient it first-writes and the discard that re-initializes
+// it, plus its graph-derived transitions. Vulkan emits the same two halves in the
+// same order, for the same reason.
+//
+// An aliasing barrier leaves the reclaimed memory's contents undefined, and D3D12
+// rejects a placed render target's use until a Clear/Discard/Copy initializes it,
+// so each reclaimed resource is opened for a `DiscardResource` first. It is left
+// in `DISCARD_STATE` afterwards rather than put back at rest: the pass's own
+// first-write transition is what takes it on from there, which for a colour
+// target is the very state it wants and collapses to nothing.
 //
 // One function because the two recording paths are otherwise asymmetric --
 // Composite records into the outer "end" list on the main thread while every
@@ -188,8 +249,59 @@ fn emit_pass_prologue(
     idx: usize,
     pass: &CompiledPass,
 ) {
-    emit_alias_barriers(cmd, &alias.0[idx]);
-    emit_graph_barriers(cmd, registry, pass);
+    let aliased = alias.for_pass(idx);
+    let mut batch = BarrierBatch::new(cmd);
+    for a in aliased {
+        batch.push(aliasing_barrier(a.resource));
+        if a.resting != DISCARD_STATE {
+            batch.push(transition_barrier(a.resource, a.resting, DISCARD_STATE));
+        }
+    }
+    for op in &pass.barriers_before {
+        if aliased
+            .iter()
+            .any(|a| a.resource_index == op.resource_index())
+        {
+            continue;
+        }
+        stage_graph_barrier(&mut batch, registry, op, None);
+    }
+    batch.flush();
+
+    if aliased.is_empty() {
+        return;
+    }
+    for a in aliased {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
+        unsafe {
+            cmd.DiscardResource(a.resource, None);
+        }
+    }
+    for op in &pass.barriers_before {
+        if aliased
+            .iter()
+            .any(|a| a.resource_index == op.resource_index())
+        {
+            // The aliasing barrier lands at the resource's first use, so the
+            // transition here opens from no prior state, and the discard is what
+            // that resolves to instead of the resting state.
+            debug_assert_eq!(
+                op.source_state(),
+                crate::gfx::render_graph::ResourceState::Undefined,
+                "a reclaimed transient is transitioned from a state the discard replaced"
+            );
+            stage_graph_barrier(&mut batch, registry, op, Some(DISCARD_STATE));
+        }
+    }
+    // A reclaimed resource the graph drives no further would otherwise sit in the
+    // discard state, which is not where the next frame expects to find it.
+    for a in aliased {
+        if a.resting != DISCARD_STATE && !graph_takes_over(registry, pass, a.resource_index) {
+            batch.push(transition_barrier(a.resource, DISCARD_STATE, a.resting));
+        }
+    }
+    batch.flush();
 }
 
 // Return every driven resource the frame left off its resting state, so the next
@@ -202,6 +314,7 @@ fn emit_graph_restores(
     registry: &DxBarrierRegistry,
     graph: &CompiledGraph,
 ) {
+    let mut batch = BarrierBatch::new(cmd);
     for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
         let Some(Some(target)) = registry.0.get(idx) else {
             continue;
@@ -210,17 +323,9 @@ fn emit_graph_restores(
         else {
             continue;
         };
-        let native: Vec<D3D12_RESOURCE_BARRIER> = target
-            .resources
-            .iter()
-            .map(|r| transition_barrier(r, before, after))
-            .collect();
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&native);
-        }
+        batch.push(transition_barrier(target.resource, before, after));
     }
+    batch.flush();
 }
 
 // Check the graph's barrier coverage and cross-frame state contract for every
@@ -443,7 +548,7 @@ impl DxContext {
         let registry_ref = &registry;
         // Likewise resolve the per-pass aliasing barriers (which pooled transients
         // reclaim a shared heap region) once, shared read-only into the workers.
-        let alias_barriers = self.build_alias_barriers(graph);
+        let alias_barriers = self.build_alias_barriers(graph, &registry);
         let alias_barriers_ref = &alias_barriers;
         let frame_idx = params.frame_idx;
 
@@ -638,17 +743,21 @@ impl DxContext {
     // field-grouping re-cuts here, not in the executor. A resource the owning
     // feature disabled (or one never migrated) gets `None`, and the graph carries
     // no barrier for it either.
-    fn build_barrier_registry(&self, graph: &CompiledGraph, frame_idx: usize) -> DxBarrierRegistry {
+    fn build_barrier_registry(
+        &self,
+        graph: &CompiledGraph,
+        frame_idx: usize,
+    ) -> DxBarrierRegistry<'_> {
         DxBarrierRegistry(
             graph
                 .resources
                 .iter()
                 .map(|res| {
                     let class = res.class()?;
-                    let (resources, resting) =
-                        self.barrier_objects_for_label(res.label, frame_idx)?;
+                    let (resource, resting) =
+                        self.barrier_object_for_label(res.label, frame_idx)?;
                     Some(DxBarrierTarget {
-                        resources,
+                        resource,
                         class,
                         resting,
                     })
@@ -664,24 +773,41 @@ impl DxContext {
     // table is empty whenever no slot is shared this frame (e.g. bloom off leaves
     // `ao_output` aliased but `bloom_top` absent from the graph; ssao off leaves
     // `bloom_top` un-aliased). Mirrors the Vulkan executor's `build_alias_barriers`.
-    fn build_alias_barriers(&self, graph: &CompiledGraph) -> DxAliasBarriers {
-        let mut table: Vec<Vec<ID3D12Resource>> = vec![Vec::new(); graph.passes.len()];
-        for res in &graph.resources {
+    //
+    // The resting state comes from the registry when the graph drives the
+    // resource, so the discard opens it from where it really sits rather than
+    // from an assumed sampled state; a pooled member the graph does not drive
+    // falls back to sampled, which is where the pool creates a colour target.
+    fn build_alias_barriers<'a>(
+        &'a self,
+        graph: &CompiledGraph,
+        registry: &DxBarrierRegistry<'a>,
+    ) -> DxAliasBarriers<'a> {
+        let mut table = Vec::new();
+        for (idx, res) in graph.resources.iter().enumerate() {
             if self.transient_pool.alias_predecessor(res.label).is_none() {
                 continue;
             }
-            if let Some(r) = self.transient_pool.resource_for(res.label) {
-                let first = res.lifetime.first;
-                if first < table.len() {
-                    table[first].push(r.clone());
-                }
+            if let Some(r) = self.transient_pool.resource_for(res.label)
+                && res.lifetime.first < graph.passes.len()
+            {
+                table.push(DxAliasBarrier {
+                    pass: res.lifetime.first,
+                    resource_index: idx,
+                    resource: r,
+                    resting: match registry.0.get(idx) {
+                        Some(Some(target)) => target.resting,
+                        _ => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    },
+                });
             }
         }
+        table.sort_by_key(|a| a.pass);
         DxAliasBarriers(table)
     }
 
-    // Map one graph resource label to the D3D12 resources backing it and their
-    // resting state (the state they were created in and return to at the end of
+    // Map one graph resource label to the D3D12 resource backing it and its
+    // resting state (the state it was created in and returns to at the end of
     // every frame), so a first-use `Undefined` transition names the state the
     // resource is really in. The barrier class is NOT decided here: it follows
     // the usage the graph declares (`CompiledResource::class`), so this backend
@@ -690,43 +816,42 @@ impl DxContext {
     // `hdr_depth` are both depth targets, and one rests sampled while the other
     // rests as a depth attachment. `None` means the owning feature is inactive,
     // and the graph carries no node for it either.
-    fn barrier_objects_for_label(
+    //
+    // The resource is borrowed rather than cloned; see `DxBarrierTarget`.
+    fn barrier_object_for_label(
         &self,
         label: &str,
         frame_idx: usize,
-    ) -> Option<(Vec<ID3D12Resource>, D3D12_RESOURCE_STATES)> {
-        // A per-frame buffer resolves through the frame slot being recorded.
-        let buffer = |slots: &[ID3D12Resource], resting| {
-            slots.get(frame_idx).map(|r| (vec![r.clone()], resting))
-        };
-        // The common case: one graph resource, one GPU object.
-        let one = |r: &ID3D12Resource, resting| (vec![r.clone()], resting);
+    ) -> Option<(&ID3D12Resource, D3D12_RESOURCE_STATES)> {
         const SAMPLED: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         match label {
             // Indirect commands the cull kernel writes (UAV) and the main pass
             // consumes through `ExecuteIndirect`.
-            "draw_args" => buffer(
+            "draw_args" => frame_slot(
                 &self.cull.indirect_cmd_buffers,
+                frame_idx,
                 D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
             ),
             // Phase-2 counterpart, written by `Cull2` and consumed by `Main2`.
-            "draw_args2" => buffer(
+            "draw_args2" => frame_slot(
                 &self.cull.indirect_cmd_buffers_2,
+                frame_idx,
                 D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
             ),
             // Phase 1 writes it and phase 2 reads it through the same root UAV,
             // so it never leaves `UNORDERED_ACCESS`.
-            "cull_status" => buffer(
+            "cull_status" => frame_slot(
                 &self.cull.cull_status_buffers,
+                frame_idx,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             ),
             // Per-cluster light index lists: the dispatch flips them to UAV and
             // back, so they rest sampled. One buffer, not per-frame.
-            "cluster_light_list" => Some(one(&self.light_cull.cluster_buffer, SAMPLED)),
+            "cluster_light_list" => Some((&self.light_cull.cluster_buffer, SAMPLED)),
             "ao_output" => self
                 .transient_pool
                 .resource_for("ao_output")
-                .map(|r| one(r, SAMPLED)),
+                .map(|r| (r, SAMPLED)),
             // The bloom chain's half-resolution top octave, and the only mip the
             // graph models: the Bloom node writes it, Composite samples it, and
             // the finer octaves in between never leave the node. Pooled, so it
@@ -734,7 +859,7 @@ impl DxContext {
             "bloom_top" => self
                 .transient_pool
                 .resource_for("bloom_top")
-                .map(|r| one(r, SAMPLED)),
+                .map(|r| (r, SAMPLED)),
             // The cascade array rests sampled: the Shadow producer barrier is the
             // real cross-frame reset for this frame's shadow loop and the Main
             // consumer returns it to sampled. Created sampled, so frame 0's
@@ -744,7 +869,7 @@ impl DxContext {
                 .resource
                 .as_ref()
                 .filter(|_| !self.shadow.dsvs.is_empty())
-                .map(|s| one(&s.resource, SAMPLED)),
+                .map(|s| (&s.resource, SAMPLED)),
             // The spot array rests sampled exactly like the cascades. Only
             // imported when the world has shadowed spots, so the `dsvs` filter
             // matches the graph gate.
@@ -753,20 +878,20 @@ impl DxContext {
                 .resource
                 .as_ref()
                 .filter(|_| !self.spot_shadow.dsvs.is_empty())
-                .map(|s| one(&s.resource, SAMPLED)),
+                .map(|s| (&s.resource, SAMPLED)),
             // The froxel volume rests sampled: the FogFroxel producer opens it for
             // the compute write and the Fog consumer closes it for the sample.
             "fog_froxel_volume" => self
                 .fog
                 .resources
                 .as_ref()
-                .map(|f| one(&f.volume_resource, SAMPLED)),
+                .map(|f| (&f.volume_resource, SAMPLED)),
             // Main depth rests as the depth attachment: one resource shared by
             // every frame in flight, created in DEPTH_WRITE, and the frame's
             // restore returns it there for the next main pass. This is the case
             // that keeps resting per-resource rather than per-class -- shadow_map
             // is the same class and rests sampled.
-            "hdr_depth" => Some(one(&self.depth.resource, D3D12_RESOURCE_STATE_DEPTH_WRITE)),
+            "hdr_depth" => Some((&self.depth.resource, D3D12_RESOURCE_STATE_DEPTH_WRITE)),
             // The multisample colour attachment, which exists only when the
             // world is multisampled -- and so does the graph resource. It rests
             // in RENDER_TARGET and no pass ever samples it, so every derived
@@ -778,7 +903,7 @@ impl DxContext {
                 .hdr
                 .resolve
                 .is_some()
-                .then(|| one(&self.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET)),
+                .then_some((&self.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET)),
             // The single-sample scene spine every decoration blends into. Which
             // object backs it, and where it rests, both follow MSAA: with MSAA
             // on it is the resolve target and rests sampled; with MSAA off there
@@ -786,8 +911,8 @@ impl DxContext {
             // RENDER_TARGET for the next frame's main pass. Its class is the
             // same either way.
             "hdr_resolve" => Some(match &self.hdr.resolve {
-                Some(resolve) => one(resolve, SAMPLED),
-                None => one(&self.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET),
+                Some(resolve) => (resolve, SAMPLED),
+                None => (&self.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET),
             }),
             // The scene-with-reflections the post stack consumes. Declared by
             // the graph exactly when a reflection resolve runs, which is the
@@ -796,7 +921,7 @@ impl DxContext {
             "scene_pre_taa" => self
                 .reflection_composite
                 .as_ref()
-                .map(|rc| one(&rc.output, SAMPLED)),
+                .map(|rc| (&rc.output, SAMPLED)),
             // The post-TAA scene. Two mutually exclusive writers back it, and
             // only one is driven: the TAA resolve writes this frame's ping-pong
             // history slot, which rests sampled like any other colour target,
@@ -809,29 +934,22 @@ impl DxContext {
                 .taa
                 .as_ref()
                 .filter(|_| self.upscale.backend.is_none())
-                .map(|taa| one(&taa.history[taa.output_index()], SAMPLED)),
+                .map(|taa| (&taa.history[taa.output_index()], SAMPLED)),
             // The unified G-buffer pre-pass's colour targets, one entry each.
             // One draw writes all three, but their consumers differ -- the
             // reflection resolve reads normal+depth and roughness, the temporal
             // passes read velocity -- so they are separate graph resources with
             // separate lifetimes. All three rest sampled.
-            "gbuffer_normal_depth" => self
-                .gbuffer
-                .as_ref()
-                .map(|gb| one(&gb.normal_depth, SAMPLED)),
-            "gbuffer_roughness" => self.gbuffer.as_ref().map(|gb| one(&gb.roughness, SAMPLED)),
-            "gbuffer_velocity" => self.gbuffer.as_ref().map(|gb| one(&gb.velocity, SAMPLED)),
+            "gbuffer_normal_depth" => self.gbuffer.as_ref().map(|gb| (&gb.normal_depth, SAMPLED)),
+            "gbuffer_roughness" => self.gbuffer.as_ref().map(|gb| (&gb.roughness, SAMPLED)),
+            "gbuffer_velocity" => self.gbuffer.as_ref().map(|gb| (&gb.velocity, SAMPLED)),
             // `gbuffer_depth` is deliberately unregistered: it is a depth
             // target rather than a colour one, and the only pass that moves it
             // is the upscaler, which borrows it inside its own dispatch.
             // The Hi-Z pyramid rests where the cull kernel samples it, which is a
             // compute stage, so it is the non-pixel shader-resource state rather
             // than the sampled default.
-            "hiz_pyramid" => self
-                .cull
-                .hiz
-                .as_ref()
-                .map(|h| one(&h.texture, h.rest_state)),
+            "hiz_pyramid" => self.cull.hiz.as_ref().map(|h| (&h.texture, h.rest_state)),
             _ => None,
         }
     }

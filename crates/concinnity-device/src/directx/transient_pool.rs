@@ -22,6 +22,8 @@
 // `ao_output` only when SSAO is on); `resource_for` returns `None` otherwise and
 // the consumer keeps its disabled-feature fallback.
 
+use std::collections::HashMap;
+
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -31,9 +33,14 @@ use crate::gfx::render_graph::{
     plan_pool_slots,
 };
 
-struct PlacedResource {
-    label: &'static str,
-    resource: ID3D12Resource,
+// Everything about one label that is fixed once the pool is built: which placed
+// resource backs it, and which member it reclaims heap memory from. The executor
+// resolves both for every graph resource every frame, so they are indexed here
+// rather than re-scanned per lookup. Mirrors the Vulkan pool's `by_label`.
+struct LabelEntry {
+    // Index into `resources`.
+    resource: usize,
+    alias_predecessor: Option<&'static str>,
 }
 
 // The transient render-target pool owned by `DxContext`. Resolution-dependent,
@@ -49,13 +56,10 @@ pub(super) struct TransientResourcePool {
         reason = "a placed resource does not keep its heap alive, so the pool retains the heaps"
     )]
     heaps: Vec<ID3D12Heap>,
-    resources: Vec<PlacedResource>,
-    // For each member of a shared (multi-member) slot, its cyclic predecessor:
-    // the label of the resource whose heap memory it reclaims. Cyclic because
-    // D3D12 is single-buffered, so the first member reclaims from the last across
-    // the frame boundary (the wrap), giving every shared member a predecessor.
-    // Empty when no slot is shared. Drives the executor's aliasing barriers.
-    alias_pred: Vec<(&'static str, &'static str)>,
+    // Every placed member, in slot-major member order -- the order `index_labels`
+    // assigns `LabelEntry::resource` from.
+    resources: Vec<ID3D12Resource>,
+    by_label: HashMap<&'static str, LabelEntry>,
     // The member labels of each slot, in the order they reuse its heap region.
     // Read back by the executor's per-frame soundness assertion, which runs
     // under `debug_assertions`, and so does its only source of truth.
@@ -79,7 +83,6 @@ impl TransientResourcePool {
     ) -> Result<Self, String> {
         let mut heaps = Vec::new();
         let mut resources = Vec::new();
-        let mut alias_pred: Vec<(&'static str, &'static str)> = Vec::new();
         // `allocated_bytes` is what the pool really reserves (one heap per slot,
         // sized to its largest member); `unaliased_bytes` is what the same
         // members would cost one heap each. Their difference is the aliasing
@@ -161,19 +164,7 @@ impl TransientResourcePool {
                 if !shared {
                     to_init.push((resource.clone(), resting_state(m)));
                 }
-                resources.push(PlacedResource {
-                    label: m.label,
-                    resource,
-                });
-            }
-            // Wire each shared-slot member to its cyclic predecessor (the prior
-            // member, the first to the last) so the executor can claim the memory
-            // before each first write.
-            if shared {
-                let n = slot.members.len();
-                for i in 0..n {
-                    alias_pred.push((slot.members[i].label, slot.members[(i + n - 1) % n].label));
-                }
+                resources.push(resource);
             }
             heaps.push(heap);
         }
@@ -208,10 +199,12 @@ impl TransientResourcePool {
             allocated_bytes / 1024,
             unaliased_bytes.saturating_sub(allocated_bytes) / 1024,
         );
+        let by_label = index_labels(slots);
+        debug_assert_eq!(by_label.len(), resources.len(), "a label was placed twice");
         Ok(Self {
             heaps,
             resources,
-            alias_pred,
+            by_label,
             #[cfg(debug_assertions)]
             slot_labels: slots.iter().map(|s| s.labels()).collect(),
             allocated_bytes,
@@ -221,10 +214,7 @@ impl TransientResourcePool {
     // The managed resource for `label`, or `None` when the owning feature was
     // disabled at build time (so nothing was placed).
     pub(super) fn resource_for(&self, label: &str) -> Option<&ID3D12Resource> {
-        self.resources
-            .iter()
-            .find(|r| r.label == label)
-            .map(|r| &r.resource)
+        self.resources.get(self.by_label.get(label)?.resource)
     }
 
     // The label of the resource whose heap memory `label` reclaims (its cyclic
@@ -233,10 +223,7 @@ impl TransientResourcePool {
     // aliasing barrier before the pass that first-writes any resource for which
     // this returns `Some`.
     pub(super) fn alias_predecessor(&self, label: &str) -> Option<&'static str> {
-        self.alias_pred
-            .iter()
-            .find(|(l, _)| *l == label)
-            .map(|(_, p)| *p)
+        self.by_label.get(label)?.alias_predecessor
     }
 
     // The pool's aliased footprint in bytes, for the memory ledger.
@@ -277,6 +264,32 @@ impl TransientResourcePool {
         *self = Self::build(device, queue, slots)?;
         Ok(())
     }
+}
+
+// Resolve each placed label to its `resources` index and its cyclic slot
+// predecessor: the member whose heap memory it reclaims. Cyclic because D3D12 is
+// single-buffered, so the first member of a shared slot reclaims from the last
+// across the frame boundary (the wrap), giving every shared member a
+// predecessor; a slot with one member shares nothing and needs no aliasing
+// barrier. `build` places every member of every slot in this order, so the
+// running index is the resource's position.
+fn index_labels(slots: &[TransientSlot]) -> HashMap<&'static str, LabelEntry> {
+    let mut by_label = HashMap::new();
+    let mut next = 0;
+    for slot in slots {
+        let n = slot.members.len();
+        for (pos, m) in slot.members.iter().enumerate() {
+            by_label.insert(
+                m.label,
+                LabelEntry {
+                    resource: next,
+                    alias_predecessor: (n > 1).then(|| slot.members[(pos + n - 1) % n].label),
+                },
+            );
+            next += 1;
+        }
+    }
+    by_label
 }
 
 // The optimized clear value a pooled target is created with, from the graph's
@@ -431,6 +444,38 @@ mod tests {
             .find(|l| l.contains(&"bloom_top"))
             .expect("checked above");
         assert_ne!(pair[0], "bloom_top", "{pair:?}");
+    }
+
+    #[test]
+    fn the_label_index_resolves_placement_order_and_the_cyclic_predecessor() {
+        // What `resource_for` / `alias_predecessor` answer with, without a
+        // device: `build` places every member of every slot in this order, so a
+        // label's index is its position in that walk. The predecessors wrap,
+        // because a shared slot's first member reclaims the last member's memory
+        // across the frame boundary.
+        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let index = index_labels(&slots);
+        let mut placed = 0;
+        for slot in &slots {
+            for m in &slot.members {
+                assert_eq!(index[m.label].resource, placed, "{}", m.label);
+                placed += 1;
+                let pred = index[m.label].alias_predecessor;
+                if slot.members.len() > 1 {
+                    assert!(
+                        slot.labels().contains(&pred.expect("shared member")),
+                        "{} reclaims from outside its slot",
+                        m.label
+                    );
+                } else {
+                    assert_eq!(pred, None, "{} sits alone", m.label);
+                }
+            }
+        }
+        assert_eq!(index.len(), placed, "a label was placed twice");
+        // The saving this pool exists for, spelled out: `bloom_top` reclaims an
+        // earlier member's region rather than owning one.
+        assert!(index["bloom_top"].alias_predecessor.is_some());
     }
 
     #[test]

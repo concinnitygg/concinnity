@@ -446,15 +446,11 @@ impl DxContext {
             cmd.Dispatch(1, 1, 1);
         }
 
-        // UAV barrier so the readback copy sees the average kernel's write.
-        let barrier = uav_barrier(&resources.output_buf);
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[barrier]) };
-
         // Copy the freshly-written average to this slot's readback buffer. A
         // later frame using the same slot reads it from the matching
-        // `readback_ptrs[frame_idx]` after the fence wait gates the copy.
+        // `readback_ptrs[frame_idx]` after the fence wait gates the copy. The
+        // transition out of UNORDERED_ACCESS is what makes the average kernel's
+        // write visible to the copy, so no UAV barrier precedes it.
         let to_copy_src = transition_barrier(
             &resources.output_buf,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -476,16 +472,14 @@ impl DxContext {
                 );
             }
         }
+        // Give the output buffer back to the next frame's kernels, and restore
+        // the HDR source to PIXEL_SHADER_RESOURCE for the post stack. Different
+        // resources with nothing between them, so they ride one call.
         let to_uav = transition_barrier(
             &resources.output_buf,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[to_uav]) };
-
-        // Restore the HDR source to PIXEL_SHADER_RESOURCE for the post stack.
         let back_to_psr = transition_barrier(
             source,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -493,6 +487,6 @@ impl DxContext {
         );
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[back_to_psr]) };
+        unsafe { cmd.ResourceBarrier(&[to_uav, back_to_psr]) };
     }
 }

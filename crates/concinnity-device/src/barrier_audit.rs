@@ -225,7 +225,9 @@ const AUDITS: &[BackendAudit] = &[
         root: DIRECTX_ROOT,
         calls: &[".ResourceBarrier("],
         sites: &[
-            ("graph_exec.rs", ".ResourceBarrier(", 5, Reason::GraphDriven),
+            // One site: every graph-derived barrier is staged into `BarrierBatch`
+            // and issued from its single flush, so a pass costs one call.
+            ("graph_exec.rs", ".ResourceBarrier(", 1, Reason::GraphDriven),
             // The single-pass downsampler takes one barrier, between the
             // dispatch that writes mip 5 and the tail that reduces it.
             ("hiz.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
@@ -295,7 +297,7 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "auto_exposure.rs",
                 ".ResourceBarrier(",
-                6,
+                4,
                 Reason::Ungraphed,
             ),
             ("cull.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),

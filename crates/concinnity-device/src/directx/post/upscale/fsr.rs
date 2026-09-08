@@ -907,25 +907,27 @@ impl crate::directx::context::DxContext {
 
         // gbuffer.depth is in DEPTH_WRITE after the G-buffer pre-pass. Flip it
         // to NON_PSR for FSR's read and back below.
-        let mut barriers = vec![transition_barrier(
-            &gb.depth,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-        )];
-        // After the *previous* frame's dispatch we left `output` in
-        // PIXEL_SHADER_RESOURCE so Bloom + Composite could sample it.
-        // FSR's dispatch needs it back in UNORDERED_ACCESS; flip it
-        // unless this is the first frame (output starts in UAV at init).
-        if upscaler.output_is_psr() {
-            barriers.push(transition_barrier(
+        //
+        // The second entry is taken only when the *previous* frame's dispatch
+        // left `output` in PIXEL_SHADER_RESOURCE for Bloom + Composite to
+        // sample: FSR's dispatch needs it back in UNORDERED_ACCESS, where the
+        // first frame already finds it (init creates it there).
+        let barriers = [
+            transition_barrier(
+                &gb.depth,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            ),
+            transition_barrier(
                 upscaler.output_resource(),
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            ));
-        }
+            ),
+        ];
+        let count = if upscaler.output_is_psr() { 2 } else { 1 };
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&barriers) };
+        unsafe { cmd.ResourceBarrier(&barriers[..count]) };
 
         // Per-frame inputs FSR consumes. Clamp dt to a sane range:
         // `upscale_prev_elapsed` initialises to 0.0, so the first
