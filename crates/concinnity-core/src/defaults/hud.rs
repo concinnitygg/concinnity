@@ -24,8 +24,9 @@ const DEBUG_SLOTS: [Slot<DebugHud>; 4] = [
     |h| &mut h.sys_label,
 ];
 
-const STAT_SLOTS: [Slot<StatHud>; 5] = [
+const STAT_SLOTS: [Slot<StatHud>; 6] = [
     |h| &mut h.fps_label,
+    |h| &mut h.gpu_wait_label,
     |h| &mut h.vram_label,
     |h| &mut h.ram_label,
     |h| &mut h.ev_label,

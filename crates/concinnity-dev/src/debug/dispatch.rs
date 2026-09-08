@@ -177,6 +177,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                     "skinned_visible": r.skinned_visible,
                     "skinned_pool_free": r.skinned_pool_free,
                     "gpu_frame_us": r.gpu_frame_us,
+                    "gpu_wait_us": r.gpu_wait_us,
                     "vram_bytes": r.vram_bytes,
                     "transient_pool_bytes": r.transient_pool_bytes,
                     "auto_exposure_ev": r.auto_exposure_ev,
@@ -483,6 +484,9 @@ mod tests {
         assert_eq!(r["systems"][0]["name"], "GraphicsSystem");
         assert_eq!(r["systems"][0]["micros"], 1234);
         assert!(r["render"]["passes"].is_array());
+        // The blocked-on-GPU reading rides alongside the GPU frame time, so a
+        // reader can split the graphics system's span into work and wait.
+        assert_eq!(r["render"]["gpu_wait_us"], 0);
         // An unsampled build omits the alloc fields rather than reporting
         // zeroes that read as "this frame allocated nothing".
         assert!(r["systems"][0].get("allocs").is_none());

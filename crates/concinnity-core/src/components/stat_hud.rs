@@ -8,16 +8,21 @@ use crate::ecs::asset_id::de_opt_asset_ref;
 /// interval.
 ///
 /// Each label field, when set, receives one chip: `fps_label` the averaged
-/// frame rate, `vram_label` the GPU-memory use, `ram_label` the host process
+/// frame rate, `gpu_wait_label` the part of the frame the CPU spent blocked on
+/// the GPU, `vram_label` the GPU-memory use, `ram_label` the host process
 /// memory (resident set size, against the memory budget when known), `ev_label`
 /// the auto-exposure value, and `edr_label` the HDR headroom multiplier. Chips
-/// whose stat is unavailable stay blank. The frame-rate and GPU-memory chips
-/// are shown or hidden from the in-game video settings ("Display performance
-/// stats"); the host-memory, exposure, and HDR chips show whenever their
-/// reading is available.
+/// whose stat is unavailable stay blank. The frame-rate, blocked-on-GPU, and
+/// GPU-memory chips are shown or hidden from the in-game video settings
+/// ("Display performance stats"); the host-memory, exposure, and HDR chips show
+/// whenever their reading is available.
+///
+/// `GPU WAIT` is the frame's fence / semaphore and swapchain-acquire time, the
+/// share of the frame the CPU spent waiting rather than working. It reads near
+/// the frame time on a GPU-bound scene and near zero on a CPU-bound one.
 ///
 /// The chips are packed into a tight strip anchored at the top-left of the
-/// window, left to right in the order fps, vram, ram, ev, edr; a blank chip
+/// window, left to right in the order fps, gpu wait, vram, ram, ev, edr; a blank chip
 /// reserves no width, so hidden readouts leave no gap. Their on-screen position
 /// is fixed by the engine rather than the authored coordinates.
 ///
@@ -36,6 +41,9 @@ pub struct StatHud {
     /// [TextLabel](#textlabel) that receives the frame-rate chip text.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub fps_label: Option<AssetId>,
+    /// [TextLabel](#textlabel) that receives the blocked-on-GPU chip text.
+    #[serde(deserialize_with = "de_opt_asset_ref")]
+    pub gpu_wait_label: Option<AssetId>,
     /// [TextLabel](#textlabel) that receives the GPU-memory chip text.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub vram_label: Option<AssetId>,
@@ -60,6 +68,7 @@ mod tests {
         // of drawing it somewhere arbitrary.
         let h = StatHud::default();
         assert!(h.fps_label.is_none());
+        assert!(h.gpu_wait_label.is_none());
         assert!(h.vram_label.is_none());
         assert!(h.ram_label.is_none());
         assert!(h.ev_label.is_none());
@@ -70,11 +79,12 @@ mod tests {
     fn each_chip_binds_its_own_label_and_round_trips_through_postcard() {
         crate::test_support::install_resolvers();
         let h: StatHud = serde_json::from_str(
-            r#"{"fps_label":"fps_chip","vram_label":"vram","ram_label":"","ev_label":3,
-                "edr_label":"edr_chip"}"#,
+            r#"{"fps_label":"fps_chip","gpu_wait_label":"vram","vram_label":"vram",
+                "ram_label":"","ev_label":3,"edr_label":"edr_chip"}"#,
         )
         .unwrap();
         assert_eq!(h.fps_label, Some(AssetId(8)));
+        assert_eq!(h.gpu_wait_label, Some(AssetId(4)));
         assert_eq!(h.vram_label, Some(AssetId(4)));
         assert_eq!(h.ram_label, None);
         assert_eq!(h.ev_label, Some(AssetId(3)));

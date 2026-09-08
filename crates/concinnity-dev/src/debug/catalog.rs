@@ -191,7 +191,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "profile",
-        description: "Report last-frame CPU time per system plus render draw-call, object, and per-pass GPU timings.",
+        description: "Report last-frame CPU time per system plus render draw-call, object, per-pass GPU timings, and the CPU's blocked-on-GPU time.",
         access: Access::ReadOnly,
         params: &[],
     },

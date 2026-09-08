@@ -42,6 +42,14 @@ pub struct RenderStats {
     /// microseconds. Reported one or more frames late: the GPU timestamps are
     /// only known once that frame's command buffer completion handler fires.
     pub gpu_frame_us: u32,
+    /// Microseconds the CPU spent blocked on the GPU inside the backend's
+    /// per-frame draw call: the frames-in-flight fence or semaphore that paces
+    /// the CPU against GPU retirement, plus the swapchain / drawable acquire.
+    /// Backend-agnostic, and part of whatever CPU frame cost the caller timed
+    /// around `draw_frame` -- a GPU-bound frame otherwise reports as CPU-bound,
+    /// because the wait is wall time inside the graphics system's own span.
+    /// Subtract it to get the CPU work the frame actually did.
+    pub gpu_wait_us: u32,
     /// Bytes of GPU memory currently allocated by the render device. On
     /// unified-memory hardware (Apple Silicon) this is the device's share of
     /// system memory rather than dedicated VRAM.
@@ -83,6 +91,7 @@ impl Default for RenderStats {
             skinned_visible: 0,
             skinned_pool_free: 0,
             gpu_frame_us: 0,
+            gpu_wait_us: 0,
             vram_bytes: 0,
             transient_pool_bytes: 0,
             pass_times_us: [("", 0); MAX_PASS_TIMINGS],

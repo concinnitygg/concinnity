@@ -312,7 +312,7 @@ impl GraphicsSystem {
                     .collect()
             })
             .unwrap_or_default();
-        // Capture the StatHud chip ids (fps, vram, ram, ev, edr strip order) so
+        // Capture the StatHud chip ids (fps, gpu wait, vram, ram, ev, edr strip order) so
         // the frame step can pack them tight from the top-left. Like DebugHud
         // the component is queried (not drained), so it is still present here.
         self.stat_hud_chips = ctx
@@ -321,6 +321,7 @@ impl GraphicsSystem {
             .map(|s| {
                 [
                     s.fps_label,
+                    s.gpu_wait_label,
                     s.vram_label,
                     s.ram_label,
                     s.ev_label,

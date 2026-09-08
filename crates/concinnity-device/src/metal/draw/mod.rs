@@ -164,7 +164,13 @@ impl MtlContext {
         // (released on GPU retirement); if this frame is abandoned before commit
         // (the drawable isn't ready, or a `?` fails mid-encode) `frame_slot`
         // drops and releases the slot synchronously, keeping the count balanced.
-        let frame_slot = self.frame_pacing.acquire();
+        // Both blocking calls this frame makes are measured into `gpu_wait`
+        // and published on the frame's stats: this one and the drawable
+        // acquire below. They are wall time inside `draw_frame`, which the
+        // engine times its graphics system around, so a GPU-bound frame is
+        // only distinguishable from a CPU-bound one with this reading.
+        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        let frame_slot = gpu_wait.measure(|| self.frame_pacing.acquire());
 
         // Asynchronous reflection-probe bake. One probe at a time, advanced across
         // frames, captures real geometry into `probe.maps` (the sky `env_map` is
@@ -181,10 +187,16 @@ impl MtlContext {
             tracing::warn!("reflection probe bake failed, keeping current environment: {e}");
         }
 
-        // tell MTKView to prepare its drawable for this frame
-        self.window.view.draw();
-
-        let drawable = match self.window.view.currentDrawable() {
+        // tell MTKView to prepare its drawable for this frame, then take it.
+        // `currentDrawable` blocks on the drawable pool when every drawable is
+        // still with the compositor, which is the display-paced half of the
+        // frame's GPU wait.
+        let drawable = gpu_wait.measure(|| {
+            self.window.view.draw();
+            self.window.view.currentDrawable()
+        });
+        self.diagnostics.frame_stats.gpu_wait_us = gpu_wait.micros();
+        let drawable = match drawable {
             Some(d) => d,
             // drawable not yet available -- skip this frame silently
             None => return Ok(()),
@@ -916,16 +928,15 @@ impl MtlContext {
                 use std::sync::atomic::Ordering as AtomicOrdering;
                 let mut frame_us = composite_span_us.load(AtomicOrdering::Relaxed);
                 if let Some(buf) = &pass_buffer {
-                    let per_pass = super::pass_timing::resolve(&buf.0);
                     let mask = active_mask.load(AtomicOrdering::Relaxed);
-                    for (i, (slot, micros)) in pass_times.iter().zip(per_pass.iter()).enumerate() {
-                        let value = if mask & (1u64 << i) != 0 { *micros } else { 0 };
-                        slot.store(value, AtomicOrdering::Relaxed);
+                    let per_pass = super::pass_timing::resolve(&buf.0, mask);
+                    for (slot, micros) in pass_times.iter().zip(per_pass.iter()) {
+                        slot.store(*micros, AtomicOrdering::Relaxed);
                     }
                     // First pass start to last pass end, across both queues:
                     // the frame's GPU span, which the per-pass times cannot be
                     // summed into once passes overlap.
-                    if let Some(span_us) = super::pass_timing::frame_span_us(&buf.0) {
+                    if let Some(span_us) = super::pass_timing::frame_span_us(&buf.0, mask) {
                         frame_us = span_us;
                     }
                 }

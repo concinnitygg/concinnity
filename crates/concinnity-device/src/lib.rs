@@ -44,6 +44,10 @@ pub(crate) use concinnity_host::thread::jobs;
 
 #[cfg(backend_dx)]
 pub(crate) mod directx;
+// The CPU's blocked-on-GPU time, shared by the three backends so
+// `RenderStats::gpu_wait_us` means the same thing on each.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod gpu_wait;
 #[cfg(backend_metal)]
 pub mod metal;
 #[cfg(backend_vk)]

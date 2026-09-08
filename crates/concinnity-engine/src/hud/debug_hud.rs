@@ -30,11 +30,12 @@ const PASSES_CHIP_TOP_N: usize = 6;
 // default `("", 0)` (the chip then renders nothing, DX/Vulkan keep it
 // blank until their per-pass timing pools land).
 //
-// **Apple-GPU caveat:** the GPU overlaps fragment work across encoders,
-// so summing these values exceeds `gpu_frame_us`. Display them as
-// per-pass attributions, not as components of a total. The chip's
-// "PASSES" header is meant to make that obvious at a glance: there is
-// no row labelled "total".
+// Each value is one pass's own GPU occupancy, so the passes on a queue
+// sum to at most that queue's share of `gpu_frame_us`. They still do not
+// sum to a frame total: the async-compute queue overlaps the graphics
+// one, and the vertex/tiling bubbles between render passes belong to no
+// pass. The chip's "PASSES" header is meant to make that obvious at a
+// glance: there is no row labelled "total".
 fn passes_text(slots: &[PassTiming]) -> String {
     let mut entries: Vec<(&'static str, u32)> = slots
         .iter()
@@ -127,10 +128,11 @@ fn sys_text(
 ///
 /// `PASSES` lists the top six passes in descending GPU-microsecond order
 /// (e.g. `main 1.4 ms`, `shadow 380 us`). Filled on Metal when the device
-/// exposes `MTLCommonCounterSetTimestamp`; blank on DirectX / Vulkan until
-/// their per-pass timing pools land. **The values are per-pass attributions,
-/// not components of `gpu_frame_us`**: the Apple GPU overlaps fragment work
-/// across encoders, so summing them exceeds the whole-frame timer.
+/// exposes `MTLCommonCounterSetTimestamp` and can sample at a stage boundary,
+/// and on DirectX / Vulkan from their timestamp query pools. Each value is one
+/// pass's own GPU occupancy; they do not sum to `gpu_frame_us`, because the
+/// async-compute queue overlaps the graphics one and the gaps between render
+/// passes belong to no pass.
 #[derive(Debug)]
 pub(crate) struct DebugHudSystem {
     passes_label: Option<AssetId>,

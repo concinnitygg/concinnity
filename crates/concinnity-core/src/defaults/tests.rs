@@ -95,8 +95,8 @@ fn a_stat_hud_is_completed_but_never_synthesized() {
     complete(&mut world).unwrap();
     let hud = world.query::<StatHud>().next().unwrap();
     assert!(hud.fps_label.is_some() && hud.edr_label.is_some());
-    // Five stat chips plus the debug HUD's four, all on one font.
-    assert_eq!(labels(&world).len(), 9);
+    // Six stat chips plus the debug HUD's four, all on one font.
+    assert_eq!(labels(&world).len(), 10);
     assert_eq!(world.resource::<FontTable>().expect("fonts").len(), 1);
 }
 

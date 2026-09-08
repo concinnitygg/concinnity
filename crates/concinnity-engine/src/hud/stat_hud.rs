@@ -28,6 +28,18 @@ fn fps_text(frames: u32, elapsed_secs: f32) -> String {
     format!("FPS {fps:.0}")
 }
 
+// Build the blocked-on-GPU chip text from the frame's `gpu_wait_us`: the
+// fence / semaphore and swapchain-acquire time inside the backend's draw call.
+// It is the share of the graphics system's CPU span that was waiting rather
+// than working, so a GPU-bound frame reads near the frame time here.
+fn gpu_wait_text(micros: u32) -> String {
+    if micros < 1000 {
+        format!("GPU WAIT {micros} us")
+    } else {
+        format!("GPU WAIT {:.1} ms", micros as f32 / 1000.0)
+    }
+}
+
 // Build the GPU-memory chip text from a byte count.
 fn vram_text(bytes: u64) -> String {
     format!("VRAM {} MB", bytes / (1024 * 1024))
@@ -68,16 +80,23 @@ fn edr_text(max_edr: Option<f32>) -> String {
     }
 }
 
-// Draws the default stats HUD: an `FPS` chip, a `VRAM` chip, an `EV` chip (when
-// auto-exposure is on), and an `EDR` chip (when the renderer is on the HDR
-// display path), each written into its own `TextLabel`. Give the labels a
-// `background` colour for the boxed look.
+// Draws the default stats HUD: an `FPS` chip, a `GPU WAIT` chip, a `VRAM` chip,
+// an `EV` chip (when auto-exposure is on), and an `EDR` chip (when the renderer
+// is on the HDR display path), each written into its own `TextLabel`. Give the
+// labels a `background` colour for the boxed look.
 //
-// The `FPS` and `VRAM` chips are shown or hidden from the in-game video
-// settings ("Display performance stats" + per-readout toggles); the `EV` and
-// `EDR` chips appear automatically whenever their feature is active. The
+// The `FPS`, `GPU WAIT`, and `VRAM` chips are shown or hidden from the in-game
+// video settings ("Display performance stats" + per-readout toggles); the `EV`
+// and `EDR` chips appear automatically whenever their feature is active. The
 // per-system timing breakdown, cursor position, and camera pose are on the
 // separate `DebugHud` (F1).
+//
+// `GPU WAIT` is the microseconds the CPU spent blocked on the GPU inside the
+// backend's per-frame draw call (the frames-in-flight fence or semaphore, plus
+// the swapchain / drawable acquire). It is part of the graphics system's own
+// CPU span, so subtracting it from that span gives the CPU work the frame did;
+// a GPU-bound frame reads near the frame time here and near zero when the CPU
+// is the bottleneck. Rides the same "Display performance stats" toggle as `FPS`.
 //
 // `VRAM` is the render device's current allocation; on Apple Silicon's
 // unified memory that is its share of system RAM. Filled on Metal
@@ -100,14 +119,16 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // ```jsonl
 // {"type":"Font","name":"hud_font","args":{"size_px":20}}
 // {"type":"TextLabel","name":"fps_chip","args":{"font":"hud_font","x":10,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"TextLabel","name":"vram_chip","args":{"font":"hud_font","x":92,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"TextLabel","name":"ev_chip","args":{"font":"hud_font","x":192,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"TextLabel","name":"edr_chip","args":{"font":"hud_font","x":272,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"StatHud","name":"hud","args":{"fps_label":"fps_chip","vram_label":"vram_chip","ev_label":"ev_chip","edr_label":"edr_chip"}}
+// {"type":"TextLabel","name":"gpu_wait_chip","args":{"font":"hud_font","x":92,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
+// {"type":"TextLabel","name":"vram_chip","args":{"font":"hud_font","x":232,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
+// {"type":"TextLabel","name":"ev_chip","args":{"font":"hud_font","x":332,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
+// {"type":"TextLabel","name":"edr_chip","args":{"font":"hud_font","x":412,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
+// {"type":"StatHud","name":"hud","args":{"fps_label":"fps_chip","gpu_wait_label":"gpu_wait_chip","vram_label":"vram_chip","ev_label":"ev_chip","edr_label":"edr_chip"}}
 // ```
 #[derive(Debug)]
 pub(crate) struct StatHudSystem {
     fps_label: Option<AssetId>,
+    gpu_wait_label: Option<AssetId>,
     vram_label: Option<AssetId>,
     ram_label: Option<AssetId>,
     ev_label: Option<AssetId>,
@@ -116,6 +137,8 @@ pub(crate) struct StatHudSystem {
     last_emit: Instant,
     // Frames counted since `last_emit`.
     frames: u32,
+    // Most recent blocked-on-GPU sample for one frame, microseconds.
+    gpu_wait_us: u32,
     // Most recent GPU-memory sample, bytes.
     vram_bytes: u64,
     // Most recent host resident-set size, bytes; `None` when the platform
@@ -135,12 +158,14 @@ impl StatHudSystem {
     pub(crate) fn new(config: StatHud) -> Self {
         Self {
             fps_label: config.fps_label,
+            gpu_wait_label: config.gpu_wait_label,
             vram_label: config.vram_label,
             ram_label: config.ram_label,
             ev_label: config.ev_label,
             edr_label: config.edr_label,
             last_emit: Instant::now(),
             frames: 0,
+            gpu_wait_us: 0,
             vram_bytes: 0,
             ram_bytes: None,
             ev: None,
@@ -174,6 +199,7 @@ impl System for StatHudSystem {
             .map_or((true, true), |p| (p.show_fps, p.show_vram));
 
         self.frames += 1;
+        self.gpu_wait_us = ctx.profile.render.gpu_wait_us;
         self.vram_bytes = ctx.profile.render.vram_bytes;
         self.ev = ctx.profile.render.auto_exposure_ev;
         self.max_edr = ctx.profile.render.max_edr;
@@ -205,6 +231,15 @@ impl System for StatHudSystem {
                 self.vram_label,
                 if show_vram {
                     vram_text(self.vram_bytes)
+                } else {
+                    String::new()
+                },
+            );
+            Self::write_chip(
+                ctx,
+                self.gpu_wait_label,
+                if show_fps {
+                    gpu_wait_text(self.gpu_wait_us)
                 } else {
                     String::new()
                 },
@@ -350,9 +385,10 @@ mod tests {
             fps_label: Some(AssetId(1)),
             vram_label: Some(AssetId(2)),
             ram_label: Some(AssetId(3)),
+            gpu_wait_label: Some(AssetId(4)),
             ..StatHud::default()
         });
-        for id in [1u32, 2, 3] {
+        for id in [1u32, 2, 3, 4] {
             world.add_component(TextLabel {
                 asset_id: AssetId(id),
                 ..Default::default()
@@ -439,5 +475,26 @@ mod tests {
         world.step();
         assert_eq!(chip(&world, 1), "", "fps chip hidden");
         assert_eq!(chip(&world, 2), "", "vram chip hidden");
+        assert_eq!(chip(&world, 4), "", "gpu wait chip hidden");
+    }
+
+    // Sub-millisecond waits stay in microseconds so a CPU-bound frame is
+    // legible; anything longer reads as milliseconds like the passes chip.
+    #[test]
+    fn gpu_wait_text_switches_unit_at_a_millisecond() {
+        assert_eq!(gpu_wait_text(0), "GPU WAIT 0 us");
+        assert_eq!(gpu_wait_text(999), "GPU WAIT 999 us");
+        assert_eq!(gpu_wait_text(12_400), "GPU WAIT 12.4 ms");
+    }
+
+    // The chip tracks `RenderStats.gpu_wait_us`, which is what separates a
+    // GPU-bound frame from a CPU-bound one in the graphics system's own span.
+    #[test]
+    fn emit_window_writes_the_gpu_wait_chip() {
+        let mut world = hud_world();
+        world.start(SYSTEMS).unwrap();
+        force_emit_due(&mut world);
+        world.step();
+        assert_eq!(chip(&world, 4), "GPU WAIT 0 us");
     }
 }

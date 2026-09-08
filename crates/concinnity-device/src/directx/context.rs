@@ -1394,6 +1394,10 @@ impl DxContext {
         let frame = self.current_frame;
 
         // Wait for this frame slot's previous work to finish before reusing it.
+        // Measured, with the `Present` below, into the frame's `gpu_wait_us`:
+        // both block the CPU on the GPU inside `draw_frame`, which the engine
+        // times its graphics system around.
+        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
         // SAFETY: the fence and the event were created from this device and are live for the call.
         let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
         if self.frame_sync.fence_values[frame] > completed {
@@ -1406,9 +1410,11 @@ impl DxContext {
                 )
             }
             .map_err(|e| super::error::map_hresult(e.code(), "SetEventOnCompletion"))?;
-            // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
-            // context, and the wait borrows nothing else.
-            unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
+            gpu_wait.measure(|| {
+                // SAFETY: the event handle was created in `DxContext::new` and lives as long as
+                // the context, and the wait borrows nothing else.
+                unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) }
+            });
         }
 
         // Streamed texture swaps: re-point this frame's flat-pool SRV copy at
@@ -1587,6 +1593,8 @@ impl DxContext {
                 skinned_visible,
                 skinned_pool_free,
                 gpu_frame_us,
+                // The fence wait alone so far; `Present` below adds to it.
+                gpu_wait_us: gpu_wait.micros(),
                 vram_bytes,
                 transient_pool_bytes: self.transient_pool.allocated_bytes(),
                 pass_times_us,
@@ -1854,13 +1862,25 @@ impl DxContext {
             } else {
                 DXGI_PRESENT(0)
             };
-        // SAFETY: the swapchain is live, and `Present` takes no borrowed state beyond the interval
-        // and flags.
-        let present_result = unsafe {
-            self.swapchain
-                .handle
-                .Present(self.swapchain.present_sync_interval, present_flags)
-        };
+        // At sync interval 1 this blocks on the display refresh once the
+        // present queue is full, so it is the display-paced half of the frame's
+        // GPU wait.
+        let present_result = gpu_wait.measure(|| {
+            // SAFETY: the swapchain is live, and `Present` takes no borrowed state beyond the
+            // interval and flags.
+            unsafe {
+                self.swapchain
+                    .handle
+                    .Present(self.swapchain.present_sync_interval, present_flags)
+            }
+        });
+        // Fold the present into the reading published above, which the stats
+        // snapshot had already captured with the fence wait alone.
+        {
+            let mut waited = self.diagnostics.frame_stats.get();
+            waited.gpu_wait_us = gpu_wait.micros();
+            self.diagnostics.frame_stats.set(waited);
+        }
         if let Err(e) = present_result.ok() {
             self.flush_validation();
             // SAFETY: a property query on a live COM object; it only reads.

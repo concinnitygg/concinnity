@@ -1431,18 +1431,24 @@ impl VkContext {
         let device = self.device.clone();
         let device = &device;
 
-        // Wait for this frame's slot to finish.
-        // SAFETY: the fence belongs to this frame slot and was created from this device; the slice
-        // borrows it for the call.
-        unsafe {
-            device
-                .wait_for_fences(
-                    std::slice::from_ref(&self.frame_sync.in_flight[frame]),
-                    true,
-                    u64::MAX,
-                )
-                .map_err(|e| super::error::map_vk_result(e, "wait fences"))?;
-        }
+        // Wait for this frame's slot to finish. Measured, with the swapchain
+        // acquire below, into the frame's `gpu_wait_us`: both block the CPU on
+        // the GPU inside `draw_frame`, which the engine times its graphics
+        // system around.
+        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        gpu_wait
+            .measure(|| {
+                // SAFETY: the fence belongs to this frame slot and was created from this device; the
+                // slice borrows it for the call.
+                unsafe {
+                    device.wait_for_fences(
+                        std::slice::from_ref(&self.frame_sync.in_flight[frame]),
+                        true,
+                        u64::MAX,
+                    )
+                }
+            })
+            .map_err(|e| super::error::map_vk_result(e, "wait fences"))?;
 
         // Streamed texture swaps: re-point this frame slot's bindless pool
         // copy at the swapped-in views (legal now -- the fence wait above
@@ -1565,6 +1571,8 @@ impl VkContext {
             skinned_visible,
             skinned_pool_free,
             gpu_frame_us,
+            // The fence wait alone so far; the acquire below adds to it.
+            gpu_wait_us: gpu_wait.micros(),
             vram_bytes,
             transient_pool_bytes,
             pass_times_us,
@@ -1586,17 +1594,25 @@ impl VkContext {
             },
         });
 
-        // Acquire swapchain image.
-        // SAFETY: `self.swapchain.handle` is the live swapchain and `image_available[frame]` is an
-        // unsignalled semaphore from this device's own pool for this frame slot.
-        let acquire = unsafe {
-            self.swapchain.loader.acquire_next_image(
-                self.swapchain.handle,
-                u64::MAX,
-                self.frame_sync.image_available[frame],
-                vk::Fence::null(),
-            )
-        };
+        // Acquire swapchain image. Blocks when the presentation engine holds
+        // every image, so it is the display-paced half of the frame's GPU wait.
+        let acquire = gpu_wait.measure(|| {
+            // SAFETY: `self.swapchain.handle` is the live swapchain and `image_available[frame]` is
+            // an unsignalled semaphore from this device's own pool for this frame slot.
+            unsafe {
+                self.swapchain.loader.acquire_next_image(
+                    self.swapchain.handle,
+                    u64::MAX,
+                    self.frame_sync.image_available[frame],
+                    vk::Fence::null(),
+                )
+            }
+        });
+        // Fold the acquire into the reading published above, which the stats
+        // snapshot had already captured with the fence wait alone.
+        let mut waited = self.frame_stats.get();
+        waited.gpu_wait_us = gpu_wait.micros();
+        self.frame_stats.set(waited);
         let image_index = match acquire {
             Ok((idx, suboptimal)) => {
                 if suboptimal {

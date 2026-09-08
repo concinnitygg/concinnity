@@ -1195,6 +1195,8 @@ impl MtlContext {
     // command buffer, so it may lag the draw counts by a frame or two.
     pub(crate) fn render_stats(&self) -> crate::gfx::profile::RenderStats {
         let mut stats = self.diagnostics.frame_stats;
+        // `gpu_wait_us` was written by `draw_frame` itself and rides along in
+        // `frame_stats`.
         stats.gpu_frame_us = self
             .diagnostics
             .gpu_time_us
