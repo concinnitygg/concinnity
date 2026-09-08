@@ -9,7 +9,8 @@
 
 use super::passes::PassId;
 use super::types::{
-    BufferDesc, BufferHandle, PassKind, ResourceId, ResourceOrigin, TextureDesc, TextureHandle,
+    BufferDesc, BufferHandle, PassKind, ReadStages, ResourceId, ResourceOrigin, TextureDesc,
+    TextureHandle,
 };
 use alloc::vec::Vec;
 
@@ -100,6 +101,37 @@ impl ResourceVersion {
     }
 }
 
+/// One `read_*` declaration: the resource version the pass reads, plus the
+/// shader stage it reads it in. The stage defaults to the one the pass's
+/// [`PassKind`] implies and is named explicitly where that default is wrong, so
+/// the barrier deriver's read-run union is the union of what the readers really
+/// declared rather than of what their kinds suggest.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ResourceRead {
+    pub(super) version: ResourceVersion,
+    pub(super) stage: ReadStages,
+}
+
+impl ResourceRead {
+    /// Stable resource index, the same value a write declaration reports.
+    pub fn resource_index(self) -> usize {
+        self.version.resource_index()
+    }
+    /// The version of the resource this read observes.
+    pub fn version(self) -> u32 {
+        self.version.version()
+    }
+    /// The read's `(resource, version)` pair, for the code that treats reads and
+    /// writes alike (resource lifetimes, the transition-reliance replay).
+    pub fn resource_version(self) -> ResourceVersion {
+        self.version
+    }
+    /// The shader stage the pass reads in.
+    pub fn stage(self) -> ReadStages {
+        self.stage
+    }
+}
+
 // One pass declaration. Reads and writes are kept in declaration order
 // for stable executor dispatch. `presents` marks the terminal pass; the
 // compile pass validates exactly one pass per graph has it set.
@@ -107,7 +139,7 @@ impl ResourceVersion {
 pub(super) struct PassDecl {
     pub(super) id: PassId,
     pub(super) kind: PassKind,
-    pub(super) reads: Vec<ResourceVersion>,
+    pub(super) reads: Vec<ResourceRead>,
     pub(super) writes: Vec<ResourceVersion>,
     pub(super) presents: bool,
 }
@@ -234,31 +266,43 @@ pub(crate) struct PassBuilder<'g> {
 }
 
 impl PassBuilder<'_> {
-    // Declare that this pass reads `h`. Silently no-ops on
-    // `TextureHandle::INVALID` so conditional graph builds stay
-    // branch-free. Returns `&mut Self` for chaining.
+    // Declare that this pass reads `h` in the stage its `PassKind` implies.
+    // Silently no-ops on `TextureHandle::INVALID` so conditional graph builds
+    // stay branch-free. Returns `&mut Self` for chaining.
     pub(crate) fn read_texture(&mut self, h: TextureHandle) -> &mut Self {
-        if h.is_valid() {
-            self.builder.passes[self.pass_idx]
-                .reads
-                .push(ResourceVersion {
-                    resource: h.resource,
-                    version: h.version,
-                });
-        }
-        self
+        self.push_read(h.resource, h.version, h.is_valid(), None)
     }
 
     // Declare that this pass reads `h`. Same INVALID-safety as
     // `read_texture`.
     pub(crate) fn read_buffer(&mut self, h: BufferHandle) -> &mut Self {
-        if h.is_valid() {
-            self.builder.passes[self.pass_idx]
-                .reads
-                .push(ResourceVersion {
-                    resource: h.resource,
-                    version: h.version,
-                });
+        self.push_read(h.resource, h.version, h.is_valid(), None)
+    }
+
+    // Declare that this pass reads `h` in `stage` rather than in the one its
+    // `PassKind` implies. The one case today is the particle draw, whose vertex
+    // shader pulls each billboard's particle out of the simulation pool: a
+    // render pass, but not a fragment read.
+    pub(crate) fn read_buffer_in_stage(&mut self, h: BufferHandle, stage: ReadStages) -> &mut Self {
+        self.push_read(h.resource, h.version, h.is_valid(), Some(stage))
+    }
+
+    // Record one read, resolving its stage against the pass's kind when the
+    // caller named none.
+    fn push_read(
+        &mut self,
+        resource: ResourceId,
+        version: u32,
+        valid: bool,
+        stage: Option<ReadStages>,
+    ) -> &mut Self {
+        if valid {
+            let pass = &mut self.builder.passes[self.pass_idx];
+            let stage = stage.unwrap_or(ReadStages::for_pass_kind(pass.kind));
+            pass.reads.push(ResourceRead {
+                version: ResourceVersion { resource, version },
+                stage,
+            });
         }
         self
     }
@@ -373,8 +417,10 @@ mod tests {
         let pass = &b.passes[0];
         assert_eq!(pass.reads.len(), 2);
         assert_eq!(pass.writes.len(), 1);
-        assert_eq!(pass.reads[0].resource, t.resource);
-        assert_eq!(pass.reads[1].resource, buf.resource);
+        assert_eq!(pass.reads[0].version.resource, t.resource);
+        assert_eq!(pass.reads[1].version.resource, buf.resource);
+        // Neither read named a stage, so both took the pass kind's.
+        assert_eq!(pass.reads[0].stage(), ReadStages::FRAGMENT);
         assert_eq!(pass.writes[0].version, 1);
     }
 

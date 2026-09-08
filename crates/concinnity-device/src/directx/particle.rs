@@ -80,7 +80,7 @@ pub(in crate::directx) struct ParticleEmitterGpuState {
     // Carry-over fractional spawn count. Combined with `dt` and the
     // emitter's `spawn_rate` to produce the integer spawn budget for each
     // dispatch. Interior-mutable because `record_frame` (which calls into
-    // `encode_particles`) holds `&self`; the field is only touched on the
+    // `prepare_particle_pass`) holds `&self`; the field is only touched on the
     // render thread.
     pub spawn_state: std::cell::Cell<ParticleSpawnState>,
 }
@@ -324,7 +324,7 @@ pub(in crate::directx) struct ParticleResources {
     pub(in crate::directx) params_stride: u64,
 
     // Per-frame upload ring for the integer spawn budgets. One u32 per slot;
-    // copied into each emitter's atomic counter at the top of `encode_particles`.
+    // copied into each emitter's atomic counter by `encode_particles_sim`.
     pub(in crate::directx) budget_upload_resources: Vec<PooledBuffer>,
     pub(in crate::directx) budget_upload_ptrs: Vec<*mut u8>,
     pub(in crate::directx) budget_stride: u64,
@@ -571,6 +571,26 @@ fn zero_default_buffer(
     Ok(())
 }
 
+// One live emitter's GPU addresses for this frame: its slot of the per-frame
+// `ParticleParams` ring, its persistent pool, and its spawn counter. Resolved
+// once in `prepare_particle_pass` so neither encode half re-borrows the emitter
+// state to find them.
+struct EmitterFrameData {
+    params_gva: u64,
+    pool_gva: u64,
+    counter_gva: u64,
+}
+
+// The per-frame particle inputs `prepare_particle_pass` derives for the two
+// read-only encode halves to consume.
+pub(in crate::directx) struct ParticleFrame {
+    // Per-emitter addresses, parallel to `records`; `None` for a tombstone. The
+    // frame's `dt`, RNG seed and spawn budget are already in the
+    // `ParticleParams` slot each entry points at, so neither half recomputes
+    // them.
+    emitters: Vec<Option<EmitterFrameData>>,
+}
+
 impl DxContext {
     // GPU descriptor handle for emitter `i`'s albedo SRV.
     pub(in crate::directx) fn emitter_albedo_srv_gpu(
@@ -594,26 +614,27 @@ impl DxContext {
         }
     }
 
-    // Encode the per-emitter compute + render passes. A no-op when no
-    // pipeline has been built (no emitter has ever existed in this session)
-    // or when every slot is tombstoned. `elapsed` is the same value the rest
-    // of the frame computed; the diff against `particle_last_elapsed` is the
-    // frame `dt` driving spawn rates + integration. Takes `&self` because
-    // `record_frame` is `&self`; per-frame mutable state (last-elapsed,
-    // frame index, per-emitter spawn accumulators) lives in `Cell`s.
-    pub(in crate::directx) fn encode_particles(
+    // Mutating prelude for the particle pass, run once on the main thread
+    // before the render-graph fan-out: advance the frame `dt` (against
+    // `particle.last_elapsed`), the monotonic `particle.frame_index`, and each
+    // emitter's fractional spawn accumulator, and fill this frame's slot of the
+    // spawn-budget and `ParticleParams` upload rings. Returns the
+    // [`ParticleFrame`] both encode halves consume, or `None` when the pass is
+    // inert (no pipeline built, or every slot tombstoned).
+    //
+    // Splitting it out is what lets the sim and the draw record into separate
+    // per-pass command lists on workers: each frame's accumulator advance has to
+    // happen exactly once, and the two halves have to see the same budgets.
+    // `&self` because every DirectX encoder is; the per-frame mutable state is
+    // in `Cell`s. Mirrors `vulkan::VkContext::prepare_particle_pass`.
+    pub(in crate::directx) fn prepare_particle_pass(
         &self,
-        cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         elapsed: f32,
-        vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
-    ) {
-        let Some(resources) = self.particle.resources.as_ref() else {
-            return;
-        };
+    ) -> Option<ParticleFrame> {
+        let resources = self.particle.resources.as_ref()?;
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
-            return;
+            return None;
         }
 
         let dt = (elapsed - self.particle.last_elapsed.get()).max(0.0);
@@ -621,60 +642,8 @@ impl DxContext {
         let frame_index = self.particle.frame_index.get().wrapping_add(1);
         self.particle.frame_index.set(frame_index);
 
-        // Visibility-cull per emitter for the *render* pass only. The compute
-        // simulation still ticks every live pool so off-screen emitters stay
-        // in a realistic mid-life state for when the camera turns back.
-        // Tombstoned (None) slots are always invisible.
-        let visible: Vec<bool> = self
-            .particle
-            .records
-            .iter()
-            .map(|slot| match slot {
-                Some(r) => {
-                    let (mn, mx) = r.aabb();
-                    frustum.intersects_aabb(mn, mx)
-                }
-                None => false,
-            })
-            .collect();
-
-        // Camera basis for camera-facing billboards: rows 0 and 1 of the view
-        // matrix's 3×3 are the world-space right and up vectors (the view
-        // matrix is column-major, so we read those rows out element-wise).
-        let v = self.view.matrix;
-        let cam_right = [v[0][0], v[1][0], v[2][0]];
-        let cam_up = [v[0][1], v[1][1], v[2][1]];
-        let view_uni = ParticleView {
-            vp,
-            cam_right,
-            _pad0: 0.0,
-            cam_up,
-            _pad1: 0.0,
-        };
-        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
-        // init sized for this payload, and the source is a separate live value, so the ranges
-        // cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &view_uni as *const ParticleView as *const u8,
-                resources.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<ParticleView>(),
-            );
-        }
-        let view_gva = com::gpu_va(&resources.view_ubo_resources[frame_idx]);
         let params_base_gva = com::gpu_va(&resources.params_ubo_resources[frame_idx]);
-        let budget_upload = &resources.budget_upload_resources[frame_idx];
-
-        // Pass 1: take per-emitter spawn budgets, write the integer budget
-        // into this frame's upload buffer + the matching `ParticleParams` slot
-        // in the per-frame params ring. Collect per-emitter draw params so the
-        // compute + render loops below can read them without re-borrowing.
-        struct EmitterFrameData {
-            params_gva: u64,
-            pool_gva: u64,
-            counter_gva: u64,
-        }
-        let mut frame_data: Vec<Option<EmitterFrameData>> =
+        let mut emitters: Vec<Option<EmitterFrameData>> =
             Vec::with_capacity(self.particle.records.len());
 
         for (i, (rec_slot, gpu_slot)) in self
@@ -687,7 +656,7 @@ impl DxContext {
             let (rec, gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
                 (Some(r), Some(g)) => (r, g),
                 _ => {
-                    frame_data.push(None);
+                    emitters.push(None);
                     continue;
                 }
             };
@@ -728,16 +697,37 @@ impl DxContext {
                 );
             }
 
-            frame_data.push(Some(EmitterFrameData {
+            emitters.push(Some(EmitterFrameData {
                 params_gva: params_base_gva + i as u64 * resources.params_stride,
                 pool_gva: com::gpu_va(&gpu.pool),
                 counter_gva: com::gpu_va(&gpu.spawn_counter),
             }));
         }
+        Some(ParticleFrame { emitters })
+    }
 
-        // Pass 2: copy each live emitter's spawn budget into its counter
-        // buffer. Counter is in UNORDERED_ACCESS (resting state); transition
-        // to COPY_DEST, copy, transition back to UAV. Batched into a single
+    // Encode the `ParticlesSim` node: copy each live emitter's spawn budget into
+    // its counter buffer, then dispatch the simulation kernel over its pool.
+    //
+    // The compute -> vertex hazard against the draw is the graph's, derived from
+    // the `particle_pool` read the draw declares in the VERTEX stage. The two
+    // barrier calls left here are intra-node: the counter rests in
+    // `UNORDERED_ACCESS` and has to visit `COPY_DEST` for the copy and come back.
+    pub(in crate::directx) fn encode_particles_sim(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        frame: &ParticleFrame,
+    ) {
+        let Some(resources) = self.particle.resources.as_ref() else {
+            return;
+        };
+        let frame_data = frame.emitters.as_slice();
+        let budget_upload = &resources.budget_upload_resources[frame_idx];
+
+        // Copy each live emitter's spawn budget into its counter buffer. The
+        // counter is in UNORDERED_ACCESS (resting state); transition to
+        // COPY_DEST, copy, transition back to UAV. Batched into a single
         // barrier per direction so the validation noise stays low.
         let mut to_copy: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
         for (i, slot) in self.particle.emitter_state.iter().enumerate() {
@@ -794,10 +784,10 @@ impl DxContext {
             unsafe { cmd.ResourceBarrier(&to_uav) };
         }
 
-        // Pass 3: compute dispatches. Pool + counter are both in
-        // UNORDERED_ACCESS state already; the kernel reads + writes through
-        // its root UAVs. Each emitter is independent so no UAV barrier is
-        // needed between dispatches (resources are disjoint).
+        // Then the dispatches. Pool + counter are both in UNORDERED_ACCESS
+        // state already; the kernel reads + writes through its root UAVs. Each
+        // emitter is independent so no UAV barrier is needed between dispatches
+        // (resources are disjoint).
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -821,32 +811,71 @@ impl DxContext {
                 cmd.Dispatch(groups, 1, 1);
             }
         }
+    }
 
-        // Pass 4: transition visible pools UAV → NON_PIXEL_SHADER_RESOURCE
-        // so the vertex shader's structured-buffer SRV reads them. Invisible
-        // pools stay in UAV (no render draw, no transition needed).
-        let mut to_srv: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
-        for (i, slot) in self.particle.emitter_state.iter().enumerate() {
-            if !visible[i] {
-                continue;
-            }
-            if let Some(gpu) = slot.as_ref() {
-                to_srv.push(transition_barrier(
-                    &gpu.pool,
-                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                ));
-            }
-        }
-        let any_visible = !to_srv.is_empty();
-        if any_visible {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe { cmd.ResourceBarrier(&to_srv) };
-        }
+    // Encode the `ParticlesDraw` node: one alpha-blended camera-facing quad per
+    // live particle of every visible emitter, into the scene spine the graph has
+    // already put in RENDER_TARGET for this pass's declared write. The vertex
+    // shader's structured-buffer SRV reads the pool `encode_particles_sim` wrote;
+    // the graph derives that `UNORDERED_ACCESS` -> `NON_PIXEL_SHADER_RESOURCE`
+    // transition from the declared read, and its end-of-frame restore is what
+    // returns each pool to the unordered-access state it rests in.
+    pub(in crate::directx) fn encode_particles_draw(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        frame: &ParticleFrame,
+        vp: [[f32; 4]; 4],
+        frustum: &crate::gfx::frustum::Frustum,
+    ) {
+        let Some(resources) = self.particle.resources.as_ref() else {
+            return;
+        };
+        let frame_data = frame.emitters.as_slice();
 
-        // Pass 5: render the visible emitters into the scene spine, which the
-        // graph has already put in RENDER_TARGET for this pass's declared write.
+        // Visibility-cull per emitter, for the draw alone: the simulation ticked
+        // every live pool so off-screen emitters stay in a realistic mid-life
+        // state for when the camera turns back. Tombstoned (None) slots are
+        // always invisible.
+        let visible: Vec<bool> = self
+            .particle
+            .records
+            .iter()
+            .map(|slot| match slot {
+                Some(r) => {
+                    let (mn, mx) = r.aabb();
+                    frustum.intersects_aabb(mn, mx)
+                }
+                None => false,
+            })
+            .collect();
+        let any_visible = visible.iter().any(|v| *v);
+
+        // Camera basis for camera-facing billboards: rows 0 and 1 of the view
+        // matrix's 3×3 are the world-space right and up vectors (the view
+        // matrix is column-major, so we read those rows out element-wise).
+        let v = self.view.matrix;
+        let cam_right = [v[0][0], v[1][0], v[2][0]];
+        let cam_up = [v[0][1], v[1][1], v[2][1]];
+        let view_uni = ParticleView {
+            vp,
+            cam_right,
+            _pad0: 0.0,
+            cam_up,
+            _pad1: 0.0,
+        };
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &view_uni as *const ParticleView as *const u8,
+                resources.view_ubo_ptrs[frame_idx],
+                std::mem::size_of::<ParticleView>(),
+            );
+        }
+        let view_gva = com::gpu_va(&resources.view_ubo_resources[frame_idx]);
+
         if any_visible {
             let scene_rtv = self.hdr_scene_rtv();
 
@@ -901,30 +930,6 @@ impl DxContext {
                     cmd.DrawInstanced(4, rec.max_particles, 0, 0);
                 }
                 self.inc_draw_calls(1);
-            }
-
-            // The scene spine is graph-driven; only the emitter pools need
-            // restoring here.
-
-            // Restore visible pools back to UAV (their resting state for the
-            // next frame's compute dispatch).
-            let mut to_uav: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
-            for (i, slot) in self.particle.emitter_state.iter().enumerate() {
-                if !visible[i] {
-                    continue;
-                }
-                if let Some(gpu) = slot.as_ref() {
-                    to_uav.push(transition_barrier(
-                        &gpu.pool,
-                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                    ));
-                }
-            }
-            if !to_uav.is_empty() {
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe { cmd.ResourceBarrier(&to_uav) };
             }
         }
     }

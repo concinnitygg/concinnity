@@ -43,7 +43,8 @@ use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,
-    PixelFormat, TextureDesc, TextureHandle, TextureSize, TextureUsage, full_mip_levels,
+    PixelFormat, ReadStages, TextureDesc, TextureHandle, TextureSize, TextureUsage,
+    full_mip_levels,
 };
 
 /// Per-frame inputs that gate conditional passes. Built by `draw_frame`
@@ -107,11 +108,13 @@ pub struct FrameGraphInputs {
     /// Composite read that version directly.
     pub ssr_enabled: bool,
     /// `true` when the particle system is going to run this frame:
-    /// `particle_pipelines` built AND at least one live emitter. The
-    /// graph adds a `ParticlesDraw` render pass that blend-writes
-    /// `hdr_resolve`. The bundled ParticlesSim compute sub-pass runs
-    /// inside the same `encode_particles` call so it keeps its per-pass
-    /// timing slot without needing its own graph node.
+    /// `particle_pipelines` built AND at least one live emitter. The graph
+    /// adds two nodes: a `ParticlesSim` compute pass that integrates every
+    /// live emitter's persistent particle pool in place, and a
+    /// `ParticlesDraw` render pass that reads those pools in its vertex
+    /// stage and blend-writes `hdr_resolve`. Sim depends on nothing else in
+    /// the frame, so the schedule is free to run it on the async queue
+    /// alongside the raster front.
     pub particles_enabled: bool,
     /// `true` when a `VolumetricFog` is in the world. The graph adds a
     /// `Fog` render pass between Decals and ParticlesDraw on the
@@ -131,7 +134,7 @@ pub struct FrameGraphInputs {
     /// render pass that dispatches the bundled `encode_ssao` (which
     /// internally encodes SsaoPrepass + SsaoKernel + SsaoBlur). SsaoBlur
     /// writes `ao_output`; Main reads it. SsaoPrepass + SsaoKernel
-    /// stay as timing-only PassIds (same pattern as ParticlesSim).
+    /// stay as timing-only PassIds.
     pub ssao_enabled: bool,
     /// `true` when temporal upscaling is on (e.g. MetalFX on Metal). The
     /// graph adds an `Upscale` pass between the post-SSR scene and the
@@ -330,7 +333,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
 // Order (with all flags on):
 //
 // ```text
-// Cull → SsrPrepass → SsaoBlur → Shadow → Main → AutoExposure
+// Cull → SsrPrepass → SsaoBlur → Shadow → ParticlesSim → Main → AutoExposure
 //   → Raymarch → Velocity → Decals → Fog → ParticlesDraw → SsrResolve
 //   → Transparent → TaaResolve → Bloom → HizFinal → Composite
 // ```
@@ -562,6 +565,32 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
+    // Particle simulation (compute): ages, integrates and respawns every live
+    // emitter's pool in place. One label covers the whole per-emitter set; each
+    // backend's registry resolves it to the live emitters' pool buffers, the way
+    // `draw_args` resolves to this frame's slot of a ring.
+    //
+    // The kernel reads no depth and no scene texture -- its inputs are the pools,
+    // the per-emitter spawn counters, and the frame's params -- so its only
+    // successor is ParticlesDraw and it is concurrent with the whole raster
+    // front. Declared here rather than beside the draw so the compiled order puts
+    // it ahead of the passes it can overlap: the async queue runs its own passes
+    // in order, and a position after a compute pass that waits on Shadow would
+    // inherit that wait.
+    //
+    // The pools are persistent (one per emitter, not one per frame in flight) and
+    // each frame integrates them in place, which is why they are imported rather
+    // than created.
+    let particle_pool_v1 = if inputs.particles_enabled {
+        let pools = b.import_buffer("particle_pool", particle_pool_desc());
+        Some(
+            b.add_pass(PassId::ParticlesSim, PassKind::Compute)
+                .write_buffer(pools),
+        )
+    } else {
+        None
+    };
+
     // Spot shadows: one depth-only render per shadowed spot into its slice of
     // the spot shadow array. Like the cascade pass it precedes Main, which
     // samples the array; backend-owned, so the import tracks dependencies only.
@@ -744,10 +773,14 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         fog_pass.read_texture(depth_cur);
         h = fog_pass.write_texture(h);
     }
-    if inputs.particles_enabled {
-        h = b
-            .add_pass(PassId::ParticlesDraw, PassKind::Render)
-            .write_texture(h);
+    if let Some(pools) = particle_pool_v1 {
+        // The billboard vertex shader pulls each particle out of the pool the
+        // sim just wrote, so the read is in the VERTEX stage rather than the
+        // FRAGMENT one a render pass otherwise implies. Naming it is what makes
+        // the derived transition a vertex-visible one on both explicit backends.
+        let mut particles = b.add_pass(PassId::ParticlesDraw, PassKind::Render);
+        particles.read_buffer_in_stage(pools, ReadStages::VERTEX);
+        h = particles.write_texture(h);
     }
     if inputs.lines_enabled {
         // Last of the hdr_resolve decorations: line geometry draws over the
@@ -1012,6 +1045,22 @@ fn cull_status_desc() -> BufferDesc {
     BufferDesc {
         size_bytes: None,
         usage: BufferUsage::STORAGE.union(BufferUsage::UNORDERED),
+    }
+}
+
+fn particle_pool_desc() -> BufferDesc {
+    // One `GpuParticle` slot per particle, per emitter. `STORAGE` alone, so the
+    // class is `StorageBuffer`: the sim reads and writes the pool through a
+    // storage / unordered-access binding, but the draw reads it as a plain
+    // shader resource in its vertex stage, so the resource really does leave the
+    // unordered-access state between the two nodes. `UnorderedBuffer` is for the
+    // buffer both sides bind the same read-write way (`cull_status`), which
+    // never transitions and orders through a UAV barrier instead; that would
+    // leave DirectX's vertex-stage SRV read unsynchronised. The executor owns
+    // the allocation (one buffer per live emitter, sized to its pool).
+    BufferDesc {
+        size_bytes: None,
+        usage: BufferUsage::STORAGE,
     }
 }
 
@@ -1682,6 +1731,9 @@ mod tests {
         assert_eq!(
             order,
             vec![
+                // ParticlesSim depends on nothing, so it keeps the position its
+                // declaration gave it: ahead of the raster front it can overlap.
+                PassId::ParticlesSim,
                 PassId::Main,
                 PassId::Decals,
                 PassId::FogFroxel,
@@ -1695,14 +1747,19 @@ mod tests {
         // SsrResolve reading v4. FogFroxel slots between Decals and Fog
         // (writing the froxel volume to v1) but doesn't touch hdr_resolve,
         // so the version walk skips it.
-        let decals = &g.passes[1];
-        assert_eq!(decals.writes[0].version(), 2);
-        let fog = &g.passes[3];
-        assert_eq!(fog.writes[0].version(), 3);
-        let particles = &g.passes[4];
-        assert_eq!(particles.writes[0].version(), 4);
-        let ssr = &g.passes[5];
-        assert_eq!(ssr.reads[0].version(), 4);
+        let at = |id| &g.passes[g.pass_index(id).expect("present")];
+        assert_eq!(at(PassId::Decals).writes[0].version(), 2);
+        assert_eq!(at(PassId::Fog).writes[0].version(), 3);
+        assert_eq!(at(PassId::ParticlesDraw).writes[0].version(), 4);
+        assert_eq!(at(PassId::SsrResolve).reads[0].version(), 4);
+        // The draw's pool read is the vertex-stage one the sim's transition has
+        // to cover; nothing else in the frame reads it.
+        let pool_read = at(PassId::ParticlesDraw)
+            .reads
+            .iter()
+            .find(|r| g.resources[r.resource_index()].label == "particle_pool")
+            .expect("the draw declares the pool read");
+        assert_eq!(pool_read.stage(), ReadStages::VERTEX);
     }
 
     #[test]

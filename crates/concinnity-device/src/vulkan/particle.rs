@@ -12,9 +12,11 @@
 //      `vkCmdUpdateBuffer` (the value fits in the inline-update 64 KiB cap).
 //   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
 //      respawn each pool.
-//   4. Transitions visible pools to SHADER_READ for the vertex stage and
-//      rasterises one alpha-blended billboard quad per live particle into
-//      `hdr_resolve_images[frame_idx]`.
+//   4. Rasterises one alpha-blended billboard quad per live particle into
+//      `hdr_resolve_images[frame_idx]`, its vertex stage reading the pool the
+//      dispatch wrote. The compute -> vertex transition is the graph's: the two
+//      halves are the `ParticlesSim` and `ParticlesDraw` nodes, and the pool set
+//      is the `particle_pool` graph resource.
 //
 // Runs after the volumetric-fog pass and before SSR / TAA so particles
 // appear in screen-space reflections and are temporally stabilised by the
@@ -76,17 +78,17 @@ pub(in crate::vulkan) fn compile_particle_shaders(
 pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // Particle pool: `record.max_particles` slots of `GpuParticle`. Used
     // as a storage buffer by both the compute pass and the vertex pass.
-    // Held for the emitter's lifetime; the descriptor sets alias it.
-    pub _pool_buffer: PooledBuffer,
+    // Held for the emitter's lifetime; the descriptor sets alias it, and the
+    // graph executor's barrier registry resolves `particle_pool` to it.
+    pub pool_buffer: PooledBuffer,
     // One u32 atomic counter (4 bytes). Reset to the integer spawn budget
     // each frame via `vkCmdUpdateBuffer`; decremented by the compute
     // kernel as threads claim spawn slots.
     pub counter_buffer: PooledBuffer,
     // Carry-over fractional spawn count. Combined with `dt` and the
     // emitter's `spawn_rate` to produce the integer spawn budget for each
-    // dispatch. Interior-mutable so `encode_particles` (which is reached
-    // through `&self` from the graph executor) can advance it without
-    // taking `&mut self`.
+    // dispatch. Interior-mutable so `prepare_particle_pass` can advance it
+    // while walking `records` and `emitter_state` in lockstep.
     pub spawn_state: Cell<ParticleSpawnState>,
     // Compute descriptor set (set 0): binding 0 the pool SSBO, binding 1
     // the counter SSBO. Allocated from the particle descriptor pool at
@@ -364,7 +366,7 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
     write_render_pool_binding(device, render_set, pool_buffer.buffer(), pool_bytes);
 
     Ok(ParticleEmitterGpuState {
-        _pool_buffer: pool_buffer,
+        pool_buffer,
         counter_buffer,
         spawn_state: Cell::new(ParticleSpawnState::default()),
         compute_set,
@@ -764,10 +766,11 @@ impl VkContext {
     // `particle.last_elapsed`), the monotonic `particle.frame_index`, and each
     // emitter's fractional spawn accumulator, returning the per-frame
     // `(dt, frame_index, per_emitter_spawn_budgets)` the read-only
-    // `encode_particles` then consumes. Split out so `encode_particles` can
-    // take `&self` and run on a parallel-recording worker without touching the
-    // `Cell` state. Returns `None` when the pass is inert (no pipeline / no
-    // live emitter). Mirrors `metal::MtlContext::prepare_particle_pass`.
+    // `encode_particles_sim` and `encode_particles_draw` then consume. Split out
+    // so both halves take `&self` and run on parallel-recording workers without
+    // touching the `Cell` state, against one consistent frame. Returns `None`
+    // when the pass is inert (no pipeline / no live emitter). Mirrors
+    // `metal::MtlContext::prepare_particle_pass`.
     pub(in crate::vulkan) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
@@ -802,20 +805,50 @@ impl VkContext {
         Some((dt, frame_index, budgets))
     }
 
-    // Encode the per-emitter compute + render passes. A no-op when no
-    // pipeline has been built (no emitter has ever existed in this
-    // session) or when every slot is tombstoned. `frame` is the
+    // Per-emitter `ParticleParams` for this frame, parallel to `records` and
+    // `None` for a tombstoned slot. Both halves derive it the same way: the
+    // dispatch needs the spawn budget, and the vertex stage sends its own
+    // zero-budget copy so both share one push-constant range shape.
+    fn particle_params(
+        &self,
+        dt: f32,
+        frame_index: u32,
+        spawn_budgets: &[u32],
+    ) -> Vec<Option<(ParticleParams, u32)>> {
+        self.particle
+            .records
+            .iter()
+            .zip(self.particle.emitter_state.iter())
+            .enumerate()
+            .map(|(i, (rec_slot, gpu_slot))| {
+                let rec = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
+                    (Some(r), Some(_)) => r,
+                    _ => return None,
+                };
+                // Spawn budget was advanced on `&mut self` in
+                // `prepare_particle_pass`; consume the precomputed value here.
+                let spawn_budget = spawn_budgets.get(i).copied().unwrap_or(0);
+                Some((rec.params(dt, spawn_budget, frame_index), spawn_budget))
+            })
+            .collect()
+    }
+
+    // Encode the `ParticlesSim` node: reset each live emitter's spawn counter,
+    // then dispatch the simulation kernel over its pool. A no-op when no
+    // pipeline has been built (no emitter has ever existed in this session) or
+    // when every slot is tombstoned. `frame` is the
     // `(dt, frame_index, per_emitter_spawn_budgets)` tuple
-    // `prepare_particle_pass` computed on `&mut self`; this method takes
-    // `&self` (no `Cell` mutation) so it can run on a parallel-recording
-    // worker.
-    pub(in crate::vulkan) fn encode_particles(
+    // `prepare_particle_pass` computed on `&mut self`; this method takes `&self`
+    // (no `Cell` mutation) so it can run on a parallel-recording worker.
+    //
+    // The compute -> vertex hazard against the draw is the graph's, derived from
+    // the `particle_pool` read the draw declares in the VERTEX stage. The two
+    // barriers left here are intra-node: they order the counter reset against
+    // the dispatch that consumes it, in both directions.
+    pub(in crate::vulkan) fn encode_particles_sim(
         &self,
         cmd: vk::CommandBuffer,
-        frame_idx: usize,
         frame: &(f32, u32, Vec<u32>),
-        vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
@@ -824,73 +857,10 @@ impl VkContext {
             return;
         }
         let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
-
         let device = &self.device;
-        let extent = self.render_extent;
+        let params_per_emitter = self.particle_params(dt, frame_index, spawn_budgets);
 
-        // Visibility-cull per emitter for the *render* pass only. The
-        // compute simulation still ticks every live pool so off-screen
-        // emitters stay in a realistic mid-life state when the camera
-        // turns back. Tombstoned (None) slots are always invisible.
-        let visible: Vec<bool> = self
-            .particle
-            .records
-            .iter()
-            .map(|slot| match slot {
-                Some(r) => {
-                    let (mn, mx) = r.aabb();
-                    frustum.intersects_aabb(mn, mx)
-                }
-                None => false,
-            })
-            .collect();
-
-        // Camera basis for camera-facing billboards: rows 0 and 1 of the
-        // view matrix's 3×3 are the world-space right and up vectors (the
-        // view matrix is column-major, so we read those rows out
-        // element-wise). Mirrors metal/directx particle encoders.
-        let v = self.view.matrix;
-        let cam_right = [v[0][0], v[1][0], v[2][0]];
-        let cam_up = [v[0][1], v[1][1], v[2][1]];
-        let view_uni = ParticleView {
-            vp,
-            cam_right,
-            _pad0: 0.0,
-            cam_up,
-            _pad1: 0.0,
-        };
-        resources.view_ubos[frame_idx].write_val(0, &view_uni);
-
-        // Per-emitter spawn budget + ParticleParams pre-compute. Each
-        // emitter advances its own fractional accumulator and we cache
-        // the resulting params so the compute + render loops below can
-        // upload the same value (the compute kernel needs the spawn
-        // budget; the vertex stage zeroes its copy since it only reads
-        // gradient + size fields).
-        let mut params_per_emitter: Vec<Option<(ParticleParams, u32)>> =
-            Vec::with_capacity(self.particle.records.len());
-        for (i, (rec_slot, gpu_slot)) in self
-            .particle
-            .records
-            .iter()
-            .zip(self.particle.emitter_state.iter())
-            .enumerate()
-        {
-            let (rec, _gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                (Some(r), Some(g)) => (r, g),
-                _ => {
-                    params_per_emitter.push(None);
-                    continue;
-                }
-            };
-            // Spawn budget was advanced on `&mut self` in
-            // `prepare_particle_pass`; consume the precomputed value here.
-            let spawn_budget = spawn_budgets.get(i).copied().unwrap_or(0);
-            let params = rec.params(dt, spawn_budget, frame_index);
-            params_per_emitter.push(Some((params, spawn_budget)));
-        }
-
-        // Pass 1: counter resets. Each emitter's counter buffer is
+        // Counter resets first. Each emitter's counter buffer is
         // updated to its integer spawn budget via `vkCmdUpdateBuffer`
         // (a transfer write). A single TRANSFER_WRITE → SHADER_READ
         // barrier between the resets and the dispatch makes the writes
@@ -960,9 +930,8 @@ impl VkContext {
             );
         }
 
-        // Pass 2: compute dispatches. One per live emitter; resources
-        // are disjoint between emitters so no inter-dispatch barrier is
-        // needed.
+        // Then the dispatches, one per live emitter; resources are disjoint
+        // between emitters so no inter-dispatch barrier is needed.
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -1007,31 +976,67 @@ impl VkContext {
                 device.cmd_dispatch(cmd, groups, 1, 1);
             }
         }
+    }
 
-        // Pass 3: render pass. SHADER_WRITE (compute) → SHADER_READ
-        // (vertex) on every visible emitter's pool: pool stays in the
-        // same memory but the access kind changes between the dispatch
-        // and the draw.
-        let any_visible = visible.iter().any(|v| *v);
-        if !any_visible {
+    // Encode the `ParticlesDraw` node: one alpha-blended camera-facing quad per
+    // live particle of every visible emitter, into this frame's `hdr_resolve`.
+    // The vertex stage reads the pool `encode_particles_sim` wrote; the graph
+    // derives that compute -> vertex transition from the declared read, so
+    // nothing here transitions the pool.
+    pub(in crate::vulkan) fn encode_particles_draw(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        frame: &(f32, u32, Vec<u32>),
+        vp: [[f32; 4]; 4],
+        frustum: &crate::gfx::frustum::Frustum,
+    ) {
+        let Some(resources) = self.particle.resources.as_ref() else {
+            return;
+        };
+        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return;
         }
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            let mem_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::VERTEX_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&mem_barrier),
-                &[],
-                &[],
-            );
+        let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
+        let device = &self.device;
+        let extent = self.render_extent;
+
+        // Visibility-cull per emitter, for the draw alone: the simulation ticked
+        // every live pool so off-screen emitters stay in a realistic mid-life
+        // state when the camera turns back. Tombstoned (None) slots are always
+        // invisible.
+        let visible: Vec<bool> = self
+            .particle
+            .records
+            .iter()
+            .map(|slot| match slot {
+                Some(r) => {
+                    let (mn, mx) = r.aabb();
+                    frustum.intersects_aabb(mn, mx)
+                }
+                None => false,
+            })
+            .collect();
+        if !visible.iter().any(|v| *v) {
+            return;
         }
+        let params_per_emitter = self.particle_params(dt, frame_index, spawn_budgets);
+
+        // Camera basis for camera-facing billboards: rows 0 and 1 of the
+        // view matrix's 3×3 are the world-space right and up vectors (the
+        // view matrix is column-major, so we read those rows out
+        // element-wise). Mirrors metal/directx particle encoders.
+        let v = self.view.matrix;
+        let cam_right = [v[0][0], v[1][0], v[2][0]];
+        let cam_up = [v[0][1], v[1][1], v[2][1]];
+        let view_uni = ParticleView {
+            vp,
+            cam_right,
+            _pad0: 0.0,
+            cam_up,
+            _pad1: 0.0,
+        };
+        resources.view_ubos[frame_idx].write_val(0, &view_uni);
 
         // Begin the render pass into this frame's framebuffer (which
         // binds the resolved HDR target as colour attachment 0). The

@@ -8,8 +8,8 @@
 //! block at the top of `draw_frame` (after the matching fence wait gates the GPU
 //! writes) and publishes the per-pass microseconds into `RenderStats`.
 //!
-//! SsaoPrepass / SsaoKernel / ParticlesSim are bundled inside their parent
-//! encoders, and the FogFroxel / Upscale / Transparent / Raymarch arms are
+//! SsaoPrepass / SsaoKernel are bundled inside their parent
+//! encoder, and the FogFroxel / Upscale / Transparent / Raymarch arms are
 //! no-ops here, so those slots stay zero. `StatHud.passes_text` picks the top
 //! six non-zero entries, so zero slots drop out of the on-screen chip.
 

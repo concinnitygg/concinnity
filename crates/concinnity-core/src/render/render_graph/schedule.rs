@@ -105,6 +105,17 @@ impl PassQueue {
 ///     before the signal, as does any transition back into a direct-queue-only
 ///     state.
 ///
+/// A third requirement is not expressible as a wait at all, because it crosses
+/// the frame boundary: the in-graph edges order one frame, and a resource that
+/// persists across frames and is touched from both queues needs the async queue
+/// to wait, at frame start, on the previous frame's graphics completion. The
+/// particle pools are the live case -- `ParticlesSim` integrates each emitter's
+/// persistent pool in place on the async queue while `ParticlesDraw` reads it on
+/// the graphics queue -- so with a native queue, frame N+1's simulation would
+/// otherwise be free to overwrite a pool frame N's draw is still reading. The
+/// executors all still record one serial stream, so it cannot happen yet;
+/// creating the queue means adding that frame-start wait in the same change.
+///
 /// Neither native half is implemented: no backend creates a compute queue yet.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CrossQueueWait {
@@ -638,15 +649,16 @@ mod tests {
             .filter(|p| p.queue == PassQueue::AsyncCompute)
             .map(|p| p.id)
             .collect();
-        // The two pre-Main compute passes, plus the two the producer-side
+        // The three pre-Main compute passes, plus the two the producer-side
         // placement freed: FogFroxel taps the shadow map as a continuation
         // reader after Main, and HizFinal reads the final depth after every
-        // decoration pass. Both are compute passes with real GPU cost, and
-        // neither could move while its run's transition sat on the run's first
-        // reader.
+        // decoration pass. All are compute passes with real GPU cost, and
+        // neither of the latter two could move while its run's transition sat on
+        // the run's first reader.
         for id in [
             PassId::Cull,
             PassId::LightCull,
+            PassId::ParticlesSim,
             PassId::FogFroxel,
             PassId::HizFinal,
         ] {
@@ -711,6 +723,29 @@ mod tests {
         assert!(
             main.waits_before.iter().any(|w| w.producer() == light_cull),
             "Main consumes the light list, so it must wait for LightCull"
+        );
+
+        // The particle simulation is the widest of them: it reads nothing the
+        // frame produces, so the whole raster front is beside it and only the
+        // draw that consumes its pools waits.
+        let sim = g.pass_index(PassId::ParticlesSim).expect("present");
+        for graphics in [
+            PassId::Shadow,
+            PassId::SpotShadow,
+            PassId::GBufferPrepass,
+            PassId::SsaoBlur,
+            PassId::Main,
+        ] {
+            let idx = g.pass_index(graphics).expect("present");
+            assert!(
+                g.passes_may_overlap(sim, idx),
+                "ParticlesSim should overlap {graphics:?}; overlaps are {pairs:?}"
+            );
+        }
+        let draw = g.pass(PassId::ParticlesDraw).expect("present");
+        assert!(
+            draw.waits_before.iter().any(|w| w.producer() == sim),
+            "ParticlesDraw reads the simulated pools, so it must wait for ParticlesSim"
         );
     }
 

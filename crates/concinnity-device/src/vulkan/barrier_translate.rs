@@ -15,8 +15,10 @@
 // A `Read`'s layout is SHADER_READ_ONLY either way, but its pipeline stage
 // follows the consuming-stage union (`ReadStages`) carried on the barrier: a
 // fragment consumer waits in FRAGMENT_SHADER, a compute consumer in
-// COMPUTE_SHADER, and a resource read in both stages on one version waits in
-// both so the single transition makes the producing write visible to each.
+// COMPUTE_SHADER, a vertex consumer (the particle billboards pulling their
+// particle out of the simulated pool) in VERTEX_SHADER, and a resource read in
+// several stages on one version waits in all of them so the single transition
+// makes the producing write visible to each.
 //
 // `Undefined` never reaches the class mapping as a real transition: the executor
 // resolves a barrier whose `from` is Undefined to the resource's *resting* layout
@@ -88,10 +90,10 @@ impl VkResting {
 
 // Map a `Read`'s consuming-stage union to the pipeline stages the transition
 // must synchronise against. FRAGMENT -> FRAGMENT_SHADER, COMPUTE ->
-// COMPUTE_SHADER, both -> both. An empty union (no Read side, or a resource no
-// consumer reads) falls back to FRAGMENT_SHADER, the historical resting stage;
-// the deriver never emits a `Read` barrier with an empty union, so the fallback
-// is purely defensive.
+// COMPUTE_SHADER, VERTEX -> VERTEX_SHADER, and a union of them to their union.
+// An empty union (no Read side, or a resource no consumer reads) falls back to
+// FRAGMENT_SHADER, the historical resting stage; the deriver never emits a
+// `Read` barrier with an empty union, so the fallback is purely defensive.
 fn read_stage_mask(stages: ReadStages) -> vk::PipelineStageFlags {
     let mut mask = vk::PipelineStageFlags::empty();
     if stages.contains(ReadStages::FRAGMENT) {
@@ -99,6 +101,9 @@ fn read_stage_mask(stages: ReadStages) -> vk::PipelineStageFlags {
     }
     if stages.contains(ReadStages::COMPUTE) {
         mask |= vk::PipelineStageFlags::COMPUTE_SHADER;
+    }
+    if stages.contains(ReadStages::VERTEX) {
+        mask |= vk::PipelineStageFlags::VERTEX_SHADER;
     }
     if mask.is_empty() {
         mask = vk::PipelineStageFlags::FRAGMENT_SHADER;
@@ -321,6 +326,40 @@ mod tests {
             ReadStages::empty(),
         );
         assert_eq!(empty.2, vk::PipelineStageFlags::FRAGMENT_SHADER);
+    }
+
+    #[test]
+    fn a_vertex_stage_read_waits_in_the_vertex_stage() {
+        // The particle pools: the simulation writes them in COMPUTE_SHADER and
+        // the billboard draw reads them in VERTEX_SHADER, which is neither of the
+        // stages a pass kind implies. Naming FRAGMENT here would leave the vertex
+        // fetch unordered against the dispatch.
+        let (old, new, src_access, dst_access, src_stage, dst_stage) = vk_transition(
+            GraphResourceClass::StorageBuffer,
+            VkResting::Discarded,
+            ResourceState::Write,
+            ResourceState::Read,
+            ReadStages::VERTEX,
+        )
+        .expect("a buffer always emits its access + stage dependency");
+        // A buffer carries no layout, which is why the pair is emitted anyway.
+        assert_eq!(old, vk::ImageLayout::UNDEFINED);
+        assert_eq!(new, vk::ImageLayout::UNDEFINED);
+        assert_eq!(src_access, vk::AccessFlags::SHADER_WRITE);
+        assert_eq!(dst_access, vk::AccessFlags::SHADER_READ);
+        assert_eq!(src_stage, vk::PipelineStageFlags::COMPUTE_SHADER);
+        assert_eq!(dst_stage, vk::PipelineStageFlags::VERTEX_SHADER);
+
+        // And it unions with the other two rather than replacing them.
+        let mixed = vk_state(
+            GraphResourceClass::StorageBuffer,
+            ResourceState::Read,
+            ReadStages::VERTEX | ReadStages::FRAGMENT,
+        );
+        assert_eq!(
+            mixed.2,
+            vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER
+        );
     }
 
     #[test]

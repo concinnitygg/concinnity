@@ -61,6 +61,15 @@ enum VkTargetObject {
     Buffer {
         buffer: vk::Buffer,
     },
+    // Several buffers under one label, as a range into the registry's buffer
+    // arena. `particle_pool` is the case: the graph declares one resource for
+    // the emitter set because the frame builder has no emitter count, and the
+    // executor resolves it to however many pools are live this frame. Each gets
+    // its own barrier; the arena keeps the per-frame refill allocation-free.
+    BufferSet {
+        first: usize,
+        count: usize,
+    },
 }
 
 // One resolved barrier target: the object a graph resource backs, its class, and
@@ -80,7 +89,23 @@ struct VkBarrierTarget {
 // truth that replaced the old label allowlist + per-label resolver. Built on the
 // main thread by `build_barrier_registry`, where the only field-naming of the
 // migrated resources lives; the parallel emit path stays field-agnostic.
-struct VkBarrierRegistry(Vec<Option<VkBarrierTarget>>);
+struct VkBarrierRegistry {
+    targets: Vec<Option<VkBarrierTarget>>,
+    // Backing store for the `VkTargetObject::BufferSet` ranges, so a label that
+    // covers several buffers costs no allocation of its own.
+    buffers: Vec<vk::Buffer>,
+}
+
+impl VkBarrierRegistry {
+    fn target(&self, resource_index: usize) -> Option<&VkBarrierTarget> {
+        self.targets.get(resource_index)?.as_ref()
+    }
+
+    // The buffers a `BufferSet` range names.
+    fn set(&self, first: usize, count: usize) -> &[vk::Buffer] {
+        &self.buffers[first..first + count]
+    }
+}
 
 // The two per-frame tables the executor builds, kept across frames on `VkContext`
 // so their backing allocations are reused. Only the allocations survive: both are
@@ -88,7 +113,7 @@ struct VkBarrierRegistry(Vec<Option<VkBarrierTarget>>);
 // nothing here can outlive the object it names. That matters because the barrier
 // targets are raw `vk::Image` / `vk::Buffer` handles: caching their *contents*
 // would mean tracking every event that rebuilds one of the ~10 fields
-// `barrier_object_for_label` reads, and a missed one would put a destroyed handle
+// `barrier_objects_for_label` reads, and a missed one would put a destroyed handle
 // in a barrier. Refilling is cheap now that the pool resolves a label in O(1).
 pub(in crate::vulkan) struct VkBarrierScratch {
     registry: VkBarrierRegistry,
@@ -101,7 +126,10 @@ pub(in crate::vulkan) struct VkBarrierScratch {
 impl VkBarrierScratch {
     fn new() -> Self {
         Self {
-            registry: VkBarrierRegistry(Vec::new()),
+            registry: VkBarrierRegistry {
+                targets: Vec::new(),
+                buffers: Vec::new(),
+            },
             alias: Vec::new(),
         }
     }
@@ -121,7 +149,7 @@ fn emit_graph_barriers(
     ops: &[BarrierOp],
 ) {
     for op in ops {
-        let Some(Some(target)) = registry.0.get(op.resource_index()) else {
+        let Some(target) = registry.target(op.resource_index()) else {
             continue;
         };
         let Some(transition) = vk_transition(
@@ -133,7 +161,7 @@ fn emit_graph_barriers(
         ) else {
             continue;
         };
-        emit_one(device, cmd, target, transition);
+        emit_one(device, cmd, registry, target, transition);
     }
 }
 
@@ -143,6 +171,7 @@ fn emit_graph_barriers(
 fn emit_one(
     device: &Device,
     cmd: vk::CommandBuffer,
+    registry: &VkBarrierRegistry,
     target: &VkBarrierTarget,
     transition: (
         vk::ImageLayout,
@@ -154,18 +183,21 @@ fn emit_one(
     ),
 ) {
     let (old_layout, new_layout, src_access, dst_access, src_stage, dst_stage) = transition;
+    // A buffer has no layout; the whole barrier is the access + stage
+    // dependency, over the whole range.
+    let buffer_barrier = |buffer: vk::Buffer| {
+        vk::BufferMemoryBarrier::default()
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(buffer)
+            .offset(0)
+            .size(vk::WHOLE_SIZE)
+            .src_access_mask(src_access)
+            .dst_access_mask(dst_access)
+    };
     match target.object {
         VkTargetObject::Buffer { buffer } => {
-            // A buffer has no layout; the whole barrier is the access + stage
-            // dependency, over the whole range.
-            let barrier = vk::BufferMemoryBarrier::default()
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .buffer(buffer)
-                .offset(0)
-                .size(vk::WHOLE_SIZE)
-                .src_access_mask(src_access)
-                .dst_access_mask(dst_access);
+            let barrier = buffer_barrier(buffer);
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -176,6 +208,31 @@ fn emit_one(
                     vk::DependencyFlags::empty(),
                     &[],
                     std::slice::from_ref(&barrier),
+                    &[],
+                );
+            }
+        }
+        VkTargetObject::BufferSet { first, count } => {
+            // One `vkCmdPipelineBarrier` covering the whole set: the members
+            // share a transition, and the barrier array is what they differ in.
+            let barriers: Vec<vk::BufferMemoryBarrier> = registry
+                .set(first, count)
+                .iter()
+                .map(|&b| buffer_barrier(b))
+                .collect();
+            if barriers.is_empty() {
+                return;
+            }
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    cmd,
+                    src_stage,
+                    dst_stage,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &barriers,
                     &[],
                 );
             }
@@ -233,13 +290,13 @@ fn emit_graph_restores(
     graph: &CompiledGraph,
 ) {
     for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
-        let Some(Some(target)) = registry.0.get(idx) else {
+        let Some(target) = registry.target(idx) else {
             continue;
         };
         let Some(transition) = vk_restore(target.class, target.resting, state, stages) else {
             continue;
         };
-        emit_one(device, cmd, target, transition);
+        emit_one(device, cmd, registry, target, transition);
     }
 }
 
@@ -349,7 +406,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
     use super::barrier_translate::vk_state;
     use crate::gfx::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
 
-    let driven: Vec<bool> = registry.0.iter().map(|t| t.is_some()).collect();
+    let driven: Vec<bool> = registry.targets.iter().map(|t| t.is_some()).collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
     assert!(
         gaps.is_empty(),
@@ -389,7 +446,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
     }
 
     for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
-        let Some(Some(target)) = registry.0.get(idx) else {
+        let Some(target) = registry.target(idx) else {
             continue;
         };
         // Buffers have no layout, and a discard-resting resource's next first use
@@ -738,16 +795,22 @@ impl VkContext {
         graph: &CompiledGraph,
         frame_idx: usize,
     ) {
-        registry.0.clear();
-        registry.0.extend(graph.resources.iter().map(|res| {
-            let class = res.class()?;
-            let (object, resting) = self.barrier_object_for_label(res.label, frame_idx)?;
-            Some(VkBarrierTarget {
-                object,
-                class,
-                resting,
-            })
-        }));
+        registry.targets.clear();
+        registry.buffers.clear();
+        // A plain loop rather than an `extend`: a label resolving to a set of
+        // buffers appends them to the arena while the table is being filled.
+        for res in &graph.resources {
+            let target = res.class().and_then(|class| {
+                let (object, resting) =
+                    self.barrier_objects_for_label(res.label, frame_idx, &mut registry.buffers)?;
+                Some(VkBarrierTarget {
+                    object,
+                    class,
+                    resting,
+                })
+            });
+            registry.targets.push(target);
+        }
     }
 
     // Build the per-pass aliasing-barrier table for this frame: `table[i]` holds
@@ -791,10 +854,11 @@ impl VkContext {
     // is genuinely per-resource and per-backend: `shadow_map` and `hdr_depth` are
     // both depth targets and rest differently. `None` means the owning feature is
     // inactive, and the graph carries no node for it either.
-    fn barrier_object_for_label(
+    fn barrier_objects_for_label(
         &self,
         label: &str,
         frame_idx: usize,
+        arena: &mut Vec<vk::Buffer>,
     ) -> Option<(VkTargetObject, VkResting)> {
         // A per-frame buffer resolves through its frame slot. Buffers have no
         // layout, so their resting is immaterial.
@@ -824,6 +888,28 @@ impl VkContext {
             "draw_args2" => buffer(&self.cull.indirect_buffers2),
             // Per-object cull status: phase 1 writes it, phase 2 reads it.
             "cull_status" => buffer(&self.cull.cull_status_buffers),
+            // Every live emitter's particle pool: `ParticlesSim` integrates them
+            // and `ParticlesDraw` reads them in its vertex stage. One graph
+            // resource covers the whole set, since the frame builder knows only
+            // whether particles run this frame; the set is resolved here, from
+            // the live emitters, and is persistent rather than per-frame (each
+            // frame integrates the same pool in place). `None` once every slot
+            // is tombstoned, which is also when the builder omits both nodes.
+            "particle_pool" => {
+                let first = arena.len();
+                arena.extend(
+                    self.particle
+                        .emitter_state
+                        .iter()
+                        .flatten()
+                        .map(|gpu| gpu.pool_buffer.buffer()),
+                );
+                let count = arena.len() - first;
+                (count > 0).then_some((
+                    VkTargetObject::BufferSet { first, count },
+                    VkResting::Discarded,
+                ))
+            }
             // Per-cluster light index lists: `LightCull` writes them, the main
             // pass's fragment shader reads them. One buffer, not per-frame.
             "cluster_light_list" => Some((
@@ -1048,9 +1134,20 @@ impl VkContext {
             PassId::AutoExposure => {
                 self.encode_auto_exposure(cmd, params.frame_idx);
             }
+            PassId::ParticlesSim => {
+                // Resets each live emitter's spawn counter and integrates its
+                // persistent pool. The graph's only edge out of it is the draw's
+                // vertex-stage read of those pools, so the schedule is free to
+                // put it on the async queue; this executor still records it in
+                // the compiled order. The per-frame particle state was advanced
+                // on `&mut self` before the fan-out by `prepare_particle_pass`.
+                if let Some(frame) = particle_frame {
+                    self.encode_particles_sim(cmd, frame);
+                }
+            }
             PassId::ParticlesDraw => {
                 if let Some(frame) = particle_frame {
-                    self.encode_particles(
+                    self.encode_particles_draw(
                         cmd,
                         params.frame_idx,
                         frame,
@@ -1151,13 +1248,6 @@ impl VkContext {
                     },
                     velocity_active,
                 );
-            }
-            other => {
-                return Err(format!(
-                    "graph executor (vulkan): pass {} is not handled by this \
-                     executor; it should not appear in the frame graph",
-                    other.name()
-                ));
             }
         }
         Ok(())

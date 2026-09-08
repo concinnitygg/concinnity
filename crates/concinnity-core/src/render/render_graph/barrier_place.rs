@@ -137,7 +137,7 @@ pub(super) fn reliance(
         for &(resource, producer) in &moved[i] {
             setter[resource] = Some(producer);
         }
-        for v in pass.writes.iter().chain(pass.reads.iter()) {
+        for v in pass.accesses() {
             if let Some(barrier) = setter[v.resource_index()]
                 && barrier != i
                 && !reliance.contains(&(barrier, i))

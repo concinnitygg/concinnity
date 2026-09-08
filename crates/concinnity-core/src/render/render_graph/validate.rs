@@ -350,7 +350,6 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
             &mut setter,
         );
 
-        let stage = ReadStages::for_pass_kind(pass.kind);
         let mut report = |i: usize, kind: GapKind| {
             gaps.push(BarrierGap {
                 pass: pass.id,
@@ -376,7 +375,7 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
             }
             if state[i] != ResourceState::Read {
                 report(i, GapKind::UncoveredRead);
-            } else if !run_stages[i].contains(stage) {
+            } else if !run_stages[i].contains(r.stage()) {
                 report(i, GapKind::MissingReadStage);
             }
         }
@@ -386,7 +385,7 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
         // every path, and only stable if nothing concurrent touches the
         // resource. One report per pass / resource, writes and reads together,
         // since both rest on the same state.
-        for v in pass.writes.iter().chain(pass.reads.iter()) {
+        for v in pass.accesses() {
             let i = v.resource_index();
             if !driven(i) {
                 continue;

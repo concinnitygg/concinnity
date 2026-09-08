@@ -120,7 +120,7 @@ pub(crate) struct ParticleState {
 }
 
 // The per-frame particle inputs `prepare_particle_pass` derives on `&mut self`
-// for the read-only `encode_particles` to consume.
+// for the read-only encode halves to consume.
 pub(in crate::metal) struct ParticleFrame {
     // Seconds since the previous prepared frame; drives ageing + integration.
     pub dt: f32,
@@ -134,27 +134,13 @@ pub(in crate::metal) struct ParticleFrame {
 }
 
 impl MtlContext {
-    // Encode the per-emitter compute + render passes. A no-op when no
-    // emitters are declared; `record.visible` and `max_particles == 0`
-    // filtering is done at `build_particle_records` time, so any emitter
-    // that reached this point is drawn.
-    //
-    // `elapsed` is the same value the rest of the frame already computed:
-    // the previous-frame snapshot lives in `particle.last_elapsed`, and the
-    // diff is the frame `dt` driving spawn rates + integration.
-    // pub(in crate::metal) so the render-graph executor in
-    // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
-    // Bundles ParticlesSim (compute) + ParticlesDraw (render); the
-    // graph only adds a node for `PassId::ParticlesDraw`, but the
-    // bundled sim sub-pass keeps its own per-pass timing slot via the
-    // inline `diagnostics.pass_timing.attach_compute` call below.
     // Mutate the per-frame particle state (dt against
     // `particle.last_elapsed`, monotonic `particle.frame_index`,
     // per-emitter spawn budgets) and write each emitter's spawn-counter
     // slot in place. Returns the [`ParticleFrame`] the read-only
-    // `encode_particles` then consumes. Split out so `encode_particles` can
-    // take `&self` and run on a parallel-recording worker; the mutating
-    // prelude stays on the frame's main `&mut self` path inside
+    // `encode_particles_sim` and `encode_particles_draw` then consume. Split out
+    // so both halves take `&self` and run on parallel-recording workers; the
+    // mutating prelude stays on the frame's main `&mut self` path inside
     // `execute_graph`, which runs it exactly once per paced frame -- the
     // counter-slot rotation depends on that.
     pub(in crate::metal) fn prepare_particle_pass(
@@ -210,7 +196,82 @@ impl MtlContext {
         })
     }
 
-    pub(in crate::metal) fn encode_particles(
+    // Encode the `ParticlesSim` node: age + integrate + respawn every live
+    // emitter's pool in place. One dispatch per emitter; cheap enough to not
+    // bother packing them, and their resources are disjoint. A no-op when no
+    // emitter has ever existed in this session or every slot is tombstoned.
+    //
+    // Records into its own command buffer, one per graph node. The pools it
+    // writes are read only by the draw, and Metal's implicit hazard tracking
+    // plus the executor's FIFO commit order is what makes the write visible
+    // there. `frame` is the state `prepare_particle_pass` advanced on
+    // `&mut self`; this method takes `&self` so it can record on a worker.
+    pub(in crate::metal) fn encode_particles_sim(
+        &self,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        frame: &ParticleFrame,
+    ) -> Result<(), String> {
+        let Some(pipelines) = self.particle.pipelines.as_ref() else {
+            return Ok(());
+        };
+        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
+            return Ok(());
+        }
+        let counter_offset = spawn_counter_offset(frame.counter_slot);
+
+        let sim_desc = MTLComputePassDescriptor::new();
+        if let Some(t) = &self.diagnostics.pass_timing {
+            t.attach_compute(&sim_desc, super::pass_timing::PassId::ParticlesSim);
+        }
+        let enc = ScopedEncoder::new(
+            cmd_buf
+                .computeCommandEncoderWithDescriptor(&sim_desc)
+                .ok_or("failed to get particle compute encoder")?,
+            ns_string!("particles: simulate"),
+        );
+        enc.set_pipeline(&pipelines.simulate);
+        // Every live pool ticks, visible or not, so an off-screen emitter stays
+        // in a realistic mid-life state for when the camera turns back. The cost
+        // is per-slot work in a single threadgroup, so leaving it un-culled is
+        // cheap.
+        for (i, (rec_slot, gpu_slot)) in self
+            .particle
+            .records
+            .iter()
+            .zip(self.particle.emitter_state.iter())
+            .enumerate()
+        {
+            let (rec, gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
+                (Some(r), Some(g)) => (r, g),
+                _ => continue,
+            };
+            let spawn_budget = frame.spawn_budgets.get(i).copied().unwrap_or(0);
+            let params = rec.params(frame.dt, spawn_budget, frame.frame_index);
+            enc.set_buffer(gpu.pool.as_ref(), 0, 0);
+            enc.set_buffer(gpu.spawn_counter.as_ref(), counter_offset, 1);
+            enc.set_value(&params, 2);
+            let grid = MTLSize {
+                width: rec.max_particles as usize,
+                height: 1,
+                depth: 1,
+            };
+            // 64-thread groups: a multiple of the SIMD width on every Apple
+            // GPU since A11 and small enough that a thin pool still
+            // dispatches efficiently.
+            let tg = MTLSize {
+                width: 64,
+                height: 1,
+                depth: 1,
+            };
+            enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+        }
+        Ok(())
+    }
+
+    // Encode the `ParticlesDraw` node: one alpha-blended camera-facing quad per
+    // live particle, blend-written into `hdr_resolve`. The vertex stage reads
+    // the pool `encode_particles_sim` wrote. Returns the draw-call count.
+    pub(in crate::metal) fn encode_particles_draw(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         frame: &ParticleFrame,
@@ -223,22 +284,11 @@ impl MtlContext {
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return Ok(0);
         }
-        let ParticleFrame {
-            dt,
-            frame_index,
-            counter_slot,
-            spawn_budgets,
-        } = frame;
-        let (dt, frame_index) = (*dt, *frame_index);
-        let counter_offset = spawn_counter_offset(*counter_slot);
+        let frame_index = frame.frame_index;
         let last_tex = self.textures.len().saturating_sub(1);
 
-        // Visibility-cull per emitter for the *render* pass only. The compute
-        // simulation still ticks every pool so particles spawn / age / die
-        // while the camera looks away: that way the emitter is in a
-        // realistic mid-life state the moment the camera turns back. The
-        // compute cost is per-slot work in a single threadgroup, so leaving
-        // it un-culled is cheap. Tombstoned (None) slots are always invisible.
+        // Visibility-cull per emitter, for the draw alone: the simulation above
+        // ticked every pool. Tombstoned (None) slots are always invisible.
         let visible: Vec<bool> = self
             .particle
             .records
@@ -266,59 +316,9 @@ impl MtlContext {
             _pad1: 0.0,
         };
 
-        // Compute: age + integrate + respawn each pool in turn. One
-        // dispatch per emitter; cheap enough to not bother packing them.
-        {
-            let sim_desc = MTLComputePassDescriptor::new();
-            if let Some(t) = &self.diagnostics.pass_timing {
-                t.attach_compute(&sim_desc, super::pass_timing::PassId::ParticlesSim);
-            }
-            // Guard drops at the end of this block, ending the compute pass
-            // before the render encoder below opens.
-            let enc = ScopedEncoder::new(
-                cmd_buf
-                    .computeCommandEncoderWithDescriptor(&sim_desc)
-                    .ok_or("failed to get particle compute encoder")?,
-                ns_string!("particles: simulate"),
-            );
-            enc.set_pipeline(&pipelines.simulate);
-            for (i, (rec_slot, gpu_slot)) in self
-                .particle
-                .records
-                .iter()
-                .zip(self.particle.emitter_state.iter())
-                .enumerate()
-            {
-                let (rec, gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                    (Some(r), Some(g)) => (r, g),
-                    _ => continue,
-                };
-                let spawn_budget = spawn_budgets.get(i).copied().unwrap_or(0);
-                let params = rec.params(dt, spawn_budget, frame_index);
-                enc.set_buffer(gpu.pool.as_ref(), 0, 0);
-                enc.set_buffer(gpu.spawn_counter.as_ref(), counter_offset, 1);
-                enc.set_value(&params, 2);
-                let grid = MTLSize {
-                    width: rec.max_particles as usize,
-                    height: 1,
-                    depth: 1,
-                };
-                // 64-thread groups: a multiple of the SIMD width on every Apple
-                // GPU since A11 and small enough that a thin pool still
-                // dispatches efficiently.
-                let tg = MTLSize {
-                    width: 64,
-                    height: 1,
-                    depth: 1,
-                };
-                enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
-            }
-        }
-
-        // Render: one alpha-blended quad per live particle, drawn into
-        // `hdr_resolve`. Caller has already ended the previous render
-        // pass (fog), so we open a fresh Load/Store pass here. When every
-        // emitter culls out we skip the render encoder entirely.
+        // A fresh Load/Store pass: the prior render pass ended with its own
+        // command buffer. When every emitter culls out we skip the encoder
+        // entirely.
         if !visible.iter().any(|v| *v) {
             return Ok(0);
         }

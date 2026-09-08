@@ -4,16 +4,12 @@
 // walks a `CompiledGraph` and dispatches each pass by `PassId` to the
 // existing `encode_*` method. Every Metal pass that ever ran inline is
 // now in the graph. Composite plus Shadow, Main, Cull, AutoExposure,
-// Bloom, Velocity, TaaResolve, SsrResolve, ParticlesDraw, Fog, Decals,
-// SsrPrepass, and SsaoBlur are the dispatchable PassIds. PassIds
-// `ParticlesSim`, `SsaoPrepass`, and `SsaoKernel` are timing-only:
-// their per-pass timing slots fire from `diagnostics.pass_timing.attach_*` calls
-// inside the bundled `encode_particles` / `encode_ssao` Rust functions,
-// but they must never appear as graph nodes (the executor rejects them
-// with a clear error if mis-added). `ParticlesDraw` dispatches the
-// bundled `encode_particles` (which internally encodes both
-// ParticlesSim compute + ParticlesDraw render), so PassId::ParticlesSim
-// has no separate graph node but keeps its per-pass timing slot.
+// Bloom, Velocity, TaaResolve, SsrResolve, ParticlesSim, ParticlesDraw,
+// Fog, Decals, SsrPrepass, and SsaoBlur are the dispatchable PassIds.
+// PassIds `SsaoPrepass` and `SsaoKernel` are timing-only: their per-pass
+// timing slots fire from `diagnostics.pass_timing.attach_*` calls inside
+// the bundled `encode_ssao` Rust function, but they must never appear as
+// graph nodes (the executor rejects them with a clear error if mis-added).
 //
 // Per-pass command buffers. Each non-composite pass now
 // runs on its own freshly-minted `MTLCommandBuffer`, committed
@@ -624,8 +620,7 @@ impl MtlContext {
                 // per-pass timing slots via inline
                 // `diagnostics.pass_timing.attach_render` calls inside
                 // encode_ssao, but they must not appear as their
-                // own graph nodes: same pattern as
-                // PassId::ParticlesSim.
+                // own graph nodes.
                 return Err(format!(
                     "graph executor: pass {} is bundled inside SsaoBlur \
                          (encode_ssao encodes all three SSAO sub-passes); it \
@@ -671,19 +666,23 @@ impl MtlContext {
                 )?;
                 self.encode_light_cull(cmd_buf, cluster_params)?
             }
-            PassId::ParticlesDraw => {
-                // Bundles ParticlesSim (compute) + ParticlesDraw
-                // (render); see `encode_particles` for the per-pass
-                // timing wiring. Only `PassId::ParticlesDraw` is a
-                // graph node: `PassId::ParticlesSim` remains a
-                // timing-only PassId. Per-frame particle-state
-                // mutations (`particle.last_elapsed`,
-                // `particle.frame_index`, per-emitter spawn budget)
-                // were run on `&mut self` before this loop via
-                // `prepare_particle_pass`; the read-only encode here
-                // consumes the precomputed tuple.
+            PassId::ParticlesSim => {
+                // Integrates every live emitter's persistent pool in place. The
+                // graph's only edge out of it is the draw's vertex-stage read of
+                // those pools, so the schedule is free to put it on the async
+                // queue; this executor still records it in the compiled order.
+                // Per-frame particle-state mutations (`particle.last_elapsed`,
+                // `particle.frame_index`, per-emitter spawn budget) ran on
+                // `&mut self` before the fan-out via `prepare_particle_pass`;
+                // both read-only halves consume the precomputed frame.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles(cmd_buf, frame, params.vp, params.frustum)?
+                    self.encode_particles_sim(cmd_buf, frame)?;
+                }
+                0
+            }
+            PassId::ParticlesDraw => {
+                if let Some(frame) = particle_frame {
+                    self.encode_particles_draw(cmd_buf, frame, params.vp, params.frustum)?
                 } else {
                     0
                 }
@@ -694,18 +693,6 @@ impl MtlContext {
                     "graph executor: Composite pass requires scene_color but none was supplied",
                 )?;
                 self.encode_composite_and_text(cmd_buf, scene_color, params.text_calls)?
-            }
-            // ParticlesSim is bundled inside `encode_particles`
-            // (dispatched via `PassId::ParticlesDraw`), so it has
-            // no separate graph node. It keeps its per-pass timing
-            // slot via the inline `diagnostics.pass_timing.attach_compute` call.
-            PassId::ParticlesSim => {
-                return Err(format!(
-                    "graph executor: pass {} is bundled inside ParticlesDraw \
-                         (encode_particles encodes both); it should not appear as \
-                         its own graph node",
-                    pass_id.name()
-                ));
             }
             PassId::Upscale => {
                 let scene_pre_taa = params.scene_pre_taa.ok_or(

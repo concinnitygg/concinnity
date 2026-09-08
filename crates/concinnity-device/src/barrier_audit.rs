@@ -94,18 +94,20 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "graph_exec.rs",
                 "cmd_pipeline_barrier",
-                3,
+                4,
                 Reason::GraphDriven,
             ),
             ("hiz.rs", "cmd_pipeline_barrier", 1, Reason::IntraPass),
-            // The sim is bundled inside the ParticlesDraw node, so its
-            // transfer -> compute -> vertex chain never crosses a node
-            // boundary. The third orders the spawn-counter reset against the
-            // previous frame's reset and dispatch: one buffer per emitter
-            // rather than one per frame in flight, so the same node's previous
-            // instance is what it waits on, and the graph models neither the
-            // buffer nor a cross-frame edge on it.
-            ("particle.rs", "cmd_pipeline_barrier", 3, Reason::IntraPass),
+            // Both are inside the ParticlesSim node, around the spawn-counter
+            // reset: one orders the reset against the previous frame's reset
+            // and dispatch (a counter is one buffer per emitter rather than one
+            // per frame in flight, so the same node's previous instance is what
+            // it waits on, and the graph models neither the buffer nor a
+            // cross-frame edge on it), the other orders the reset against the
+            // dispatch that consumes it. The compute -> vertex hazard against
+            // the draw was the third; it crosses a node boundary now, so the
+            // graph derives it from the pool read the draw declares.
+            ("particle.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
             ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
             ("probe.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
             (
@@ -231,7 +233,13 @@ const AUDITS: &[BackendAudit] = &[
             // The single-pass downsampler takes one barrier, between the
             // dispatch that writes mip 5 and the tail that reduces it.
             ("hiz.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
-            ("particle.rs", ".ResourceBarrier(", 6, Reason::IntraPass),
+            // Two around the spawn-counter reset inside the ParticlesSim node
+            // (the counter rests in UNORDERED_ACCESS and visits COPY_DEST for
+            // the copy), and two in the one-shot zero-init of a new emitter's
+            // buffers. The pool's UAV -> NON_PIXEL_SHADER_RESOURCE pair was the
+            // other two; it crosses the sim -> draw node boundary now, so the
+            // graph derives it and its end-of-frame restore.
+            ("particle.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
             // The MSAA resolve step: the graph rests both HDR targets in
             // RENDER_TARGET, and `ResolveSubresource` needs them in the resolve
             // states for the length of one call.

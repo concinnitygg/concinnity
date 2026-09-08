@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 use hashbrown::HashMap;
 
-use super::builder::{GraphBuilder, ResourceVersion};
+use super::builder::{GraphBuilder, ResourceRead, ResourceVersion};
 use super::passes::PassId;
 use super::schedule::{CrossQueueWait, PassQueue, Schedule};
 use super::types::{
@@ -97,8 +97,8 @@ pub struct CompiledPass {
     pub id: PassId,
     /// Whether the executor encodes a render or a compute pass.
     pub kind: PassKind,
-    /// Resource versions this pass reads.
-    pub reads: Vec<ResourceVersion>,
+    /// Resource versions this pass reads, each with the stage it reads in.
+    pub reads: Vec<ResourceRead>,
     /// Resource versions this pass writes.
     pub writes: Vec<ResourceVersion>,
     /// Whether this pass writes the swapchain image.
@@ -132,6 +132,19 @@ pub struct CompiledPass {
     /// Queues that wait on this pass's completion, deduplicated. Empty for a
     /// pass nothing on another queue consumes.
     pub signals_after: Vec<PassQueue>,
+}
+
+impl CompiledPass {
+    /// Every `(resource, version)` this pass touches, writes first. For the code
+    /// that treats a read and a write alike -- resource lifetimes, the
+    /// transition-reliance replay -- and so does not care which stage a read is
+    /// in.
+    pub fn accesses(&self) -> impl Iterator<Item = ResourceVersion> + '_ {
+        self.writes
+            .iter()
+            .copied()
+            .chain(self.reads.iter().map(|r| r.resource_version()))
+    }
 }
 
 /// One resource in the compiled graph. Carries the lifetime interval
@@ -305,6 +318,7 @@ impl GraphBuilder {
         // still need a real producer in the same graph.
         for pass in passes.iter() {
             for r in &pass.reads {
+                let r = r.resource_version();
                 if writer_of.contains_key(&(r.resource, r.version)) {
                     continue;
                 }
@@ -339,7 +353,7 @@ impl GraphBuilder {
         for (i, pass) in passes.iter().enumerate() {
             for r in &pass.reads {
                 readers_of
-                    .entry((r.resource, r.version))
+                    .entry((r.version.resource, r.version.version))
                     .or_default()
                     .push(i);
             }
@@ -349,7 +363,7 @@ impl GraphBuilder {
             // Read-after-write: each read of (resource, version) requires
             // the pass that wrote (resource, version) to precede us.
             for r in &pass.reads {
-                if let Some(&w) = writer_of.get(&(r.resource, r.version)) {
+                if let Some(&w) = writer_of.get(&(r.version.resource, r.version.version)) {
                     add_edge(w, pass_idx, &mut edges, &mut in_degree);
                 }
             }
@@ -455,7 +469,7 @@ impl GraphBuilder {
         let mut lifetimes: Vec<Option<PassRange>> = vec![None; n_resources];
         let mut touches: Vec<Vec<usize>> = (0..n_resources).map(|_| Vec::new()).collect();
         for (sorted_idx, pass) in compiled_passes.iter().enumerate() {
-            for v in pass.writes.iter().chain(pass.reads.iter()) {
+            for v in pass.accesses() {
                 let i = v.resource.index();
                 let merged = match lifetimes[i] {
                     None => PassRange {
@@ -535,10 +549,11 @@ fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
     // sorted by pass index without an explicit sort.
     let mut timeline: Vec<Vec<(usize, Eff)>> = (0..n_resources).map(|_| Vec::new()).collect();
     for (i, pass) in passes.iter().enumerate() {
-        let stage = ReadStages::for_pass_kind(pass.kind);
         let mut access: HashMap<ResourceId, Eff> = HashMap::new();
         for r in &pass.reads {
-            access.entry(r.resource).or_insert(Eff::Read(stage));
+            access
+                .entry(r.version.resource)
+                .or_insert(Eff::Read(r.stage()));
         }
         for w in &pass.writes {
             access.insert(w.resource, Eff::Write);

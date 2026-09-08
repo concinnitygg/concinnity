@@ -250,10 +250,11 @@ impl GraphResourceClass {
 /// single transition: a write made visible to both a compute consumer and a
 /// fragment consumer needs one barrier covering both stages, not a per-consumer
 /// read-to-read barrier (which would not carry the producing write). Derived
-/// from each reading pass's `PassKind` (a render pass samples in the fragment
-/// stage, a compute pass in the compute stage); empty on a barrier with no Read
-/// side (a write-only producer transition). Add bits as passes read in stages
-/// the two current ones do not model.
+/// from each reading pass's declared stage, which defaults to the one its
+/// `PassKind` implies (a render pass samples in the fragment stage, a compute
+/// pass in the compute stage) and which a pass may name per resource where that
+/// default is wrong; empty on a barrier with no Read side (a write-only producer
+/// transition). Add bits as passes read in stages the current ones do not model.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ReadStages(u32);
 
@@ -266,18 +267,25 @@ impl ReadStages {
     /// A compute pass's read (DirectX NON_PIXEL_SHADER_RESOURCE / Vulkan
     /// COMPUTE_SHADER stage).
     pub const COMPUTE: Self = Self(1 << 1);
+    /// A vertex-stage read (DirectX NON_PIXEL_SHADER_RESOURCE / Vulkan
+    /// VERTEX_SHADER stage). A pass names this per resource: the particle draw
+    /// pulls each live particle out of the simulation pool in its vertex shader
+    /// while sampling its albedo in the fragment shader, so the two reads of one
+    /// render pass are in different stages and the pass kind cannot tell them
+    /// apart.
+    pub const VERTEX: Self = Self(1 << 2);
 
     /// Whether no stage is set.
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
-    /// The stage a pass of `kind` reads a resource in: render passes sample in
-    /// the fragment stage, compute passes in the compute stage. This is the one
-    /// place a `PassKind` becomes a read stage, so the approximation lives here:
-    /// a render pass that sampled in the vertex / geometry stage would be
-    /// labelled FRAGMENT. No graph-driven resource is read that way today; if
-    /// one ever is, carry an explicit per-read stage instead of deriving it.
+    /// The stage a pass of `kind` reads a resource in unless the declaration
+    /// names one: render passes sample in the fragment stage, compute passes in
+    /// the compute stage. This is the one place a `PassKind` becomes a read
+    /// stage, and it is only ever the default: a render pass reading in another
+    /// stage says so per resource (see `PassBuilder::read_buffer_in_stage`),
+    /// because the kind cannot distinguish two reads of the same pass.
     pub(crate) const fn for_pass_kind(kind: PassKind) -> Self {
         match kind {
             PassKind::Render => Self::FRAGMENT,

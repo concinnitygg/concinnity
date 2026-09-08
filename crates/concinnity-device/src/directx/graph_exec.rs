@@ -38,9 +38,11 @@
 //     internally encodes the SSAO pre-pass + GTAO kernel + depth-aware
 //     blur). `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay
 //     timing-only and the executor rejects them as graph nodes.
-//   * `PassId::ParticlesDraw` dispatches the bundled `encode_particles`
-//     (compute sim + render draw). `PassId::ParticlesSim` stays
-//     timing-only and the executor rejects it as a graph node.
+//
+// `PassId::ParticlesSim` and `PassId::ParticlesDraw` are two nodes with their
+// own command lists: the sim integrates every live emitter's pool and the draw
+// reads those pools in its vertex stage, with the transition between them
+// derived from the graph rather than emitted inline.
 
 use concinnity_core::gfx::transform::mat4_inverse;
 use std::sync::Mutex;
@@ -66,9 +68,20 @@ use super::texture::{aliasing_barrier, transition_barrier, uav_barrier};
 // keeps the per-frame path free of `AddRef` / `Release` traffic and makes it
 // impossible for a target to outlive the field it was resolved from.
 struct DxBarrierTarget<'a> {
-    resource: &'a ID3D12Resource,
+    object: DxTargetObject<'a>,
     class: GraphResourceClass,
     resting: D3D12_RESOURCE_STATES,
+}
+
+// What a graph resource resolves to: one D3D12 resource, or several under one
+// label as a range into the registry's resource arena. `particle_pool` is the
+// second case: the graph declares one resource for the emitter set because the
+// frame builder has no emitter count, and the executor resolves it to however
+// many pools are live this frame. Each gets its own barrier; the arena keeps the
+// set from costing an allocation of its own.
+enum DxTargetObject<'a> {
+    One(&'a ID3D12Resource),
+    Set { first: usize, count: usize },
 }
 
 // `ResourceId`-indexed table of barrier targets for the migrated graph resources
@@ -78,7 +91,25 @@ struct DxBarrierTarget<'a> {
 // main thread by `build_barrier_registry`, where the only field-naming of the
 // migrated resources lives (so it is what re-cuts when those fields move into
 // sub-structs); the parallel emit path stays field-agnostic.
-struct DxBarrierRegistry<'a>(Vec<Option<DxBarrierTarget<'a>>>);
+struct DxBarrierRegistry<'a> {
+    targets: Vec<Option<DxBarrierTarget<'a>>>,
+    // Backing store for the `DxTargetObject::Set` ranges.
+    resources: Vec<&'a ID3D12Resource>,
+}
+
+impl<'a> DxBarrierRegistry<'a> {
+    fn target(&self, resource_index: usize) -> Option<&DxBarrierTarget<'a>> {
+        self.targets.get(resource_index)?.as_ref()
+    }
+
+    // The resources one target names: a single object, or the whole set.
+    fn objects<'r>(&'r self, target: &'r DxBarrierTarget<'a>) -> &'r [&'a ID3D12Resource] {
+        match target.object {
+            DxTargetObject::One(ref r) => std::slice::from_ref(r),
+            DxTargetObject::Set { first, count } => &self.resources[first..first + count],
+        }
+    }
+}
 
 // SAFETY: same read-only contract as `ParallelCtxRef` / `SendableCmdList` (see
 // `parallel_encoder.rs`). The registry holds borrows of D3D12 resource handles
@@ -182,7 +213,7 @@ fn stage_graph_barrier(
     op: &BarrierOp,
     opened_at: Option<D3D12_RESOURCE_STATES>,
 ) {
-    let Some(Some(target)) = registry.0.get(op.resource_index()) else {
+    let Some(target) = registry.target(op.resource_index()) else {
         return;
     };
     let Some(barrier) = d3d12_barrier(
@@ -194,10 +225,12 @@ fn stage_graph_barrier(
     ) else {
         return;
     };
-    batch.push(match barrier {
-        DxBarrier::Transition(before, after) => transition_barrier(target.resource, before, after),
-        DxBarrier::Uav => uav_barrier(target.resource),
-    });
+    for resource in registry.objects(target) {
+        batch.push(match barrier {
+            DxBarrier::Transition(before, after) => transition_barrier(resource, before, after),
+            DxBarrier::Uav => uav_barrier(resource),
+        });
+    }
 }
 
 // One slot of a per-frame buffer ring, as a barrier target: the slot for the
@@ -218,7 +251,7 @@ fn graph_takes_over(
     pass: &CompiledPass,
     resource_index: usize,
 ) -> bool {
-    matches!(registry.0.get(resource_index), Some(Some(_)))
+    registry.target(resource_index).is_some()
         && pass
             .barriers_before
             .iter()
@@ -338,14 +371,16 @@ fn emit_graph_restores(
 ) {
     let mut batch = BarrierBatch::new(cmd);
     for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
-        let Some(Some(target)) = registry.0.get(idx) else {
+        let Some(target) = registry.target(idx) else {
             continue;
         };
         let Some((before, after)) = d3d12_restore(target.class, target.resting, state, stages)
         else {
             continue;
         };
-        batch.push(transition_barrier(target.resource, before, after));
+        for resource in registry.objects(target) {
+            batch.push(transition_barrier(resource, before, after));
+        }
     }
     batch.flush();
 }
@@ -371,7 +406,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry
     use super::barrier_translate::d3d12_state;
     use crate::gfx::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
 
-    let driven: Vec<bool> = registry.0.iter().map(|t| t.is_some()).collect();
+    let driven: Vec<bool> = registry.targets.iter().map(|t| t.is_some()).collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
     assert!(
         gaps.is_empty(),
@@ -411,7 +446,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry
     }
 
     for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
-        let Some(Some(target)) = registry.0.get(idx) else {
+        let Some(target) = registry.target(idx) else {
             continue;
         };
         if state == ResourceState::Undefined {
@@ -572,6 +607,14 @@ impl DxContext {
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
     ) -> Result<Vec<ID3D12GraphicsCommandList>, String> {
+        // Particle per-frame state (dt / frame index / per-emitter spawn budgets
+        // and their upload-ring slots) is advanced here, once, before any pass
+        // encodes, so the sim and draw halves record on separate workers against
+        // one consistent frame. `None` when the pass is inert. Mirrors Vulkan's
+        // and Metal's `prepare_particle_pass` hoist.
+        let particle_frame = self.prepare_particle_pass(params.frame_idx, params.elapsed);
+        let particle_ref = particle_frame.as_ref();
+
         // Find Composite's slot (if any) so we can skip it in the
         // worker fan-out and run it inline on the main thread instead.
         let composite_idx = graph.passes.iter().position(|p| p.id == PassId::Composite);
@@ -678,7 +721,8 @@ impl DxContext {
 
                         emit_pass_prologue(cmd, registry_ref, alias_barriers_ref, idx, pass);
 
-                        let encode_result = ctx.encode_pass_into(pass_id, cmd, params);
+                        let encode_result =
+                            ctx.encode_pass_into(pass_id, cmd, params, particle_ref);
 
                         if encode_result.is_ok() {
                             emit_pass_epilogue(cmd, registry_ref, pass);
@@ -814,22 +858,25 @@ impl DxContext {
         graph: &CompiledGraph,
         frame_idx: usize,
     ) -> DxBarrierRegistry<'_> {
-        DxBarrierRegistry(
-            graph
-                .resources
-                .iter()
-                .map(|res| {
-                    let class = res.class()?;
-                    let (resource, resting) =
-                        self.barrier_object_for_label(res.label, frame_idx)?;
-                    Some(DxBarrierTarget {
-                        resource,
-                        class,
-                        resting,
-                    })
+        let mut registry = DxBarrierRegistry {
+            targets: Vec::with_capacity(graph.resources.len()),
+            resources: Vec::new(),
+        };
+        // A plain loop rather than a `collect`: a label resolving to a set of
+        // resources appends them to the arena while the table is being filled.
+        for res in &graph.resources {
+            let target = res.class().and_then(|class| {
+                let (object, resting) =
+                    self.barrier_objects_for_label(res.label, frame_idx, &mut registry.resources)?;
+                Some(DxBarrierTarget {
+                    object,
+                    class,
+                    resting,
                 })
-                .collect(),
-        )
+            });
+            registry.targets.push(target);
+        }
+        registry
     }
 
     // Resolve, per pass, the pooled transients that reclaim a shared heap region
@@ -861,9 +908,9 @@ impl DxContext {
                     pass: res.lifetime.first,
                     resource_index: idx,
                     resource: r,
-                    resting: match registry.0.get(idx) {
-                        Some(Some(target)) => target.resting,
-                        _ => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    resting: match registry.target(idx) {
+                        Some(target) => target.resting,
+                        None => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                     },
                 });
             }
@@ -884,13 +931,39 @@ impl DxContext {
     // and the graph carries no node for it either.
     //
     // The resource is borrowed rather than cloned; see `DxBarrierTarget`.
-    fn barrier_object_for_label(
-        &self,
+    fn barrier_objects_for_label<'a>(
+        &'a self,
         label: &str,
         frame_idx: usize,
-    ) -> Option<(&ID3D12Resource, D3D12_RESOURCE_STATES)> {
+        arena: &mut Vec<&'a ID3D12Resource>,
+    ) -> Option<(DxTargetObject<'a>, D3D12_RESOURCE_STATES)> {
         const SAMPLED: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        match label {
+        // Every live emitter's particle pool: `ParticlesSim` integrates them and
+        // `ParticlesDraw` reads them in its vertex stage. One graph resource
+        // covers the whole set, since the frame builder knows only whether
+        // particles run this frame. They rest in UNORDERED_ACCESS -- created
+        // there, and where the frame's restore returns them -- because that is
+        // the binding the simulation writes them through; the draw's SRV read is
+        // the only state they leave it for.
+        if label == "particle_pool" {
+            let first = arena.len();
+            arena.extend(
+                self.particle
+                    .emitter_state
+                    .iter()
+                    .flatten()
+                    .map(|gpu| &gpu.pool),
+            );
+            let count = arena.len() - first;
+            return (count > 0).then_some((
+                DxTargetObject::Set { first, count },
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            ));
+        }
+        let one = |r: Option<(&'a ID3D12Resource, D3D12_RESOURCE_STATES)>| {
+            r.map(|(resource, resting)| (DxTargetObject::One(resource), resting))
+        };
+        one(match label {
             // Indirect commands the cull kernel writes (UAV) and the main pass
             // consumes through `ExecuteIndirect`.
             "draw_args" => frame_slot(
@@ -1017,7 +1090,7 @@ impl DxContext {
             // than the sampled default.
             "hiz_pyramid" => self.cull.hiz.as_ref().map(|h| (&h.texture, h.rest_state)),
             _ => None,
-        }
+        })
     }
 
     // Build the per-frame `RaymarchView` cbuffer payload from the
@@ -1071,6 +1144,7 @@ impl DxContext {
         pass_id: PassId,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
+        particle_frame: Option<&super::particle::ParticleFrame>,
     ) -> Result<(), String> {
         match pass_id {
             PassId::Cull => {
@@ -1173,22 +1247,27 @@ impl DxContext {
             PassId::Fog => {
                 self.encode_fog(cmd, params.frame_idx, params.vp_mat, params.cam_pos);
             }
-            PassId::ParticlesDraw => {
-                self.encode_particles(
-                    cmd,
-                    params.frame_idx,
-                    params.elapsed,
-                    params.vp_mat,
-                    params.frustum,
-                );
-            }
             PassId::ParticlesSim => {
-                return Err(format!(
-                    "graph executor (directx): pass {} is bundled inside ParticlesDraw \
-                     (encode_particles runs both compute sim and render); it \
-                     should not appear as its own graph node",
-                    pass_id.name()
-                ));
+                // Resets each live emitter's spawn counter and integrates its
+                // persistent pool. The graph's only edge out of it is the draw's
+                // vertex-stage read of those pools, so the schedule is free to
+                // put it on the async queue; this executor still records it in
+                // the compiled order. The per-frame particle state was advanced
+                // once before the fan-out by `prepare_particle_pass`.
+                if let Some(frame) = particle_frame {
+                    self.encode_particles_sim(cmd, params.frame_idx, frame);
+                }
+            }
+            PassId::ParticlesDraw => {
+                if let Some(frame) = particle_frame {
+                    self.encode_particles_draw(
+                        cmd,
+                        params.frame_idx,
+                        frame,
+                        params.vp_mat,
+                        params.frustum,
+                    );
+                }
             }
             PassId::SsrResolve => {
                 self.encode_ssr_resolve(

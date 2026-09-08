@@ -9,9 +9,10 @@
 //
 // A `Read` maps by the consuming-stage union (`ReadStages`) carried on the
 // barrier, not the class: a fragment consumer needs `PIXEL_SHADER_RESOURCE`, a
-// compute consumer `NON_PIXEL_SHADER_RESOURCE`, and a resource read in both
-// stages on one version needs both bits so the single transition makes the
-// write visible to each. The class is irrelevant once a resource is being read.
+// compute or vertex consumer `NON_PIXEL_SHADER_RESOURCE`, and a resource read
+// in both kinds of stage on one version needs both bits so the single
+// transition makes the write visible to each. The class is irrelevant once a
+// resource is being read.
 //
 // The `StorageImage` class covers a compute-written, fragment-sampled UAV
 // resource (`fog_froxel_volume`): its `Write` is `UNORDERED_ACCESS` and its
@@ -27,16 +28,16 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::gfx::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 
 // Map a `Read`'s consuming-stage union to the matching shader-resource states.
-// FRAGMENT -> `PIXEL_SHADER_RESOURCE`, COMPUTE -> `NON_PIXEL_SHADER_RESOURCE`,
-// both -> both bits. An empty union (no Read side, or a resource no consumer
-// reads) falls back to `PIXEL_SHADER_RESOURCE`, the historical default before
-// stages were carried; the deriver never emits a `Read` barrier with an empty
-// union, so the fallback is purely defensive.
+// D3D12 splits shader reads in two, not three: FRAGMENT is
+// `PIXEL_SHADER_RESOURCE`, and both COMPUTE and VERTEX are
+// `NON_PIXEL_SHADER_RESOURCE`, so a union spanning the two sides carries both
+// bits. An empty union (no Read side, or a resource no consumer reads) falls
+// back to `PIXEL_SHADER_RESOURCE`, the historical default before stages were
+// carried; the deriver never emits a `Read` barrier with an empty union, so the
+// fallback is purely defensive.
 fn read_state(stages: ReadStages) -> D3D12_RESOURCE_STATES {
-    match (
-        stages.contains(ReadStages::FRAGMENT),
-        stages.contains(ReadStages::COMPUTE),
-    ) {
+    let non_pixel = stages.contains(ReadStages::COMPUTE) || stages.contains(ReadStages::VERTEX);
+    match (stages.contains(ReadStages::FRAGMENT), non_pixel) {
         (true, true) => {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
                 | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
@@ -264,6 +265,71 @@ mod tests {
                 ReadStages::empty()
             ),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        );
+    }
+
+    #[test]
+    fn a_vertex_stage_read_is_a_non_pixel_shader_resource() {
+        // The particle pools: the simulation writes them through a UAV and the
+        // billboard draw reads them through a structured-buffer SRV in its
+        // vertex shader. D3D12 has no vertex-specific read state, so VERTEX maps
+        // onto the same non-pixel state COMPUTE does -- and unions with FRAGMENT
+        // the same way.
+        assert_eq!(
+            d3d12_state(
+                GraphResourceClass::StorageBuffer,
+                ResourceState::Read,
+                ReadStages::VERTEX
+            ),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+        );
+        assert_eq!(
+            d3d12_state(
+                GraphResourceClass::StorageBuffer,
+                ResourceState::Read,
+                ReadStages::VERTEX | ReadStages::FRAGMENT
+            ),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+        );
+        // The pool's whole round trip: written as a UAV, read by the vertex
+        // stage, and restored to the unordered-access state it rests in.
+        assert_eq!(
+            d3d12_transition(
+                GraphResourceClass::StorageBuffer,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                ResourceState::Write,
+                ResourceState::Read,
+                ReadStages::VERTEX,
+            ),
+            Some((
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+            ))
+        );
+        assert_eq!(
+            d3d12_restore(
+                GraphResourceClass::StorageBuffer,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                ResourceState::Read,
+                ReadStages::VERTEX,
+            ),
+            Some((
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+            ))
+        );
+        // And the sim's own first use is a no-op: the pool already rests where
+        // the dispatch wants it.
+        assert_eq!(
+            d3d12_transition(
+                GraphResourceClass::StorageBuffer,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                ResourceState::Undefined,
+                ResourceState::Write,
+                ReadStages::empty(),
+            ),
+            None
         );
     }
 
