@@ -23,6 +23,7 @@ use super::context::MtlContext;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
+use objc2_foundation::ns_string;
 
 // Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
 const THREADGROUP: usize = 64;
@@ -49,7 +50,7 @@ impl MtlContext {
             record_count: record_count as u32,
             _pad: [0; 3],
         };
-        let desc = objc2_metal::MTLComputePassDescriptor::computePassDescriptor();
+        let desc = objc2_metal::MTLComputePassDescriptor::new();
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_compute(&desc, super::pass_timing::PassId::GBufferPrepass);
         }
@@ -57,7 +58,7 @@ impl MtlContext {
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&desc)
                 .ok_or("failed to get model-history compute encoder")?,
-            "model history",
+            ns_string!("model history"),
         );
         enc.set_pipeline(pipeline);
         enc.set_value(&params, 0);

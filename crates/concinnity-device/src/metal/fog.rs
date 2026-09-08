@@ -36,6 +36,7 @@ use super::post::fullscreen::{
 };
 use super::scoped_encoder::ScopedEncoder;
 use super::slang_shaders::{FOG_FRAG, FOG_FROXEL};
+use objc2_foundation::ns_string;
 
 // All volumetric-fog state grouped into one feature unit: the resolved
 // tunables, the fullscreen ray-march pipeline, and the froxel-volume compute
@@ -110,7 +111,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
                 .ok_or("failed to get fog render encoder")?,
-            "volumetric fog",
+            ns_string!("volumetric fog"),
         );
         enc.set_pipeline(pipeline);
 
@@ -158,7 +159,7 @@ impl MtlContext {
         };
 
         let cmd_buf_dyn: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer> = cmd_buf;
-        let desc = objc2_metal::MTLComputePassDescriptor::computePassDescriptor();
+        let desc = objc2_metal::MTLComputePassDescriptor::new();
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_compute(&desc, super::pass_timing::PassId::FogFroxel);
         }
@@ -166,7 +167,7 @@ impl MtlContext {
             cmd_buf_dyn
                 .computeCommandEncoderWithDescriptor(&desc)
                 .ok_or("failed to get fog froxel compute encoder")?,
-            "fog froxel volume",
+            ns_string!("fog froxel volume"),
         );
         enc.set_pipeline(pipeline);
 

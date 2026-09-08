@@ -101,10 +101,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub skinned_morph_weight_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     pub scene_color: Option<&'a Retained<ProtocolObject<dyn MTLTexture>>>,
     pub text_calls: &'a [TextDrawCall],
-    // This frame's expanded line ribbons, consumed by the WorldLines
-    // pass. Empty whenever nothing published lines, in which case the graph
-    // carries no WorldLines node either.
-    pub lines: &'a [crate::gfx::render_types::LineVertex],
+    // This frame's transient-buffer ring slot (`frame_ring_index % frames_in_flight`).
+    // The auto-exposure pass writes the readback buffer at this slot.
+    pub ring_slot: usize,
     // An opaque menu backdrop hides the scene: the Main pass runs as a bare
     // clear (it is the only surviving world pass in the masked graph), skipping
     // every geometry sub-path so nothing of the world draws behind the menu.
@@ -519,7 +518,7 @@ impl MtlContext {
                 },
                 params.world_hidden,
             )?,
-            PassId::AutoExposure => self.encode_auto_exposure(cmd_buf)?,
+            PassId::AutoExposure => self.encode_auto_exposure(cmd_buf, params.ring_slot)?,
             PassId::Bloom => {
                 let scene_color = params.scene_color.ok_or(
                     "graph executor: Bloom pass requires scene_color but none was supplied",
@@ -676,7 +675,7 @@ impl MtlContext {
                     0
                 }
             }
-            PassId::Lines => self.encode_lines(cmd_buf, params.vp, params.lines)?,
+            PassId::Lines => self.encode_lines(cmd_buf, params.vp)?,
             PassId::Composite => {
                 let scene_color = params.scene_color.ok_or(
                     "graph executor: Composite pass requires scene_color but none was supplied",

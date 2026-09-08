@@ -32,6 +32,7 @@ use super::allocator::{DeviceAllocator, PooledTexture};
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
+use objc2_foundation::ns_string;
 
 // Threadgroup tile size, matching the kernels' `[numthreads(8, 8, 1)]`. The
 // third dispatch dimension is the six cube faces, one thread deep.
@@ -226,7 +227,7 @@ impl super::context::MtlContext {
             cmd_buf
                 .computeCommandEncoder()
                 .ok_or("probe: failed to get prefilter compute encoder")?,
-            "probe-pyramid",
+            ns_string!("probe-pyramid"),
         );
 
         let params = plan.mip0_params();
@@ -267,7 +268,7 @@ impl super::context::MtlContext {
             cmd_buf
                 .computeCommandEncoder()
                 .ok_or("probe: failed to get prefilter compute encoder")?,
-            "probe-ggx",
+            ns_string!("probe-ggx"),
         );
         let params = plan.ggx_params(dst_mip);
         enc.set_pipeline(&pipelines.ggx);

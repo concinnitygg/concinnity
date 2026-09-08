@@ -41,6 +41,7 @@ use super::scoped_encoder::ScopedEncoder;
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
 use concinnity_core::render::uniforms::GpuParticle;
 use concinnity_core::render::uniforms::ParticleView;
+use objc2_foundation::ns_string;
 
 // Byte stride between an emitter's per-frame spawn-counter slots. The counter
 // itself is one `u32`; the padding buys the 256-byte buffer-offset alignment
@@ -278,7 +279,7 @@ impl MtlContext {
                 cmd_buf
                     .computeCommandEncoderWithDescriptor(&sim_desc)
                     .ok_or("failed to get particle compute encoder")?,
-                "particles: simulate",
+                ns_string!("particles: simulate"),
             );
             enc.set_pipeline(&pipelines.simulate);
             for (i, (rec_slot, gpu_slot)) in self
@@ -338,7 +339,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
                 .ok_or("failed to get particle render encoder")?,
-            "particles: draw",
+            ns_string!("particles: draw"),
         );
         enc.set_pipeline(&pipelines.render);
         enc.set_vertex_value(&view, 1);

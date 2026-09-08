@@ -27,6 +27,7 @@ use crate::gfx::shadow_bias;
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
+use objc2_foundation::ns_string;
 
 impl MtlContext {
     // Choose which shadow cascades to re-render this frame and advance the
@@ -119,7 +120,7 @@ impl MtlContext {
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&shadow_pass_desc)
                     .ok_or("failed to get shadow render encoder")?,
-                "shadow cascade",
+                ns_string!("shadow cascade"),
             );
 
             if let Some(object_buffer) = object_buffer {

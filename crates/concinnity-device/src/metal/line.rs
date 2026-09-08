@@ -17,18 +17,20 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBlendFactor, MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
+    MTLBlendFactor, MTLBuffer, MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
     MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLStoreAction,
-    MTLVertexFormat, MTLVertexStepFunction,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction, MTLVertexFormat,
+    MTLVertexStepFunction,
 };
 
-use super::context::MtlContext;
+use super::context::{MtlContext, bytes_of_slice};
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 
 use super::scoped_encoder::ScopedEncoder;
+use super::transient::TransientRing;
 use crate::gfx::render_types::LineVertex;
+use objc2_foundation::ns_string;
 
 // How much of a line still shows where scene geometry is in front of it. A
 // faint trace keeps the axes readable inside a dense scene without letting
@@ -40,11 +42,18 @@ const OCCLUDED_ALPHA: f32 = 0.12;
 const VERTEX_BUFFER_INDEX: usize = 1;
 
 // Line-pass state: the pipeline, built on the first frame that submits lines
-// so a world that never draws any pays nothing, plus the build-failure latch
-// that keeps a broken build from re-reporting every frame.
+// so a world that never draws any pays nothing, the build-failure latch that
+// keeps a broken build from re-reporting every frame, and the per-frame ribbon
+// vertex upload.
 pub(crate) struct LineState {
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub build_failed: bool,
+    // Ring of per-frame ribbon vertex buffers, one slot per frame-in-flight.
+    // Written by [`MtlContext::upload_lines`] before the graph runs.
+    pub upload: TransientRing,
+    // This frame's slot handle and its vertex count, `None` on a frame that
+    // publishes no lines. Set by `upload_lines`, bound by `encode_lines`.
+    pub frame: Option<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)>,
 }
 
 impl MtlContext {
@@ -64,6 +73,27 @@ impl MtlContext {
         }
     }
 
+    // Copy this frame's expanded ribbons into this frame's ring slot. Call once
+    // per frame, past the frames-in-flight fence and before the graph runs, so
+    // overwriting the slot cannot race a GPU read of the frame that last used
+    // it. `encode_lines` takes `&self` and so cannot upload for itself.
+    pub(in crate::metal) fn upload_lines(
+        &mut self,
+        slot: usize,
+        vertices: &[LineVertex],
+    ) -> Result<(), String> {
+        self.lines.frame = None;
+        if self.lines.pipeline.is_none() || vertices.is_empty() {
+            return Ok(());
+        }
+        let buf = self
+            .lines
+            .upload
+            .write(&self.device, slot, bytes_of_slice(vertices))?;
+        self.lines.frame = Some((buf, vertices.len()));
+        Ok(())
+    }
+
     // Encode the line pass: one unindexed triangle list covering every
     // expanded ribbon, alpha-blended into `hdr_resolve`. `vp` is the same
     // view-projection the main pass rasterised with (jittered under TAA), so a
@@ -74,31 +104,16 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
         vp: [[f32; 4]; 4],
-        vertices: &[LineVertex],
     ) -> Result<u32, String> {
-        let pipeline = match &self.lines.pipeline {
-            Some(p) => p,
-            None => return Ok(0),
-        };
-        if vertices.is_empty() {
+        let (Some(pipeline), Some((vbuf, vertex_count))) =
+            (self.lines.pipeline.as_ref(), self.lines.frame.as_ref())
+        else {
             return Ok(0);
-        }
+        };
         let view = concinnity_core::render::uniforms::LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
             _pad: [0.0; 3],
-        };
-        let bytes = std::mem::size_of_val(vertices);
-        // SAFETY: the pointer and length describe the live `vertices` allocation, and Metal copies
-        // those bytes into the new buffer before the call returns.
-        let vbuf = unsafe {
-            self.device
-                .newBufferWithBytes_length_options(
-                    std::ptr::NonNull::from(vertices).cast(),
-                    bytes,
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or("failed to create line vertex buffer")?
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
@@ -117,12 +132,12 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
                 .ok_or("failed to get line render encoder")?,
-            "lines",
+            ns_string!("lines"),
         );
         enc.set_pipeline(pipeline);
         enc.set_vertex_value(&view, 0);
         enc.set_fragment_value(&view, 0);
-        enc.set_vertex_buffer(&vbuf, 0, VERTEX_BUFFER_INDEX);
+        enc.set_vertex_buffer(vbuf, 0, VERTEX_BUFFER_INDEX);
         // Resolved scene depth at texture(0) for the manual depth test.
         enc.set_fragment_texture(self.hdr_targets.depth_resolve.as_ref(), 0);
         // SAFETY: the draw covers exactly the vertices uploaded into `vbuf`.
@@ -130,7 +145,7 @@ impl MtlContext {
             enc.drawPrimitives_vertexStart_vertexCount(
                 MTLPrimitiveType::Triangle,
                 0,
-                vertices.len(),
+                *vertex_count,
             );
         }
         Ok(1)

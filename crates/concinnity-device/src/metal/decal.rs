@@ -28,6 +28,7 @@ use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::decal::DecalSet;
 use concinnity_core::render::uniforms::DecalView;
+use objc2_foundation::ns_string;
 
 // All projected-decal state grouped into one feature unit: the decal slot
 // table, the pipeline, the shared unit-cube geometry, and the sampler. The
@@ -114,7 +115,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
                 .ok_or("failed to get decal render encoder")?,
-            "decals",
+            ns_string!("decals"),
         );
         enc.set_pipeline(pipeline);
 

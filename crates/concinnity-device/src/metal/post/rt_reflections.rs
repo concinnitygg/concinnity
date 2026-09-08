@@ -27,6 +27,7 @@ use crate::metal::post::fullscreen::{
 };
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_shaders::SlangLib;
+use objc2_foundation::ns_string;
 
 // Fragment sampler index the textured variant reads the bindless pool through.
 // slangc splits the combined screen sources into texture + sampler pairs at
@@ -117,7 +118,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&desc)
                 .ok_or("failed to get RT reflections encoder")?,
-            "rt reflections",
+            ns_string!("rt reflections"),
         );
         enc.set_pipeline(pipeline);
         // Textures + samplers mirror the SSR resolve.

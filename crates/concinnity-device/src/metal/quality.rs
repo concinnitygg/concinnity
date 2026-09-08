@@ -150,6 +150,7 @@ impl MtlContext {
                 taa_enabled: taa_effective,
                 needs_velocity,
                 hot_reload: self.hot_reload.enabled,
+                frames_in_flight: self.frames_in_flight,
             },
         ) {
             Ok(b) => b,
@@ -172,7 +173,7 @@ impl MtlContext {
             rt_skin_pipeline,
             auto_exposure_pipelines,
             auto_exposure_histogram,
-            auto_exposure_output,
+            auto_exposure_outputs,
             auto_exposure_state,
             auto_exposure_bias_ev,
         } = bundle;
@@ -259,6 +260,6 @@ impl MtlContext {
         self.auto_exposure.bias_ev = auto_exposure_bias_ev;
         self.auto_exposure.pipelines = auto_exposure_pipelines;
         self.auto_exposure.histogram = auto_exposure_histogram;
-        self.auto_exposure.output = auto_exposure_output;
+        self.auto_exposure.outputs = auto_exposure_outputs;
     }
 }

@@ -799,7 +799,7 @@ impl MtlContext {
             particle_emitter_state,
             auto_exposure_pipelines,
             auto_exposure_histogram,
-            auto_exposure_output,
+            auto_exposure_outputs,
             auto_exposure_state,
             auto_exposure_bias_ev: auto_exposure_bias,
         } = effects::build_effects(
@@ -824,12 +824,12 @@ impl MtlContext {
                 taa_enabled: effective_taa_enabled,
                 needs_velocity: velocity_needed,
                 hot_reload,
+                frames_in_flight,
             },
             effects::WorldContentEffects {
                 fog_settings: &fog_settings,
                 decals: &decals,
                 particles: &particles,
-                frames_in_flight,
             },
         )?;
 
@@ -1318,6 +1318,8 @@ impl MtlContext {
             lines: super::line::LineState {
                 pipeline: None,
                 build_failed: false,
+                upload: super::transient::TransientRing::new(frames_in_flight),
+                frame: None,
             },
             decal: super::decal::DecalState {
                 set: decal_set,
@@ -1352,7 +1354,7 @@ impl MtlContext {
                 bias_ev: auto_exposure_bias,
                 pipelines: auto_exposure_pipelines,
                 histogram: auto_exposure_histogram,
-                output: auto_exposure_output,
+                outputs: auto_exposure_outputs,
                 last_elapsed: 0.0,
             },
             hot_reload: super::context::HotReloadState {

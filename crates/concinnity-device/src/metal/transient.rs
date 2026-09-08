@@ -268,7 +268,25 @@ fn fill(
 
 #[cfg(test)]
 mod tests {
-    use super::{RetirePool, grow_to};
+    use super::{RetirePool, TransientRing, grow_to};
+
+    use objc2::rc::Retained;
+    use objc2::runtime::ProtocolObject;
+    use objc2_metal::{MTLBuffer, MTLDevice};
+
+    // `None` on a machine with no Metal device, which skips the device-backed
+    // tests rather than failing them.
+    fn device() -> Option<Retained<ProtocolObject<dyn MTLDevice>>> {
+        objc2_metal::MTLCreateSystemDefaultDevice()
+    }
+
+    // The bytes a shared-storage buffer currently holds, truncated to `len`.
+    fn read_back(buf: &ProtocolObject<dyn MTLBuffer>, len: usize) -> Vec<u8> {
+        // SAFETY: the ring allocates every slot `StorageModeShared` and at least
+        // `len` bytes long (the caller passes the length it just wrote), so
+        // `contents()` is a live CPU mapping of at least that many bytes.
+        unsafe { std::slice::from_raw_parts(buf.contents().as_ptr() as *const u8, len).to_vec() }
+    }
 
     #[test]
     fn grow_to_keeps_a_slot_that_already_fits() {
@@ -288,6 +306,91 @@ mod tests {
         // Growth is power-of-two so a slowly-growing list stops reallocating.
         assert_eq!(grow_to(512, 513), Some(1024));
         assert_eq!(grow_to(1024, 4096), Some(4096));
+    }
+
+    // The property the per-frame producers rely on: once a slot fits the
+    // frame's bytes, reusing it allocates nothing. Without it every frame that
+    // publishes geometry mints a driver allocation the committed command buffer
+    // retains until the frame retires.
+    #[test]
+    fn steady_state_writes_reuse_one_buffer_per_slot() {
+        let Some(device) = device() else {
+            return;
+        };
+        let mut ring = TransientRing::new(2);
+        let first = ring.write(&device, 0, &[7u8; 64]).expect("first write");
+        for _ in 0..8 {
+            let again = ring.write(&device, 0, &[7u8; 64]).expect("repeat write");
+            assert!(
+                std::ptr::eq(&*first, &*again),
+                "a slot that already fits must not reallocate"
+            );
+        }
+    }
+
+    #[test]
+    fn write_copies_the_bytes_into_the_slot() {
+        let Some(device) = device() else {
+            return;
+        };
+        let mut ring = TransientRing::new(2);
+        let payload: Vec<u8> = (0..96u8).collect();
+        let buf = ring.write(&device, 0, &payload).expect("write");
+        assert_eq!(read_back(&buf, payload.len()), payload);
+
+        // Rewriting the same slot replaces its contents rather than appending.
+        let next = vec![0xABu8; 32];
+        let buf = ring.write(&device, 0, &next).expect("rewrite");
+        assert_eq!(read_back(&buf, next.len()), next);
+    }
+
+    // Two frames in flight must not share storage: the whole point of the ring
+    // is that overwriting this frame's slot cannot touch bytes the GPU is still
+    // reading for the previous frame.
+    #[test]
+    fn distinct_slots_get_distinct_buffers() {
+        let Some(device) = device() else {
+            return;
+        };
+        let mut ring = TransientRing::new(2);
+        let a = ring.write(&device, 0, &[1u8; 48]).expect("slot 0");
+        let b = ring.write(&device, 1, &[2u8; 48]).expect("slot 1");
+        assert!(!std::ptr::eq(&*a, &*b));
+        assert_eq!(read_back(&a, 48), vec![1u8; 48]);
+        assert_eq!(read_back(&b, 48), vec![2u8; 48]);
+    }
+
+    // Slot indices wrap, so a monotonically-increasing frame counter can be
+    // handed in directly: frame `R` and frame `R + depth` land on one buffer.
+    #[test]
+    fn slot_indices_wrap_modulo_depth() {
+        let Some(device) = device() else {
+            return;
+        };
+        let mut ring = TransientRing::new(2);
+        let a = ring.write(&device, 0, &[1u8; 16]).expect("frame 0");
+        let c = ring.write(&device, 2, &[3u8; 16]).expect("frame 2");
+        assert!(std::ptr::eq(&*a, &*c), "frame 2 must reuse slot 0");
+    }
+
+    // A slot that outgrows its buffer reallocates, and the new one holds the
+    // larger payload; a later smaller write reuses it rather than shrinking.
+    #[test]
+    fn a_slot_grows_once_and_never_shrinks() {
+        let Some(device) = device() else {
+            return;
+        };
+        let mut ring = TransientRing::new(1);
+        let small = ring.write(&device, 0, &[0u8; 16]).expect("small");
+        let small_len = small.length();
+        let big = ring.write(&device, 0, &[9u8; 4096]).expect("big");
+        assert!(big.length() >= 4096);
+        assert!(big.length() > small_len);
+        let shrunk = ring.write(&device, 0, &[5u8; 8]).expect("small again");
+        assert!(
+            std::ptr::eq(&*big, &*shrunk),
+            "a grown slot must not be reallocated by a smaller write"
+        );
     }
 
     #[test]

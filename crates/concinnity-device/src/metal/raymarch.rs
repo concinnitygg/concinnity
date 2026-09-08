@@ -50,6 +50,7 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
+use objc2_foundation::ns_string;
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported at `pub(in crate::metal)` so the graph executor, the shadow pass
 // and this file keep their existing paths.
@@ -609,7 +610,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
                 .ok_or("failed to get raymarch render encoder")?,
-            "raymarch",
+            ns_string!("raymarch"),
         );
         // Front-face cull so each pixel inside the box receives exactly
         // one fragment shader invocation regardless of whether the
@@ -782,7 +783,7 @@ impl MtlContext {
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&pass_desc)
                     .ok_or("failed to get raymarch shadow render encoder")?,
-                "raymarch shadow",
+                ns_string!("raymarch shadow"),
             );
             // Front-face cull → exactly one fragment per texel inside the box's
             // light-space projection. Same depth state (compare = less, write

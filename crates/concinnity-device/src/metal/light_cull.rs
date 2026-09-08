@@ -20,6 +20,7 @@ use super::context::MtlContext;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
+use objc2_foundation::ns_string;
 
 // Clustered-lighting GPU state: the binning compute pipeline and the per-cluster
 // light-index buffer it writes / the forward pass reads. The buffer is always
@@ -45,7 +46,7 @@ impl MtlContext {
             None => return Ok(0),
         };
 
-        let desc = objc2_metal::MTLComputePassDescriptor::computePassDescriptor();
+        let desc = objc2_metal::MTLComputePassDescriptor::new();
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_compute(&desc, super::pass_timing::PassId::LightCull);
         }
@@ -53,7 +54,7 @@ impl MtlContext {
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&desc)
                 .ok_or("failed to get light-cull compute encoder")?,
-            "clustered light cull",
+            ns_string!("clustered light cull"),
         );
         enc.set_pipeline(pipeline);
 

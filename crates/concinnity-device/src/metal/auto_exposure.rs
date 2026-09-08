@@ -8,6 +8,16 @@
 // the top of the next frame, so there is one frame of latency between the
 // scene's actual luminance and the exposure applied to it: invisible at
 // human-scale eye-adaptation rates.
+//
+// The readback is a ring of one buffer per frame-in-flight rather than a single
+// shared one. Frame `R` writes slot `R % depth` and reads that same slot before
+// encoding, which the frames-in-flight fence guarantees frame `R - depth` wrote
+// and the GPU has retired -- so the value read is always exactly `depth` frames
+// old. A single shared buffer instead yields whichever frame the GPU happened to
+// have finished, which varies with how far ahead the CPU is running and makes
+// the adaptation jitter. Mirrors `vulkan/auto_exposure.rs` and
+// `directx/auto_exposure.rs`, on the argument `metal/transient.rs` already
+// makes for the transient rings.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
@@ -23,6 +33,7 @@ use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
 use concinnity_core::render::uniforms::*;
+use objc2_foundation::ns_string;
 
 // All auto-exposure (EV adaptation) state grouped into one feature unit: the
 // resolved tunables, the EMA-tracked adapted EV, the authored bias, the
@@ -42,9 +53,10 @@ pub(crate) struct AutoExposureGpu {
     // 256-bin global histogram the build kernel accumulates into (shared
     // storage so the average kernel can read + clear it in one pass).
     pub histogram: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // One-float readback buffer the average kernel writes the count-weighted
-    // average log-luminance into; CPU reads it at the top of the next frame.
-    pub output: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // One-float readback buffer per frame-in-flight; the average kernel writes
+    // this frame's slot and the CPU reads that same slot `depth` frames later,
+    // past the fence that retired its writer. Empty when auto-exposure is off.
+    pub outputs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Last frame's `elapsed`, used to derive a frame `dt` for the EMA step.
     pub last_elapsed: f32,
 }
@@ -73,25 +85,25 @@ impl MtlContext {
     // `draw_frame` already receives. We diff against the previous call's
     // elapsed to derive a frame `dt`; on the first frame `dt` is 0 so the
     // EMA snaps to the initial state (midpoint of the clamp range).
-    pub(super) fn update_auto_exposure(&mut self, elapsed: f32) {
+    pub(super) fn update_auto_exposure(&mut self, elapsed: f32, slot: usize) {
         let Some(settings) = self.auto_exposure.settings.as_ref().copied() else {
+            return;
+        };
+        let Some(output_buf) = self.auto_exposure.outputs.get(slot).cloned() else {
             return;
         };
         let Some(state) = self.auto_exposure.state.as_mut() else {
             return;
         };
-        let Some(output_buf) = self.auto_exposure.output.as_ref() else {
-            return;
-        };
 
-        // Read the previous frame's average log-luminance from the shared
-        // output buffer. Shared storage on Apple silicon means the CPU sees
-        // the GPU's most recent write without an explicit sync; in the worst
-        // case it sees a stale value, which the EMA smooths over.
+        // Read this slot's average log-luminance. The frames-in-flight fence
+        // has already retired the frame that wrote it, so the value is a
+        // completed GPU write exactly `depth` frames old -- deterministic
+        // rather than whichever frame the GPU last happened to finish.
         // SAFETY: `output_buf` is shared storage of at least one f32 (the kernel's average
         // log-luminance output), so `contents()` is a live CPU mapping of it. A torn read is
-        // impossible for a single aligned f32, and a stale value is handled by the `is_finite`
-        // check below.
+        // impossible for a single aligned f32, and the unwritten value the first `depth` frames
+        // see is the zero the buffer was created with.
         let avg_log_lum = unsafe {
             let ptr = output_buf.contents().as_ptr() as *const f32;
             ptr.read()
@@ -118,18 +130,19 @@ impl MtlContext {
     // build kernel runs one thread per HDR pixel; the average kernel runs
     // one threadgroup of 256 threads that reduces the histogram, clears it
     // for the next frame, and writes the average log-luminance to the
-    // shared output buffer the CPU will read at the top of the next frame.
-    // A no-op when auto-exposure is disabled.
+    // `slot`'s readback buffer, which the CPU reads at the top of the frame
+    // that reuses this ring slot. A no-op when auto-exposure is disabled.
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_auto_exposure(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        slot: usize,
     ) -> Result<u32, String> {
         let (Some(pipelines), Some(histogram), Some(output)) = (
             self.auto_exposure.pipelines.as_ref(),
             self.auto_exposure.histogram.as_ref(),
-            self.auto_exposure.output.as_ref(),
+            self.auto_exposure.outputs.get(slot),
         ) else {
             return Ok(0);
         };
@@ -151,7 +164,7 @@ impl MtlContext {
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&ae_desc)
                 .ok_or("failed to get auto-exposure compute encoder")?,
-            "auto-exposure",
+            ns_string!("auto-exposure"),
         );
 
         // Build kernel: 16x16 threadgroups, one thread per HDR pixel.

@@ -35,6 +35,7 @@ use super::context::MtlContext;
 use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
 use concinnity_core::render::uniforms::TransparentView;
+use objc2_foundation::ns_string;
 
 // One translucent draw recorded for the transparent pass. Self-contained
 // except for the shared [`TransparentView`], which `encode_transparent` binds
@@ -158,7 +159,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
                 .ok_or("failed to get transparent render encoder")?,
-            "transparent",
+            ns_string!("transparent"),
         );
 
         // Shared per-frame view at buffer(5) for both stages. The pass has no

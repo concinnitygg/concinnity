@@ -68,6 +68,10 @@ pub(crate) struct EffectFlags {
     // on or temporal upscaling is on (the MetalFX scaler consumes motion vectors).
     pub needs_velocity: bool,
     pub hot_reload: bool,
+    // Depth of the frame-pacing ring: one slot per frame the CPU may queue
+    // ahead of the GPU. Sizes the auto-exposure readback ring and each
+    // emitter's spawn-counter buffer.
+    pub frames_in_flight: usize,
 }
 
 // The resolution pair [`build_effects`] operates at. Render-resolution is where
@@ -90,9 +94,6 @@ pub(crate) struct WorldContentEffects<'a> {
     pub fog_settings: &'a Option<FogSettings>,
     pub decals: &'a [DecalRecord],
     pub particles: &'a [ParticleEmitterRecord],
-    // Depth of the frame-pacing ring, which sizes each emitter's spawn-counter
-    // buffer: one slot per frame the CPU may queue ahead of the GPU.
-    pub frames_in_flight: usize,
 }
 
 pub(crate) struct EffectsBundle {
@@ -158,7 +159,8 @@ pub(crate) struct EffectsBundle {
     // Auto-exposure: built only when auto_exposure_settings is Some.
     pub auto_exposure_pipelines: Option<AutoExposurePipelines>,
     pub auto_exposure_histogram: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub auto_exposure_output: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    // One readback buffer per frame-in-flight; see [`AutoExposureGpu::outputs`].
+    pub auto_exposure_outputs: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub auto_exposure_state: Option<AutoExposureState>,
     pub auto_exposure_bias_ev: f32,
 }
@@ -187,7 +189,8 @@ pub(crate) struct QualityEffectsBundle {
         Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
     pub auto_exposure_pipelines: Option<AutoExposurePipelines>,
     pub auto_exposure_histogram: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub auto_exposure_output: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    // One readback buffer per frame-in-flight; see [`AutoExposureGpu::outputs`].
+    pub auto_exposure_outputs: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub auto_exposure_state: Option<AutoExposureState>,
     pub auto_exposure_bias_ev: f32,
 }
@@ -221,6 +224,7 @@ pub(crate) fn build_quality_effects(
         taa_enabled,
         needs_velocity,
         hot_reload,
+        frames_in_flight,
     } = flags;
     // TAA pipeline + ping-pong history buffers. Built only when TAA is on;
     // upscaling-on worlds skip the TAA pass entirely (the MetalFX scaler does
@@ -406,29 +410,31 @@ pub(crate) fn build_quality_effects(
         None
     };
 
-    // Auto-exposure pipelines + persistent compute buffers. Both buffers are
+    // Auto-exposure pipelines + persistent compute buffers. Every buffer is
     // zero-initialised so the build kernel's first dispatch sees an empty
-    // histogram.
+    // histogram and the readback ring's first reads see a finite average.
     let (
         auto_exposure_pipelines,
         auto_exposure_histogram,
-        auto_exposure_output,
+        auto_exposure_outputs,
         auto_exposure_state,
         auto_exposure_bias,
     ) = if let Some(settings) = auto_exposure_settings.as_ref() {
         let pipelines = build_auto_exposure_pipelines(device, hot_reload)?;
         let hist = make_auto_exposure_histogram(device)?;
-        let out = make_auto_exposure_output(device)?;
+        let outputs = (0..frames_in_flight.max(1))
+            .map(|_| make_auto_exposure_output(device))
+            .collect::<Result<Vec<_>, _>>()?;
         let state = AutoExposureState::new(settings);
         (
             Some(pipelines),
             Some(hist),
-            Some(out),
+            outputs,
             Some(state),
             auto_exposure_bias_ev,
         )
     } else {
-        (None, None, None, None, 0.0)
+        (None, None, Vec::new(), None, 0.0)
     };
 
     Ok(QualityEffectsBundle {
@@ -444,7 +450,7 @@ pub(crate) fn build_quality_effects(
         rt_skin_pipeline,
         auto_exposure_pipelines,
         auto_exposure_histogram,
-        auto_exposure_output,
+        auto_exposure_outputs,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
     })
@@ -471,8 +477,8 @@ pub(crate) fn build_effects(
         fog_settings,
         decals,
         particles,
-        frames_in_flight,
     } = world_content;
+    let frames_in_flight = flags.frames_in_flight;
     // `flags` is Copy and moves intact into `build_quality_effects` below; this
     // local drives the bloom + world-content pipeline builds that stay here.
     let hot_reload = flags.hot_reload;
@@ -496,7 +502,7 @@ pub(crate) fn build_effects(
         rt_skin_pipeline,
         auto_exposure_pipelines,
         auto_exposure_histogram,
-        auto_exposure_output,
+        auto_exposure_outputs,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
     } = build_quality_effects(alloc, dims, settings, flags)?;
@@ -582,7 +588,7 @@ pub(crate) fn build_effects(
         particle_emitter_state,
         auto_exposure_pipelines,
         auto_exposure_histogram,
-        auto_exposure_output,
+        auto_exposure_outputs,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
     })

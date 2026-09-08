@@ -31,6 +31,7 @@ use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use concinnity_core::render::uniforms::ViewUniforms;
+use objc2_foundation::ns_string;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
 // `self.view_matrix` for the on-screen main pass (and its phase-2 sibling) but
@@ -179,7 +180,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&main_pass_desc)
                 .ok_or("failed to get render encoder")?,
-            "main pass",
+            ns_string!("main pass"),
         );
         // Wireframe view: fill mode is encoder state that indirect commands
         // inherit, so the one call covers the ICB sub-paths too.
@@ -277,7 +278,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&desc)
                 .ok_or("failed to get probe render encoder")?,
-            "probe face",
+            ns_string!("probe face"),
         );
 
         let view_uniforms = ViewUniforms {
@@ -372,7 +373,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&main_pass_desc)
                 .ok_or("failed to get render encoder")?,
-            "main2 pass",
+            ns_string!("main2 pass"),
         );
         if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);

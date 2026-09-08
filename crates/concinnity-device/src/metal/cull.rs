@@ -26,6 +26,7 @@ use super::uniforms::*;
 // existing draw_args builder reads naturally; the actual implementation
 // lives on the backend-agnostic `gfx::lod` module.
 use crate::gfx::lod::camera_distance as lod_camera_distance;
+use objc2_foundation::{NSString, ns_string};
 
 // All GPU-driven cull state grouped into one feature unit: the phase-1 +
 // phase-2 cull pipelines, their indirect command buffers + argument
@@ -283,7 +284,7 @@ struct CullOutputTarget<'a> {
 struct CullDispatchOptions<'a> {
     use_hiz: bool,
     timing: Option<super::pass_timing::PassId>,
-    label: &'a str,
+    label: &'a NSString,
 }
 
 // One thread per slot over a non-uniform grid: no remainder branch beyond the
@@ -553,7 +554,7 @@ impl MtlContext {
             CullDispatchOptions {
                 use_hiz: true,
                 timing: Some(super::pass_timing::PassId::Cull),
-                label: "cull phase1",
+                label: ns_string!("cull phase1"),
             },
         )?;
         Ok(())
@@ -597,7 +598,7 @@ impl MtlContext {
             CullDispatchOptions {
                 use_hiz: false,
                 timing: None,
-                label: "mirror cull",
+                label: ns_string!("mirror cull"),
             },
         )
     }
@@ -811,7 +812,7 @@ impl MtlContext {
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&cull_pass_desc)
                 .ok_or("failed to get compute encoder")?,
-            "cull phase2",
+            ns_string!("cull phase2"),
         );
         enc.set_pipeline(pipeline);
         enc.set_buffer(object_buffer, 0, 0);
@@ -900,7 +901,7 @@ impl MtlContext {
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&cull_pass_desc)
                 .ok_or("failed to get shadow cull compute encoder")?,
-            "shadow cull",
+            ns_string!("shadow cull"),
         );
         enc.set_pipeline(pipeline);
         enc.set_buffer(object_buffer, 0, 0);

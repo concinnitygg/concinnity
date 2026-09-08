@@ -25,6 +25,7 @@ use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::ModelUniforms;
+use objc2_foundation::ns_string;
 
 // A spot slice's matrix always lands in slot 0 of its one-matrix
 // `ShadowUniforms`, so the shadow VS's cascade index is constant here.
@@ -112,7 +113,7 @@ impl MtlContext {
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&pass_desc)
                     .ok_or("failed to get spot shadow render encoder")?,
-                "spot shadow slice",
+                ns_string!("spot shadow slice"),
             );
 
             let uniforms = self.spot_slice_uniforms(slice);

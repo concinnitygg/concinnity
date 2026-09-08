@@ -20,6 +20,7 @@ use crate::gfx::render_types::TextDrawCall;
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
+use objc2_foundation::ns_string;
 
 impl MtlContext {
     // pub(in crate::metal) so the render-graph executor in
@@ -57,7 +58,7 @@ impl MtlContext {
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&composite_pass_desc)
                 .ok_or("failed to get post-process render encoder")?,
-            "composite",
+            ns_string!("composite"),
         );
 
         post_encoder.set_pipeline(&self.post_pipeline_state);

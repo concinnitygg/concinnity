@@ -47,6 +47,7 @@ use super::scoped_encoder::ScopedEncoder;
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
 // is unchanged.
 use concinnity_core::render::uniforms::HizParams;
+use objc2_foundation::ns_string;
 
 // Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
 // DirectX `[numthreads(8, 8, 1)]`).
@@ -233,7 +234,7 @@ impl MtlContext {
             tracing::error!("hiz: failed to get compute encoder");
             return;
         };
-        let enc = ScopedEncoder::new(enc, "hiz-build");
+        let enc = ScopedEncoder::new(enc, ns_string!("hiz-build"));
 
         // Init: mip 0 from the MSAA main depth, MAX over samples.
         let init_params = HizParams {

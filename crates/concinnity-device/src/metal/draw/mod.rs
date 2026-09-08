@@ -229,7 +229,7 @@ impl MtlContext {
         // (the bloom prefilter and composite both consume it). A no-op when
         // auto-exposure is disabled -- the static authored EV then drives the
         // exposure multiplier unchanged.
-        self.update_auto_exposure(elapsed);
+        self.update_auto_exposure(elapsed, ring_slot);
 
         // Transient per-frame GPU buffers holding each skinned object's joint
         // matrices. Built once and reused across the shadow cascades and the
@@ -648,6 +648,10 @@ impl MtlContext {
         // Line pipeline: built on the first frame that publishes lines,
         // so the graph gate below can see it live this same frame.
         self.ensure_line_pipeline(!lines.is_empty());
+        // This frame's ribbon geometry, written into this slot's persistent
+        // vertex buffer up front for the same reason the text geometry is: the
+        // line pass encodes through `&self`, so it cannot upload for itself.
+        self.upload_lines(ring_slot, lines)?;
 
         // Single render-graph dispatch for the full frame.
         // The merged graph contains every Metal pass that once ran
@@ -830,7 +834,7 @@ impl MtlContext {
             skinned_morph_weight_bufs: &skinned_morph_weight_bufs,
             scene_color: Some(&scene_color),
             text_calls,
-            lines,
+            ring_slot,
             world_hidden,
             elapsed,
             vp,

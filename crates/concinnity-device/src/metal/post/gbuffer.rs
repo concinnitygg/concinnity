@@ -26,6 +26,7 @@ use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_shaders;
 use concinnity_core::render::uniforms::GBufferView;
+use objc2_foundation::ns_string;
 
 // All unified-G-buffer pre-pass state grouped into one unit: the shared
 // targets (normal+depth / roughness / velocity / sampleable depth) and the one
@@ -314,7 +315,7 @@ impl MtlContext {
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&desc)
                     .ok_or("failed to get G-buffer pre-pass encoder")?,
-                "g-buffer prepass",
+                ns_string!("g-buffer prepass"),
             );
 
             // The encoder above cleared all four attachments, so a world with
