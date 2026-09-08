@@ -879,7 +879,64 @@ impl MtlContext {
             ssgi_params: ssgi_params.as_ref(),
             rt_reflection_params: rt_reflection_params.as_ref(),
         };
-        self.execute_graph(&graph, &params)?;
+        // The frame's completion join. Every command buffer the frame submits
+        // registers a part before it is committed and arrives from its
+        // completion handler; the last arrival resolves the frame's per-pass
+        // timings and releases the frame-in-flight slot. The join is built
+        // before submission because the graph executor attaches the async
+        // queue's parts, and the submission token holds it open until this
+        // frame has finished recording -- including the error paths, where the
+        // token's Drop is the only arrival.
+        //
+        // Per-pass timings resolve here rather than from the presenting command
+        // buffer's own handler because the async queue's terminal pass
+        // (`HizFinal`) is not an ancestor of the composite: its sample-buffer
+        // slots would still be a few frames stale when the composite retires.
+        let gpu_time = std::sync::Arc::clone(&self.diagnostics.gpu_time_us);
+        let pass_times = std::sync::Arc::clone(&self.diagnostics.pass_times_us);
+        // The composite command buffer's own GPU span, published by its handler
+        // as the fallback whole-frame time when per-pass timing is unavailable.
+        let composite_span_us = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        // Which passes actually ran this frame. The sample buffer is reused
+        // across frames and never cleared, so a pass absent this frame (e.g.
+        // every world pass behind an opaque menu) would otherwise resolve to
+        // its last run's stale timestamps; the resolve zeroes those slots. Read
+        // on this thread once the frame is recorded, which the submission token
+        // orders before any arrival can run the completion work.
+        let active_mask = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let pass_buffer = self
+            .diagnostics
+            .pass_timing
+            .as_ref()
+            .map(|p| super::pass_timing::SendableSampleBuf(p.buffer_for(pass_timing_slot)));
+        let (join, submission_token) = frame_slot.into_join({
+            let composite_span_us = std::sync::Arc::clone(&composite_span_us);
+            let active_mask = std::sync::Arc::clone(&active_mask);
+            Box::new(move || {
+                use std::sync::atomic::Ordering as AtomicOrdering;
+                let mut frame_us = composite_span_us.load(AtomicOrdering::Relaxed);
+                if let Some(buf) = &pass_buffer {
+                    let per_pass = super::pass_timing::resolve(&buf.0);
+                    let mask = active_mask.load(AtomicOrdering::Relaxed);
+                    for (i, (slot, micros)) in pass_times.iter().zip(per_pass.iter()).enumerate() {
+                        let value = if mask & (1u64 << i) != 0 { *micros } else { 0 };
+                        slot.store(value, AtomicOrdering::Relaxed);
+                    }
+                    // First pass start to last pass end, across both queues:
+                    // the frame's GPU span, which the per-pass times cannot be
+                    // summed into once passes overlap.
+                    if let Some(span_us) = super::pass_timing::frame_span_us(&buf.0) {
+                        frame_us = span_us;
+                    }
+                }
+                gpu_time.store(frame_us, AtomicOrdering::Relaxed);
+            })
+        });
+
+        let submission = self.execute_graph(&graph, &params, &join)?;
+        if let Some(timing) = self.diagnostics.pass_timing.as_ref() {
+            active_mask.store(timing.attached_mask(), std::sync::atomic::Ordering::Relaxed);
+        }
         // Cache the compiled graph under this frame's inputs so the next frame
         // with matching inputs skips the rebuild.
         self.draw.graph_cache = Some((graph_inputs, graph));
@@ -911,41 +968,16 @@ impl MtlContext {
             self.last_present_texture = Some(drawable.texture());
         }
 
-        // Record this frame's GPU execution time for the profiler overlay.
-        // The completion handler fires on a GPU callback thread once the
-        // command buffer retires, so the result is read back a frame or two
-        // later via the shared atomic. GPUStartTime / GPUEndTime are only
-        // valid inside the handler.
-        //
-        // If per-pass timing is active, the same completion handler also
-        // resolves the frame's `MTLCounterSampleBuffer` slot and publishes
-        // each pass's microseconds into `diagnostics.pass_times_us`. The handler holds
-        // a `Retained` clone of the sample buffer, so the buffer outlives
-        // the borrow `self.diagnostics.pass_timing` came from.
+        // The presenting command buffer's own completion handler. It reports
+        // the buffer's fault status and publishes its GPU span as the
+        // whole-frame fallback, then arrives at the frame's completion join;
+        // the per-pass resolve and the frame-slot release belong to the join's
+        // last arrival, since the async queue may still be running.
         {
-            // Hand this frame's in-flight slot to the GPU completion handler;
-            // `into_gpu_release` suppresses the guard's Drop so the slot is
-            // released exactly once, when the GPU retires the command buffer.
-            let frame_sem = frame_slot.into_gpu_release();
-            let gpu_time = std::sync::Arc::clone(&self.diagnostics.gpu_time_us);
-            let pass_times = std::sync::Arc::clone(&self.diagnostics.pass_times_us);
             let render_fault_logged = std::sync::Arc::clone(&self.diagnostics.render_fault_logged);
             let device_error = std::sync::Arc::clone(&self.diagnostics.device_error);
-            let pass_buffer = self
-                .diagnostics
-                .pass_timing
-                .as_ref()
-                .map(|p| p.buffer_for(pass_timing_slot));
-            // Which passes actually ran this frame. The sample buffer is reused
-            // across frames and never cleared, so a pass absent this frame (e.g.
-            // every world pass behind an opaque menu) would otherwise resolve to
-            // its last run's stale timestamps; the handler zeroes those slots.
-            let active_mask = self
-                .diagnostics
-                .pass_timing
-                .as_ref()
-                .map(|p| p.attached_mask())
-                .unwrap_or(0);
+            let part = std::sync::Arc::clone(&join);
+            join.add_part();
             let handler = block2::RcBlock::new(
                 move |cb: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>| {
                     // SAFETY: Metal hands the completion handler a live command buffer, and the
@@ -976,38 +1008,18 @@ impl MtlContext {
                             *slot = Some(classified);
                         }
                     }
-                    // Whole-frame GPU time. This handler's command buffer is
-                    // only one slice of a multi-buffer frame, so its own
-                    // GPUStartTime/GPUEndTime span under-reports the frame.
-                    // Prefer the counter-sample span (earliest pass start to
-                    // latest pass end); fall back to this buffer's span when
-                    // per-pass timing is unavailable.
+                    // This buffer is one slice of a multi-buffer, two-queue
+                    // frame, so its own span under-reports the frame; it is only
+                    // the fallback for a device with no per-pass timing.
+                    // GPUStartTime / GPUEndTime are valid only inside the handler.
                     let span = cb.GPUEndTime() - cb.GPUStartTime();
-                    let mut frame_us = (span * 1.0e6).clamp(0.0, f64::from(u32::MAX)) as u32;
-                    if let Some(buf) = &pass_buffer {
-                        let per_pass = super::pass_timing::resolve(buf);
-                        for (i, (slot, micros)) in
-                            pass_times.iter().zip(per_pass.iter()).enumerate()
-                        {
-                            // Report a pass's time only if it ran this frame;
-                            // otherwise its sample-buffer slot holds stale data.
-                            let value = if active_mask & (1u64 << i) != 0 {
-                                *micros
-                            } else {
-                                0
-                            };
-                            slot.store(value, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        if let Some(span_us) = super::pass_timing::frame_span_us(buf) {
-                            frame_us = span_us;
-                        }
-                    }
-                    gpu_time.store(frame_us, std::sync::atomic::Ordering::Relaxed);
-                    // Release this frame's in-flight slot now the GPU is done
-                    // with the command buffer, freeing the CPU to queue the
-                    // next frame. Fires on success and on GPU fault alike, so
-                    // the semaphore can never leak a slot.
-                    frame_sem.signal();
+                    composite_span_us.store(
+                        (span * 1.0e6).clamp(0.0, f64::from(u32::MAX)) as u32,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    // Fires on success and on GPU fault alike, so the join can
+                    // never leak the frame's slot.
+                    part.arrive();
                 },
             );
             // SAFETY: addCompletedHandler copies the block (Block_copy), so
@@ -1018,6 +1030,14 @@ impl MtlContext {
         }
 
         cmd_buf.commit();
+        // The graphics queue's frame terminal rides that buffer, so the next
+        // frame may only wait on it now that it has been committed.
+        if let Some(value) = submission.pending_terminal {
+            self.record_graph_terminal(value);
+        }
+        // Recording is done: release the join's submission part so the frame
+        // can complete once every command buffer has retired.
+        drop(submission_token);
 
         // Advance temporal state for the next frame whenever the velocity
         // pre-pass runs: that's TAA *or* the MetalFX upscaler. The

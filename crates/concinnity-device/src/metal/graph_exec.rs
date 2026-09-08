@@ -11,38 +11,61 @@
 // the bundled `encode_ssao` Rust function, but they must never appear as
 // graph nodes (the executor rejects them with a clear error if mis-added).
 //
-// Per-pass command buffers. Each non-composite pass now
-// runs on its own freshly-minted `MTLCommandBuffer`, committed
-// immediately. The `Composite` pass keeps using the outer cmd_buf that
-// `draw_frame` owns (so `presentDrawable` + the completion handler
-// stay attached to the cmd buf that actually writes to the drawable).
-// On a single command queue, commit order = GPU execution order, so
-// the topologically-sorted `graph.passes` iteration order is also the
-// GPU order: no `MTLEvent` wait/signal pairs are needed. It also
-// sidesteps the `MTLParallelRenderCommandEncoder`
-// abort that reliably trips G14X (M2/M3 Pro/Max-class GPUs) on
-// macOS 26.4 after ~20-90 s of rendering, regardless of how few
-// sub-encoders we minted.
+// Per-pass command buffers, two queues. Each non-composite pass runs on its own
+// freshly-minted `MTLCommandBuffer`, encoded on a rayon worker and committed by
+// the main thread onto the queue the graph's schedule assigned it
+// (`CompiledPass::queue`). Each queue's buffers commit in ascending compiled
+// index, so a queue's own commit order is that queue's graph order; the two
+// queues are ordered against each other only by the `MTLEvent` signal / wait
+// pairs the schedule derived, laid out by `metal/graph_events.rs` and carried
+// by `metal/graph_queues.rs`.
+//
+// The `Composite` pass keeps using the outer cmd_buf that `draw_frame` owns (so
+// `presentDrawable` + the completion handler stay attached to the cmd buf that
+// actually writes to the drawable). It is the last graphics pass, so it also
+// carries that queue's frame terminal signal, and `draw_frame` records the
+// terminal only once it has committed the buffer.
+//
+// Ordering within a queue is still submission order, never events. An earlier
+// draft had workers commit their own cmd bufs in arbitrary thread-schedule
+// order with an `MTLEvent` chain enforcing GPU ordering, and the renderer drew
+// into a black drawable: Apple's command queue executes cmd bufs FIFO in commit
+// order regardless of events, so committing out of order broke the dependency
+// chain (later passes ran while earlier passes' writes were still queued behind
+// them). That is exactly why the asynchronous passes need a *second* queue
+// rather than out-of-order commits on one, and why events only ever cross
+// between the two.
+//
+// Per-pass command buffers also sidestep the `MTLParallelRenderCommandEncoder`
+// abort that reliably trips G14X (M2/M3 Pro/Max-class GPUs) on macOS 26.4 after
+// ~20-90 s of rendering, regardless of how few sub-encoders we minted.
 //
 // The executor is a `&mut self` method on `MtlContext` taking the
 // concrete per-frame params.
 //
 // Per-pass barriers (`pass.barriers_before` and `pass.barriers_after`) are not
-// applied on Metal: the
-// DX/VK seam (`barrier_translate` + a per-resource registry +
-// `emit_graph_barriers`) emits explicit resource-state TRANSITIONS, and Metal
-// has none to emit.
+// applied on Metal: the DX/VK seam (`barrier_translate` + a per-resource
+// registry + `emit_graph_barriers`) emits explicit resource-state TRANSITIONS,
+// and Metal has none to emit.
 //
-//   1. Hazards are tracked automatically. Every resource here uses the default
-//      tracked hazard mode (no `MTLHeap` / untracked resources), so Metal
-//      inserts the cross-encoder and cross-command-buffer read/write
-//      dependencies itself. There is no `ResourceBarrier` / pipeline-barrier
-//      analogue to translate a `(class, ResourceState)` into.
-//   2. Cross-pass ordering is free. Each pass commits its own command buffer in
-//      topological order on one queue (commit order = GPU execution order, see
-//      below), so the producer -> consumer ordering the two lists encode is
-//      already guaranteed by submission order, whichever side of a pass the
-//      graph chose to record a read run's transition on.
+//   1. Hazards are tracked automatically -- within a queue. Every resource here
+//      uses the default tracked hazard mode (no `MTLHeap` / untracked
+//      resources). Apple documents that mode as "delay write operations until
+//      all previous read operations finish" and "prevent subsequent commands
+//      from running until write operations finish", without claiming a scope
+//      wider than the queue; the resource-synchronization overview places the
+//      mechanisms in a ladder where a fence "synchronizes resource memory
+//      operations across different passes within a command queue" and only an
+//      `MTLEvent` "synchronizes resource memory operations in passes across all
+//      command queues". So automatic tracking is taken to cover encoders and
+//      command buffers on ONE queue only, and every cross-queue edge is carried
+//      by an event instead: the in-frame ones the schedule derived, plus the
+//      frame-start wait that closes the cross-frame hazard on the persistent
+//      resources both queues touch (see `metal/graph_events.rs`).
+//   2. Same-queue cross-pass ordering is free. A queue's passes commit in that
+//      queue's graph order, so the producer -> consumer ordering the two barrier
+//      lists encode is already guaranteed by submission order, whichever side of
+//      a pass the graph chose to record a read run's transition on.
 //   3. The only Metal "barrier-analogue" is `useResource` residency, and it is
 //      a DIFFERENT concern the graph cannot drive: it is per-encoder (every
 //      encoder reaching a resource INDIRECTLY -- through an ICB, an argument
@@ -55,8 +78,8 @@
 //
 // The Vulkan / DirectX executors consume the same `BarrierOp` list; Metal reads
 // the graph for ordering + resource lifetimes only. (If untracked / heap
-// resources are ever introduced, the point-1 assumption breaks and explicit
-// `MTLFence`s become necessary.)
+// resources are ever introduced, the point-1 assumption breaks even within a
+// queue, and explicit `MTLFence`s become necessary.)
 
 use std::sync::atomic::Ordering;
 
@@ -65,17 +88,28 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _, MTLTexture};
 
 use crate::gfx::frustum::Frustum;
-use crate::gfx::render_graph::{CompiledGraph, PassId};
+use crate::gfx::render_graph::{CompiledGraph, PassId, PassQueue};
 use crate::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
 
 use super::context::MtlContext;
+use super::frame_pacing::FrameJoin;
+use super::graph_events;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
 use super::uniforms::VelocityUniforms;
 use concinnity_core::render::uniforms::GBufferView;
 use concinnity_core::render::uniforms::TaaParams;
+
+// What `execute_graph` leaves for `draw_frame` to finish. The composite pass
+// rides the command buffer `draw_frame` owns, so the graphics queue's frame
+// terminal is signalled on a buffer this executor never commits.
+pub(in crate::metal) struct GraphSubmission {
+    // The graphics terminal value the composite command buffer signals, to be
+    // handed to `MtlContext::record_graph_terminal` once it is committed.
+    pub(in crate::metal) pending_terminal: Option<u64>,
+}
 
 // Per-frame params the executor threads into each pass's `encode_*`
 // method. The set is the union of what every currently-migrated pass
@@ -200,22 +234,20 @@ impl MtlContext {
         &mut self,
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
-    ) -> Result<(), String> {
+        join: &std::sync::Arc<FrameJoin>,
+    ) -> Result<GraphSubmission, String> {
         #[cfg(debug_assertions)]
         crate::gfx::render_graph::assert_slot_aliasing_sound(
             graph,
             self.transient_pool.slot_labels(),
             "metal",
         );
-        // The graph now carries a two-queue schedule (a `PassQueue` per pass plus
-        // the cross-queue signal / wait pairs). This executor still records one
-        // serial stream in `graph.passes` order, which is the schedule's queues
-        // interleaved back into their compiled order: the command order is
-        // therefore byte-for-byte what it was before the schedule existed, and
-        // no compute queue is created. What has to hold for that flattening to
-        // be legal is that the compiled order is a topological order for both
-        // queues at once and that every wait names an already-recorded producer,
-        // which is what this asserts.
+        // Both submission paths need the compiled order to be a topological
+        // order for each queue at once, with every wait naming a producer
+        // recorded earlier: the two-queue path because it commits each queue's
+        // buffers in ascending compiled index and encodes a wait for a value
+        // that queue signals no later, the single-queue fallback because it
+        // flattens the schedule back into one stream. This asserts both.
         #[cfg(debug_assertions)]
         crate::gfx::render_graph::assert_serial_order_honours_schedule(graph, "metal");
 
@@ -232,21 +264,30 @@ impl MtlContext {
             .passes
             .iter()
             .position(|p| matches!(p.id, PassId::Composite));
+        // The graphics queue's terminal signal rides whichever pass the plan put
+        // it on. That is the composite pass in every graph that presents, and
+        // its command buffer is committed by `draw_frame` rather than here, so
+        // the terminal is handed back and recorded after that commit.
+        let last_graphics = (0..graph.passes.len())
+            .rev()
+            .find(|&i| graph.passes[i].queue == PassQueue::Graphics);
+        let deferred_terminal = (composite_idx.is_some() && composite_idx == last_graphics)
+            .then_some(PassQueue::Graphics);
+
+        // This frame's event values. `None` when the second queue could not be
+        // created: the fallback records every pass onto the graphics queue in
+        // compiled order and encodes no events at all.
+        let plan = self.graph_queues.as_ref().map(|queues| {
+            let (events, previous) = queues.begin_frame(graph.passes.len());
+            graph_events::plan_frame(graph, events, previous)
+        });
 
         // Pre-allocate per-pass slots. Workers encode into their own
         // freshly-minted `MTLCommandBuffer` in parallel and hand the
         // encoded-but-uncommitted buffer back through the matching slot.
-        // The main thread then commits each slot in topological pass
-        // order, so the single command queue's commit order = the
-        // graph's pass order = the GPU's execution order. This is
-        // important on Apple Silicon: an earlier draft of this code
-        // had workers commit their own cmd bufs in arbitrary
-        // thread-schedule order with an `MTLEvent` wait/signal chain
-        // enforcing GPU ordering. That left the renderer drawing into
-        // a black drawable: Apple's command queue executes cmd bufs
-        // FIFO in commit order regardless of events, so committing out
-        // of order broke the dependency chain (later passes ran while
-        // earlier passes' writes were still queued behind them).
+        // The main thread then commits each slot onto its own queue in
+        // compiled order, so each queue's commit order is that queue's graph
+        // order, which is that queue's GPU execution order.
         let worker_slots: std::sync::Mutex<Vec<Option<SendableCmdBuf>>> =
             std::sync::Mutex::new((0..graph.passes.len()).map(|_| None).collect());
         let first_error: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -255,6 +296,7 @@ impl MtlContext {
         // fault-logging handlers can share the throttle without re-borrowing
         // `self` while `ctx_ref` is live.
         let pass_fault_count = std::sync::Arc::clone(&self.diagnostics.pass_fault_count);
+        let plan_ref = plan.as_ref();
         let ctx_ref = ParallelCtxRef::new(self);
         crate::jobs::pool().install(|| {
             rayon::scope(|scope| {
@@ -263,11 +305,13 @@ impl MtlContext {
                         continue;
                     }
                     // No Metal-side barrier work: Apple's implicit
-                    // hazard tracking covers it. Touched here so the
-                    // unused fields don't lint when this loop is the
+                    // hazard tracking covers it within a queue, and every
+                    // cross-queue edge is carried by an event instead. Touched
+                    // here so the unused fields don't lint when this loop is the
                     // only consumer.
                     let _ = (&pass.barriers_before, &pass.barriers_after);
                     let pass_id = pass.id;
+                    let pass_queue = pass.queue;
                     let particle_ref = particle_frame.as_ref();
                     let first_error_ref = &first_error;
                     let worker_slots_ref = &worker_slots;
@@ -279,7 +323,11 @@ impl MtlContext {
                     scope.spawn(move |_| {
                         objc2::rc::autoreleasepool(|_| {
                             let ctx = ctx_ref.as_ctx();
-                            let cmd_buf = match ctx.command_queue.commandBuffer() {
+                            let queue = match ctx.graph_queues.as_ref() {
+                                Some(queues) => queues.queue(pass_queue, &ctx.command_queue),
+                                None => &ctx.command_queue,
+                            };
+                            let cmd_buf = match queue.commandBuffer() {
                                 Some(cb) => cb,
                                 None => {
                                     let mut e = first_error_ref.lock().unwrap();
@@ -292,8 +340,26 @@ impl MtlContext {
                                     return;
                                 }
                             };
+                            // Waits before the pass's own encoders, signals
+                            // after them: Metal accepts an event command only
+                            // while the command buffer has no open encoder.
+                            let sync = ctx.graph_queues.as_ref().zip(plan_ref);
+                            if let Some((queues, plan)) = sync {
+                                for &(event_queue, value) in &plan.pass(idx).waits {
+                                    cmd_buf
+                                        .encodeWaitForEvent_value(queues.event(event_queue), value);
+                                }
+                            }
                             match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref) {
                                 Ok(count) => {
+                                    if let Some((queues, plan)) = sync {
+                                        for &value in &plan.pass(idx).signals {
+                                            cmd_buf.encodeSignalEvent_value(
+                                                queues.event(pass_queue),
+                                                value,
+                                            );
+                                        }
+                                    }
                                     ctx.diagnostics
                                         .draw_calls_accum
                                         .fetch_add(count, Ordering::Relaxed);
@@ -313,13 +379,15 @@ impl MtlContext {
             });
         });
 
+        // Nothing has been committed yet, so an encode failure leaves the
+        // frame's event values unsignalled and unrecorded: the next frame
+        // reuses the slice rather than waiting on a value nothing reaches.
         if let Some(err) = first_error.into_inner().unwrap_or(None) {
             return Err(err);
         }
 
-        // Commit every worker-encoded cmd buf in topological pass
-        // order. Single command queue, FIFO execution: the order
-        // these commit in is the order the GPU runs them in.
+        // Commit every worker-encoded cmd buf onto its own queue, walking the
+        // compiled order so each queue sees its passes in graph order.
         let slots = worker_slots
             .into_inner()
             .map_err(|_| "graph executor: worker slot mutex poisoned".to_string())?;
@@ -329,9 +397,14 @@ impl MtlContext {
                 // GPU fault confined to one pass (e.g. the RT reflection trace)
                 // surfaces only here: the outer composite buffer just sees a
                 // downstream victim. Attach a handler naming the faulting pass
-                // so the *original* fault in a cascade is identifiable.
+                // so the *original* fault in a cascade is identifiable. The same
+                // handler reports the buffer to the frame's completion join, so
+                // the frame-in-flight slot outlives every queue's work rather
+                // than just the presenting buffer's.
                 let pass_id = graph.passes.get(idx).map(|p| p.id);
                 let throttle = std::sync::Arc::clone(&pass_fault_count);
+                let part = std::sync::Arc::clone(join);
+                join.add_part();
                 let handler = block2::RcBlock::new(
                     move |cbh: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                         // SAFETY: Metal hands the completion handler a live command buffer, and the
@@ -346,6 +419,7 @@ impl MtlContext {
                                 cbh.error()
                             );
                         }
+                        part.arrive();
                     },
                 );
                 // SAFETY: addCompletedHandler copies the block, so the RcBlock
@@ -357,21 +431,46 @@ impl MtlContext {
             }
         }
 
-        // Composite stays on the outer cmd buf that `draw_frame` owns,
-        // so `presentDrawable` + the completion handler attach to the
-        // same cmd buf that writes to the drawable. It's committed by
-        // `draw_frame` after this returns; since every non-composite
-        // cmd buf above has already committed, the queue order places
-        // the outer cmd buf strictly after them: composite reads
-        // every prior write correctly without any explicit MTLEvent
-        // wait.
+        // Every terminal but the deferred one is now committed, so the next
+        // frame may wait on it. Also advances the value slice.
+        let mut submission = GraphSubmission {
+            pending_terminal: None,
+        };
+        if let (Some(queues), Some(plan)) = (self.graph_queues.as_mut(), plan.as_ref()) {
+            queues.end_submission(plan, deferred_terminal);
+            submission.pending_terminal = deferred_terminal.and_then(|q| plan.terminal(q));
+        }
+
+        // Composite stays on the outer cmd buf that `draw_frame` owns, so
+        // `presentDrawable` + the completion handler attach to the same cmd buf
+        // that writes to the drawable. It is committed by `draw_frame` after
+        // this returns; every other graphics-queue cmd buf has already
+        // committed, so the queue order places it strictly after them.
         if composite_idx.is_some() {
+            if let (Some(queues), Some(plan), Some(idx)) =
+                (self.graph_queues.as_ref(), plan.as_ref(), composite_idx)
+            {
+                for &(event_queue, value) in &plan.pass(idx).waits {
+                    params
+                        .cmd_buf
+                        .encodeWaitForEvent_value(queues.event(event_queue), value);
+                }
+            }
             let count = self.encode_pass_into(
                 PassId::Composite,
                 params.cmd_buf,
                 params,
                 particle_frame.as_ref(),
             )?;
+            if let (Some(queues), Some(plan), Some(idx)) =
+                (self.graph_queues.as_ref(), plan.as_ref(), composite_idx)
+            {
+                for &value in &plan.pass(idx).signals {
+                    params
+                        .cmd_buf
+                        .encodeSignalEvent_value(queues.event(PassQueue::Graphics), value);
+                }
+            }
             self.diagnostics
                 .draw_calls_accum
                 .fetch_add(count, Ordering::Relaxed);
@@ -379,7 +478,17 @@ impl MtlContext {
 
         self.diagnostics.frame_stats.draw_calls +=
             self.diagnostics.draw_calls_accum.load(Ordering::Relaxed);
-        Ok(())
+        Ok(submission)
+    }
+
+    // Record the frame terminal whose command buffer `draw_frame` commits
+    // itself. Called after that commit, so a frame abandoned between recording
+    // and committing never leaves the next frame waiting on a value the GPU is
+    // not going to reach.
+    pub(in crate::metal) fn record_graph_terminal(&mut self, value: u64) {
+        if let Some(queues) = self.graph_queues.as_mut() {
+            queues.record_terminal(PassQueue::Graphics, value);
+        }
     }
 
     // Dispatch a single pass into a freshly-minted `MTLCommandBuffer`. Takes

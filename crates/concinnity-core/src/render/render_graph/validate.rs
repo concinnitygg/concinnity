@@ -263,13 +263,13 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
 
 /// Panic unless recording `graph.passes` in index order honours the schedule.
 ///
-/// This is the contract every backend executor currently relies on: it records
-/// one serial stream, so the compiled order has to be a topological order for
-/// each queue at once and every wait has to name a producer already recorded.
-/// An executor that later submits the queues separately stops needing this;
-/// until then it is what lets a two-queue schedule be flattened back to one
-/// without changing the recorded command order. `backend` names the caller in
-/// the message.
+/// Every backend executor relies on this, whether it flattens the schedule or
+/// not. Vulkan and DirectX record one serial stream, which is legal exactly
+/// because the compiled order is a topological order for each queue at once.
+/// Metal submits the two queues separately but walks the same compiled order to
+/// do it, so each queue's commit order is that queue's graph order and every
+/// wait names a value its producing queue signals no later. `backend` names the
+/// caller in the message.
 pub fn assert_serial_order_honours_schedule(graph: &CompiledGraph, backend: &str) {
     let problems = serial_order_problems(graph);
     assert!(

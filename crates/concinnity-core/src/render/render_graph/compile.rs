@@ -120,8 +120,9 @@ pub struct CompiledPass {
     /// the matching acquire on the consuming family; on DirectX the transition
     /// into a compute-legal state has to happen on the direct queue before the
     /// signal, which is what recording it here rather than on the consumer
-    /// gives. Neither native half is implemented: no backend creates a compute
-    /// queue yet, and every executor records both lists into one serial stream.
+    /// gives. Neither native half is implemented: Vulkan and DirectX create no
+    /// compute queue yet and record both lists into one serial stream, and Metal,
+    /// which does submit two queues, emits no resource transitions at all.
     pub barriers_after: Vec<BarrierOp>,
     /// The queue this pass is scheduled onto. Derived by [`super::schedule`]
     /// from the dependency DAG, so it is a pure function of the graph.

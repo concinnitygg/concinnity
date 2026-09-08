@@ -1150,9 +1150,20 @@ impl MtlContext {
             (records, args)
         };
 
+        // Second queue + per-queue events for the render graph's two-queue
+        // schedule. Falls back to a single-queue submission when the device
+        // will not create them.
+        let graph_queues = super::graph_queues::GraphQueues::new(&device);
+        if graph_queues.is_none() {
+            tracing::warn!(
+                "metal: no async-compute queue, submitting the render graph on one queue"
+            );
+        }
+
         let ctx = Self {
             device,
             command_queue,
+            graph_queues,
             swap_pixel_format,
             hdr: super::context::HdrState {
                 max_edr,

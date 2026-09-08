@@ -56,6 +56,24 @@ pub(super) const FRAMES_IN_FLIGHT: usize = 3;
 // "don't sample at this stage".
 const NO_SAMPLE: usize = usize::MAX;
 
+// A frame's sample buffer, moved into the completion work that resolves it.
+//
+// The resolve now runs from the frame's completion join rather than from the
+// presenting command buffer's own handler, because the async-compute queue can
+// still be writing timestamps when the composite retires. The join's completion
+// work is a `Box<dyn FnOnce() + Send>`, so the buffer handle has to cross that
+// bound.
+pub(super) struct SendableSampleBuf(
+    pub(super) Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>,
+);
+
+// SAFETY: the handle is created on the render thread, moved once into the
+// frame's completion work, and read there by whichever thread makes the last
+// arrival; no two threads hold it at once. `resolveCounterRange` is a read of a
+// buffer the GPU has finished writing (every command buffer of the frame has
+// retired by then), and Apple's Metal objects are safe for shared read.
+unsafe impl Send for SendableSampleBuf {}
+
 // One frame's worth of pass timestamps. The sample buffer lives on the GPU
 // (private storage); `resolve` reads it back into CPU-visible bytes.
 pub(super) struct PassTimingResources {

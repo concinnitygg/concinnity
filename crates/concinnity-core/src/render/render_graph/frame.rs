@@ -245,11 +245,13 @@ pub struct FrameGraphInputs {
 }
 
 impl FrameGraphInputs {
-    // Every gated pass off, at a representative resolution. A neutral base a
-    // caller can flip individual flags on, e.g. to plan a worst-case graph for
-    // transient-memory allocation (where the allocation must cover every
-    // per-frame graph, not just the current frame's active passes).
-    pub(crate) fn all_off() -> Self {
+    /// Every gated pass off, at a representative resolution.
+    ///
+    /// A neutral base a caller can flip individual flags on, e.g. to plan a
+    /// worst-case graph for transient-memory allocation (where the allocation
+    /// must cover every per-frame graph, not just the current frame's active
+    /// passes), or to build a representative graph for a backend's own tests.
+    pub fn all_off() -> Self {
         FrameGraphInputs {
             shadow_enabled: false,
             shadow_map_size: 2048,
@@ -543,10 +545,18 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // read, mirroring the encoder's `enable_shadows` shader path.
     let shadow_v1 = if inputs.shadow_enabled {
         let shadow_map = b.import_texture("shadow_map", shadow_map_desc(inputs.shadow_map_size));
-        Some(
-            b.add_pass(PassId::Shadow, PassKind::Render)
-                .write_texture(shadow_map),
-        )
+        let mut shadow = b.add_pass(PassId::Shadow, PassKind::Render);
+        // The GPU-driven cascade path draws from a per-cascade indirect command
+        // buffer the cull pass fills from the same cull output, so it must run
+        // after Cull. Reading the cull-produced draw_args buffer pins that
+        // ordering in the toposort, the way GBufferPrepass and Main do, and on a
+        // backend that submits the two queues separately it is what puts a
+        // cross-queue wait between an async cull and this pass. A no-op when
+        // bindless cull is off, where the cascades draw per-object.
+        if let Some(h) = draw_args_v1 {
+            shadow.read_buffer(h);
+        }
+        Some(shadow.write_texture(shadow_map))
     } else {
         None
     };
@@ -2221,5 +2231,42 @@ mod tests {
         // Composite is the presenter and runs last.
         assert_eq!(order.last(), Some(&PassId::Composite));
         assert!(g.passes.last().unwrap().presents);
+    }
+
+    #[test]
+    fn shadow_orders_after_cull_through_the_draw_args_read() {
+        // The GPU-driven cascade path draws from an indirect command buffer the
+        // cull pass fills, so Shadow has to depend on Cull. Without the edge a
+        // backend that runs Cull on the async queue has nothing ordering the two.
+        let mut i = all_off();
+        i.shadow_enabled = true;
+        i.bindless_cull_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let cull = g.pass_index(PassId::Cull).expect("Cull is in the graph");
+        let shadow = g
+            .pass_index(PassId::Shadow)
+            .expect("Shadow is in the graph");
+        assert!(
+            g.depends_on(cull, shadow),
+            "Shadow does not depend on Cull: {:?}",
+            g.passes.iter().map(|p| p.id).collect::<Vec<_>>()
+        );
+        assert!(
+            g.pass_precedes(cull, shadow),
+            "the schedule does not order them"
+        );
+    }
+
+    #[test]
+    fn shadow_without_bindless_cull_declares_no_cull_read() {
+        // A world drawing its cascades per-object has no cull output to read, so
+        // the edge must not appear and Shadow stays the graph's first pass.
+        let mut i = all_off();
+        i.shadow_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let shadow = g
+            .pass_index(PassId::Shadow)
+            .expect("Shadow is in the graph");
+        assert!(g.passes[shadow].reads.is_empty());
     }
 }

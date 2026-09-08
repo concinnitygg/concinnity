@@ -27,9 +27,11 @@
 //      quietly unsound.
 //
 // The assignment is a pure function of the compiled graph, so a graph cached by
-// `FrameGraphInputs` stays valid. Wiring a native compute queue is per-backend
-// work this module does not do: every executor still records the passes in one
-// serial order.
+// `FrameGraphInputs` stays valid. Creating the native queues is per-backend work
+// this module does not do. The Metal executor submits both queues; the Vulkan
+// and DirectX ones still flatten the schedule back into one serial order, which
+// stays legal because the compiled order is a topological order for both queues
+// at once.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -111,12 +113,16 @@ impl PassQueue {
 /// to wait, at frame start, on the previous frame's graphics completion. The
 /// particle pools are the live case -- `ParticlesSim` integrates each emitter's
 /// persistent pool in place on the async queue while `ParticlesDraw` reads it on
-/// the graphics queue -- so with a native queue, frame N+1's simulation would
-/// otherwise be free to overwrite a pool frame N's draw is still reading. The
-/// executors all still record one serial stream, so it cannot happen yet;
-/// creating the queue means adding that frame-start wait in the same change.
+/// the graphics queue -- so on a backend with a native queue, frame N+1's
+/// simulation would otherwise be free to overwrite a pool frame N's draw is
+/// still reading. The fog froxel volume is the same shape, and so is every
+/// pool-aliased transient a pass on one queue reads and the next frame's other
+/// queue rewrites. A backend that creates the queue owes that frame-start wait
+/// in both directions; Metal's is in `metal/graph_events.rs`.
 ///
-/// Neither native half is implemented: no backend creates a compute queue yet.
+/// Metal creates the queue and honours both halves. Vulkan and DirectX create
+/// no compute queue yet, so neither native barrier half above is implemented
+/// there and both flatten the schedule into one serial stream.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CrossQueueWait {
     pub(super) producer: usize,

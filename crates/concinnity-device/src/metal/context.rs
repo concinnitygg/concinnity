@@ -513,6 +513,11 @@ pub(crate) struct MtlContext {
     // rather than one device allocation each. See `metal/allocator.rs`.
     pub(super) allocator: DeviceAllocator,
     pub(super) command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    // The async-compute queue plus the per-queue `MTLEvent`s the render-graph
+    // executor submits the schedule's two queues over. `None` when the device
+    // would not create them, which drops the executor back to recording every
+    // pass onto `command_queue` in compiled order.
+    pub(super) graph_queues: Option<super::graph_queues::GraphQueues>,
     // Pixel format the MTKView's CAMetalLayer is currently presenting at:
     // `BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR. The post + text
     // pipelines bake this format into their colour attachment descriptors,
