@@ -10,10 +10,12 @@
 //!   * track read / write declarations so the compile pass can derive
 //!     pass order, transient resource lifetimes, and per-pass barriers,
 //!   * schedule the passes across a graphics and an async-compute queue, with
-//!     the cross-queue signal / wait pairs the edges imply,
+//!     the cross-queue signal / wait pairs the edges imply and each read run's
+//!     transition placed on whichever side orders it for both queues,
 //!   * surface a `CompiledGraph` the per-backend executor consumes.
 
 mod alias;
+mod barrier_place;
 mod builder;
 mod compile;
 mod frame;

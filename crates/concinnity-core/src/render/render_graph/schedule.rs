@@ -4,12 +4,16 @@
 // hands this module the topologically sorted passes plus the dependency edges
 // in compiled-index space; this module:
 //
-//   1. Assigns each pass a [`PassQueue`]. A `Compute` pass moves to the async
-//      queue when the graph shows work it could actually overlap with (at least
-//      one render pass that is neither its ancestor nor its descendant) and
-//      when every barrier it takes part in is already ordered by a data
-//      dependency. Everything else stays on the graphics queue, so its position
-//      in the serial order is unchanged.
+//   1. Assigns each pass a [`PassQueue`] and, jointly with it, decides where
+//      each read run's transition is recorded. A `Compute` pass moves to the
+//      async queue when the graph shows work it could actually overlap with (at
+//      least one render pass that is neither its ancestor nor its descendant)
+//      and when every transition it takes part in is ordered by a data
+//      dependency; a read run whose readers end up split across queues has its
+//      transition recorded on the producing side, which is what makes the
+//      second condition reachable for a continuation reader (see
+//      [`super::barrier_place`]). Everything else stays on the graphics queue,
+//      so its position in the serial order is unchanged.
 //   2. Derives the cross-queue signal / wait pairs from the same edges, one
 //      wait per (consumer, producing queue) naming the latest producer on that
 //      queue: waiting on it covers every earlier producer there, because a
@@ -30,9 +34,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use super::barrier_place;
 use super::compile::CompiledPass;
 use super::reach::Reachability;
-use super::types::{PassKind, ResourceState};
+use super::types::PassKind;
 
 /// The hardware queue an executor records a pass onto.
 ///
@@ -81,9 +86,11 @@ impl PassQueue {
 /// well, since a queue runs its passes in order, so the compile pass keeps only
 /// the latest producer per queue.
 ///
-/// A cross-queue edge is more than an execution dependency, and the pass's
-/// `barriers_before` for the shared resource has to carry the extra semantics
-/// each API needs at the handoff:
+/// A cross-queue edge is more than an execution dependency, and the barriers for
+/// the shared resource have to carry the extra semantics each API needs at the
+/// handoff. Both halves belong on the producing side, which is why a run read
+/// from two queues transitions in the producer's
+/// [`barriers_after`](super::CompiledPass::barriers_after):
 ///
 ///   * Vulkan: when the two queues come from different queue families, the
 ///     resource needs a release barrier on the producer's family and a matching
@@ -94,8 +101,9 @@ impl PassQueue {
 ///     the direct queue, so the resource must already be in a compute-legal
 ///     state (a `UNORDERED_ACCESS` / `NON_PIXEL_SHADER_RESOURCE` / `COMMON`
 ///     rather than a render-target or pixel-shader state) when the handoff
-///     happens; a transition into a direct-queue-only state has to be recorded
-///     back on the direct queue.
+///     happens; the transition into it has to be recorded on the direct queue
+///     before the signal, as does any transition back into a direct-queue-only
+///     state.
 ///
 /// Neither native half is implemented: no backend creates a compute queue yet.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -151,9 +159,23 @@ impl Schedule {
     }
 }
 
-// Assign queues, derive the cross-queue sync points onto `passes`, and return
-// the resulting schedule relations. `dag[i]` lists the successors of compiled
-// pass `i`; every edge points forward because the list is topologically sorted.
+// Assign queues, place each read run's transition, derive the cross-queue sync
+// points onto `passes`, and return the resulting schedule relations. `dag[i]`
+// lists the successors of compiled pass `i`; every edge points forward because
+// the list is topologically sorted.
+//
+// The assignment and the placement depend on each other -- a pass may move only
+// when every transition it relies on is ordered, and a transition moves onto its
+// producer only when the run spans queues -- so the two are resolved as a fixed
+// point rather than in one pass. It is the *greatest* fixed point: the iteration
+// starts from every compute pass that has graphics work to overlap and takes
+// passes back off the async queue until nothing else has to move. Starting from
+// the empty async set would be a fixed point too, and a vacuous one: with
+// nothing scheduled asynchronously no run spans queues, so no transition moves
+// and no pass is ever freed to move.
+//
+// Each round strictly shrinks the async set, so the loop runs at most `n` times,
+// and both halves read only the graph, keeping the result a pure function of it.
 pub(crate) fn schedule(
     passes: &mut [CompiledPass],
     dag: &[Vec<usize>],
@@ -161,15 +183,37 @@ pub(crate) fn schedule(
 ) -> Schedule {
     let n = passes.len();
     let dependency = Reachability::new(n, dag);
-    let reliance = barrier_reliance(passes, n_resources);
+    let runs = barrier_place::read_runs(passes, n_resources);
 
-    for i in 0..n {
-        passes[i].queue = if may_run_async(passes, &dependency, &reliance, i) {
-            PassQueue::AsyncCompute
-        } else {
-            PassQueue::Graphics
-        };
+    let mut queues: Vec<PassQueue> = (0..n)
+        .map(|i| {
+            if has_overlap(passes, &dependency, i) {
+                PassQueue::AsyncCompute
+            } else {
+                PassQueue::Graphics
+            }
+        })
+        .collect();
+    loop {
+        let reliance = barrier_place::reliance(passes, &runs, &queues, n_resources);
+        let mut settled = true;
+        for (i, queue) in queues.iter_mut().enumerate() {
+            if *queue == PassQueue::AsyncCompute
+                && !transitions_are_ordered(&dependency, &reliance, i)
+            {
+                *queue = PassQueue::Graphics;
+                settled = false;
+            }
+        }
+        if settled {
+            break;
+        }
     }
+
+    for (pass, &queue) in passes.iter_mut().zip(queues.iter()) {
+        pass.queue = queue;
+    }
+    barrier_place::apply(passes, &runs, &queues);
 
     derive_sync_points(passes, dag);
 
@@ -180,38 +224,36 @@ pub(crate) fn schedule(
     }
 }
 
-// Whether pass `i` belongs on the async-compute queue: it is a compute pass, it
-// has graphics work to overlap with, and every barrier it takes part in is
-// already ordered by a data dependency.
+// Whether pass `i` is a compute pass with graphics work the graph leaves it free
+// to overlap: at least one render pass that is neither its ancestor nor its
+// descendant. The partner is looked for among the render passes rather than
+// among the passes already assigned to the graphics queue, which keeps the rule
+// non-circular: a render pass is on the graphics queue by construction.
+fn has_overlap(passes: &[CompiledPass], dependency: &Reachability, i: usize) -> bool {
+    passes[i].kind == PassKind::Compute
+        && passes
+            .iter()
+            .enumerate()
+            .any(|(j, p)| p.kind == PassKind::Render && dependency.concurrent(i, j))
+}
+
+// Whether every transition pass `i` takes part in is ordered against it by a
+// data dependency, which is what a pass needs before it can leave the graphics
+// queue.
 //
-// The last condition is what keeps the move sound against the barrier
-// derivation as it stands. `barriers_before` records one transition per read
-// run, on the run's first pass, and a continuation reader relies on it without
-// carrying one of its own. On a single queue the serial order covers that; once
-// the pass sits on another queue, only a data dependency does. So a pass may
-// leave the graphics queue only when every transition it relies on runs on an
-// ancestor (or on itself), and every transition it records that another pass
-// relies on runs for a descendant. Splitting a read run's barrier per queue
-// would relax this; until then the assignment respects the barriers in hand.
-fn may_run_async(
-    passes: &[CompiledPass],
+// On a single queue the serial order covers every transition; once the pass sits
+// on another queue, only a data dependency does. So a pass may run
+// asynchronously when every transition it relies on runs on an ancestor (or on
+// itself) and every transition it records that another pass relies on runs for a
+// descendant. A read run recorded on its producer (see
+// [`super::barrier_place`]) satisfies both directions by construction, since the
+// producer is an ancestor of every reader of the version it wrote; a run still
+// recorded on its first reader is what holds a continuation reader back.
+fn transitions_are_ordered(
     dependency: &Reachability,
     reliance: &[(usize, usize)],
     i: usize,
 ) -> bool {
-    if passes[i].kind != PassKind::Compute {
-        return false;
-    }
-    // The partner is looked for among the render passes rather than among the
-    // passes already assigned to the graphics queue, which keeps the rule
-    // non-circular: a render pass is on the graphics queue by construction.
-    let overlaps = passes
-        .iter()
-        .enumerate()
-        .any(|(j, p)| p.kind == PassKind::Render && dependency.concurrent(i, j));
-    if !overlaps {
-        return false;
-    }
     reliance.iter().all(|&(barrier, relying)| {
         if relying == i {
             dependency.reaches(barrier, i)
@@ -221,31 +263,6 @@ fn may_run_async(
             true
         }
     })
-}
-
-// Every `(barrier pass, relying pass)` pair in the graph: the pass whose
-// `barriers_before` last put a resource in the state some other pass's declared
-// access needs. Replayed in serial order, which is the order the transitions are
-// recorded in. Pairs where the relying pass carries the transition itself are
-// omitted: they need no ordering.
-fn barrier_reliance(passes: &[CompiledPass], n_resources: usize) -> Vec<(usize, usize)> {
-    let mut setter: Vec<Option<usize>> = vec![None; n_resources];
-    let mut reliance: Vec<(usize, usize)> = Vec::new();
-    for (i, pass) in passes.iter().enumerate() {
-        for op in &pass.barriers_before {
-            debug_assert_ne!(op.to_state(), ResourceState::Undefined);
-            setter[op.resource_index()] = Some(i);
-        }
-        for v in pass.writes.iter().chain(pass.reads.iter()) {
-            if let Some(barrier) = setter[v.resource_index()]
-                && barrier != i
-                && !reliance.contains(&(barrier, i))
-            {
-                reliance.push((barrier, i));
-            }
-        }
-    }
-    reliance
 }
 
 // Fill each pass's `waits_before` / `signals_after` from the cross-queue
@@ -621,10 +638,50 @@ mod tests {
             .filter(|p| p.queue == PassQueue::AsyncCompute)
             .map(|p| p.id)
             .collect();
-        assert!(
-            async_passes.contains(&PassId::Cull) && async_passes.contains(&PassId::LightCull),
-            "expected the two pre-Main compute passes on the async queue, got {async_passes:?}"
-        );
+        // The two pre-Main compute passes, plus the two the producer-side
+        // placement freed: FogFroxel taps the shadow map as a continuation
+        // reader after Main, and HizFinal reads the final depth after every
+        // decoration pass. Both are compute passes with real GPU cost, and
+        // neither could move while its run's transition sat on the run's first
+        // reader.
+        for id in [
+            PassId::Cull,
+            PassId::LightCull,
+            PassId::FogFroxel,
+            PassId::HizFinal,
+        ] {
+            assert!(
+                async_passes.contains(&id),
+                "expected {id:?} on the async queue, got {async_passes:?}"
+            );
+        }
+        // Every compute pass still on the graphics queue is there because the
+        // graph orders it against every render pass, not because of where a
+        // transition sits: HizBuild and Cull2 are the two-phase occlusion cull's
+        // own chain between the pre-pass and Main2, AutoExposure reads the frame
+        // Main just wrote and feeds the tonemap, and Upscale sits between the
+        // last scene pass and Bloom.
+        for id in [
+            PassId::HizBuild,
+            PassId::Cull2,
+            PassId::AutoExposure,
+            PassId::Upscale,
+        ] {
+            let i = g.pass_index(id).expect("present");
+            assert_eq!(g.passes[i].queue, PassQueue::Graphics, "{id:?}");
+            // Asked of the dependency DAG, not of the realised relation: the
+            // latter serialises the graphics queue, so every graphics pair looks
+            // ordered there and the claim would be vacuous.
+            assert!(
+                !g.passes
+                    .iter()
+                    .enumerate()
+                    .any(|(j, p)| p.kind == PassKind::Render
+                        && !g.depends_on(i, j)
+                        && !g.depends_on(j, i)),
+                "{id:?} has render work to overlap, so a transition is what holds it back"
+            );
+        }
 
         let mut pairs: Vec<String> = Vec::new();
         for a in 0..g.passes.len() {
@@ -655,6 +712,94 @@ mod tests {
             main.waits_before.iter().any(|w| w.producer() == light_cull),
             "Main consumes the light list, so it must wait for LightCull"
         );
+    }
+
+    #[test]
+    fn a_graph_that_schedules_nothing_asynchronously_moves_no_transition() {
+        // The byte-identity guarantee: a run whose readers share a queue keeps
+        // the first-reader placement the deriver gave it, so a graph with no
+        // async pass compiles to exactly the barrier lists it did before the
+        // producer-side placement existed. Swept over the reachable graphs
+        // rather than asserted on one, since which graphs those are is what the
+        // frame builder's flags decide.
+        use crate::render::render_graph::frame::{
+            FrameGraphInputs, GATED_FLAGS, build_frame_graph,
+        };
+
+        let mut checked = 0;
+        for (_, set) in GATED_FLAGS {
+            let mut inputs = FrameGraphInputs::all_off();
+            set(&mut inputs);
+            let g = build_frame_graph(&inputs).expect("frame graph compiles");
+            if g.passes.iter().any(|p| p.queue == PassQueue::AsyncCompute) {
+                continue;
+            }
+            checked += 1;
+            for pass in &g.passes {
+                assert!(
+                    pass.barriers_after.is_empty(),
+                    "{:?} moved a transition with nothing on the async queue",
+                    pass.id
+                );
+            }
+        }
+        assert!(checked > 0, "no single-flag graph stays on one queue");
+    }
+
+    #[test]
+    fn a_moved_transition_is_always_a_producer_opening_a_read_run() {
+        // What `barriers_after` may carry, over every reachable graph: only the
+        // `Write -> Read` that opens a run, only on a pass that wrote the
+        // resource, and only when the readers really are split across queues.
+        use crate::render::render_graph::frame::{
+            FrameGraphInputs, GATED_FLAGS, build_frame_graph,
+        };
+        use crate::render::render_graph::types::ResourceState;
+
+        let mut inputs = FrameGraphInputs::all_off();
+        for (name, set) in GATED_FLAGS {
+            if *name != "world_hidden" {
+                set(&mut inputs);
+            }
+        }
+        let g = build_frame_graph(&inputs).expect("frame graph compiles");
+        let mut moved = 0;
+        for (i, pass) in g.passes.iter().enumerate() {
+            for op in &pass.barriers_after {
+                moved += 1;
+                assert_eq!(op.source_state(), ResourceState::Write, "{:?}", pass.id);
+                assert_eq!(op.to_state(), ResourceState::Read, "{:?}", pass.id);
+                assert!(
+                    pass.writes
+                        .iter()
+                        .any(|w| w.resource_index() == op.resource_index()),
+                    "{:?} carries a transition for a resource it does not write",
+                    pass.id
+                );
+                let readers: Vec<usize> = g.resources[op.resource_index()]
+                    .touches
+                    .iter()
+                    .copied()
+                    .filter(|&p| p > i && g.depends_on(i, p))
+                    .collect();
+                assert!(
+                    readers
+                        .iter()
+                        .any(|&r| g.passes[r].queue != g.passes[i].queue),
+                    "{:?} moved a transition no other queue reads",
+                    pass.id
+                );
+                for &r in &readers {
+                    assert!(
+                        g.pass_precedes(i, r),
+                        "{:?} must complete before {:?} sees the transition",
+                        pass.id,
+                        g.passes[r].id
+                    );
+                }
+            }
+        }
+        assert!(moved > 0, "the loaded graph moves no transition at all");
     }
 
     #[test]

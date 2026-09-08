@@ -31,7 +31,8 @@
 // The executor is a `&mut self` method on `MtlContext` taking the
 // concrete per-frame params.
 //
-// Per-pass barriers (`pass.barriers_before`) are not applied on Metal: the
+// Per-pass barriers (`pass.barriers_before` and `pass.barriers_after`) are not
+// applied on Metal: the
 // DX/VK seam (`barrier_translate` + a per-resource registry +
 // `emit_graph_barriers`) emits explicit resource-state TRANSITIONS, and Metal
 // has none to emit.
@@ -43,8 +44,9 @@
 //      analogue to translate a `(class, ResourceState)` into.
 //   2. Cross-pass ordering is free. Each pass commits its own command buffer in
 //      topological order on one queue (commit order = GPU execution order, see
-//      below), so the producer -> consumer ordering `barriers_before` encodes is
-//      already guaranteed by submission order.
+//      below), so the producer -> consumer ordering the two lists encode is
+//      already guaranteed by submission order, whichever side of a pass the
+//      graph chose to record a read run's transition on.
 //   3. The only Metal "barrier-analogue" is `useResource` residency, and it is
 //      a DIFFERENT concern the graph cannot drive: it is per-encoder (every
 //      encoder reaching a resource INDIRECTLY -- through an ICB, an argument
@@ -266,9 +268,9 @@ impl MtlContext {
                     }
                     // No Metal-side barrier work: Apple's implicit
                     // hazard tracking covers it. Touched here so the
-                    // unused field doesn't lint when this loop is the
+                    // unused fields don't lint when this loop is the
                     // only consumer.
-                    let _ = &pass.barriers_before;
+                    let _ = (&pass.barriers_before, &pass.barriers_after);
                     let pass_id = pass.id;
                     let particle_ref = particle_frame.as_ref();
                     let first_error_ref = &first_error;

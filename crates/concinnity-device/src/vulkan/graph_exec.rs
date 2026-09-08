@@ -9,11 +9,13 @@
 // The catch-all arm at the bottom returns a clear error if any not-yet-ported
 // `PassId` slips into the compiled graph.
 //
-// Per-pass `barriers_before` is consumed for every resource the executor's
+// Both of a pass's barrier lists are consumed for every resource the executor's
 // barrier registry resolves: `emit_graph_barriers` translates their graph state
-// transitions into explicit `vkCmdPipelineBarrier` calls at the start of each
-// pass's command buffer, and `emit_graph_restores` returns any that the frame
-// left off their resting layout at the end of the outer "end" buffer. A resource
+// transitions into explicit `vkCmdPipelineBarrier` calls, `barriers_before` at
+// the start of each pass's command buffer and `barriers_after` at its end (a
+// read run whose readers span the schedule's two queues transitions on the
+// producing side), and `emit_graph_restores` returns any that the frame left off
+// their resting layout at the end of the outer "end" buffer. A resource
 // with no registry entry keeps whatever transitions its encoder or render pass
 // owns; `barrier_audit.rs` classifies every one of those remaining sites.
 //
@@ -36,7 +38,7 @@ use ash::Device;
 
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_graph::{
-    CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
+    BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
 };
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
 
@@ -106,10 +108,8 @@ impl VkBarrierScratch {
 }
 
 // Emit the explicit image-layout transitions for the migrated graph resources
-// from a pass's `barriers_before`, resolved through the registry. Called at the
-// start of each pass's own command buffer, before the pass encodes, so the
-// transition lands ahead of the pass's render pass in the same submission. A
-// resource with no registry entry is skipped and keeps its render-pass-driven
+// in one of a pass's barrier lists, resolved through the registry. A resource
+// with no registry entry is skipped and keeps its render-pass-driven
 // transition; a transition whose layout does not change (e.g. the depth
 // producer's no-op Undefined -> Write) is skipped too. Takes `&ash::Device`, not
 // `&VkContext`: the field-to-image mapping was already resolved into the
@@ -118,9 +118,9 @@ fn emit_graph_barriers(
     device: &Device,
     cmd: vk::CommandBuffer,
     registry: &VkBarrierRegistry,
-    pass: &CompiledPass,
+    ops: &[BarrierOp],
 ) {
-    for op in &pass.barriers_before {
+    for op in ops {
         let Some(Some(target)) = registry.0.get(op.resource_index()) else {
             continue;
         };
@@ -312,7 +312,22 @@ fn emit_pass_prologue(
     pass: &CompiledPass,
 ) {
     emit_alias_barriers(device, cmd, alias);
-    emit_graph_barriers(device, cmd, registry, pass);
+    emit_graph_barriers(device, cmd, registry, &pass.barriers_before);
+}
+
+// The one thing a pass owes its command buffer after its body: the transitions
+// the graph records on the producing side, for a read run whose readers are
+// split across the schedule's two queues. Recorded into the same buffer as the
+// pass it follows, so the flattened serial stream is command-for-command what a
+// transition on the run's first reader produced. A queue-family release barrier
+// belongs here too once a compute queue exists; nothing emits one yet.
+fn emit_pass_epilogue(
+    device: &Device,
+    cmd: vk::CommandBuffer,
+    registry: &VkBarrierRegistry,
+    pass: &CompiledPass,
+) {
+    emit_graph_barriers(device, cmd, registry, &pass.barriers_after);
 }
 
 // Check the graph's barrier coverage and cross-frame layout contract for every
@@ -344,6 +359,34 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
             .collect::<Vec<_>>()
             .join(", ")
     );
+
+    // The producer-side half of the barrier lists. A pass's `barriers_after` is
+    // recorded once its own encode has run, which is only sound for a
+    // transition out of the state that encode left the resource in, so every op
+    // there has to be a `Write -> Read` on a resource this pass writes. The
+    // headless sweep proves that of the graphs it builds; this proves it of the
+    // graphs a real session builds.
+    for pass in &graph.passes {
+        for op in &pass.barriers_after {
+            assert_eq!(
+                (op.source_state(), op.to_state()),
+                (ResourceState::Write, ResourceState::Read),
+                "render graph (vulkan): {:?} records a {:?} -> {:?} on {} after its own work",
+                pass.id,
+                op.source_state(),
+                op.to_state(),
+                graph.resources[op.resource_index()].label,
+            );
+            assert!(
+                pass.writes
+                    .iter()
+                    .any(|w| w.resource_index() == op.resource_index()),
+                "render graph (vulkan): {:?} records a transition on {}, which it does not write",
+                pass.id,
+                graph.resources[op.resource_index()].label,
+            );
+        }
+    }
 
     for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
         let Some(Some(target)) = registry.0.get(idx) else {
@@ -591,6 +634,7 @@ impl VkContext {
                             set_err(e);
                             return;
                         }
+                        emit_pass_epilogue(device_ref, buf, registry_ref, pass);
                         if let Some(pool) = ctx.timestamp_query_pool {
                             let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, pass_id);
                             rec.write_timestamp(
@@ -643,6 +687,7 @@ impl VkContext {
             // it belongs to this device.
             let rec = unsafe { Recorder::assume_recording(&self.device, params.cmd) };
             self.encode_pass_into(PassId::Composite, &rec, params, particle_frame.as_ref())?;
+            emit_pass_epilogue(&self.device, params.cmd, registry, &graph.passes[idx]);
             if let Some(pool) = self.timestamp_query_pool {
                 let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and

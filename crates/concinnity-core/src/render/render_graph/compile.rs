@@ -10,7 +10,9 @@
 //   4. Derives a `barriers_before` list per pass from the per-resource
 //      state machine (Undefined → Read → Write transitions).
 //   5. Hands the sorted passes and their edges to [`super::schedule`], which
-//      assigns each pass a queue, derives the cross-queue signal / wait pairs,
+//      assigns each pass a queue, moves a read run's transition onto its
+//      producer's `barriers_after` when the run spans both queues (see
+//      [`super::barrier_place`]), derives the cross-queue signal / wait pairs,
 //      and returns the schedule's happens-before relations.
 //   6. Computes a `[first, last]` pass-index lifetime and the touching-pass set
 //      per resource, which [`super::alias`] packs against the schedule's
@@ -103,6 +105,24 @@ pub struct CompiledPass {
     pub presents: bool,
     /// Barriers the executor emits before the pass.
     pub barriers_before: Vec<BarrierOp>,
+    /// Barriers the executor emits once the pass's own work has completed, in
+    /// the same command stream. Carries a read run's `* -> Read` transition when
+    /// that run's readers are split across queues: recorded on the producing
+    /// side, the transition is ordered by the producer's signal for every
+    /// consumer on either queue, where a transition on the run's first reader
+    /// would order only that reader's own queue. Empty for a pass producing
+    /// nothing read from two queues, which is every pass in a graph that
+    /// schedules no work asynchronously.
+    ///
+    /// This is also where the native halves of a queue handoff belong once a
+    /// backend creates a compute queue: on Vulkan the queue-family release
+    /// barrier is recorded here, on the producing family after its write, with
+    /// the matching acquire on the consuming family; on DirectX the transition
+    /// into a compute-legal state has to happen on the direct queue before the
+    /// signal, which is what recording it here rather than on the consumer
+    /// gives. Neither native half is implemented: no backend creates a compute
+    /// queue yet, and every executor records both lists into one serial stream.
+    pub barriers_after: Vec<BarrierOp>,
     /// The queue this pass is scheduled onto. Derived by [`super::schedule`]
     /// from the dependency DAG, so it is a pure function of the graph.
     pub queue: PassQueue,
@@ -417,6 +437,7 @@ impl GraphBuilder {
                     writes: core::mem::take(&mut decl.writes),
                     presents: decl.presents,
                     barriers_before: Vec::new(),
+                    barriers_after: Vec::new(),
                     queue: PassQueue::Graphics,
                     waits_before: Vec::new(),
                     signals_after: Vec::new(),
@@ -1094,9 +1115,11 @@ mod tests {
     #[test]
     fn mixed_stage_read_run_unions_consumer_stages() {
         // Main writes hdr; AutoExposure (compute) and Composite (render) read
-        // it. The single producer barrier on the first reader must carry BOTH
-        // stages so the write is made visible to the compute and the fragment
-        // consumer; the second reader coalesces (no barrier).
+        // it. One barrier serves the whole run and must carry BOTH stages, so
+        // the write is made visible to the compute and the fragment consumer;
+        // no other reader carries one. The two readers land on different queues,
+        // so the schedule records that barrier on the producer rather than on
+        // the run's first reader.
         let mut b = GraphBuilder::new();
         let hdr = b.create_texture("hdr", tex());
         let hdr_v1 = b
@@ -1109,16 +1132,15 @@ mod tests {
             .presents();
 
         let g = b.compile().expect("compiles");
-        // AutoExposure is the first reader: one Write -> Read barrier carrying
-        // the whole run's stage union.
-        let ae = find(&g, PassId::AutoExposure);
-        assert_eq!(ae.barriers_before.len(), 1);
-        assert_eq!(ae.barriers_before[0].source_state(), ResourceState::Write);
-        assert_eq!(ae.barriers_before[0].to_state(), ResourceState::Read);
-        let rs = ae.barriers_before[0].read_stages();
+        let main = find(&g, PassId::Main);
+        assert_eq!(main.barriers_after.len(), 1);
+        assert_eq!(main.barriers_after[0].source_state(), ResourceState::Write);
+        assert_eq!(main.barriers_after[0].to_state(), ResourceState::Read);
+        let rs = main.barriers_after[0].read_stages();
         assert!(rs.contains(ReadStages::COMPUTE));
         assert!(rs.contains(ReadStages::FRAGMENT));
-        // Composite coalesces into the run: no hdr barrier.
+        // Neither reader carries an hdr barrier of its own.
+        assert_eq!(find(&g, PassId::AutoExposure).barriers_before.len(), 0);
         assert_eq!(find(&g, PassId::Composite).barriers_before.len(), 0);
     }
 

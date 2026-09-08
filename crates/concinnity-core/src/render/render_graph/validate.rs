@@ -1,12 +1,14 @@
 // src/render_graph/validate.rs
 //
-// Barrier-coverage check over a `CompiledGraph`. The compile pass derives
-// `barriers_before` by walking each resource's timeline; this module replays
-// those barriers in execution order and checks the resulting state against what
-// each pass's read / write declarations require. The two directions are
-// structurally independent -- a per-resource timeline versus a per-pass replay --
-// so a deriver bug (a dropped transition, a mis-ordered run, a read-run stage
-// union that misses a consumer) shows up as a gap here.
+// Barrier-coverage check over a `CompiledGraph`. The compile pass derives each
+// pass's barrier lists by walking each resource's timeline; this module replays
+// those barriers in execution order -- `barriers_before` ahead of the pass's own
+// accesses, `barriers_after` once they have been checked -- and checks the
+// resulting state against what each pass's read / write declarations require.
+// The two directions are structurally independent -- a per-resource timeline
+// versus a per-pass replay -- so a deriver bug (a dropped transition, a
+// mis-ordered run, a read-run stage union that misses a consumer) shows up as a
+// gap here.
 //
 // The replay respects the schedule's partial order, not just the serial index
 // order: a state has to hold along every path to the pass that relies on it, so
@@ -26,7 +28,7 @@ use super::compile::CompiledGraph;
 use super::passes::PassId;
 use super::reach::Reachability;
 use super::schedule::{PassQueue, realised_reachability};
-use super::types::{ReadStages, ResourceState};
+use super::types::{BarrierOp, ReadStages, ResourceState};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -105,7 +107,11 @@ pub fn barrier_coverage_gaps_for_driven(graph: &CompiledGraph, driven: &[bool]) 
 pub fn final_states(graph: &CompiledGraph) -> Vec<(ResourceState, ReadStages)> {
     let mut state = vec![(ResourceState::Undefined, ReadStages::empty()); graph.resources.len()];
     for pass in &graph.passes {
-        for op in &pass.barriers_before {
+        for op in pass
+            .barriers_before
+            .iter()
+            .chain(pass.barriers_after.iter())
+        {
             state[op.resource_index()] = (op.to_state(), op.read_stages());
         }
     }
@@ -318,8 +324,14 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
     let mut setter: Vec<Option<usize>> = vec![None; n_resources];
     let mut gaps = Vec::new();
 
-    for (pass_idx, pass) in graph.passes.iter().enumerate() {
-        for op in &pass.barriers_before {
+    // Applying one pass's barrier list: the same effect whichever end of the
+    // pass it runs at, so the replay differs only in when it calls this.
+    let apply = |ops: &[BarrierOp],
+                 pass_idx: usize,
+                 state: &mut [ResourceState],
+                 run_stages: &mut [ReadStages],
+                 setter: &mut [Option<usize>]| {
+        for op in ops {
             let i = op.resource_index();
             state[i] = op.to_state();
             setter[i] = Some(pass_idx);
@@ -327,6 +339,16 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
                 run_stages[i] = op.read_stages();
             }
         }
+    };
+
+    for (pass_idx, pass) in graph.passes.iter().enumerate() {
+        apply(
+            &pass.barriers_before,
+            pass_idx,
+            &mut state,
+            &mut run_stages,
+            &mut setter,
+        );
 
         let stage = ReadStages::for_pass_kind(pass.kind);
         let mut report = |i: usize, kind: GapKind| {
@@ -379,6 +401,18 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
                 report(i, GapKind::ConcurrentAccess);
             }
         }
+        // A producer-side transition runs once this pass's own work has
+        // completed, so it lands after the pass's accesses have been checked
+        // against the state it was itself given. Every consumer of it is a
+        // descendant of this pass on the realised relation, which is what the
+        // `UnorderedTransition` check above tests for them.
+        apply(
+            &pass.barriers_after,
+            pass_idx,
+            &mut state,
+            &mut run_stages,
+            &mut setter,
+        );
     }
 
     gaps
@@ -742,7 +776,11 @@ mod tests {
             .presents();
         let mut g = g.compile().expect("compiles");
         for pass in &mut g.passes {
-            for op in &mut pass.barriers_before {
+            for op in pass
+                .barriers_before
+                .iter_mut()
+                .chain(pass.barriers_after.iter_mut())
+            {
                 if op.to_state() == ResourceState::Read {
                     op.read_stages = ReadStages::FRAGMENT;
                 }
@@ -936,14 +974,22 @@ mod tests {
             .presents();
         let mut g = g.compile().expect("compiles");
 
-        // The compile pass keeps it on graphics for exactly this reason, and the
-        // graph is clean while it is there.
+        // The compile pass records the run's transition on its producer for
+        // exactly this reason, which is what frees the continuation reader to
+        // leave the graphics queue, and the graph is clean as compiled.
+        let cull = g.pass_index(PassId::Cull).expect("present");
+        let main = g.pass_index(PassId::Main).expect("present");
         let cull2 = g.pass_index(PassId::Cull2).expect("present");
-        assert_eq!(g.passes[cull2].queue, PassQueue::Graphics);
+        assert_eq!(g.passes[cull2].queue, PassQueue::AsyncCompute);
         assert!(g.passes[cull2].barriers_before.is_empty());
+        assert_eq!(g.passes[cull].barriers_after.len(), 1);
         assert_eq!(barrier_coverage_gaps(&g), vec![]);
 
-        g.passes[cull2].queue = PassQueue::AsyncCompute;
+        // Put the transition back on the run's first reader, which is where a
+        // deriver blind to the queue split would leave it. Nothing then orders
+        // it before the reader on the other queue.
+        let op = g.passes[cull].barriers_after.remove(0);
+        g.passes[main].barriers_before.push(op);
         let gaps = barrier_coverage_gaps(&g);
         assert!(
             gaps.iter()

@@ -18,7 +18,7 @@
 // `ResolveQueryData` ride the same submission). Mirrors
 // `metal/graph_exec.rs`.
 //
-// Per-pass `barriers_before` is consumed for every resource the barrier registry
+// Both of a pass's barrier lists are consumed for every resource the registry
 // resolves: `emit_pass_prologue` translates their graph state transitions into
 // `D3D12_RESOURCE_BARRIER` transitions at the start of each pass's own command
 // list -- batched, so a pass costs one `ResourceBarrier` call -- and
@@ -304,6 +304,28 @@ fn emit_pass_prologue(
     batch.flush();
 }
 
+// The one thing a pass owes its command list after its body: the transitions the
+// graph records on the producing side, for a read run whose readers are split
+// across the schedule's two queues. Recorded into the same list as the pass it
+// follows, so the flattened serial stream is command-for-command what a
+// transition on the run's first reader produced. The transition into a
+// compute-legal state belongs here too once a compute queue exists, since it has
+// to happen on the direct queue before the signal; nothing creates one yet.
+fn emit_pass_epilogue(
+    cmd: &ID3D12GraphicsCommandList,
+    registry: &DxBarrierRegistry,
+    pass: &CompiledPass,
+) {
+    if pass.barriers_after.is_empty() {
+        return;
+    }
+    let mut batch = BarrierBatch::new(cmd);
+    for op in &pass.barriers_after {
+        stage_graph_barrier(&mut batch, registry, op, None);
+    }
+    batch.flush();
+}
+
 // Return every driven resource the frame left off its resting state, so the next
 // frame's first transition for it names the state the resource is really in (the
 // debug layer rejects a mismatch). Recorded last into the outer "end" command
@@ -359,6 +381,34 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry
             .collect::<Vec<_>>()
             .join(", ")
     );
+
+    // The producer-side half of the barrier lists. A pass's `barriers_after` is
+    // recorded once its own encode has run, which is only sound for a
+    // transition out of the state that encode left the resource in, so every op
+    // there has to be a `Write -> Read` on a resource this pass writes. The
+    // headless sweep proves that of the graphs it builds; this proves it of the
+    // graphs a real session builds.
+    for pass in &graph.passes {
+        for op in &pass.barriers_after {
+            assert_eq!(
+                (op.source_state(), op.to_state()),
+                (ResourceState::Write, ResourceState::Read),
+                "render graph (directx): {:?} records a {:?} -> {:?} on {} after its own work",
+                pass.id,
+                op.source_state(),
+                op.to_state(),
+                graph.resources[op.resource_index()].label,
+            );
+            assert!(
+                pass.writes
+                    .iter()
+                    .any(|w| w.resource_index() == op.resource_index()),
+                "render graph (directx): {:?} records a transition on {}, which it does not write",
+                pass.id,
+                graph.resources[op.resource_index()].label,
+            );
+        }
+    }
 
     for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
         let Some(Some(target)) = registry.0.get(idx) else {
@@ -630,6 +680,10 @@ impl DxContext {
 
                         let encode_result = ctx.encode_pass_into(pass_id, cmd, params);
 
+                        if encode_result.is_ok() {
+                            emit_pass_epilogue(cmd, registry_ref, pass);
+                        }
+
                         if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
                             let (_, end_slot) = super::pass_timing::pass_pair(frame_idx, pass_id);
                             // SAFETY: the command list is in the recording state, and every
@@ -716,6 +770,7 @@ impl DxContext {
                     height: params.output_height,
                 },
             )?;
+            emit_pass_epilogue(params.cmd, &registry, &graph.passes[idx]);
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
                 let (_, end_slot) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: the command list is in the recording state, and every resource,
