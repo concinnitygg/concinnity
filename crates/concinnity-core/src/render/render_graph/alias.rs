@@ -1,10 +1,10 @@
 // src/render_graph/alias.rs
 //
-// Transient-resource memory aliasing planner. The compile pass already
-// computes each resource's `[first, last]` lifetime over the sorted pass list
-// (`CompiledResource.lifetime`); this module turns those intervals into a
-// physical-memory plan: transient resources whose lifetimes do not overlap can
-// share one backing allocation, since they are never live at the same time.
+// Transient-resource memory aliasing planner. The compile pass records which
+// passes touch each resource and the schedule's happens-before relation over
+// those passes; this module turns them into a physical-memory plan: transient
+// resources the schedule never leaves live at the same time can share one
+// backing allocation.
 //
 // The planner is backend-agnostic and pure. It only decides *which resources
 // share a slot* and *how big each slot must be*; the per-backend executor
@@ -20,19 +20,22 @@
 // or short-lived enough to matter).
 //
 // The packing is a linear scan over lifetime-start order (the classic
-// interval-graph greedy, optimal for the slot *count* on an interval graph):
-// each resource takes the first compatible slot whose last occupant's lifetime
-// ended strictly before this resource's begins, else opens a new slot. A slot
-// is sized to its largest member. Compatibility is [`SlotClass`]: resources
-// that differ on it never share, whatever their lifetimes.
+// interval-graph greedy, kept for the slot *count*): each resource takes the
+// first compatible slot every member of which the schedule orders strictly
+// before it, else opens a new slot. A slot is sized to its largest member.
+// Compatibility is [`SlotClass`]: resources that differ on it never share,
+// whatever their lifetimes.
 //
-// The interval test is on `[first, last]` **pass indices**, which is only a
-// disjointness test while the pass list is totally ordered. Async compute makes
-// the schedule partially ordered, and two resources with disjoint index ranges
-// can then be concurrently live on two queues -- so the planner would need the
-// toposort's reachability relation (is every writer of B ordered after every
-// reader of A?) rather than an index comparison. Aliasing and async compute
-// have to be designed together; do not read this packing as finished.
+// The disjointness test is the schedule's happens-before relation
+// (`CompiledGraph::resource_precedes`), not a `[first, last]` index comparison.
+// An index interval is a disjointness test only under a total order: once a
+// compute pass runs on the async queue, two resources with disjoint index
+// ranges can be concurrently live on two queues. The relation the planner asks
+// is "does every reader and writer of A complete before every reader and writer
+// of B starts?", answered over the dependency DAG plus each queue's own serial
+// order -- so two graphics passes with no data dependency are still ordered
+// (their queue runs them in order) while a graphics pass and an unsynchronised
+// async pass are not.
 
 use super::compile::CompiledGraph;
 use super::types::{ResourceOrigin, TextureDesc};
@@ -63,8 +66,8 @@ impl SlotClass {
     }
 }
 
-// One physical memory slot shared by one or more transient resources with
-// pairwise-disjoint lifetimes. `byte_size` is the max footprint of its members
+// One physical memory slot shared by one or more transient resources the
+// schedule never leaves simultaneously live. `byte_size` is the max footprint of its members
 // (the allocation the backend must make); `members` are resource indices into
 // `CompiledGraph.resources`, in assignment order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +107,7 @@ pub(crate) struct AliasPlan {
 
 impl AliasPlan {
     // Bytes saved by aliasing: the unaliased footprint minus the slot
-    // footprint. Zero when no two transients have disjoint lifetimes.
+    // footprint. Zero when no two transients are separable.
     #[cfg(test)]
     pub(crate) fn saved_bytes(&self) -> u64 {
         self.unaliased_bytes.saturating_sub(self.aliased_bytes)
@@ -128,11 +131,10 @@ pub(crate) fn plan_aliasing_for(
     drawable_h: u32,
     poolable: &dyn Fn(&str) -> bool,
 ) -> AliasPlan {
-    // Gather the transient texture candidates with their lifetime + size.
+    // Gather the transient texture candidates with their lifetime start + size.
     struct Cand {
         idx: usize,
         first: usize,
-        last: usize,
         size: u64,
         class: SlotClass,
     }
@@ -147,7 +149,6 @@ pub(crate) fn plan_aliasing_for(
         cands.push(Cand {
             idx,
             first: res.lifetime.first,
-            last: res.lifetime.last,
             size: desc.byte_size(drawable_w, drawable_h),
             class: SlotClass::of(&desc),
         });
@@ -156,15 +157,14 @@ pub(crate) fn plan_aliasing_for(
     let unaliased_bytes: u64 = cands.iter().map(|c| c.size).sum();
 
     // Process in lifetime-start order (ties by resource index for determinism),
-    // so a slot's running `free_at` (max last over its members) is enough to
-    // test disjointness against the next candidate.
+    // which keeps the greedy's slot count and makes the plan a pure function of
+    // the graph. A partial order has no single "free at" instant per slot, so
+    // the compatibility test below asks the schedule about every member.
     cands.sort_by(|a, b| a.first.cmp(&b.first).then(a.idx.cmp(&b.idx)));
 
-    // Slot bookkeeping kept alongside the public `AliasSlot` so we can track the
-    // running free-time without recomputing it.
+    // Slot bookkeeping kept alongside the public `AliasSlot`.
     struct SlotMeta {
         class: SlotClass,
-        free_at: usize,
         byte_size: u64,
         members: Vec<usize>,
     }
@@ -172,17 +172,16 @@ pub(crate) fn plan_aliasing_for(
     let mut assignment: Vec<Option<usize>> = vec![None; graph.resources.len()];
 
     for c in &cands {
-        // First compatible slot whose last occupant ended strictly before this
-        // resource begins. `free_at < c.first` (strict) because an inclusive
-        // `[..=free_at]` and `[c.first..=..]` that touch at `free_at == c.first`
-        // are both live on that pass and must not share memory.
-        let chosen = slots
-            .iter()
-            .position(|s| s.class == c.class && s.free_at < c.first);
+        // First compatible slot every member of which the schedule orders
+        // strictly before this candidate. Every member, not just the latest:
+        // under a partial order a slot's occupants are not themselves totally
+        // ordered, so there is no single last one to compare against.
+        let chosen = slots.iter().position(|s| {
+            s.class == c.class && s.members.iter().all(|&m| graph.resource_precedes(m, c.idx))
+        });
         let si = match chosen {
             Some(si) => {
                 let s = &mut slots[si];
-                s.free_at = c.last;
                 s.byte_size = s.byte_size.max(c.size);
                 s.members.push(c.idx);
                 si
@@ -190,7 +189,6 @@ pub(crate) fn plan_aliasing_for(
             None => {
                 slots.push(SlotMeta {
                     class: c.class,
-                    free_at: c.last,
                     byte_size: c.size,
                     members: vec![c.idx],
                 });
@@ -223,8 +221,10 @@ mod tests {
     use crate::render::render_graph::builder::GraphBuilder;
     use crate::render::render_graph::frame::{FrameGraphInputs, build_frame_graph};
     use crate::render::render_graph::passes::PassId;
+    use crate::render::render_graph::schedule::PassQueue;
+    use crate::render::render_graph::transient::slot_conflicts;
     use crate::render::render_graph::types::{
-        PassKind, PixelFormat, TextureDesc, TextureSize, TextureUsage,
+        BufferDesc, BufferUsage, PassKind, PixelFormat, TextureDesc, TextureSize, TextureUsage,
     };
 
     // The plan over every transient in the graph. Only the tests want this:
@@ -483,6 +483,89 @@ mod tests {
             plan.saved_bytes(),
             2 * size_at_100(PixelFormat::Rgba16Float)
         );
+    }
+
+    // Two write-only transients, one written by the graph's first pass and one by
+    // its second, with a buffer producer / consumer pair beside them so the
+    // first pass can earn the async-compute queue. `kind` is what that first
+    // pass declares, which is the only difference between the two graphs the
+    // test below compares.
+    fn split_transient_graph(kind: PassKind) -> CompiledGraph {
+        let mut g = GraphBuilder::new();
+        let args = g.create_buffer(
+            "draw_args",
+            BufferDesc {
+                size_bytes: None,
+                usage: BufferUsage::STORAGE,
+            },
+        );
+        let a = g.create_texture("a", tex(PixelFormat::Rgba16Float));
+        let b = g.create_texture("b", tex(PixelFormat::Rgba16Float));
+        let scene = g.create_texture("scene", tex(PixelFormat::Rgba16Float));
+
+        let args1 = {
+            let mut p = g.add_pass(PassId::Cull, kind);
+            let _ = p.write_texture(a);
+            p.write_buffer(args)
+        };
+        g.add_pass(PassId::Shadow, PassKind::Render)
+            .write_texture(b);
+        let scene1 = {
+            let mut p = g.add_pass(PassId::Main, PassKind::Render);
+            p.read_buffer(args1);
+            p.write_texture(scene)
+        };
+        g.add_pass(PassId::Composite, PassKind::Render)
+            .read_texture(scene1)
+            .presents();
+        g.compile().expect("compiles")
+    }
+
+    #[test]
+    fn a_transient_on_the_async_queue_does_not_alias_a_concurrent_one() {
+        // The case the index interval could not see. `a` is touched only by the
+        // first pass and `b` only by the second, so their index ranges are
+        // disjoint either way -- but with the first pass on the async queue
+        // nothing orders the two, and the bytes must not be shared.
+        let async_graph = split_transient_graph(PassKind::Compute);
+        let a = async_graph
+            .resources
+            .iter()
+            .position(|r| r.label == "a")
+            .expect("a present");
+        let b = async_graph
+            .resources
+            .iter()
+            .position(|r| r.label == "b")
+            .expect("b present");
+        assert_eq!(
+            async_graph.pass(PassId::Cull).expect("present").queue,
+            PassQueue::AsyncCompute,
+            "the control needs the first pass on the async queue"
+        );
+        assert!(
+            async_graph.resources[a].lifetime.last < async_graph.resources[b].lifetime.first,
+            "the index intervals are disjoint, so only the schedule can separate these"
+        );
+        assert!(async_graph.resources_may_be_live_together(a, b));
+        assert_eq!(
+            plan_aliasing(&async_graph, 100, 100).slots.len(),
+            2,
+            "a concurrent pair must not share bytes"
+        );
+        // The pool-side check reads the same relation, so a grouping that pairs
+        // them is reported rather than silently corrupting one of them.
+        let conflicts = slot_conflicts(&async_graph, &[vec!["a", "b"]]);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+
+        // Same graph with the first pass declared as a render pass: everything is
+        // on the graphics queue, which runs its passes in order, so the pair is
+        // separable again and packs into one slot. That is what makes this test
+        // measure the queue split and not the two labels.
+        let serial_graph = split_transient_graph(PassKind::Render);
+        assert!(!serial_graph.resources_may_be_live_together(a, b));
+        assert_eq!(plan_aliasing(&serial_graph, 100, 100).slots.len(), 1);
+        assert!(slot_conflicts(&serial_graph, &[vec!["a", "b"]]).is_empty());
     }
 
     #[test]

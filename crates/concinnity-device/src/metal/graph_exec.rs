@@ -209,6 +209,17 @@ impl MtlContext {
             self.transient_pool.slot_labels(),
             "metal",
         );
+        // The graph now carries a two-queue schedule (a `PassQueue` per pass plus
+        // the cross-queue signal / wait pairs). This executor still records one
+        // serial stream in `graph.passes` order, which is the schedule's queues
+        // interleaved back into their compiled order: the command order is
+        // therefore byte-for-byte what it was before the schedule existed, and
+        // no compute queue is created. What has to hold for that flattening to
+        // be legal is that the compiled order is a topological order for both
+        // queues at once and that every wait names an already-recorded producer,
+        // which is what this asserts.
+        #[cfg(debug_assertions)]
+        crate::gfx::render_graph::assert_serial_order_honours_schedule(graph, "metal");
 
         // Per-frame particle-state mutations live on `&mut self` and have
         // to happen before the read-only `encode_particles` path runs. We

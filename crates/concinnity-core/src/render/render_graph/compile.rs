@@ -9,9 +9,12 @@
 //      edges. Cycles are an error.
 //   4. Derives a `barriers_before` list per pass from the per-resource
 //      state machine (Undefined → Read → Write transitions).
-//   5. Computes a `[first, last]` pass-index lifetime per resource, which
-//      [`super::alias`] uses to overlap non-overlapping lifetimes in
-//      physical memory.
+//   5. Hands the sorted passes and their edges to [`super::schedule`], which
+//      assigns each pass a queue, derives the cross-queue signal / wait pairs,
+//      and returns the schedule's happens-before relations.
+//   6. Computes a `[first, last]` pass-index lifetime and the touching-pass set
+//      per resource, which [`super::alias`] packs against the schedule's
+//      partial order.
 //
 // The graph allocates no GPU resources and interprets no barriers per
 // backend. This module only produces the data the backend executor consumes.
@@ -24,6 +27,7 @@ use hashbrown::HashMap;
 
 use super::builder::{GraphBuilder, ResourceVersion};
 use super::passes::PassId;
+use super::schedule::{CrossQueueWait, PassQueue, Schedule};
 use super::types::{
     BarrierOp, BufferDesc, GraphResourceClass, PassKind, PassRange, ReadStages, ResourceId,
     ResourceOrigin, ResourceState, TextureDesc,
@@ -99,6 +103,15 @@ pub struct CompiledPass {
     pub presents: bool,
     /// Barriers the executor emits before the pass.
     pub barriers_before: Vec<BarrierOp>,
+    /// The queue this pass is scheduled onto. Derived by [`super::schedule`]
+    /// from the dependency DAG, so it is a pure function of the graph.
+    pub queue: PassQueue,
+    /// Cross-queue waits the executor satisfies before the pass runs, at most
+    /// one per producing queue. Empty for a pass with no cross-queue producer.
+    pub waits_before: Vec<CrossQueueWait>,
+    /// Queues that wait on this pass's completion, deduplicated. Empty for a
+    /// pass nothing on another queue consumes.
+    pub signals_after: Vec<PassQueue>,
 }
 
 /// One resource in the compiled graph. Carries the lifetime interval
@@ -110,8 +123,15 @@ pub struct CompiledResource {
     pub label: &'static str,
     /// Whether the resource is imported or graph-declared.
     pub origin: ResourceOrigin,
-    /// The pass range over which the resource must stay live.
+    /// The pass range over which the resource must stay live. A total-order
+    /// summary of [`Self::touches`]: sound to size a lifetime with, but not to
+    /// test two resources for simultaneous liveness once the schedule is
+    /// partially ordered.
     pub lifetime: PassRange,
+    // Compiled pass indices that read or write this resource, ascending. The
+    // aliasing planner tests these against the schedule's partial order, which
+    // an index interval cannot express.
+    pub(super) touches: Vec<usize>,
     /// Texture shape (format / size / sample count / layers), `None` for a
     /// buffer. The aliasing planner uses it to size each transient resource;
     /// the backend will use it to allocate the realised resource.
@@ -135,18 +155,69 @@ impl CompiledResource {
     }
 }
 
-/// Frozen graph the per-backend executor consumes. Passes are in
-/// execution order; barriers are pre-derived; resource lifetimes are
-/// ready for a future aliaser.
+/// Frozen graph the per-backend executor consumes. Passes are in execution
+/// order, each with the queue it is scheduled onto and the cross-queue waits it
+/// performs; barriers are pre-derived; the schedule's happens-before relation is
+/// precomputed for the aliasing planner and the validator.
 #[derive(Debug, Clone)]
 pub struct CompiledGraph {
     /// Passes in execution order.
     pub passes: Vec<CompiledPass>,
     /// Resources, indexed by [`ResourceId`].
     pub resources: Vec<CompiledResource>,
+    // The schedule's happens-before relations over pass indices. Private so the
+    // queries below stay the only way to ask, since a raw relation is easy to
+    // read in the wrong direction.
+    schedule: Schedule,
 }
 
 impl CompiledGraph {
+    /// The compiled index of `id`, or `None` when the graph omits that pass.
+    pub fn pass_index(&self, id: PassId) -> Option<usize> {
+        self.passes.iter().position(|p| p.id == id)
+    }
+
+    /// The compiled pass `id` names, or `None` when the graph omits it.
+    pub fn pass(&self, id: PassId) -> Option<&CompiledPass> {
+        self.passes.iter().find(|p| p.id == id)
+    }
+
+    /// Whether pass `b` depends on pass `a`, transitively, through the read /
+    /// write edges. What correctness requires, independent of the schedule.
+    pub fn depends_on(&self, a: usize, b: usize) -> bool {
+        self.schedule.depends(a, b)
+    }
+
+    /// Whether the schedule guarantees pass `a` completes before pass `b`
+    /// starts: the closure of each queue's serial order plus the cross-queue
+    /// signal / wait pairs.
+    pub fn pass_precedes(&self, a: usize, b: usize) -> bool {
+        self.schedule.precedes(a, b)
+    }
+
+    /// Whether the schedule leaves two distinct passes free to run at the same
+    /// time. False for a pass against itself.
+    pub fn passes_may_overlap(&self, a: usize, b: usize) -> bool {
+        self.schedule.may_overlap(a, b)
+    }
+
+    /// Whether every pass touching resource `a` is guaranteed to complete
+    /// before every pass touching resource `b` starts. Vacuously true when
+    /// either resource is untouched.
+    pub fn resource_precedes(&self, a: usize, b: usize) -> bool {
+        let (a, b) = (&self.resources[a], &self.resources[b]);
+        a.touches
+            .iter()
+            .all(|&pa| b.touches.iter().all(|&pb| self.schedule.precedes(pa, pb)))
+    }
+
+    /// Whether two resources may be live at the same time, i.e. the schedule
+    /// orders neither entirely before the other. Two resources that may be
+    /// live at once must never share backing memory.
+    pub fn resources_may_be_live_together(&self, a: usize, b: usize) -> bool {
+        !self.resource_precedes(a, b) && !self.resource_precedes(b, a)
+    }
+
     // Restrict a pass's `barriers_before` to the resources whose label is in
     // `allow`, pairing each kept barrier with that label. A backend executor
     // uses this to drive native transitions for the subset of resources that
@@ -313,6 +384,25 @@ impl GraphBuilder {
             return Err(GraphError::Cycle);
         }
 
+        // Re-express the dependency edges in compiled-index space, which the
+        // scheduler needs: `order` is topological, so every edge points forward
+        // and the reachability closure is one reverse scan. Sorted + deduped so
+        // the derived schedule is a pure function of the graph.
+        let mut position: Vec<usize> = vec![0; n_passes];
+        for (compiled_idx, &orig_idx) in order.iter().enumerate() {
+            position[orig_idx] = compiled_idx;
+        }
+        let mut dag: Vec<Vec<usize>> = vec![Vec::new(); n_passes];
+        for (orig_from, successors) in edges.iter().enumerate() {
+            for &orig_to in successors {
+                dag[position[orig_from]].push(position[orig_to]);
+            }
+        }
+        for row in dag.iter_mut() {
+            row.sort_unstable();
+            row.dedup();
+        }
+
         // Step 5: realise compiled passes in execution order
         let mut compiled_passes: Vec<CompiledPass> = order
             .iter()
@@ -327,6 +417,9 @@ impl GraphBuilder {
                     writes: core::mem::take(&mut decl.writes),
                     presents: decl.presents,
                     barriers_before: Vec::new(),
+                    queue: PassQueue::Graphics,
+                    waits_before: Vec::new(),
+                    signals_after: Vec::new(),
                 }
             })
             .collect();
@@ -334,8 +427,12 @@ impl GraphBuilder {
         // Step 6: derive per-pass barriers
         derive_barriers(&mut compiled_passes, n_resources);
 
-        // Step 7: compute resource lifetimes
+        // Step 7: assign queues and derive the cross-queue sync points
+        let schedule = super::schedule::schedule(&mut compiled_passes, &dag, n_resources);
+
+        // Step 8: compute resource lifetimes and touching-pass sets
         let mut lifetimes: Vec<Option<PassRange>> = vec![None; n_resources];
+        let mut touches: Vec<Vec<usize>> = (0..n_resources).map(|_| Vec::new()).collect();
         for (sorted_idx, pass) in compiled_passes.iter().enumerate() {
             for v in pass.writes.iter().chain(pass.reads.iter()) {
                 let i = v.resource.index();
@@ -350,13 +447,17 @@ impl GraphBuilder {
                     },
                 };
                 lifetimes[i] = Some(merged);
+                if touches[i].last() != Some(&sorted_idx) {
+                    touches[i].push(sorted_idx);
+                }
             }
         }
 
         let compiled_resources: Vec<CompiledResource> = resources
             .into_iter()
+            .zip(touches)
             .enumerate()
-            .map(|(i, decl)| {
+            .map(|(i, (decl, touches))| {
                 // A resource that's declared but never touched gets a
                 // degenerate `[0, 0]` lifetime; the executor can treat
                 // it as a leak warning later.
@@ -365,6 +466,7 @@ impl GraphBuilder {
                     label: decl.label(),
                     origin: decl.origin(),
                     lifetime,
+                    touches,
                     tex_desc: decl.texture_desc(),
                     buf_desc: decl.buffer_desc(),
                 }
@@ -374,6 +476,7 @@ impl GraphBuilder {
         Ok(CompiledGraph {
             passes: compiled_passes,
             resources: compiled_resources,
+            schedule,
         })
     }
 }

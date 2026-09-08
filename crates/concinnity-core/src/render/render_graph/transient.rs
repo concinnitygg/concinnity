@@ -273,8 +273,8 @@ fn resolve(
     }
 }
 
-// Two members of one slot whose lifetimes overlap in a graph, i.e. two
-// resources that would be live at once on the same bytes.
+// Two members of one slot the graph's schedule leaves simultaneously live, i.e.
+// two resources that would be live at once on the same bytes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SlotConflict {
     pub slot: usize,
@@ -292,10 +292,15 @@ impl core::fmt::Display for SlotConflict {
     }
 }
 
-// Every pair of slot members whose `[first, last]` lifetimes overlap in
+// Every pair of slot members the schedule leaves simultaneously live in
 // `graph`. Empty when the grouping is sound for this graph, which is the
 // invariant a pool's aliasing rests on: members of a slot share bytes, so two
 // live at once means one is reading memory the other overwrote.
+//
+// The test is the schedule's happens-before relation, not an index interval:
+// two resources with disjoint index ranges are still simultaneously live when
+// an async-compute pass touches one of them without a sync point ordering it
+// against the other's passes.
 //
 // Labels absent from `graph` are skipped -- a pool holds a resource for as long
 // as its build configuration says so, and a frame that omits the pass writing
@@ -304,24 +309,18 @@ pub(crate) fn slot_conflicts(
     graph: &CompiledGraph,
     slots: &[Vec<&'static str>],
 ) -> Vec<SlotConflict> {
-    let lifetime = |label: &str| {
-        graph
-            .resources
-            .iter()
-            .find(|r| r.label == label)
-            .map(|r| (r.lifetime.first, r.lifetime.last))
-    };
+    let index_of = |label: &str| graph.resources.iter().position(|r| r.label == label);
     let mut conflicts = Vec::new();
     for (slot, members) in slots.iter().enumerate() {
         for (i, &a) in members.iter().enumerate() {
-            let Some((a_first, a_last)) = lifetime(a) else {
+            let Some(a_idx) = index_of(a) else {
                 continue;
             };
             for &b in &members[i + 1..] {
-                let Some((b_first, b_last)) = lifetime(b) else {
+                let Some(b_idx) = index_of(b) else {
                     continue;
                 };
-                if a_first <= b_last && b_first <= a_last {
+                if graph.resources_may_be_live_together(a_idx, b_idx) {
                     conflicts.push(SlotConflict { slot, a, b });
                 }
             }

@@ -9,6 +9,8 @@
 //!   * give every pass a stable identity ([`PassId`]),
 //!   * track read / write declarations so the compile pass can derive
 //!     pass order, transient resource lifetimes, and per-pass barriers,
+//!   * schedule the passes across a graphics and an async-compute queue, with
+//!     the cross-queue signal / wait pairs the edges imply,
 //!   * surface a `CompiledGraph` the per-backend executor consumes.
 
 mod alias;
@@ -16,6 +18,8 @@ mod builder;
 mod compile;
 mod frame;
 mod passes;
+mod reach;
+mod schedule;
 mod transient;
 mod types;
 mod validate;
@@ -26,6 +30,7 @@ pub(crate) use compile::GraphError;
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource};
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
 pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
+pub use schedule::{CrossQueueWait, PassQueue};
 pub use transient::{
     PoolGates, TransientSlot, TransientTexture, assert_slot_aliasing_sound, plan_pool_slots, pooled,
 };
@@ -34,5 +39,8 @@ pub use types::{
     ResourceId, ResourceState, TextureDesc, TextureHandle, TextureUsage,
 };
 pub(crate) use types::{BufferDesc, TextureSize, full_mip_levels};
-pub use validate::{barrier_coverage_gaps_for_driven, final_states};
+pub use validate::{
+    SyncGap, SyncGapKind, assert_serial_order_honours_schedule, barrier_coverage_gaps_for_driven,
+    final_states, sync_point_gaps,
+};
 pub use view_mask::apply_view;
