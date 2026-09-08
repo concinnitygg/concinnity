@@ -195,6 +195,7 @@ impl MtlContext {
         self.probe.placements = placements;
         self.probe.maps.clear();
         self.probe.set = concinnity_core::render::uniforms::ProbeSet::EMPTY;
+        self.texture_epoch += 1;
         self.probe.bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe.placements.len());
         // Park both slots' GPU resources instead of dropping them: their command
         // buffers may still be reading the reserved-slot buffers, the capture cube or
@@ -485,6 +486,10 @@ impl MtlContext {
     // it: each face's cull (and the frame's own cull) waits for the prior read,
     // ordering the reuse correctly with no explicit barrier or `waitUntilCompleted`.
     fn probe_render_next_face(&mut self) -> Result<(), String> {
+        // The face's main pass declares the bindless textures resident from the
+        // cached set. It runs ahead of the frame's own refresh, so refresh here
+        // rather than depend on a prior frame having done it.
+        self.refresh_bindless_residency();
         let Some(bake) = self.probe.rendering.as_ref() else {
             return Err("probe: render face with no capture in flight".into());
         };
@@ -695,6 +700,7 @@ impl MtlContext {
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],
         };
         self.probe.set.count = self.probe.maps.len() as u32;
+        self.texture_epoch += 1;
         tracing::info!(
             "reflection probes: baked {}/{}",
             index + 1,

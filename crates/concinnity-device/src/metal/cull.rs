@@ -11,8 +11,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLArgumentEncoder, MTLCommandBuffer as _, MTLComputePassDescriptor, MTLComputePipelineState,
-    MTLDevice as _, MTLFunction as _, MTLLibrary as _, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState,
+    MTLDevice as _, MTLFunction as _, MTLLibrary as _, MTLRenderPipelineState,
 };
 
 use concinnity_core::gfx::cull_status::CullStatus;
@@ -968,17 +967,59 @@ impl MtlContext {
         Ok(())
     }
 
+    // The identity of everything the `BindlessTextures` block names outside the
+    // shared pool, plus the pool's own generation. Two frames that agree on
+    // this would write byte-identical argument buffers, so a ring slot already
+    // holding it can be left alone.
+    fn bindless_texture_signature(&self) -> u64 {
+        use concinnity_core::render::uniforms::MAX_PROBES;
+        let mut sig = super::bindless_args::Signature::new();
+        sig.push_u64(self.texture_epoch);
+        sig.push_u64(self.textures.len() as u64);
+        for tex in &self.fallback_textures {
+            sig.push_texture(tex.as_ref());
+        }
+        sig.push_texture(self.shadow.map.as_ref());
+        sig.push_texture(self.env_map.irradiance.as_ref());
+        sig.push_texture(self.env_map.prefilter.as_ref());
+        sig.push_texture(self.ao_output_texture());
+        for i in 0..MAX_PROBES {
+            sig.push_texture(self.probe_cube_or_sky(i));
+        }
+        sig.push_texture(self.spot_shadow.map.as_ref());
+        sig.push_texture(self.ltc_matrix_texture.as_ref());
+        sig.push_texture(self.ltc_magnitude_texture.as_ref());
+        sig.finish()
+    }
+
+    // The pool's unused tail, every slot of it the same white texture. It is
+    // most of the block on a world that fills a fraction of the pool, and it
+    // moves only when the pool's length or that texture does, so it is gated
+    // apart from the contents a stream-in changes every time.
+    fn bindless_tail_signature(&self) -> u64 {
+        let mut sig = super::bindless_args::Signature::new();
+        sig.push_u64(self.textures.len() as u64);
+        if let Some(tex) = self.fallback_textures.get(1) {
+            sig.push_texture(tex.as_ref());
+        }
+        sig.finish()
+    }
+
     // Build the per-frame `BindlessTextures` argument buffer for the bindless
     // static pass: the albedo + normal-map pool (every one of the
     // `BINDLESS_TEXTURE_COUNT` slots filled: overflow and trailing empty
     // slots fall back to the white albedo texture at slot 0) followed by the
     // shadow map and the two IBL cubes. The bindless fragment shader can only
     // reach textures through this argument buffer because discrete texture
-    // bindings make it incompatible with indirect command buffers. A fresh
-    // buffer is allocated each frame (like the object / draw-args buffers)
-    // so a streamed texture swap is picked up and the GPU never reads a buffer
-    // the next frame's CPU encode is rewriting. `None` for non-bindless
-    // contexts. The committed command buffer keeps the buffer alive.
+    // bindings make it incompatible with indirect command buffers.
+    //
+    // The buffer is a ring slot, one per frame in flight, so the GPU never
+    // reads a slot the CPU is rewriting. Its contents move only on a texture
+    // stream/evict, a probe bake, an env-map swap or a transient-pool repack,
+    // and a signature gate per slot skips the encode entirely on the frames
+    // between: a change is re-encoded once into each slot and then stops.
+    // `None` for non-bindless contexts. The committed command buffer keeps the
+    // buffer alive.
     pub(super) fn build_bindless_texture_args(
         &mut self,
         ring_slot: usize,
@@ -990,114 +1031,138 @@ impl MtlContext {
             Some(e) => e.clone(),
             None => return Ok(None),
         };
+        let sig = self.bindless_texture_signature();
+        let tail_sig = self.bindless_tail_signature();
         let len = enc.encodedLength().max(16);
         // Ring slot, grown to the encoder's `encodedLength()` instead of a fresh
         // allocation each frame. The argument encoder rewrites it in place; the
         // fence guarantees the prior user of this slot has retired on the GPU.
-        let buf = self.rings.bindless_tex.slot(&self.device, ring_slot, len)?;
+        let (buf, allocated) = self
+            .rings
+            .bindless_tex
+            .slot_fresh(&self.device, ring_slot, len)?;
+        if allocated {
+            self.bindless_tex_gates.invalidate(ring_slot);
+            self.bindless_tail_gates.invalidate(ring_slot);
+        }
+        let write_tail = self.bindless_tail_gates.stale(ring_slot, tail_sig);
+        let write_pool = self.bindless_tex_gates.stale(ring_slot, sig);
+        if !write_pool && !write_tail {
+            return Ok(Some(buf));
+        }
         // SAFETY: `buf` was sized to the encoder's `encodedLength()`, and every
         // texture index below is within the `BindlessTextures` layout.
         unsafe {
             enc.setArgumentBuffer_offset(Some(&buf), 0);
         }
         let count = super::context::BINDLESS_TEXTURE_COUNT;
-        // The shared pool: every real texture, then the reserved fallbacks --
-        // flat-normal at `texture_count`, white at `texture_count + 1` -- and
-        // white again across the unused tail, so an over-cap or clamped index
-        // still samples a valid texture.
         let texture_count = self.textures.len();
-        for i in 0..count {
-            let tex = if i < texture_count {
-                self.textures[i].as_ref()
-            } else if i == texture_count {
-                self.fallback_textures[0].as_ref()
-            } else {
-                self.fallback_textures[1].as_ref()
-            };
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
+        if write_pool {
+            // The shared pool: every real texture, then the reserved fallbacks --
+            // flat-normal at `texture_count`, white at `texture_count + 1` -- so an
+            // over-cap or clamped index still samples a valid texture.
+            for i in 0..count.min(texture_count) {
+                // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at
+                // the buffer/texture indices the shaders declare.
+                unsafe {
+                    enc.setTexture_atIndex(Some(self.textures[i].as_ref()), i);
+                }
+            }
+            for (i, tex) in (texture_count..count).zip(&self.fallback_textures) {
+                // SAFETY: as above; `i` is a pool index the shaders declare.
+                unsafe {
+                    enc.setTexture_atIndex(Some(tex.as_ref()), i);
+                }
+            }
+            // SAFETY: every texture bound here is owned by `self` and outlives the encoder, and the
+            // argument ids match the layout the shaders declare: `count` shadow map, then irradiance,
+            // prefilter, AO, and `MAX_PROBES` probe cubes.
             unsafe {
-                enc.setTexture_atIndex(Some(tex), i);
+                enc.setTexture_atIndex(Some(self.shadow.map.as_ref()), count);
+                enc.setTexture_atIndex(Some(self.env_map.irradiance.as_ref()), count + 1);
+                enc.setTexture_atIndex(Some(self.env_map.prefilter.as_ref()), count + 2);
+                // SSAO occlusion: the blurred AO when SSAO is on, else 1x1 white.
+                enc.setTexture_atIndex(Some(self.ao_output_texture()), count + 3);
+                // Local reflection probe cube array (specular only): one slice per
+                // baked probe, the sky prefilter for unused slots. Occupies argument
+                // ids `count + 4 ..= count + 4 + MAX_PROBES`.
+                for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
+                    enc.setTexture_atIndex(Some(self.probe_cube_or_sky(i)), count + 4 + i);
+                }
+                // Spot shadow map array (1x1 fallback when nothing casts), just past
+                // the probe cubes.
+                enc.setTexture_atIndex(
+                    Some(self.spot_shadow.map.as_ref()),
+                    count + 4 + concinnity_core::render::uniforms::MAX_PROBES,
+                );
+                // The two area-light LTC tables follow the spot shadow array.
+                enc.setTexture_atIndex(
+                    Some(self.ltc_matrix_texture.as_ref()),
+                    count + 5 + concinnity_core::render::uniforms::MAX_PROBES,
+                );
+                enc.setTexture_atIndex(
+                    Some(self.ltc_magnitude_texture.as_ref()),
+                    count + 6 + concinnity_core::render::uniforms::MAX_PROBES,
+                );
             }
         }
-        // SAFETY: every texture bound here is owned by `self` and outlives the encoder, and the
-        // argument ids match the layout the shaders declare: `count` shadow map, then irradiance,
-        // prefilter, AO, and `MAX_PROBES` probe cubes.
-        unsafe {
-            enc.setTexture_atIndex(Some(self.shadow.map.as_ref()), count);
-            enc.setTexture_atIndex(Some(self.env_map.irradiance.as_ref()), count + 1);
-            enc.setTexture_atIndex(Some(self.env_map.prefilter.as_ref()), count + 2);
-            // SSAO occlusion: the blurred AO when SSAO is on, else 1×1 white.
-            enc.setTexture_atIndex(Some(self.ao_output_texture()), count + 3);
-            // Local reflection probe cube array (specular only): one slice per
-            // baked probe, the sky prefilter for unused slots. Occupies argument
-            // ids `count + 4 ..= count + 4 + MAX_PROBES`.
-            for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
-                enc.setTexture_atIndex(Some(self.probe_cube_or_sky(i)), count + 4 + i);
+        if write_tail {
+            // White across the unused tail, past the two reserved fallbacks.
+            let white = self.fallback_textures.last();
+            for i in (texture_count + self.fallback_textures.len()).min(count)..count {
+                // SAFETY: as above; `i` is a pool index the shaders declare.
+                unsafe {
+                    enc.setTexture_atIndex(white.map(|t| t.as_ref()), i);
+                }
             }
-            // Spot shadow map array (1x1 fallback when nothing casts), just past
-            // the probe cubes.
-            enc.setTexture_atIndex(
-                Some(self.spot_shadow.map.as_ref()),
-                count + 4 + concinnity_core::render::uniforms::MAX_PROBES,
-            );
-            // The two area-light LTC tables follow the spot shadow array.
-            enc.setTexture_atIndex(
-                Some(self.ltc_matrix_texture.as_ref()),
-                count + 5 + concinnity_core::render::uniforms::MAX_PROBES,
-            );
-            enc.setTexture_atIndex(
-                Some(self.ltc_magnitude_texture.as_ref()),
-                count + 6 + concinnity_core::render::uniforms::MAX_PROBES,
-            );
         }
         Ok(Some(buf))
     }
+
+    // Rebuild the bindless pass's residency set when the textures the
+    // `BindlessTextures` block names change. Called once per frame before any
+    // pass declares them; a frame whose signature is unchanged does nothing.
+    pub(super) fn refresh_bindless_residency(&mut self) {
+        let sig = self.bindless_texture_signature();
+        // Taken out so the iterator below can borrow the rest of `self`.
+        let mut set = core::mem::replace(
+            &mut self.bindless_residency,
+            super::bindless_args::ResidencySet::new(),
+        );
+        set.refresh(
+            sig,
+            self.textures
+                .iter()
+                .chain(self.fallback_textures.iter())
+                .map(|t| t.as_ref())
+                .chain([
+                    self.shadow.map.as_ref(),
+                    self.spot_shadow.map.as_ref(),
+                    self.ltc_matrix_texture.as_ref(),
+                    self.ltc_magnitude_texture.as_ref(),
+                    self.env_map.irradiance.as_ref(),
+                    self.env_map.prefilter.as_ref(),
+                    self.ao_output_texture(),
+                ])
+                .chain(
+                    (0..concinnity_core::render::uniforms::MAX_PROBES)
+                        .map(|i| self.probe_cube_or_sky(i)),
+                ),
+        );
+        self.bindless_residency = set;
+    }
+
     // Declare every texture the bindless pass samples resident for the
     // indirect command buffer. The textures are referenced through the
     // `BindlessTextures` argument buffer rather than bound on the encoder, so
     // the indirect execution cannot see them unless they are explicitly used.
+    // One batched call over the set `refresh_bindless_residency` cached: the
+    // driver records the same residency either way.
     pub(super) fn use_bindless_textures(
         &self,
         encoder: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
     ) {
-        use objc2_metal::{MTLRenderStages, MTLResourceUsage};
-        for tex in self.textures.iter().chain(self.fallback_textures.iter()) {
-            encoder.useResource_usage_stages(
-                ProtocolObject::from_ref(&**tex),
-                MTLResourceUsage::Read,
-                MTLRenderStages::Fragment,
-            );
-        }
-        for tex in [
-            self.shadow.map.as_ref(),
-            self.spot_shadow.map.as_ref(),
-            self.ltc_matrix_texture.as_ref(),
-            self.ltc_magnitude_texture.as_ref(),
-            self.env_map.irradiance.as_ref(),
-            self.env_map.prefilter.as_ref(),
-        ] {
-            encoder.useResource_usage_stages(
-                ProtocolObject::from_ref(tex),
-                MTLResourceUsage::Read,
-                MTLRenderStages::Fragment,
-            );
-        }
-        // SSAO occlusion travels in the BindlessTextures argument buffer too.
-        encoder.useResource_usage_stages(
-            ProtocolObject::from_ref(self.ao_output_texture()),
-            MTLResourceUsage::Read,
-            MTLRenderStages::Fragment,
-        );
-        // The reflection probe cube array (each slice, or its sky fallback) rides
-        // the argument buffer, so every bound slice must be resident.
-        for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
-            encoder.useResource_usage_stages(
-                ProtocolObject::from_ref(self.probe_cube_or_sky(i)),
-                MTLResourceUsage::Read,
-                MTLRenderStages::Fragment,
-            );
-        }
+        self.bindless_residency.declare_fragment(encoder);
     }
 }
 

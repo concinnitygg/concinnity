@@ -12,9 +12,9 @@ impl MtlContext {
     // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
     //
     // The asset-streaming subsystem calls this to bring a texture resident
-    // after init. The bindless argument buffer is rebuilt from `self.textures`
-    // each frame, so the swapped texture is picked up on the next `draw_frame`
-    // with no pipeline rebuild.
+    // after init. Bumping the texture epoch re-encodes the bindless argument
+    // buffer into every ring slot, so the swapped texture is picked up from the
+    // next `draw_frame` with no pipeline rebuild.
     pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
@@ -28,6 +28,7 @@ impl MtlContext {
             ));
         }
         self.textures[slot] = upload_texture_image(&self.allocator, image)?;
+        self.texture_epoch += 1;
         Ok(())
     }
 
@@ -46,6 +47,7 @@ impl MtlContext {
             ));
         }
         self.textures[slot] = upload_texture(&self.allocator, 1, 1, &[128, 128, 128, 255])?;
+        self.texture_epoch += 1;
         Ok(())
     }
 
@@ -76,6 +78,7 @@ impl MtlContext {
             &view.prefilter_mip_bytes,
         )?;
         self.env_map = new_env;
+        self.texture_epoch += 1;
         Ok(())
     }
 }

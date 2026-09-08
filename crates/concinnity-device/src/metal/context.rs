@@ -195,6 +195,10 @@ pub(super) struct ProbeState {
     // `build_probe_cube_args` and bound by every pass that samples the cubes.
     // `None` before the first frame builds one.
     pub cube_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    // Per-ring-slot change gate for that argument buffer, and the cube
+    // residency set every pass binding it declares.
+    pub cube_arg_gates: super::bindless_args::SlotGates,
+    pub cube_residency: super::bindless_args::ResidencySet,
 }
 
 // One baked reflection probe: the prefiltered radiance cube the specular term
@@ -553,10 +557,22 @@ pub(crate) struct MtlContext {
     pub(super) cull: CullState,
     // Encoder that packs the bindless pass's textures into a per-frame
     // argument buffer (the `BindlessTextures` block). `Some` only
-    // when `bindless`; the argument buffer itself is rebuilt every frame so
-    // streamed texture swaps are picked up and the GPU never reads a buffer
-    // the CPU is mid-rewrite. (A main-pass resource, not part of `cull`.)
+    // when `bindless`. (A main-pass resource, not part of `cull`.)
     pub(super) bindless_tex_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+    // Per-ring-slot change gates for that argument buffer: the block's contents
+    // and its unused tail, gated apart because a stream-in moves the former
+    // every time and the latter almost never. See `build_bindless_texture_args`.
+    pub(super) bindless_tex_gates: super::bindless_args::SlotGates,
+    pub(super) bindless_tail_gates: super::bindless_args::SlotGates,
+    // Every texture the `BindlessTextures` block names, declared resident in
+    // one batched call per encoder. Refreshed once per frame by
+    // `refresh_bindless_residency`.
+    pub(super) bindless_residency: super::bindless_args::ResidencySet,
+    // Bumped by every announced change to the textures those argument buffers
+    // name (a pool slot streamed in or evicted, an env-map or probe swap), so a
+    // handle that happens to reuse a freed one's address still moves the
+    // signature the gates compare.
+    pub(super) texture_epoch: u64,
     // Argument encoder for the `ProbeCubes` block the five probe-sampling
     // fragments declare; see `probe_cubes::probe_cube_arg_encoder`.
     pub(super) probe_cube_arg_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,

@@ -4,6 +4,7 @@
 mod allocator;
 mod auto_exposure;
 mod backend;
+mod bindless_args;
 mod context;
 mod cull;
 mod cull_readback;

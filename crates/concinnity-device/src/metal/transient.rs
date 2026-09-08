@@ -119,18 +119,34 @@ impl TransientRing {
         slot: usize,
         min_len: usize,
     ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+        Ok(self.slot_fresh(device, slot, min_len)?.0)
+    }
+
+    // [`Self::slot`], also reporting whether the slot was (re)allocated by this
+    // call. A producer that skips re-encoding an unchanged slot needs to know:
+    // a fresh buffer holds nothing it wrote.
+    pub(super) fn slot_fresh(
+        &mut self,
+        device: &ProtocolObject<dyn MTLDevice>,
+        slot: usize,
+        min_len: usize,
+    ) -> Result<(Retained<ProtocolObject<dyn MTLBuffer>>, bool), String> {
         let idx = slot % self.slots.len();
         let have = self.slots[idx].as_ref().map_or(0, |buf| buf.length());
-        if let Some(cap) = grow_to(have, min_len) {
+        let grown = grow_to(have, min_len);
+        if let Some(cap) = grown {
             let buf = device
                 .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
                 .ok_or("failed to allocate transient ring buffer")?;
             self.slots[idx] = Some(buf);
         }
-        Ok(self.slots[idx]
-            .as_ref()
-            .expect("ring slot was just ensured")
-            .clone())
+        Ok((
+            self.slots[idx]
+                .as_ref()
+                .expect("ring slot was just ensured")
+                .clone(),
+            grown.is_some(),
+        ))
     }
 
     // Copy `bytes` into `slot`'s buffer (growing it first) and return a cloned

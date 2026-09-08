@@ -358,6 +358,11 @@ impl MtlContext {
         // list of their own, and a slot left holding last frame's ring buffer
         // would outlive the frame that wrote it.
         self.probe.cube_args = Some(self.build_probe_cube_args(ring_slot)?);
+        // The residency sets the argument buffers' contents need. Refreshed
+        // before any pass encodes, and a no-op on a frame whose textures are
+        // unchanged, which is every frame between a stream-in or a bake.
+        self.refresh_probe_cube_residency();
+        self.refresh_bindless_residency();
 
         // While the world is hidden behind an opaque menu, the surviving Main
         // pass is fed an empty scene -- no bindless object / cull / texture
