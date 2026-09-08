@@ -95,6 +95,15 @@ impl SsgiSettings {
         )
     }
 
+    /// Whether the pass can contribute anything to the frame. The composite
+    /// scales the gathered indirect term by `intensity` and blends it additively,
+    /// so a zero intensity adds exactly zero and the whole pass (a hemisphere
+    /// ray-march plus a bilateral upsample) is dead weight. Backends gate
+    /// `FrameGraphInputs::ssgi_enabled` on this so the graph drops the node.
+    pub fn contributes(&self) -> bool {
+        self.intensity > 0.0
+    }
+
     /// Build the per-frame GPU uniform from these settings and the active
     /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
     /// viewport width / height ratio: together they give the view-ray scale
@@ -129,6 +138,23 @@ mod tests {
         let s = SsgiSettings::resolve(-2.0, -10.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
         assert_eq!(s.intensity, 0.0);
         assert_eq!(s.max_distance, MIN_DISTANCE);
+    }
+
+    #[test]
+    fn zero_intensity_does_not_contribute() {
+        // A world may author `indirect_lighting: ssgi` and dial the intensity to
+        // zero; the settings still resolve, so presence alone cannot gate the pass.
+        let off = SsgiSettings::resolve(0.0, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
+        assert!(!off.contributes());
+
+        let on = SsgiSettings::resolve(0.05, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
+        assert!(on.contributes());
+    }
+
+    #[test]
+    fn negative_intensity_clamps_to_no_contribution() {
+        let s = SsgiSettings::resolve(-1.0, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
+        assert!(!s.contributes());
     }
 
     #[test]

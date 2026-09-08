@@ -32,6 +32,7 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 use crate::vulkan::slang_builtins::SlangCompile;
+use crate::vulkan::wire_cache::WireCache;
 
 // Reflection-composite resources, held by `VkContext` when the SSR resolve or RT
 // reflections are active (both feed this composite). All `vk::*` handles are owned
@@ -62,10 +63,14 @@ pub(in crate::vulkan) struct ReflectionCompositeResources {
     composite_pso: OwnedPipeline,
 
     _descriptor_pool: OwnedDescriptorPool,
-    // Per-frame sets. Binding 0 (the reflection target) is re-pointed each encode to
-    // the resolve that just ran; the rest are wired at init / resize.
+    // Per-frame sets. Binding 0 (the reflection target) is re-pointed at the top
+    // of a frame whose resolve target moved; the rest are wired at init / resize.
     blur_sets: Vec<vk::DescriptorSet>,
     composite_sets: Vec<vk::DescriptorSet>,
+
+    // Which reflection view each frame's binding 0 already names. The view only
+    // moves on a resize / quality rebuild, so the steady state writes nothing.
+    wired_reflection: WireCache<vk::ImageView>,
 
     sampler: OwnedSampler,
 
@@ -399,6 +404,7 @@ impl ReflectionCompositeResources {
             composite_sets,
             sampler,
             blur_scale,
+            wired_reflection: WireCache::new(frames),
         };
         me.build_targets(ctx, width, height)?;
         me.wire_sets(device, views);
@@ -509,7 +515,44 @@ impl ReflectionCompositeResources {
         self.destroy_targets(ctx.device);
         self.build_targets(ctx, width, height)?;
         self.wire_sets(ctx.device, views);
+        // The resolves moved with everything else; drop the memo so the next
+        // frame re-points binding 0 unconditionally.
+        self.wired_reflection.reset();
         Ok(())
+    }
+
+    // Point every frame's binding 0 (blur + composite) at `view`, the resolve
+    // target that feeds the composite this frame, skipping the write when this
+    // slot already names it. Called on `&mut self` before any pass records, so
+    // the update lands ahead of the workers that bind these sets; the slot is
+    // fence-gated (its previous submission completed at the top of the frame).
+    pub(in crate::vulkan) fn repoint_reflection(
+        &mut self,
+        device: &VkDevice,
+        frame_idx: usize,
+        view: vk::ImageView,
+    ) {
+        if !self.wired_reflection.changed(frame_idx, view) {
+            return;
+        }
+        let refl = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(view)
+            .sampler(self.sampler.handle());
+        let write = |set: vk::DescriptorSet| {
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(std::slice::from_ref(&refl))
+        };
+        let writes = [
+            write(self.blur_sets[frame_idx]),
+            write(self.composite_sets[frame_idx]),
+        ];
+        // SAFETY: `writes` and the image info it borrows are live for the call, and every set and
+        // resource it names belongs to this device.
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
 
     // Swap freshly-built pipelines into the live resources after a hot-reload.
@@ -525,12 +568,35 @@ impl ReflectionCompositeResources {
 }
 
 impl VkContext {
+    // Point this frame's composite sets at the resolve target that will feed
+    // them: the RT output when the trace is live (RT takes the `SsrResolve`
+    // slot), the SSR output otherwise. Reads the same `rt_reflections_active`
+    // the frame graph gates `rt_reflections_enabled` on, so the wiring and the
+    // pass that encodes always agree. Runs on `&mut self` ahead of the parallel
+    // recording, and skips the write unless the view actually moved.
+    pub(in crate::vulkan) fn prepare_reflection_composite(&mut self, frame_idx: usize) {
+        let view = if self.rt_reflections_active() {
+            self.rt_reflections.as_ref().map(|rt| rt.output.view)
+        } else {
+            self.ssr.as_ref().map(|ssr| ssr.output.view)
+        };
+        let Some(view) = view else {
+            return;
+        };
+        let device = self.device.clone();
+        if let Some(rc) = self.reflection_composite.as_mut() {
+            rc.repoint_reflection(&device, frame_idx, view);
+        }
+    }
+
     // Blur the reflection target by surface roughness and composite it over the base
     // HDR scene into `reflection_composite.output`. `reflection_view` is the resolve
     // target the SSR / RT pass just wrote (radiance + weight), in
     // SHADER_READ_ONLY_OPTIMAL after its render pass. Encoded inline at the tail of
     // `encode_ssr_resolve` / `encode_rt_reflections`. No-op when the composite is
-    // absent (no reflection path active).
+    // absent (no reflection path active). Binding 0 was pointed at this view by
+    // `prepare_reflection_composite` before any pass recorded; the assert catches
+    // a resolve encoding against a set wired for the other one.
     pub(in crate::vulkan) fn encode_reflection_composite(
         &self,
         cmd: vk::CommandBuffer,
@@ -540,33 +606,12 @@ impl VkContext {
         let Some(rc) = &self.reflection_composite else {
             return;
         };
+        debug_assert_eq!(
+            rc.wired_reflection.current(frame_idx),
+            Some(reflection_view),
+            "reflection composite set wired for a different resolve target"
+        );
         let device = &self.device;
-
-        // Re-point binding 0 (reflection) of this frame's blur + composite sets at
-        // the resolve that just ran. This frame's sets are fence-gated (the previous
-        // submission for this slot completed at the top of the frame), so the write
-        // is safe; the SSR and RT paths are mutually exclusive, so only one feeds a
-        // given frame.
-        let refl = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(reflection_view)
-            .sampler(rc.sampler.handle());
-        let repoint = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(rc.blur_sets[frame_idx])
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&refl)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(rc.composite_sets[frame_idx])
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&refl)),
-        ];
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(&repoint, &[]) };
-
         // Pass 1: roughness blur into the reduced-resolution blur target.
         self.begin_fullscreen_pass_sized(
             cmd,

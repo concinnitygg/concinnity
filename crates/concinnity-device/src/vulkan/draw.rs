@@ -477,6 +477,15 @@ impl VkContext {
         // `draw_frame` retired everything that read this slot last trip.
         self.ensure_line_pipeline(frame_idx, lines);
 
+        // Clustered light binning runs only when the pipeline exists (a world
+        // with local lights) and at least one light is still live. Drives both
+        // `ClusterParams::use_clusters` below and the `LightCull` graph node, so
+        // the forward pass never reads a list the skipped pass did not write.
+        let clustered = crate::gfx::lights::clustered_lighting_active(
+            self.light_cull.pipeline.is_some(),
+            self.uniforms.light_uniforms.num_local_lights,
+        );
+
         //  Per-frame seed inputs for the shared backend-agnostic frame
         //  builder ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
         //  Decals landed 2026-05-24; Fog followed; AutoExposure landed
@@ -506,11 +515,14 @@ impl VkContext {
             ssr_enabled: self.ssr_resolve_active,
             particles_enabled: self.particle.resources.is_some()
                 && self.particle.records.iter().any(|p| p.is_some()),
-            // Gated on both the resources (built at init when the world declared
-            // a VolumetricFog) and the live settings, so runtime
-            // `update_fog_settings(None)` drops the FogFroxel + Fog passes from
-            // the graph entirely. Mirrors Metal's `pipeline && settings` gate.
-            fog_enabled: self.fog.resources.is_some() && self.fog.settings.is_some(),
+            // Gated on the resources (built at init when the world declared a
+            // VolumetricFog) and on live settings that can affect the frame, so
+            // runtime `update_fog_settings(None)` -- or an authored zero density,
+            // which integrates to a transparent black over the whole volume --
+            // drops the FogFroxel + Fog passes from the graph entirely. Mirrors
+            // Metal's gate.
+            fog_enabled: self.fog.resources.is_some()
+                && self.fog.settings.is_some_and(|s| s.contributes()),
             decals_enabled: self.decal.resources.is_some() && !self.decal.set.is_empty(),
             // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
             // `self.ssr` exists (built for SSR resolve *or* SSGI).
@@ -544,11 +556,13 @@ impl VkContext {
             // pyramid: the frame ends by reducing its final depth into it for the
             // next frame's phase-1 occlusion test.
             hiz_build_enabled: self.cull.hiz.is_some(),
-            // Screen-space global illumination. `Some` only when the world
+            // Screen-space global illumination. Built only when the world
             // selected `indirect_lighting: ssgi`; the graph then inserts the
             // `Ssgi` node on the hdr_resolve RMW chain (which forces the SSR
-            // pre-pass on, since `self.ssr` is built for SSGI too).
-            ssgi_enabled: self.ssgi.is_some(),
+            // pre-pass on, since `self.ssr` is built for SSGI too). Also asks the
+            // settings whether they contribute: a zero intensity would otherwise
+            // pay a hemisphere ray-march to add exactly zero.
+            ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
             // Hardware ray-traced reflections (`VK_KHR_ray_query`). On only when
             // the world requested it, the GPU exposed the ray-query extensions,
             // and the acceleration structure built; the shared builder then emits
@@ -567,10 +581,11 @@ impl VkContext {
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).
             world_hidden,
-            // Clustered light binning. The compute pipeline is built only when
-            // the world has local lights to bin, so this also gates the
-            // `LightCull` graph node; otherwise the forward pass brute-forces.
-            clustered_lighting_enabled: self.light_cull.pipeline.is_some(),
+            // Clustered light binning, sharing the gate that sets `use_clusters`
+            // below: the pipeline is built only for a world with local lights,
+            // and the live count has to still be non-zero. Otherwise the forward
+            // pass brute-forces an empty light list.
+            clustered_lighting_enabled: clustered,
             // Zero drops the SpotShadow node and its imported array from the
             // graph entirely, which is the common case (no shadow-casting spot).
             shadowed_spot_count: self.spot_shadow.count(),
@@ -636,10 +651,11 @@ impl VkContext {
         // these to build each cluster's world-space AABB (un-jittered inverse VP
         // + camera forward, matching the fog froxel convention) and the forward
         // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only when the world has local lights;
-        // otherwise the forward pass iterates them all. The planar / probe global
-        // sets bind the static `use_clusters = 0` copy instead.
-        let clustered = self.light_cull.pipeline.is_some();
+        // fragment. `use_clusters` is set only when the world has local lights
+        // and at least one is live; otherwise the forward pass iterates them all
+        // (zero iterations) rather than reading a list the skipped binning pass
+        // never wrote. The planar / probe global sets bind the static
+        // `use_clusters = 0` copy instead.
         let cluster_params = crate::gfx::render_types::ClusterParams {
             inv_view_proj: mat4_inverse(mat4_mul(proj, self.view.matrix)),
             cam_pos,

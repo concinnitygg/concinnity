@@ -37,6 +37,7 @@ use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
 use crate::vulkan::slang_builtins::SlangCompile;
+use crate::vulkan::wire_cache::WireCache;
 
 // SPIR-V blobs for the RT pipelines. Produced by [`compile_rt_shaders`];
 // consumed by `RtReflectionsResources::new` at init and by
@@ -134,6 +135,11 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // hot-reload recompile sizes `probe_cubes[]` to the same global set layout
     // the pipeline layouts already reference.
     probe_cube_count: u32,
+
+    // What each frame's dynamic bindings (1/2/9/10) already point at, so a frame
+    // whose acceleration structures did not move skips four descriptor writes,
+    // one of them an acceleration-structure write.
+    wired_accel: WireCache<RtAccelHandles>,
 }
 
 // SAFETY: The params UBOs' mapped pointers are host-mapped, render-thread-only; the
@@ -316,8 +322,9 @@ pub(in crate::vulkan) struct RtStaticInputs<'a> {
 // The live acceleration-structure handles the trace binds per frame: the TLAS,
 // the geometry table (buffer + byte size), the deformed skinned vertex buffer,
 // and the skinned index buffer. All re-pointed each frame by `wire_dynamic`
-// because a dynamic rebuild fresh-allocates them.
-#[derive(Clone, Copy)]
+// because a dynamic rebuild fresh-allocates them. Compared frame to frame so a
+// frame that rebuilt nothing rewrites nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::vulkan) struct RtAccelHandles {
     pub tlas: vk::AccelerationStructureKHR,
     pub geom_buffer: vk::Buffer,
@@ -560,6 +567,7 @@ impl RtReflectionsResources {
             dummy_ssbo,
             pool_size,
             probe_cube_count,
+            wired_accel: WireCache::new(frames),
         };
         me.build_targets(alloc, device, width, height)?;
         me.wire_static(
@@ -750,17 +758,23 @@ impl RtReflectionsResources {
     // the live handles. Called every frame because a dynamic rebuild
     // fresh-allocates the TLAS / geom table / deformed buffer; the current frame's
     // set is fence-gated (its previous submission completed at the top of
-    // `draw_frame`), so the update is safe. `deformed` is always a valid handle
+    // `draw_frame`), so the update is safe. A frame that rebuilt nothing hands
+    // over the same five handles this slot already holds and writes nothing:
+    // the comparison is over the handles themselves, so any that moved still
+    // fires. `deformed` is always a valid handle
     // (the accel data holds a 1-element dummy when there is no skinned geometry);
     // `skinned_indices` is `vk::Buffer::null()` until the first skinned rebuild,
     // in which case the 1-element dummy SSBO is bound so the descriptor stays
     // valid.
     pub(in crate::vulkan) fn wire_dynamic(
-        &self,
+        &mut self,
         device: &VkDevice,
         frame_idx: usize,
         accel: RtAccelHandles,
     ) {
+        if !self.wired_accel.changed(frame_idx, accel) {
+            return;
+        }
         let RtAccelHandles {
             tlas,
             geom_buffer,
@@ -873,6 +887,9 @@ impl RtReflectionsResources {
         self.destroy_targets(device);
         self.build_targets(alloc, device, width, height)?;
         self.wire_static(device, inputs);
+        // `wire_static` rewrites the set; drop the dynamic memo so the next frame
+        // re-points bindings 1/2/9/10 unconditionally.
+        self.wired_accel.reset();
         Ok(())
     }
 
@@ -1027,7 +1044,7 @@ impl VkContext {
         let skinned_indices = accel.skinned_indices();
         let rt = self
             .rt_reflections
-            .as_ref()
+            .as_mut()
             .expect("RT reflection resources are live");
         rt.wire_dynamic(
             &device,
@@ -1044,7 +1061,7 @@ impl VkContext {
         // handles, so a trace this frame samples the current TLAS / geometry table.
         // A no-op when the world has no transparent content or the RT pipelines are
         // absent.
-        if let Some(transparent) = self.transparent.as_ref() {
+        if let Some(transparent) = self.transparent.as_mut() {
             transparent.wire_rt_dynamic(
                 &device,
                 frame_idx,

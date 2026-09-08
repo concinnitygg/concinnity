@@ -218,6 +218,14 @@ impl DxContext {
         // pre-pass still runs; FSR consumes its motion vectors.
         let upscale_on = self.upscale.backend.is_some();
         let taa_on = self.taa.is_some() && !upscale_on;
+        // Clustered light binning runs only when the pipeline exists (a world
+        // with local lights) and at least one light is still live. Drives both
+        // `ClusterParams::use_clusters` below and the `LightCull` graph node, so
+        // the forward pass never reads a list the skipped pass did not write.
+        let clustered = crate::gfx::lights::clustered_lighting_active(
+            self.light_cull.pso.is_some(),
+            self.uniforms.light_uniforms.num_local_lights,
+        );
         let seed_inputs = FrameGraphInputs {
             shadow_enabled: !self.shadow.dsvs.is_empty(),
             shadow_map_size: self.shadow.map_size,
@@ -238,15 +246,17 @@ impl DxContext {
             auto_exposure_enabled: self.auto_exposure.resources.is_some(),
             particles_enabled: self.particle.resources.is_some()
                 && !self.particle.records.is_empty(),
-            // Gated on both the resources (built at init when the world declared
-            // a VolumetricFog) and the live settings, so runtime
-            // `update_fog_settings(None)` drops the FogFroxel + Fog passes from
-            // the graph entirely. Mirrors Vulkan + Metal's `pipeline && settings`
-            // gate; without the settings half a settings-None frame would still
+            // Gated on the resources (built at init when the world declared a
+            // VolumetricFog) and on live settings that can affect the frame, so
+            // runtime `update_fog_settings(None)` -- or an authored zero density,
+            // which integrates to a transparent black over the whole volume --
+            // drops the FogFroxel + Fog passes from the graph entirely. Mirrors
+            // Vulkan + Metal; without the settings half a settings-None frame would still
             // emit the (bailing) Fog pass, and the graph-driven froxel-volume
             // consumer barrier would transition the volume with no encoder to
             // reset it.
-            fog_enabled: self.fog.resources.is_some() && self.fog.settings.is_some(),
+            fog_enabled: self.fog.resources.is_some()
+                && self.fog.settings.is_some_and(|s| s.contributes()),
             // `DecalState` is built at init unconditionally so a runtime
             // `add_decal` works from a world that declared none, so the
             // resources half alone is always true. The live half drops the
@@ -286,7 +296,7 @@ impl DxContext {
             // after `Raymarch` and before `Decals`. On when the world selected
             // `indirect_lighting: ssgi` (which also forces the SSR pre-pass on
             // above so the gather has a G-buffer).
-            ssgi_enabled: self.ssgi.is_some(),
+            ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
             // Hardware ray-traced reflections (DXR inline `RayQuery`). On when
             // the world authored `ray_traced_reflections`, the GPU supports the
             // DXR tier, and the DXC compile + acceleration-structure build
@@ -303,10 +313,11 @@ impl DxContext {
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).
             world_hidden,
-            // Clustered light binning. The compute pipeline is built only when
-            // the world has local lights to bin, so this also gates the
-            // `LightCull` graph node; otherwise the forward pass brute-forces.
-            clustered_lighting_enabled: self.light_cull.pso.is_some(),
+            // Clustered light binning, sharing the gate that sets `use_clusters`
+            // below: the pipeline is built only for a world with local lights,
+            // and the live count has to still be non-zero. Otherwise the forward
+            // pass brute-forces an empty light list.
+            clustered_lighting_enabled: clustered,
             // Zero drops the SpotShadow node and its imported array from the
             // graph entirely, which is the common case (no shadow-casting spot).
             shadowed_spot_count: self.spot_shadow.count(),
@@ -375,11 +386,11 @@ impl DxContext {
         // these to build each cluster's world-space AABB (un-jittered inverse VP
         // + camera forward, matching the fog froxel convention) and the forward
         // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only when the world has local lights;
-        // otherwise the forward pass iterates them all. Slot 1 of the same
-        // buffer holds the `use_clusters = 0` copy the planar / probe
-        // re-renders bind (written once at init).
-        let clustered = self.light_cull.pso.is_some();
+        // fragment. `use_clusters` is set only when the world has local lights
+        // and at least one is live; otherwise the forward pass iterates them all
+        // (zero iterations) rather than reading a list the skipped binning pass
+        // never wrote. Slot 1 of the same buffer holds the `use_clusters = 0`
+        // copy the planar / probe re-renders bind (written once at init).
         let cluster_params = ClusterParams {
             inv_view_proj: mat4_inverse(mat4_mul(proj, self.view.matrix)),
             cam_pos,

@@ -35,6 +35,16 @@ impl SsaoSettings {
         }
     }
 
+    /// Whether the pass can darken anything. The kernel returns
+    /// `pow(visibility, max(intensity, 0.0))`, so a zero intensity resolves to
+    /// 1.0 everywhere -- the same value the renderer's 1x1 white fallback binds
+    /// when SSAO is off. Resolving to `None` on this keeps a zero-intensity
+    /// world on that already-supported path instead of paying the kernel and
+    /// the blur to compute white.
+    pub fn contributes(&self) -> bool {
+        self.intensity > 0.0
+    }
+
     /// Build the per-frame GPU uniform from these settings and the active
     /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
     /// viewport width / height ratio: together they give the view-ray scale
@@ -53,6 +63,17 @@ impl SsaoSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_intensity_does_not_contribute() {
+        assert!(!SsaoSettings::resolve(0.5, 0.0).contributes());
+        assert!(SsaoSettings::resolve(0.5, 0.05).contributes());
+    }
+
+    #[test]
+    fn a_negative_intensity_clamps_to_no_contribution() {
+        assert!(!SsaoSettings::resolve(0.5, -1.0).contributes());
+    }
 
     #[test]
     fn resolve_floors_radius_and_clamps_intensity() {

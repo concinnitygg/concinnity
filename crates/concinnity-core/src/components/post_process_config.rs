@@ -569,21 +569,30 @@ pub trait PostProcessResolve {
     fn reflection_blur_divisor(&self) -> u32;
 
     /// Resolve the SSAO tunables into clamped `SsaoSettings`, or `None` when the
-    /// `ssao` toggle is off so the backend can skip the SSAO passes entirely.
+    /// `ssao` toggle is off -- or on with an intensity that cannot darken
+    /// anything -- so the backend can skip the SSAO passes entirely.
     fn ssao_settings(&self) -> Option<crate::gfx::ssao::SsaoSettings>;
 
     /// Resolve the SSR tunables into clamped `SsrSettings`, or `None` when the
     /// `ssr` toggle is off.
+    ///
+    /// Deliberately NOT gated on the intensity, unlike SSAO / SSGI: when a
+    /// resolve is active the forward pass hands its glossy dielectric specular
+    /// over to the resolve's composite (`ViewUniforms::reflections_enabled`), so
+    /// a zero-intensity resolve still carries that term and dropping the pass
+    /// changes the image. Measured at 1.53M of 3.28M pixels on a glossy floor.
     fn ssr_settings(&self) -> Option<crate::gfx::ssr::SsrSettings>;
 
     /// Resolve the ray-traced-reflection tunables into clamped
     /// `RtReflectionSettings`, or `None` when `ray_traced_reflections` is off.
     /// Reuses the SSR intensity / distance fields; the backend additionally gates
-    /// on GPU ray-tracing support.
+    /// on GPU ray-tracing support. Not gated on the intensity, for the same
+    /// specular-handover reason as `ssr_settings`.
     fn rt_reflection_settings(&self) -> Option<crate::gfx::rt_reflections::RtReflectionSettings>;
 
     /// Resolve the SSGI tunables into clamped `SsgiSettings`, or `None` when
-    /// `indirect_lighting` is not `Ssgi` so the backend can skip the SSGI passes.
+    /// `indirect_lighting` is not `Ssgi`, or its intensity scales the gathered
+    /// bounce to zero, so the backend can skip the SSGI passes.
     fn ssgi_settings(&self) -> Option<crate::gfx::ssgi::SsgiSettings>;
 
     /// Resolve the auto-exposure tunables into clamped `AutoExposureSettings`, or
@@ -618,6 +627,7 @@ impl PostProcessResolve for PostProcessConfig {
     fn ssao_settings(&self) -> Option<crate::gfx::ssao::SsaoSettings> {
         self.ssao
             .then(|| crate::gfx::ssao::SsaoSettings::resolve(self.ssao_radius, self.ssao_intensity))
+            .filter(|s| s.contributes())
     }
 
     fn ssr_settings(&self) -> Option<crate::gfx::ssr::SsrSettings> {
@@ -636,15 +646,17 @@ impl PostProcessResolve for PostProcessConfig {
     }
 
     fn ssgi_settings(&self) -> Option<crate::gfx::ssgi::SsgiSettings> {
-        (self.indirect_lighting == IndirectLighting::Ssgi).then(|| {
-            crate::gfx::ssgi::SsgiSettings::resolve(
-                self.ssgi_intensity,
-                self.ssgi_max_distance,
-                self.ssgi_rays,
-                self.ssgi_steps,
-                self.ssgi_resolution.scale_divisor(),
-            )
-        })
+        (self.indirect_lighting == IndirectLighting::Ssgi)
+            .then(|| {
+                crate::gfx::ssgi::SsgiSettings::resolve(
+                    self.ssgi_intensity,
+                    self.ssgi_max_distance,
+                    self.ssgi_rays,
+                    self.ssgi_steps,
+                    self.ssgi_resolution.scale_divisor(),
+                )
+            })
+            .filter(|s| s.contributes())
     }
 
     fn auto_exposure_settings(&self) -> Option<crate::gfx::auto_exposure::AutoExposureSettings> {
@@ -786,6 +798,61 @@ mod runtime_tests {
             ..Default::default()
         };
         assert!(off.ssao_settings().is_none());
+    }
+
+    #[test]
+    fn an_inert_intensity_resolves_to_none_like_the_toggle_being_off() {
+        // The backends read presence, so a toggle left on with a value that
+        // cannot change a pixel has to resolve away here or the passes run for
+        // nothing. Each is the same state as its toggle being off. Only the two
+        // whose neutrality was verified pixel-for-pixel are listed; see
+        // `a_zero_intensity_reflection_still_resolves` for the exceptions.
+        let ssao = PostProcessConfig {
+            ssao: true,
+            ssao_intensity: 0.0,
+            ..Default::default()
+        };
+        assert!(ssao.ssao_settings().is_none());
+
+        let ssgi = PostProcessConfig {
+            indirect_lighting: IndirectLighting::Ssgi,
+            ssgi_intensity: 0.0,
+            ..Default::default()
+        };
+        assert!(ssgi.ssgi_settings().is_none());
+    }
+
+    #[test]
+    fn a_contributing_intensity_still_resolves() {
+        let cfg = PostProcessConfig {
+            ssao: true,
+            ssao_intensity: 0.05,
+            indirect_lighting: IndirectLighting::Ssgi,
+            ssgi_intensity: 0.05,
+            ..Default::default()
+        };
+        assert!(cfg.ssao_settings().is_some());
+        assert!(cfg.ssgi_settings().is_some());
+    }
+
+    #[test]
+    fn a_zero_intensity_reflection_still_resolves() {
+        // SSR and RT are deliberately NOT intensity-gated: an active resolve
+        // owns the glossy dielectric specular the forward pass hands over, so a
+        // zero-intensity resolve still changes the image. Measured, not assumed.
+        let ssr = PostProcessConfig {
+            ssr: true,
+            ssr_intensity: 0.0,
+            ..Default::default()
+        };
+        assert!(ssr.ssr_settings().is_some());
+
+        let rt = PostProcessConfig {
+            ray_traced_reflections: true,
+            ssr_intensity: 0.0,
+            ..Default::default()
+        };
+        assert!(rt.rt_reflection_settings().is_some());
     }
 
     #[test]

@@ -19,7 +19,6 @@ use crate::components::{DirectionalLight, GraphicsConfig, PostProcessConfig, Vol
 use crate::ecs::{ActiveRenderQueues, World};
 use crate::gfx::render_config as resolve;
 use crate::gfx::settings_system::{SettingsSlot, SettingsState};
-use crate::gfx::volumetric_fog::FogSettings;
 use concinnity_core::render::lights::DirectionalLightSet;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::sky::SkyOrientation;
@@ -104,17 +103,7 @@ pub fn lights_under_sky<'a>(
 /// Enabling fog on a world that started without it is refused: see
 /// [`fog_pass_built`].
 pub fn apply_fog(world: &mut World, fog: Option<&VolumetricFog>) -> bool {
-    let settings = fog.filter(|f| f.enabled).map(|f| {
-        FogSettings::resolve(
-            f.color,
-            f.density,
-            f.height_falloff,
-            f.height_reference,
-            f.max_distance,
-            f.phase_g,
-            f.ambient,
-        )
-    });
+    let settings = fog.and_then(crate::gfx::volumetric_fog::resolve_asset);
     if settings.is_some() && !fog_pass_built(world) {
         return false;
     }

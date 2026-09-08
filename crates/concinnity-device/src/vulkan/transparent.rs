@@ -47,6 +47,7 @@ use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
 };
+use super::wire_cache::WireCache;
 
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
@@ -72,8 +73,9 @@ pub(in crate::vulkan) struct TransparentRtInputs {
 // transparent RT descriptor set every frame by `wire_dynamic` /
 // `wire_rt_dynamic`. Same handles the RT-reflection pass rewires; the deformed
 // buffer is always valid while `skinned_indices` is null until the first skinned
-// rebuild.
-#[derive(Clone, Copy)]
+// rebuild. Compared frame to frame so a frame that rebuilt nothing rewrites
+// nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::vulkan) struct TransparentRtDynamic {
     pub tlas: vk::AccelerationStructureKHR,
     pub geom_buffer: vk::Buffer,
@@ -387,6 +389,11 @@ struct TransparentRt {
     // is then `vk::Buffer::null()`), so the descriptor stays valid. Mirrors the
     // RT-reflection pass's dummy.
     dummy_ssbo: PooledBuffer,
+
+    // What each frame's dynamic bindings (1/2/5/6) already point at, so a frame
+    // whose acceleration structures did not move skips four descriptor writes,
+    // one of them an acceleration-structure write.
+    wired_accel: WireCache<TransparentRtDynamic>,
 }
 
 // Engine-side transparent-pass resources. Built only when the world declared at
@@ -563,12 +570,17 @@ impl TransparentRt {
 
     // Re-point one frame's TLAS (1), geometry table (2), deformed skinned verts
     // (5), and skinned indices (6) at the live handles. Called every frame from
-    // `VkContext::rt_dynamic_update` (the current frame's set is fence-gated). The
-    // deformed buffer is always a valid handle (the accel data holds a 1-element
+    // `VkContext::rt_dynamic_update` (the current frame's set is fence-gated). A
+    // frame that rebuilt nothing hands over the same five handles this slot
+    // already holds and writes nothing. The deformed buffer is always a valid
+    // handle (the accel data holds a 1-element
     // dummy when there is no skinned geometry); `skinned_indices` is null until the
     // first skinned rebuild, in which case the 1-element dummy SSBO binds so the
     // descriptor stays valid. Mirrors `post::rt_reflections::wire_dynamic`.
-    fn wire_dynamic(&self, device: &VkDevice, frame_idx: usize, dynamic: TransparentRtDynamic) {
+    fn wire_dynamic(&mut self, device: &VkDevice, frame_idx: usize, dynamic: TransparentRtDynamic) {
+        if !self.wired_accel.changed(frame_idx, dynamic) {
+            return;
+        }
         let TransparentRtDynamic {
             tlas,
             geom_buffer,
@@ -742,7 +754,7 @@ fn build_transparent_rt(
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
 
-    let rt = TransparentRt {
+    let mut rt = TransparentRt {
         _set_layout: set_layout,
         layout_flat,
         layout_textured,
@@ -750,6 +762,7 @@ fn build_transparent_rt(
         sets,
         _pool: pool,
         dummy_ssbo,
+        wired_accel: WireCache::new(frames),
     };
     rt.wire_static(device, geometry.vertex_buffer, geometry.index_buffer);
     if let Some(inputs) = geometry.rt_inputs {
@@ -1570,12 +1583,12 @@ impl TransparentResources {
     // `VkContext::rt_dynamic_update` alongside the RT-reflection pass's re-point,
     // so the transparent traces sample the same per-frame acceleration structure.
     pub(in crate::vulkan) fn wire_rt_dynamic(
-        &self,
+        &mut self,
         device: &VkDevice,
         frame_idx: usize,
         dynamic: TransparentRtDynamic,
     ) {
-        if let Some(rt) = self.rt.as_ref() {
+        if let Some(rt) = self.rt.as_mut() {
             rt.wire_dynamic(device, frame_idx, dynamic);
         }
     }

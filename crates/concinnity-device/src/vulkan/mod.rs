@@ -60,6 +60,7 @@ mod water;
 mod win32_window;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) mod window;
+mod wire_cache;
 mod wireframe;
 mod world_shaders;
 

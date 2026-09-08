@@ -507,7 +507,13 @@ impl MtlContext {
                         sky_rot,
                     })
                 });
-        let fog_params = self.fog.settings.map(|fog| {
+        // The live settings, dropped when the medium cannot affect the frame (a
+        // zero density integrates to a transparent black over the whole volume).
+        // One source for the two param blocks and the graph gate below, so
+        // `GraphFrameParams`'s "Some only when the Fog pass is in the graph"
+        // contract holds.
+        let fog_settings = self.fog.settings.filter(|s| s.contributes());
+        let fog_params = fog_settings.map(|fog| {
             // Sun = the first directional light; falls back to the
             // LightUniforms::DEFAULT direction if the world declared none.
             let sun = &self.light_uniforms.directional[0];
@@ -536,30 +542,32 @@ impl MtlContext {
         // FogFroxel volume extras: view matrix + volume dimensions + near/far
         // so the compute kernel can place each froxel in world-space and the
         // fragment shader can map a scene depth into the volume's Z axis.
-        let fog_froxel_params =
-            self.fog
-                .settings
-                .map(|fog| crate::gfx::render_types::FogFroxelParams {
-                    view: self.view.matrix,
-                    froxel_dims: [
-                        crate::gfx::render_graph::FOG_FROXEL_X,
-                        crate::gfx::render_graph::FOG_FROXEL_Y,
-                        crate::gfx::render_graph::FOG_FROXEL_Z,
-                    ],
-                    _pad_align: 0,
-                    z_near: near.max(1e-3),
-                    z_far: fog.max_distance,
-                    _pad: [0.0; 2],
-                });
+        let fog_froxel_params = fog_settings.map(|fog| crate::gfx::render_types::FogFroxelParams {
+            view: self.view.matrix,
+            froxel_dims: [
+                crate::gfx::render_graph::FOG_FROXEL_X,
+                crate::gfx::render_graph::FOG_FROXEL_Y,
+                crate::gfx::render_graph::FOG_FROXEL_Z,
+            ],
+            _pad_align: 0,
+            z_near: near.max(1e-3),
+            z_far: fog.max_distance,
+            _pad: [0.0; 2],
+        });
         // Clustered light-binning params (main camera). The compute pass reads
         // these to build each cluster's world-space AABB (un-jittered inverse VP
         // + camera forward, matching the fog froxel convention) and the forward
         // pass reads the grid dims / depth range / screen size to place a
         // fragment. `use_clusters` is set only when the world has local lights
-        // (the pipeline is built iff so); otherwise the forward pass brute-forces
-        // and the LightCull graph node is omitted. Stored on self so the shared
-        // main-pass bind can push it; a local copy feeds the LightCull arm.
-        let clustered = self.light_cull.pipeline.is_some();
+        // (the pipeline is built iff so) and at least one is still live;
+        // otherwise the forward pass brute-forces an empty list and the LightCull
+        // graph node is omitted, so a list the skipped pass did not write is never
+        // read. Stored on self so the shared main-pass bind can push it; a local
+        // copy feeds the LightCull arm.
+        let clustered = crate::gfx::lights::clustered_lighting_active(
+            self.light_cull.pipeline.is_some(),
+            self.light_uniforms.num_local_lights,
+        );
         let cluster_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
         self.cluster_params = crate::gfx::render_types::ClusterParams {
             inv_view_proj: cluster_inv_vp,
@@ -684,7 +692,7 @@ impl MtlContext {
             particles_enabled: self.particle.pipelines.is_some()
                 && !self.particle.records.is_empty()
                 && !self.particle.emitter_state.is_empty(),
-            fog_enabled: self.fog.pipeline.is_some() && self.fog.settings.is_some(),
+            fog_enabled: self.fog.pipeline.is_some() && fog_settings.is_some(),
             decals_enabled: self.decal.pipeline.is_some() && !self.decal.set.is_empty(),
             // The SSR depth + normal + roughness pre-pass also feeds SSGI and
             // the RT-reflection kernel, so it runs when SSR, SSGI, *or* RT
@@ -720,11 +728,13 @@ impl MtlContext {
             // pyramid: the frame ends by reducing its final depth into it for the
             // next frame's phase-1 occlusion test.
             hiz_build_enabled: self.cull.hiz.is_some(),
-            // SSGI runs when `indirect_lighting: "ssgi"` resolved settings.
-            // The builder inserts the Ssgi RMW pass after Raymarch on the
-            // hdr_resolve chain; the gather reads the SSR pre-pass G-buffer
-            // (forced on above via `ssr_prepass_enabled`).
-            ssgi_enabled: self.ssgi.settings.is_some(),
+            // SSGI runs when `indirect_lighting: "ssgi"` resolved settings that
+            // contribute: the composite scales by intensity, so zero would pay a
+            // hemisphere ray-march to add nothing. The builder inserts the Ssgi
+            // RMW pass after Raymarch on the hdr_resolve chain; the gather reads
+            // the SSR pre-pass G-buffer (forced on above via
+            // `ssr_prepass_enabled`).
+            ssgi_enabled: self.ssgi.settings.is_some_and(|s| s.contributes()),
             // RT reflections run when the scene acceleration structure is live
             // (RT requested + GPU supports it + scene has geometry). The builder
             // inserts the RtReflections pass in the SsrResolve slot and, when

@@ -457,6 +457,11 @@ impl VkContext {
         // worker threads. Inert when no clusters are declared.
         self.prepare_instanced_clusters(params.cam_pos);
 
+        // Point the reflection composite's binding 0 at the resolve that will
+        // feed it, on `&mut self` before the fan-out. The view only moves on a
+        // resize / quality rebuild, so in the steady state this writes nothing.
+        self.prepare_reflection_composite(params.frame_idx);
+
         // Composite stays on the main thread (it writes the swapchain image
         // and allocates + drops transient text buffers through the RefCell
         // device allocator); every other pass fans onto a `jobs::pool()`

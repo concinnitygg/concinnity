@@ -2384,20 +2384,13 @@ impl GraphicsSystem {
         // Resolve the world's `VolumetricFog`. The first declared instance
         // wins; later ones are silently dropped (one homogeneous medium is
         // all the fog pass models). `None` means the renderer skips the
-        // fog pass; an asset with `enabled = false` also yields `None`.
+        // fog pass, which `resolve_asset` also returns for a disabled asset
+        // or one whose density cannot affect the frame.
         let fog_settings = {
             let fogs: Vec<VolumetricFog> = ctx.drain::<VolumetricFog>();
-            fogs.into_iter().find(|f| f.enabled).map(|f| {
-                crate::gfx::volumetric_fog::FogSettings::resolve(
-                    f.color,
-                    f.density,
-                    f.height_falloff,
-                    f.height_reference,
-                    f.max_distance,
-                    f.phase_g,
-                    f.ambient,
-                )
-            })
+            fogs.into_iter()
+                .find(|f| f.enabled)
+                .and_then(|f| crate::gfx::volumetric_fog::resolve_asset(&f))
         };
         let fog_enabled = fog_settings.is_some();
         self.fog_built = fog_enabled;

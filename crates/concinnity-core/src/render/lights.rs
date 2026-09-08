@@ -278,9 +278,42 @@ pub fn build_light_uniforms(
     }
 }
 
+/// Whether the clustered forward path should bin lights this frame.
+///
+/// `pipeline_live` is whether the backend built the binning pipeline at all (it
+/// is skipped for a world that never had a local light); `local_light_count` is
+/// the live count the forward pass would iterate. The binning kernel dispatches
+/// one thread per cluster over the whole grid regardless of how many lights it
+/// finds, so a runtime drop to zero lights pays the full dispatch to write a
+/// grid of empty lists.
+///
+/// This single-sources two things that must agree: `ClusterParams::use_clusters`
+/// and `FrameGraphInputs::clustered_lighting_enabled`. When it is false the
+/// forward pass iterates `num_local_lights` directly (zero iterations) instead
+/// of reading a cluster list the dropped pass never wrote, so a stale list from
+/// an earlier frame is never sampled.
+pub fn clustered_lighting_active(pipeline_live: bool, local_light_count: i32) -> bool {
+    pipeline_live && local_light_count > 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clustered_binning_needs_a_pipeline_and_a_light() {
+        assert!(clustered_lighting_active(true, 1));
+        // Every local light despawned at runtime: the pipeline outlives them.
+        assert!(!clustered_lighting_active(true, 0));
+        assert!(!clustered_lighting_active(false, 4));
+        assert!(!clustered_lighting_active(false, 0));
+    }
+
+    #[test]
+    fn clustered_binning_ignores_a_negative_count() {
+        // `num_local_lights` is a signed i32 in the uniform block.
+        assert!(!clustered_lighting_active(true, -1));
+    }
 
     use alloc::vec;
     fn dir(direction: [f32; 3], color: [f32; 3], intensity: f32) -> DirectionalLight {

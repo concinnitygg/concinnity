@@ -77,6 +77,18 @@ impl FogSettings {
         }
     }
 
+    /// Whether the medium can affect the frame. The froxel kernel integrates
+    /// `tau = density * step_len` per slab, so a zero density leaves every slab
+    /// at `exp(0) = 1`: the volume stores `(0, 0)` everywhere, `ambient` never
+    /// enters (it is scaled by `1 - slab_T`), and the premultiplied `over`
+    /// blend resolves to the scene untouched. Backends gate
+    /// `FrameGraphInputs::fog_enabled` on this so the graph drops the froxel
+    /// compute and the fullscreen resolve rather than paying both to composite
+    /// a transparent black.
+    pub fn contributes(&self) -> bool {
+        self.density > 0.0
+    }
+
     /// Build the per-frame GPU uniform from these settings and the active
     /// camera. `inv_vp` is the inverse view-projection used to reconstruct
     /// world positions from depth; `cam_pos` is the camera origin; `sun_dir`
@@ -114,9 +126,68 @@ impl FogSettings {
     }
 }
 
+/// Resolve an authored `VolumetricFog` into clamped [`FogSettings`], or `None`
+/// when the asset's `enabled` toggle is off.
+///
+/// The one place the asset becomes settings. Init, the `VolumetricFog`
+/// hot-reload, and the lighting preview all route through here, so `None` means
+/// the same thing on every path and none of them can drift on which fields gate
+/// the pass. Mirrors `PostProcessConfig`'s `*_settings()` resolvers.
+///
+/// Deliberately NOT filtered on [`FogSettings::contributes`], unlike the SSAO
+/// and SSGI resolvers. Fog is live-editable: the settings decide whether the
+/// backend builds the fog resources at all, and `SettingsState::fog_built`
+/// refuses a later runtime enable on a world that never built them. Resolving a
+/// zero density away here would leave an author who starts at 0 unable to raise
+/// it. The per-frame skip is the backends' `fog_enabled` gate instead, which
+/// costs one allocation to keep the slider live.
+pub fn resolve_asset(fog: &crate::components::VolumetricFog) -> Option<FogSettings> {
+    fog.enabled.then(|| {
+        FogSettings::resolve(
+            fog.color,
+            fog.density,
+            fog.height_falloff,
+            fog.height_reference,
+            fog.max_distance,
+            fog.phase_g,
+            fog.ambient,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authored(enabled: bool, density: f32) -> crate::components::VolumetricFog {
+        crate::components::VolumetricFog {
+            enabled,
+            density,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolve_asset_skips_a_disabled_medium() {
+        assert!(resolve_asset(&authored(false, 0.02)).is_none());
+    }
+
+    #[test]
+    fn resolve_asset_keeps_an_enabled_but_inert_medium() {
+        // A zero density still resolves, so the backend builds the fog
+        // resources and a live density raise has a pass to land on; the
+        // per-frame `fog_enabled` gate is what skips the work. Dropping it here
+        // would strand an author who starts the slider at zero.
+        let s = resolve_asset(&authored(true, 0.0)).expect("enabled");
+        assert!(!s.contributes());
+    }
+
+    #[test]
+    fn resolve_asset_clamps_a_live_medium() {
+        let s = resolve_asset(&authored(true, 1.0e6)).expect("enabled and dense");
+        assert_eq!(s.density, MAX_DENSITY);
+        assert!(s.contributes());
+    }
 
     const IDENTITY: [[f32; 4]; 4] = [
         [1.0, 0.0, 0.0, 0.0],
@@ -149,6 +220,31 @@ mod tests {
         let s = FogSettings::resolve([0.6; 3], 0.05, 0.2, 0.0, f32::NAN, 0.4, 0.15);
         assert!(s.max_distance.is_finite());
         assert!(s.max_distance >= MIN_DISTANCE);
+    }
+
+    #[test]
+    fn zero_density_does_not_contribute() {
+        // `VolumetricFog { enabled: true, density: 0.0 }` resolves to settings,
+        // so presence alone cannot gate the pass.
+        let off = FogSettings::resolve([0.6, 0.7, 0.8], 0.0, 0.1, 0.0, 200.0, 0.3, 0.2);
+        assert!(!off.contributes());
+
+        let on = FogSettings::resolve([0.6, 0.7, 0.8], 0.02, 0.1, 0.0, 200.0, 0.3, 0.2);
+        assert!(on.contributes());
+    }
+
+    #[test]
+    fn a_negative_density_clamps_to_no_contribution() {
+        let s = FogSettings::resolve([0.6, 0.7, 0.8], -1.0, 0.1, 0.0, 200.0, 0.3, 0.2);
+        assert!(!s.contributes());
+    }
+
+    #[test]
+    fn ambient_alone_does_not_make_zero_density_contribute() {
+        // The in-scatter is scaled by `1 - exp(-tau)`, so a bright ambient with
+        // no medium to scatter in is still nothing.
+        let s = FogSettings::resolve([1.0, 1.0, 1.0], 0.0, 0.1, 0.0, 200.0, 0.0, 10.0);
+        assert!(!s.contributes());
     }
 
     #[test]
