@@ -1073,7 +1073,7 @@ impl DxContext {
                 .taa
                 .as_ref()
                 .filter(|_| self.upscale.backend.is_none())
-                .map(|taa| (&taa.history[taa.output_index()], SAMPLED)),
+                .map(|taa| (&taa.output().resource, SAMPLED)),
             // The unified G-buffer pre-pass's colour targets, one entry each.
             // One draw writes all three, but their consumers differ -- the
             // reflection resolve reads normal+depth and roughness, the temporal

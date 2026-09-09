@@ -19,8 +19,8 @@
 //
 // Unlike DirectX's single-resource G-buffer, the Vulkan unified buffer holds a
 // per-frame `Vec<GpuImage>` for every MRT target (and per-frame framebuffers),
-// because TAA reads `velocity_images[frame_idx]` and the engine pipelines
-// frames-in-flight deep; this follows the per-frame `Vec` shape of taa.rs.
+// because the temporal resolve reads `velocity_images[frame_idx]` and the engine
+// pipelines frames-in-flight deep.
 
 use ash::vk;
 use concinnity_core::gfx::transform::IDENTITY;
@@ -656,8 +656,7 @@ pub(in crate::vulkan) struct GbufferPooled {
 // consumer is enabled. Every `vk::*` handle here is owned by this struct and
 // freed on `destroy`, EXCEPT the three pooled colour channels (see
 // `PooledTarget`). Holds per-frame MRT targets / framebuffers because the
-// velocity target is read per-frame-in-flight by TAA, mirroring taa.rs's `Vec`
-// shape.
+// velocity target is read per frame in flight by the temporal resolve.
 pub(in crate::vulkan) struct GbufferResources {
     // Render pass.
     pub(in crate::vulkan) prepass_render_pass: OwnedRenderPass,

@@ -344,7 +344,7 @@ fn rt_desc(m: &TransientTexture) -> D3D12_RESOURCE_DESC {
     }
 }
 
-fn dxgi_format(format: PixelFormat) -> DXGI_FORMAT {
+pub(in crate::directx) fn dxgi_format(format: PixelFormat) -> DXGI_FORMAT {
     match format {
         PixelFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
         PixelFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,

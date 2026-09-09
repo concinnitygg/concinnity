@@ -100,7 +100,6 @@ use super::graph_events;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
 use super::uniforms::VelocityUniforms;
 use concinnity_core::render::uniforms::GBufferView;
-use concinnity_core::render::uniforms::TaaParams;
 
 // What `execute_graph` leaves for `draw_frame` to finish. The composite pass
 // rides the command buffer `draw_frame` owns, so the graphics queue's frame
@@ -178,9 +177,6 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // `Velocity` pass is in the graph this frame (matches
     // `FrameGraphInputs::velocity_enabled`).
     pub vel_uniforms: Option<&'a VelocityUniforms>,
-    // TAA-resolve pass uniforms. `Some` only when the `TaaResolve` pass
-    // is in the graph this frame (matches `FrameGraphInputs::taa_enabled`).
-    pub taa_uniforms: Option<&'a TaaParams>,
     // Pre-TAA scene texture that `TaaResolve` reads (the SSR resolve
     // output when SSR is on, otherwise the raw `hdr_resolve`). `Some`
     // only when the `TaaResolve` pass is in the graph this frame.
@@ -686,13 +682,10 @@ impl MtlContext {
                 )?
             }
             PassId::TaaResolve => {
-                let taa_uniforms = params.taa_uniforms.ok_or(
-                    "graph executor: TaaResolve pass requires taa_uniforms but none was supplied",
-                )?;
                 let scene_pre_taa = params.scene_pre_taa.ok_or(
                     "graph executor: TaaResolve pass requires scene_pre_taa but none was supplied",
                 )?;
-                self.encode_taa(cmd_buf, taa_uniforms, scene_pre_taa)?
+                self.encode_taa(cmd_buf, scene_pre_taa)?
             }
             PassId::SsrResolve => {
                 let ssr_params = params.ssr_params.ok_or(

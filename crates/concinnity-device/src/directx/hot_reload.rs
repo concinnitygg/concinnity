@@ -524,12 +524,7 @@ impl DxContext {
         // TAA (only when PostProcessConfig.aa_mode).
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            super::post::taa::rebuild_taa_pipelines(
-                device,
-                self.taa.as_ref().expect("TAA resources are live"),
-                hr,
-                info_queue
-            )
+            concinnity_core::render::post::taa::build_pipeline(&self.post_device())
         );
 
         // RT reflections (only when DXR + DXC compile + accel build all succeeded
@@ -625,7 +620,7 @@ impl DxContext {
             super::post::reflection_composite::swap_reflection_composite_pipelines(rc, rebuilt);
         }
         if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
-            swap_taa_pipelines(taa, rebuilt);
+            taa.pass.swap_pipeline(rebuilt);
         }
         Ok(())
     }
@@ -649,11 +644,4 @@ fn swap_ssr_pipelines(
     if let (Some(pso), Some(resolve)) = (rebuilt.resolve_pso, ssr.resolve.as_mut()) {
         resolve.resolve_pso = pso;
     }
-}
-
-fn swap_taa_pipelines(
-    taa: &mut super::post::taa::TaaResources,
-    rebuilt: super::post::taa::RebuiltTaaPipelines,
-) {
-    taa.taa_pso = rebuilt.taa_pso;
 }

@@ -315,8 +315,10 @@ impl DxContext {
         //    resolve pass treats the next frame as the first-after-resize
         //    (history is unreliable across a resize: the reprojection
         //    coordinates were generated at the old resolution).
-        if let Some(taa) = self.taa.as_mut() {
-            taa.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
+        if let Some(mut taa) = self.taa.take() {
+            let r = taa.resize_to(&self.post_device(), render_w, render_h);
+            self.taa = Some(taa);
+            r?;
         }
 
         // 6) SSAO: pre-pass G-buffer + private depth + raw/blurred AO. The

@@ -32,11 +32,11 @@ use super::init::pipelines::{
     make_vertex_descriptor,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
+use super::post::post_device::MtlPostDevice;
 use super::post::{
     build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
     build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
     build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline,
-    build_taa_pipeline,
 };
 use super::resources::skinning::{build_skinned_shadow_pipeline, make_skinned_vertex_descriptor};
 use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
@@ -272,8 +272,13 @@ impl MtlContext {
             build_text_pipeline(device, self.swap_pixel_format, hr)
         );
         let taa = rebuild_if_live!(
-            self.taa.pipeline_state.is_some(),
-            build_taa_pipeline(device, hr)
+            self.taa.pass.is_some(),
+            concinnity_core::render::post::taa::build_pipeline(&MtlPostDevice {
+                device,
+                sampler: &self.post_sampler,
+                timing: None,
+                hot_reload: hr,
+            })
         );
         // The main pass and the GPU cull come from one builder, because the
         // cull's argument encoder is derived from the pipeline it feeds. A
@@ -428,8 +433,8 @@ impl MtlContext {
         if let Some(p) = text {
             self.text.pipeline_state = Some(p);
         }
-        if let Some(p) = taa {
-            self.taa.pipeline_state = Some(p);
+        if let (Some(p), Some(taa)) = (taa, self.taa.pass.as_mut()) {
+            taa.swap_pipeline(p);
         }
         if let Some(p) = main {
             self.pipeline_state = Some(p.pipeline_state);

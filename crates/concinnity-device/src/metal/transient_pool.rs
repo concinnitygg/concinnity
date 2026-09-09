@@ -95,7 +95,7 @@ impl TransientTexturePool {
             let mut slot_size: usize = 0;
             let mut descs = Vec::with_capacity(slot.members.len());
             for m in &slot.members {
-                let desc = texture_descriptor(m);
+                let desc = texture_descriptor_for(m);
                 let size = device.heapTextureSizeAndAlignWithDescriptor(&desc).size;
                 unaliased_bytes += size as u64;
                 slot_size = slot_size.max(size);
@@ -201,7 +201,9 @@ fn new_slot_heap(
 // backend's whole share of describing a pooled resource: the extent, format,
 // mip count and usage all come from the graph, so there is no second table here
 // that could disagree with it. GPU-private to match its heap's storage mode.
-fn texture_descriptor(spec: &TransientTexture) -> Retained<MTLTextureDescriptor> {
+pub(in crate::metal) fn texture_descriptor_for(
+    spec: &TransientTexture,
+) -> Retained<MTLTextureDescriptor> {
     TextureDesc {
         kind: texture_type(spec),
         format: pixel_format(spec.format),
@@ -230,7 +232,7 @@ fn texture_type(spec: &TransientTexture) -> MTLTextureType {
     }
 }
 
-fn pixel_format(format: PixelFormat) -> MTLPixelFormat {
+pub(in crate::metal) fn pixel_format(format: PixelFormat) -> MTLPixelFormat {
     match format {
         PixelFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
         PixelFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
@@ -407,7 +409,7 @@ mod tests {
                 .expect("member present")
         };
 
-        let ao = texture_descriptor(member("ao_output"));
+        let ao = texture_descriptor_for(member("ao_output"));
         assert_eq!(
             ao.pixelFormat(),
             super::super::post::ssao::SSAO_OCCLUSION_FORMAT
@@ -423,7 +425,7 @@ mod tests {
 
         // Half the *output* extent, which is what `create_bloom_targets` sizes
         // its mip 0 to.
-        let bloom = texture_descriptor(member("bloom_top"));
+        let bloom = texture_descriptor_for(member("bloom_top"));
         assert_eq!(bloom.pixelFormat(), super::super::post::bloom::BLOOM_FORMAT);
         assert_eq!((bloom.width(), bloom.height()), (512, 384));
     }
@@ -432,7 +434,7 @@ mod tests {
     fn a_volume_translates_to_a_3d_descriptor() {
         // Nothing pooled is a volume yet, but the froxel volume's desc is now
         // real, so the translator has to handle it before it can be pooled.
-        let desc = texture_descriptor(&TransientTexture {
+        let desc = texture_descriptor_for(&TransientTexture {
             label: "probe_volume",
             width: 80,
             height: 45,

@@ -136,6 +136,7 @@ impl MtlContext {
 
         let bundle = match build_quality_effects(
             &self.allocator,
+            &self.post_sampler,
             dims,
             EffectSettings {
                 ssao: &q.ssao,
@@ -161,8 +162,7 @@ impl MtlContext {
         };
 
         let QualityEffectsBundle {
-            taa_pipeline_state,
-            taa_targets,
+            taa,
             ssao,
             transient_pool,
             ssr,
@@ -183,12 +183,10 @@ impl MtlContext {
         // Metal retain until the GPU retires the frame, so the swap is safe
         // between frames. The render graph is rebuilt from these gates every
         // frame (no cached graph to invalidate).
+        // A rebuilt pass starts with its ring at slot 0 and its history
+        // invalid, so the first frame after a toggle passes through.
         self.taa.enabled = taa_effective;
-        self.taa.pipeline_state = taa_pipeline_state;
-        self.taa.targets = taa_targets;
-        self.taa.dst = 0;
-        // History is stale after a rebuild; the first frame passes through.
-        self.taa.history_valid = false;
+        self.taa.pass = taa;
         self.ssao = ssao;
         self.transient_pool = transient_pool;
         // The rebuilt pool holds a fresh `bloom_top`, so the bloom chain's top

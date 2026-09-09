@@ -107,7 +107,7 @@ const REGISTRIES: &[BackendRegistry] = &[
             // It exists so the passes that pick between them still name the
             // resource at the barrier, which a local binding would hide.
             ("scene_pre_taa", "post_scene_target()"),
-            ("scene_color", "taa.history"),
+            ("scene_color", "taa.output()"),
             ("bloom_top", "bloom.mips"),
             ("gbuffer_normal_depth", "gb.normal_depth"),
             ("gbuffer_roughness", "gb.roughness"),

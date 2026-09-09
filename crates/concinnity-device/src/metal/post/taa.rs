@@ -1,143 +1,102 @@
 // src/metal/post/taa.rs
 //
-// Temporal anti-aliasing: the velocity (motion-vector) pre-pass and the
-// resolve pass that blends the current frame with reprojected history.
-// Pipelines, ping-pong targets, velocity target allocation, and both
-// per-frame encoders live together so the effect is a single unit Vulkan /
-// DirectX can mirror.
+// Metal's share of temporal anti-aliasing, which is the toggle and the jitter
+// counter. The resolve itself -- its pipeline, its ping-pong accumulation
+// targets, the history-validity gate and the draw -- is written once in
+// `concinnity_core::render::post::taa` and reaches Metal through
+// `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
-    MTLTextureUsage,
-};
+use objc2_metal::{MTLRenderPipelineState, MTLTexture};
+
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::metal::context::MtlContext;
-use crate::metal::descriptors::TextureDesc;
-use crate::metal::encode::RenderEncode;
-use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
-    set_fragment_sampler_range,
-};
-use crate::metal::slang_shaders::TAA_FRAG;
-use concinnity_core::render::uniforms::TaaParams;
+use crate::metal::post::post_device::MtlPostDevice;
 
-// All temporal-anti-aliasing state grouped into one feature unit: the on/off
-// toggle, the resolve pipeline, the two ping-pong history buffers, and the
-// per-frame bookkeeping (write index, history-valid flag, Halton jitter
-// frame counter). The pipeline / targets are `Some` / non-empty only when TAA
-// is enabled (and not bypassed by the upscaler).
+// The shared temporal resolve, holding Metal's own pipeline and target handles.
+pub(crate) type MtlTaaPass = TaaPass<
+    Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    Retained<ProtocolObject<dyn MTLTexture>>,
+>;
+
+// Temporal-anti-aliasing state: whether the effect runs, the shared resolve when
+// it does, and the frame counter driving the Halton projection jitter. The
+// jitter counter is here rather than in the shared pass because it also drives
+// the MetalFX upscaler, which runs in the resolve's place.
 pub(crate) struct TaaState {
     // Toggle resolved from `PostProcessConfig.aa_mode`; false skips the TAA pass
-    // + projection jitter entirely.
+    // and the projection jitter entirely.
     pub enabled: bool,
-    // Resolve pipeline (fullscreen triangle). `Some` only when TAA is on.
-    pub pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // The two `RGBA16Float` history buffers the resolve ping-pongs between;
-    // empty when TAA is disabled, re-created with `hdr_targets` on resize.
-    pub targets: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
-    // Index into `targets` this frame writes into; the other slot is history.
-    pub dst: usize,
-    // False on the first frame and after a resize: the resolve then passes
-    // the current frame through untouched.
-    pub history_valid: bool,
+    // The resolve. `Some` only when TAA is on (and not bypassed by the
+    // upscaler).
+    pub pass: Option<MtlTaaPass>,
     // Frame counter driving the Halton projection-jitter sequence.
     pub frame: u32,
 }
 
-// Pipelines
-
-// Build the temporal anti-aliasing (TAA) resolve pipeline: a fullscreen
-// triangle that blends the current HDR frame with a reprojected history
-// buffer. Renders into a single-sample `RGBA16Float` target (the new
-// history). Per-pixel motion comes from the velocity pre-pass
-// (`build_velocity_pipeline`), so both camera motion and per-object / skinned
-// motion reproject correctly -- moving props no longer ghost.
-pub(crate) fn build_taa_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_slang_fullscreen_pipeline(
-        device,
-        &TAA_FRAG,
-        MTLPixelFormat::RGBA16Float,
-        FullscreenBlend::Replace,
-        hot_reload,
-    )
+impl TaaState {
+    // The accumulation target this frame writes: what bloom and the composite
+    // sample as the scene once the resolve has run.
+    pub(crate) fn output(&self) -> Option<&Retained<ProtocolObject<dyn MTLTexture>>> {
+        let pass = self.pass.as_ref()?;
+        Some(pass.target(pass.ring().write()))
+    }
 }
 
-// Targets
-
-// Create the two single-sample `RGBA16Float` targets the TAA resolve pass
-// ping-pongs between: one frame's output is the next frame's history. Both
-// are full drawable resolution, `ShaderRead | RenderTarget`, GPU-private.
-pub(crate) fn create_taa_targets(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+// Build the resolve at `width` x `height` render resolution.
+pub(crate) fn build_taa_pass(
+    device: &MtlPostDevice,
     width: u32,
     height: u32,
-) -> Result<[Retained<ProtocolObject<dyn MTLTexture>>; 2], String> {
-    let w = width.max(1) as usize;
-    let h = height.max(1) as usize;
-    let make = || -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-        let desc = TextureDesc {
-            format: MTLPixelFormat::RGBA16Float,
-            width: w,
-            height: h,
-            usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
-            ..Default::default()
-        }
-        .build();
-        device
-            .newTextureWithDescriptor(&desc)
-            .ok_or("failed to create TAA target texture".to_string())
-    };
-    Ok([make()?, make()?])
+) -> Result<MtlTaaPass, String> {
+    TaaPass::new(device, TaaRing::ping_pong(), PostExtent { width, height })
 }
 
-// Encoders
-
 impl MtlContext {
+    // The post-pass device over this context: the Metal device, the linear
+    // clamp-to-edge sampler every screen-space source is read through, and the
+    // GPU-timing resources.
+    pub(in crate::metal) fn post_device(&self) -> MtlPostDevice<'_> {
+        MtlPostDevice {
+            device: &self.device,
+            sampler: &self.post_sampler,
+            timing: self.diagnostics.pass_timing.as_ref(),
+            hot_reload: self.hot_reload.enabled,
+        }
+    }
+
     // Encode the TAA resolve pass: one fullscreen-triangle draw that blends
-    // `scene_input` (the SSR output, or `hdr_resolve` when SSR is off) with
-    // the reprojected history buffer. Runs between SSR and bloom; the output
-    // is both the scene colour the later passes consume and next frame's
-    // history.
+    // `scene_input` (the reflection composite's output, or `hdr_resolve` when no
+    // reflection path is live) with the reprojected history. Runs between SSR
+    // and bloom; its output is both the scene colour the later passes consume
+    // and next frame's history.
     pub(in crate::metal) fn encode_taa(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        taa_uniforms: &TaaParams,
         scene_input: &ProtocolObject<dyn objc2_metal::MTLTexture>,
     ) -> Result<u32, String> {
-        let pipeline = self
+        let pass = self
             .taa
-            .pipeline_state
+            .pass
             .as_ref()
-            .ok_or("TAA enabled but pipeline missing")?;
+            .ok_or("TAA enabled but the resolve is missing")?;
         // Pool-owned, so it is fetched at encode time: a pool rebuild repacks
         // every slot, and a cached handle would point at another resource.
         let velocity = self
             .gbuffer_velocity()
             .ok_or("TAA enabled but the pooled G-buffer velocity is missing")?;
-        let history = &self.taa.targets[1 - self.taa.dst];
-        let dst = &self.taa.targets[self.taa.dst];
-
-        self.fullscreen_pass(
+        let device = self.post_device();
+        pass.encode(
+            &device,
             cmd_buf,
-            FullscreenPass {
-                target: dst.as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer: PassTimer::Whole(crate::metal::pass_timing::PassId::TaaResolve),
-                pipeline,
-                label: "TAA resolve",
-            },
-            |enc| {
-                enc.set_fragment_texture(scene_input, 0);
-                enc.set_fragment_texture(velocity, 1);
-                enc.set_fragment_texture(history.as_ref(), 2);
-                enc.set_fragment_value(taa_uniforms, 0);
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 3);
+            pass.ring().write(),
+            TaaInputs {
+                scene: scene_input,
+                velocity,
             },
         )?;
         Ok(0)

@@ -35,7 +35,9 @@ use super::graph_exec::GraphFrameParams;
 use super::uniforms::*;
 use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::transform::mat4_mul;
-use concinnity_core::render::uniforms::*;
+use concinnity_core::render::post::device::PostExtent;
+
+use crate::metal::post::post_device::MtlPostDevice;
 
 // One term of the Halton low-discrepancy sequence. Used to drive the
 // sub-pixel projection jitter so successive frames sample slightly different
@@ -613,14 +615,6 @@ impl MtlContext {
         } else {
             None
         };
-        let taa_uniforms = if self.taa.enabled {
-            Some(TaaParams {
-                history_valid: if self.taa.history_valid { 1.0 } else { 0.0 },
-            })
-        } else {
-            None
-        };
-
         // `scene_input` is the engine-owned texture the post-decoration stack
         // treats as the pre-TAA scene: `ssr_targets.output` when a reflection
         // path is live, else the raw `hdr_resolve`.
@@ -648,8 +642,8 @@ impl MtlContext {
         };
         let scene_color = if let Some(u) = &self.upscale.scaler {
             u.output.clone()
-        } else if self.taa.enabled {
-            self.taa.targets[self.taa.dst].clone()
+        } else if let Some(out) = self.taa.output() {
+            out.clone()
         } else {
             scene_input.clone()
         };
@@ -870,7 +864,6 @@ impl MtlContext {
             history_targets: &history_targets,
             draw_args_buffer: cull_draw_args.as_ref(),
             vel_uniforms: vel_uniforms.as_ref(),
-            taa_uniforms: taa_uniforms.as_ref(),
             scene_pre_taa: if self.taa.enabled
                 || self.upscale.scaler.is_some()
                 || transparent_active
@@ -1059,9 +1052,8 @@ impl MtlContext {
         if velocity_active {
             self.prev_view_proj = mat4_mul(proj, self.view.matrix);
             self.taa.frame = self.taa.frame.wrapping_add(1);
-            if self.taa.enabled {
-                self.taa.dst = 1 - self.taa.dst;
-                self.taa.history_valid = true;
+            if let Some(taa) = self.taa.pass.as_mut() {
+                taa.advance();
             }
         }
 
@@ -1498,10 +1490,21 @@ impl MtlContext {
         // history can't be reprojected into the new resolution, so mark
         // it invalid: the next frame passes straight through and
         // accumulation restarts.
-        if render_changed && self.taa.enabled {
-            self.taa.targets =
-                super::post::create_taa_targets(&self.device, render_w, render_h)?.to_vec();
-            self.taa.history_valid = false;
+        if render_changed && let Some(mut taa) = self.taa.pass.take() {
+            let r = taa.resize(
+                &MtlPostDevice {
+                    device: &self.device,
+                    sampler: &self.post_sampler,
+                    timing: None,
+                    hot_reload: self.hot_reload.enabled,
+                },
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
+                },
+            );
+            self.taa.pass = Some(taa);
+            r?;
         }
         // The SSAO kernel's raw-occlusion target is render-resolution. Its depth
         // + normal input now comes from the unified G-buffer pre-pass (below),

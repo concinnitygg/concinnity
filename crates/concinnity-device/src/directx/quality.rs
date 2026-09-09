@@ -44,8 +44,6 @@ use super::texture::write_hdr_srv;
 // the resources behind them but never moves the slots.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct QualitySlotHandles {
-    pub taa_history_rtv: [D3D12_CPU_DESCRIPTOR_HANDLE; 2],
-    pub taa_history_srv: [(D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE); 2],
     pub ssao_ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub ssao_ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
     pub ssao_ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -138,18 +136,15 @@ impl DxContext {
 
         // TAA.
         if desired_taa && self.taa.is_none() {
-            let taa = super::post::taa::TaaResources::new(
-                &self.device,
-                render_w,
-                render_h,
-                slots.taa_history_rtv,
-                slots.taa_history_srv,
-                self.diagnostics.info_queue.as_ref(),
-                hot_reload,
-            )?;
+            // The shared post block hands the rebuilt targets the same slots the
+            // torn-down ones held, so the composite and bloom-prefilter bindings
+            // survive a toggle without a re-bind.
+            self.post.rewind();
+            let taa = super::post::taa::TaaResources::new(&self.post_device(), render_w, render_h)?;
             self.taa = Some(taa);
         } else if !desired_taa && self.taa.is_some() {
             self.taa = None;
+            self.post.rewind();
         }
 
         // SSR pre-pass + resolve. `q.ssr` (Option) drives the resolve half:

@@ -21,4 +21,7 @@ pub(in crate::directx) mod ssao;
 pub(in crate::directx) mod ssgi;
 pub(in crate::directx) mod ssr;
 pub(in crate::directx) mod taa;
+
+pub(in crate::directx) mod descriptors;
+pub(in crate::directx) mod post_device;
 pub(in crate::directx) mod upscale;

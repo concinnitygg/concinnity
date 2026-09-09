@@ -39,6 +39,7 @@ use super::com;
 use super::context::*;
 use super::draw::*;
 use super::post::bloom::bloom_mip_count;
+use super::post::descriptors::{POST_TARGET_SLOTS, PostDescriptors};
 use super::texture::*;
 
 mod effects;
@@ -282,11 +283,11 @@ impl DxContext {
         // `*_enabled` / `*_present` gates below still drive whether the resources
         // are BUILT at init, just not whether the slots exist.
         //
-        // TAA: 2 ping-pong history RTVs after the bloom mip RTVs + 2 history SRVs
-        // after the colour LUT SRV. Its motion comes from the G-buffer pre-pass,
-        // so TAA reserves no DSV of its own.
-        let taa_rtv_extra = 2;
-        let taa_srv_extra = 2;
+        // The shared fullscreen post passes: one RTV after the bloom mip RTVs
+        // and one SRV after the colour LUT SRV per target they may hold, always
+        // reserved and sub-allocated at runtime by `post/descriptors.rs`. They
+        // reserve no DSV: a post target is colour only.
+        let post_rtv_extra = POST_TARGET_SLOTS;
         // SSAO: 2 RTVs (ao_raw + ao) + 2 SRVs (ao_raw + ao); view normal + depth
         // come from the G-buffer pre-pass, so no DSV. A 1x1 white fallback always
         // sits one slot further so the main pass binds a constant 1.0 occlusion
@@ -346,7 +347,7 @@ impl DxContext {
                 NumDescriptors: FRAMES as u32
                     + 1
                     + bloom_count as u32
-                    + taa_rtv_extra as u32
+                    + post_rtv_extra as u32
                     + ssao_rtv_extra as u32
                     + ssr_rtv_extra as u32
                     + ssgi_rtv_extra as u32
@@ -464,7 +465,7 @@ impl DxContext {
             hdr_srv_slot,
             bloom_srv_base_slot,
             lut_srv_slot,
-            taa_srv_base_slot,
+            post_srv_base_slot,
             ssao_srv_base_slot,
             ssao_white_srv_slot,
             ssr_srv_base_slot,
@@ -496,7 +497,6 @@ impl DxContext {
         } = heap_layout::SrvHeapLayout::compute(&heap_layout::SrvHeapParams {
             n_atlases,
             bloom_count,
-            taa_srv_extra,
             ssao_srv_extra,
             ssr_srv_extra,
             ssgi_srv_extra,
@@ -1003,7 +1003,7 @@ impl DxContext {
                     + (FRAMES
                         + 1
                         + bloom_count
-                        + taa_rtv_extra
+                        + post_rtv_extra
                         + ssao_rtv_extra
                         + ssr_rtv_extra
                         + ssgi_rtv_extra)
@@ -1374,23 +1374,21 @@ impl DxContext {
         let bloom_srv_cpu_for = |i: usize| slot_cpu(bloom_srv_base_slot + i);
         let bloom_srv_gpu_for = |i: usize| slot_gpu(bloom_srv_base_slot + i);
 
-        let taa_rtv_for = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr + (FRAMES + 1 + bloom_count + i) * rtv_descriptor_size,
-        };
-        let taa_slots = effects::TaaSlots {
-            history_rtv: [taa_rtv_for(0), taa_rtv_for(1)],
-            history_srv: [
-                (slot_cpu(taa_srv_base_slot), slot_gpu(taa_srv_base_slot)),
-                (
-                    slot_cpu(taa_srv_base_slot + 1),
-                    slot_gpu(taa_srv_base_slot + 1),
-                ),
-            ],
-        };
+        // The shared post passes' descriptor block: SRVs after the colour LUT,
+        // RTVs after the bloom mips.
+        let post_descriptors = PostDescriptors::new(
+            slot_cpu(post_srv_base_slot),
+            slot_gpu(post_srv_base_slot),
+            srv_descriptor_size,
+            D3D12_CPU_DESCRIPTOR_HANDLE {
+                ptr: rtv_base.ptr + (FRAMES + 1 + bloom_count) * rtv_descriptor_size,
+            },
+            rtv_descriptor_size,
+        );
 
         let ssr_rtv_for = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr
-                + (FRAMES + 1 + bloom_count + taa_rtv_extra + ssao_rtv_extra + i)
+                + (FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra + i)
                     * rtv_descriptor_size,
         };
         let ssr_slots = effects::SsrSlots {
@@ -1401,7 +1399,7 @@ impl DxContext {
         // SSGI gather target: RTV right after the SSR RTVs, SRV at the heap tail.
         let ssgi_gi_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr
-                + (FRAMES + 1 + bloom_count + taa_rtv_extra + ssao_rtv_extra + ssr_rtv_extra)
+                + (FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra + ssr_rtv_extra)
                     * rtv_descriptor_size,
         };
         let ssgi_slots = effects::SsgiSlots {
@@ -1411,7 +1409,7 @@ impl DxContext {
 
         let ssao_rtv_for = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr
-                + (FRAMES + 1 + bloom_count + taa_rtv_extra + i) * rtv_descriptor_size,
+                + (FRAMES + 1 + bloom_count + post_rtv_extra + i) * rtv_descriptor_size,
         };
         let ssao_slots = effects::SsaoSlots {
             ao_raw_rtv: ssao_rtv_for(0),
@@ -1431,7 +1429,7 @@ impl DxContext {
                 + (FRAMES
                     + 1
                     + bloom_count
-                    + taa_rtv_extra
+                    + post_rtv_extra
                     + ssao_rtv_extra
                     + ssr_rtv_extra
                     + ssgi_rtv_extra
@@ -1452,7 +1450,7 @@ impl DxContext {
         let refl_composite_rtv_base = FRAMES
             + 1
             + bloom_count
-            + taa_rtv_extra
+            + post_rtv_extra
             + ssao_rtv_extra
             + ssr_rtv_extra
             + ssgi_rtv_extra
@@ -1497,7 +1495,7 @@ impl DxContext {
         let gb_rtv_base = FRAMES
             + 1
             + bloom_count
-            + taa_rtv_extra
+            + post_rtv_extra
             + ssao_rtv_extra
             + ssr_rtv_extra
             + ssgi_rtv_extra
@@ -1532,8 +1530,6 @@ impl DxContext {
         // without re-deriving the heap layout. Copied from the per-effect slot
         // structs before they move into `build_effects` below.
         let quality_slots = super::quality::QualitySlotHandles {
-            taa_history_rtv: taa_slots.history_rtv,
-            taa_history_srv: taa_slots.history_srv,
             ssao_ao_raw_rtv: ssao_slots.ao_raw_rtv,
             ssao_ao_raw_srv: ssao_slots.ao_raw_srv,
             ssao_ao_rtv: ssao_slots.ao_rtv,
@@ -1551,6 +1547,13 @@ impl DxContext {
         let effects_bundle = effects::build_effects(
             &alloc,
             info_queue.as_ref(),
+            &crate::directx::post::post_device::DxPostDevice {
+                device: &device,
+                descriptors: &post_descriptors,
+                srv_heap: &srv_heap,
+                info_queue: info_queue.as_ref(),
+                hot_reload,
+            },
             effects::EffectDimensions {
                 width,
                 height,
@@ -1575,7 +1578,6 @@ impl DxContext {
                     srv_cpu_for: &bloom_srv_cpu_for,
                     srv_gpu_for: &bloom_srv_gpu_for,
                 },
-                taa: taa_slots,
                 ssao: ssao_slots,
                 ssr: ssr_slots,
                 ssgi: ssgi_slots,
@@ -2120,6 +2122,7 @@ impl DxContext {
         );
 
         Ok(Self {
+            post: post_descriptors,
             win_state: Some(win_state),
             fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode::new(),
             device,

@@ -10,7 +10,12 @@
 //   ssao.rs     GTAO depth+normal pre-pass + horizon-search kernel + blur
 //   ssgi.rs     hemisphere gather + depth-aware blur over the SSR G-buffer
 //   ssr.rs      depth+normal+roughness pre-pass + fullscreen ray-march resolve
-//   taa.rs      velocity (motion-vector) pre-pass + TAA resolve
+//   taa.rs      the TAA jitter counter + inputs over the shared resolve
+//
+// The three files below the effects are the shared fullscreen post-pass seam's
+// Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`,
+// `pass_cache.rs` caches the render passes and framebuffers a draw needs, and
+// `set_arena.rs` hands out descriptor sets per frame instead of per effect.
 //   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind VkUpscaleBackend
 
 pub(in crate::vulkan) mod bloom;
@@ -22,6 +27,10 @@ pub(in crate::vulkan) mod ssao;
 pub(in crate::vulkan) mod ssgi;
 pub(in crate::vulkan) mod ssr;
 pub(in crate::vulkan) mod taa;
+
+pub(in crate::vulkan) mod pass_cache;
+pub(in crate::vulkan) mod post_device;
+pub(in crate::vulkan) mod set_arena;
 pub(in crate::vulkan) mod upscale;
 
 pub(in crate::vulkan) use gbuffer::GbufferResources;
@@ -31,6 +40,28 @@ pub(in crate::vulkan) use ssao::SsaoResources;
 pub(in crate::vulkan) use ssgi::SsgiResources;
 pub(in crate::vulkan) use ssr::SsrResources;
 pub(in crate::vulkan) use taa::TaaResources;
+
+/// The resources every shared post pass draws through, held once for the
+/// backend rather than once per effect.
+pub(in crate::vulkan) struct PostSupport {
+    /// Render passes and framebuffers, keyed by attachment shape and view.
+    pub(in crate::vulkan) cache: pass_cache::PostPassCache,
+    /// Descriptor sets, one pool per frame in flight.
+    pub(in crate::vulkan) arena: set_arena::PostSetArena,
+}
+
+impl PostSupport {
+    /// Build the support for `frames` frames in flight.
+    pub(in crate::vulkan) fn new(
+        device: &crate::vulkan::owned::VkDevice,
+        frames: usize,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            cache: pass_cache::PostPassCache::new(),
+            arena: set_arena::PostSetArena::new(device, frames)?,
+        })
+    }
+}
 pub(in crate::vulkan) use upscale::{
     ResolvedBackend, UpscaleSdk, VkUpscaleBackend, build_upscaler,
 };

@@ -13,6 +13,7 @@ use crate::directx::post::bloom::{
     compile_bloom_shaders, create_bloom_mips, create_bloom_pso, create_bloom_root_signature,
     write_color_rtv,
 };
+use crate::directx::post::post_device::DxPostDevice;
 use crate::directx::post::rt_reflections::{
     RtBuildContext, RtBuildInit, RtOutputDescriptors, RtReflectionsResources,
 };
@@ -57,11 +58,6 @@ pub(super) struct BloomSlots<'a> {
     pub rtv_for: &'a dyn Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_cpu_for: &'a dyn Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_gpu_for: &'a dyn Fn(usize) -> D3D12_GPU_DESCRIPTOR_HANDLE,
-}
-
-pub(super) struct TaaSlots {
-    pub history_rtv: [D3D12_CPU_DESCRIPTOR_HANDLE; 2],
-    pub history_srv: [(D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE); 2],
 }
 
 pub(super) struct SsaoSlots {
@@ -122,7 +118,6 @@ pub(super) struct EffectFlags {
 // Descriptor-heap slots for every effect pass: bloom, TAA, SSAO, SSR, SSGI, RT.
 pub(super) struct EffectDescriptorSlots<'a> {
     pub bloom: BloomSlots<'a>,
-    pub taa: TaaSlots,
     pub ssao: SsaoSlots,
     pub ssr: SsrSlots,
     pub ssgi: SsgiSlots,
@@ -132,6 +127,9 @@ pub(super) struct EffectDescriptorSlots<'a> {
 pub(super) fn build_effects(
     alloc: &DeviceAllocator,
     info_queue: Option<&ID3D12InfoQueue>,
+    // The shared post-pass device, which builds every effect drawn through the
+    // seam.
+    post_device: &DxPostDevice<'_>,
     dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
@@ -158,7 +156,6 @@ pub(super) fn build_effects(
     } = flags;
     let EffectDescriptorSlots {
         bloom,
-        taa: taa_slots,
         ssao: ssao_slots,
         ssr: ssr_slots,
         ssgi: ssgi_slots,
@@ -241,15 +238,7 @@ pub(super) fn build_effects(
     // TAA history-resolve resources. Sized at render-res; the motion it
     // reprojects through comes from the unified G-buffer pre-pass.
     let taa = if taa_enabled {
-        Some(TaaResources::new(
-            device,
-            render_width,
-            render_height,
-            taa_slots.history_rtv,
-            taa_slots.history_srv,
-            info_queue,
-            hot_reload,
-        )?)
+        Some(TaaResources::new(post_device, render_width, render_height)?)
     } else {
         None
     };

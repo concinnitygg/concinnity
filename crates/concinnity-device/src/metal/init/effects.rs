@@ -10,7 +10,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerAddressMode,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState, MTLTexture,
+    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState,
 };
 
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
@@ -28,13 +28,15 @@ use crate::metal::fog::build_fog_pipeline;
 use crate::metal::particle::{
     ParticleEmitterGpuState, ParticlePipelines, build_emitter_gpu_state, build_particle_pipelines,
 };
+use crate::metal::post::post_device::MtlPostDevice;
+use crate::metal::post::taa::MtlTaaPass;
 use crate::metal::post::{
     BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState,
     build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
     build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
-    build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline,
-    build_taa_pipeline, create_bloom_targets, create_gbuffer_targets, create_ssao_targets,
-    create_ssgi_targets, create_ssr_targets, create_taa_targets,
+    build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline, build_taa_pass,
+    create_bloom_targets, create_gbuffer_targets, create_ssao_targets, create_ssgi_targets,
+    create_ssr_targets,
 };
 use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::texture::create_fallback_texture;
@@ -105,8 +107,7 @@ pub(crate) struct EffectsBundle {
     pub bloom_pipelines: Option<BloomPipelines>,
 
     // TAA: built only when taa_enabled.
-    pub taa_pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub taa_targets: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub taa: Option<MtlTaaPass>,
 
     // SSAO: pipelines + targets built only when ssao_settings is Some (the
     // kernel reads the unified G-buffer pre-pass output, so there is no
@@ -176,8 +177,7 @@ pub(crate) struct EffectsBundle {
 // and decals/fog/particles are world-content effects a quality toggle never
 // affects (and rebuilding particles would reset their live GPU pools).
 pub(crate) struct QualityEffectsBundle {
-    pub taa_pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub taa_targets: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub taa: Option<MtlTaaPass>,
     pub ssao: SsaoState,
     pub transient_pool: TransientTexturePool,
     pub ssr: SsrState,
@@ -200,6 +200,9 @@ pub(crate) struct QualityEffectsBundle {
 // resident geometry buffers); this builds only the RT resolve pipelines.
 pub(crate) fn build_quality_effects(
     alloc: &DeviceAllocator,
+    // The linear clamp-to-edge state the shared post passes sample every
+    // screen-space source through.
+    post_sampler: &ProtocolObject<dyn MTLSamplerState>,
     dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
@@ -226,17 +229,20 @@ pub(crate) fn build_quality_effects(
         hot_reload,
         frames_in_flight,
     } = flags;
-    // TAA pipeline + ping-pong history buffers. Built only when TAA is on;
-    // upscaling-on worlds skip the TAA pass entirely (the MetalFX scaler does
-    // temporal accumulation itself). The TAA targets are sized at
-    // render-resolution to match the scene texture they sample.
-    let (taa_pipeline_state, taa_targets) = if taa_enabled {
-        (
-            Some(build_taa_pipeline(device, hot_reload)?),
-            create_taa_targets(device, render_w, render_h)?.to_vec(),
-        )
+    // The shared temporal resolve: pipeline plus ping-pong history buffers.
+    // Built only when TAA is on; upscaling-on worlds skip the TAA pass entirely
+    // (the MetalFX scaler does temporal accumulation itself). Its targets are
+    // sized at render-resolution to match the scene texture they sample.
+    let post_device = MtlPostDevice {
+        device,
+        sampler: post_sampler,
+        timing: None,
+        hot_reload,
+    };
+    let taa = if taa_enabled {
+        Some(build_taa_pass(&post_device, render_w, render_h)?)
     } else {
-        (None, Vec::new())
+        None
     };
 
     // SSAO (GTAO): the horizon-search kernel, the depth-aware blur, and their
@@ -438,8 +444,7 @@ pub(crate) fn build_quality_effects(
     };
 
     Ok(QualityEffectsBundle {
-        taa_pipeline_state,
-        taa_targets,
+        taa,
         ssao,
         transient_pool,
         ssr,
@@ -458,6 +463,7 @@ pub(crate) fn build_quality_effects(
 
 pub(crate) fn build_effects(
     alloc: &DeviceAllocator,
+    post_sampler: &ProtocolObject<dyn MTLSamplerState>,
     // False for a world with no 3D scene content: bloom pipelines are skipped
     // (the settings-gated features below are already trimmed by the
     // requirements derivation before they reach here).
@@ -490,8 +496,7 @@ pub(crate) fn build_effects(
     // structure is built below. Runs before the bloom chain, which takes its top
     // mip from the pool this builds.
     let QualityEffectsBundle {
-        taa_pipeline_state,
-        taa_targets,
+        taa,
         ssao,
         transient_pool,
         ssr,
@@ -505,7 +510,7 @@ pub(crate) fn build_effects(
         auto_exposure_outputs,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
-    } = build_quality_effects(alloc, dims, settings, flags)?;
+    } = build_quality_effects(alloc, post_sampler, dims, settings, flags)?;
 
     // Bloom chain + pipelines. Bloom samples whatever scene_color the post
     // stack hands it: that's at output (drawable) resolution when MetalFX
@@ -567,8 +572,7 @@ pub(crate) fn build_effects(
     Ok(EffectsBundle {
         bloom_targets,
         bloom_pipelines,
-        taa_pipeline_state,
-        taa_targets,
+        taa,
         ssao,
         transient_pool,
         ssr,

@@ -20,7 +20,6 @@ use super::post::rt_reflections::RtStaticInputs;
 use super::post::ssao::SsaoDeviceCtx;
 use super::post::ssgi::SsgiDevice;
 use super::post::ssr::{SsrExtent, SsrGpuContext, SsrResolveInputs};
-use super::post::taa::{TaaDeviceContext, TaaSceneInputs};
 use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
 use super::texture::*;
@@ -474,43 +473,18 @@ impl VkContext {
             self.reflection_composite = Some(rc);
         }
 
-        // Rebuild the TAA velocity + history targets at the new resolution.
-        // When TAA is on the bloom prefilter + composite sample its output
-        // image; otherwise they sample the raw HDR resolve (or SSR output
-        // when SSR is on but TAA is off). wait_idle() above guarantees none
-        // of these are still in flight.
+        // Rebuild the TAA accumulation images at the new resolution. When TAA is
+        // on the bloom prefilter + composite sample its output image; otherwise
+        // they sample the raw HDR resolve (or the reflection composite's output
+        // when a reflection path is on but TAA is off). The resolve's own inputs
+        // need no re-point: it writes its descriptor set per frame from what it
+        // holds then. `wait_idle()` above guarantees none of these are still in
+        // flight.
         if let Some(mut taa) = self.taa.take() {
-            taa.rebuild(
-                &TaaDeviceContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
-                    command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
-                },
-                render_ext,
-                self.frames_in_flight,
-                &TaaSceneInputs {
-                    hdr_resolve_images: &self.hdr_resolve_images,
-                    sampler: self.composite.sampler.handle(),
-                },
-            )?;
-            // When a reflection path owns the scene image, TAA samples the reflection
-            // composite output (HDR + reflections) instead of the raw HDR resolve. A
-            // SSGI-only build leaves TAA on the raw HDR resolve.
-            if let Some(rc) = self.reflection_composite.as_ref() {
-                taa.rewire_scene(
-                    &self.device,
-                    rc.output.view,
-                    self.composite.sampler.handle(),
-                );
-            }
-            // The TAA resolve's velocity input is the unified G-buffer's per-frame
-            // velocity channel (rebuilt above), replacing TAA's own velocity
-            // pre-pass output. Mirrors the init-time `rewire_velocity`.
-            if let Some(gb) = self.gbuffer.as_ref() {
-                let vel_views = gb.velocity_views();
-                taa.rewire_velocity(&self.device, &vel_views, self.composite.sampler.handle());
-            }
+            // The cached framebuffers name the views the rebuild is about to
+            // drop, and were sized at the old extent either way.
+            self.post.cache.forget_views();
+            taa.rebuild(&self.post_device(0), render_ext)?;
             for (i, frame_sets) in self.bloom.input_sets.iter().enumerate() {
                 rebind_bloom_input0(
                     &self.device,

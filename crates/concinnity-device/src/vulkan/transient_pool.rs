@@ -393,7 +393,7 @@ fn create_image_unbound(device: &VkDevice, spec: &TransientTexture) -> Result<vk
     unsafe { device.create_image(&info, None) }.map_err(|e| format!("transient pool image: {e}"))
 }
 
-fn image_format(format: PixelFormat) -> vk::Format {
+pub(in crate::vulkan) fn image_format(format: PixelFormat) -> vk::Format {
     match format {
         PixelFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
         PixelFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
@@ -413,7 +413,7 @@ fn image_aspect(format: PixelFormat) -> vk::ImageAspectFlags {
     }
 }
 
-fn image_usage(usage: TextureUsage) -> vk::ImageUsageFlags {
+pub(in crate::vulkan) fn image_usage(usage: TextureUsage) -> vk::ImageUsageFlags {
     let mut flags = vk::ImageUsageFlags::empty();
     if usage.contains(TextureUsage::SHADER_READ) {
         flags |= vk::ImageUsageFlags::SAMPLED;
@@ -436,7 +436,7 @@ fn image_usage(usage: TextureUsage) -> vk::ImageUsageFlags {
     flags
 }
 
-fn sample_count(samples: u32) -> vk::SampleCountFlags {
+pub(in crate::vulkan) fn sample_count(samples: u32) -> vk::SampleCountFlags {
     match samples.max(1) {
         2 => vk::SampleCountFlags::TYPE_2,
         4 => vk::SampleCountFlags::TYPE_4,

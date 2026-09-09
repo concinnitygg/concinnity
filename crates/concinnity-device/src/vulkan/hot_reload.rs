@@ -30,7 +30,6 @@ use super::pipeline::{
 use super::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
 use super::post::ssao::rebuild_ssao_pipelines;
 use super::post::ssr::rebuild_ssr_pipelines;
-use super::post::taa::rebuild_taa_pipelines;
 
 // Rebuild a feature's pipeline(s) into a temporary only when the feature is
 // live, propagating any compile/create error out of the enclosing
@@ -456,11 +455,7 @@ impl VkContext {
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            rebuild_taa_pipelines(
-                device,
-                self.taa.as_ref().expect("TAA resources are live"),
-                hr
-            )
+            concinnity_core::render::post::taa::build_pipeline(&self.post_device(0))
         );
 
         // Particles (only when ≥1 emitter is live or has ever been

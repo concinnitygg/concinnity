@@ -37,6 +37,7 @@ pub mod parallel_ctx;
 pub mod particles;
 pub mod pass_timing;
 pub mod planar_reflection;
+pub mod post;
 pub mod reflection_probe;
 pub mod render_graph;
 pub mod rt_geom;

@@ -406,6 +406,56 @@ pub(super) fn create_composite_pso(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
 ) -> Result<ID3D12PipelineState, String> {
+    create_blended_composite_pso(
+        device,
+        root_sig,
+        vs,
+        ps,
+        rtv_format,
+        concinnity_core::render::post::device::PostBlend::Replace,
+    )
+}
+
+// The blend state a fullscreen post pass's single colour attachment runs under.
+fn blend_target(
+    blend: concinnity_core::render::post::device::PostBlend,
+) -> D3D12_RENDER_TARGET_BLEND_DESC {
+    use concinnity_core::render::post::device::PostBlend;
+    let mask = D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
+    let (src, dst) = match blend {
+        PostBlend::Replace => {
+            return D3D12_RENDER_TARGET_BLEND_DESC {
+                BlendEnable: false.into(),
+                RenderTargetWriteMask: mask,
+                ..Default::default()
+            };
+        }
+        PostBlend::Additive => (D3D12_BLEND_ONE, D3D12_BLEND_ONE),
+        PostBlend::PremultipliedOver => (D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA),
+    };
+    D3D12_RENDER_TARGET_BLEND_DESC {
+        BlendEnable: true.into(),
+        SrcBlend: src,
+        DestBlend: dst,
+        BlendOp: D3D12_BLEND_OP_ADD,
+        SrcBlendAlpha: src,
+        DestBlendAlpha: dst,
+        BlendOpAlpha: D3D12_BLEND_OP_ADD,
+        RenderTargetWriteMask: mask,
+        ..Default::default()
+    }
+}
+
+// As `create_composite_pso`, with the attachment's blend chosen by the caller.
+// The shared post-pass seam builds every fullscreen pipeline through this.
+pub(super) fn create_blended_composite_pso(
+    device: &ID3D12Device,
+    root_sig: &ID3D12RootSignature,
+    vs: &[u8],
+    ps: &[u8],
+    rtv_format: DXGI_FORMAT,
+    blend: concinnity_core::render::post::device::PostBlend,
+) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
@@ -448,11 +498,7 @@ pub(super) fn create_composite_pso(
         BlendState: D3D12_BLEND_DESC {
             RenderTarget: {
                 let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
+                arr[0] = blend_target(blend);
                 arr
             },
             ..Default::default()

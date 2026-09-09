@@ -179,55 +179,68 @@ pub(in crate::metal) struct FullscreenPass<'a> {
     pub label: &'a str,
 }
 
+// Run one fullscreen-triangle pass: open a single-attachment render encoder on
+// `pass.target` (with the given `pass.load` action and an always-`Store`),
+// attach GPU timing per `pass.timer`, set `pass.pipeline`, let `bind` set the
+// pass's fragment inputs, draw the `[[vertex_id]]` triangle, and end encoding.
+// Centralises the encoder open / draw / close skeleton every screen-space
+// effect repeats so each `encode_*` supplies only its unique bindings.
+//
+// A free function over the timing resources rather than a method on the
+// context, so the shared post-pass seam (post/post_device.rs) can drive it from
+// a device value assembled at init, before a context exists.
+pub(in crate::metal) fn encode_fullscreen_pass(
+    cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+    timing: Option<&crate::metal::pass_timing::PassTimingResources>,
+    pass: FullscreenPass,
+    bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
+) -> Result<(), String> {
+    let FullscreenPass {
+        target,
+        load,
+        timer,
+        pipeline,
+        label,
+    } = pass;
+    let desc = MTLRenderPassDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
+    unsafe {
+        let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
+        ca.setTexture(Some(target));
+        ca.setLoadAction(load);
+        ca.setStoreAction(MTLStoreAction::Store);
+    }
+    if let Some(t) = timing {
+        match timer {
+            PassTimer::None => {}
+            PassTimer::Whole(id) => t.attach_render(&desc, id),
+            PassTimer::First(id) => t.attach_render_first(&desc, id),
+            PassTimer::Last(id) => t.attach_render_last(&desc, id),
+        }
+    }
+    let enc = cmd_buf
+        .renderCommandEncoderWithDescriptor(&desc)
+        .ok_or_else(|| format!("failed to get {} encoder", label))?;
+    enc.set_pipeline(pipeline);
+    bind(&enc);
+    // SAFETY: the fullscreen triangle's three vertices are generated from `[[vertex_id]]` in
+    // the shader, so the draw reads no vertex buffer.
+    unsafe {
+        enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+    }
+    enc.endEncoding();
+    Ok(())
+}
+
 impl MtlContext {
-    // Run one fullscreen-triangle pass: open a single-attachment render encoder
-    // on `pass.target` (with the given `pass.load` action and an always-`Store`),
-    // attach GPU timing per `pass.timer`, set `pass.pipeline`, let `bind` set the
-    // pass's fragment inputs, draw the `[[vertex_id]]` triangle, and end
-    // encoding. Centralises the encoder open / draw / close skeleton every
-    // screen-space effect repeats so each `encode_*` supplies only its unique
-    // bindings.
+    // `encode_fullscreen_pass` against this context's own timing resources.
     pub(in crate::metal) fn fullscreen_pass(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         pass: FullscreenPass,
         bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
     ) -> Result<(), String> {
-        let FullscreenPass {
-            target,
-            load,
-            timer,
-            pipeline,
-            label,
-        } = pass;
-        let desc = MTLRenderPassDescriptor::new();
-        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-        // declares.
-        unsafe {
-            let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(target));
-            ca.setLoadAction(load);
-            ca.setStoreAction(MTLStoreAction::Store);
-        }
-        if let Some(t) = &self.diagnostics.pass_timing {
-            match timer {
-                PassTimer::None => {}
-                PassTimer::Whole(id) => t.attach_render(&desc, id),
-                PassTimer::First(id) => t.attach_render_first(&desc, id),
-                PassTimer::Last(id) => t.attach_render_last(&desc, id),
-            }
-        }
-        let enc = cmd_buf
-            .renderCommandEncoderWithDescriptor(&desc)
-            .ok_or_else(|| format!("failed to get {} encoder", label))?;
-        enc.set_pipeline(pipeline);
-        bind(&enc);
-        // SAFETY: the fullscreen triangle's three vertices are generated from `[[vertex_id]]` in
-        // the shader, so the draw reads no vertex buffer.
-        unsafe {
-            enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
-        }
-        enc.endEncoding();
-        Ok(())
+        encode_fullscreen_pass(cmd_buf, self.diagnostics.pass_timing.as_ref(), pass, bind)
     }
 }

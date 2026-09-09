@@ -1019,6 +1019,11 @@ pub(crate) struct VkContext {
     // dropped from the graph and `Upscale` runs in its slot.
     pub(super) taa: Option<TaaResources>,
 
+    // What every shared fullscreen post pass draws through: the cached render
+    // passes and framebuffers, and the per-frame descriptor arena. Held once for
+    // the backend rather than once per effect, which is the point of the seam.
+    pub(super) post: super::post::PostSupport,
+
     // Temporal upscaling (FSR / DLSS / XeSS, behind `VkUpscaleBackend`). `Some`
     // only when the world's `PostProcessConfig` set `temporal_upscaling: true`
     // AND a backend resolved + built; `None` renders at native resolution
@@ -1457,6 +1462,11 @@ impl VkContext {
         // trip (this slot's fence signalling also covers the older frames that
         // last sampled them, and every pool copy has been re-pointed since).
         self.apply_streamed_texture_rewrites(frame);
+
+        // Reclaim this frame slot's shared post-pass descriptor sets. Here for
+        // the same reason as the two ticks below: the fence wait above is what
+        // makes reclaiming the previous pass's sets legal.
+        self.post.arena.begin_frame(&self.device, frame);
 
         // Tick the device allocator: destroy retired handles, reclaim retired
         // ranges, release empty blocks. Here because the fence wait above is
@@ -2247,10 +2257,11 @@ impl VkContext {
         // Bloom resources (mips + framebuffers freed by
         // destroy_swapchain_resources above).
 
-        // TAA resources (velocity + history passes, pipelines, targets, UBOs).
-        if let Some(mut taa) = self.taa.take() {
-            taa.destroy(device);
-        }
+        // The shared post passes' framebuffers, before the targets whose views
+        // they name, then the TAA resolve itself (pipeline + accumulation
+        // images).
+        self.post.cache.destroy();
+        self.taa = None;
 
         // SSAO resources (pre-pass + kernel + blur). The blur framebuffer
         // references the pool's `ao_output` view, so SSAO is torn down before

@@ -82,6 +82,7 @@ pub(super) trait RenderEncode {
     // copying padding.
     fn set_vertex_value<T: NoUninit>(&self, value: &T, index: usize);
     fn set_fragment_value<T: NoUninit>(&self, value: &T, index: usize);
+    fn set_fragment_bytes(&self, bytes: &[u8], index: usize);
     fn set_fragment_texture(&self, texture: &ProtocolObject<dyn MTLTexture>, index: usize);
     fn set_fragment_sampler(&self, sampler: &ProtocolObject<dyn MTLSamplerState>, index: usize);
     fn set_fragment_acceleration_structure(
@@ -145,6 +146,20 @@ impl RenderEncode for ProtocolObject<dyn MTLRenderCommandEncoder> {
         // within the buffer argument table.
         unsafe {
             self.setFragmentBytes_length_atIndex(std::ptr::NonNull::from(value).cast(), len, index);
+        }
+    }
+
+    fn set_fragment_bytes(&self, bytes: &[u8], index: usize) {
+        check_buffer_index(index);
+        check_inline_len(bytes.len());
+        // SAFETY: the pointer and length both describe `bytes`, which is live
+        // for the call, and the index is within the buffer argument table.
+        unsafe {
+            self.setFragmentBytes_length_atIndex(
+                std::ptr::NonNull::from(bytes).cast(),
+                bytes.len(),
+                index,
+            );
         }
     }
 

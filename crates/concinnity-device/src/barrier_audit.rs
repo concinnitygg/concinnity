@@ -219,7 +219,12 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::AttachmentLayout,
             ),
             ("post/ssr.rs", ".final_layout(", 1, Reason::AttachmentLayout),
-            ("post/taa.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            (
+                "post/pass_cache.rs",
+                ".final_layout(",
+                1,
+                Reason::AttachmentLayout,
+            ),
         ],
     },
     BackendAudit {

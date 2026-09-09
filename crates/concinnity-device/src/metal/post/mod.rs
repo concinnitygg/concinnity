@@ -9,7 +9,7 @@
 //   ssao.rs   GTAO depth+normal pre-pass + horizon-search kernel + blur
 //   ssr.rs    SSR depth+normal+roughness pre-pass + ray-march resolve
 //   ssgi.rs   SSGI hemisphere gather + depth-aware blur composite
-//   taa.rs    velocity (motion-vector) pre-pass + TAA resolve
+//   taa.rs    the TAA toggle + jitter counter over the shared resolve
 //   bloom.rs  prefilter + downsample/upsample mip chain
 //
 // Pipeline builders / targets that any other module reaches are re-exported
@@ -18,6 +18,7 @@
 pub(super) mod bloom;
 pub(super) mod fullscreen;
 pub(super) mod gbuffer;
+pub(super) mod post_device;
 pub(super) mod rt_reflections;
 pub(super) mod ssao;
 pub(super) mod ssgi;
@@ -36,5 +37,5 @@ pub(super) use ssr::{
     SsrState, build_reflection_blur_pipeline, build_reflection_composite_pipeline,
     build_ssr_pipeline, create_ssr_targets,
 };
-pub(super) use taa::{TaaState, build_taa_pipeline, create_taa_targets};
+pub(super) use taa::{TaaState, build_taa_pass};
 pub(super) use upscale::{MetalFXUpscaler, UpscaleState, temporal_scaler_supported};

@@ -803,11 +803,15 @@ impl VkContext {
         // the SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT reset over every
         // cascade layer, so no inline end-of-frame restore is needed here.
 
-        // Advance the TAA jitter sequence (`taa_frame > 0` also validates the
-        // history for next frame). The motion-vector temporal state lives on the
-        // unified G-buffer (advanced below); TAA only consumes its velocity view.
+        // Advance the TAA jitter sequence and the accumulation ring that
+        // validates next frame's history. The motion-vector temporal state lives
+        // on the unified G-buffer (advanced below); TAA only consumes its
+        // velocity view.
         if let Some(taa) = &mut self.taa {
             taa.taa_frame = taa.taa_frame.wrapping_add(1);
+            // Step the accumulation ring in lockstep: what this frame wrote is
+            // next frame's history.
+            taa.pass.advance();
         }
 
         // Advance the unified G-buffer's velocity-channel temporal state in

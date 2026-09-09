@@ -1107,6 +1107,11 @@ pub(crate) struct DxContext {
     // the composite samples the HDR scene target directly.
     pub(super) taa: Option<TaaResources>,
 
+    // The descriptor slots every shared fullscreen post pass allocates its
+    // targets from. Held once for the backend rather than reserved per effect in
+    // `init/heap_layout.rs`.
+    pub(super) post: super::post::descriptors::PostDescriptors,
+
     // SSAO (GTAO). See [`SsaoState`].
     pub(super) ssao: SsaoState,
 
@@ -1789,6 +1794,14 @@ impl DxContext {
             },
             world_hidden,
         )?;
+
+        // Step the TAA accumulation ring: what this frame wrote is next frame's
+        // history. After `record_frame` rather than inside it, so the write slot
+        // is stable across the whole graph, and here rather than beside the
+        // jitter tick because stepping the ring needs `&mut self`.
+        if let Some(taa) = self.taa.as_mut() {
+            taa.pass.advance();
+        }
 
         // Drain the parallel-encoder draw-call accumulator into this
         // frame's `diagnostics.frame_stats.draw_calls`. The accumulator was reset

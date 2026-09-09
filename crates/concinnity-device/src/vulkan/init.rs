@@ -22,6 +22,7 @@ use super::post::bloom::{
     BloomDeviceContext, MAX_BLOOM_MIPS, alloc_bloom_input_sets, compile_bloom_shaders,
     create_bloom_chain, create_bloom_framebuffers, create_bloom_pipeline, rebind_bloom_input0,
 };
+use super::post::post_device::{PostQueue, VkPostDevice};
 use super::post::taa::*;
 use super::render_pass::*;
 use super::resources::*;
@@ -3101,30 +3102,27 @@ impl VkContext {
         // When TAA is on the history resolve produces a post-TAA scene image;
         // the bloom prefilter and composite pass must sample that instead of the
         // raw HDR resolve, so their binding-0 descriptor is re-pointed at the
-        // per-frame TAA output image.
+        // per-frame TAA output image. The resolve's own inputs need no wiring:
+        // it allocates its set per frame from the shared post arena.
+        let post_support = super::post::PostSupport::new(&device, frames)?;
         let taa = if taa_enabled {
             let taa = TaaResources::new(
-                &TaaDeviceContext {
-                    alloc: &alloc,
+                &VkPostDevice {
                     device: &device,
-                    command_pool,
-                    queue: graphics_queue,
+                    alloc: &alloc,
+                    queue: PostQueue {
+                        command_pool,
+                        queue: graphics_queue,
+                    },
+                    cache: &post_support.cache,
+                    arena: &post_support.arena,
+                    sampler: composite_sampler.handle(),
+                    frame: 0,
+                    hot_reload,
                 },
                 frames,
                 render_extent,
-                &TaaSceneInputs {
-                    hdr_resolve_images: &hdr_resolve_images,
-                    sampler: composite_sampler.handle(),
-                },
-                hot_reload,
             )?;
-            // When a reflection path owns the scene image, TAA samples the
-            // reflection composite output (the HDR scene with reflections composited
-            // in) instead of the raw HDR resolve. A SSGI-only build leaves TAA on the
-            // raw HDR resolve.
-            if let Some(view) = composite_opt.as_ref().map(|c| c.output.view) {
-                taa.rewire_scene(&device, view, composite_sampler.handle());
-            }
             for (i, &set) in composite_sets.iter().enumerate() {
                 write_composite_set(
                     &device,
@@ -3189,7 +3187,6 @@ impl VkContext {
         if let Some(gb) = gbuffer_opt.as_ref() {
             let nd_views = gb.normal_depth_views();
             let rough_views = gb.roughness_views();
-            let vel_views = gb.velocity_views();
             let hdr_views: Vec<vk::ImageView> =
                 hdr_resolve_images.iter().map(|img| img.view).collect();
             if let Some(ssr) = ssr_opt.as_ref() {
@@ -3207,9 +3204,6 @@ impl VkContext {
             }
             if let Some(ssao) = ssao_opt.as_ref() {
                 ssao.wire_kernel_and_blur_sets_gbuffer(&device, &nd_views);
-            }
-            if let Some(taa) = taa.as_ref() {
-                taa.rewire_velocity(&device, &vel_views, composite_sampler.handle());
             }
         }
 
@@ -3777,6 +3771,7 @@ impl VkContext {
             },
             post_process,
             taa,
+            post: post_support,
             upscale,
             upscale_requested: upscale_backend,
             ssao: ssao_opt,

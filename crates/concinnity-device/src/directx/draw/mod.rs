@@ -468,7 +468,7 @@ impl DxContext {
             self.scene_srv_for_post()
         } else {
             match &self.taa {
-                Some(taa) => taa.history_srv_gpu[taa.output_index()],
+                Some(taa) => taa.output().srv_gpu(),
                 None => self.scene_srv_for_post(),
             }
         };

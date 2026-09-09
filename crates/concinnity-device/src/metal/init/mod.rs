@@ -791,8 +791,7 @@ impl MtlContext {
         let effects::EffectsBundle {
             bloom_targets,
             bloom_pipelines,
-            taa_pipeline_state,
-            taa_targets,
+            taa,
             ssao,
             transient_pool,
             ssr,
@@ -817,6 +816,7 @@ impl MtlContext {
             auto_exposure_bias_ev: auto_exposure_bias,
         } = effects::build_effects(
             &allocator,
+            &post_sampler,
             requirements.scene,
             effects::EffectDimensions {
                 render_w,
@@ -1311,10 +1311,7 @@ impl MtlContext {
             color_lut,
             taa: super::post::TaaState {
                 enabled: effective_taa_enabled,
-                pipeline_state: taa_pipeline_state,
-                targets: taa_targets,
-                dst: 0,
-                history_valid: false,
+                pass: taa,
                 frame: 0,
             },
             prev_view_proj: IDENTITY,

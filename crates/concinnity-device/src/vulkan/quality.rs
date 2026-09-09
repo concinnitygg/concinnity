@@ -128,24 +128,16 @@ impl VkContext {
         // TAA.
         if desired_taa && self.taa.is_none() {
             let taa = super::post::taa::TaaResources::new(
-                &super::post::taa::TaaDeviceContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
-                    command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
-                },
+                &self.post_device(0),
                 self.frames_in_flight,
                 self.render_extent,
-                &super::post::taa::TaaSceneInputs {
-                    hdr_resolve_images: &self.hdr_resolve_images,
-                    sampler: self.composite.sampler.handle(),
-                },
-                self.hot_reload.enabled,
             )?;
             self.taa = Some(taa);
         } else if !desired_taa && self.taa.is_some() {
-            let mut taa = self.taa.take().expect("taa present");
-            taa.destroy(&self.device);
+            // The cached framebuffers name the accumulation images' views, so
+            // they go before the images do.
+            self.post.cache.forget_views();
+            self.taa = None;
         }
 
         // SSR pre-pass + resolve. Built whenever SSR / SSGI / RT is on; a

@@ -18,7 +18,7 @@
 //   [hdr_srv_slot]                 HDR scene target SRV (composite pass)
 //   [bloom_srv_base_slot..]        bloom mip SRVs
 //   [lut_srv_slot]                 3D colour-grading LUT SRV
-//   [taa_srv_base_slot..]          (TAA) 2 ping-pong history SRVs
+//   [post_srv_base_slot..]         POST_TARGET_SLOTS shared post-pass target SRVs
 //   [ssao_srv_base_slot..]         (SSAO) ao_raw + ao_blurred
 //   [ssao_white_srv_slot]          1x1 white occlusion fallback (always)
 //   [ssr_srv_base_slot..]          (SSR) resolve output
@@ -47,6 +47,7 @@ use crate::directx::decal::MAX_DECALS;
 use crate::directx::particle::MAX_EMITTERS;
 
 use super::HIZ_MAX_MIPS;
+use crate::directx::post::descriptors::POST_TARGET_SLOTS;
 use crate::directx::probe_prefilter::PROBE_MAX_MIPS;
 
 // Per-world feature counts that size the variable-length blocks of the SRV
@@ -55,11 +56,12 @@ use crate::directx::probe_prefilter::PROBE_MAX_MIPS;
 pub(in crate::directx) struct SrvHeapParams {
     pub n_atlases: usize,
     pub bloom_count: usize,
-    // Per-effect SRV reservations when enabled, else 0: TAA = 2 (history
-    // ping-pong), SSAO = 2 (raw + blurred occlusion), SSR = 1 (resolve output).
-    // The view normal / depth / roughness / velocity all come from the unified
-    // G-buffer pre-pass (`gbuffer_srv_extra`).
-    pub taa_srv_extra: usize,
+    // Per-effect SRV reservations when enabled, else 0: SSAO = 2 (raw +
+    // blurred occlusion), SSR = 1 (resolve output). The view normal / depth /
+    // roughness / velocity all come from the unified G-buffer pre-pass
+    // (`gbuffer_srv_extra`). The shared post passes take theirs from a fixed
+    // block instead (`post_srv_base_slot`), so no effect drawing through that
+    // seam appears here.
     pub ssao_srv_extra: usize,
     pub ssr_srv_extra: usize,
     // 1 when SSGI is enabled, else 0.
@@ -96,7 +98,13 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub hdr_srv_slot: usize,
     pub bloom_srv_base_slot: usize,
     pub lut_srv_slot: usize,
-    pub taa_srv_base_slot: usize,
+    // Base of the shared post passes' target SRVs. A fixed
+    // `POST_TARGET_SLOTS`-wide block, always reserved, sub-allocated at runtime
+    // by `post/descriptors.rs`. Fixed and unconditional on purpose: a pass that
+    // draws through the shared seam should not have to add a row to this
+    // cascade, and a block that appears only when one feature is on would put
+    // every later block at a different offset per world.
+    pub post_srv_base_slot: usize,
     pub ssao_srv_base_slot: usize,
     pub ssao_white_srv_slot: usize,
     pub ssr_srv_base_slot: usize,
@@ -156,8 +164,8 @@ impl SrvHeapLayout {
         // 2-descriptor table, so bloom mip 0 sits right after the HDR SRV.
         let bloom_srv_base_slot = hdr_srv_slot + 1;
         let lut_srv_slot = bloom_srv_base_slot + p.bloom_count;
-        let taa_srv_base_slot = lut_srv_slot + 1;
-        let ssao_srv_base_slot = taa_srv_base_slot + p.taa_srv_extra;
+        let post_srv_base_slot = lut_srv_slot + 1;
+        let ssao_srv_base_slot = post_srv_base_slot + POST_TARGET_SLOTS;
         // The white fallback always sits one slot past the SSAO block (present
         // whether SSAO is on or off) so the main pass can bind a pass-through
         // occlusion when SSAO is disabled.
@@ -216,7 +224,7 @@ impl SrvHeapLayout {
             hdr_srv_slot,
             bloom_srv_base_slot,
             lut_srv_slot,
-            taa_srv_base_slot,
+            post_srv_base_slot,
             ssao_srv_base_slot,
             ssao_white_srv_slot,
             ssr_srv_base_slot,
@@ -269,7 +277,7 @@ mod tests {
             (l.hdr_srv_slot, 1),
             (l.bloom_srv_base_slot, p.bloom_count),
             (l.lut_srv_slot, 1),
-            (l.taa_srv_base_slot, p.taa_srv_extra),
+            (l.post_srv_base_slot, POST_TARGET_SLOTS),
             (l.ssao_srv_base_slot, p.ssao_srv_extra),
             (l.ssao_white_srv_slot, 1),
             (l.ssr_srv_base_slot, p.ssr_srv_extra),
@@ -322,7 +330,6 @@ mod tests {
         assert_gap_free(&SrvHeapParams {
             n_atlases: 2,
             bloom_count: 6,
-            taa_srv_extra: 2,
             ssao_srv_extra: 2,
             ssr_srv_extra: 1,
             ssgi_srv_extra: 1,
@@ -340,7 +347,6 @@ mod tests {
         assert_gap_free(&SrvHeapParams {
             n_atlases: 0,
             bloom_count: 0,
-            taa_srv_extra: 0,
             ssao_srv_extra: 0,
             ssr_srv_extra: 0,
             ssgi_srv_extra: 0,
@@ -358,7 +364,6 @@ mod tests {
         assert_gap_free(&SrvHeapParams {
             n_atlases: 1,
             bloom_count: 5,
-            taa_srv_extra: 2,
             ssao_srv_extra: 0,
             ssr_srv_extra: 1,
             ssgi_srv_extra: 0,
@@ -378,7 +383,6 @@ mod tests {
         let l = SrvHeapLayout::compute(&SrvHeapParams {
             n_atlases: 0,
             bloom_count: 0,
-            taa_srv_extra: 0,
             ssao_srv_extra: 0,
             ssr_srv_extra: 0,
             ssgi_srv_extra: 0,
