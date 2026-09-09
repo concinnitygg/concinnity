@@ -8,4 +8,4 @@ into the entities carrying every named component.
 ## Parameters
 
 - `name`: A string. The name expressions read the result by.
-- `has`: An array of strings. Component names an entity must all carry to match. Resolved the same way as a behavior's [`scope`](Behavior::scope).
+- `has`: An array of strings. Component names an entity must all carry to match. Resolved the same way as a behavior's [`scope`](Behavior::scope). `Camera3D` reaches the player: the camera answers `position`, `distance` and the spatial expressions from the pose its camera system writes each frame, so a query naming it tracks where the player is rather than where the camera was authored.

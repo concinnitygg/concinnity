@@ -36,7 +36,12 @@ pub struct View<'a> {
     pub spatial: &'a dyn Fn(&Spatial<'_>) -> Option<Val>,
     /// Resolves a name to the entity carrying it.
     pub by_name: &'a dyn Fn(AssetId) -> Option<Entity>,
-    /// Reads an entity's transform.
+    /// Reads where an entity is. A camera answers from its own pose, so
+    /// `position` and `distance` reach one; everything else answers from its
+    /// `Transform`.
+    pub positions: &'a dyn Fn(Entity) -> Option<[f32; 3]>,
+    /// Reads the transform a `set_transform` node edits. An entity with none
+    /// is not one this can move, so its nodes yield no effect.
     pub transforms: &'a dyn Fn(Entity) -> Option<Transform>,
     /// Whether an entity still exists.
     pub alive: &'a dyn Fn(Entity) -> bool,
@@ -173,7 +178,7 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
         CExpr::Elapsed => Some(Val::Float(view.elapsed)),
         CExpr::Position(e) => {
             let entity = eval(e, view)?.as_entity()?;
-            Some(Val::Vec3((view.transforms)(entity)?.position))
+            Some(Val::Vec3((view.positions)(entity)?))
         }
         CExpr::Alive(e) => {
             // An expression that yields no entity at all is not alive.
@@ -183,8 +188,8 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
             Some(Val::Bool(alive))
         }
         CExpr::Distance(a, b) => {
-            let a = (view.transforms)(eval(a, view)?.as_entity()?)?.position;
-            let b = (view.transforms)(eval(b, view)?.as_entity()?)?.position;
+            let a = (view.positions)(eval(a, view)?.as_entity()?)?;
+            let b = (view.positions)(eval(b, view)?.as_entity()?)?;
             let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
             Some(Val::Float(sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])))
         }
@@ -265,7 +270,7 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
 fn point(expr: &CExpr, view: &View<'_>) -> Option<[f32; 3]> {
     match eval(expr, view)? {
         Val::Vec3(v) => Some(v),
-        Val::Entity(e) => Some((view.transforms)(e)?.position),
+        Val::Entity(e) => Some((view.positions)(e)?),
         _ => None,
     }
 }
@@ -516,7 +521,8 @@ mod tests {
     // What one evaluated run reads, so a test states only the parts it is
     // about. Every list defaults empty: an entity absent from `entities` is
     // dead, one absent from `transforms` has none, and a name absent from
-    // `names` resolves to nothing.
+    // `names` resolves to nothing. `positions` covers what says where it is
+    // without a transform to move, which is what a camera does.
     #[derive(Default)]
     struct Run {
         dt: f32,
@@ -526,6 +532,7 @@ mod tests {
         queries: Vec<Vec<Entity>>,
         entities: Vec<Entity>,
         transforms: Vec<(Entity, Transform)>,
+        positions: Vec<(Entity, [f32; 3])>,
         names: Vec<(AssetId, Entity)>,
         self_entity: Option<Entity>,
         bindings: usize,
@@ -558,6 +565,18 @@ mod tests {
                 bindings: &mut bindings,
                 queries: &self.queries,
                 by_name: &|id| self.names.iter().find(|(n, _)| *n == id).map(|(_, e)| *e),
+                positions: &|e| {
+                    self.transforms
+                        .iter()
+                        .find(|(t, _)| *t == e)
+                        .map(|(_, t)| t.position)
+                        .or_else(|| {
+                            self.positions
+                                .iter()
+                                .find(|(p, _)| *p == e)
+                                .map(|(_, p)| *p)
+                        })
+                },
                 transforms: &|e| {
                     self.transforms
                         .iter()
@@ -1083,6 +1102,63 @@ mod tests {
         let effects = run.exec(&[node(COp::SetTransform {
             entity: CExpr::Lit(Val::Entity(ghost)),
             position: None,
+            rotation_deg: None,
+            scale: None,
+        })]);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    // An entity may say where it is without carrying a transform to move,
+    // which is what a camera does: every read of a position answers for it.
+    #[test]
+    fn a_position_without_a_transform_answers_every_read() {
+        let (cam, prop) = (entity(1), entity(2));
+        let run = Run {
+            queries: vec![vec![cam]],
+            transforms: vec![(prop, moved([0.0, 0.0, 0.0]))],
+            positions: vec![(cam, [3.0, 0.0, 4.0])],
+            entities: vec![cam, prop],
+            spatial_answer: Some(Val::Int(1)),
+            ..Run::default()
+        };
+
+        assert_eq!(
+            run.eval(&CExpr::Position(lit(Val::Entity(cam)))),
+            Some(Val::Vec3([3.0, 0.0, 4.0])),
+        );
+        assert_eq!(
+            run.eval(&CExpr::Distance(
+                lit(Val::Entity(prop)),
+                lit(Val::Entity(cam)),
+            )),
+            Some(Val::Float(5.0)),
+        );
+
+        // And it stands in as a point operand like any other entity.
+        run.eval(&CExpr::CountWithin {
+            query: 0,
+            of: lit(Val::Entity(cam)),
+            radius: lit(Val::Float(5.0)),
+        });
+        assert_eq!(
+            run.asked.take(),
+            vec![SpatialAsk::CountWithin(vec![cam], [3.0, 0.0, 4.0], 5.0)],
+        );
+    }
+
+    // Reading where it is does not make it movable: a `set_transform` aimed at
+    // one yields no effect rather than a write with nowhere to land.
+    #[test]
+    fn a_position_without_a_transform_is_not_a_transform_write() {
+        let cam = entity(1);
+        let run = Run {
+            positions: vec![(cam, [3.0, 0.0, 4.0])],
+            entities: vec![cam],
+            ..Run::default()
+        };
+        let effects = run.exec(&[node(COp::SetTransform {
+            entity: CExpr::Lit(Val::Entity(cam)),
+            position: Some(CExpr::Lit(Val::Vec3([9.0; 3]))),
             rotation_deg: None,
             scale: None,
         })]);

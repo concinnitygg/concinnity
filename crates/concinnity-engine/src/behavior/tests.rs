@@ -4,7 +4,7 @@
 // the state a `save` node writes reaches the file store and comes back.
 
 use crate::components::{Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, PropInstance};
-use crate::components::{Transform, Variables};
+use crate::components::{BehaviorQuery, Camera3D, Transform, Variables};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{MeshHandle, SYSTEMS, World};
 
@@ -119,4 +119,95 @@ fn a_saving_world_restores_its_variable_through_the_file_store() {
     run(1, "the tick's value reached the file");
     run(2, "the second run started from what the first stored");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// The documented "act when the player is near" shape, as
+// `private/tests/behavior_valid.jsonl` writes it: props scoped, the camera
+// queried, its entity bound, and a distance gate deciding. The camera carries
+// no Transform, so the gate answers only if a camera says where it is.
+#[test]
+fn a_distance_gate_on_the_queried_camera_decides_by_where_the_camera_is() {
+    use crate::components::cook::Camera3D as Camera3DArgs;
+
+    let mut world = World::new();
+    world.add_component(Prop {
+        asset_id: AssetId(1),
+        mesh: Some(MeshHandle(10)),
+        scale: [1.0; 3],
+        ..Default::default()
+    });
+    // Uncontrolled, so nothing but this test moves it.
+    world.add_component(Camera3D::bake(Camera3DArgs {
+        position: [0.0, 0.0, 100.0],
+        controller: None,
+        ..Default::default()
+    }));
+    world.add_component(Behavior {
+        on: BehaviorSource::Tick,
+        scope: vec!["Prop".into()],
+        queries: vec![BehaviorQuery {
+            name: "player".into(),
+            has: vec!["Camera3D".into()],
+        }],
+        body: vec![
+            BehaviorNode::Let {
+                name: "target".into(),
+                value: BehaviorExpr::First("player".into()),
+            },
+            BehaviorNode::If {
+                cond: BehaviorExpr::Lt(
+                    Box::new(BehaviorExpr::Distance(
+                        Box::new(BehaviorExpr::SelfEntity),
+                        Box::new(BehaviorExpr::Bind("target".into())),
+                    )),
+                    Box::new(BehaviorExpr::Float(20.0)),
+                ),
+                // A fixed step rather than the fixture's `dt`-scaled one, so
+                // the assertion does not depend on how long a tick took.
+                then: vec![BehaviorNode::SetTransform {
+                    entity: BehaviorExpr::SelfEntity,
+                    position: Some(BehaviorExpr::Add(
+                        Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
+                        Box::new(BehaviorExpr::Mul(
+                            Box::new(BehaviorExpr::Normalize(Box::new(BehaviorExpr::Sub(
+                                Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::Bind(
+                                    "target".into(),
+                                )))),
+                                Box::new(BehaviorExpr::Position(Box::new(
+                                    BehaviorExpr::SelfEntity,
+                                ))),
+                            )))),
+                            Box::new(BehaviorExpr::Float(2.0)),
+                        )),
+                    )),
+                    rotation_deg: None,
+                    scale: None,
+                }],
+                otherwise: Vec::new(),
+            },
+        ],
+        ..Default::default()
+    });
+
+    world.start(SYSTEMS).unwrap();
+    let chased = |world: &mut World| {
+        world
+            .join2::<PropInstance, Transform>()
+            .map(|(_, _, t)| t.position[2])
+            .next()
+            .expect("the prop kept its transform")
+    };
+
+    world.step();
+    assert_eq!(chased(&mut world), 0.0, "the far camera left the gate shut");
+
+    for camera in world.context().query_mut::<Camera3D>() {
+        camera.position = [0.0, 0.0, 5.0];
+    }
+    world.step();
+    assert_eq!(
+        chased(&mut world),
+        2.0,
+        "the near camera opened the gate and the prop stepped toward it",
+    );
 }

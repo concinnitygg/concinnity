@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use super::BehaviorSystem;
 use super::instance::Instance;
-use crate::behavior::{Effect, Program, Spatial, Val, View, exec, spatial};
+use crate::behavior::{Effect, Program, Spatial, Val, View, exec, position, spatial};
 use crate::components::Transform;
 use crate::ecs::{ComponentStorage, Entity, EntityByName, PipelineContext};
 
@@ -123,6 +123,7 @@ pub(super) fn eval_one(
                 .and_then(|n| n.get(id))
                 .filter(|e| ec.components.is_alive(*e))
         },
+        positions: &|e| position::of(ec.components, e),
         transforms: &|e| ec.components.get::<Transform>(e).copied(),
         alive: &|e| ec.components.is_alive(e),
         // The behavior's own entity is never an answer: a ray cast from

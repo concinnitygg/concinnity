@@ -16,6 +16,7 @@
 //! persists nothing.
 
 mod compile;
+mod position;
 mod program;
 mod run;
 pub(crate) mod spatial;

@@ -10,7 +10,7 @@
 // Nothing here reads the physics world itself, so a behavior sees no terrain
 // and no heightfield: an entity with no collider cannot be hit.
 
-use crate::components::Transform;
+use crate::behavior::position;
 use crate::ecs::{ComponentStorage, Entity};
 
 /// Squared distance between two points, for comparisons that never need the
@@ -20,8 +20,8 @@ fn distance_sq(a: [f32; 3], b: [f32; 3]) -> f32 {
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
 }
 
-/// The candidate nearest `point`, skipping `exclude` and anything with no
-/// transform. Ties go to the earlier entity, and the candidate order is the
+/// The candidate nearest `point`, skipping `exclude` and anything that says
+/// nowhere it is. Ties go to the earlier entity, and the candidate order is the
 /// query's own stable order, so the answer does not depend on despawns
 /// elsewhere.
 pub(crate) fn nearest(
@@ -35,10 +35,10 @@ pub(crate) fn nearest(
         if Some(entity) == exclude {
             continue;
         }
-        let Some(transform) = components.get::<Transform>(entity) else {
+        let Some(candidate) = position::of(components, entity) else {
             continue;
         };
-        let d = distance_sq(transform.position, point);
+        let d = distance_sq(candidate, point);
         if best.is_none_or(|(_, best)| d < best) {
             best = Some((entity, d));
         }
@@ -62,8 +62,8 @@ pub(crate) fn count_within(
     candidates
         .iter()
         .filter(|entity| Some(**entity) != exclude)
-        .filter_map(|entity| components.get::<Transform>(*entity))
-        .filter(|transform| distance_sq(transform.position, point) <= limit)
+        .filter_map(|entity| position::of(components, *entity))
+        .filter(|candidate| distance_sq(*candidate, point) <= limit)
         .count() as i32
 }
 
@@ -137,6 +137,34 @@ mod tests {
         assert_eq!(
             nearest(&components, &[bare, placed], [0.0; 3], None),
             Some(placed)
+        );
+    }
+
+    // A camera has no transform but does have a pose, so a query that names
+    // one searches it rather than passing it over.
+    #[test]
+    fn a_camera_is_a_candidate_through_its_own_pose() {
+        use crate::components::Camera3D;
+        use crate::components::cook::Camera3D as Camera3DArgs;
+
+        let mut components = ComponentStorage::default();
+        let camera = components.spawn();
+        components.insert_typed(
+            camera,
+            Camera3D::bake(Camera3DArgs {
+                position: [2.0, 0.0, 0.0],
+                ..Default::default()
+            }),
+        );
+        let placed = at(&mut components, 5.0);
+
+        assert_eq!(
+            nearest(&components, &[placed, camera], [0.0; 3], None),
+            Some(camera),
+        );
+        assert_eq!(
+            count_within(&components, &[placed, camera], [0.0; 3], 3.0, None),
+            1,
         );
     }
 

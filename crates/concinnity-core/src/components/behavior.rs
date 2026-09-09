@@ -115,6 +115,11 @@ pub struct BehaviorQuery {
     pub name: String,
     /// Component names an entity must all carry to match. Resolved the same
     /// way as a behavior's [`scope`](Behavior::scope).
+    ///
+    /// `Camera3D` reaches the player: the camera answers `position`,
+    /// `distance` and the spatial expressions from the pose its camera system
+    /// writes each frame, so a query naming it tracks where the player is
+    /// rather than where the camera was authored.
     pub has: Vec<String>,
 }
 
@@ -169,9 +174,11 @@ pub enum BehaviorExpr {
     Dt,
     /// Seconds elapsed since the world started.
     Elapsed,
-    /// World-space position of an entity.
+    /// World-space position of an entity. A camera answers from its own
+    /// pose, everything else from its transform.
     Position(Box<BehaviorExpr>),
-    /// Distance between two entities.
+    /// Distance between two entities, each located the way
+    /// [`Position`](BehaviorExpr::Position) locates one.
     Distance(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// The first entity of a declared query, or none when it is empty.
     First(String),
@@ -321,7 +328,9 @@ pub enum BehaviorNode {
         #[serde(default)]
         add: bool,
     },
-    /// Writes an entity's transform. An omitted field is left unchanged.
+    /// Writes an entity's transform. An omitted field is left unchanged, and
+    /// an entity with no transform to write (a camera, whose pose belongs to
+    /// its camera system) is left alone.
     SetTransform {
         /// The entity moved.
         entity: BehaviorExpr,
