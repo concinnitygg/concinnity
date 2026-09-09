@@ -166,7 +166,7 @@ pub struct PostProcessConfig {
     /// the best available at runtime (DLSS on NVIDIA RTX, else XeSS, else FSR3);
     /// `fsr3` / `dlss` / `xess` request a specific one and fall back when it is
     /// unavailable on the current GPU or build. No effect when
-    /// `temporal_upscaling` is off. DLSS and XeSS are DirectX-only.
+    /// `temporal_upscaling` is off. Metal treats every value as MetalFX.
     pub upscale_backend: UpscalerBackend,
     /// Two-pass occlusion culling toggle. Reduces objects popping in a frame
     /// late when they're revealed by camera or occluder motion, at the cost of
@@ -209,9 +209,9 @@ impl UpscaleQuality {
 /// Upscaler backend selector for `PostProcessConfig.temporal_upscaling`.
 /// `Auto` resolves at runtime to the best available (DLSS, then XeSS, then
 /// FSR3); the explicit variants request a specific backend and fall back when
-/// it is unavailable. DLSS (NVIDIA NGX) and XeSS (Intel) are DirectX-only;
-/// Metal uses MetalFX and Vulkan has no upscaler yet, so both treat any value
-/// as their native path.
+/// it is unavailable. DirectX and Vulkan both resolve all three, each from the
+/// vendor SDK staged beside the binary; Metal uses MetalFX and treats any value
+/// as its native path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]

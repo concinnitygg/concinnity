@@ -1,6 +1,8 @@
 // Bindless forward pass: vertex + fragment, single source for every backend.
-// Compile with -DPOOL_SIZE=<n> and -DMAX_PROBES=<n> (the bindless texture-pool
-// and reflection-probe array lengths the device binds).
+// Compile with -DMAX_PROBES=<n> (the reflection-probe array length the device
+// binds), and on Metal -DPOOL_SIZE=<n> for the bindless texture pool, whose
+// argument-buffer member needs a concrete length. Vulkan and DXIL declare that
+// pool unsized and read whatever their descriptor table holds.
 //
 // The shading body is shared; only the resource declarations differ per
 // binding model, selected by a define and bridged into the body through the
@@ -345,7 +347,7 @@ struct ObjectResources
     StructuredBuffer<GpuObjectData> objects;
     // Bindless texture pool: [albedo textures..] ++ [normal maps..]. The
     // object record's albedo_index / normal_index address it directly.
-    Sampler2D<float4> tex_pool[POOL_SIZE];
+    Sampler2D<float4> tex_pool[];
 };
 
 ParameterBlock<SceneResources> scene;

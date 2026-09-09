@@ -23,3 +23,6 @@ pub mod surface;
 
 /// What the Vulkan backend compiles to SPIR-V.
 pub mod vk;
+
+#[cfg(test)]
+mod declared;

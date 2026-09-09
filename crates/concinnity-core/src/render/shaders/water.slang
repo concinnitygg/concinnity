@@ -315,7 +315,7 @@ float3 pool_sample_level0(uint idx, float2 uv)
     return tex_pool[nonuniform_index(idx)].SampleLevel(pool_sampler, uv, 0.0).rgb;
 }
 #else
-[[vk::binding(1, 4)]] Sampler2D<float4> tex_pool[POOL_SIZE];
+[[vk::binding(1, 4)]] Sampler2D<float4> tex_pool[];
 
 float3 pool_sample_level0(uint idx, float2 uv)
 {

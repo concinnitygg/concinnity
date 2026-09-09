@@ -87,7 +87,6 @@ fn compile_water_shaders(
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
-        pool_size: 0,
         probe_count: probe_cube_count as usize,
     };
     let vert = super::slang_builtins::WATER_VERT.compile(&ctx)?;
@@ -120,7 +119,6 @@ fn compile_water_rt_shaders(
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
-        pool_size: pool_size.max(1),
         probe_count: probe_cube_count as usize,
     };
     let vs = super::slang_builtins::WATER_VERT.compile(&ctx)?;

@@ -362,11 +362,9 @@ pub(super) struct VkCull {
     pub(super) bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) bindless_set_layout: Option<OwnedSetLayout>,
     // Descriptor count `bindless_set_layout`'s binding 1 was built with, and the
-    // `{POOL_SIZE}` every pool-sized shader must compile against. 0 when the
-    // bindless path is inactive. Every recompile reads this rather than
-    // re-deriving from the texture table: a shader that declares fewer array
-    // elements than the layout is legal Vulkan, so drift is silent and costs the
-    // trailing flat-normal fallback slot.
+    // number of image infos the pool write pads to. 0 when the bindless path is
+    // inactive. The shaders declare that array unsized, so this is the only place
+    // the length lives.
     pub(super) bindless_pool_size: usize,
     // Whether `bindless_set_layout` was created with
     // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`, which every

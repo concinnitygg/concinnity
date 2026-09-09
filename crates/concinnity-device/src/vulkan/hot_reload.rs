@@ -278,11 +278,7 @@ impl VkContext {
         let bindless_main_pipeline = rebuild_if_live!(
             self.cull.bindless_pipeline_layout.is_some() && self.cull.bindless_pipeline.is_some(),
             {
-                let engine_pair = compile_bindless_shaders(
-                    hr,
-                    self.cull.bindless_pool_size,
-                    self.descriptors.probe_cube_count,
-                )?;
+                let engine_pair = compile_bindless_shaders(hr, self.descriptors.probe_cube_count)?;
                 let pipeline =
                     self.build_world_main_pipeline(self.world_shader.as_ref(), &engine_pair)?;
                 Ok::<_, String>((pipeline, engine_pair))
@@ -601,7 +597,6 @@ impl VkContext {
                 msaa_samples: self.msaa_samples,
                 swapchain_format: self.swapchain.format,
                 hot_reload: self.hot_reload.enabled,
-                pool_size: self.cull.bindless_pool_size,
                 probe_count: self.descriptors.probe_cube_count as usize,
             },
             0,

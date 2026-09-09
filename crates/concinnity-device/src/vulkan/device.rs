@@ -180,11 +180,12 @@ pub(super) fn create_logical_device(
     let mut accel_probe = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut rq_probe = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
     let mut rt_bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
-    // Descriptor indexing serves two independent needs, so it is probed
+    // Descriptor indexing serves three independent needs, so it is probed
     // unconditionally: every bindless shader indexes the texture pool with a
     // non-uniform index via `nonuniformEXT`
-    // (`shaderSampledImageArrayNonUniformIndexing`), and a sampler-constrained
-    // device declares that pool update-after-bind
+    // (`shaderSampledImageArrayNonUniformIndexing`), the pool declares no length
+    // (`runtimeDescriptorArray`), and a sampler-constrained device declares that
+    // pool update-after-bind
     // (`descriptorBindingSampledImageUpdateAfterBind`).
     let mut di_probe = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
     // Present only on a portability driver (MoltenVK). Probed here and chained
@@ -272,6 +273,20 @@ pub(super) fn create_logical_device(
     // it appends.
     let want_nonuniform_indexing = di_probe.shader_sampled_image_array_non_uniform_indexing != 0
         && upscaler_sdk.choice != ResolvedBackend::Xess;
+
+    // Runtime-array gate for the bindless texture pool, which declares no length
+    // and reads whatever its set layout was built with. Nothing beyond the SPIR-V
+    // capability is needed: the layout carries a concrete count, and the pool
+    // write pads to it, so neither a per-set count nor an unbound tail arises.
+    // Every path that renders those shaders needs it, XeSS included, which gets it
+    // through `enable_runtime_descriptor_array` instead of the struct below.
+    let want_runtime_pool = di_probe.runtime_descriptor_array != 0;
+    if !want_runtime_pool {
+        tracing::warn!(
+            "descriptor indexing: no runtime_descriptor_array, so the bindless \
+             texture pool must declare its length"
+        );
+    }
 
     // Update-after-bind gate for the bindless texture pool. Enabled only on a
     // device whose plain per-stage sampler budget cannot seat the pool, which
@@ -407,6 +422,7 @@ pub(super) fn create_logical_device(
     let mut rq_enable = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
     let mut di_enable = vk::PhysicalDeviceDescriptorIndexingFeatures::default()
         .shader_sampled_image_array_non_uniform_indexing(want_nonuniform_indexing)
+        .runtime_descriptor_array(want_runtime_pool)
         .descriptor_binding_sampled_image_update_after_bind(want_update_after_bind);
     // The probed portability subset, reused as the enable struct so every
     // feature the driver supports is on. Its `p_next` still points into the
@@ -418,6 +434,7 @@ pub(super) fn create_logical_device(
         "Vulkan device features: fp16={want_f16}, 16bit_storage={want_16bit}, \
          subgroup_extended_types={want_subgroup_ext}, buffer_device_address={want_bda}, \
          ray_query={rt_capable}, nonuniform_indexing={want_nonuniform_indexing}, \
+         runtime_pool={want_runtime_pool}, \
          update_after_bind={want_update_after_bind} (upscaler + RT enablers)"
     );
 
@@ -445,6 +462,7 @@ pub(super) fn create_logical_device(
             pd,
             &mut features2 as *mut _ as *mut c_void,
         );
+        enable_runtime_descriptor_array(head);
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&ext_names);
@@ -490,7 +508,7 @@ pub(super) fn create_logical_device(
             .push_next(&mut accel_enable)
             .push_next(&mut rq_enable);
     }
-    if want_nonuniform_indexing || want_update_after_bind {
+    if want_nonuniform_indexing || want_runtime_pool || want_update_after_bind {
         device_info = device_info.push_next(&mut di_enable);
     }
     if has_portability_subset {
@@ -508,6 +526,57 @@ pub(super) fn create_logical_device(
         depth_bias_clamp: base_supported.depth_bias_clamp != 0,
         update_after_bind: want_update_after_bind,
     })
+}
+
+// Turn `runtimeDescriptorArray` on in a chained `VkPhysicalDeviceVulkan12Features`,
+// reporting whether one was there to write.
+//
+// The bindless shaders declare their texture pool unsized, so every path that
+// renders them needs that feature. XeSS is the one path the engine cannot enable
+// it on directly: it appends this struct itself, and a second struct covering the
+// same features alongside it is invalid. So the engine writes the bit into the
+// one already in the chain, which XeSS leaves cleared.
+//
+// Returns whether the feature is on, which is false only when no such struct is
+// chained at all.
+fn enable_runtime_descriptor_array(head: *mut c_void) -> bool {
+    // Every `pNext` node begins with these two fields, which is what lets a walk
+    // read a chain of mixed struct types.
+    #[repr(C)]
+    struct Node {
+        s_type: vk::StructureType,
+        p_next: *mut c_void,
+    }
+
+    let mut node = head;
+    while !node.is_null() {
+        // SAFETY: `head` is a Vulkan `pNext` chain, so every node begins with an
+        // `sType` / `pNext` pair, and the walk stops at the null terminator. The
+        // cast to `Vulkan12Features` happens only where `sType` names that struct,
+        // which is the contract Vulkan itself reads the chain under.
+        let (s_type, next) =
+            unsafe { ((*node.cast::<Node>()).s_type, (*node.cast::<Node>()).p_next) };
+        if s_type == vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES {
+            // SAFETY: `sType` names this struct, so the node is one, and it is
+            // still mutable here: the chain is only read once `create_device`
+            // consumes it, which has not been called yet.
+            let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features>() };
+            tracing::info!(
+                "chained Vulkan12Features: runtime_descriptor_array={} (forcing on), \
+                 sampled_image_non_uniform_indexing={}",
+                f.runtime_descriptor_array != 0,
+                f.shader_sampled_image_array_non_uniform_indexing != 0,
+            );
+            f.runtime_descriptor_array = vk::TRUE;
+            return true;
+        }
+        node = next;
+    }
+    tracing::warn!(
+        "no Vulkan12Features in the device chain, so the unsized bindless texture \
+         pool has no feature to enable"
+    );
+    false
 }
 
 // The requested HDR sample count clamped to what this device reports for the

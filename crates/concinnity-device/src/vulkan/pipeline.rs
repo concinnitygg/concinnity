@@ -20,20 +20,18 @@ pub(super) fn is_spirv(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x07230203
 }
 
-// Compile the engine's bindless static-pass pair. `pool_size` is the bindless
-// texture-pool length, injected into the fragment source's `tex_pool[]` array
-// declaration; `probe_cube_count` is the global set layout's binding-8
-// descriptor count, injected into the probe cube array. A bucket whose Shader
-// is the world's compiles the same file through `world_entry` instead.
+// Compile the engine's bindless static-pass pair. `probe_cube_count` is the
+// global set layout's binding-8 descriptor count, injected into the probe cube
+// array. The texture pool takes no count: the fragment declares `tex_pool[]`
+// unsized and reads whatever the set layout holds. A bucket whose Shader is the
+// world's compiles the same file through `world_entry` instead.
 pub(super) fn compile_bindless_shaders(
     hot_reload: bool,
-    pool_size: usize,
     probe_cube_count: u32,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = builtins::Ctx {
         hot_reload,
         msaa: false,
-        pool_size,
         probe_count: probe_cube_count as usize,
     };
     let vert = super::slang_builtins::MAIN_BINDLESS_VERT.compile(&ctx)?;
@@ -163,19 +161,16 @@ pub(in crate::vulkan) fn spv_module<'d>(
 }
 
 // The world Shader's program for `entry`, as SPIR-V: the cook's artifact when
-// the engine template still matches, else a compile here. `pool_size` and
-// `probe_count` are the bindless pool and probe cube array lengths the host
-// declares.
+// the engine template still matches, else a compile here. `probe_count` is the
+// probe cube array length the host declares.
 pub(super) fn world_entry(
     world: &concinnity_core::components::ShaderPrograms,
     entry: &str,
     hot_reload: bool,
-    pool_size: usize,
     probe_count: usize,
 ) -> Result<Vec<u8>, String> {
     let req = crate::surface_source::Request {
         platform: concinnity_core::platform::Platform::Glsl,
-        pool_size,
         probe_count,
         hot_reload,
     };
@@ -335,9 +330,8 @@ pub(super) struct BucketPipelineTargets {
     pub msaa_samples: vk::SampleCountFlags,
     pub swapchain_format: vk::Format,
     pub hot_reload: bool,
-    // The pool and probe cube counts the bindless set layout declares, which a
-    // world's bindless pair compiles against.
-    pub pool_size: usize,
+    // The probe cube count the global set layout declares, which a world's
+    // bindless pair compiles against.
     pub probe_count: usize,
 }
 
@@ -360,14 +354,12 @@ pub(super) fn build_bucket_pipeline(
                 programs,
                 "vertex_main_bindless",
                 targets.hot_reload,
-                targets.pool_size,
                 targets.probe_count,
             )?,
             world_entry(
                 programs,
                 "fragment_main_bindless",
                 targets.hot_reload,
-                targets.pool_size,
                 targets.probe_count,
             )?,
         ),
@@ -954,20 +946,23 @@ mod tests {
         }
         for probes in [1, 7, concinnity_core::render::uniforms::MAX_PROBES as u32] {
             let (vs, fs) =
-                compile_bindless_shaders(false, 4, probes).expect("bindless shaders compile");
+                compile_bindless_shaders(false, probes).expect("bindless shaders compile");
             assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
             assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
         }
-        // The runtime pool / probe counts ride the assembled source as
-        // `#define` lines, which is what the shader cache keys.
+        // The probe count rides the assembled source as a `#define` line, which
+        // is what the shader cache keys. The pool takes none: the array is
+        // declared unsized.
         let frag_src = crate::vulkan::slang_builtins::MAIN_BINDLESS_FRAG.source(&builtins::Ctx {
             hot_reload: false,
             msaa: false,
-            pool_size: 4,
             probe_count: 4,
         });
-        assert!(frag_src.contains("#define POOL_SIZE 4"));
-        assert!(frag_src.contains("#define MAX_PROBES 4"));
+        let injected: Vec<&str> = frag_src
+            .lines()
+            .take_while(|l| l.starts_with("#define "))
+            .collect();
+        assert_eq!(injected, ["#define MAX_PROBES 4"]);
     }
 
     // A world Shader's bindless pair compiles from its programs, and is its own
@@ -987,12 +982,11 @@ mod tests {
                 .to_string(),
             programs: Vec::new(),
         };
-        let pool = 4;
         let probes = concinnity_core::render::uniforms::MAX_PROBES;
-        let vs = world_entry(&programs, "vertex_main_bindless", false, pool, probes).unwrap();
-        let fs = world_entry(&programs, "fragment_main_bindless", false, pool, probes).unwrap();
+        let vs = world_entry(&programs, "vertex_main_bindless", false, probes).unwrap();
+        let fs = world_entry(&programs, "fragment_main_bindless", false, probes).unwrap();
         assert!(is_spirv(&vs) && is_spirv(&fs), "the world's pair compiles");
-        let (_, engine_fs) = compile_bindless_shaders(false, pool, probes as u32).unwrap();
+        let (_, engine_fs) = compile_bindless_shaders(false, probes as u32).unwrap();
         assert_ne!(fs, engine_fs, "the world's fragment is its own program");
         // The depth-only skinned shadow vertex stays the engine's.
         assert!(is_spirv(&compile_skinned_shadow_shader(false).unwrap()));

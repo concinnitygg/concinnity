@@ -23,11 +23,9 @@ use concinnity_slang::{SlangJob, SlangTarget};
 #[derive(Clone, Copy)]
 pub(crate) struct Request {
     pub platform: Platform,
-    /// The bindless texture-pool length and probe cube array length the host
-    /// declares. Only the Vulkan bindless pair reads them; the cook bakes the
-    /// ceilings, and a device that cannot seat them digests differently and
-    /// compiles here.
-    pub pool_size: usize,
+    /// The probe cube array length the host declares. Only the Vulkan bindless
+    /// pair reads it; the cook bakes the ceiling, and a device that cannot seat it
+    /// digests differently and compiles here.
     pub probe_count: usize,
     pub hot_reload: bool,
 }
@@ -90,18 +88,11 @@ pub(crate) fn artifact<'a>(
 // templates under hot-reload exactly as every other single-source shader does.
 fn source(program: &surface::Program, req: &Request, sources: &Sources<'_>) -> String {
     if !req.hot_reload {
-        return surface::source(
-            program,
-            req.platform,
-            req.pool_size,
-            req.probe_count,
-            sources,
-        );
+        return surface::source(program, req.platform, req.probe_count, sources);
     }
     surface::source_with(
         program,
         req.platform,
-        req.pool_size,
         req.probe_count,
         sources,
         crate::slang_source::from_checkout,
@@ -112,14 +103,13 @@ fn source(program: &surface::Program, req: &Request, sources: &Sources<'_>) -> S
 mod tests {
     use super::*;
     use concinnity_core::components::compiled_programs::CompiledProgram;
-    use concinnity_core::render::uniforms::{BINDLESS_POOL_SIZE, MAX_PROBES};
+    use concinnity_core::render::uniforms::MAX_PROBES;
 
     const SHADE: &str = "float4 shade(VertexOut in, GpuObjectData od) { return float4(1.0); }";
 
     fn request(platform: Platform) -> Request {
         Request {
             platform,
-            pool_size: BINDLESS_POOL_SIZE,
             probe_count: MAX_PROBES,
             hot_reload: false,
         }
@@ -131,7 +121,7 @@ mod tests {
             fragment: SHADE,
         };
         let program = surface::program(entries[0]).unwrap();
-        let src = surface::source(program, platform, BINDLESS_POOL_SIZE, MAX_PROBES, &sources);
+        let src = surface::source(program, platform, MAX_PROBES, &sources);
         ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
@@ -160,10 +150,10 @@ mod tests {
         }
     }
 
-    // An artifact built for another host, or under another pool size, is not
+    // An artifact built for another host, or under another probe count, is not
     // this one's: the digest covers the defines.
     #[test]
-    fn an_artifact_from_another_host_or_pool_size_does_not_match() {
+    fn an_artifact_from_another_host_or_probe_count_does_not_match() {
         let metal = stored(
             Platform::Metal,
             &["fragment_main_bindless"],
@@ -174,13 +164,7 @@ mod tests {
             fragment: SHADE,
         };
         let program = surface::program("fragment_main_bindless").unwrap();
-        let other_host = surface::source(
-            program,
-            Platform::Glsl,
-            BINDLESS_POOL_SIZE,
-            MAX_PROBES,
-            &sources,
-        );
+        let other_host = surface::source(program, Platform::Glsl, MAX_PROBES, &sources);
         assert!(
             metal
                 .artifact(
@@ -190,15 +174,15 @@ mod tests {
                 .is_none()
         );
         let vulkan = stored(Platform::Glsl, &["fragment_main_bindless"], b"stored bytes");
-        let smaller = surface::source(program, Platform::Glsl, 37, MAX_PROBES, &sources);
+        let fewer_probes = surface::source(program, Platform::Glsl, 4, &sources);
         assert!(
             vulkan
                 .artifact(
                     "fragment_main_bindless",
-                    slang_source::source_digest(&smaller)
+                    slang_source::source_digest(&fewer_probes)
                 )
                 .is_none(),
-            "a constrained device's pool size digests differently"
+            "a constrained device's probe count digests differently"
         );
     }
 

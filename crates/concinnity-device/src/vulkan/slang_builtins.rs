@@ -23,19 +23,10 @@ pub(crate) trait SlangCompile {
 impl SlangCompile for SlangProgram {
     // Assemble the exact source text this program compiles under `ctx`.
     fn source(&self, ctx: &Ctx) -> String {
-        let pool = ctx.pool_size.to_string();
         let probes = ctx.probe_count.to_string();
         let mut defines: Vec<(&str, &str)> = self.gates.iter().map(|g| (*g, "1")).collect();
         if self.msaa {
             defines.push(("USE_MSAA", if ctx.msaa { "1" } else { "0" }));
-        }
-        if self.sizes == Sizes::PoolAndProbes {
-            debug_assert!(
-                ctx.pool_size > 0,
-                "{}: sized program assembled with no pool count",
-                self.label
-            );
-            defines.push(("POOL_SIZE", pool.as_str()));
         }
         if self.sizes != Sizes::None {
             debug_assert!(
@@ -118,26 +109,25 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<V
 mod tests {
     use super::*;
 
-    fn ctx(pool_size: usize, probe_count: usize) -> Ctx {
+    fn ctx(probe_count: usize) -> Ctx {
         Ctx {
             hot_reload: false,
             msaa: false,
-            pool_size,
             probe_count,
         }
     }
 
     #[test]
     fn sized_programs_inject_their_counts_and_gates_lead() {
-        let src = MAIN_BINDLESS_FRAG.source(&ctx(17, 5));
-        assert!(src.starts_with("#define POOL_SIZE 17\n#define MAX_PROBES 5\n"));
-        // The SSR resolve reads the probe array but none of the texture pool,
-        // so it takes the probe count alone.
-        let src = SSR_RESOLVE.source(&ctx(17, 5));
+        // The probe count is the only capacity a Vulkan program bakes; the
+        // texture pool is declared unsized and takes no define.
+        let src = MAIN_BINDLESS_FRAG.source(&ctx(5));
         assert!(src.starts_with("#define MAX_PROBES 5\n"));
-        let src = HIZ_INIT_MSAA.source(&ctx(0, 0));
-        assert!(src.starts_with("#define HIZ_INIT_MSAA 1\n"));
-        let src = LIGHT_CULL.source(&ctx(0, 0));
+        let src = SSR_RESOLVE.source(&ctx(5));
+        assert!(src.starts_with("#define MAX_PROBES 5\n"));
+        let src = HIZ_SPD_MSAA.source(&ctx(0));
+        assert!(src.starts_with("#define HIZ_SPD_MSAA 1\n"));
+        let src = LIGHT_CULL.source(&ctx(0));
         assert!(!src.starts_with("#define"));
     }
 
@@ -146,7 +136,7 @@ mod tests {
     #[test]
     fn every_program_assembles_with_its_fragments_spliced() {
         for p in ALL {
-            let src = p.source(&ctx(4, 4));
+            let src = p.source(&ctx(4));
             for marker in [
                 "{POST_COMMON}",
                 "{OBJECT_COMMON}",
@@ -200,7 +190,7 @@ mod tests {
     fn table_has_no_duplicate_programs() {
         let mut seen = std::collections::HashSet::new();
         for p in ALL {
-            let src = p.source(&ctx(4, 4));
+            let src = p.source(&ctx(4));
             assert!(
                 seen.insert((src, p.entry)),
                 "duplicate program: {}",
@@ -211,9 +201,9 @@ mod tests {
 
     #[test]
     fn every_key_field_tracks_the_program() {
-        let a = MAIN_BINDLESS_VERT.source(&ctx(4, 4));
-        let b = MAIN_BINDLESS_VERT.source(&ctx(5, 4));
-        assert_ne!(a, b, "pool size must change the assembled source");
+        let a = MAIN_BINDLESS_VERT.source(&ctx(4));
+        let b = MAIN_BINDLESS_VERT.source(&ctx(8));
+        assert_ne!(a, b, "probe count must change the assembled source");
         let key = MAIN_BINDLESS_VERT.cache_key(&a);
         assert_eq!(key.compiler, "slang");
         assert_eq!(key.target, "spirv");

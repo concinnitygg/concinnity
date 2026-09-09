@@ -19,11 +19,11 @@
 pub enum Sizes {
     /// No size defines.
     None,
-    /// The reflection-probe array length only: the SSR resolve binds the
-    /// forward global set's probe cubes but none of the texture pool.
+    /// The reflection-probe array length. Every sized Vulkan program takes this
+    /// one and no other: the bindless texture pool is declared unsized and reads
+    /// whatever its descriptor table holds, so its length never reaches the
+    /// source text.
     Probes,
-    /// The bindless texture-pool capacity and the probe array length.
-    PoolAndProbes,
 }
 
 /// One SPIR-V program: which shader file, which entry point, under which
@@ -36,7 +36,7 @@ pub struct SlangProgram {
     pub entry: &'static str,
     /// Diagnostic label (compile errors + cache miss logs + export report).
     pub label: &'static str,
-    /// Fixed variant gates (e.g. HIZ_INIT_MSAA), each injected as
+    /// Fixed variant gates (e.g. HIZ_SPD_MSAA), each injected as
     /// `#define <gate> 1`. More than one where a variant is the intersection of
     /// two, like the textured ray-traced glass fragment.
     pub gates: &'static [&'static str],
@@ -54,7 +54,7 @@ pub static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
     entry: "vertex_main_bindless",
     label: "vert_bindless.slang",
     gates: &[],
-    sizes: Sizes::PoolAndProbes,
+    sizes: Sizes::Probes,
     msaa: false,
 };
 /// `fragment_main_bindless` from `main_bindless.slang`.
@@ -63,7 +63,7 @@ pub static MAIN_BINDLESS_FRAG: SlangProgram = SlangProgram {
     entry: "fragment_main_bindless",
     label: "frag_bindless.slang",
     gates: &[],
-    sizes: Sizes::PoolAndProbes,
+    sizes: Sizes::Probes,
     msaa: false,
 };
 /// `cull_kernel` from `cull.slang`: phase-1 draw cull.
@@ -114,33 +114,10 @@ pub static LIGHT_CULL: SlangProgram = SlangProgram {
     sizes: Sizes::None,
     msaa: false,
 };
-/// `hiz_init_msaa` from `hiz_build.slang`.
-pub static HIZ_INIT_MSAA: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    entry: "hiz_init_msaa",
-    label: "hiz_init_msaa.slang",
-    gates: &["HIZ_INIT_MSAA"],
-    sizes: Sizes::None,
-    msaa: false,
-};
-/// `hiz_init_single` from `hiz_build.slang`.
-pub static HIZ_INIT_SINGLE: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    entry: "hiz_init_single",
-    label: "hiz_init_single.slang",
-    gates: &["HIZ_INIT_SINGLE"],
-    sizes: Sizes::None,
-    msaa: false,
-};
-/// `hiz_downsample` from `hiz_build.slang`.
-pub static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    entry: "hiz_downsample",
-    label: "hiz_downsample.slang",
-    gates: &["HIZ_DOWNSAMPLE"],
-    sizes: Sizes::None,
-    msaa: false,
-};
+// The pyramid is two dispatches: one of the phase-1 kernels, chosen by the
+// main pass's sample count, then the tail. The sample count picks a program
+// here rather than a `USE_MSAA` define because the two read different depth
+// resource types, so each is its own entry point.
 /// `hiz_spd_msaa` from `hiz_build.slang`.
 pub static HIZ_SPD_MSAA: SlangProgram = SlangProgram {
     file: "hiz_build.slang",
@@ -523,7 +500,7 @@ pub static RT_REFLECTIONS_FRAG_TEXTURED: SlangProgram = SlangProgram {
     entry: "rt_reflections_fragment",
     label: "rt_reflections_textured.slang",
     gates: &["RT_TEXTURED"],
-    sizes: Sizes::PoolAndProbes,
+    sizes: Sizes::Probes,
     msaa: false,
 };
 /// `glass_vertex` from `glass.slang`.
@@ -559,7 +536,7 @@ pub static GLASS_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
     entry: "glass_rt_fragment",
     label: "glass_frag_rt_textured.slang",
     gates: &["GLASS_RT", "RT_TEXTURED"],
-    sizes: Sizes::PoolAndProbes,
+    sizes: Sizes::Probes,
     msaa: true,
 };
 
@@ -592,7 +569,7 @@ pub static GLASS_MESH_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
     entry: "glass_mesh_rt_fragment",
     label: "glass_mesh_frag_rt_textured.slang",
     gates: &["RT_TEXTURED"],
-    sizes: Sizes::PoolAndProbes,
+    sizes: Sizes::Probes,
     msaa: true,
 };
 
@@ -633,7 +610,7 @@ pub static WATER_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
     entry: "water_rt_fragment",
     label: "water_frag_rt_textured.slang",
     gates: &["WATER_RT", "RT_TEXTURED"],
-    sizes: Sizes::PoolAndProbes,
+    sizes: Sizes::Probes,
     msaa: true,
 };
 
@@ -649,9 +626,9 @@ pub static ALL: &[&SlangProgram] = &[
     &CULL_PHASE2,
     &CULL_SHADOW,
     &RT_SKIN,
-    &HIZ_INIT_MSAA,
-    &HIZ_INIT_SINGLE,
-    &HIZ_DOWNSAMPLE,
+    &HIZ_SPD_MSAA,
+    &HIZ_SPD_SINGLE,
+    &HIZ_SPD_TAIL,
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,
     &PROBE_GGX,
@@ -705,6 +682,15 @@ pub static ALL: &[&SlangProgram] = &[
 mod tests {
     use super::*;
     use alloc::vec::Vec;
+
+    // A declared program left off `ALL` compiles at renderer init on every host
+    // instead of riding the binary, which is what a slangc-free player cannot
+    // do. The declarations are read from this file's own text because nothing
+    // else distinguishes the two cases.
+    #[test]
+    fn every_declared_program_is_in_the_table() {
+        super::super::declared::assert_table_is_complete(include_str!("vk.rs"));
+    }
 
     // `label` keys each precompiled SPIR-V artifact, paired with the sample
     // count for the programs that read it, so two programs sharing a label

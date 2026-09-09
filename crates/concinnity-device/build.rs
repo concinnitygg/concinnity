@@ -913,15 +913,14 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
 //
 // Two things vary per program and neither depends on the world, which is what
 // makes them enumerable here. `USE_MSAA` is the host's sample count, so a
-// program that reads the main pass's depth gets both variants. `POOL_SIZE` and
-// `MAX_PROBES` are baked at the ceilings a desktop driver affords; a device that
-// seats less falls back to sizing them itself, and that source then matches no
-// artifact and compiles -- see `vulkan::builtins::bindless_pool_size`.
+// program that reads the main pass's depth gets both variants. `MAX_PROBES` is
+// baked at the ceiling a desktop driver affords; a device that seats fewer
+// declares its own and that source then matches no artifact and compiles. The
+// texture pool takes no define at all: the shaders declare it unsized.
 fn precompile_spirv() {
     use concinnity_core::render::slang_programs::vk::{self, Sizes};
-    use concinnity_core::render::uniforms::{BINDLESS_POOL_SIZE, MAX_PROBES};
+    use concinnity_core::render::uniforms::MAX_PROBES;
 
-    let pool = BINDLESS_POOL_SIZE.to_string();
     let probes = MAX_PROBES.to_string();
     let mut artifacts = Vec::new();
     for program in vk::ALL {
@@ -929,9 +928,6 @@ fn precompile_spirv() {
             let mut defines: Vec<(&str, &str)> = program.gates.iter().map(|g| (*g, "1")).collect();
             if program.msaa {
                 defines.push(("USE_MSAA", if *msaa { "1" } else { "0" }));
-            }
-            if program.sizes == Sizes::PoolAndProbes {
-                defines.push(("POOL_SIZE", pool.as_str()));
             }
             if program.sizes != Sizes::None {
                 defines.push(("MAX_PROBES", probes.as_str()));

@@ -20,7 +20,7 @@ use concinnity_core::components::compiled_programs::CompiledProgram;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::slang_programs::surface::{self, Sources, Stage};
 use concinnity_core::render::slang_source;
-use concinnity_core::render::uniforms::{BINDLESS_POOL_SIZE, MAX_PROBES};
+use concinnity_core::render::uniforms::MAX_PROBES;
 use concinnity_slang::{SlangJob, SlangTarget};
 
 // What slangc emits for a host, and for a stage where the target needs one.
@@ -51,7 +51,7 @@ pub fn compile_world_shader(
     let work = concinnity_host::scratch::Scratch::dir(&format!("shader-{name}"))?;
     let mut programs = Vec::new();
     for group in surface::groups(platform) {
-        let source = surface::source(group[0], platform, BINDLESS_POOL_SIZE, MAX_PROBES, sources);
+        let source = surface::source(group[0], platform, MAX_PROBES, sources);
         let entries: Vec<&str> = group.iter().map(|p| p.entry).collect();
         let job = SlangJob {
             source: &source,
@@ -177,8 +177,7 @@ mod tests {
             assert_eq!(programs.fragment, SHADE);
             assert!(programs.vertex.is_none());
             for program in surface::programs(platform) {
-                let source =
-                    surface::source(program, platform, BINDLESS_POOL_SIZE, MAX_PROBES, &sources);
+                let source = surface::source(program, platform, MAX_PROBES, &sources);
                 let digest = slang_source::source_digest(&source);
                 let bytes = programs
                     .artifact(program.entry, digest)

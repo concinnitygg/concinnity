@@ -53,7 +53,6 @@ pub(in crate::directx) fn world_entry(
 ) -> Result<Vec<u8>, String> {
     let req = crate::surface_source::Request {
         platform: concinnity_core::platform::Platform::Hlsl,
-        pool_size: 0,
         probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         hot_reload,
     };

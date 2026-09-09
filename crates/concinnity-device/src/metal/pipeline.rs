@@ -109,7 +109,6 @@ pub(super) fn world_library(
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
     let req = crate::surface_source::Request {
         platform: concinnity_core::platform::Platform::Metal,
-        pool_size: concinnity_core::render::uniforms::BINDLESS_POOL_SIZE,
         probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         hot_reload,
     };

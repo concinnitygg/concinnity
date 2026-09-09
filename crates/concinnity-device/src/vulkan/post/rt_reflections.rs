@@ -66,7 +66,6 @@ pub(in crate::vulkan) fn compile_rt_shaders(
     let ctx = builtins::Ctx {
         hot_reload,
         msaa: false,
-        pool_size: pool_size.max(1),
         probe_count: probe_cube_count as usize,
     };
     let vs = slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;

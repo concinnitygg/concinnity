@@ -136,30 +136,10 @@ pub static LIGHT_CULL: SlangProgram = SlangProgram {
     label: "light_cull.slang",
     defines: &[],
 };
-/// `hiz_init_single` from `hiz_build.slang`.
-pub static HIZ_INIT_SINGLE: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    entry: "hiz_init_single",
-    profile: "cs_6_0",
-    label: "hiz_init_single.slang",
-    defines: &[("HIZ_INIT_SINGLE", "1")],
-};
-/// `hiz_init_msaa` from `hiz_build.slang`.
-pub static HIZ_INIT_MSAA: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    entry: "hiz_init_msaa",
-    profile: "cs_6_0",
-    label: "hiz_init_msaa.slang",
-    defines: &[("HIZ_INIT_MSAA", "1")],
-};
-/// `hiz_downsample` from `hiz_build.slang`.
-pub static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
-    file: "hiz_build.slang",
-    entry: "hiz_downsample",
-    profile: "cs_6_0",
-    label: "hiz_downsample.slang",
-    defines: &[("HIZ_DOWNSAMPLE", "1")],
-};
+// The pyramid is two dispatches: one of the phase-1 kernels, chosen by the
+// main pass's sample count, then the tail. The sample count picks a program
+// here rather than a define because the two read different depth resource
+// types, so each is its own entry point.
 /// `hiz_spd_msaa` from `hiz_build.slang`.
 pub static HIZ_SPD_MSAA: SlangProgram = SlangProgram {
     file: "hiz_build.slang",
@@ -831,9 +811,9 @@ pub static ALL: &[&SlangProgram] = &[
     &CULL_PHASE2,
     &CULL_SHADOW,
     &RT_SKIN,
-    &HIZ_INIT_SINGLE,
-    &HIZ_INIT_MSAA,
-    &HIZ_DOWNSAMPLE,
+    &HIZ_SPD_MSAA,
+    &HIZ_SPD_SINGLE,
+    &HIZ_SPD_TAIL,
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,
     &PROBE_GGX,
@@ -899,6 +879,15 @@ mod tests {
     use super::*;
     use alloc::vec::Vec;
 
+    // A declared program left off `ALL` compiles at renderer init on every host
+    // instead of riding the binary, which is what a slangc-free player cannot
+    // do. The declarations are read from this file's own text because nothing
+    // else distinguishes the two cases.
+    #[test]
+    fn every_declared_program_is_in_the_table() {
+        super::super::declared::assert_table_is_complete(include_str!("dx.rs"));
+    }
+
     // `label` is the key the build script files each precompiled DXIL artifact
     // under and the renderer looks it up by, so two programs sharing one would
     // silently hand one variant's bytes to the other. Nothing else is unique:
@@ -932,10 +921,10 @@ mod tests {
         }
     }
 
-    // The table is the compile set: a declared program left out of it is never
-    // precompiled and never reached.
+    // Both fields key a compile: the entry point slangc is asked for and the
+    // profile dxc targets.
     #[test]
-    fn the_table_carries_every_declared_program() {
+    fn every_table_entry_names_an_entry_point_and_profile() {
         for p in ALL {
             assert!(!p.entry.is_empty() && !p.profile.is_empty(), "{}", p.label);
         }

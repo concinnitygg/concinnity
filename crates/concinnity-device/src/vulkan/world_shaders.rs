@@ -41,7 +41,6 @@ impl VkContext {
                 msaa_samples: self.msaa_samples,
                 swapchain_format: self.swapchain.format,
                 hot_reload: self.hot_reload.enabled,
-                pool_size: self.cull.bindless_pool_size,
                 probe_count: self.descriptors.probe_cube_count as usize,
             },
             bucket as usize,

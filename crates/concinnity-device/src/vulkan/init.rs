@@ -1698,38 +1698,16 @@ impl VkContext {
         // (`gpu_textures.len() + gpu_normal_maps.len()`); the helper derives the
         // same value from the texture table so the export-time precompile matches.
         let bindless_active = n_cull > 0;
-        // Whether this device can declare the pool at its fixed ceiling rather
-        // than sizing it to the world. Two things have to hold, and both are
-        // about never needing to clamp or truncate: the ceiling has to fit the
-        // plain per-stage sampler budget (six figures on every desktop driver,
-        // 16 on MoltenVK), and the world's own textures have to fit inside the
-        // ceiling. Where either fails the pool is sized to the world exactly as
-        // before, which is also what keeps every index in range by construction.
-        //
-        // The payoff is that `POOL_SIZE` stops depending on the world, so the
-        // build script can compile these shaders ahead of time; a device that
-        // falls back simply misses those artifacts and compiles.
-        let ceiling_fits = bindless_active
-            && !super::descriptor_layout::bindless_pool_needs_update_after_bind(
-                max_per_stage_samplers,
-                probe_cube_count,
-                concinnity_core::render::uniforms::BINDLESS_POOL_SIZE as u32,
-                global_update_after_bind,
-            )
-            && super::builtins::world_pool_size(textures.len())
-                <= concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
+        // The pool is sized to the world's own texture table, which keeps every
+        // index in range by construction. The shaders declare the array unsized,
+        // so this length reaches the descriptor layout and nothing else: it is not
+        // part of any source text and cannot make a program miss its precompiled
+        // artifact.
         let bindless_pool_size = if bindless_active {
-            super::builtins::bindless_pool_size(textures.len(), ceiling_fits)
+            super::builtins::world_pool_size(textures.len())
         } else {
             0
         };
-        if bindless_active && !ceiling_fits {
-            tracing::debug!(
-                "bindless texture pool: sized to the world ({bindless_pool_size}); this device \
-                 cannot seat the {} slot ceiling, so its shaders compile at init",
-                concinnity_core::render::uniforms::BINDLESS_POOL_SIZE
-            );
-        }
         // The texture pool's length is the world's texture table, so it cannot be
         // clamped to the device's per-stage sampler headroom the way the probe
         // cube array is. Where it does not fit, its set layout is declared
@@ -2137,8 +2115,7 @@ impl VkContext {
             // The engine's own pair is the program for every bucket that
             // declares no Shader and the source of the Wireframe twin; bucket 0
             // takes the world default Shader's pair where it declares one.
-            let engine_pair =
-                compile_bindless_shaders(hot_reload, bindless_pool_size, probe_cube_count)?;
+            let engine_pair = compile_bindless_shaders(hot_reload, probe_cube_count)?;
             let pipeline = build_bucket_pipeline(
                 &device,
                 BucketPipelineTargets {
@@ -2147,7 +2124,6 @@ impl VkContext {
                     msaa_samples,
                     swapchain_format,
                     hot_reload,
-                    pool_size: bindless_pool_size,
                     probe_count: probe_cube_count as usize,
                 },
                 0,
@@ -2255,7 +2231,6 @@ impl VkContext {
                         msaa_samples,
                         swapchain_format,
                         hot_reload,
-                        pool_size: bindless_pool_size,
                         probe_count: probe_cube_count as usize,
                     },
                     bucket_shaders,

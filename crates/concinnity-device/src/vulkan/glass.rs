@@ -56,7 +56,6 @@ fn compile_glass_shaders(
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
-        pool_size: 0,
         probe_count: probe_cube_count as usize,
     };
     let vert = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
@@ -84,12 +83,9 @@ fn compile_glass_rt_shaders(
     pool_size: usize,
     probe_cube_count: u32,
 ) -> Result<GlassRtShaders, String> {
-    // The pool declaration needs at least one slot even when the bindless pool
-    // is absent (the textured variant is then skipped).
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
-        pool_size: pool_size.max(1),
         probe_count: probe_cube_count as usize,
     };
     let vs = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
@@ -247,7 +243,6 @@ fn compile_glass_mesh_shaders(
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
-        pool_size: pool_size.max(1),
         probe_count: probe_cube_count as usize,
     };
     let vs = super::slang_builtins::GLASS_MESH_VERT.compile(&ctx)?;

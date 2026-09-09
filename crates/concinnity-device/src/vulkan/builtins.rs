@@ -10,40 +10,17 @@
 
 // Slots a world with `texture_count` table entries needs: one image per slot (a
 // single fallback when the table is empty) plus the reserved fallbacks,
-// flat-normal and white. What the pool was always sized to, and what a device
-// that cannot seat the ceiling still falls back to.
+// flat-normal and white. The pool's descriptor count, and the only length it
+// has: the shaders declare the array unsized and read whatever the set layout
+// was built with, so this never reaches the source text.
 pub(crate) fn world_pool_size(texture_count: usize) -> usize {
     texture_count.max(1) + crate::gfx::render_types::FALLBACK_TEXTURE_COUNT
-}
-
-// The pool length a device declares, baked into the pool-sized shaders via
-// `{POOL_SIZE}`.
-//
-// The ceiling wherever it fits, which is every desktop driver, so the shader
-// text is a property of the build rather than of the world -- which is what
-// lets the build script compile these programs ahead of any world. Where it
-// does not fit the pool is sized to the world exactly as it always was, and the
-// differing `POOL_SIZE` makes that source miss the precompiled artifacts and
-// compile, through the same content check every other artifact goes through.
-//
-// `ceiling_fits` is the device's answer (see `vulkan::init`); the export-time
-// precompile has no device and bakes the ceiling, which is what a bundle's
-// eventual host will use unless it is one of the constrained ones.
-pub(crate) fn bindless_pool_size(texture_count: usize, ceiling_fits: bool) -> usize {
-    if ceiling_fits {
-        concinnity_core::render::uniforms::BINDLESS_POOL_SIZE
-    } else {
-        world_pool_size(texture_count)
-    }
 }
 
 // Inputs a call site supplies to assemble a program's source.
 pub(crate) struct Ctx {
     pub hot_reload: bool,
     pub msaa: bool,
-    // Bindless texture-pool length for `{POOL_SIZE}` programs; ignored by the
-    // rest. Callers pass the live pool size (see `bindless_pool_size`).
-    pub pool_size: usize,
     // Reflection-probe cube-array length for `{MAX_PROBES}` programs; ignored by
     // the rest. Callers pass the descriptor count the global set layout was
     // built with (`descriptor_layout::probe_cube_array_count`), so the GLSL array
@@ -52,12 +29,11 @@ pub(crate) struct Ctx {
 }
 
 impl Ctx {
-    // For programs whose assembly needs no MSAA state, pool size, or probe count.
+    // For programs whose assembly needs no MSAA state or probe count.
     pub(crate) fn plain(hot_reload: bool) -> Self {
         Self {
             hot_reload,
             msaa: false,
-            pool_size: 0,
             probe_count: 0,
         }
     }
@@ -66,17 +42,14 @@ impl Ctx {
 // Compile every declared program into `bundle`, reusing local cache artifacts
 // where present.
 //
-// Both the pool length and the probe cube-array length are properties of the
-// device the bundle eventually runs on rather than of the world, so both are
-// baked at the ceiling every desktop driver affords. A device that reports less
-// headroom than that (MoltenVK) simply misses these entries and compiles them
-// at first launch.
+// The probe cube-array length is a property of the device the bundle eventually
+// runs on rather than of the world, so it is baked at the ceiling every desktop
+// driver affords. A device that reports less headroom than that declares fewer
+// and compiles these at first launch.
 pub(crate) fn precompile(
     bundle: &mut concinnity_host::store::cache::Segment,
     report: &mut crate::precompile::Report,
 ) {
-    let pool_size = concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
-
     // A program whose source reads the main pass's sample count gets both
     // variants: which one a device runs is a property of its MSAA mode, not of
     // the bundle.
@@ -90,7 +63,6 @@ pub(crate) fn precompile(
             let ctx = Ctx {
                 hot_reload: false,
                 msaa,
-                pool_size,
                 probe_count: concinnity_core::render::uniforms::MAX_PROBES,
             };
             let source = program.source(&ctx);
@@ -136,29 +108,30 @@ mod tests {
         }
     }
 
-    // The ceiling is a constant, so a shader compiled against it is the same
-    // text for every world -- which is the whole reason the build script can
-    // compile these ahead of time. Without it the length tracks the world and
-    // the text does too.
+    // The pool length reaches the descriptor layout and nothing else. A program
+    // assembled for two different worlds is one text, which is what lets the
+    // build script compile it ahead of any world.
     #[test]
-    fn the_ceiling_makes_the_pool_length_independent_of_the_world() {
-        let ceiling = concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
-        for texture_count in [0usize, 1, 7, 64] {
-            assert_eq!(bindless_pool_size(texture_count, true), ceiling);
-            assert_eq!(
-                bindless_pool_size(texture_count, false),
-                world_pool_size(texture_count)
+    fn the_pool_length_never_reaches_the_source() {
+        let probes = concinnity_core::render::uniforms::MAX_PROBES;
+        let ctx = |probe_count| Ctx {
+            hot_reload: false,
+            msaa: false,
+            probe_count,
+        };
+        for program in super::super::slang_builtins::ALL {
+            let source = program.source(&ctx(probes));
+            // The capacities are prepended as `#define` lines ahead of the file
+            // body, which mentions POOL_SIZE in the Metal branch it never takes.
+            let injected: Vec<&str> = source
+                .lines()
+                .take_while(|l| l.starts_with("#define "))
+                .collect();
+            assert!(
+                !injected.iter().any(|l| l.contains("POOL_SIZE")),
+                "{}: pool length injected as {injected:?}",
+                program.label
             );
         }
-    }
-
-    // Every slot the ceiling declares is written at init, and the world's own
-    // images have to fit inside it for that fill to be a pad rather than a
-    // truncation -- which is what `vulkan::init` checks before choosing it.
-    #[test]
-    fn a_world_that_fits_the_ceiling_leaves_room_to_pad() {
-        let ceiling = concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
-        assert!(world_pool_size(ceiling - 3) <= ceiling);
-        assert!(world_pool_size(ceiling) > ceiling);
     }
 }

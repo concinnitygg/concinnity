@@ -96,15 +96,15 @@ impl<'a> Sources<'a> {
     }
 }
 
-/// The variant defines for one entry on one host. `pool_size` and
-/// `probe_count` are the bindless texture-pool length and the probe cube
-/// array length the Vulkan host declares; the cook bakes the ceilings and a
-/// device that cannot seat them recompiles, exactly as the engine's own
-/// bindless programs do. Metal and DirectX bind fixed counts.
+/// The variant defines for one entry on one host. `probe_count` is the probe
+/// cube array length the Vulkan host declares; the cook bakes the ceiling and a
+/// device that cannot seat it recompiles, exactly as the engine's own bindless
+/// programs do. Metal and DirectX bind a fixed count. Only Metal takes a pool
+/// length, for the argument-buffer member that needs one; Vulkan and DirectX
+/// declare that array unsized.
 pub fn defines(
     _program: &Program,
     platform: Platform,
-    pool_size: usize,
     probe_count: usize,
 ) -> Vec<(&'static str, String)> {
     let probes = ("MAX_PROBES", MAX_PROBES.to_string());
@@ -115,10 +115,7 @@ pub fn defines(
             probes,
         ],
         Platform::Hlsl => alloc::vec![("DXIL_ABI", "1".into()), probes],
-        Platform::Glsl => alloc::vec![
-            ("POOL_SIZE", pool_size.to_string()),
-            ("MAX_PROBES", probe_count.to_string()),
-        ],
+        Platform::Glsl => alloc::vec![("MAX_PROBES", probe_count.to_string())],
     }
 }
 
@@ -128,12 +125,11 @@ pub fn defines(
 pub fn source_with(
     program: &Program,
     platform: Platform,
-    pool_size: usize,
     probe_count: usize,
     sources: &Sources<'_>,
     resolve: impl Fn(&str) -> Option<&'static str>,
 ) -> String {
-    let defines = defines(program, platform, pool_size, probe_count);
+    let defines = defines(program, platform, probe_count);
     let defines: Vec<(&str, &str)> = defines.iter().map(|(k, v)| (*k, v.as_str())).collect();
     slang_source::assemble_with_splices(program.file, &defines, resolve, &sources.splices())
 }
@@ -142,14 +138,12 @@ pub fn source_with(
 pub fn source(
     program: &Program,
     platform: Platform,
-    pool_size: usize,
     probe_count: usize,
     sources: &Sources<'_>,
 ) -> String {
     source_with(
         program,
         platform,
-        pool_size,
         probe_count,
         sources,
         crate::render::shaders::embedded,
@@ -225,13 +219,7 @@ mod tests {
     #[test]
     fn the_world_fragment_replaces_the_default_and_the_vertex_default_stays() {
         let frag = program("fragment_main_bindless").unwrap();
-        let src = source(
-            frag,
-            Platform::Metal,
-            BINDLESS_POOL_SIZE,
-            MAX_PROBES,
-            &fragment_only(),
-        );
+        let src = source(frag, Platform::Metal, MAX_PROBES, &fragment_only());
         assert!(src.contains(SHADE));
         assert!(
             !src.contains("return shade_surface(in, od);"),
@@ -246,7 +234,7 @@ mod tests {
             ),
             fragment: SHADE,
         };
-        let src = source(frag, Platform::Metal, BINDLESS_POOL_SIZE, MAX_PROBES, &both);
+        let src = source(frag, Platform::Metal, MAX_PROBES, &both);
         assert!(src.contains("VertexOut transform(float4x4 m,"));
         assert!(!src.contains("return project_vertex(model, pos, normal, tangent, color, uv);"));
     }
@@ -257,34 +245,21 @@ mod tests {
     fn the_pair_assembles_to_one_text() {
         let vert = program("vertex_main_bindless").unwrap();
         let frag = program("fragment_main_bindless").unwrap();
-        let a = source(
-            vert,
-            Platform::Metal,
-            BINDLESS_POOL_SIZE,
-            MAX_PROBES,
-            &fragment_only(),
-        );
-        let b = source(
-            frag,
-            Platform::Metal,
-            BINDLESS_POOL_SIZE,
-            MAX_PROBES,
-            &fragment_only(),
-        );
+        let a = source(vert, Platform::Metal, MAX_PROBES, &fragment_only());
+        let b = source(frag, Platform::Metal, MAX_PROBES, &fragment_only());
         assert_eq!(a, b);
         assert!(a.contains(SHADE));
         assert!(a.contains("#define METAL_ABI 1"));
     }
 
-    // Each host's defines are the ones its own program table bakes, and the
-    // Vulkan pool size is whatever the caller declares.
+    // Each host's defines are the ones its own program table bakes. Only Metal
+    // takes a pool length, for the argument-buffer member that needs one.
     #[test]
     fn defines_follow_the_host() {
         let frag = program("fragment_main_bindless").unwrap();
-        let names =
-            |platform, pool| -> Vec<(&str, String)> { defines(frag, platform, pool, MAX_PROBES) };
+        let names = |platform| -> Vec<(&str, String)> { defines(frag, platform, MAX_PROBES) };
         assert_eq!(
-            names(Platform::Metal, 0),
+            names(Platform::Metal),
             [
                 ("METAL_ABI", "1".to_string()),
                 ("POOL_SIZE", "1024".to_string()),
@@ -292,30 +267,21 @@ mod tests {
             ]
         );
         assert_eq!(
-            names(Platform::Hlsl, 0),
+            names(Platform::Hlsl),
             [
                 ("DXIL_ABI", "1".to_string()),
                 ("MAX_PROBES", "8".to_string())
             ]
         );
-        assert_eq!(
-            names(Platform::Glsl, 37),
-            [
-                ("POOL_SIZE", "37".to_string()),
-                ("MAX_PROBES", "8".to_string())
-            ]
-        );
+        assert_eq!(names(Platform::Glsl), [("MAX_PROBES", "8".to_string())]);
         // Only the Vulkan host reads the probe count the device seats.
         assert_eq!(
-            defines(frag, Platform::Glsl, 37, 4),
-            [
-                ("POOL_SIZE", "37".to_string()),
-                ("MAX_PROBES", "4".to_string())
-            ]
+            defines(frag, Platform::Glsl, 4),
+            [("MAX_PROBES", "4".to_string())]
         );
         assert_eq!(
-            defines(frag, Platform::Metal, 0, 4),
-            defines(frag, Platform::Metal, 0, MAX_PROBES)
+            defines(frag, Platform::Metal, 4),
+            defines(frag, Platform::Metal, MAX_PROBES)
         );
     }
 }

@@ -116,9 +116,9 @@ mod tests {
                 .starts_with("#define DXIL_ABI 1\n#define MAX_PROBES 8\n")
         );
         assert!(
-            HIZ_INIT_MSAA
+            HIZ_SPD_MSAA
                 .source(false)
-                .starts_with("#define HIZ_INIT_MSAA 1\n")
+                .starts_with("#define HIZ_SPD_MSAA 1\n")
         );
         // The SSR resolve reads the probe array but none of the texture pool.
         assert!(
