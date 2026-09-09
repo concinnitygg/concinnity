@@ -89,6 +89,12 @@ impl App {
         &self.world
     }
 
+    /// Mutably borrow the world being run, so a caller holding the app can
+    /// still add to it: content, or a system, up until `start` reads them.
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
     /// Ticks stepped so far.
     pub fn ticks(&self) -> u64 {
         self.sim.ticks()

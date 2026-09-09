@@ -480,6 +480,22 @@ fn expr_rows(
                 out[before].element = Some(p);
             }
         }
+        Shape::Fields => {
+            // The same helper a node's settings draw through: the operands are
+            // named, so they draw as named rows rather than as `a` and `b`.
+            let f = Fields {
+                body,
+                base: b,
+                depth: d,
+            };
+            for operand in palette::operands(verb) {
+                if operand.query {
+                    f.text(out, operand.key, Text::Str);
+                } else {
+                    f.expr(out, operand.key, false);
+                }
+            }
+        }
         Shape::Unit | Shape::Literal | Shape::Name => {}
     }
 }
@@ -704,6 +720,56 @@ mod tests {
         let query = find(&rows, "query");
         assert_eq!(query.value, "player");
         assert_eq!(find(&rows, "has").kind, Kind::List(List::Components));
+    }
+
+    // A spatial expression's operands are named rather than positional, so they
+    // draw as named rows under it: the query as text the value field edits, and
+    // each operand as an expression row of its own.
+    #[test]
+    fn a_spatial_expressions_operands_draw_as_named_rows() {
+        let rows = rows(&json!({"scope": ["Prop"],
+                                "queries": [{"name": "props", "has": ["Prop"]}],
+                                "do": [{"despawn": {"target":
+            {"raycast": {"query": "props", "from": "self",
+                         "dir": {"vec3": [0.0, 0.0, -1.0]}, "distance": {"float": 20.0}}}}}]}));
+        let target = find(&rows, "target");
+        assert_eq!(target.value, "raycast");
+
+        let base = vec![
+            field("do"),
+            Step::Index(0),
+            field("despawn"),
+            field("target"),
+            field("raycast"),
+        ];
+        let under = |key: &str| {
+            let mut p = base.clone();
+            p.push(field(key));
+            p
+        };
+
+        // By path, since the declaration list has a `query`-labelled row too.
+        let at = |path: Vec<Step>| {
+            rows.iter()
+                .find(|r| r.path == path)
+                .unwrap_or_else(|| panic!("no row at {path:?}"))
+        };
+        let query = at(under("query"));
+        assert_eq!(query.label, "query");
+        assert_eq!(query.value, "props");
+        assert_eq!(
+            query.kind,
+            Kind::Text(Text::Str),
+            "the query is a name the value field edits"
+        );
+
+        for key in ["from", "dir", "distance"] {
+            let row = at(under(key));
+            assert_eq!(row.label, key);
+            assert_eq!(row.kind, Kind::Expr { optional: false }, "{key}");
+            assert_eq!(row.depth, target.depth + 1, "{key}");
+        }
+        assert_eq!(at(under("dir")).value, "vec3 0, 0, -1");
     }
 
     // The body flattens into an indented tree: a node's fields sit under it and

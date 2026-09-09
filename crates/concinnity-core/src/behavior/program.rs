@@ -38,6 +38,33 @@ pub enum CExpr {
     First(u16),
     /// How many entities a declared query selects, by slot.
     Count(u16),
+    /// The entity of a declared query nearest a point.
+    Nearest {
+        /// The query's slot.
+        query: u16,
+        /// The point searched around.
+        of: Box<CExpr>,
+    },
+    /// How many of a declared query's entities lie within a radius of a point.
+    CountWithin {
+        /// The query's slot.
+        query: u16,
+        /// The point searched around.
+        of: Box<CExpr>,
+        /// How far from it to search.
+        radius: Box<CExpr>,
+    },
+    /// The nearest entity of a declared query a ray meets.
+    Raycast {
+        /// The query's slot.
+        query: u16,
+        /// Where the ray starts.
+        from: Box<CExpr>,
+        /// Which way it points.
+        dir: Box<CExpr>,
+        /// How far it reaches.
+        distance: Box<CExpr>,
+    },
     /// Two numbers combined.
     Arith(Arith, Box<CExpr>, Box<CExpr>),
     /// A vector scaled to unit length.
@@ -85,6 +112,13 @@ pub enum COp {
         /// Binding slot the iterated entity lands in.
         bind: u16,
         /// Nodes run per entity.
+        body: Vec<CNode>,
+    },
+    /// Run a block later, with the bindings live when this node was reached.
+    After {
+        /// Seconds of simulated time to wait.
+        seconds: CExpr,
+        /// Nodes run once the wait elapses.
         body: Vec<CNode>,
     },
     /// Introduce a binding for the rest of the enclosing list.
@@ -200,6 +234,34 @@ impl Program {
     pub fn is_scoped(&self) -> bool {
         !self.scope.is_empty()
     }
+
+    /// The block an [`COp::After`] node holds, by that node's id.
+    ///
+    /// A deferred run records the node it came from rather than a copy of the
+    /// block, so nothing has to be kept alive beside the program; this is what
+    /// resolves the one back to the other when the wait elapses. `None` when
+    /// no node of that id defers anything, which is what a run scheduled
+    /// against a body that has since been edited resolves to.
+    pub fn deferred_block(&self, node: u32) -> Option<&[CNode]> {
+        fn find(nodes: &[CNode], node: u32) -> Option<&[CNode]> {
+            for n in nodes {
+                let found = match &n.op {
+                    COp::After { body, .. } if n.id == node => return Some(body),
+                    COp::After { body, .. } => find(body, node),
+                    COp::If {
+                        then, otherwise, ..
+                    } => find(then, node).or_else(|| find(otherwise, node)),
+                    COp::ForEach { body, .. } => find(body, node),
+                    _ => None,
+                };
+                if found.is_some() {
+                    return found;
+                }
+            }
+            None
+        }
+        find(&self.body, node)
+    }
 }
 
 /// The world's variables, in slot order: shared across behaviors, so slots are
@@ -253,5 +315,89 @@ impl VarTable {
         self.slot_of(name)
             .and_then(|slot| self.inits.get(slot as usize))
             .copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CExpr, CNode, COp, Program};
+    use crate::behavior::Val;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    fn node(id: u32, op: COp) -> CNode {
+        CNode { id, op }
+    }
+
+    fn after(id: u32, body: Vec<CNode>) -> CNode {
+        node(
+            id,
+            COp::After {
+                seconds: CExpr::Lit(Val::Float(1.0)),
+                body,
+            },
+        )
+    }
+
+    fn program(body: Vec<CNode>) -> Program {
+        Program {
+            def: Default::default(),
+            scope: Vec::new(),
+            local_inits: Vec::new(),
+            queries: Vec::new(),
+            body,
+            paths: Vec::new(),
+            bindings: 0,
+        }
+    }
+
+    // A deferred run records the node it came from, so this is what turns that
+    // number back into the block to run.
+    #[test]
+    fn a_deferred_block_resolves_by_its_node_id() {
+        let p = program(vec![node(0, COp::Save), after(1, vec![node(2, COp::Save)])]);
+        let block = p.deferred_block(1).expect("node 1 defers a block");
+        assert_eq!(block.len(), 1);
+        assert_eq!(block[0].id, 2);
+    }
+
+    // The search descends branches and loop bodies, so an `after` nested
+    // anywhere in the body is reachable.
+    #[test]
+    fn a_nested_deferred_block_is_found() {
+        let p = program(vec![node(
+            0,
+            COp::If {
+                cond: CExpr::Lit(Val::Bool(true)),
+                then: vec![node(
+                    1,
+                    COp::ForEach {
+                        query: 0,
+                        bind: 0,
+                        body: vec![after(2, vec![node(3, COp::Save)])],
+                    },
+                )],
+                otherwise: Vec::new(),
+            },
+        )]);
+        let block = p.deferred_block(2).expect("node 2 defers a block");
+        assert_eq!(block[0].id, 3);
+    }
+
+    // An `after` inside an `after` block is reachable too: the search descends
+    // a deferred block the way it descends any other list.
+    #[test]
+    fn an_after_inside_a_deferred_block_is_found() {
+        let p = program(vec![after(0, vec![after(1, vec![node(2, COp::Save)])])]);
+        assert_eq!(p.deferred_block(1).expect("the inner block")[0].id, 2);
+    }
+
+    // A node that defers nothing resolves to nothing, which is what a run
+    // scheduled against a body that has since been edited lands on.
+    #[test]
+    fn a_node_that_defers_nothing_resolves_to_nothing() {
+        let p = program(vec![node(0, COp::Save), after(1, Vec::new())]);
+        assert!(p.deferred_block(0).is_none());
+        assert!(p.deferred_block(9).is_none());
     }
 }

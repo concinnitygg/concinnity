@@ -3,8 +3,9 @@
 // Nothing here reads the world back, so the runs apply in job order and each
 // sees exactly what the one before it left.
 
-use super::BehaviorSystem;
+use super::eval::Resume;
 use super::instance::Instance;
+use super::{BehaviorSystem, Deferred};
 use crate::behavior::{Effect, Val};
 use crate::components::{
     DespawnRequest, PlayCue, ReparentRequest, SceneCommand, ScreenCommand, SpawnRequest,
@@ -45,6 +46,22 @@ impl BehaviorSystem {
                     } else {
                         value
                     };
+                }
+                Effect::After {
+                    node,
+                    seconds,
+                    bindings,
+                } => {
+                    // A non-positive wait would run the block on the next tick
+                    // rather than this one, which reads as a bug rather than as
+                    // "immediately"; the countdown handles it either way, so it
+                    // is queued like any other.
+                    self.pending.push(Deferred {
+                        program: i,
+                        entity,
+                        resume: Some(Resume { node, bindings }),
+                        seconds,
+                    });
                 }
                 Effect::SetTransform { entity, transform } => {
                     if let Some(current) = ctx.get_mut::<Transform>(entity) {

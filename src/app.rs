@@ -64,6 +64,37 @@ impl App {
             .map_err(crate::error::from_startup)
     }
 
+    /// Register a system on the app's world, to run in `phase` under `name`.
+    ///
+    /// The same registration [`World::add_system`](crate::World::add_system)
+    /// makes, reachable on an app whose world came from a blob rather than from
+    /// a world assembled here.
+    ///
+    /// ```no_run
+    /// # use concinnity::system::{Phase, PipelineContext, StepResult, System};
+    /// # use concinnity::{App, Error};
+    /// # #[derive(Debug)]
+    /// # struct Ai;
+    /// # impl System for Ai {
+    /// #     fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult { StepResult::Continue }
+    /// # }
+    /// # fn main() -> Result<(), Error> {
+    /// App::from_blob("data/0")?
+    ///     .with_system(Phase::Late, "Ai", Ai)
+    ///     .run()
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_system<S: concinnity_core::ecs::System>(
+        mut self,
+        phase: concinnity_core::ecs::Phase,
+        name: &'static str,
+        system: S,
+    ) -> Self {
+        self.inner.world_mut().add_system(phase, name, system);
+        self
+    }
+
     /// The same app on the headless loop: the simulation systems stepped on a
     /// fixed virtual timestep, with no window and no renderer. A world that
     /// declares a `GraphicsConfig` keeps it and draws nothing, which is what

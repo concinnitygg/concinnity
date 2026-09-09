@@ -14,9 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::components::{
-    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
-    DespawnRequest, EntityTarget, PropInstance, SpawnRequest, StoryCommand, StoryPlayback,
-    Transform, VariableDecl, VisibilityRequest,
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery, Collider,
+    DespawnRequest, EntityTarget, PropCollider, PropInstance, SpawnRequest, StoryCommand,
+    StoryPlayback, Transform, VariableDecl, VisibilityRequest,
 };
 use crate::ecs::{
     ExecutionTrace, HEADLESS_SYSTEMS, TraceEvent, TracePaths, TraceStep, TraceVal, World,
@@ -355,6 +355,238 @@ fn a_delay_postpones_the_body() {
     assert_eq!(var(&sys, "late"), 0, "the delay has not elapsed");
     tick(&mut sys, &mut world, 1.5);
     assert_eq!(var(&sys, "late"), 1);
+}
+
+// An `after` block runs once, later, and the nodes beside it run now.
+#[test]
+fn an_after_block_runs_once_the_wait_elapses() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Start,
+        body: vec![
+            set_var("now", 1, false),
+            BehaviorNode::After {
+                seconds: BehaviorExpr::Float(1.0),
+                body: vec![set_var("later", 1, false)],
+            },
+        ],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "now"), 1, "the body ran past the deferral");
+    assert_eq!(var(&sys, "later"), 0, "the wait has not elapsed");
+
+    tick(&mut sys, &mut world, 1.5);
+    assert_eq!(var(&sys, "later"), 1);
+
+    // Once run, the block is spent: a `start` behavior does not fire again, so
+    // nothing re-queues it.
+    tick(&mut sys, &mut world, 1.5);
+    assert_eq!(var(&sys, "later"), 1);
+}
+
+// The block resumes on the frame its node captured, so a name bound before the
+// wait still reads after it. This is what makes `after` usable inside a
+// `for_each`: each deferral keeps the entity it was reached with.
+#[test]
+fn a_deferred_block_keeps_the_bindings_it_was_reached_with() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Start,
+        body: vec![
+            BehaviorNode::Let {
+                name: "amount".to_string(),
+                value: BehaviorExpr::Int(7),
+            },
+            BehaviorNode::After {
+                seconds: BehaviorExpr::Float(1.0),
+                body: vec![BehaviorNode::Set {
+                    var: "carried".to_string(),
+                    value: BehaviorExpr::Bind("amount".to_string()),
+                    add: false,
+                }],
+            },
+        ],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "carried"), 0);
+    tick(&mut sys, &mut world, 1.5);
+    assert_eq!(var(&sys, "carried"), 7);
+}
+
+// Two deferrals from one tick each keep their own frame rather than sharing
+// the last one's.
+#[test]
+fn each_deferral_keeps_its_own_frame() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Tick,
+        once: true,
+        body: vec![
+            BehaviorNode::Let {
+                name: "n".to_string(),
+                value: BehaviorExpr::Int(1),
+            },
+            BehaviorNode::After {
+                seconds: BehaviorExpr::Float(1.0),
+                body: vec![BehaviorNode::Set {
+                    var: "total".to_string(),
+                    value: BehaviorExpr::Bind("n".to_string()),
+                    add: true,
+                }],
+            },
+            BehaviorNode::Let {
+                name: "n".to_string(),
+                value: BehaviorExpr::Int(10),
+            },
+            BehaviorNode::After {
+                seconds: BehaviorExpr::Float(1.0),
+                body: vec![BehaviorNode::Set {
+                    var: "total".to_string(),
+                    value: BehaviorExpr::Bind("n".to_string()),
+                    add: true,
+                }],
+            },
+        ],
+        ..Default::default()
+    }]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "total"), 0);
+    tick(&mut sys, &mut world, 1.5);
+    assert_eq!(
+        var(&sys, "total"),
+        11,
+        "each block read the value bound where its node sat"
+    );
+}
+
+// The spatial expressions, end to end: a scoped behavior asks about a declared
+// query, and the running entity is left out of the answer.
+#[test]
+fn count_within_counts_a_querys_entities_around_the_running_one() {
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Tick,
+        scope: vec!["Prop".to_string()],
+        queries: vec![BehaviorQuery {
+            name: "props".to_string(),
+            has: vec!["Prop".to_string()],
+        }],
+        body: vec![BehaviorNode::Set {
+            var: "near".to_string(),
+            value: BehaviorExpr::CountWithin {
+                query: "props".to_string(),
+                of: Box::new(BehaviorExpr::SelfEntity),
+                radius: Box::new(BehaviorExpr::Float(4.0)),
+            },
+            add: true,
+        }],
+        ..Default::default()
+    }]);
+    // One at the origin, one just inside the radius, one well outside.
+    spawn_prop(&mut world, [0.0, 0.0, 0.0]);
+    spawn_prop(&mut world, [3.0, 0.0, 0.0]);
+    spawn_prop(&mut world, [100.0, 0.0, 0.0]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    // The body runs per prop and adds: the two near each other see one
+    // neighbour each, the far one sees none, and no entity counts itself.
+    assert_eq!(var(&sys, "near"), 2);
+}
+
+// A ray is tested against the entities the named query selects, using their
+// colliders, and never meets the entity casting it.
+#[test]
+fn raycast_meets_a_querys_entity_and_never_the_caster() {
+    let blocker_behavior = |dir: [f32; 3]| Behavior {
+        on: BehaviorSource::Tick,
+        scope: vec!["Prop".to_string()],
+        queries: vec![BehaviorQuery {
+            name: "props".to_string(),
+            has: vec!["Prop".to_string()],
+        }],
+        body: vec![BehaviorNode::If {
+            cond: BehaviorExpr::Alive(Box::new(BehaviorExpr::Raycast {
+                query: "props".to_string(),
+                from: Box::new(BehaviorExpr::SelfEntity),
+                dir: Box::new(BehaviorExpr::Vec3(dir)),
+                distance: Box::new(BehaviorExpr::Float(20.0)),
+            })),
+            then: vec![set_var("hits", 1, true)],
+            otherwise: vec![],
+        }],
+        ..Default::default()
+    };
+
+    // A caster at the origin and a solid box five along +x. Both carry
+    // colliders, so a ray that met its own would report a hit at once.
+    let solid = |world: &mut TestWorld, x: f32| {
+        let entity = spawn_prop(world, [x, 0.0, 0.0]);
+        world
+            .components
+            .insert_typed(entity, Collider(PropCollider::default()));
+        entity
+    };
+
+    let mut world = world_with(vec![blocker_behavior([1.0, 0.0, 0.0])]);
+    solid(&mut world, 0.0);
+    solid(&mut world, 5.0);
+    let mut sys = system(&mut world);
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(
+        var(&sys, "hits"),
+        1,
+        "the body runs for both props, and only the one at the origin has the \
+         box ahead of it"
+    );
+
+    // One prop, alone in its own query, casting from its own position: without
+    // the exclusion the ray would meet the collider it starts inside at once.
+    let mut world = world_with(vec![blocker_behavior([1.0, 0.0, 0.0])]);
+    solid(&mut world, 0.0);
+    let mut sys = system(&mut world);
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "hits"), 0, "a caster never meets itself");
+}
+
+// A deferral is a run of the body it was scheduled against, so an edit that
+// replaces that body drops it rather than resuming into the new one. Driven
+// through `step`, which is what notices the edit.
+#[test]
+fn an_edit_drops_a_deferral_of_the_body_it_replaced() {
+    let deferring = |seconds: f32| Behavior {
+        asset_id: AssetId(1),
+        on: BehaviorSource::Start,
+        body: vec![BehaviorNode::After {
+            seconds: BehaviorExpr::Float(seconds),
+            body: vec![set_var("fired", 1, true)],
+        }],
+        ..Default::default()
+    };
+    // Long enough that no number of steps in this test elapses it, so what
+    // fires can only be a deferral that survived.
+    let mut world = world_with(vec![deferring(1.0e6)]);
+    let mut sys = system(&mut world);
+
+    step(&mut sys, &mut world);
+    assert_eq!(sys.pending.len(), 1, "the block is waiting");
+
+    // The edited body is a different program, so its `start` fires again and
+    // defers afresh; what must not survive is the deferral against the body
+    // that was replaced.
+    edit_behavior(&mut world, 0, deferring(2.0e6));
+    step(&mut sys, &mut world);
+    assert_eq!(
+        sys.pending.len(),
+        1,
+        "the replaced body's deferral is gone and the new one waits: {:?}",
+        sys.pending,
+    );
+    assert_eq!(var(&sys, "fired"), 0, "neither wait has elapsed");
 }
 
 #[test]
@@ -1672,7 +1904,7 @@ fn a_pending_run_follows_its_program_or_goes_with_it() {
     edit_behavior(&mut world, 0, delayed(1, "edited"));
     step(&mut sys, &mut world);
     assert_eq!(
-        sys.pending.iter().map(|p| p.0).collect::<Vec<_>>(),
+        sys.pending.iter().map(|p| p.program).collect::<Vec<_>>(),
         vec![1, 0],
         "the survivor keeps its place; the edited body scheduled a fresh run"
     );

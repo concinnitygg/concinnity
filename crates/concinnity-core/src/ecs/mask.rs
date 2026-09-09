@@ -75,6 +75,29 @@ impl ComponentMask {
     }
 }
 
+/// The [`ComponentMask`] holding the given component types, for the
+/// [`Access`](crate::ecs::Access) a system declares.
+///
+/// ```
+/// use concinnity_core::component_mask;
+/// use concinnity_core::components::{Transform, TextLabel};
+/// use concinnity_core::ecs::Access;
+///
+/// let access = Access::new()
+///     .reads_components(component_mask![Transform])
+///     .writes_components(component_mask![TextLabel]);
+/// ```
+#[macro_export]
+macro_rules! component_mask {
+    ( $( $ty:ty ),* $(,)? ) => {{
+        let mut m = $crate::ecs::ComponentMask::EMPTY;
+        $( m.insert($crate::ecs::ComponentId::new(
+            <$ty as $crate::ecs::ComponentSlot>::DISCRIMINANT,
+        )); )*
+        m
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -340,6 +340,13 @@ fn check_verb<'a>(verb: &str, body: &'a Value, scope: &mut Scope<'a>) -> Result<
             check_nodes(body.get("do"), scope).at_field("do")?;
             scope.bindings.truncate(depth);
         }
+        "after" => {
+            expect(body.get("seconds"), Ty::Float, "`after` seconds", scope).at_field("seconds")?;
+            // The block runs on the bindings live where the node sits, so it
+            // checks in this scope; anything it binds still falls out with it,
+            // exactly as `check_nodes` does for every other list.
+            check_nodes(body.get("do"), scope).at_field("do")?;
+        }
         "let" => {
             let bind = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if bind.is_empty() {
@@ -444,6 +451,20 @@ fn expect(expr: Option<&Value>, want: Ty, what: &str, scope: &Scope<'_>) -> Resu
     Ok(())
 }
 
+// A point operand: a vector, or an entity whose position stands in for one.
+// Every spatial expression takes its point this way, so `self` and a literal
+// vector both read.
+fn expect_point(expr: Option<&Value>, what: &str, scope: &Scope<'_>) -> Result<(), Fault> {
+    let got = expr_ty(expr, scope).map_err(|f| f.about(what))?;
+    if got != Ty::Vec3 && got != Ty::Entity {
+        return Err(Fault::new(format!(
+            "{what} must be vec3 or entity, found {}",
+            got.name()
+        )));
+    }
+    Ok(())
+}
+
 fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, Fault> {
     let Some(expr) = expr else {
         return Err(Fault::new("is missing"));
@@ -513,6 +534,40 @@ fn expr_ty(expr: Option<&Value>, scope: &Scope<'_>) -> Result<Ty, Fault> {
                 )));
             }
             Ok(if verb == "first" { Ty::Entity } else { Ty::Int })
+        }
+        "nearest" | "count_within" | "raycast" => {
+            let query = body.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            if !scope.has_query(query) {
+                return Err(
+                    Fault::new(format!("`{verb}` names undeclared query '{query}'"))
+                        .within(field("query")),
+                );
+            }
+            match verb {
+                "nearest" => {
+                    expect_point(body.get("of"), "`nearest` point", scope).at_field("of")?;
+                    Ok(Ty::Entity)
+                }
+                "count_within" => {
+                    expect_point(body.get("of"), "`count_within` point", scope).at_field("of")?;
+                    expect(
+                        body.get("radius"),
+                        Ty::Float,
+                        "`count_within` radius",
+                        scope,
+                    )
+                    .at_field("radius")?;
+                    Ok(Ty::Int)
+                }
+                _ => {
+                    expect_point(body.get("from"), "`raycast` origin", scope).at_field("from")?;
+                    expect(body.get("dir"), Ty::Vec3, "`raycast` direction", scope)
+                        .at_field("dir")?;
+                    expect(body.get("distance"), Ty::Float, "`raycast` distance", scope)
+                        .at_field("distance")?;
+                    Ok(Ty::Entity)
+                }
+            }
         }
         "normalize" => {
             expect(Some(body), Ty::Vec3, "`normalize` operand", scope)?;
@@ -907,6 +962,95 @@ mod tests {
         let args = serde_json::from_str(r#"{"vars":[{"name":"a"}]}"#).unwrap();
         let e = check_variables("v", &args).expect_err("an untyped declaration is caught");
         assert!(e.contains("needs a typed `value`"), "{e}");
+    }
+
+    // The spatial expressions: each names a declared query and each operand
+    // has a type, so a misspelled query or a mistyped operand is a build error
+    // rather than a body that silently answers nothing.
+    #[test]
+    fn a_spatial_expression_must_name_a_declared_query() {
+        for verb in ["nearest", "count_within", "raycast"] {
+            expect_err(
+                &format!(
+                    r#"{{"scope":["Prop"],"do":[{{"let":{{"name":"x","value":{{"{verb}":{{"query":"ghosts","of":"self","radius":{{"float":1.0}},"from":"self","dir":{{"vec3":[0.0,0.0,1.0]}},"distance":{{"float":1.0}}}}}}}}}}]}}"#
+                ),
+                &format!("`{verb}` names undeclared query 'ghosts'"),
+            );
+        }
+    }
+
+    #[test]
+    fn a_spatial_point_takes_a_vector_or_an_entity() {
+        let body = |of: &str| {
+            format!(
+                r#"{{"scope":["Prop"],"queries":[{{"name":"props","has":["Prop"]}}],"do":[{{"let":{{"name":"x","value":{{"nearest":{{"query":"props","of":{of}}}}}}}}}]}}"#
+            )
+        };
+        check_json(&body("\"self\"")).expect("an entity is a point");
+        check_json(&body(r#"{"vec3":[0.0,0.0,0.0]}"#)).expect("a vector is a point");
+        expect_err(&body(r#"{"int":3}"#), "must be vec3 or entity, found int");
+    }
+
+    #[test]
+    fn raycast_operands_are_typed() {
+        let body = |dir: &str, distance: &str| {
+            format!(
+                r#"{{"scope":["Prop"],"queries":[{{"name":"props","has":["Prop"]}}],"do":[{{"let":{{"name":"x","value":{{"raycast":{{"query":"props","from":"self","dir":{dir},"distance":{distance}}}}}}}}}]}}"#
+            )
+        };
+        check_json(&body(r#"{"vec3":[0.0,0.0,1.0]}"#, r#"{"float":9.0}"#)).expect("a valid ray");
+        expect_err(
+            &body(r#"{"float":1.0}"#, r#"{"float":9.0}"#),
+            "`raycast` direction must be vec3",
+        );
+        expect_err(
+            &body(r#"{"vec3":[0.0,0.0,1.0]}"#, r#"{"vec3":[0.0,0.0,1.0]}"#),
+            "`raycast` distance must be float",
+        );
+    }
+
+    // `nearest` and `raycast` answer with an entity, `count_within` with a
+    // count, and a body that uses one where the other belongs is rejected.
+    #[test]
+    fn the_spatial_expressions_carry_their_result_types() {
+        let query = r#""queries":[{"name":"props","has":["Prop"]}]"#;
+        expect_err(
+            &format!(
+                r#"{{"scope":["Prop"],{query},"do":[{{"despawn":{{"target":{{"count_within":{{"query":"props","of":"self","radius":{{"float":1.0}}}}}}}}}}]}}"#
+            ),
+            "`despawn` target must be entity, found int",
+        );
+        check_json(&format!(
+            r#"{{"scope":["Prop"],{query},"do":[{{"despawn":{{"target":{{"nearest":{{"query":"props","of":"self"}}}}}}}}]}}"#
+        ))
+        .expect("nearest answers with an entity");
+    }
+
+    // An `after` block is checked like any other node list, in the scope its
+    // node sits in: a binding made before the wait is in scope inside it, and
+    // one made inside falls out with the block.
+    #[test]
+    fn an_after_block_is_checked_in_the_scope_it_sits_in() {
+        check_json(
+            r#"{"do":[{"let":{"name":"n","value":{"int":1}}},
+                     {"after":{"seconds":{"float":1.0},
+                               "do":[{"set":{"var":"carried","value":{"bind":"n"}}}]}}]}"#,
+        )
+        .expect("a name bound before the wait is in scope inside the block");
+
+        expect_err(
+            r#"{"do":[{"after":{"seconds":{"int":1},"do":[]}}]}"#,
+            "`after` seconds must be float",
+        );
+        expect_err(
+            r#"{"do":[{"after":{"seconds":{"float":1.0},"do":[{"teleport":{}}]}}]}"#,
+            "unknown node `teleport`",
+        );
+        expect_err(
+            r#"{"do":[{"after":{"seconds":{"float":1.0},"do":[{"let":{"name":"inner","value":{"int":1}}}]}},
+                     {"set":{"var":"v","value":{"bind":"inner"}}}]}"#,
+            "reads unbound name 'inner'",
+        );
     }
 
     #[test]

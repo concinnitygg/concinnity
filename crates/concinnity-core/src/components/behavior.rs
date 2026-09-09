@@ -177,6 +177,42 @@ pub enum BehaviorExpr {
     First(String),
     /// How many entities a declared query matched.
     Count(String),
+    /// The entity of a declared query nearest to a point, or none when the
+    /// query is empty. The behavior's own entity is never selected.
+    Nearest {
+        /// The declared query searched.
+        query: String,
+        /// The point searched around, as a vector.
+        of: Box<BehaviorExpr>,
+    },
+    /// How many entities of a declared query lie within `radius` of a point.
+    /// The behavior's own entity is never counted.
+    #[serde(rename = "count_within")]
+    CountWithin {
+        /// The declared query searched.
+        query: String,
+        /// The point searched around, as a vector.
+        of: Box<BehaviorExpr>,
+        /// How far from the point to search.
+        radius: Box<BehaviorExpr>,
+    },
+    /// The nearest entity of a declared query a ray meets, or none when it
+    /// meets nothing.
+    ///
+    /// Only an entity carrying a collider can be hit, and the behavior's own
+    /// entity never is, so a ray cast from `position(self)` starts clear. This
+    /// tests the entities the named query selects, not the world's terrain.
+    Raycast {
+        /// The declared query whose entities the ray is tested against.
+        query: String,
+        /// Where the ray starts, as a vector.
+        from: Box<BehaviorExpr>,
+        /// Which way the ray points, as a vector. Need not be unit length; a
+        /// zero direction meets nothing.
+        dir: Box<BehaviorExpr>,
+        /// How far the ray reaches.
+        distance: Box<BehaviorExpr>,
+    },
     /// Whether an entity is still alive.
     Alive(Box<BehaviorExpr>),
     /// Sum of two values.
@@ -241,6 +277,19 @@ pub enum BehaviorNode {
         /// The name each entity is bound to.
         bind: String,
         /// Nodes run per entity.
+        #[serde(default, rename = "do")]
+        body: Vec<BehaviorNode>,
+    },
+    /// Runs `do` once, `seconds` of simulated time after this node is reached.
+    ///
+    /// The names bound when the node was reached are still bound when the body
+    /// runs, so a deferred block sees the `let` and `for_each` bindings that
+    /// led to it. The delay is not persisted: a world reloaded before it
+    /// elapses does not run the block.
+    After {
+        /// Seconds of simulated time to wait.
+        seconds: BehaviorExpr,
+        /// Nodes run once the wait elapses.
         #[serde(default, rename = "do")]
         body: Vec<BehaviorNode>,
     },
@@ -392,7 +441,9 @@ impl Behavior {
                         BehaviorNode::If {
                             then, otherwise, ..
                         } => walk(then, pred) || walk(otherwise, pred),
-                        BehaviorNode::ForEach { body, .. } => walk(body, pred),
+                        BehaviorNode::ForEach { body, .. } | BehaviorNode::After { body, .. } => {
+                            walk(body, pred)
+                        }
                         _ => false,
                     }
             })
@@ -552,6 +603,76 @@ mod tests {
         );
         assert!(b.plays_sound());
         assert!(b.saves_state());
+    }
+
+    // The spatial expressions and the deferred block, in the JSON a world is
+    // authored in. Each takes named operands rather than positional ones, so
+    // what the keys are is part of the schema.
+    #[test]
+    fn the_spatial_expressions_parse_from_their_named_operands() {
+        let expr: BehaviorExpr =
+            serde_json::from_str(r#"{"nearest":{"query":"enemies","of":"self"}}"#).unwrap();
+        let BehaviorExpr::Nearest { query, of } = expr else {
+            panic!("expected a nearest, got {expr:?}");
+        };
+        assert_eq!(query, "enemies");
+        assert_eq!(*of, BehaviorExpr::SelfEntity);
+
+        let expr: BehaviorExpr = serde_json::from_str(
+            r#"{"count_within":{"query":"props","of":{"vec3":[0.0,0.0,0.0]},"radius":{"float":5.0}}}"#,
+        )
+        .unwrap();
+        let BehaviorExpr::CountWithin { query, of, radius } = expr else {
+            panic!("expected a count_within, got {expr:?}");
+        };
+        assert_eq!(query, "props");
+        assert_eq!(*of, BehaviorExpr::Vec3([0.0; 3]));
+        assert_eq!(*radius, BehaviorExpr::Float(5.0));
+
+        let expr: BehaviorExpr = serde_json::from_str(
+            r#"{"raycast":{"query":"blockers","from":"self","dir":{"vec3":[0.0,0.0,-1.0]},"distance":{"float":20.0}}}"#,
+        )
+        .unwrap();
+        let BehaviorExpr::Raycast {
+            query,
+            from,
+            dir,
+            distance,
+        } = expr
+        else {
+            panic!("expected a raycast, got {expr:?}");
+        };
+        assert_eq!(query, "blockers");
+        assert_eq!(*from, BehaviorExpr::SelfEntity);
+        assert_eq!(*dir, BehaviorExpr::Vec3([0.0, 0.0, -1.0]));
+        assert_eq!(*distance, BehaviorExpr::Float(20.0));
+    }
+
+    #[test]
+    fn an_after_node_parses_its_wait_and_block() {
+        let node: BehaviorNode =
+            serde_json::from_str(r#"{"after":{"seconds":{"float":2.0},"do":[{"save":null}]}}"#)
+                .unwrap();
+        let BehaviorNode::After { seconds, body } = node else {
+            panic!("expected an after, got {node:?}");
+        };
+        assert_eq!(seconds, BehaviorExpr::Float(2.0));
+        assert!(matches!(body.as_slice(), [BehaviorNode::Save]));
+    }
+
+    // `plays_sound` and `saves_state` walk every nested list, so a node only a
+    // deferred block reaches still gates its system on.
+    #[test]
+    fn a_deferred_block_is_visited_for_sound_and_save() {
+        let behavior = Behavior {
+            body: alloc::vec![BehaviorNode::After {
+                seconds: BehaviorExpr::Float(1.0),
+                body: alloc::vec![BehaviorNode::Save],
+            }],
+            ..Default::default()
+        };
+        assert!(behavior.saves_state());
+        assert!(!behavior.plays_sound());
     }
 
     #[test]

@@ -45,16 +45,19 @@ mod clock;
 mod column;
 mod component;
 mod context;
+mod declare;
 mod define_components;
 mod entity;
 mod entity_by_name;
 mod event;
 mod event_store;
+mod ext_columns;
 mod frame;
 mod headless;
 mod join;
 mod mask;
 mod payload_store;
+mod phase;
 mod protocol;
 mod registry;
 mod resource;
@@ -62,11 +65,16 @@ mod storage;
 mod system;
 mod system_entry;
 mod tick;
+mod user_system;
 mod waves;
 mod world;
 
 #[cfg(test)]
+mod declared_component_tests;
+#[cfg(test)]
 mod join_bench;
+#[cfg(test)]
+mod registration_tests;
 #[cfg(test)]
 mod storage_bench;
 #[cfg(test)]
@@ -77,9 +85,11 @@ mod world_run_tests;
 // here for every crate that expands it.
 pub use access::Access;
 pub use column::{Column, ColumnTicks};
+pub use declare::EXTENSION_COMPONENT_BASE;
 pub use entity::{Entities, Entity};
 pub use event::{EventCursor, Events};
 pub use event_store::EventStore;
+pub use ext_columns::ExtColumns;
 pub use join::JoinIndex;
 pub use mask::{ComponentId, ComponentMask};
 pub use resource::Resources;
@@ -138,6 +148,7 @@ pub use payload_store::{NoPayloads, PayloadStore};
 // owns, for a world that runs with no host beyond it.
 pub use built_system::BuiltSystem;
 pub use headless::HEADLESS_SYSTEMS;
+pub use phase::Phase;
 pub use system_entry::{CompleteWorld, SystemEntry, SystemTable};
 pub use world::{BakedMesh, ScratchStats, World};
 

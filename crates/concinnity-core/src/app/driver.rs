@@ -32,6 +32,10 @@ pub trait Driver {
 
     /// Take the world back instead of running it.
     fn into_world(self: Box<Self>) -> World;
+
+    /// Mutably borrow the world the loop holds, so a caller can still add to it
+    /// before [`start`](Driver::start) reads it. Adding after that does nothing.
+    fn world_mut(&mut self) -> &mut World;
 }
 
 impl Driver for App {
@@ -45,5 +49,9 @@ impl Driver for App {
 
     fn into_world(self: Box<Self>) -> World {
         self.world
+    }
+
+    fn world_mut(&mut self) -> &mut World {
+        App::world_mut(self)
     }
 }

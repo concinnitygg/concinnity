@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use super::BehaviorSystem;
 use super::instance::Instance;
-use crate::behavior::{Effect, Program, Val, View, exec};
+use crate::behavior::{Effect, Program, Spatial, Val, View, exec, spatial};
 use crate::components::Transform;
 use crate::ecs::{ComponentStorage, Entity, EntityByName, PipelineContext};
 
@@ -86,17 +86,29 @@ pub(super) struct EvalCtx<'a> {
 pub(super) fn eval_one(
     ec: &EvalCtx<'_>,
     bindings: &mut Vec<Option<Val>>,
-    i: usize,
-    entity: Option<Entity>,
+    job: &Job,
     out: &mut Vec<Effect>,
 ) -> Option<(usize, Vec<u32>)> {
+    let (i, entity) = (job.program, job.entity);
     let locals = ec.instances[i]
         .iter()
         .find(|inst| inst.entity == entity)
         .map(|inst| inst.locals.as_slice())?;
+    // A deferred block resumes on the frame its `after` node captured; a whole
+    // body starts on a cleared one. Either way the frame is the body's compiled
+    // width, so every slot a resumed block reads is in range.
     bindings.clear();
     bindings.resize(ec.programs[i].bindings, None);
-    let mut nodes: Option<Vec<u32>> = ec.tracing.then(Vec::new);
+    let nodes = match &job.resume {
+        Some(resume) => {
+            for (slot, value) in resume.bindings.iter().enumerate().take(bindings.len()) {
+                bindings[slot] = *value;
+            }
+            ec.programs[i].deferred_block(resume.node)?
+        }
+        None => &ec.programs[i].body,
+    };
+    let mut traced: Option<Vec<u32>> = ec.tracing.then(Vec::new);
     let before = out.len();
     let mut view = View {
         dt: ec.dt,
@@ -113,11 +125,64 @@ pub(super) fn eval_one(
         },
         transforms: &|e| ec.components.get::<Transform>(e).copied(),
         alive: &|e| ec.components.is_alive(e),
+        // The behavior's own entity is never an answer: a ray cast from
+        // `position(self)` starts inside self's own collider, and an entity is
+        // never its own nearest.
+        spatial: &|question| answer(ec.components, question, entity),
         self_entity: entity,
-        trace: &mut nodes,
+        trace: &mut traced,
     };
-    exec(&ec.programs[i].body, &mut view, out);
-    Some((out.len() - before, nodes.unwrap_or_default()))
+    exec(nodes, &mut view, out);
+    Some((out.len() - before, traced.unwrap_or_default()))
+}
+
+// Resolve one spatial question against the world, excluding the running
+// instance's own entity.
+fn answer(
+    components: &ComponentStorage,
+    question: &Spatial<'_>,
+    self_entity: Option<Entity>,
+) -> Option<Val> {
+    match *question {
+        Spatial::Nearest { candidates, point } => {
+            spatial::nearest(components, candidates, point, self_entity).map(Val::Entity)
+        }
+        Spatial::CountWithin {
+            candidates,
+            point,
+            radius,
+        } => Some(Val::Int(spatial::count_within(
+            components,
+            candidates,
+            point,
+            radius,
+            self_entity,
+        ))),
+        Spatial::Raycast {
+            candidates,
+            from,
+            dir,
+            distance,
+        } => spatial::raycast(components, candidates, from, dir, distance, self_entity)
+            .map(Val::Entity),
+    }
+}
+
+/// One run queued for this tick: a whole body, or a block an earlier tick's
+/// `after` node deferred.
+#[derive(Debug)]
+pub(super) struct Job {
+    pub(super) program: usize,
+    pub(super) entity: Option<Entity>,
+    pub(super) resume: Option<Resume>,
+}
+
+/// Where a deferred run picks up: the `after` node whose block it runs, and the
+/// binding frame that node captured.
+#[derive(Debug, Clone)]
+pub(super) struct Resume {
+    pub(super) node: u32,
+    pub(super) bindings: Vec<Option<Val>>,
 }
 
 impl BehaviorSystem {

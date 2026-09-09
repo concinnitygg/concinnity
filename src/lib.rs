@@ -123,6 +123,7 @@ mod app;
 pub mod bake;
 mod driver;
 mod error;
+pub mod system;
 mod world;
 
 pub use app::App;
@@ -132,6 +133,12 @@ pub use world::World;
 // The status a failed call reports, carried by [`Error`] and returned by the
 // world's own systems.
 pub use concinnity_core::result::CnResult;
+
+// The two macros an application writes against, exported at the crate root
+// because `#[macro_export]` puts them there: the component mask a system's
+// access declaration is built from, and the declaration of an application's own
+// component types. `system` is where both are documented.
+pub use concinnity_core::{component_mask, declare_components};
 
 // The dense per-kind handles the world's data-entry methods return and a
 // component's reference fields hold, and the bound on what `add_mesh` takes.

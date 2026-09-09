@@ -86,14 +86,16 @@ impl<'a> PipelineContext<'a> {
     pub fn query<C: ComponentSlot>(&self) -> core::slice::Iter<'_, C> {
         #[cfg(debug_assertions)]
         note_read::<C>();
-        C::slot(self.components).iter()
+        C::column(self.components).map_or(&[][..], |c| c).iter()
     }
 
     /// Iterate all components of type C paired with their owning Entity.
     pub fn query_with_entity<C: ComponentSlot>(&self) -> impl Iterator<Item = (Entity, &C)> {
         #[cfg(debug_assertions)]
         note_read::<C>();
-        C::slot(self.components).iter_with_entities()
+        C::column(self.components)
+            .into_iter()
+            .flat_map(|column| column.iter_with_entities())
     }
 
     /// Mutable iteration over all components of type C.

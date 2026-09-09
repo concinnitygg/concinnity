@@ -13,7 +13,9 @@ use alloc::boxed::Box;
 
 use crate::app::App;
 use crate::components::Transform;
-use crate::ecs::{PipelineContext, SimTiming, StepResult, System, SystemEntry, SystemTable, World};
+use crate::ecs::{
+    Phase, PipelineContext, SimTiming, StepResult, System, SystemEntry, SystemTable, World,
+};
 use crate::result::CnResult;
 
 // The step count the halting world stops at.
@@ -60,6 +62,7 @@ const fn entry(name: &'static str, gate: fn(&World) -> Option<Box<dyn System>>) 
     SystemEntry {
         name,
         present_when: "the world holds a Transform",
+        phase: Phase::Late,
         gate,
         after: &[],
         before: &[],

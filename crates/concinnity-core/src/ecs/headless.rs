@@ -15,7 +15,7 @@ use alloc::boxed::Box;
 
 use crate::behavior::BehaviorSystem;
 use crate::components::{Behavior, PhysicsConfig, PropBody, RigidBody, SkyRotation, TriggerVolume};
-use crate::ecs::{System, SystemEntry, SystemTable, World};
+use crate::ecs::{Phase, System, SystemEntry, SystemTable, World};
 use crate::physics::PhysicsSystem;
 use crate::resource::SkinnedMeshTable;
 use crate::sky::SkyRotationSystem;
@@ -65,6 +65,7 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
         SystemEntry {
             name: "SkyRotationSystem",
             present_when: "the world declares a SkyRotation",
+            phase: Phase::Early,
             gate: sky_rotation,
             after: &[],
             before: &[],
@@ -72,6 +73,7 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
         SystemEntry {
             name: "BehaviorSystem",
             present_when: "the world declares any Behavior",
+            phase: Phase::Logic,
             gate: behavior,
             after: &[],
             before: &[],
@@ -79,6 +81,7 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
         SystemEntry {
             name: "PhysicsSystem",
             present_when: "the world declares a PhysicsConfig, RigidBody, PropBody, or TriggerVolume, or a skinned mesh bakes a character capsule",
+            phase: Phase::Late,
             gate: physics,
             after: &[],
             before: &[],
@@ -126,6 +129,24 @@ mod tests {
                 !entry.present_when.is_empty(),
                 "{} has no present_when",
                 entry.name
+            );
+        }
+    }
+
+    // The table is in phase order, which is what lets the merge walk the phases
+    // once and keep table order inside each: an entry out of phase order would
+    // silently move when a system was registered beside it.
+    #[test]
+    fn entries_are_in_phase_order() {
+        let entries = HEADLESS_SYSTEMS.entries;
+        for pair in entries.windows(2) {
+            assert!(
+                pair[0].phase <= pair[1].phase,
+                "{} runs in {} and {} after it in {}",
+                pair[0].name,
+                pair[0].phase.as_str(),
+                pair[1].name,
+                pair[1].phase.as_str(),
             );
         }
     }

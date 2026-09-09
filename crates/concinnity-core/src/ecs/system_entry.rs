@@ -7,10 +7,15 @@
 //! take the file top to bottom as the tick. What builds the systems is a gate
 //! per entry: it inspects the world's content and returns the constructed
 //! system, or `None` to leave it out.
+//!
+//! Each entry also names the [`Phase`] it runs in, and a table's entries are in
+//! phase order. That is what a system registered on a world from outside the
+//! table anchors to: it names a phase, never an entry, so the entries stay
+//! internal and their order stays the table's own business.
 
 use alloc::boxed::Box;
 
-use crate::ecs::{Access, EventStore, PipelineContext, System, World};
+use crate::ecs::{Access, EventStore, Phase, PipelineContext, System, World};
 use crate::result::CnResult;
 
 /// One row of the system table. Table order is run order.
@@ -19,6 +24,10 @@ pub struct SystemEntry {
     pub name: &'static str,
     /// Human-readable gate condition, for docs and CLI reporting.
     pub present_when: &'static str,
+    /// Where in the tick this entry runs. Entries appear in the table in phase
+    /// order, and a system registered on a world runs after every entry sharing
+    /// its phase.
+    pub phase: Phase,
     /// Constructs the system from world content when its gate holds. Runs from
     /// `World::start` and from `World::system_manifest`, which discards the
     /// value, so a system's constructor must stay cheap and side-effect-free.
@@ -39,7 +48,10 @@ pub type CompleteWorld = fn(&mut PipelineContext) -> Result<(), CnResult>;
 /// A host's system table and the load-time passes only the host can supply.
 ///
 /// The entries name the host's own system types, so the table is written where
-/// those types live; everything that runs it is here.
+/// those types live; everything that runs it is here. A world can also carry
+/// systems no table lists ([`World::add_system`](crate::ecs::World::add_system));
+/// those anchor to a [`Phase`] rather than to an entry, so a table stays a
+/// closed document whatever a world registers beside it.
 pub struct SystemTable {
     /// One entry per system, in run order.
     pub entries: &'static [SystemEntry],

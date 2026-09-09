@@ -114,6 +114,30 @@ pub(crate) struct RayQuery {
     pub(crate) mask: LayerMask,
 }
 
+/// How far along a ray a single shape at a pose is met, within `max_dist`.
+///
+/// The whole-scene [`raycast`] answers against the bodies the simulation holds;
+/// this answers against one shape the caller placed itself, for a caller that
+/// keeps its own list of things to hit. `dir` must be unit length.
+pub(crate) fn ray_hit_distance(
+    origin: [f32; 3],
+    dir_unit: [f32; 3],
+    shape: &ColliderShape,
+    position: [f32; 3],
+    rotation_deg: [f32; 3],
+    max_dist: f32,
+) -> Option<f32> {
+    let ray = Ray {
+        origin: Vec3::from_array(origin),
+        direction: Vec3::from_array(dir_unit),
+    };
+    let pose = Pose {
+        position: Vec3::from_array(position),
+        rotation: Quat::from_euler_deg(rotation_deg),
+    };
+    ray::cast(ray, shape, pose, max_dist).map(|impact| impact.distance)
+}
+
 /// The nearest ray hit, or `None`.
 ///
 /// `dir` need not be unit length; a zero direction, a non-finite one, or a

@@ -19,6 +19,10 @@ impl Driver for App {
     fn into_world(self: Box<Self>) -> World {
         (*self).into_world()
     }
+
+    fn world_mut(&mut self) -> &mut World {
+        App::world_mut(self)
+    }
 }
 
 #[cfg(test)]

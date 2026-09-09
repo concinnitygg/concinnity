@@ -16,14 +16,15 @@ and (for glTF) any morph targets; animations are imported separately by
 [Animation](Animation.md) assets referencing the same file.
 
 The `customize_character` example ships a neutral unclothed body
-(`base_humanoid.glb`, about 19k vertices, A-pose bind) with a 25-joint
+(`base_humanoid.glb`, about 21k vertices, A-pose bind) with a 25-joint
 skeleton (`root`, `hips`, `spine`, `chest`,
 `upper_chest`, `neck`, `head`, and `clavicle` / `upper_arm` / `forearm` /
 `hand` / `thumb` / `thigh` / `shin` / `foot` / `toe` with an `_l` / `_r`
 suffix), the morph targets a [CharacterShape](CharacterShape.md) slider set
 names (`weight+/-`, `muscle`, `shoulders+/-`, `hips+/-`, `chest+/-`,
 `belly`, `head+/-`, `jaw+/-`, `nose+/-`, `brow`, `cheeks+/-`,
-`chin+/-`), and a rotation-only `idle` clip an Animation can import from
+`chin+/-`, `eyes+/-`, `lips+/-`, `mouth_width+/-`, `ears+/-`,
+`cheekbones+/-`), and a rotation-only `idle` clip an Animation can import from
 the same file; a [CharacterModel](CharacterModel.md) is the usual way to
 declare it.
 

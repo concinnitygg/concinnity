@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 
 use crate::app::{App, Driver};
 use crate::components::Transform;
-use crate::ecs::{PipelineContext, StepResult, System, SystemEntry, SystemTable, World};
+use crate::ecs::{Phase, PipelineContext, StepResult, System, SystemEntry, SystemTable, World};
 use crate::result::CnResult;
 
 // The step count the halting world stops at.
@@ -42,6 +42,7 @@ fn refuse(_: &mut PipelineContext) -> Result<(), CnResult> {
 const ENTRIES: &[SystemEntry] = &[SystemEntry {
     name: "Counter",
     present_when: "the world holds a Transform",
+    phase: Phase::Late,
     gate: counter,
     after: &[],
     before: &[],

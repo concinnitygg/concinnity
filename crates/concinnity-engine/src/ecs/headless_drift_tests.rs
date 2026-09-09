@@ -8,8 +8,8 @@
 //! drifting apart.
 //!
 //! What must agree: every core entry is present here, in the same relative
-//! order, under the same name, with the same `present_when`, and with the same
-//! ordering edges among the systems core also knows about. Edges to systems
+//! order, under the same name, with the same `present_when`, in the same phase,
+//! and with the same ordering edges among the systems core also knows about. Edges to systems
 //! core has no idea exist (the render band, audio, story) are this crate's
 //! business and are not compared.
 
@@ -60,13 +60,21 @@ fn every_headless_entry_appears_here_in_the_same_order() {
 }
 
 #[test]
-fn every_headless_entry_keeps_its_gate_description_and_shared_edges() {
+fn every_headless_entry_keeps_its_phase_gate_description_and_shared_edges() {
     let core = HEADLESS_SYSTEMS.entries;
     let mine = SYSTEMS.entries;
     let known: Vec<&str> = core.iter().map(|e| e.name).collect();
 
     for entry in core {
         let here = matching(mine, entry.name);
+        assert_eq!(
+            here.phase,
+            entry.phase,
+            "{} runs in {} here and {} in core's headless table",
+            entry.name,
+            here.phase.as_str(),
+            entry.phase.as_str(),
+        );
         assert_eq!(
             here.present_when, entry.present_when,
             "{}'s gate reads '{}' here and '{}' in core's headless table",

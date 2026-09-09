@@ -54,15 +54,26 @@ imports, mesh compilation, texture encoding, shader compilation, IBL
 convolution, font rasterisation. The runtime loads compiled payloads and
 uploads them. No asset compiler ships in the player.
 
-**Closed-world storage.** The set of component types is fixed at compile time by
-a single registry macro. There is no `TypeId`-keyed type erasure and no
-open-world insertion of arbitrary types. This buys dense storage, a bitmask
-scheduler, and exhaustive dispatch.
+**Closed-world storage.** The set of component types is fixed at compile time.
+There is no runtime type registration and no open-world insertion of arbitrary
+types. This buys dense storage, a bitmask scheduler, and exhaustive dispatch.
+
+The engine's own set comes from a single registry macro: those types have blob
+discriminants, authoring names, and a column each in the storage struct. An
+application declares its own types beside them with `declare_components!`, which
+numbers them from the first discriminant the registry does not use and gives
+each a column in the storage's extension map. Both halves resolve through one
+`ComponentSlot` impl, so every component operation is one piece of generic code
+over both; what a declared type does not get is an authoring name or a blob
+record, so it is runtime-only and is seeded from Rust. The 128-bit
+`ComponentMask` bounds the two sets together.
 
 **Gated systems.** No world declares a system. Each internal system has a _gate_
 that inspects world content and returns a constructed system or nothing. A world
 with no audio content opens no audio device; a world with no physics content
-builds no physics simulation.
+builds no physics simulation. A system written outside the engine is registered
+on the world instead, naming the tick _phase_ it runs in rather than a table
+entry.
 
 **One-way dependency graph.** Crates form a DAG with no cycles and no
 back-edges. The runtime vocabulary knows nothing about file paths; the format
@@ -903,6 +914,7 @@ order. Each entry pairs a system with:
 - a **gate** that inspects world content and returns a constructed system or
   `None`;
 - a human-readable `present_when` condition, used by docs and CLI reporting;
+- a **phase**, the band of the tick the entry runs in;
 - `after` / `before` ordering edges naming other systems.
 
 Gates construct their system, so every system constructor must stay cheap and
@@ -910,7 +922,16 @@ side-effect-free: the manifest probe (`cn` reporting what a world would build)
 constructs and discards each gated system. Anything heavy — device acquisition,
 payload reads — belongs in `System::init`.
 
-Systems are then inited in table order. `GraphicsSystem::init` is by far the
+The four phases are `Early`, `Logic`, `PreRender`, and `Late`, and a table's
+entries are in phase order. They exist for the systems the table does not list:
+`World::add_system` registers a system written outside the engine, naming a phase
+rather than a neighbouring entry. The merge is one rule — phases run in order,
+and within a phase every table entry runs before every registered system — so a
+registration never reorders the engine's own tick and the table's entries stay
+internal. A registered name that repeats a table entry's is refused at start,
+since the ordering edges and the profile both key on it.
+
+Systems are then inited in run order. `GraphicsSystem::init` is by far the
 largest: it drains the render-facing components and stands up the GPU.
 
 ### 8.8 Graphics initialization

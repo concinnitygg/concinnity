@@ -18,12 +18,13 @@
 mod compile;
 mod program;
 mod run;
+pub(crate) mod spatial;
 mod system;
 mod value;
 
 pub use compile::compile;
 pub use program::{CExpr, CNode, COp, Program, VarTable};
-pub use run::{Effect, SpawnEffect, View, exec};
+pub use run::{Effect, Spatial, SpawnEffect, View, exec};
 pub use system::{
     BehaviorState, BehaviorStore, BehaviorSystem, EvalBucket, EvalScheduler, def_hash,
 };

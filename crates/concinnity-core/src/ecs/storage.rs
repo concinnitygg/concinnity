@@ -18,6 +18,13 @@
 // layout, access trait, and join live here so the component query shares one
 // definition, and so the registered component set stays the only thing that
 // names concrete component types.
+//
+// A component type the list does not name gets its column from `ExtColumns`
+// instead of a struct field, under the same `ComponentId`. The access trait is
+// what hides the difference: `column` resolves a type to its column either way,
+// so every operation below is one piece of generic code over both halves. The
+// one thing it costs is that `column` is fallible -- a type nothing has pushed
+// has no column yet -- which each read handles as an empty column.
 
 /// Generate a component storage for a fixed set of component types: one
 /// `Column<T>` per type, the entity allocator, the shared change tick, the join
@@ -48,6 +55,8 @@ macro_rules! define_component_storage {
             entities: $crate::ecs::Entities,
             change_tick: $crate::ecs::AtomicTick,
             join: $crate::ecs::JoinIndex,
+            /// The columns of component types this list does not name.
+            pub ext: $crate::ecs::ExtColumns,
         }
 
         impl $storage {
@@ -56,7 +65,7 @@ macro_rules! define_component_storage {
             pub fn push_typed<C: $slot>(&mut self, c: C) -> $crate::ecs::Entity {
                 let entity = self.entities.alloc();
                 let tick = self.change_tick.bump();
-                let col = C::slot_mut(self);
+                let col = C::column_mut(self);
                 col.push(entity, c, tick);
                 let row = (col.len() - 1) as u32;
                 self.join.set(entity, $crate::ecs::ComponentId::new(C::DISCRIMINANT), row);
@@ -100,7 +109,7 @@ macro_rules! define_component_storage {
                     "insert_typed: entity already has this component",
                 );
                 let tick = self.change_tick.bump();
-                let col = C::slot_mut(self);
+                let col = C::column_mut(self);
                 col.push(entity, c, tick);
                 let row = (col.len() - 1) as u32;
                 self.join.set(entity, id, row);
@@ -114,7 +123,7 @@ macro_rules! define_component_storage {
                 let id = $crate::ecs::ComponentId::new(C::DISCRIMINANT);
                 let row = self.join.row(entity, id)? as usize;
                 let tick = self.change_tick.bump();
-                let col = C::slot_mut(self);
+                let col = C::column_mut(self);
                 let last = col.len() - 1;
                 let moved = if row != last { Some(col.entities()[last]) } else { None };
                 let value = col.swap_remove(row, tick);
@@ -149,6 +158,7 @@ macro_rules! define_component_storage {
                         }
                     }
                 )+
+                self.ext.despawn_entity(&mut self.join, entity, tick);
                 self.join.clear_entity(entity);
                 self.entities.despawn(entity);
             }
@@ -161,9 +171,12 @@ macro_rules! define_component_storage {
             /// for C; only each owner's C entry in the join is cleared.
             pub fn drain<C: $slot>(&mut self) -> ::alloc::vec::Vec<C> {
                 let id = $crate::ecs::ComponentId::new(C::DISCRIMINANT);
-                let owners = C::slot(self).entities().to_vec();
+                let Some(column) = C::column(self) else {
+                    return ::alloc::vec::Vec::new();
+                };
+                let owners = column.entities().to_vec();
                 let tick = self.change_tick.bump();
-                let drained = C::slot_mut(self).drain(tick);
+                let drained = C::column_mut(self).drain(tick);
                 for entity in owners {
                     self.join.clear(entity, id);
                     if self.join.mask(entity).is_empty() {
@@ -177,7 +190,7 @@ macro_rules! define_component_storage {
             /// tick because any element may be written.
             pub fn values_mut<C: $slot>(&mut self) -> &mut [C] {
                 let tick = self.change_tick.bump();
-                C::slot_mut(self).values_mut(tick)
+                C::column_mut(self).values_mut(tick)
             }
 
             /// Mutable iteration over every component of type C paired with its
@@ -187,14 +200,14 @@ macro_rules! define_component_storage {
                 &mut self,
             ) -> impl Iterator<Item = ($crate::ecs::Entity, &mut C)> {
                 let tick = self.change_tick.bump();
-                C::slot_mut(self).iter_mut_with_entities(tick)
+                C::column_mut(self).iter_mut_with_entities(tick)
             }
 
             /// The change tick of C's column: the tick at which any C was last
             /// inserted, removed, or mutably accessed. Read-only, so it never
             /// bumps the tick itself.
             pub fn changed_tick<C: $slot>(&self) -> $crate::ecs::Tick {
-                C::slot(self).changed_tick()
+                C::column(self).map_or($crate::ecs::Tick::ZERO, |c| c.changed_tick())
             }
 
             /// Every tick stamp of C's column at once. A consumer that tracks
@@ -202,7 +215,7 @@ macro_rules! define_component_storage {
             /// `changed` to know whether the per-row stamps still describe the
             /// whole change.
             pub fn column_ticks<C: $slot>(&self) -> $crate::ecs::ColumnTicks {
-                C::slot(self).ticks()
+                C::column(self).map(|c| c.ticks()).unwrap_or_default()
             }
 
             /// Rows of C written since `since`, paired with their owning entity.
@@ -215,13 +228,16 @@ macro_rules! define_component_storage {
                 &self,
                 since: $crate::ecs::Tick,
             ) -> impl Iterator<Item = ($crate::ecs::Entity, &C)> {
-                C::slot(self).changed_rows(since.clamp_to(self.change_tick.get()))
+                let since = since.clamp_to(self.change_tick.get());
+                C::column(self)
+                    .into_iter()
+                    .flat_map(move |column| column.changed_rows(since))
             }
 
             /// Borrow one entity's component C, if it has one.
             pub fn get<C: $slot>(&self, entity: $crate::ecs::Entity) -> Option<&C> {
                 let row = self.join.row(entity, $crate::ecs::ComponentId::new(C::DISCRIMINANT))?;
-                C::slot(self).get(row as usize)
+                C::column(self)?.get(row as usize)
             }
 
             /// Mutably borrow one entity's component C, stamping that row's
@@ -231,7 +247,7 @@ macro_rules! define_component_storage {
                 let id = $crate::ecs::ComponentId::new(C::DISCRIMINANT);
                 let row = self.join.row(entity, id)? as usize;
                 let tick = self.change_tick.bump();
-                C::slot_mut(self).value_mut(row, tick)
+                C::column_mut(self).value_mut(row, tick)
             }
 
             /// Read-only join over two component types. Iterates the first type's
@@ -243,12 +259,13 @@ macro_rules! define_component_storage {
                 &'s self,
             ) -> impl Iterator<Item = ($crate::ecs::Entity, &'s A, &'s B)> + 's {
                 let bid = $crate::ecs::ComponentId::new(B::DISCRIMINANT);
-                let bcol = B::slot(self);
-                A::slot(self)
-                    .iter_with_entities()
+                let bcol = B::column(self);
+                A::column(self)
+                    .into_iter()
+                    .flat_map(|acol| acol.iter_with_entities())
                     .filter_map(move |(entity, a)| {
                         let brow = self.join.row(entity, bid)? as usize;
-                        let b = bcol.get(brow);
+                        let b = bcol?.get(brow);
                         debug_assert!(
                             b.is_some(),
                             "join2: stale JoinIndex row for an entity's component",
@@ -263,15 +280,16 @@ macro_rules! define_component_storage {
             ) -> impl Iterator<Item = ($crate::ecs::Entity, &'s A, &'s B, &'s C)> + 's {
                 let bid = $crate::ecs::ComponentId::new(B::DISCRIMINANT);
                 let cid = $crate::ecs::ComponentId::new(C::DISCRIMINANT);
-                let bcol = B::slot(self);
-                let ccol = C::slot(self);
-                A::slot(self)
-                    .iter_with_entities()
+                let bcol = B::column(self);
+                let ccol = C::column(self);
+                A::column(self)
+                    .into_iter()
+                    .flat_map(|acol| acol.iter_with_entities())
                     .filter_map(move |(entity, a)| {
                         let brow = self.join.row(entity, bid)? as usize;
                         let crow = self.join.row(entity, cid)? as usize;
-                        let b = bcol.get(brow);
-                        let c = ccol.get(crow);
+                        let b = bcol?.get(brow);
+                        let c = ccol?.get(crow);
                         debug_assert!(
                             b.is_some() && c.is_some(),
                             "join3: stale JoinIndex row for an entity's component",
@@ -282,12 +300,12 @@ macro_rules! define_component_storage {
 
             /// Total number of components across all typed columns.
             pub fn len(&self) -> usize {
-                0 $( + self.$field.len() )+
+                self.ext.len() $( + self.$field.len() )+
             }
 
             /// Whether every typed column is empty.
             pub fn is_empty(&self) -> bool {
-                true $( && self.$field.is_empty() )+
+                self.ext.is_empty() $( && self.$field.is_empty() )+
             }
         }
 
@@ -297,20 +315,23 @@ macro_rules! define_component_storage {
         /// and `DISCRIMINANT` is its stable id, used as its `ComponentId` in the
         /// join index. `'static`: components own their data, and the generic ops
         /// hand out borrows of (and owned vectors of) the type.
-        pub trait $slot: Sized + 'static {
+        pub trait $slot: Sized + core::fmt::Debug + Send + Sync + 'static {
             /// The component type's stable id, used as its `ComponentId`.
             const DISCRIMINANT: u8;
-            /// Borrow this type's column out of the storage.
-            fn slot(s: &$storage) -> &$crate::ecs::Column<Self>;
-            /// Mutably borrow this type's column out of the storage.
-            fn slot_mut(s: &mut $storage) -> &mut $crate::ecs::Column<Self>;
+            /// Borrow this type's column out of the storage, or `None` when the
+            /// type has no column yet. A registered type always has one; a type
+            /// stored in `ExtColumns` gets one on its first row.
+            fn column(s: &$storage) -> Option<&$crate::ecs::Column<Self>>;
+            /// Mutably borrow this type's column out of the storage, creating it
+            /// if this is the type's first row.
+            fn column_mut(s: &mut $storage) -> &mut $crate::ecs::Column<Self>;
         }
 
         $(
             impl $slot for $ty {
                 const DISCRIMINANT: u8 = $disc;
-                fn slot(s: &$storage) -> &$crate::ecs::Column<Self> { &s.$field }
-                fn slot_mut(s: &mut $storage) -> &mut $crate::ecs::Column<Self> { &mut s.$field }
+                fn column(s: &$storage) -> Option<&$crate::ecs::Column<Self>> { Some(&s.$field) }
+                fn column_mut(s: &mut $storage) -> &mut $crate::ecs::Column<Self> { &mut s.$field }
             }
             // The ComponentMask is a u128, so a discriminant past 127 would
             // silently alias another component's mask bit in a release build.
@@ -413,7 +434,9 @@ mod tests {
         let a = s.push_typed(Position(7));
         let b = s.push_typed(Position(8));
         // Each pushed row got a distinct Entity, aligned with the data.
-        let entities = <Position as TestSlot>::slot(&s).entities();
+        let entities = <Position as TestSlot>::column(&s)
+            .expect("a registered column")
+            .entities();
         assert_eq!(entities, &[a, b]);
         assert_ne!(a, b);
     }
@@ -608,9 +631,24 @@ mod tests {
         let joined: Vec<_> = s.join2::<Position, Velocity>().collect();
         assert_eq!(joined, vec![(e2, &Position(2), &Velocity(22))]);
         // e1 contributed one row to each column; all three are gone.
-        assert_eq!(<Position as TestSlot>::slot(&s).len(), 1);
-        assert_eq!(<Velocity as TestSlot>::slot(&s).len(), 1);
-        assert_eq!(<Tag as TestSlot>::slot(&s).len(), 0);
+        assert_eq!(
+            <Position as TestSlot>::column(&s)
+                .expect("a registered column")
+                .len(),
+            1
+        );
+        assert_eq!(
+            <Velocity as TestSlot>::column(&s)
+                .expect("a registered column")
+                .len(),
+            1
+        );
+        assert_eq!(
+            <Tag as TestSlot>::column(&s)
+                .expect("a registered column")
+                .len(),
+            0
+        );
     }
 
     #[test]

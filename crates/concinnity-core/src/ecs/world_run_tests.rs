@@ -11,7 +11,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::components::TextLabel;
 use crate::ecs::{
-    Access, Clock, EventStore, PipelineContext, StepResult, System, SystemEntry, SystemTable, World,
+    Access, Clock, EventStore, Phase, PipelineContext, StepResult, System, SystemEntry,
+    SystemTable, World,
 };
 
 // Steps until it has run `stop_after` times, then reports Done. Each phase
@@ -74,6 +75,7 @@ const fn entry(name: &'static str, gate: fn(&World) -> Option<Box<dyn System>>) 
     SystemEntry {
         name,
         present_when: "the world holds a TextLabel",
+        phase: Phase::Late,
         gate,
         after: &[],
         before: &[],

@@ -36,7 +36,7 @@ mod tests;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use eval::{EvalCtx, PARALLEL_EVAL_MIN_JOBS, Snapshot, eval_one};
+use eval::{EvalCtx, Job, PARALLEL_EVAL_MIN_JOBS, Resume, Snapshot, eval_one};
 use instance::Instance;
 use resolve::{Resolved, SourceTicks};
 
@@ -64,8 +64,9 @@ pub struct BehaviorSystem {
     instances: Vec<Vec<Instance>>,
     vars: Vec<Val>,
     var_table: VarTable,
-    // Delayed runs: (program, the instance's entity, seconds left).
-    pending: Vec<(usize, Option<Entity>, f32)>,
+    // Runs waiting on a clock: a whole body a `delay` postponed, or the block
+    // an `after` node deferred with the bindings it captured.
+    pending: Vec<Deferred>,
     crossing_cursor: EventCursor,
     press_cursor: EventCursor,
     crossings: Vec<VolumeEvent>,
@@ -100,7 +101,7 @@ pub struct BehaviorSystem {
     eval_buckets: Vec<EvalBucket>,
     // The tick's firing list and the serial path's binding scratch, kept for
     // their capacity across ticks.
-    jobs: Vec<(usize, Option<Entity>)>,
+    jobs: Vec<Job>,
     bindings: Vec<Option<Val>>,
     // The serial path's effect/record buffers, kept for their capacity like
     // the parallel path's per-worker buckets.
@@ -110,6 +111,19 @@ pub struct BehaviorSystem {
     // for their capacity across ticks like the buffers above.
     snapshot: Snapshot,
     tag_scratch: Vec<Entity>,
+}
+
+/// A run waiting on a clock: a whole body a `delay` postponed, or the block an
+/// `after` node deferred. Both count down on simulated time, so both freeze
+/// while a menu is open, and neither is persisted.
+#[derive(Debug)]
+struct Deferred {
+    program: usize,
+    entity: Option<Entity>,
+    // `None` runs the whole body (a `delay`); `Some` runs one `after` block on
+    // the frame it captured.
+    resume: Option<Resume>,
+    seconds: f32,
 }
 
 impl BehaviorSystem {
@@ -214,9 +228,9 @@ impl BehaviorSystem {
         // program was edited away is dropped rather than aimed at the new one.
         let moved = carried.moved;
         self.pending.retain_mut(
-            |(program, _, _)| match moved.get(*program).copied().flatten() {
+            |waiting| match moved.get(waiting.program).copied().flatten() {
                 Some(next) => {
-                    *program = next;
+                    waiting.program = next;
                     true
                 }
                 None => false,
@@ -385,10 +399,14 @@ impl BehaviorSystem {
         jobs.clear();
         let mut idx = 0;
         while idx < self.pending.len() {
-            self.pending[idx].2 -= dt;
-            if self.pending[idx].2 <= 0.0 {
-                let (i, entity, _) = self.pending.swap_remove(idx);
-                jobs.push((i, entity));
+            self.pending[idx].seconds -= dt;
+            if self.pending[idx].seconds <= 0.0 {
+                let waiting = self.pending.swap_remove(idx);
+                jobs.push(Job {
+                    program: waiting.program,
+                    entity: waiting.entity,
+                    resume: waiting.resume,
+                });
             } else {
                 idx += 1;
             }
@@ -396,9 +414,18 @@ impl BehaviorSystem {
         for &(i, entity) in runs.iter() {
             let delay = self.programs[i].def.delay;
             if delay > 0.0 {
-                self.pending.push((i, entity, delay));
+                self.pending.push(Deferred {
+                    program: i,
+                    entity,
+                    resume: None,
+                    seconds: delay,
+                });
             } else {
-                jobs.push((i, entity));
+                jobs.push(Job {
+                    program: i,
+                    entity,
+                    resume: None,
+                });
             }
         }
 
@@ -448,25 +475,25 @@ impl BehaviorSystem {
                     bucket.effects.clear();
                     bucket.produced.clear();
                     bucket.fired.clear();
-                    for &(i, entity) in &jobs[bucket.jobs.clone()] {
+                    for job in &jobs[bucket.jobs.clone()] {
                         if let Some((count, nodes)) =
-                            eval_one(ec, &mut bucket.bindings, i, entity, &mut bucket.effects)
+                            eval_one(ec, &mut bucket.bindings, job, &mut bucket.effects)
                         {
-                            bucket.produced.push((i, entity, count));
+                            bucket.produced.push((job.program, job.entity, count));
                             if ec.tracing {
-                                bucket.fired.push((i, nodes));
+                                bucket.fired.push((job.program, nodes));
                             }
                         }
                     }
                 });
             } else {
-                for &(i, entity) in &jobs {
+                for job in &jobs {
                     if let Some((count, nodes)) =
-                        eval_one(&ec, &mut serial_bindings, i, entity, &mut effects)
+                        eval_one(&ec, &mut serial_bindings, job, &mut effects)
                     {
-                        produced.push((i, entity, count));
+                        produced.push((job.program, job.entity, count));
                         if tracing {
-                            fired.push((i, nodes));
+                            fired.push((job.program, nodes));
                         }
                     }
                 }

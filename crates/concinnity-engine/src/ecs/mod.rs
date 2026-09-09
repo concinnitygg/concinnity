@@ -7,10 +7,15 @@
 //! resources the render band parks in a world.
 //!
 //! TO ADD A NEW COMPONENT: register it in concinnity-core's `ecs::registry`
-//! (`define_components!`). TO ADD A NEW SYSTEM: implement the `System` behavior
-//! trait on it, write its gate in this crate's `ecs::schedule`, and add one
-//! entry to the `define_systems!` table in `ecs::registry` -- the table is the
-//! registry AND the schedule (table order is run order).
+//! (`define_components!`). TO ADD A NEW ENGINE SYSTEM: implement the `System`
+//! behavior trait on it, write its gate in this crate's `ecs::schedule`, and add
+//! one entry to the `define_systems!` table in `ecs::registry` -- the table is
+//! the registry AND the schedule (table order is run order).
+//!
+//! A system written outside the engine needs none of that: it is registered on
+//! the world with `World::add_system`, naming the `Phase` it runs in. The table
+//! entries stay internal; the phases are what an outside registration anchors
+//! to.
 //!
 //! A system concinnity-core owns is listed in ITS table too
 //! (`ecs::HEADLESS_SYSTEMS`, what a world with no host runs), and the two must
@@ -61,7 +66,7 @@ pub use concinnity_core::ecs::{
 // The `SYSTEMS` table is written client-side, since its gates name the client's
 // own system types (see `registry`); a gate builds one `BuiltSystem` per
 // present entry. Everything that runs it is in concinnity-core.
-pub use concinnity_core::ecs::{BuiltSystem, SystemEntry, SystemTable};
+pub use concinnity_core::ecs::{BuiltSystem, Phase, SystemEntry, SystemTable};
 pub use registry::SYSTEMS;
 
 // The world itself, its data and the systems that run over it, is
@@ -275,9 +280,14 @@ pub(crate) struct DisplayModes(pub Vec<crate::gfx::display_mode::DisplayMode>);
 /// Every system is internal: it has no declarable asset, is never parsed from a
 /// world or written to a blob, and is constructed by its gate from world
 /// content. Each entry maps a name to the behavior type that implements
-/// `System`, the gate that builds it, and a human-readable gate description;
-/// the entry name doubles as the system's stable display name for profiling and
-/// logging.
+/// `System`, the gate that builds it, a human-readable gate description, and
+/// the `Phase` it runs in; the entry name doubles as the system's stable
+/// display name for profiling and logging.
+///
+/// Entries are in phase order, and a system registered on a world with
+/// `World::add_system` runs after every entry sharing its phase. That is the
+/// whole of what a table entry owes an outside registration: the entries
+/// themselves stay internal.
 #[macro_export]
 macro_rules! define_systems {
     ( complete_world: $complete_world:path,
@@ -286,6 +296,7 @@ macro_rules! define_systems {
       $( $name:ident => $behavior:path {
             gate: $gate:path,
             present_when: $present_when:literal,
+            phase: $phase:ident,
             after: [ $( $after:ident ),* $(,)? ],
             before: [ $( $before:ident ),* $(,)? ] $(,)?
         } ),* $(,)? ) => {
@@ -297,6 +308,7 @@ macro_rules! define_systems {
                 $( $crate::ecs::SystemEntry {
                     name: stringify!($name),
                     present_when: $present_when,
+                    phase: $crate::ecs::Phase::$phase,
                     // Boxing happens here rather than in the gates, so each
                     // gate returns its own system type and the entry's behavior
                     // path has to name it.

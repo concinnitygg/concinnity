@@ -114,17 +114,6 @@ fn resolve(type_id: TypeId) -> Option<ComponentId> {
         .map(|&(_, _, id)| ComponentId::new(id))
 }
 
-// Build a component mask from registered component types.
-macro_rules! component_mask {
-    ( $( $ty:ty ),* $(,)? ) => {{
-        let mut m = $crate::ecs::ComponentMask::EMPTY;
-        $( m.insert($crate::ecs::ComponentId::new(
-            <$ty as $crate::ecs::ComponentSlot>::DISCRIMINANT,
-        )); )*
-        m
-    }};
-}
-
 // Build a resource mask from types in the access-id registry. Panics on an
 // unregistered type: called once at schedule build, so a typo fails loudly at
 // world start, not silently at runtime.
@@ -142,7 +131,8 @@ macro_rules! resource_mask {
     }};
 }
 
-pub(crate) use {component_mask, resource_mask};
+pub(crate) use concinnity_core::component_mask;
+pub(crate) use resource_mask;
 
 #[cfg(debug_assertions)]
 mod validate {

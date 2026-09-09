@@ -224,23 +224,29 @@ fn complete(world: &mut concinnity_engine::ecs::World) -> std::io::Result<()> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
 }
 
-// One "<name>  <present_when>" row per system the world's content gates in, in
-// run order. Split out from the printing so it is unit-testable without
-// capturing stdout. The reason column is the `present_when` from the static
-// schedule table (`ecs::SYSTEMS`), keyed by the manifest's system name.
+// One "<name>  <phase>  <present_when>" row per system the world's content gates
+// in, in run order. Split out from the printing so it is unit-testable without
+// capturing stdout. The phase and reason columns come from the static schedule
+// table (`ecs::SYSTEMS`), keyed by the manifest's system name; the phase is what
+// a system written outside the engine anchors to.
 fn manifest_lines(world: &concinnity_engine::ecs::World) -> Vec<String> {
     let manifest = world.system_manifest(concinnity_engine::ecs::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
+    let phase_width = concinnity_engine::ecs::Phase::ALL
+        .iter()
+        .map(|p| p.as_str().len())
+        .max()
+        .unwrap_or(0);
     manifest
         .iter()
         .map(|name| {
-            let reason = concinnity_engine::ecs::SYSTEMS
+            let entry = concinnity_engine::ecs::SYSTEMS
                 .entries
                 .iter()
-                .find(|e| e.name == *name)
-                .map(|e| e.present_when)
-                .unwrap_or("");
-            format!("{name:<width$}  {reason}")
+                .find(|e| e.name == *name);
+            let phase = entry.map(|e| e.phase.as_str()).unwrap_or("");
+            let reason = entry.map(|e| e.present_when).unwrap_or("");
+            format!("{name:<width$}  {phase:<phase_width$}  {reason}")
         })
         .collect()
 }
@@ -278,6 +284,10 @@ mod tests {
         assert!(joined.contains("Camera3DSystem"), "{joined}");
         // The reason column is present (GraphicsSystem gates on a GraphicsConfig).
         assert!(joined.contains("GraphicsConfig"), "{joined}");
+        // And the phase column, which is what a system written outside the
+        // engine names to place itself.
+        assert!(joined.contains("PreRender"), "{joined}");
+        assert!(joined.contains("Late"), "{joined}");
     }
 
     // A system only an injected default turns on is still reported: the

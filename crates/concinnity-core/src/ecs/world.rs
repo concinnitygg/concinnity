@@ -16,12 +16,13 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::ecs::asset_id::{AssetId, MintedIds};
+use crate::ecs::user_system::{self, UserSystem};
 use crate::ecs::waves::{self, ExecSchedule};
 use crate::ecs::{
     BuiltSystem, Clock, ComponentAsset, ComponentId, ComponentSlot, ComponentStorage, Entity,
     EnvironmentMapHandle, EventStore, Events, FrameContext, MaterialHandle, MeshHandle, NoPayloads,
-    PayloadStore, PipelineContext, Resources, RuntimeComponent, StepResult, SystemEntry,
-    SystemTable,
+    PayloadStore, Phase, PipelineContext, Resources, RuntimeComponent, StepResult, System,
+    SystemEntry, SystemTable,
 };
 use crate::gfx::profile::FrameProfile;
 use crate::result::CnResult;
@@ -71,8 +72,11 @@ pub struct World {
     // life. The arena's own counter is cleared each frame once reported, so
     // this is what survives to say the reserve wants raising.
     scratch_overflows: u64,
-    // The systems built for this world, in table order.
+    // The systems built for this world, in run order.
     systems: Vec<BuiltSystem>,
+    // Systems registered on this world from outside the table, held until
+    // `start` merges each into the schedule at the phase it named.
+    registered: Vec<UserSystem>,
     // The table `start` built them from, kept for the schedule rebuild a
     // finished system triggers.
     entries: &'static [SystemEntry],
@@ -164,6 +168,7 @@ impl World {
             scratch: Arena::tagged(FRAME_SCRATCH_BYTES, MemTag::Scratch),
             scratch_overflows: 0,
             systems: Vec::new(),
+            registered: Vec::new(),
             entries: &[],
             systems_built: false,
             schedule: None,
@@ -240,7 +245,7 @@ impl World {
     /// Iterate every stored component of a given type. Mirrors
     /// `PipelineContext::query`; useful in tests that hold a `World` directly.
     pub fn query<C: ComponentSlot>(&self) -> core::slice::Iter<'_, C> {
-        C::slot(&self.components).iter()
+        C::column(&self.components).map_or(&[][..], |c| c).iter()
     }
 
     /// Mutable iteration over all components of type C. Mirror of
@@ -248,6 +253,13 @@ impl World {
     /// than a per-system `PipelineContext`.
     pub fn query_mut<C: ComponentSlot>(&mut self) -> core::slice::IterMut<'_, C> {
         self.components.values_mut::<C>().iter_mut()
+    }
+
+    /// Allocate an entity that owns no components yet, to be filled with
+    /// [`insert`](World::insert). Mirror of `PipelineContext`'s entity
+    /// allocation, for code holding a `World` directly.
+    pub fn spawn(&mut self) -> Entity {
+        self.components.spawn()
     }
 
     /// Push a runtime-produced component into the matching typed slot,
@@ -436,12 +448,59 @@ impl World {
     /// and after `start` has drained the gating components it reports the
     /// systems a rebuild of the CURRENT content would get, not the built set.
     pub fn system_manifest(&self, table: &SystemTable) -> Vec<&'static str> {
-        table
-            .entries
+        let mut names = Vec::new();
+        for phase in Phase::ALL {
+            names.extend(
+                table
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.phase == phase)
+                    .filter(|entry| (entry.gate)(self).is_some())
+                    .map(|entry| entry.name),
+            );
+            names.extend(
+                self.registered
+                    .iter()
+                    .filter(|s| s.phase == phase)
+                    .map(|s| s.name),
+            );
+        }
+        names
+    }
+
+    /// Register a system on this world, to run in `phase` under `name`.
+    ///
+    /// This is how a system the engine's table does not list joins the tick.
+    /// Registration order is run order within a phase, and every table entry in
+    /// a phase runs before every system registered into it, so a registration
+    /// never reorders the engine's own tick.
+    ///
+    /// `name` is what the profile, the log and the schedule address the system
+    /// by. It must not repeat a table entry's name or an earlier registration's,
+    /// since both the ordering edges and the schedule's lookups key on it;
+    /// [`start`](World::start) panics on a repeat rather than resolving it.
+    ///
+    /// Registrations are read once, by `start`. Adding one to a world that has
+    /// already started does nothing.
+    pub fn add_system<S: System>(&mut self, phase: Phase, name: &'static str, system: S) {
+        self.registered.push(UserSystem {
+            phase,
+            name,
+            system: Box::new(system),
+        });
+    }
+
+    /// Systems registered on this world, in run order, whether or not it has
+    /// started.
+    pub fn registered_systems(&self) -> Vec<&'static str> {
+        let mut names: Vec<(Phase, usize, &'static str)> = self
+            .registered
             .iter()
-            .filter(|entry| (entry.gate)(self).is_some())
-            .map(|entry| entry.name)
-            .collect()
+            .enumerate()
+            .map(|(i, s)| (s.phase, i, s.name))
+            .collect();
+        names.sort_unstable();
+        names.into_iter().map(|(_, _, name)| name).collect()
     }
 
     // Disjoint borrows of the system list and the tick's context over the data
@@ -518,9 +577,30 @@ impl World {
         }
         self.systems_built = true;
         self.entries = table.entries;
-        for entry in table.entries {
-            if let Some(system) = (entry.gate)(self) {
-                self.systems.push(BuiltSystem::new(entry.name, system));
+
+        let registered: Vec<&'static str> = self.registered.iter().map(|s| s.name).collect();
+        let table_names: Vec<&'static str> = table.entries.iter().map(|e| e.name).collect();
+        if let Some(name) = user_system::colliding_name(&registered, &table_names) {
+            panic!(
+                "a system is already registered as '{name}': every system's name has to be its \
+                 own, since the schedule's edges and lookups key on it",
+            );
+        }
+
+        // Phase by phase: the table's entries in table order, then the systems
+        // registered into that phase in registration order. A stable sort is
+        // what keeps registration order within a phase.
+        let mut registered = core::mem::take(&mut self.registered);
+        registered.sort_by_key(|s| s.phase);
+        let mut registered = registered.into_iter().peekable();
+        for phase in Phase::ALL {
+            for entry in table.entries.iter().filter(|e| e.phase == phase) {
+                if let Some(system) = (entry.gate)(self) {
+                    self.systems.push(BuiltSystem::new(entry.name, system));
+                }
+            }
+            while let Some(next) = registered.next_if(|s| s.phase == phase) {
+                self.systems.push(BuiltSystem::new(next.name, next.system));
             }
         }
     }

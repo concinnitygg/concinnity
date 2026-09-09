@@ -106,6 +106,13 @@ macro_rules! define_components {
         }
 
         impl ComponentTag {
+            /// How many component types the registry lists.
+            ///
+            /// Also the first discriminant no registered component uses, which
+            /// is where a component type declared outside the engine starts
+            /// counting (see `EXTENSION_COMPONENT_BASE`).
+            pub const COUNT: u8 = 0 $( + { let _ = ComponentTag::$variant; 1 } )+;
+
             /// The registry name of this tag, as a world authors it.
             pub fn as_str(self) -> &'static str {
                 match self {
@@ -278,7 +285,9 @@ macro_rules! define_components {
             }
 
             /// How many components of each type are stored: one `(tag, count)`
-            /// entry per populated type, in tag order. The debug WS snapshot
+            /// entry per populated type, in tag order. A component type declared
+            /// outside the engine is reported by its discriminant, since it has
+            /// no registry name. The debug WS snapshot
             /// reports these; nothing re-serializes stored components back to
             /// defs. Counted rather than listed per instance, so the snapshot
             /// is sized by the number of component types rather than by the
@@ -291,6 +300,9 @@ macro_rules! define_components {
                         out.push((ComponentTag::$variant as u8, count as u32));
                     }
                 )+
+                // Every discriminant here is past the registry's, so appending
+                // keeps the whole census in tag order.
+                out.extend(self.ext.census());
                 out
             }
         }

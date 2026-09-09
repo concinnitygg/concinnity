@@ -28,6 +28,7 @@ mod character;
 mod contacts;
 // The authored assets turned into the simulation's shapes and parameters.
 mod convert;
+pub(crate) mod entity_ray;
 // What a step reports back: contact, ray, and sensor crossings.
 mod events;
 // What a step hands out as independent work, and the seam a host lends its

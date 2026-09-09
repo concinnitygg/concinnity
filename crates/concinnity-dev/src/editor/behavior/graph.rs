@@ -319,6 +319,27 @@ pub(crate) fn expr_text(value: &Value, depth: usize) -> String {
                 None => format!("{verb}({a}, {b})"),
             }
         }
+        Shape::Fields => {
+            // Named operands read as a call over the query the expression
+            // searches, which is what makes a card's condition legible.
+            let named: Vec<String> = palette::operands(verb)
+                .iter()
+                .map(|operand| {
+                    let value = body.and_then(|b| b.get(operand.key));
+                    if operand.query {
+                        let name = value.and_then(Value::as_str).unwrap_or("");
+                        if name.is_empty() {
+                            "(unnamed)".to_string()
+                        } else {
+                            name.to_string()
+                        }
+                    } else {
+                        self::operand(value, depth)
+                    }
+                })
+                .collect();
+            format!("{verb}({})", named.join(", "))
+        }
         Shape::List => {
             let joiner = if verb == "all" { " and " } else { " or " };
             let items: Vec<String> = array(body)

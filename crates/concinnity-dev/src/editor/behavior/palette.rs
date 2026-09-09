@@ -25,6 +25,37 @@ pub(crate) enum Shape {
     Binary,
     // Any number of nested expressions.
     List,
+    // Named operands, the way a node's settings are: the spatial expressions,
+    // whose operands do not read as `a` and `b`.
+    Fields,
+}
+
+// One named operand of a `Shape::Fields` expression: the key it sits under, and
+// whether it names a declared query rather than holding an expression.
+pub(crate) struct Operand {
+    pub key: &'static str,
+    pub query: bool,
+}
+
+// The named operands each `Shape::Fields` expression takes, in the order their
+// rows draw.
+pub(crate) fn operands(verb: &str) -> &'static [Operand] {
+    const QUERY: Operand = Operand {
+        key: "query",
+        query: true,
+    };
+    const fn expr(key: &'static str) -> Operand {
+        Operand { key, query: false }
+    }
+    const NEAREST: &[Operand] = &[QUERY, expr("of")];
+    const COUNT_WITHIN: &[Operand] = &[QUERY, expr("of"), expr("radius")];
+    const RAYCAST: &[Operand] = &[QUERY, expr("from"), expr("dir"), expr("distance")];
+    match verb {
+        "nearest" => NEAREST,
+        "count_within" => COUNT_WITHIN,
+        "raycast" => RAYCAST,
+        _ => &[],
+    }
 }
 
 // One offerable verb: the JSON key, and the hint shown beside it.
@@ -78,6 +109,10 @@ pub(crate) const NODES: &[Entry] = &[
     Entry {
         verb: "for_each",
         hint: "run nodes per entity a query matched",
+    },
+    Entry {
+        verb: "after",
+        hint: "run nodes once, after a wait",
     },
     Entry {
         verb: "let",
@@ -204,6 +239,18 @@ pub(crate) const EXPRS: &[Entry] = &[
         hint: "how many entities a query matched",
     },
     Entry {
+        verb: "nearest",
+        hint: "the entity of a query nearest a point",
+    },
+    Entry {
+        verb: "count_within",
+        hint: "how many of a query sit within a radius",
+    },
+    Entry {
+        verb: "raycast",
+        hint: "the entity of a query a ray meets first",
+    },
+    Entry {
         verb: "add",
         hint: "sum",
     },
@@ -306,6 +353,7 @@ pub(crate) fn shape(verb: &str) -> Shape {
         "self" | "dt" | "elapsed" => Shape::Unit,
         "bool" | "int" | "float" | "vec3" => Shape::Literal,
         "var" | "local" | "bind" | "named" | "first" | "count" => Shape::Name,
+        "nearest" | "count_within" | "raycast" => Shape::Fields,
         "position" | "alive" | "normalize" | "not" => Shape::Unary,
         "all" | "any" => Shape::List,
         _ => Shape::Binary,
@@ -332,6 +380,7 @@ pub(crate) fn source_default(verb: &str) -> Value {
 pub(crate) fn node_default(verb: &str) -> Value {
     match verb {
         "if" => json!({"if": {"cond": {"bool": true}, "then": [], "else": []}}),
+        "after" => json!({"after": {"seconds": {"float": 1.0}, "do": []}}),
         "for_each" => json!({"for_each": {"query": "", "bind": "each", "do": []}}),
         "let" => json!({"let": {"name": "value", "value": {"int": 0}}}),
         "set" => json!({"set": {"var": "", "value": {"int": 0}, "add": false}}),
@@ -365,6 +414,22 @@ pub(crate) fn expr_default(verb: &str) -> Value {
         Shape::Unary => single(verb, unary_operand(verb)),
         Shape::List => single(verb, json!([])),
         Shape::Binary => single(verb, binary_operands(verb)),
+        Shape::Fields => single(verb, named_operands(verb)),
+    }
+}
+
+// A fresh body for a named-operand expression, with every operand of the type
+// it needs so a newly picked one type-checks.
+fn named_operands(verb: &str) -> Value {
+    match verb {
+        "nearest" => json!({"query": "", "of": "self"}),
+        "count_within" => json!({"query": "", "of": "self", "radius": {"float": 5.0}}),
+        _ => json!({
+            "query": "",
+            "from": "self",
+            "dir": {"vec3": [0.0, 0.0, -1.0]},
+            "distance": {"float": 20.0},
+        }),
     }
 }
 
@@ -389,7 +454,10 @@ fn binary_operands(verb: &str) -> Value {
 // new verb takes the same shape.
 pub(crate) fn swap_expr(current: &Value, verb: &str) -> Value {
     let (from, to) = (shape(verb_of(current)), shape(verb));
-    if from != to {
+    // A named-operand expression keys its operands differently from every
+    // other, so swapping to or from one starts fresh rather than carrying keys
+    // the new verb does not read.
+    if from != to || to == Shape::Fields {
         return expr_default(verb);
     }
     let body = body_of(current);
@@ -444,6 +512,40 @@ mod tests {
             assert_eq!(verb_of(&v), entry.verb);
             serde_json::from_value::<crate::components::BehaviorNode>(v)
                 .unwrap_or_else(|e| panic!("node `{}` does not parse: {e}", entry.verb));
+        }
+    }
+
+    // A named-operand expression keys its operands differently from every
+    // other, so swapping to or from one starts fresh instead of carrying keys
+    // the new verb does not read.
+    #[test]
+    fn swapping_a_named_operand_expression_starts_fresh() {
+        let nearest = expr_default("nearest");
+        let raycast = swap_expr(&nearest, "raycast");
+        assert_eq!(raycast, expr_default("raycast"));
+
+        // And the other way: an expression with positional operands does not
+        // keep them when it becomes a named-operand one.
+        let distance = expr_default("distance");
+        assert_eq!(swap_expr(&distance, "nearest"), expr_default("nearest"));
+        assert_eq!(swap_expr(&raycast, "distance"), expr_default("distance"));
+    }
+
+    // Every named operand a `Shape::Fields` expression declares is present in
+    // the body the palette inserts, so a freshly picked one is complete rather
+    // than half-filled.
+    #[test]
+    fn a_named_operand_default_carries_every_operand() {
+        for verb in ["nearest", "count_within", "raycast"] {
+            assert_eq!(shape(verb), Shape::Fields, "{verb}");
+            let body = body_of(&expr_default(verb)).cloned().unwrap_or(Value::Null);
+            for operand in operands(verb) {
+                assert!(
+                    body.get(operand.key).is_some(),
+                    "`{verb}` default is missing `{}`: {body}",
+                    operand.key,
+                );
+            }
         }
     }
 

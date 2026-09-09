@@ -21,11 +21,16 @@ pub enum StepResult {
     Stop,
 }
 
-/// System -- has behavior, receives a PipelineContext each tick. Every system
-/// is internal engine code: `World::start` constructs it from world components
-/// (via the system's own `new(..)`), so a system is never loaded from or
-/// written to a blob. `init` runs once at `World::start`; `step` runs every
-/// tick.
+/// System -- has behavior, receives a PipelineContext each tick. `init` runs
+/// once at `World::start`; `step` runs every tick.
+///
+/// A system is code, never data: it has no declarable asset and is never loaded
+/// from or written to a blob. It reaches a world one of two ways -- an engine
+/// system is built by its [`SystemTable`](crate::ecs::SystemTable) entry's gate
+/// from the world's own content, and a system written outside the engine is
+/// registered on the world with
+/// [`World::add_system`](crate::ecs::World::add_system), naming the
+/// [`Phase`](crate::ecs::Phase) it runs in.
 ///
 /// A world holds its systems as `dyn System`, so the trait is object-safe.
 /// `Send` is what lets a built world move to the simulation thread, and `Any`

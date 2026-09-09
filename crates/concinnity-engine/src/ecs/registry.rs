@@ -6,7 +6,17 @@
 // discriminant. `World::start` runs each entry's gate against the world's
 // content and pushes the systems the gates return, in table order. To add a
 // system: implement `System` on it, write its gate in `schedule`, and add one
-// entry here in its run position with its ordering edges.
+// entry here in its run position with its phase and its ordering edges.
+//
+// `phase` is the only thing this table owes the world outside it. Entries are
+// in phase order, and a system registered with `World::add_system` runs after
+// every entry sharing its phase, so an outside registration anchors to a phase
+// and never to an entry. The four bands:
+//   * Early     -- the menu gate and the sky, before any logic runs.
+//   * Logic     -- the world's behaviours, whose requests drain later this tick.
+//   * PreRender -- the request drains and the streaming, before the frame goes.
+//   * Late      -- the frame itself and everything downstream of it (input,
+//                  physics, cameras, animation, story, audio, UI).
 //
 // `after`/`before` are the cross-system ordering constraints, validated
 // against table order when the world's schedule is built.
@@ -55,120 +65,140 @@ crate::define_systems! {
     OverlaySystem => crate::gfx::overlay::OverlaySystem {
         gate: schedule::overlay,
         present_when: "the world declares a GraphicsConfig",
+        phase: Early,
         after: [],
         before: [BehaviorSystem, SpawnSystem, GraphicsSystem, InputSystem, PhysicsSystem, AnimationSystem],
     },
     SkyRotationSystem => concinnity_core::sky::SkyRotationSystem {
         gate: schedule::sky_rotation,
         present_when: "the world declares a SkyRotation",
+        phase: Early,
         after: [OverlaySystem],
         before: [GraphicsSystem],
     },
     BehaviorSystem => concinnity_core::behavior::BehaviorSystem {
         gate: schedule::behavior,
         present_when: "the world declares any Behavior",
+        phase: Logic,
         after: [OverlaySystem],
         before: [SpawnSystem, SettingsSystem, StorySystem, AudioSystem],
     },
     SpawnSystem => crate::spawn::SpawnSystem {
         gate: schedule::spawn,
         present_when: "the world declares a GraphicsConfig",
+        phase: PreRender,
         after: [BehaviorSystem],
         before: [GraphicsSystem],
     },
     SettingsSystem => crate::gfx::settings_system::SettingsSystem {
         gate: schedule::settings,
         present_when: "the world declares a GraphicsConfig",
+        phase: PreRender,
         after: [],
         before: [GraphicsSystem],
     },
     StreamingSystem => crate::gfx::streaming_system::StreamingSystem {
         gate: schedule::streaming,
         present_when: "the world declares a GraphicsConfig",
+        phase: PreRender,
         after: [],
         before: [GraphicsSystem],
     },
     GraphicsSystem => crate::gfx::graphics_system::GraphicsSystem {
         gate: schedule::graphics,
         present_when: "the world declares a GraphicsConfig",
+        phase: Late,
         after: [SpawnSystem, SettingsSystem, StreamingSystem],
         before: [InputSystem],
     },
     InputSystem => crate::gfx::input_system::InputSystem {
         gate: schedule::input,
         present_when: "the world declares a GraphicsConfig",
+        phase: Late,
         after: [GraphicsSystem],
         before: [],
     },
     StatHud => crate::hud::stat_hud::StatHudSystem {
         gate: schedule::stat_hud,
         present_when: "the world declares a StatHud",
+        phase: Late,
         after: [],
         before: [],
     },
     DebugHud => crate::hud::debug_hud::DebugHudSystem {
         gate: schedule::debug_hud,
         present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
+        phase: Late,
         after: [],
         before: [],
     },
     LoadingOverlaySystem => crate::hud::loading_overlay::LoadingOverlaySystem {
         gate: schedule::loading_overlay,
         present_when: "the world declares a LoadingOverlay",
+        phase: Late,
         after: [StreamingSystem],
         before: [UiInputSystem],
     },
     PhysicsSystem => concinnity_core::physics::PhysicsSystem {
         gate: schedule::physics,
         present_when: "the world declares a PhysicsConfig, RigidBody, PropBody, or TriggerVolume, or a skinned mesh bakes a character capsule",
+        phase: Late,
         after: [OverlaySystem],
         before: [Camera3DSystem, ThirdPersonSystem],
     },
     Camera3DSystem => crate::gfx::camera_controller::Camera3DSystem {
         gate: schedule::camera3d,
         present_when: "the first controlled Camera3D has no follow block",
+        phase: Late,
         after: [PhysicsSystem],
         before: [AudioSystem],
     },
     ThirdPersonSystem => crate::gfx::third_person::ThirdPersonSystem {
         gate: schedule::third_person,
         present_when: "the first controlled Camera3D has a follow block",
+        phase: Late,
         after: [PhysicsSystem],
         before: [AudioSystem],
     },
     FpsCounter => crate::hud::fps_counter::FpsCounterSystem {
         gate: schedule::fps_counter,
         present_when: "the world declares an FpsCounter",
+        phase: Late,
         after: [],
         before: [],
     },
     AnimationSystem => crate::gfx::animation::AnimationSystem {
         gate: schedule::animation,
         present_when: "the world declares any Animation or AnimationGraph",
+        phase: Late,
         after: [OverlaySystem],
         before: [],
     },
     StorySystem => crate::story::StorySystem {
         gate: schedule::story,
         present_when: "the world declares a Story",
+        phase: Late,
         after: [BehaviorSystem],
         before: [AudioSystem],
     },
     AudioSystem => crate::audio::AudioSystem {
         gate: schedule::audio,
         present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, or a Behavior with a sound node",
+        phase: Late,
         after: [BehaviorSystem, Camera3DSystem, ThirdPersonSystem, StorySystem],
         before: [],
     },
     UiInputSystem => crate::ui::UiInputSystem {
         gate: schedule::ui_input,
         present_when: "the world declares any HitRegion, Screen, or KeyBinding",
+        phase: Late,
         after: [LoadingOverlaySystem],
         before: [],
     },
     TextInputSystem => crate::text_input_system::TextInputSystem {
         gate: schedule::text_input,
         present_when: "the world declares any TextInput",
+        phase: Late,
         after: [],
         before: [],
     },
@@ -344,6 +374,52 @@ mod tests {
         world.add_component(FpsCounter::default());
         world.start(SYSTEMS).unwrap();
         assert_eq!(world.system_count(), 1, "the FpsCounter gate built one");
+    }
+
+    // The table is in phase order: the merge walks the phases once, so an entry
+    // out of phase order would silently move the moment a system was registered
+    // into the phase beside it.
+    #[test]
+    fn entries_are_in_phase_order() {
+        for pair in ENTRIES.windows(2) {
+            assert!(
+                pair[0].phase <= pair[1].phase,
+                "{} runs in {} and {} after it in {}",
+                pair[0].name,
+                pair[0].phase.as_str(),
+                pair[1].name,
+                pair[1].phase.as_str(),
+            );
+        }
+    }
+
+    // A system registered on a world lands in the phase it named, among the
+    // engine's own: after every table entry sharing that phase, and before
+    // every entry of a later one. Manifest-only, so no device is built.
+    #[test]
+    fn a_registration_lands_in_the_phase_it_named() {
+        use crate::components::{FpsCounter, SkyRotation};
+        use crate::ecs::{Phase, PipelineContext, StepResult, System};
+
+        #[derive(Debug)]
+        struct Inert;
+
+        impl System for Inert {
+            fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+                StepResult::Continue
+            }
+        }
+
+        let mut world = World::new();
+        world.add_component(SkyRotation::default());
+        world.add_component(FpsCounter::default());
+        world.add_system(Phase::Early, "MyEarly", Inert);
+        world.add_system(Phase::Late, "MyLate", Inert);
+
+        assert_eq!(
+            world.system_manifest(SYSTEMS),
+            ["SkyRotationSystem", "MyEarly", "FpsCounter", "MyLate"]
+        );
     }
 
     // Every declared edge agrees with table order. The table is the one

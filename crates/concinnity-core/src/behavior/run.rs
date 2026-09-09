@@ -30,6 +30,10 @@ pub struct View<'a> {
     pub bindings: &'a mut [Option<Val>],
     /// The entities each declared query selected this tick, in slot order.
     pub queries: &'a [Vec<Entity>],
+    /// Answers a spatial question about a declared query's entities: the one
+    /// nearest a point, how many sit within a radius of it, or the one a ray
+    /// meets first. The behavior's own entity is never an answer.
+    pub spatial: &'a dyn Fn(&Spatial<'_>) -> Option<Val>,
     /// Resolves a name to the entity carrying it.
     pub by_name: &'a dyn Fn(AssetId) -> Option<Entity>,
     /// Reads an entity's transform.
@@ -41,6 +45,41 @@ pub struct View<'a> {
     /// Node ids executed this run, recorded only while tracing is requested
     /// (`None` costs one branch per node).
     pub trace: &'a mut Option<Vec<u32>>,
+}
+
+/// A spatial question a body asked of a declared query's entities.
+///
+/// One enum rather than three closures on the view: the host answers all three
+/// against the same candidate list, and a body reaches them all the same way.
+#[derive(Debug)]
+pub enum Spatial<'a> {
+    /// The candidate nearest `point`.
+    Nearest {
+        /// The query's entities, in the tick's stable order.
+        candidates: &'a [Entity],
+        /// The point searched around.
+        point: [f32; 3],
+    },
+    /// How many candidates lie within `radius` of `point`.
+    CountWithin {
+        /// The query's entities, in the tick's stable order.
+        candidates: &'a [Entity],
+        /// The point searched around.
+        point: [f32; 3],
+        /// How far from it to search.
+        radius: f32,
+    },
+    /// The candidate a ray meets first.
+    Raycast {
+        /// The query's entities, in the tick's stable order.
+        candidates: &'a [Entity],
+        /// Where the ray starts.
+        from: [f32; 3],
+        /// Which way it points; need not be unit length.
+        dir: [f32; 3],
+        /// How far it reaches.
+        distance: f32,
+    },
 }
 
 /// One world change a behavior asked for, in body order.
@@ -99,6 +138,16 @@ pub enum Effect {
     Story(StoryPlayback),
     /// Persist the world's behavior state.
     Save,
+    /// Run one of the body's `after` blocks later, with the bindings that were
+    /// live when the node was reached.
+    After {
+        /// The `after` node's id, which resolves back to its block.
+        node: u32,
+        /// Seconds of simulated time to wait.
+        seconds: f32,
+        /// The binding frame the block resumes with.
+        bindings: Vec<Option<Val>>,
+    },
 }
 
 /// A requested copy of a template.
@@ -146,6 +195,38 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
             .copied()
             .map(Val::Entity),
         CExpr::Count(slot) => Some(Val::Int(view.queries.get(*slot as usize)?.len() as i32)),
+        CExpr::Nearest { query, of } => {
+            let candidates = view.queries.get(*query as usize)?;
+            let point = point(of, view)?;
+            (view.spatial)(&Spatial::Nearest { candidates, point })
+        }
+        CExpr::CountWithin { query, of, radius } => {
+            let candidates = view.queries.get(*query as usize)?;
+            let point = point(of, view)?;
+            let radius = eval(radius, view)?.as_f32()?;
+            (view.spatial)(&Spatial::CountWithin {
+                candidates,
+                point,
+                radius,
+            })
+        }
+        CExpr::Raycast {
+            query,
+            from,
+            dir,
+            distance,
+        } => {
+            let candidates = view.queries.get(*query as usize)?;
+            let from = point(from, view)?;
+            let dir = eval(dir, view)?.as_vec3()?;
+            let distance = eval(distance, view)?.as_f32()?;
+            (view.spatial)(&Spatial::Raycast {
+                candidates,
+                from,
+                dir,
+                distance,
+            })
+        }
         CExpr::Normalize(e) => {
             let v = eval(e, view)?.as_vec3()?;
             let len = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
@@ -175,6 +256,17 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
             Some(Val::Bool(false))
         }
         CExpr::Never => None,
+    }
+}
+
+// A point operand: a vector as written, or the position of the entity given.
+// Every spatial expression takes its point this way, so `self` and a literal
+// vector both read.
+fn point(expr: &CExpr, view: &View<'_>) -> Option<[f32; 3]> {
+    match eval(expr, view)? {
+        Val::Vec3(v) => Some(v),
+        Val::Entity(e) => Some((view.transforms)(e)?.position),
+        _ => None,
     }
 }
 
@@ -268,6 +360,18 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
                 set_binding(view, *bind, Some(Val::Entity(entity)));
                 exec(body, view, out);
             }
+        }
+        COp::After { seconds, .. } => {
+            let Some(seconds) = eval(seconds, view).and_then(|v| v.as_f32()) else {
+                return;
+            };
+            // The block is reached by node id rather than copied, so the
+            // effect carries only the frame it has to resume with.
+            out.push(Effect::After {
+                node: node.id,
+                seconds,
+                bindings: view.bindings.to_vec(),
+            });
         }
         COp::Let { bind, value } => {
             let value = eval(value, view);
@@ -395,6 +499,7 @@ mod tests {
     use crate::ecs::AudioClipHandle;
     use alloc::boxed::Box;
     use alloc::vec;
+    use core::cell::RefCell;
     use core::num::NonZeroU32;
 
     fn entity(index: u32) -> Entity {
@@ -424,6 +529,21 @@ mod tests {
         names: Vec<(AssetId, Entity)>,
         self_entity: Option<Entity>,
         bindings: usize,
+        // What the spatial closure answers, and where the question it was
+        // asked is recorded. The geometry is tested where it lives (physics'
+        // `entity_ray`, the system's `spatial`); what this file owes is that a
+        // body asks the right question and hands back the answer.
+        spatial_answer: Option<Val>,
+        asked: RefCell<Vec<SpatialAsk>>,
+    }
+
+    // A flattened record of one spatial question, so a test can assert on it
+    // without borrowing the candidate slice.
+    #[derive(Debug, PartialEq)]
+    enum SpatialAsk {
+        Nearest(Vec<Entity>, [f32; 3]),
+        CountWithin(Vec<Entity>, [f32; 3], f32),
+        Raycast(Vec<Entity>, [f32; 3], [f32; 3], f32),
     }
 
     impl Run {
@@ -445,6 +565,25 @@ mod tests {
                         .map(|(_, t)| *t)
                 },
                 alive: &|e| self.entities.contains(&e),
+                spatial: &|question| {
+                    self.asked.borrow_mut().push(match *question {
+                        Spatial::Nearest { candidates, point } => {
+                            SpatialAsk::Nearest(candidates.to_vec(), point)
+                        }
+                        Spatial::CountWithin {
+                            candidates,
+                            point,
+                            radius,
+                        } => SpatialAsk::CountWithin(candidates.to_vec(), point, radius),
+                        Spatial::Raycast {
+                            candidates,
+                            from,
+                            dir,
+                            distance,
+                        } => SpatialAsk::Raycast(candidates.to_vec(), from, dir, distance),
+                    });
+                    self.spatial_answer
+                },
                 self_entity: self.self_entity,
                 trace: &mut trace,
             };
@@ -468,6 +607,165 @@ mod tests {
 
     fn lit(v: Val) -> Box<CExpr> {
         Box::new(CExpr::Lit(v))
+    }
+
+    // The spatial expressions: each resolves its query slot to that query's
+    // entities, evaluates its operands, and hands back whatever the host
+    // answered. What the host does with the question is tested where the
+    // geometry lives.
+    #[test]
+    fn nearest_asks_its_query_and_returns_the_answer() {
+        let (a, b) = (entity(1), entity(2));
+        let run = Run {
+            queries: vec![vec![], vec![a, b]],
+            transforms: vec![(a, moved([4.0, 0.0, 0.0]))],
+            entities: vec![a, b],
+            spatial_answer: Some(Val::Entity(b)),
+            ..Run::default()
+        };
+        let expr = CExpr::Nearest {
+            query: 1,
+            of: Box::new(CExpr::Position(lit(Val::Entity(a)))),
+        };
+        assert_eq!(run.eval(&expr), Some(Val::Entity(b)));
+        assert_eq!(
+            run.asked.take(),
+            vec![SpatialAsk::Nearest(vec![a, b], [4.0, 0.0, 0.0])],
+        );
+    }
+
+    // A point operand may be a vector or an entity, whose position stands in
+    // for one; both reach the host as the same point.
+    #[test]
+    fn a_point_operand_takes_a_vector_or_an_entity() {
+        let a = entity(1);
+        let run = Run {
+            queries: vec![vec![a]],
+            transforms: vec![(a, moved([1.0, 2.0, 3.0]))],
+            entities: vec![a],
+            spatial_answer: Some(Val::Int(0)),
+            ..Run::default()
+        };
+        let ask = |of: Box<CExpr>| {
+            run.eval(&CExpr::CountWithin {
+                query: 0,
+                of,
+                radius: lit(Val::Float(5.0)),
+            });
+            run.asked.take()
+        };
+        assert_eq!(
+            ask(lit(Val::Vec3([1.0, 2.0, 3.0]))),
+            ask(lit(Val::Entity(a))),
+        );
+    }
+
+    #[test]
+    fn raycast_asks_with_its_origin_direction_and_reach() {
+        let (a, b) = (entity(1), entity(2));
+        let run = Run {
+            queries: vec![vec![a, b]],
+            entities: vec![a, b],
+            spatial_answer: Some(Val::Entity(a)),
+            ..Run::default()
+        };
+        let expr = CExpr::Raycast {
+            query: 0,
+            from: lit(Val::Vec3([0.0, 1.0, 0.0])),
+            dir: lit(Val::Vec3([0.0, 0.0, -1.0])),
+            distance: lit(Val::Float(20.0)),
+        };
+        assert_eq!(run.eval(&expr), Some(Val::Entity(a)));
+        assert_eq!(
+            run.asked.take(),
+            vec![SpatialAsk::Raycast(
+                vec![a, b],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, -1.0],
+                20.0
+            )],
+        );
+    }
+
+    // A query slot the body never declared, or an operand that yields no
+    // value, asks nothing rather than asking a malformed question.
+    #[test]
+    fn a_spatial_expression_with_no_operand_asks_nothing() {
+        let run = Run {
+            queries: vec![vec![entity(1)]],
+            spatial_answer: Some(Val::Int(3)),
+            ..Run::default()
+        };
+        let unknown_query = CExpr::Nearest {
+            query: 7,
+            of: lit(Val::Vec3([0.0; 3])),
+        };
+        assert_eq!(run.eval(&unknown_query), None);
+        // `bind` 0 is unset, so the point never resolves.
+        let no_point = CExpr::Nearest {
+            query: 0,
+            of: Box::new(CExpr::Bind(0)),
+        };
+        assert_eq!(run.eval(&no_point), None);
+        assert!(run.asked.take().is_empty());
+    }
+
+    // An `after` node runs nothing now: it asks for its block later, carrying
+    // the binding frame that was live when it was reached.
+    #[test]
+    fn after_defers_its_block_with_the_bindings_it_captured() {
+        let run = Run {
+            bindings: 2,
+            ..Run::default()
+        };
+        let node = CNode {
+            id: 4,
+            op: COp::After {
+                seconds: CExpr::Lit(Val::Float(2.5)),
+                body: vec![node(COp::Save)],
+            },
+        };
+        let effects = run.with_view(|view| {
+            let mut out = Vec::new();
+            // A binding the body had already made when the node was reached.
+            view.bindings[1] = Some(Val::Int(9));
+            exec(&[node], view, &mut out);
+            out
+        });
+        match effects.as_slice() {
+            [
+                Effect::After {
+                    node,
+                    seconds,
+                    bindings,
+                },
+            ] => {
+                assert_eq!(*node, 4, "the block is named by the node it came from");
+                assert_eq!(*seconds, 2.5);
+                assert_eq!(bindings, &[None, Some(Val::Int(9))]);
+            }
+            other => panic!("expected one deferral, got {other:?}"),
+        }
+    }
+
+    // A wait that is not a number defers nothing, rather than queueing a run
+    // that would fire on the next tick.
+    #[test]
+    fn after_with_no_wait_defers_nothing() {
+        let run = Run::default();
+        let node = CNode {
+            id: 0,
+            op: COp::After {
+                seconds: CExpr::Bind(0),
+                body: vec![node(COp::Save)],
+            },
+        };
+        let effects = run.with_view(|view| {
+            let mut out = Vec::new();
+            exec(&[node], view, &mut out);
+            out
+        });
+        assert!(effects.is_empty(), "{effects:?}");
     }
 
     #[test]

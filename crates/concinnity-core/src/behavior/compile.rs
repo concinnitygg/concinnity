@@ -164,6 +164,13 @@ fn compile_node(
             then: compile_nodes(then, names, vars, &branch(path, "if", "then"), paths),
             otherwise: compile_nodes(otherwise, names, vars, &branch(path, "if", "else"), paths),
         },
+        BehaviorNode::After { seconds, body } => COp::After {
+            seconds: compile_expr(seconds, names, vars),
+            // The block keeps the bindings live where the node sits, so it
+            // compiles in this scope rather than a fresh one; the deferred run
+            // is handed the frame those bindings held.
+            body: compile_nodes(body, names, vars, &branch(path, "after", "do"), paths),
+        },
         BehaviorNode::ForEach { query, bind, body } => {
             let Some(query) = names.query(query) else {
                 return COp::Never;
@@ -286,6 +293,35 @@ fn compile_expr(expr: &BehaviorExpr, names: &mut Names<'_>, vars: &mut VarTable)
         }
         BehaviorExpr::First(q) => names.query(q).map_or(CExpr::Never, CExpr::First),
         BehaviorExpr::Count(q) => names.query(q).map_or(CExpr::Never, CExpr::Count),
+        BehaviorExpr::Nearest { query, of } => match names.query(query) {
+            Some(query) => CExpr::Nearest {
+                query,
+                of: Box::new(compile_expr(of, names, vars)),
+            },
+            None => CExpr::Never,
+        },
+        BehaviorExpr::CountWithin { query, of, radius } => match names.query(query) {
+            Some(query) => CExpr::CountWithin {
+                query,
+                of: Box::new(compile_expr(of, names, vars)),
+                radius: Box::new(compile_expr(radius, names, vars)),
+            },
+            None => CExpr::Never,
+        },
+        BehaviorExpr::Raycast {
+            query,
+            from,
+            dir,
+            distance,
+        } => match names.query(query) {
+            Some(query) => CExpr::Raycast {
+                query,
+                from: Box::new(compile_expr(from, names, vars)),
+                dir: Box::new(compile_expr(dir, names, vars)),
+                distance: Box::new(compile_expr(distance, names, vars)),
+            },
+            None => CExpr::Never,
+        },
         BehaviorExpr::Add(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Arith(Arith::Add, a, b)
