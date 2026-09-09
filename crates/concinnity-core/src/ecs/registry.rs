@@ -71,6 +71,7 @@ macro_rules! for_each_component {
                 GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
                 Shader            => $crate::components::Shader { manual, external, compiled, consumed },
                 Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
+                CameraTrack       => $crate::components::CameraTrack { manual, external, singleton, id, args: CameraTrack },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
                 Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("texture", "Texture"), ("scene", "Scene"), ("parent", "Prop"), ("parent", "SkyRotation")], consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },

@@ -15,6 +15,9 @@ pub use super::behavior::{
     BehaviorSource,
 };
 pub use super::block_type::BlockType;
+pub use super::camera_track::{
+    CameraTrack, CameraTravel, CameraTravelKey, CameraTurn, CameraTurnKey, Ease,
+};
 pub use super::camera3d::{CameraController, FollowController, FollowDrive};
 pub use super::character_shape::{CharacterShape, JointProportion, ResolvedSliders, ShapeSlider};
 pub use super::debug_hud::DebugHud;

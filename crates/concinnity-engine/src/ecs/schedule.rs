@@ -189,10 +189,30 @@ pub(crate) fn third_person(world: &World) -> Option<crate::gfx::third_person::Th
         .then(|| crate::gfx::third_person::ThirdPersonSystem::new(&ctrl))
 }
 
+// A declared CameraTrack owns the camera, so neither input controller is
+// built: two systems writing the same pose would fight for it every tick.
 fn controlled_camera(world: &World) -> Option<crate::components::CameraController> {
+    if world
+        .query::<crate::components::CameraTrack>()
+        .next()
+        .is_some()
+    {
+        return None;
+    }
     world
         .query::<crate::components::Camera3D>()
         .find_map(|c| c.controller.clone())
+}
+
+// CameraTrackSystem: present when a world declares both a `CameraTrack` and the
+// `Camera3D` it drives. Sits where the input controllers sit, after physics has
+// settled the tick's poses and before the listener reads the camera.
+pub(crate) fn camera_track(
+    world: &World,
+) -> Option<concinnity_core::camera_track::CameraTrackSystem> {
+    let track = world.query::<crate::components::CameraTrack>().next()?;
+    world.query::<crate::components::Camera3D>().next()?;
+    Some(concinnity_core::camera_track::CameraTrackSystem::new(track))
 }
 
 // FpsCounter: present whenever the world declares an `FpsCounter`; built from

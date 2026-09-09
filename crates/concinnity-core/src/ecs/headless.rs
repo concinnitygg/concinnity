@@ -14,7 +14,10 @@
 use alloc::boxed::Box;
 
 use crate::behavior::BehaviorSystem;
-use crate::components::{Behavior, PhysicsConfig, PropBody, RigidBody, SkyRotation, TriggerVolume};
+use crate::camera_track::CameraTrackSystem;
+use crate::components::{
+    Behavior, Camera3D, CameraTrack, PhysicsConfig, PropBody, RigidBody, SkyRotation, TriggerVolume,
+};
 use crate::ecs::{Phase, System, SystemEntry, SystemTable, World};
 use crate::physics::PhysicsSystem;
 use crate::resource::SkinnedMeshTable;
@@ -58,6 +61,15 @@ fn physics(world: &World) -> Option<Box<dyn System>> {
     Some(Box::new(PhysicsSystem::new(config)))
 }
 
+// CameraTrackSystem: present when a world declares both a `CameraTrack` and the
+// `Camera3D` it drives. Runs after physics, which is where the camera's pose is
+// settled for the tick.
+fn camera_track(world: &World) -> Option<Box<dyn System>> {
+    let track = world.query::<CameraTrack>().next()?;
+    world.query::<Camera3D>().next()?;
+    Some(Box::new(CameraTrackSystem::new(track)))
+}
+
 /// The simulation systems a world runs with no host beyond this crate, in run
 /// order. What [`App`](crate::App) starts a headless world against.
 pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
@@ -84,6 +96,14 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
             phase: Phase::Late,
             gate: physics,
             after: &[],
+            before: &[],
+        },
+        SystemEntry {
+            name: "CameraTrackSystem",
+            present_when: "the world declares a CameraTrack and the Camera3D it drives",
+            phase: Phase::Late,
+            gate: camera_track,
+            after: &["PhysicsSystem"],
             before: &[],
         },
     ],
@@ -169,6 +189,28 @@ mod tests {
         assert_eq!(
             world.system_manifest(HEADLESS_SYSTEMS),
             ["SkyRotationSystem", "BehaviorSystem"]
+        );
+    }
+
+    // A camera track needs both halves: the path and the camera it drives.
+    // Either alone leaves the system out rather than half-building it.
+    #[test]
+    fn a_camera_track_gates_the_track_system_only_beside_a_camera() {
+        let mut world = World::new();
+        world.add_component(CameraTrack::default());
+        assert!(world.system_manifest(HEADLESS_SYSTEMS).is_empty());
+
+        let mut world = World::new();
+        world.add_component(Camera3D::bake(Default::default()));
+        assert!(world.system_manifest(HEADLESS_SYSTEMS).is_empty());
+
+        let mut world = World::new();
+        world.add_component(CameraTrack::default());
+        world.add_component(Camera3D::bake(Default::default()));
+        world.add_component(PhysicsConfig::default());
+        assert_eq!(
+            world.system_manifest(HEADLESS_SYSTEMS),
+            ["PhysicsSystem", "CameraTrackSystem"]
         );
     }
 

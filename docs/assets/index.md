@@ -12,6 +12,7 @@
 - [BlockType](BlockType.md) - Describes one entry in a [VoxelChunk](VoxelChunk.md) palette.
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
 - [CameraShot](CameraShot.md) - A reusable [Camera3D](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
+- [CameraTrack](CameraTrack.md) - Drives the world's [Camera3D](Camera3D.md) along a scripted path, so a fly-through visits the same poses on every machine that runs it.
 - [CharacterModel](CharacterModel.md) - A character body that conforms to a [CharacterSchema](CharacterSchema.md).
 - [CharacterSchema](CharacterSchema.md) - The contract between a character body and everything that uses it.
 - [CharacterShape](CharacterShape.md) - Shape sliders and joint proportions applied to one [SkinnedMesh](SkinnedMesh.md).
@@ -93,8 +94,11 @@
 - [BehaviorLocal](BehaviorLocal.md) - A per-entity state slot declared by a [Behavior](Behavior.md). The declared value fixes both the slot's type and its starting value.
 - [BehaviorQuery](BehaviorQuery.md) - A world read declared by a [Behavior](Behavior.md), resolved once per tick into the entities carrying every named component.
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
+- [CameraTravel](CameraTravel.md) - One straight run on a [CameraTrack](CameraTrack.md)'s travel track.
+- [CameraTurn](CameraTurn.md) - One turn on a [CameraTrack](CameraTrack.md)'s turn track.
 - [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
 - [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
+- [Ease](Ease.md) - How a [CameraTrack](CameraTrack.md) leg paces the run between its start and its end.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
 - [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.

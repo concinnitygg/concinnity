@@ -38,6 +38,8 @@
 //     this tick) and before UiInput (its screen commands apply same tick).
 //   * Physics before the camera controllers: physics consumes the camera's
 //     previous-frame `desired_move` (a one-frame-lagged resolution).
+//   * CameraTrack after Physics, before Audio: it sits where the input
+//     controllers sit, and replaces them when a world declares a track.
 //   * Cameras and Story before Audio: the listener reads the camera, and a
 //     `PlayCue` page audio is heard the same tick.
 // Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
@@ -160,6 +162,13 @@ crate::define_systems! {
         after: [PhysicsSystem],
         before: [AudioSystem],
     },
+    CameraTrackSystem => concinnity_core::camera_track::CameraTrackSystem {
+        gate: schedule::camera_track,
+        present_when: "the world declares a CameraTrack and the Camera3D it drives",
+        phase: Late,
+        after: [PhysicsSystem],
+        before: [AudioSystem],
+    },
     FpsCounter => crate::hud::fps_counter::FpsCounterSystem {
         gate: schedule::fps_counter,
         present_when: "the world declares an FpsCounter",
@@ -265,6 +274,31 @@ mod tests {
         assert_eq!(world.query::<EngineDefaults>().count(), 0);
         let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(built, ["PhysicsSystem"]);
+    }
+
+    // A declared track takes the camera off the input controller, so exactly
+    // one system writes the pose. Without the track the same world builds the
+    // controller instead.
+    #[test]
+    fn a_camera_track_replaces_the_camera_controller() {
+        use crate::components::{Camera3D, CameraTrack, PhysicsConfig};
+
+        let mut world = World::new();
+        world.add_component(Camera3D::bake(Default::default()));
+        world.add_component(PhysicsConfig::default());
+        assert_eq!(
+            world.system_manifest(SYSTEMS),
+            ["PhysicsSystem", "Camera3DSystem"]
+        );
+
+        let mut world = World::new();
+        world.add_component(Camera3D::bake(Default::default()));
+        world.add_component(CameraTrack::default());
+        world.add_component(PhysicsConfig::default());
+        assert_eq!(
+            world.system_manifest(SYSTEMS),
+            ["PhysicsSystem", "CameraTrackSystem"]
+        );
     }
 
     // Manifest names come out in table order, and every name is a real table

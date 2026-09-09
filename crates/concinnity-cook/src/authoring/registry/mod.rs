@@ -722,6 +722,12 @@ pub fn bake_divergent(
                 concinnity_core::components::cook::Camera3D
             )
         }
+        RegisteredType::CameraTrack => {
+            bake!(
+                crate::components::CameraTrack,
+                concinnity_core::components::cook::CameraTrack
+            )
+        }
         RegisteredType::Room => bake!(
             crate::components::Room,
             concinnity_core::components::cook::Room
@@ -1061,6 +1067,7 @@ mod tests {
             [
                 "Window",
                 "GraphicsConfig",
+                "CameraTrack",
                 "PostProcessConfig",
                 "StreamingConfig",
                 "PhysicsConfig",

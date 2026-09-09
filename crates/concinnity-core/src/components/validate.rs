@@ -8,12 +8,13 @@
 use alloc::string::ToString;
 
 use crate::components::{
-    Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, MAX_WATER_WAVES,
-    Material, ParticleEmitter, PhysicsJoint, PhysicsJointKind, PointLight, Prop, RectAreaLight,
-    ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight,
-    SpotLightGeometry, VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
+    CameraTrackArgs, Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp,
+    MAX_WATER_WAVES, Material, ParticleEmitter, PhysicsJoint, PhysicsJointKind, PointLight, Prop,
+    RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation,
+    SpotLight, SpotLightGeometry, VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 use crate::math::sqrt;
+use crate::math::vec3;
 
 /// Normalize an authored volume for the runtime: clamp the raymarch knobs to
 /// sane bounds and force shadows off for translucent volumetrics, which write
@@ -93,6 +94,42 @@ pub fn sky_rotation(mut args: SkyRotation) -> SkyRotation {
         args.axis = SkyRotation::default().axis;
     }
     args
+}
+
+/// Normalize an authored `CameraTrack` so every leg has a duration the
+/// timeline can lay out: negative and non-finite quantities become zero, and a
+/// leg with no direction to travel in becomes a hold of the duration its
+/// distance and speed implied, so the legs after it stay where the author put
+/// them on the clock. A turn angle that is not a real one is dropped, leaving
+/// that leg holding the angle it started from. `CameraTrack` bakes divergently, so no generated
+/// `from_args` runs this -- `CameraTrack::bake` calls it.
+pub fn camera_track(mut args: CameraTrackArgs) -> CameraTrackArgs {
+    for leg in args.travel.iter_mut() {
+        leg.distance = finite_non_negative(leg.distance);
+        leg.speed = finite_non_negative(leg.speed);
+        leg.seconds = finite_non_negative(leg.seconds);
+        for axis in leg.direction.iter_mut() {
+            if !axis.is_finite() {
+                *axis = 0.0;
+            }
+        }
+        if vec3::length(leg.direction) < 1e-6 {
+            leg.seconds = crate::components::camera_track::travel_seconds(leg);
+            leg.distance = 0.0;
+        }
+    }
+    for leg in args.turn.iter_mut() {
+        leg.yaw_deg = leg.yaw_deg.filter(|a| a.is_finite());
+        leg.pitch_deg = leg.pitch_deg.filter(|a| a.is_finite());
+        leg.degrees_per_second = finite_non_negative(leg.degrees_per_second);
+        leg.seconds = finite_non_negative(leg.seconds);
+    }
+    args
+}
+
+// Zero for anything that is not a usable non-negative magnitude.
+fn finite_non_negative(v: f32) -> f32 {
+    if v.is_finite() { v.max(0.0) } else { 0.0 }
 }
 
 /// Clamp a `Material`'s authored fields into their valid ranges. Material is a

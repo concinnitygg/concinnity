@@ -60,6 +60,7 @@ mod app;
 pub mod bake;
 pub mod behavior;
 pub mod blob;
+pub mod camera_track;
 pub mod components;
 pub mod decode;
 pub mod defaults;
