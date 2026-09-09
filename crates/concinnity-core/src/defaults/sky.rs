@@ -13,7 +13,8 @@ use crate::{bake, geometry};
 use super::Minter;
 
 // Sky depth is pinned to the far plane, so the mesh only has to enclose the
-// camera while staying inside it.
+// camera while staying inside it. The renderer keeps it centred on the camera,
+// so the size is a fit to the frustum rather than to the world.
 const SKY_SIZE_MAX: f32 = 400.0;
 const SKY_FAR_FRACTION: f32 = 0.9;
 const CAMERA_FAR_DEFAULT: f32 = 200.0;

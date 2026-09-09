@@ -40,6 +40,8 @@
 //     previous-frame `desired_move` (a one-frame-lagged resolution).
 //   * CameraTrack after Physics, before Audio: it sits where the input
 //     controllers sit, and replaces them when a world declares a track.
+//   * FrameReport last: it records the frame that just went, so everything
+//     it reads has to have run.
 //   * Cameras and Story before Audio: the listener reads the camera, and a
 //     `PlayCue` page audio is heard the same tick.
 // Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
@@ -209,6 +211,13 @@ crate::define_systems! {
         present_when: "the world declares any TextInput",
         phase: Late,
         after: [],
+        before: [],
+    },
+    FrameReportSystem => crate::frame_report::FrameReportSystem {
+        gate: schedule::frame_report,
+        present_when: "the world declares a FrameReport",
+        phase: Late,
+        after: [GraphicsSystem, CameraTrackSystem],
         before: [],
     },
 }

@@ -58,8 +58,9 @@ pub struct CameraTravel {
     pub seconds: f32,
     /// How the run is paced.
     pub ease: Ease,
-    /// Names the reporting segment this leg opens. An empty label continues
-    /// whichever segment the previous leg was in.
+    /// Names the segment of the path this leg opens, for whatever reads where
+    /// the track has reached. An empty label continues whichever segment the
+    /// previous leg was in.
     pub segment: String,
 }
 
@@ -196,8 +197,8 @@ pub struct CameraTrack {
     pub travel: Vec<CameraTravelKey>,
     /// The turn track, as absolute headings.
     pub turn: Vec<CameraTurnKey>,
-    /// Segment names in the order the travel legs open them. A key's
-    /// `segment` indexes this list.
+    /// The path's segment names, in the order the travel legs open them. A
+    /// key's `segment` indexes this list.
     pub segments: Vec<String>,
 }
 

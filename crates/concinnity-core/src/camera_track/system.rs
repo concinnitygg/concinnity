@@ -268,8 +268,8 @@ mod tests {
 
     #[test]
     fn the_clock_is_the_fixed_step_so_two_tick_rates_reach_the_same_pose() {
-        // The whole point of the asset: what the camera is looking at is a
-        // function of track time, never of how fast the host renders.
+        // What the camera is looking at is a function of track time, never of
+        // how fast the host renders.
         let legs = || vec![travel([0.0, 0.0, -1.0], 12.0, 3.0)];
         let (mut a, mut sa) = world_with(track(legs(), vec![]), [0.0; 3], 0.0, 0.0);
         sa.init(&mut a.context());

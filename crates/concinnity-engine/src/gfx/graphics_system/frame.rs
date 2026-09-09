@@ -9,6 +9,8 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
 use crate::gfx::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::gfx::{scene_flow, setting_action, settings, transform_propagation};
+
+use super::sky_follow;
 // The settings-row helpers this system's init-time captures share with the
 // SettingCommand drain (which now lives in `settings_system`).
 use crate::gfx::settings_system::rows::{
@@ -300,6 +302,11 @@ impl GraphicsSystem {
         // Lifetime/Spawner ticks and the spawn / despawn / reparent drains run
         // in SpawnSystem, scheduled earlier this tick, so the churn is already
         // applied when transforms are gathered below.
+
+        // The sky rides with the camera: its mesh is sized to sit inside the
+        // far plane, so it only covers the horizon while the camera is within
+        // it. Done before the propagation below picks the move up.
+        sky_follow::centre_on_camera(ctx, &self.sky_props, final_cam_pos);
 
         // Gather updated model matrices for any entity whose transform changed
         // since last frame (physics, camera interact, reparent): resolve each

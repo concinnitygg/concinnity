@@ -75,6 +75,7 @@ pub(crate) mod audio;
 // The standalone startup-error window, shown when a fatal startup failure
 // happens before any world exists.
 pub(crate) mod error_screen;
+pub mod frame_report;
 pub mod gfx;
 pub(crate) mod hud;
 pub(crate) mod input;

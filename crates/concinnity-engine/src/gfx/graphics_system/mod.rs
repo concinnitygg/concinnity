@@ -175,6 +175,10 @@ pub struct GraphicsSystem {
     // step refreshes the published index from these + the live transforms;
     // empty in a shipped runtime, which skips the refresh entirely.
     pick_candidates: Vec<PickCandidate>,
+    // Prop entities drawing a skybox-generated mesh, captured at init. The
+    // frame step moves them onto the camera so the sky encloses it wherever it
+    // goes; empty in a world with no sky.
+    sky_props: Vec<crate::ecs::Entity>,
     // Streaming pools built during init (shared albedo+normal texture pool,
     // mesh geometry, and voxel-world chunks), each `Some` only when a
     // `StreamingConfig` / `VoxelWorld` was declared and the backend supports it
@@ -469,6 +473,7 @@ impl GraphicsSystem {
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             pick_candidates: Vec::new(),
+            sky_props: Vec::new(),
             texture_streamer: None,
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),
@@ -777,6 +782,7 @@ mod init;
 mod lines;
 mod model_push;
 pub(crate) mod scene;
+mod sky_follow;
 mod streaming;
 pub(crate) mod submit;
 #[cfg(test)]

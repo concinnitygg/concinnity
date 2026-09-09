@@ -1071,6 +1071,7 @@ mod tests {
                 "PostProcessConfig",
                 "StreamingConfig",
                 "PhysicsConfig",
+                "FrameReport",
                 "AppConfig",
                 "Variables",
                 "LoadingOverlay",

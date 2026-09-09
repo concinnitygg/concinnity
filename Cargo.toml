@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.19.37"
+version = "0.19.38"
 description = "Asset-driven world engine"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -101,6 +101,10 @@ concinnity-toolchain = { workspace = true, optional = true }
 [[example]]
 name = "cube"
 required-features = ["std"]
+
+[[example]]
+name = "benchmark"
+required-features = ["cook"]
 
 [lints]
 workspace = true

@@ -54,12 +54,12 @@ use alloc::vec::Vec;
 ///
 /// `EnvironmentMap`, `Font`, `Material` and `Mesh` are resources: a compiled
 /// world reaches each by handle, so a value that uses one holds the handle its
-/// `World::add_*` method returned rather than the value itself. `Camera3D` is
-/// the authored form of the component of the same name, which [`camera`]
-/// bakes. The `cook` module carries these same types under its own namespace,
-/// along with the ones that need an importer.
+/// `World::add_*` method returned rather than the value itself. `Camera3D` and
+/// `CameraTrack` are the authored forms of the components of the same names,
+/// which [`camera`] and [`camera_track`] bake. The `cook` module carries these
+/// same types under its own namespace, along with the ones that need an importer.
 pub use concinnity_core::components::cook::{
-    Camera3D, EnvironmentMap, Font, Material, Mesh, VertexData,
+    Camera3D, CameraTrack, EnvironmentMap, Font, Material, Mesh, VertexData,
 };
 
 use concinnity_core::components::{self, ProceduralMesh};
@@ -112,6 +112,14 @@ pub fn font(font: &Font) -> Result<Vec<u8>, String> {
 /// here.
 pub fn camera(args: Camera3D) -> components::Camera3D {
     components::Camera3D::bake(args)
+}
+
+/// Bake an authored [`CameraTrack`] into the runtime component: each travel
+/// leg's duration and cumulative offset are resolved, and the segment names it
+/// reports under are gathered. The turn legs are timed when the world starts,
+/// from the heading the camera was authored at.
+pub fn camera_track(args: CameraTrack) -> components::CameraTrack {
+    components::CameraTrack::bake(args)
 }
 
 #[cfg(test)]

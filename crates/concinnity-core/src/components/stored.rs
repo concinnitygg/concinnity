@@ -26,6 +26,7 @@ pub use super::directional_light::DirectionalLight;
 pub use super::engine_defaults::EngineDefaults;
 pub use super::file::FileKind;
 pub use super::fps_counter::FpsCounter;
+pub use super::frame_report::FrameReport;
 pub use super::glass_panel::GlassPanel;
 pub use super::graphics_config::{GraphicsConfig, ShadowUpdate};
 pub use super::hit_region::HitRegion;

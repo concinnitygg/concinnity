@@ -124,7 +124,7 @@ pub struct CompiledPass {
     /// compute queue yet and record both lists into one serial stream, and Metal,
     /// which does submit two queues, emits no resource transitions at all.
     pub barriers_after: Vec<BarrierOp>,
-    /// The queue this pass is scheduled onto. Derived by [`super::schedule`]
+    /// The queue this pass is scheduled onto. Derived by the schedule pass
     /// from the dependency DAG, so it is a pure function of the graph.
     pub queue: PassQueue,
     /// Cross-queue waits the executor satisfies before the pass runs, at most
@@ -158,7 +158,7 @@ pub struct CompiledResource {
     /// Whether the resource is imported or graph-declared.
     pub origin: ResourceOrigin,
     /// The pass range over which the resource must stay live. A total-order
-    /// summary of [`Self::touches`]: sound to size a lifetime with, but not to
+    /// summary of the touched set: sound to size a lifetime with, but not to
     /// test two resources for simultaneous liveness once the schedule is
     /// partially ordered.
     pub lifetime: PassRange,

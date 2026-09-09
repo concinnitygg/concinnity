@@ -54,6 +54,7 @@ mod file;
 mod font;
 mod fps_counter;
 mod frame_input;
+mod frame_report;
 mod gamepad_button;
 mod gamepad_map;
 mod geometry;
@@ -337,6 +338,7 @@ pub use transform::Transform;
 // HUD-overlay request components; their behavior lives in the client crate.
 pub use debug_hud::DebugHud;
 pub use fps_counter::FpsCounter;
+pub use frame_report::FrameReport;
 pub use stat_hud::StatHud;
 
 // The file-name extension of a path (the chars after the last `.` of its final

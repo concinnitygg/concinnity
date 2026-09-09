@@ -2073,6 +2073,18 @@ impl GraphicsSystem {
             );
         }
 
+        // The props that draw the sky, so the frame step can keep them centred
+        // on the camera. Column-aligned with `items` by construction.
+        self.sky_props = prop_entities
+            .iter()
+            .zip(&items)
+            .filter(|(_, item)| {
+                item.mesh
+                    .is_some_and(|mesh| always_resident_meshes.contains(&mesh.index()))
+            })
+            .map(|(&entity, _)| entity)
+            .collect();
+
         let draw_list::DrawListData {
             vertices: all_vertices,
             indices: all_indices,

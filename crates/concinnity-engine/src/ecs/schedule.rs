@@ -215,6 +215,17 @@ pub(crate) fn camera_track(
     Some(concinnity_core::camera_track::CameraTrackSystem::new(track))
 }
 
+// FrameReportSystem: present whenever the world declares a `FrameReport`;
+// built from that component (the discard, the budget, and whether the end of
+// the camera track ends the run). Last in the Late band, so the frame it
+// records is complete before it reads it.
+pub(crate) fn frame_report(world: &World) -> Option<crate::frame_report::FrameReportSystem> {
+    world
+        .query::<crate::components::FrameReport>()
+        .next()
+        .map(crate::frame_report::FrameReportSystem::new)
+}
+
 // FpsCounter: present whenever the world declares an `FpsCounter`; built from
 // that component (its optional TextLabel ref).
 pub(crate) fn fps_counter(world: &World) -> Option<crate::hud::fps_counter::FpsCounterSystem> {

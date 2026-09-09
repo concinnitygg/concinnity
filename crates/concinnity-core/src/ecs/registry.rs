@@ -109,6 +109,7 @@ macro_rules! for_each_component {
                 LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
                 FpsCounter        => $crate::components::FpsCounter { gen, external, useful_blank, refs: [("label", "TextLabel")] },
+                FrameReport       => $crate::components::FrameReport { gen, external, singleton, id },
                 StatHud           => $crate::components::StatHud { gen, external, renders, refs: [("fps_label", "TextLabel"), ("gpu_wait_label", "TextLabel"), ("vram_label", "TextLabel"), ("ram_label", "TextLabel"), ("ev_label", "TextLabel"), ("edr_label", "TextLabel")] },
                 ScrollPanel       => $crate::components::ScrollPanel { gen, external, refs: [("screen", "Screen")], consumed },
                 ReflectionProbe   => $crate::components::ReflectionProbe { gen, external, useful_blank, validate: reflection_probe },

@@ -15,4 +15,4 @@ which is what lets them be read separately.
 - `speed`: A float. Travel rate in world units per second, which fixes the leg's duration as `distance` divided by it. An eased leg still covers `distance` in that duration, so this is the average rate rather than the peak.
 - `seconds`: A float. Duration in seconds, overriding the one `distance` and `speed` imply. A leg with only this set holds the camera still for that long.
 - `ease`: A string (see [Ease](Ease.md)). How the run is paced.
-- `segment`: A string. Names the reporting segment this leg opens. An empty label continues whichever segment the previous leg was in.
+- `segment`: A string. Names the segment of the path this leg opens, for whatever reads where the track has reached. An empty label continues whichever segment the previous leg was in.

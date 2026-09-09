@@ -26,6 +26,7 @@
 - [File](File.md) - References a source file by path.
 - [Font](Font.md) - Rasterises a TrueType font into a glyph atlas at build time.
 - [FpsCounter](FpsCounter.md) - Requests a frames-per-second counter; optionally writes it to a [TextLabel](TextLabel.md).
+- [FrameReport](FrameReport.md) - Times every frame of a run and prints what they cost when it ends.
 - [GlassPanel](GlassPanel.md) - A flat translucent panel of coloured glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
 - [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear colour. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.

@@ -42,6 +42,9 @@ use alloc::string::String;
 /// `"sky": false` to use the map for image-based lighting only, with the
 /// background left to `clear_color` or your own geometry.
 ///
+/// A skybox mesh, injected or declared, is kept centred on the camera, so it
+/// covers the horizon anywhere in a world however far the camera travels.
+///
 /// ```rust
 /// # use concinnity_core::components::EnvironmentMap;
 /// EnvironmentMap {
