@@ -331,6 +331,11 @@ pub enum BehaviorNode {
     /// Writes an entity's transform. An omitted field is left unchanged, and
     /// an entity with no transform to write (a camera, whose pose belongs to
     /// its camera system) is left alone.
+    ///
+    /// Writing the transform of an entity the simulation owns (one with a
+    /// collider) teleports its body: it arrives at the written pose at rest,
+    /// so the motion it had is dropped rather than carried across the jump.
+    /// Its collider keeps the size it was built at; only the pose moves.
     SetTransform {
         /// The entity moved.
         entity: BehaviorExpr,

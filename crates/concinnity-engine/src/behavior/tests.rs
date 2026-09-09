@@ -63,6 +63,61 @@ fn a_prop_scoped_behavior_fires_once_started() {
     );
 }
 
+// A `set_transform` on a prop the simulation owns is a teleport, not a write
+// physics overwrites the same tick: the driver adopts the pose the behaviour
+// left and simulates on from there.
+#[test]
+fn a_behavior_moves_a_prop_the_simulation_owns() {
+    use crate::components::{PropBody, PropCollider};
+
+    let mut world = World::new();
+    world.add_component(Prop {
+        asset_id: AssetId(1),
+        mesh: Some(MeshHandle(10)),
+        position: [0.0, 5.0, 0.0],
+        scale: [1.0; 3],
+        collider: Some(PropCollider {
+            shape: "ball".into(),
+            radius: 0.5,
+            half_extents: [0.5; 3],
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    world.add_component(PropBody {
+        prop_name: Some(AssetId(1)),
+        mass: 1.0,
+        ..Default::default()
+    });
+    world.add_component(Behavior {
+        on: BehaviorSource::Tick,
+        scope: vec!["Prop".into()],
+        body: vec![BehaviorNode::SetTransform {
+            entity: BehaviorExpr::SelfEntity,
+            position: Some(BehaviorExpr::Add(
+                Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
+                Box::new(BehaviorExpr::Vec3([0.0, 4.0, 0.0])),
+            )),
+            rotation_deg: None,
+            scale: None,
+        }],
+        ..Default::default()
+    });
+
+    world.start(SYSTEMS).unwrap();
+    world.step();
+
+    let y = world
+        .join2::<PropInstance, Transform>()
+        .map(|(_, _, t)| t.position[1])
+        .next()
+        .expect("the prop kept its transform");
+    assert!(
+        (y - 9.0).abs() < 0.05,
+        "the body was moved to where the behaviour put it (y = {y})",
+    );
+}
+
 // The store this host attaches is reached by a `save` node and read back at the
 // next start: the seam between the system and the file is live, not just
 // constructible.

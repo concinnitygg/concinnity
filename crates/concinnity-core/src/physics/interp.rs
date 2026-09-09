@@ -66,6 +66,12 @@ impl PoseInterp {
         self.curr = (position, rotation);
     }
 
+    // Adopt an externally written pose with no blend across the jump.
+    pub(crate) fn snap(&mut self, position: [f32; 3], rotation: [f32; 4]) {
+        self.prev = (position, rotation);
+        self.curr = (position, rotation);
+    }
+
     pub(crate) fn sample(&self, alpha: f32) -> ([f32; 3], [f32; 4]) {
         (
             lerp(self.prev.0, self.curr.0, alpha),
@@ -136,6 +142,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn pose_snap_jumps_without_blending() {
+        let mut pose = PoseInterp::new([0.0; 3], IDENTITY);
+        pose.push([1.0, 0.0, 0.0], quat_y(90.0));
+        pose.snap([50.0, 0.0, 0.0], IDENTITY);
+        let (position, rotation) = pose.sample(0.5);
+        assert_close3(position, [50.0, 0.0, 0.0]);
+        assert!((rotation[3] - 1.0).abs() < 1.0e-4, "{rotation:?}");
     }
 
     #[test]

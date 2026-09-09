@@ -735,6 +735,73 @@ impl Simulation {
         true
     }
 
+    /// Move a body to `pos` with rotation `euler_deg`, discarding the motion
+    /// it had. Returns whether the handle named a live body with a shape to
+    /// move (terrain is the world, not something in it).
+    ///
+    /// The jump is not motion: both velocities are cleared and any pending
+    /// kinematic target is dropped, so the body arrives at rest and is driven
+    /// again only by what happens to it from there. Whatever it was leaning on
+    /// where it stood is woken, as is the body itself.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use concinnity_core::physics::{ColliderShape, DynamicParams, LayerMask, Simulation};
+    ///
+    /// let mut sim = Simulation::with_capacity(1);
+    /// let ball = sim
+    ///     .add_dynamic(
+    ///         &ColliderShape::Ball { radius: 0.5 },
+    ///         [0.0, 10.0, 0.0],
+    ///         [0.0; 3],
+    ///         DynamicParams {
+    ///             mass: 1.0,
+    ///             friction: 0.4,
+    ///             restitution: 0.0,
+    ///             gravity_scale: 1.0,
+    ///             linear_damping: 0.0,
+    ///         },
+    ///         LayerMask::ALL,
+    ///     )
+    ///     .expect("room for one body");
+    /// for _ in 0..30 {
+    ///     sim.step(1.0 / 60.0);
+    /// }
+    ///
+    /// assert!(sim.teleport_body(ball, [4.0, 10.0, 0.0], [0.0; 3]));
+    /// let (position, _) = sim.body_pose_quat(ball).expect("a live body");
+    /// assert_eq!(position, [4.0, 10.0, 0.0], "it is where it was put");
+    /// ```
+    pub fn teleport_body(
+        &mut self,
+        handle: BodyHandle,
+        pos: [f32; 3],
+        euler_deg: [f32; 3],
+    ) -> bool {
+        let margin = self.config.bounds_margin;
+        let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
+            return false;
+        };
+        if body.convex().is_none() {
+            return false;
+        }
+        body.position = Vec3::from_array(pos);
+        body.orientation = Quat::from_euler_deg(euler_deg);
+        body.linear_velocity = Vec3::ZERO;
+        body.angular_velocity = Vec3::ZERO;
+        body.kinematic_target = None;
+        body.wake();
+        body.refresh_bounds(margin);
+        let proxy = proxy_for(body);
+        let slot = handle.index();
+        self.broadphase.set_proxy(slot, proxy);
+        // Whatever was resting against the body where it stood has to be
+        // re-examined without it.
+        self.wake_neighbours(slot);
+        true
+    }
+
     /// Switch a body to position-driven control, keeping its handle and the
     /// mass it was authored with. Returns whether the handle named a live
     /// body.
@@ -1640,6 +1707,108 @@ mod tests {
         assert_eq!(sim.is_sleeping(ball), Some(false));
         sim.step(TICK);
         assert!(sim.body_pose(ball).expect("live").0[1] > 0.55);
+    }
+
+    // A teleport is a placement, not a push: the body arrives exactly where it
+    // was put, at rest, and falls again from there.
+    #[test]
+    fn a_teleport_places_a_body_at_rest() {
+        let mut sim = Simulation::with_capacity(1);
+        let ball = sim
+            .add_dynamic(
+                &ColliderShape::Ball { radius: 0.5 },
+                [0.0, 10.0, 0.0],
+                [0.0; 3],
+                params(0.0, 0.0),
+                LayerMask::ALL,
+            )
+            .expect("room");
+        for _ in 0..30 {
+            sim.step(TICK);
+        }
+        assert!(
+            sim.linear_velocity(ball).expect("live")[1] < -1.0,
+            "falling"
+        );
+
+        assert!(sim.teleport_body(ball, [4.0, 20.0, -2.0], [0.0, 90.0, 0.0]));
+        assert_eq!(sim.body_pose(ball).expect("live").0, [4.0, 20.0, -2.0]);
+        assert_eq!(sim.linear_velocity(ball), Some([0.0; 3]));
+        assert_eq!(sim.angular_velocity(ball), Some([0.0; 3]));
+        let yaw = sim.body_pose(ball).expect("live").1[1];
+        assert!(
+            (yaw - 90.0).abs() < 0.01,
+            "the rotation went with it: {yaw}"
+        );
+
+        sim.step(TICK);
+        let dropped = 20.0 - sim.body_pose(ball).expect("live").0[1];
+        assert!(
+            dropped > 0.0 && dropped < 0.02,
+            "one tick of fall: {dropped}"
+        );
+    }
+
+    // The body a teleport disturbs is not only the one that moved: whatever
+    // was resting on it where it stood is woken to fall.
+    #[test]
+    fn a_teleport_wakes_the_body_and_what_leaned_on_it() {
+        let mut sim = Simulation::with_capacity(2);
+        let ground = floor(&mut sim);
+        let ball = sim
+            .add_dynamic(
+                &ColliderShape::Ball { radius: 0.5 },
+                [0.0, 0.5, 0.0],
+                [0.0; 3],
+                params(0.0, 0.5),
+                LayerMask::ALL,
+            )
+            .expect("room");
+        for _ in 0..120 {
+            sim.step(TICK);
+        }
+        assert_eq!(sim.is_sleeping(ball), Some(true), "settled first");
+
+        // The floor is pulled out from under it.
+        assert!(sim.teleport_body(ground, [0.0, -20.0, 0.0], [0.0; 3]));
+        assert_eq!(sim.is_sleeping(ball), Some(false), "the sleeper was woken");
+        for _ in 0..30 {
+            sim.step(TICK);
+        }
+        assert!(
+            sim.body_pose(ball).expect("live").0[1] < 0.0,
+            "and fell through where the floor used to be"
+        );
+    }
+
+    // Terrain is the world rather than something in it, and a handle naming
+    // nothing names nothing: neither can be teleported.
+    #[test]
+    fn a_teleport_declines_terrain_and_a_dead_handle() {
+        let mut sim = Simulation::with_capacity(2);
+        let ball = sim
+            .add_dynamic(
+                &ColliderShape::Ball { radius: 0.5 },
+                [0.0, 5.0, 0.0],
+                [0.0; 3],
+                params(0.0, 0.0),
+                LayerMask::ALL,
+            )
+            .expect("room");
+        let ground = sim
+            .add_heightfield(
+                2,
+                2,
+                Vec::from([0.0; 4]),
+                [1.0; 3],
+                [0.0; 3],
+                LayerMask::ALL,
+            )
+            .expect("room");
+        assert!(!sim.teleport_body(ground, [0.0, 5.0, 0.0], [0.0; 3]));
+
+        sim.remove_body(ball);
+        assert!(!sim.teleport_body(ball, [0.0, 5.0, 0.0], [0.0; 3]));
     }
 
     #[test]

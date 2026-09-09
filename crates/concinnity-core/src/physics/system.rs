@@ -656,6 +656,15 @@ impl System for PhysicsSystem {
             cam_pos[2] + fwd_full[2] * HOLD_DISTANCE,
         ];
 
+        // Adopt prop transforms written from outside physics (a behaviour's
+        // `set_transform`, an editor drag): a Transform that differs from the
+        // one written back last frame teleports the body there before any tick
+        // runs, so the pose the world asked for is the one it simulates from.
+        self.props.sync_external_poses(world, |entity| {
+            ctx.get::<Transform>(entity)
+                .map(|t| (t.position, t.rotation_deg))
+        });
+
         // Root-motion displacements published since last frame, applied on the
         // frame's first tick. Rig capsules whose entity moved externally snap
         // before any tick runs.
@@ -1159,6 +1168,37 @@ mod tests {
             (y - 0.5).abs() < 0.1,
             "the spawned ball rests on the flat floor (y = {y})"
         );
+    }
+
+    // A Transform written from outside physics (a behaviour's `set_transform`,
+    // an editor drag) is adopted rather than overwritten: the body is moved
+    // there, at rest, and the pose written back is the one that was asked for.
+    #[test]
+    fn an_externally_written_transform_moves_a_tracked_prop() {
+        let mut world = TestWorld::new();
+        let ball = world.spawn_prop(AssetId(1), [0.0, 5.0, 0.0], false);
+        make_dynamic(&mut world, ball);
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        for _ in 0..30 {
+            physics.step(&mut world.ctx());
+        }
+        let fallen = world.components.get::<Transform>(ball).unwrap().position;
+        assert!(fallen[1] < 4.5, "it was falling first (y = {})", fallen[1]);
+
+        world
+            .components
+            .get_mut::<Transform>(ball)
+            .expect("the prop has a transform")
+            .position = [2.0, 12.0, -1.0];
+        physics.step(&mut world.ctx());
+
+        let landed = world.components.get::<Transform>(ball).unwrap().position;
+        assert!((landed[0] - 2.0).abs() < 1.0e-4, "x = {}", landed[0]);
+        assert!((landed[2] + 1.0).abs() < 1.0e-4, "z = {}", landed[2]);
+        // A tick of fall from rest is about 0.006; the speed it had built up
+        // would have cost twenty times that.
+        assert!((landed[1] - 12.0).abs() < 0.02, "y = {}", landed[1]);
     }
 
     // Spawn, despawn, and respawn leave no bodies or colliders behind: a

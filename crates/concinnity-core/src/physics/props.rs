@@ -37,6 +37,9 @@ pub(crate) struct PropPhysics {
     pub pickup: bool,
     // Simulated pose snapshots the render blend samples (dynamic props only).
     pub pose: PoseInterp,
+    // The pose written back to the entity's Transform last frame. A Transform
+    // that differs was written by something else and is adopted.
+    written: ([f32; 3], [f32; 3]),
 }
 
 // A collider-bearing entity's physics description, snapshotted from its
@@ -122,6 +125,7 @@ impl PropBodies {
             dynamic,
             pickup: snap.pickup && dynamic,
             pose,
+            written: (snap.position, snap.rotation_deg),
         });
         self.by_handle.insert(handle, entity);
         self.tracked.insert(entity);
@@ -221,6 +225,30 @@ impl PropBodies {
         self.bodies.iter()
     }
 
+    // Adopt externally written prop transforms before the frame's ticks run: a
+    // pose that differs from the one written back last frame was not ours, so
+    // the body is moved there, at rest and with no blend across the jump.
+    // `authored` reads the entity's current Transform, or None when it has
+    // none to read.
+    pub(crate) fn sync_external_poses(
+        &mut self,
+        world: &mut Simulation,
+        authored: impl Fn(Entity) -> Option<([f32; 3], [f32; 3])>,
+    ) {
+        for prop in self.bodies.iter_mut() {
+            let Some((position, rotation_deg)) = authored(prop.entity) else {
+                continue;
+            };
+            if (position, rotation_deg) == prop.written {
+                continue;
+            }
+            if world.teleport_body(prop.handle, position, rotation_deg) {
+                prop.pose.snap(position, quat_from_euler_deg(rotation_deg));
+                prop.written = (position, rotation_deg);
+            }
+        }
+    }
+
     // Record every dynamic prop's freshly simulated pose for the render blend.
     pub(crate) fn record_tick_poses(&mut self, world: &Simulation) {
         for prop in self.bodies.iter_mut().filter(|p| p.dynamic) {
@@ -237,9 +265,11 @@ impl PropBodies {
             bodies, sampled, ..
         } = self;
         sampled.clear();
-        sampled.extend(bodies.iter().filter(|p| p.dynamic).map(|prop| {
+        sampled.extend(bodies.iter_mut().filter(|p| p.dynamic).map(|prop| {
             let (pos, rot) = prop.pose.sample(alpha);
-            (prop.entity, pos, euler_deg_from_quat(rot))
+            let rot = euler_deg_from_quat(rot);
+            prop.written = (pos, rot);
+            (prop.entity, pos, rot)
         }));
         sampled
     }
@@ -446,6 +476,105 @@ mod tests {
         assert!(props.tracked.capacity() >= 16);
         assert!(props.refused.capacity() >= 4);
         assert!(props.sampled.capacity() >= 8);
+    }
+
+    // What the write-back last put on the entity is what the next sync
+    // compares against, so a pose physics itself produced is not read back as
+    // an external move.
+    #[test]
+    fn a_simulated_pose_is_not_read_back_as_an_external_move() {
+        let (mut world, _layers, mut props, entities) = three_props();
+        for _ in 0..30 {
+            world.step(1.0 / 60.0);
+            props.record_tick_poses(&world);
+        }
+        let written: Vec<([f32; 3], [f32; 3])> = props
+            .sample_poses(1.0)
+            .iter()
+            .map(|&(_, pos, rot)| (pos, rot))
+            .collect();
+        assert!(written[0].0[1] < 2.0, "the props fell");
+
+        let before: Vec<[f32; 3]> = props
+            .iter()
+            .map(|p| world.body_pose_quat(p.handle).expect("live").0)
+            .collect();
+        props.sync_external_poses(&mut world, |entity| {
+            let i = entities.iter().position(|&e| e == entity)?;
+            Some(written[i])
+        });
+        let after: Vec<[f32; 3]> = props
+            .iter()
+            .map(|p| world.body_pose_quat(p.handle).expect("live").0)
+            .collect();
+        assert_eq!(before, after, "no body was moved");
+    }
+
+    // A Transform that differs from the one written back moves the body there,
+    // and the render blend starts from the new pose rather than sweeping to it.
+    #[test]
+    fn an_externally_written_transform_moves_the_body() {
+        let (mut world, _layers, mut props, entities) = three_props();
+        world.step(1.0 / 60.0);
+        props.record_tick_poses(&world);
+        props.sample_poses(1.0);
+
+        let moved = [7.0, 9.0, -3.0];
+        props.sync_external_poses(&mut world, |entity| {
+            (entity == entities[1]).then_some((moved, [0.0, 45.0, 0.0]))
+        });
+
+        let handle = props.get(1).expect("body 1").handle;
+        assert_eq!(world.body_pose_quat(handle).expect("live").0, moved);
+        let (blended, _) = props.get(1).expect("body 1").pose.sample(0.0);
+        assert_eq!(blended, moved, "the blend starts at the new pose");
+
+        // The props either side of it stayed where the simulation had them.
+        for i in [0, 2] {
+            let handle = props.get(i).expect("body i").handle;
+            let y = world.body_pose_quat(handle).expect("live").0[1];
+            assert!(y < 2.0 && y > 1.9, "prop {i} was left alone (y = {y})");
+        }
+    }
+
+    // A static prop's body follows an external write too: it is never written
+    // back to, so its collider would otherwise stay where the visual left.
+    #[test]
+    fn an_externally_written_transform_moves_a_static_bodys_collider() {
+        let mut storage = ComponentStorage::default();
+        let entity = mint_entities(&mut storage, 1)[0];
+        let mut world = Simulation::with_capacity(4);
+        let layers = LayerTable::new(&PhysicsConfig::default());
+        let mut props = PropBodies::default();
+        let mut snap = ball_snap([0.0, 2.0, 0.0]);
+        snap.dynamics = None;
+        props
+            .add(&layers, &mut world, entity, snap)
+            .expect("room in the pool");
+
+        props.sync_external_poses(&mut world, |_| Some(([0.0, 6.0, 0.0], [0.0; 3])));
+        let handle = props.get(0).expect("body 0").handle;
+        assert_eq!(
+            world.body_pose_quat(handle).expect("live").0,
+            [0.0, 6.0, 0.0]
+        );
+    }
+
+    // An entity with no Transform to read has no pose to adopt, so its body is
+    // left where the simulation has it.
+    #[test]
+    fn a_prop_without_a_transform_is_left_alone() {
+        let (mut world, _layers, mut props, _entities) = three_props();
+        let before: Vec<[f32; 3]> = props
+            .iter()
+            .map(|p| world.body_pose_quat(p.handle).expect("live").0)
+            .collect();
+        props.sync_external_poses(&mut world, |_| None);
+        let after: Vec<[f32; 3]> = props
+            .iter()
+            .map(|p| world.body_pose_quat(p.handle).expect("live").0)
+            .collect();
+        assert_eq!(before, after);
     }
 
     #[test]
