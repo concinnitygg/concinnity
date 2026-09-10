@@ -49,7 +49,7 @@ pub(crate) enum Commands {
     #[command(name = "debug")]
     Debug(DebugArgs),
 
-    /// Edit a world in-engine with a save-back HUD
+    /// Edit a world in-engine with a save-back HUD [default command]
     //
     // Compiles world.jsonl in memory (no prior `cn build` needed, and the blobs
     // one wrote are neither read nor refreshed here), overlays the editor HUD (a
@@ -127,11 +127,32 @@ pub(crate) enum Commands {
 #[command(version = concinnity_dev::command::version_details(), disable_version_flag = true)]
 pub(crate) struct Cli {
     #[command(subcommand)]
-    pub(crate) command: Commands,
+    pub(crate) command: Option<Commands>,
 
     /// Print the version
     #[arg(short = 'V', short_alias = 'v', long, action = clap::ArgAction::Version)]
     pub(crate) version: (),
+}
+
+// What a bare `concinnity` runs. Launching the binary with no argv at all --
+// a double click, where there is no terminal to type a subcommand into --
+// opens the editor on the world discovered from `worlds/`.
+const DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
+    file: None,
+    debug_port: None,
+    validation: None,
+    render: RenderArgs {
+        quality_preset: None,
+        rt_dynamic: None,
+        rt_skinned_geometry: None,
+    },
+});
+
+impl Cli {
+    /// The command this run performs: the one argv named, or [`DEFAULT_COMMAND`].
+    pub(crate) fn resolved_command(&self) -> &Commands {
+        self.command.as_ref().unwrap_or(&DEFAULT_COMMAND)
+    }
 }
 
 // The argv face of the launch-time render knobs the engine reads through
@@ -437,7 +458,7 @@ pub(crate) fn reexec_with_metal_validation(cli: &Cli) {
 
     // Only the rendering commands create a Metal context; every other
     // subcommand starts no renderer, so it needs no validation re-exec.
-    let requested = match &cli.command {
+    let requested = match cli.resolved_command() {
         Commands::Run(args) => args.validation,
         Commands::Debug(args) => args.validation,
         Commands::Editor(args) => args.validation,
@@ -498,7 +519,7 @@ mod tests {
             vec!["concinnity", "editor"],
         ] {
             let cli = Cli::try_parse_from(&argv).unwrap();
-            let render = match &cli.command {
+            let render = match cli.resolved_command() {
                 Commands::Run(a) => &a.render,
                 Commands::Debug(a) => &a.render,
                 Commands::Editor(a) => &a.render,
@@ -524,7 +545,7 @@ mod tests {
                 "false",
             ])
             .unwrap();
-            let render = match &cli.command {
+            let render = match cli.resolved_command() {
                 Commands::Run(a) => &a.render,
                 Commands::Debug(a) => &a.render,
                 Commands::Editor(a) => &a.render,
@@ -572,7 +593,7 @@ mod tests {
     #[test]
     fn debug_starts_the_server_on_the_named_world() {
         let cli = Cli::try_parse_from(["concinnity", "debug", "-f", "world.jsonl"]).unwrap();
-        let Commands::Debug(a) = cli.command else {
+        let Commands::Debug(a) = cli.resolved_command() else {
             panic!("expected debug");
         };
         assert_eq!(a.file.as_deref(), Some("world.jsonl"));
@@ -593,12 +614,12 @@ mod tests {
     #[test]
     fn mcp_defaults_to_the_debug_port() {
         let cli = Cli::try_parse_from(["concinnity", "mcp"]).unwrap();
-        let Commands::Mcp(a) = cli.command else {
+        let Commands::Mcp(a) = cli.resolved_command() else {
             panic!("expected mcp");
         };
         assert_eq!(a.port, 8777);
         let cli = Cli::try_parse_from(["concinnity", "mcp", "--port", "9001"]).unwrap();
-        let Commands::Mcp(a) = cli.command else {
+        let Commands::Mcp(a) = cli.resolved_command() else {
             panic!("expected mcp");
         };
         assert_eq!(a.port, 9001);
@@ -607,7 +628,7 @@ mod tests {
     #[test]
     fn export_defaults() {
         let cli = Cli::try_parse_from(["concinnity", "export"]).unwrap();
-        let Commands::Export(e) = cli.command else {
+        let Commands::Export(e) = cli.resolved_command() else {
             panic!("expected export");
         };
         assert_eq!(e.out, "dist");
@@ -619,22 +640,41 @@ mod tests {
     fn add_requires_a_target() {
         assert!(Cli::try_parse_from(["concinnity", "add"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "add", "Logger", "--name", "log"]).unwrap();
-        let Commands::Add(a) = cli.command else {
+        let Commands::Add(a) = cli.resolved_command() else {
             panic!("expected add");
         };
         assert_eq!(a.target, "Logger");
         assert_eq!(a.name.as_deref(), Some("log"));
     }
 
+    // A bare invocation is the double-click case: no terminal, no subcommand,
+    // and the useful thing to do is open a window.
     #[test]
-    fn missing_subcommand_is_an_error() {
-        assert!(Cli::try_parse_from(["concinnity"]).is_err());
+    fn a_bare_invocation_runs_the_editor() {
+        let cli = Cli::try_parse_from(["concinnity"]).unwrap();
+        assert!(cli.command.is_none());
+        let Commands::Editor(a) = cli.resolved_command() else {
+            panic!("expected the editor by default");
+        };
+        assert!(a.file.is_none());
+        assert!(a.debug_port.is_none());
+        assert!(a.validation.is_none());
+        assert!(a.render.quality_preset.is_none());
+        assert!(a.render.rt_dynamic.is_none());
+        assert!(a.render.rt_skinned_geometry.is_none());
+    }
+
+    // The default is `editor` itself, not a look-alike: an unknown subcommand
+    // still fails rather than silently falling back to it.
+    #[test]
+    fn an_unknown_subcommand_is_still_an_error() {
+        assert!(Cli::try_parse_from(["concinnity", "edtior"]).is_err());
     }
 
     #[test]
     fn init_takes_no_arguments() {
         let cli = Cli::try_parse_from(["concinnity", "init"]).unwrap();
-        assert!(matches!(cli.command, Commands::Init));
+        assert!(matches!(cli.resolved_command(), Commands::Init));
         assert!(Cli::try_parse_from(["concinnity", "init", "extra"]).is_err());
     }
 
@@ -642,7 +682,7 @@ mod tests {
     fn new_requires_a_path() {
         assert!(Cli::try_parse_from(["concinnity", "new"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "new", "my-app"]).unwrap();
-        let Commands::New(a) = cli.command else {
+        let Commands::New(a) = cli.resolved_command() else {
             panic!("expected new");
         };
         assert_eq!(a.path, "my-app");
@@ -652,19 +692,19 @@ mod tests {
     #[test]
     fn build_and_test_take_an_optional_world_file() {
         let cli = Cli::try_parse_from(["concinnity", "build"]).unwrap();
-        let Commands::Build(a) = cli.command else {
+        let Commands::Build(a) = cli.resolved_command() else {
             panic!("expected build");
         };
         assert!(a.file.is_none());
 
         let cli = Cli::try_parse_from(["concinnity", "build", "-f", "w.jsonl"]).unwrap();
-        let Commands::Build(a) = cli.command else {
+        let Commands::Build(a) = cli.resolved_command() else {
             panic!("expected build");
         };
         assert_eq!(a.file.as_deref(), Some("w.jsonl"));
 
         let cli = Cli::try_parse_from(["concinnity", "test", "--file", "w.jsonl"]).unwrap();
-        let Commands::Test(a) = cli.command else {
+        let Commands::Test(a) = cli.resolved_command() else {
             panic!("expected test");
         };
         assert_eq!(a.file.as_deref(), Some("w.jsonl"));
@@ -673,14 +713,14 @@ mod tests {
     #[test]
     fn list_flags_are_independent() {
         let cli = Cli::try_parse_from(["concinnity", "list"]).unwrap();
-        let Commands::List(a) = cli.command else {
+        let Commands::List(a) = cli.resolved_command() else {
             panic!("expected list");
         };
         assert!(!a.expanded);
         assert!(!a.systems);
 
         let cli = Cli::try_parse_from(["concinnity", "list", "--expanded", "--systems"]).unwrap();
-        let Commands::List(a) = cli.command else {
+        let Commands::List(a) = cli.resolved_command() else {
             panic!("expected list");
         };
         assert!(a.expanded);
@@ -691,7 +731,7 @@ mod tests {
     fn explain_requires_a_name() {
         assert!(Cli::try_parse_from(["concinnity", "explain"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "explain", "gfx", "-f", "w.jsonl"]).unwrap();
-        let Commands::Explain(a) = cli.command else {
+        let Commands::Explain(a) = cli.resolved_command() else {
             panic!("expected explain");
         };
         assert_eq!(a.name, "gfx");
@@ -702,7 +742,7 @@ mod tests {
     fn rm_requires_a_name() {
         assert!(Cli::try_parse_from(["concinnity", "rm"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "rm", "my_llm"]).unwrap();
-        let Commands::Rm(a) = cli.command else {
+        let Commands::Rm(a) = cli.resolved_command() else {
             panic!("expected rm");
         };
         assert_eq!(a.name, "my_llm");
@@ -712,7 +752,7 @@ mod tests {
     fn add_takes_a_scaffold_template() {
         let cli = Cli::try_parse_from(["concinnity", "add", "scene.glb", "-t", "minimal-3d-world"])
             .unwrap();
-        let Commands::Add(a) = cli.command else {
+        let Commands::Add(a) = cli.resolved_command() else {
             panic!("expected add");
         };
         assert_eq!(a.target, "scene.glb");
@@ -722,13 +762,13 @@ mod tests {
     #[test]
     fn docs_root_defaults_to_the_current_directory() {
         let cli = Cli::try_parse_from(["concinnity", "docs"]).unwrap();
-        let Commands::Docs(a) = cli.command else {
+        let Commands::Docs(a) = cli.resolved_command() else {
             panic!("expected docs");
         };
         assert_eq!(a.root.as_deref(), Some("."));
 
         let cli = Cli::try_parse_from(["concinnity", "docs", "--root", "/engine"]).unwrap();
-        let Commands::Docs(a) = cli.command else {
+        let Commands::Docs(a) = cli.resolved_command() else {
             panic!("expected docs");
         };
         assert_eq!(a.root.as_deref(), Some("/engine"));
@@ -740,14 +780,14 @@ mod tests {
     #[test]
     fn run_validation_is_tri_state() {
         let cli = Cli::try_parse_from(["concinnity", "run"]).unwrap();
-        let Commands::Run(a) = cli.command else {
+        let Commands::Run(a) = cli.resolved_command() else {
             panic!("expected run");
         };
         assert_eq!(a.validation, None);
 
         for (arg, expected) in [("true", true), ("false", false)] {
             let cli = Cli::try_parse_from(["concinnity", "run", "--validation", arg]).unwrap();
-            let Commands::Run(a) = cli.command else {
+            let Commands::Run(a) = cli.resolved_command() else {
                 panic!("expected run");
             };
             assert_eq!(a.validation, Some(expected));
@@ -757,7 +797,7 @@ mod tests {
     #[test]
     fn editor_takes_a_file_debug_port_and_validation() {
         let cli = Cli::try_parse_from(["concinnity", "editor"]).unwrap();
-        let Commands::Editor(a) = cli.command else {
+        let Commands::Editor(a) = cli.resolved_command() else {
             panic!("expected editor");
         };
         assert!(a.file.is_none());
@@ -775,7 +815,7 @@ mod tests {
             "false",
         ])
         .unwrap();
-        let Commands::Editor(a) = cli.command else {
+        let Commands::Editor(a) = cli.resolved_command() else {
             panic!("expected editor");
         };
         assert_eq!(a.file.as_deref(), Some("w.jsonl"));
@@ -803,7 +843,7 @@ mod tests {
             "--dmg",
         ])
         .unwrap();
-        let Commands::Export(e) = cli.command else {
+        let Commands::Export(e) = cli.resolved_command() else {
             panic!("expected export");
         };
         assert_eq!(e.file.as_deref(), Some("w.jsonl"));
@@ -826,7 +866,7 @@ mod tests {
             "true",
         ])
         .unwrap();
-        let Commands::Debug(a) = cli.command else {
+        let Commands::Debug(a) = cli.resolved_command() else {
             panic!("expected debug");
         };
         assert_eq!(a.debug_port, Some(9100));

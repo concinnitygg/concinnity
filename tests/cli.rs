@@ -1,5 +1,5 @@
 //! End-to-end tests that drive the built `concinnity` binary through the paths
-//! that never touch the renderer: `--help`, a missing subcommand, `cn mcp`
+//! that never touch the renderer: `--help`, an unknown subcommand, `cn mcp`
 //! pointed at a dead debug port, and every authoring subcommand
 //! (`build` / `add` / `rm` / `list` / `explain` / `test` / `docs` / `export` /
 //! `init` / `new`). They exercise `fn main()` and the command dispatch (which the
@@ -9,8 +9,9 @@
 //! racing its neighbours. Under `cargo llvm-cov` the profile data the spawned
 //! binary writes on exit is merged, so this coverage counts.
 //!
-//! Only the non-engine paths are driven here; `cn run` and a bare `cn debug`
-//! stand up a renderer + window and are verified by screenshot probes instead.
+//! Only the non-engine paths are driven here; `cn run`, a bare `cn debug`, and
+//! an argv-less run (which is `cn editor`) stand up a renderer + window and are
+//! verified by screenshot probes instead.
 
 use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -198,13 +199,27 @@ fn the_version_carries_a_build_stamp() {
     assert_eq!(date.split('-').count(), 3, "{date} is not a date");
 }
 
+// A bare invocation launches the editor, so what argv still owes is a usage
+// error for a command it does not know, rather than a fallback into the
+// default. Nothing here spawns a window: the binary exits at parse.
 #[test]
-fn missing_subcommand_is_a_usage_error() {
-    let out = run(&[]);
+fn an_unknown_subcommand_is_a_usage_error() {
+    let out = run(&["edtior"]);
     assert!(
         !out.status.success(),
-        "a bare invocation should be a usage error"
+        "an unknown subcommand should be a usage error"
     );
+    assert!(stderr(&out).contains("edtior"), "{}", stderr(&out));
+}
+
+// The command is optional, and the help says which one a bare run performs.
+#[test]
+fn the_help_reports_an_optional_command_defaulting_to_the_editor() {
+    let out = run(&["--help"]);
+    expect_ok(&out, "cn --help");
+    let help = stdout(&out);
+    assert!(help.contains("Usage: concinnity [COMMAND]"), "{help}");
+    assert!(help.contains("[default command]"), "{help}");
 }
 
 // Drive `cn mcp` over stdin, one JSON-RPC message per line, and collect the

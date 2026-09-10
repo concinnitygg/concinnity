@@ -5,7 +5,6 @@
 // support query, and swapchain creation. Returns a `DeviceAndWindow` bundle
 // that init/mod.rs unpacks into the constructor's local state.
 
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -119,18 +118,11 @@ pub(super) fn setup(
             .map_err(|e| format!("CreateDXGIFactory2: {e}"))?
     };
 
-    let adapter = pick_adapter(&factory)?;
+    let super::adapter::Selection { adapter, device } = super::adapter::select(&factory)?;
     // Try to upcast to IDXGIAdapter3 for QueryVideoMemoryInfo. Optional; pre-
     // WDDM 2.0 drivers may not expose it, in which case the VRAM chip stays
     // at 0 MB and the rest of the overlay still works.
     let adapter3: Option<IDXGIAdapter3> = adapter.cast().ok();
-
-    let mut device_opt: Option<ID3D12Device> = None;
-    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
-    // COM object lands in a binding that owns it.
-    unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device_opt) }
-        .map_err(|e| format!("D3D12CreateDevice: {e}"))?;
-    let device = device_opt.ok_or("D3D12CreateDevice returned None")?;
 
     // Validation message sink
     // Disable break-on-error so the debug layer doesn't terminate the process
@@ -449,65 +441,6 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
         }
     }
     best
-}
-
-fn pick_adapter(factory: &IDXGIFactory4) -> Result<IDXGIAdapter1, String> {
-    let mut i = 0u32;
-    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
-    // are live locals that outlive the call.
-    while let Ok(adapter) = unsafe { factory.EnumAdapters1(i) } {
-        // SAFETY: a property query on a live COM object; it only reads.
-        let desc = unsafe { adapter.GetDesc1() }.map_err(|e| format!("GetDesc1: {e}"))?;
-        // Skip the software (WARP) adapter.
-        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0 {
-            i += 1;
-            continue;
-        }
-        // Check D3D12 support.
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        if unsafe {
-            D3D12CreateDevice(
-                &adapter,
-                D3D_FEATURE_LEVEL_11_0,
-                std::ptr::null_mut::<Option<ID3D12Device>>(),
-            )
-        }
-        .is_ok()
-        {
-            return Ok(adapter);
-        }
-        i += 1;
-    }
-    Err(no_adapter_message())
-}
-
-// Every adapter failed `D3D12CreateDevice`. On a binary that bundles the
-// Agility SDK that almost never means the GPU: `d3d12.dll` read the
-// `D3D12SDKPath` export at process start (see `directx::agility`), could not
-// load `D3D12Core.dll` from beside the executable, and left the D3D12 runtime
-// dead -- which surfaces here as every adapter looking unsupported. The
-// directory is staged next to the build tree's binaries and does not travel with
-// a copied executable, so say so rather than blaming the hardware.
-fn no_adapter_message() -> String {
-    let mut message = "no suitable D3D12 adapter found".to_string();
-    if cfg!(agility_sdk_configured) {
-        let dir = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("D3D12")));
-        message.push_str(&format!(
-            ". This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
-             Microsoft's Agility SDK and needs D3D12Core.dll in {}; without it \
-             D3D12 fails to start and every adapter reports unsupported. Copy \
-             that directory next to the executable, or rebuild without the \
-             opt-in to use the OS D3D12 runtime",
-            dir.map_or_else(
-                || "a `D3D12` directory beside the executable".to_string(),
-                |d| d.display().to_string()
-            )
-        ));
-    }
-    message
 }
 
 pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {

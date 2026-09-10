@@ -42,6 +42,7 @@ use super::post::bloom::bloom_mip_count;
 use super::post::descriptors::{POST_TARGET_SLOTS, PostDescriptors};
 use super::texture::*;
 
+mod adapter;
 mod effects;
 mod heap_layout;
 pub(in crate::directx) mod pipelines;

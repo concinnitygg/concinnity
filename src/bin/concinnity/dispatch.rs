@@ -9,7 +9,7 @@ use concinnity_engine::StateTree;
 use concinnity_engine::app::dev_flags;
 
 pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
-    match &cli.command {
+    match cli.resolved_command() {
         Commands::Init => command::init(),
         Commands::New(args) => command::new(&args.path),
         Commands::Build(args) => command::build(args.file.as_deref()),

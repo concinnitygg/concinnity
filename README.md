@@ -114,7 +114,7 @@ Check out the [Rust Documentation][docs-link] to explore the crate.
 ## CLI Reference
 
 ```
-Usage: concinnity <COMMAND>
+Usage: concinnity [COMMAND]
 
 Commands:
   init     Create a new app in the current directory
@@ -122,7 +122,7 @@ Commands:
   build    Build a world from worlds/ into binary blobs
   run      Run a compiled world
   debug    Run interpreted directly from a world jsonl file
-  editor   Edit a compiled world in-engine with a save-back HUD
+  editor   Edit a world in-engine with a save-back HUD [default command]
   add      Add an asset to the active world
   rm       Remove an asset from the active world by its unique name
   list     List all declared assets
