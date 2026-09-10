@@ -6,13 +6,15 @@
 //! (`CN_AGILITY_SDK`, `CN_XESS_SDK`, ...), and leads for the same reason: an
 //! explicit answer beats a discovered one.
 //!
-//! The two after it are the same idea for the two ways this code ships. An
-//! install carries its compiler in `slang/` beside the binaries, so it works
-//! with nothing set up; a checkout carries a pinned release under `vendor/`, so
-//! a given revision compiles its shaders with a given compiler rather than with
-//! whatever an individual machine installed. Both beat PATH, because both are
-//! the answer their own distribution shipped. Neither exists for a consumer
-//! building from a registry copy, which starts at PATH.
+//! The two after it are the same idea from either side of a release. `slang/`
+//! beside the binaries is where someone who wants to author shaders puts a
+//! compiler, and a release carries none: everything it draws is compiled ahead
+//! of time, so the archive stays small and works with nothing installed. A
+//! checkout carries a pinned release under `vendor/`, so a given revision
+//! compiles its shaders with a given compiler rather than with whatever an
+//! individual machine installed. Both beat PATH, because both are the answer
+//! nearest to the thing being run. Neither exists for a consumer building from
+//! a registry copy, which starts at PATH.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +33,8 @@ include!(concat!(env!("OUT_DIR"), "/workspace_root.rs"));
 /// `CN_<VENDOR>_SDK` shape the graphics SDKs use.
 pub(crate) const ROOT_VAR: &str = "CN_SLANG_SDK";
 
-/// The directory an install puts its Slang release in, beside the binaries.
+/// The directory a Slang release goes in to make a release build compile
+/// shaders, beside the binaries.
 const BUNDLED_DIR: &str = "slang";
 
 /// Every slangc to try, in resolution order.

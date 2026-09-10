@@ -2,7 +2,7 @@
 
 use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};
-use concinnity_core::components::{Shader, ShaderStage};
+use concinnity_core::components::{Shader, ShaderPrograms, ShaderStage};
 use concinnity_core::render::slang_programs::surface::Sources;
 
 // Resolve a declared source path to the on-disk path the build will read. A
@@ -43,6 +43,31 @@ fn declared_path(args: &serde_json::Value, stage: ShaderStage) -> Option<String>
         .map(str::to_string)
 }
 
+// A Shader's compiled programs, or an error naming what this host is missing.
+//
+// Reaching here means the payload cache had nothing for this Shader, so it has
+// to be compiled and there is no compiler. A world whose shaders are already
+// cooked never gets this far: the cache answers first and the compiler is not
+// part of its key.
+fn world_shader_programs(
+    name: &str,
+    sources: &Sources<'_>,
+    platform: concinnity_core::platform::Platform,
+    have_slangc: bool,
+) -> std::io::Result<ShaderPrograms> {
+    if !have_slangc {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "Shader '{name}': {}",
+                concinnity_slang::unavailable_reason()
+                    .unwrap_or("slangc not found and this Shader has no compiled payload")
+            ),
+        ));
+    }
+    compile_world_shader(name, sources, platform)
+}
+
 impl crate::asset::BuildAsset for Shader {
     // Read the declared files and compile every program this backend consumes
     // into one container: a Shader is one asset with one payload, so its
@@ -69,7 +94,12 @@ impl crate::asset::BuildAsset for Shader {
             vertex: vertex.as_deref(),
             fragment: &fragment,
         };
-        let programs = compile_world_shader(ctx.name, &sources, ctx.platform)?;
+        let programs = world_shader_programs(
+            ctx.name,
+            &sources,
+            ctx.platform,
+            crate::slangc_gate::slangc_available(),
+        )?;
         programs.encode().map_err(|e| {
             std::io::Error::other(format!("Asset '{}': shader payload encode: {e}", ctx.name))
         })
@@ -125,6 +155,29 @@ mod tests {
 
     fn args(fragment: &str) -> serde_json::Value {
         serde_json::json!({ "fragment": fragment })
+    }
+
+    // A Shader that has to be compiled on a host with no compiler is an error
+    // naming the Shader, not a payload that quietly renders as something else.
+    // The message carries the resolver's own reason, so it says what to install.
+    #[test]
+    fn a_shader_needing_a_compiler_fails_when_there_is_none() {
+        let sources = Sources {
+            vertex: Some("VertexOut transform() {}"),
+            fragment: "float4 shade() { return float4(1.0); }",
+        };
+        let err = world_shader_programs(
+            "wall",
+            &sources,
+            concinnity_core::platform::Platform::Metal,
+            false,
+        )
+        .expect_err("no compiler is an error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let message = err.to_string();
+        assert!(message.contains("wall"), "{message}");
+        assert!(message.contains("slangc"), "{message}");
     }
 
     #[test]

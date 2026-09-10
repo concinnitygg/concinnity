@@ -265,26 +265,28 @@ pub(super) fn create_logical_device(
     // the three RT extensions are all that's added here.
     let rt_capable = rt_device_capable && upscaler_sdk.choice != ResolvedBackend::Xess;
 
-    // Non-uniform indexing gate for the bindless texture pool. The main scene
-    // pass indexes it per fragment, so this rides device support alone rather
-    // than RT capability: an RT-incapable GPU still runs that pass, and without
-    // the feature a divergent index is undefined. Never under XeSS, which
-    // forbids the descriptor-indexing struct alongside the `Vulkan12Features`
-    // it appends.
-    let want_nonuniform_indexing = di_probe.shader_sampled_image_array_non_uniform_indexing != 0
-        && upscaler_sdk.choice != ResolvedBackend::Xess;
-
-    // Runtime-array gate for the bindless texture pool, which declares no length
-    // and reads whatever its set layout was built with. Nothing beyond the SPIR-V
-    // capability is needed: the layout carries a concrete count, and the pool
-    // write pads to it, so neither a per-set count nor an unbound tail arises.
-    // Every path that renders those shaders needs it, XeSS included, which gets it
-    // through `enable_runtime_descriptor_array` instead of the struct below.
+    // The two descriptor-indexing features the bindless texture pool's own
+    // declarations require, so every path that renders those shaders needs both.
+    // They ride device support alone rather than RT capability: an RT-incapable
+    // GPU still runs the main scene pass.
+    //
+    // `runtimeDescriptorArray` carries the unsized array. Nothing beyond that
+    // capability is needed for it: the set layout holds a concrete count and the
+    // pool write pads to it, so neither a per-set count nor an unbound tail
+    // arises. `shaderSampledImageArrayNonUniformIndexing` carries the
+    // `nonuniformEXT` the pool is indexed through, which the main pass does per
+    // fragment and which is undefined for a divergent index without it.
+    //
+    // XeSS cannot take either through the struct below, since it appends its own
+    // `Vulkan12Features` and a second struct covering the same features alongside
+    // it is invalid. That path enables them through `enable_bindless_features`.
+    let want_nonuniform_indexing = di_probe.shader_sampled_image_array_non_uniform_indexing != 0;
     let want_runtime_pool = di_probe.runtime_descriptor_array != 0;
-    if !want_runtime_pool {
+    if !want_nonuniform_indexing || !want_runtime_pool {
         tracing::warn!(
-            "descriptor indexing: no runtime_descriptor_array, so the bindless \
-             texture pool must declare its length"
+            "descriptor indexing: runtime_descriptor_array={want_runtime_pool}, \
+             sampled_image_non_uniform_indexing={want_nonuniform_indexing}; the \
+             bindless texture pool needs both"
         );
     }
 
@@ -462,7 +464,7 @@ pub(super) fn create_logical_device(
             pd,
             &mut features2 as *mut _ as *mut c_void,
         );
-        enable_runtime_descriptor_array(head);
+        enable_bindless_features(head);
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&ext_names);
@@ -528,18 +530,14 @@ pub(super) fn create_logical_device(
     })
 }
 
-// Turn `runtimeDescriptorArray` on in a chained `VkPhysicalDeviceVulkan12Features`,
-// reporting whether one was there to write.
+// Turn the bindless texture pool's two descriptor-indexing features on in a
+// chained `VkPhysicalDeviceVulkan12Features`.
 //
-// The bindless shaders declare their texture pool unsized, so every path that
-// renders them needs that feature. XeSS is the one path the engine cannot enable
-// it on directly: it appends this struct itself, and a second struct covering the
-// same features alongside it is invalid. So the engine writes the bit into the
-// one already in the chain, which XeSS leaves cleared.
-//
-// Returns whether the feature is on, which is false only when no such struct is
-// chained at all.
-fn enable_runtime_descriptor_array(head: *mut c_void) -> bool {
+// XeSS is the one path the engine cannot enable them on directly: it appends this
+// struct itself, and a second struct covering the same features alongside it is
+// invalid. So the engine writes the bits into the one already in the chain, which
+// XeSS leaves cleared for both.
+fn enable_bindless_features(head: *mut c_void) {
     // Every `pNext` node begins with these two fields, which is what lets a walk
     // read a chain of mixed struct types.
     #[repr(C)]
@@ -562,21 +560,22 @@ fn enable_runtime_descriptor_array(head: *mut c_void) -> bool {
             // consumes it, which has not been called yet.
             let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features>() };
             tracing::info!(
-                "chained Vulkan12Features: runtime_descriptor_array={} (forcing on), \
-                 sampled_image_non_uniform_indexing={}",
+                "chained Vulkan12Features: runtime_descriptor_array={}, \
+                 sampled_image_non_uniform_indexing={}; forcing both on for the \
+                 bindless texture pool",
                 f.runtime_descriptor_array != 0,
                 f.shader_sampled_image_array_non_uniform_indexing != 0,
             );
             f.runtime_descriptor_array = vk::TRUE;
-            return true;
+            f.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+            return;
         }
         node = next;
     }
     tracing::warn!(
-        "no Vulkan12Features in the device chain, so the unsized bindless texture \
-         pool has no feature to enable"
+        "no Vulkan12Features in the device chain, so the bindless texture pool's \
+         declarations have no features to enable"
     );
-    false
 }
 
 // The requested HDR sample count clamped to what this device reports for the

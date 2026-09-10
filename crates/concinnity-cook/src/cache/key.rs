@@ -508,7 +508,9 @@ mod tests {
     }
 
     // A target-dependent asset does fold the platform in, so the two backends
-    // separate even when every other input matches.
+    // separate even when every other input matches. The compiler is deliberately
+    // not part of the key: a host with no slangc has to reach the payloads an
+    // earlier cook already made, and it computes this key to find them.
     #[test]
     fn target_dependent_payload_keys_fold_in_the_platform() {
         let args = json!({});

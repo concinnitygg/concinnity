@@ -22,7 +22,7 @@ use concinnity_slang::{SlangJob, SlangTarget};
 /// Decode a volume's payload. A payload that does not decode is a build the
 /// renderer cannot use, and saying which volume is the whole of the fix.
 pub(crate) fn decode(payload: &[u8], label: &str) -> Result<SdfPrograms, String> {
-    postcard::from_bytes(payload)
+    SdfPrograms::decode(payload)
         .map_err(|e| format!("SdfVolume '{label}': compiled field does not decode: {e}"))
 }
 

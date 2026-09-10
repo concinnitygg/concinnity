@@ -31,6 +31,16 @@ pub struct SdfPrograms {
 }
 
 impl SdfPrograms {
+    /// Serialize the payload for the blob.
+    pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    /// Read a payload back out of the blob.
+    pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+
     /// The artifact holding `entry`, if one was compiled from source matching
     /// `digest`. A mismatch is a stale artifact and reads as absent.
     pub fn artifact(&self, entry: &str, digest: u64) -> Option<&[u8]> {

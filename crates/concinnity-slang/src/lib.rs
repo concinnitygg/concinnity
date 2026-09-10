@@ -23,15 +23,16 @@
 //! slangc resolves from `$CN_SLANG_SDK`, then `slang/` beside the running
 //! executable, then the workspace's vendored releases, then PATH, then
 //! `$VULKAN_SDK/bin`, taking the first candidate that meets `MIN_SLANGC` (see
-//! `locate`). What an install or a checkout shipped for itself beats PATH,
+//! `locate`). What sits beside the binaries or inside a checkout beats PATH,
 //! because those are the only sources either one pins: two machines with
 //! different releases on PATH compile the same source to different bytes, and
 //! while the caches key on `compiler_id` and so never serve one's output to the
-//! other, the artifacts a build ships still depend on whoever built it. A host
-//! without any of them degrades the same way a missing
-//! Metal toolchain does: the build script emits a stub lookup and the renderer
-//! falls back to compiling at startup, which then needs slangc at runtime and
-//! reports a clear error when it is absent or too old.
+//! other, the artifacts a build ships still depend on whoever built it.
+//!
+//! A release carries no compiler. Everything it draws is compiled ahead of time,
+//! so a host with none of these candidates runs a world fine and fails only when
+//! something has to be compiled -- a world authoring its own shader, or a
+//! distance field -- which the cook reports by name.
 
 include!(concat!(env!("OUT_DIR"), "/source_hash.rs"));
 

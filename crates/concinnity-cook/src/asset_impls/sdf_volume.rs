@@ -88,7 +88,7 @@ impl crate::asset::BuildAsset for SdfVolume {
 
         let programs =
             super::sdf_field::compile(ctx.name, &field, ctx.platform, volumetric, cast_shadows)?;
-        postcard::to_allocvec(&programs).map_err(|e| {
+        programs.encode().map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("SdfVolume '{}': encoding compiled field: {e}", ctx.name),

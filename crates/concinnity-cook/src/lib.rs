@@ -90,7 +90,6 @@ mod file_stamp;
 pub mod import;
 pub mod pipeline;
 pub mod resource_handles;
-#[cfg(test)]
 mod slangc_gate;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra

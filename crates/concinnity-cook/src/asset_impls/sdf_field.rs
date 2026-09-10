@@ -45,6 +45,41 @@ pub(super) fn compile(
     volumetric: bool,
     cast_shadows: bool,
 ) -> std::io::Result<SdfPrograms> {
+    compile_with(
+        name,
+        field,
+        platform,
+        volumetric,
+        cast_shadows,
+        crate::slangc_gate::slangc_available(),
+    )
+}
+
+// [`compile`] with the host's compiler availability supplied, so the
+// no-compiler path is reachable without uninstalling slangc.
+//
+// Reaching here means the payload cache had nothing for this volume, so its
+// field has to be compiled and there is no compiler. A world whose volumes are
+// already cooked never gets this far: the cache answers first and the compiler
+// is not part of its key.
+fn compile_with(
+    name: &str,
+    field: &str,
+    platform: Platform,
+    volumetric: bool,
+    cast_shadows: bool,
+    have_slangc: bool,
+) -> std::io::Result<SdfPrograms> {
+    if !have_slangc {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "SdfVolume '{name}': {}",
+                concinnity_slang::unavailable_reason()
+                    .unwrap_or("slangc not found and this volume has no compiled payload")
+            ),
+        ));
+    }
     let work = concinnity_host::scratch::Scratch::dir(&format!("sdf-{name}"))?;
     let mut programs = Vec::new();
     for family in raymarch::families(volumetric, cast_shadows) {
@@ -104,6 +139,20 @@ fn entry_groups(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A volume whose field has to be compiled on a host with no compiler is an
+    // error naming the volume, not a payload that quietly draws nothing.
+    #[test]
+    fn a_volume_needing_a_compiler_fails_when_there_is_none() {
+        let field = "float map(float3 p) { return length(p) - 1.0; }";
+        let err = compile_with("blob", field, Platform::Metal, false, true, false)
+            .expect_err("no compiler is an error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let message = err.to_string();
+        assert!(message.contains("blob"), "{message}");
+        assert!(message.contains("slangc"), "{message}");
+    }
 
     // Every host takes the target its renderer can load without a toolchain of
     // its own: Metal source text for `newLibraryWithSource`, and a container
