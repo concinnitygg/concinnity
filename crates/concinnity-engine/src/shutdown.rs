@@ -1,17 +1,17 @@
 //! Cooperative shutdown signal shared across threads. Clones observe the same
 //! flag: any clone's `cancel()` is visible to every other clone's
-//! `is_cancelled()`. Cancellation is one-way and sticky.
+//! `is_canceled()`. Cancellation is one-way and sticky.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Cloneable one-shot cancellation flag. The run loop polls `is_cancelled`
+/// Cloneable one-shot cancellation flag. The run loop polls `is_canceled`
 /// each tick; signal handlers and debug servers call `cancel` to stop it.
 #[derive(Debug, Clone, Default)]
 pub struct ShutdownToken(Arc<AtomicBool>);
 
 impl ShutdownToken {
-    /// A fresh, uncancelled token.
+    /// A fresh, uncanceled token.
     pub fn new() -> Self {
         Self::default()
     }
@@ -21,8 +21,8 @@ impl ShutdownToken {
         self.0.store(true, Ordering::Release);
     }
 
-    /// Whether any clone has signalled shutdown.
-    pub fn is_cancelled(&self) -> bool {
+    /// Whether any clone has signaled shutdown.
+    pub fn is_canceled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 }
@@ -32,13 +32,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn starts_uncancelled_and_sticks_once_cancelled() {
+    fn starts_uncanceled_and_sticks_once_canceled() {
         let token = ShutdownToken::new();
-        assert!(!token.is_cancelled());
+        assert!(!token.is_canceled());
         token.cancel();
-        assert!(token.is_cancelled());
+        assert!(token.is_canceled());
         token.cancel();
-        assert!(token.is_cancelled());
+        assert!(token.is_canceled());
     }
 
     #[test]
@@ -46,7 +46,7 @@ mod tests {
         let token = ShutdownToken::new();
         let clone = token.clone();
         clone.cancel();
-        assert!(token.is_cancelled());
+        assert!(token.is_canceled());
     }
 
     #[test]
@@ -56,6 +56,6 @@ mod tests {
         std::thread::spawn(move || clone.cancel())
             .join()
             .expect("cancel thread panicked");
-        assert!(token.is_cancelled());
+        assert!(token.is_canceled());
     }
 }

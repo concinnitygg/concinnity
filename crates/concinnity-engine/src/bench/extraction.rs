@@ -11,8 +11,8 @@
 use super::{BenchWorld, bench};
 use crate::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
 use crate::ecs::{Entity, SkinnedMeshHandle};
-use crate::gfx::graphics_system::GraphicsSystem;
 use crate::gfx::snapshot::RenderSnapshot;
+use crate::gfx::system::GraphicsSystem;
 
 const SMALL: usize = 100;
 const LARGE: usize = 20_000;

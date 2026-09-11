@@ -11,7 +11,7 @@
 //   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
 //   xess  Intel XeSS (cross-vendor; runtime libxess.dll)
 // `build_upscaler` resolves the requested `UpscalerBackend` against runtime
-// availability and constructs the first that initialises, falling back to
+// availability and constructs the first that initializes, falling back to
 // native-resolution rendering when none is available. The shared per-frame
 // `VkContext::encode_upscale` (below) drives whichever backend is active through
 // the trait; only the inner vendor dispatch differs.
@@ -64,7 +64,7 @@ pub(in crate::vulkan) struct UpscaleInputs<'a> {
 }
 
 // Per-frame temporal / camera parameters shared with the jittered camera
-// projection so the rasterised scene and the reconstruction agree.
+// projection so the rasterized scene and the reconstruction agree.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct UpscaleCamera {
     // Sub-pixel jitter for this frame (render-pixel units).
@@ -153,7 +153,7 @@ pub(super) fn frame_delta_ms(prev: &Cell<f32>, now: f32) -> f32 {
 // Sub-pixel jitter shared by the DLSS + XeSS backends (FSR queries its own
 // FFX-prescribed sequence instead). A 16-phase Halton-2/3 sequence in
 // [-0.5, 0.5] render-pixel units; the same value jitters the camera projection
-// (see `draw.rs`) so the rasterised scene and the upscale agree.
+// (see `draw.rs`) so the rasterized scene and the upscale agree.
 pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
     crate::gfx::jitter::offset(frame_index)
 }
@@ -225,7 +225,7 @@ pub(super) struct LayoutTransition {
 }
 
 // The source / destination stage + access scopes one `image_barrier`
-// synchronises.
+// synchronizes.
 #[derive(Clone, Copy)]
 pub(super) struct BarrierSync {
     pub(super) src_stage: vk::PipelineStageFlags,
@@ -236,7 +236,7 @@ pub(super) struct BarrierSync {
 
 // One image barrier with explicit stages/access (the upscalers read their
 // inputs in the COMPUTE stage; the generic `transition_image_layout` helper
-// targets FRAGMENT, which would not synchronise the compute reads).
+// targets FRAGMENT, which would not synchronize the compute reads).
 pub(super) fn image_barrier(
     device: &VkDevice,
     cmd: vk::CommandBuffer,
@@ -603,7 +603,7 @@ fn supported_device_extensions(
 impl VkContext {
     // Encode the temporal upscale onto `cmd`. Runs after SSR resolve / fog /
     // particles / transparent (so the scene input is the fully decorated
-    // post-SSR colour) and before Bloom + Composite (which sample the
+    // post-SSR color) and before Bloom + Composite (which sample the
     // upscaler's output, rewired at init / resize). Recorded onto the
     // `PassId::Upscale` per-pass command buffer by the executor. Backend-
     // agnostic: the barrier choreography (output GENERAL, color / motion / depth
@@ -648,7 +648,7 @@ impl VkContext {
             .get(frame)
             .ok_or("upscale: gbuffer depth slot out of range")?;
 
-        // Scene colour: SSR resolve output when the SSR resolve is active (HDR +
+        // Scene color: SSR resolve output when the SSR resolve is active (HDR +
         // reflections), else this slot's HDR resolve target (also the SSGI-only
         // case, where `ssr` exists for the G-buffer but the resolve is off).
         // Both rest in SHADER_READ_ONLY_OPTIMAL after their writer.
@@ -662,10 +662,10 @@ impl VkContext {
 
         let (rw, rh) = upscaler.render_dims();
 
-        // Make the producer writes (colour / velocity = COLOR_ATTACHMENT_WRITE,
+        // Make the producer writes (color / velocity = COLOR_ATTACHMENT_WRITE,
         // depth = DEPTH_STENCIL_ATTACHMENT_WRITE) visible to the upscaler's
         // COMPUTE reads, and transition the depth from its attachment layout to
-        // SHADER_READ_ONLY. The colour + velocity already rest in
+        // SHADER_READ_ONLY. The color + velocity already rest in
         // SHADER_READ_ONLY (their render-pass final layout), so those are
         // same-layout execution+memory barriers.
         image_barrier(

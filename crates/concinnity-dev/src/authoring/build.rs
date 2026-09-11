@@ -95,7 +95,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         crate::cook_platform(),
     )?;
 
-    // The material name catalogue, read before the result is taken apart below.
+    // The material name catalog, read before the result is taken apart below.
     let material_names = crate::resource::MaterialNames(
         result.resource_names(concinnity_cook::resource_handles::ResourceKind::Material),
     );
@@ -131,12 +131,12 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     if let Some(budget) = result.physics_budget {
         world.insert_resource(concinnity_core::ecs::WorldPhysicsBudget(budget));
     }
-    // Dev-only source catalogues for the hot-reload watcher (see the scan above).
+    // Dev-only source catalogs for the hot-reload watcher (see the scan above).
     world.insert_resource(crate::resource::ColorLutSources(color_lut_source));
     world.insert_resource(crate::resource::EnvironmentMapSources(
         environment_map_source,
     ));
-    // Dev-only: the texture source catalogue, so the renderer's hot-reload
+    // Dev-only: the texture source catalog, so the renderer's hot-reload
     // capture and the runtime spawn-by-name path can map a texture handle back to
     // its file / name. Not present in the shipped `load_blob` path.
     world.insert_resource(crate::resource::TextureSources(
@@ -150,10 +150,10 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
             })
             .collect(),
     ));
-    // Dev-only: the material name catalogue, so the editor's live draw seam can
+    // Dev-only: the material name catalog, so the editor's live draw seam can
     // resolve a material an edit names to the handle it was compiled at.
     world.insert_resource(material_names);
-    // Dev-only: the mesh source catalogue, so the renderer's hot-reload capture
+    // Dev-only: the mesh source catalog, so the renderer's hot-reload capture
     // can map a mesh handle back to the `.glb`/`.fbx` that backs it.
     world.insert_resource(crate::resource::MeshSources(
         result
@@ -371,10 +371,10 @@ mod tests {
         assert!(scan_environment_map_source(&no_source).is_none());
     }
 
-    // The assembled world publishes both dev-only source catalogues, which is
+    // The assembled world publishes both dev-only source catalogs, which is
     // what seeds the hot-reload watcher.
     #[test]
-    fn the_assembled_world_publishes_the_watcher_source_catalogues() {
+    fn the_assembled_world_publishes_the_watcher_source_catalogs() {
         let loaded =
             prepare("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n").unwrap();
         let world = world_from_loaded(loaded).unwrap();
@@ -382,7 +382,7 @@ mod tests {
             world
                 .resource::<crate::resource::ColorLutSources>()
                 .is_some_and(|s| s.0.is_none()),
-            "a world with no LUT publishes an empty catalogue, not none at all"
+            "a world with no LUT publishes an empty catalog, not none at all"
         );
         assert!(
             world
@@ -447,7 +447,7 @@ mod tests {
         .expect("a material-only world compiles");
         let names = world
             .resource::<crate::resource::MaterialNames>()
-            .expect("the catalogue is installed");
+            .expect("the catalog is installed");
         assert_eq!(
             names.0,
             vec![

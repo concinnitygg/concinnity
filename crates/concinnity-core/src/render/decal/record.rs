@@ -108,7 +108,7 @@ pub fn invert_decal_model(model: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
 /// the texture's slot in the backend's albedo texture pool; `texture_count` is
 /// that pool's size and bounds the handle. A decal whose handle is out of range
 /// is logged and dropped. A decal with no `texture` falls back to texture slot 0
-/// (the renderer's white fallback) so the tint colour still stamps.
+/// (the renderer's white fallback) so the tint color still stamps.
 pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<DecalRecord> {
     let mut out = Vec::new();
     for d in decals {

@@ -4,7 +4,7 @@
 // previous frame's average log-luminance, an EMA step that updates the adapted
 // EV, and the histogram build + average compute dispatches that produce next
 // frame's average. The compute passes are encoded after the main HDR resolve
-// (where `hdr_srv_gpu` carries this frame's scene colour) and read CPU-side at
+// (where `hdr_srv_gpu` carries this frame's scene color) and read CPU-side at
 // the top of a later frame, so there is `FRAMES - 1` frames of latency between
 // the scene's actual luminance and the exposure applied to it, invisible at
 // human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.

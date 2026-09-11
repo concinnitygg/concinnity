@@ -89,7 +89,7 @@ struct TransparentView
     // identity when the sky does not turn.
     float4 sky_rot[3];
     // Direction toward the scene's sun (the first directional light) and that
-    // light's colour times its intensity; both zero when the world declares no
+    // light's color times its intensity; both zero when the world declares no
     // directional light, which the water glint reads as no sun.
     float4 sun_dir;
     float4 sun_color;
@@ -110,7 +110,7 @@ struct WaterWave
 
 // Per-surface tunables. Layout matches `WaterParams` / the WaterParamsBlock UBO
 // (224 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
-// cannot desynchronise them from the CPU struct.
+// cannot desynchronize them from the CPU struct.
 struct WaterParams
 {
     float4 center;         // world-space surface center
@@ -130,7 +130,7 @@ struct WaterParams
     // reflection over the trace / probe / sky cube; `distortion` scales the
     // wave-normal perturbation of its screen-UV lookup. Set on both paths: the
     // host raises it whenever this surface holds a mirror slot and the planar
-    // pass ran, and the RT entry honours it too.
+    // pass ran, and the RT entry honors it too.
     float4 planar;
 };
 
@@ -379,7 +379,7 @@ WaterPoint gerstner_displace(float2 rest_xz, float time)
         float c = cos(phase);
         float s = sin(phase);
 
-        // Steepness normalised by wave count so summed crests cannot pinch past
+        // Steepness normalized by wave count so summed crests cannot pinch past
         // self-intersection.
         float q = steep / (k * amp * max(float(count), 1.0));
 
@@ -406,7 +406,7 @@ WaterPoint gerstner_displace(float2 rest_xz, float time)
 [shader("vertex")]
 WaterVertexOut water_vertex(WaterVertexIn v)
 {
-    // The grid is built centred on the origin in the XZ plane, so the surface
+    // The grid is built centered on the origin in the XZ plane, so the surface
     // center rides in through the params rather than the vertex buffer.
     float2 rest_xz = float2(v.pos.x + params.center.x, v.pos.z + params.center.z);
     WaterPoint p = gerstner_displace(rest_xz, view.time);
@@ -479,7 +479,7 @@ WaterSurfacePoint water_surface(WaterVertexOut i)
     float water_dist = distance(i.world_pos, view.camera_pos.xyz);
     float water_depth = max(scene_dist - water_dist, 0.0);
 
-    // Tint: exponential shallow to deep blend over `depth_falloff` metres.
+    // Tint: exponential shallow to deep blend over `depth_falloff` meters.
     float depth_t = 1.0 - exp(-water_depth / max(params.depth_falloff, 1e-3));
     float3 tinted = lerp(params.shallow_color.rgb, params.deep_color.rgb, depth_t);
     float3 below = lerp(refracted * params.shallow_color.rgb, tinted, depth_t);
@@ -573,17 +573,17 @@ float3 water_sun_glint(float3 normal, float3 view_dir)
 // term, which is what strengthens it toward grazing angles, so weighting it by
 // the surface Fresnel as well would count that twice.
 // Alpha 1: water fully covers what it drew over, and the pipeline's straight
-// alpha blend leaves the composited colour as-is.
+// alpha blend leaves the composited color as-is.
 float4 water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflection)
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
-    float3 colour = lerp(s.below, reflection, fresnel) + water_sun_glint(s.normal, view_dir);
-    return float4(colour, 1.0);
+    float3 color = lerp(s.below, reflection, fresnel) + water_sun_glint(s.normal, view_dir);
+    return float4(color, 1.0);
 }
 
 // True where nearer opaque geometry occludes the surface. The transparent pass
-// binds no depth attachment, so the test is manual; every backend rasterised
+// binds no depth attachment, so the test is manual; every backend rasterized
 // this depth under the same viewport convention the main pass used, so the
 // fragment position lines up with the stored texel.
 bool water_occluded(WaterVertexOut i)

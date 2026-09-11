@@ -56,7 +56,7 @@ struct TransparentView
     // identity when the sky does not turn.
     float4 sky_rot[3];
     // Direction toward the scene's sun (the first directional light) and that
-    // light's colour times its intensity; both zero when the world declares no
+    // light's color times its intensity; both zero when the world declares no
     // directional light, which the water glint reads as no sun.
     float4 sun_dir;
     float4 sun_color;
@@ -72,7 +72,7 @@ struct TransparentView
 struct GlassMeshParams
 {
     float4x4 model; // local -> world
-    float4 tint;    // colour multiplied into the refracted scene
+    float4 tint;    // color multiplied into the refracted scene
     float opacity;
     float refraction_strength;
     float fresnel_power;
@@ -291,7 +291,7 @@ GlassMeshVertexOut glass_mesh_vertex(GlassMeshVertexIn v)
     float4 world = mul(params.model, float4(v.pos, 1.0));
     o.world_pos = world.xyz;
     // Rigid / uniform-scale model, so `M * n` needs no inverse-transpose. The
-    // fragment renormalises after interpolation.
+    // fragment renormalizes after interpolation.
     o.world_normal = mul((float3x3)params.model, v.normal);
     o.position = mul(view.vp, world);
     return o;
@@ -343,9 +343,9 @@ float4 glass_mesh_resolve(GlassMeshSurface s, float3 view_dir, float3 reflection
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float rim = pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
     float refl_weight = saturate(RT_F0 + 0.96 * rim);
-    float3 colour = lerp(s.refracted, reflection, refl_weight);
+    float3 color = lerp(s.refracted, reflection, refl_weight);
     float alpha = saturate(lerp(params.opacity, 1.0, rim));
-    return float4(colour, alpha);
+    return float4(color, alpha);
 }
 
 [shader("fragment")]

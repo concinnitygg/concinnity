@@ -402,7 +402,7 @@ impl System for PhysicsSystem {
                     }
                 }
             } else {
-                // Static world anchor at anchor_b. Sub-millimetre ball so it
+                // Static world anchor at anchor_b. Sub-millimeter ball so it
                 // takes effectively no space in the broad phase.
                 let anchor = world.add_fixed(
                     &ColliderShape::Ball { radius: 0.001 },
@@ -458,7 +458,7 @@ impl System for PhysicsSystem {
             let radius = rb.capsule_radius.max(0.05);
             let half_height = ((rb.capsule_height * 0.5) - radius).max(0.05);
             // a grounded character's eye sits at the capsule top; a flying
-            // camera's capsule is centred on the eye.
+            // camera's capsule is centered on the eye.
             let eye_offset = if has_gravity {
                 (rb.capsule_height * 0.5).max(radius + 0.05)
             } else {
@@ -656,7 +656,7 @@ impl System for PhysicsSystem {
             cam_pos[2] + fwd_full[2] * HOLD_DISTANCE,
         ];
 
-        // Adopt prop transforms written from outside physics (a behaviour's
+        // Adopt prop transforms written from outside physics (a behavior's
         // `set_transform`, an editor drag): a Transform that differs from the
         // one written back last frame teleports the body there before any tick
         // runs, so the pose the world asked for is the one it simulates from.
@@ -1170,7 +1170,7 @@ mod tests {
         );
     }
 
-    // A Transform written from outside physics (a behaviour's `set_transform`,
+    // A Transform written from outside physics (a behavior's `set_transform`,
     // an editor drag) is adopted rather than overwritten: the body is moved
     // there, at rest, and the pose written back is the one that was asked for.
     #[test]
@@ -1268,7 +1268,7 @@ mod tests {
     // reserves from what it holds plus the headroom its config authored, and
     // caps spawns there. The cap used to be left open for such a world, on the
     // grounds that nothing had counted its spawns; a fixed-capacity simulation
-    // cannot honour that -- a spawn past the reservation gets no body either
+    // cannot honor that -- a spawn past the reservation gets no body either
     // way, and the cap is what turns a silently declined one into a refusal
     // naming the knob to raise.
     #[test]

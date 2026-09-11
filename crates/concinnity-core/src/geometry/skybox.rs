@@ -1,7 +1,7 @@
 // Large inside-facing cube used as a skybox.
 //
 // Wound CCW from the interior. The floor face is included to prevent the clear
-// colour showing at the horizon or beyond terrain edges.
+// color showing at the horizon or beyond terrain edges.
 //
 // The blue channel is set to 2.0 (outside the [0, 1] scene range) so the
 // fragment shader can identify sky vertices with a simple threshold and skip
@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn skybox_vertex_colour_flags_sky_with_an_out_of_range_blue() {
+    fn skybox_vertex_color_flags_sky_with_an_out_of_range_blue() {
         let (verts, _) = build_skybox(1.0);
         assert!(
             verts

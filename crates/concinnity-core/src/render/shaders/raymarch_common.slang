@@ -70,8 +70,8 @@ float2 rayBox(float3 ro, float3 rd, float3 box_min, float3 box_max)
     return float2(max(max(tmin.x, tmin.y), tmin.z), min(min(tmax.x, tmax.y), tmax.z));
 }
 
-// Four-tap central-difference gradient, normalised. `eps` has to be small
-// enough for the linearisation to hold and large enough that the field does not
+// Four-tap central-difference gradient, normalized. `eps` has to be small
+// enough for the linearization to hold and large enough that the field does not
 // return zero on both sides; 0.001 world units suits the library above.
 float3 sdfNormal(float3 p, SdfParams params, float time, float eps)
 {
@@ -125,7 +125,7 @@ float3 sampleSceneRefracted(float2 frag_uv, float3 normal, float strength)
 }
 
 // Cook-Torrance GGX with Smith G and Schlick F, the same math the forward main
-// pass runs, so a raymarched surface and a rasterised one agree under one sun.
+// pass runs, so a raymarched surface and a rasterized one agree under one sun.
 // `shadow` is 1 for fully lit.
 float3 shadePbrSun(SdfSurface s, float3 normal, float3 viewDir, DirLight sun, float shadow)
 {
@@ -170,7 +170,7 @@ float raymarchHashRotation(float2 p)
 }
 
 // Cascade-shadow PCF, mirroring `shadow_factor_cascaded` in
-// `main_shading.slang` so a raymarched surface takes the shadow a rasterised
+// `main_shading.slang` so a raymarched surface takes the shadow a rasterized
 // one at the same point would.
 float sampleSunShadow(float3 world_pos, float view_depth, float2 screen_xy)
 {

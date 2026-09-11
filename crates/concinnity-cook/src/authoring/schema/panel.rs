@@ -44,7 +44,7 @@ pub struct Panel {
     pub title: String,
     /// [Font](#font) for the title. Empty uses the built-in font.
     pub title_font: String,
-    /// Linear-space RGB colour of the title text.
+    /// Linear-space RGB color of the title text.
     pub title_color: [f32; 3],
     /// Scale applied to the title text.
     pub title_scale: f32,

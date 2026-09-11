@@ -10,7 +10,7 @@
 // single `ExecuteIndirect`, so the CPU never walks the draw list.
 //
 // The frustum and distance maths mirror `gfx::frustum` exactly (the six
-// planes are extracted CPU-side already normalised) so the GPU path culls
+// planes are extracted CPU-side already normalized) so the GPU path culls
 // identically to the CPU BVH path it replaces. `GpuObjectData` / `GpuDrawArgs`
 // mirror `gfx::render_types`; `IndirectCommand` is a b0 root constant (the
 // object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
@@ -558,7 +558,7 @@ impl DxContext {
         // `UNORDERED_ACCESS`, so it binds as a root UAV with no transition.
         let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[frame_idx]);
 
-        // Pack the six already-normalised frustum planes + the previous frame's
+        // Pack the six already-normalized frustum planes + the previous frame's
         // VP + Hi-Z metadata for the kernel. Hi-Z is gated on the per-context
         // `hiz_valid` flag (false on the very first frame, before any Hi-Z
         // pyramid has been built) and on whether a `HiZResources` was built

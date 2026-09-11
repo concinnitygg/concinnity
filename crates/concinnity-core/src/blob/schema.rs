@@ -46,7 +46,7 @@ pub enum ResourceKind {
     CubemapTexture,
     /// A prefiltered environment map.
     EnvironmentMap,
-    /// A colour lookup table.
+    /// A color lookup table.
     ColorLut,
     /// Skinned mesh geometry.
     SkinnedMesh,

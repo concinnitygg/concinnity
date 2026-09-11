@@ -12,7 +12,7 @@
 // point along a fixed direction moves with the shape, so the distance to a
 // plane changes linearly with the sweep and the moment of contact is one
 // division rather than a search. What the clip then decides is whether that
-// contact happened over this triangle or over its neighbour.
+// contact happened over this triangle or over its neighbor.
 //
 // The ray walks the grid cell by cell along its own direction rather than
 // testing everything under its bounds, because a ray long enough to cross a

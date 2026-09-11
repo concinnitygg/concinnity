@@ -74,7 +74,7 @@ impl TaaResources {
 impl DxContext {
     // Encode the TAA history-resolve pass: a fullscreen triangle that reprojects
     // the accumulated history through the G-buffer's motion buffer, clips it to
-    // the current frame's neighbourhood, and blends. Writes this frame's
+    // the current frame's neighborhood, and blends. Writes this frame's
     // ping-pong slot, reading the other as history. Called only when `self.taa`
     // is `Some`, after the unified G-buffer pre-pass.
     pub(in crate::directx) fn encode_taa(&self, cmd: &ID3D12GraphicsCommandList) {

@@ -177,7 +177,7 @@ impl RangeAllocator {
     }
 
     // Insert a block, keeping `free` sorted by offset and coalescing it with
-    // either adjacent neighbour so the largest possible blocks stay available.
+    // either adjacent neighbor so the largest possible blocks stay available.
     fn insert_free(&mut self, block: Block) {
         let pos = self.free.partition_point(|b| b.offset < block.offset);
         debug_assert!(
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn reclaimed_region_coalesces_with_neighbours() {
+    fn reclaimed_region_coalesces_with_neighbors() {
         let mut a = RangeAllocator::new();
         seed(&mut a, 0, 300);
         let first = a.alloc(100).unwrap();

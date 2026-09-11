@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn two_by_two_averages_to_single_texel() {
-        // Four grey texels 0, 4, 8, 12 -> mean 6 (rounded).
+        // Four gray texels 0, 4, 8, 12 -> mean 6 (rounded).
         let px = vec![
             0, 0, 0, 0, // (0,0)
             4, 4, 4, 4, // (1,0)

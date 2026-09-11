@@ -55,7 +55,7 @@ impl ChunkCoord {
 
     /// Squared Euclidean distance to `other`, in chunk units.
     ///
-    /// Used to prioritise loads (nearest chunk first). Squared keeps the math
+    /// Used to prioritize loads (nearest chunk first). Squared keeps the math
     /// `sqrt`-free; `i64` so a far-apart pair cannot overflow.
     pub fn sq_distance(self, other: ChunkCoord) -> i64 {
         let dx = (self.x - other.x) as i64;

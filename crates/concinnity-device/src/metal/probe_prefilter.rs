@@ -38,7 +38,7 @@ use objc2_foundation::ns_string;
 // third dispatch dimension is the six cube faces, one thread deep.
 const PREFILTER_TILE: usize = 8;
 
-// Colour format of both cubes. RGBA16Float is what the faces resolve as, and
+// Color format of both cubes. RGBA16Float is what the faces resolve as, and
 // what the read_write views the kernels bind require (an Apple7 device and
 // later reads and writes it; the engine's Metal floor is Apple7).
 const PROBE_CUBE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
@@ -62,19 +62,19 @@ impl ProbePrefilterPipelines {
         Ok(ProbePrefilterPipelines {
             mip0: build_kernel(
                 device,
-                &super::slang_shaders::PROBE_MIP0,
+                &super::slang_builtins::PROBE_MIP0,
                 "probe_mip0",
                 hot_reload,
             )?,
             downsample: build_kernel(
                 device,
-                &super::slang_shaders::PROBE_DOWNSAMPLE,
+                &super::slang_builtins::PROBE_DOWNSAMPLE,
                 "probe_downsample",
                 hot_reload,
             )?,
             ggx: build_kernel(
                 device,
-                &super::slang_shaders::PROBE_GGX,
+                &super::slang_builtins::PROBE_GGX,
                 "probe_ggx",
                 hot_reload,
             )?,
@@ -84,7 +84,7 @@ impl ProbePrefilterPipelines {
 
 fn build_kernel(
     device: &ProtocolObject<dyn MTLDevice>,
-    lib: &super::slang_shaders::SlangLib,
+    lib: &super::slang_builtins::SlangLib,
     entry: &str,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {

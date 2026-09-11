@@ -17,7 +17,7 @@
 //
 // Escape (its own `FrameInput` pulse rather than a `InputKey`) otherwise answers
 // whichever state is waiting on a press, most consequential first: an armed
-// removal is cancelled, and failing that the field holding the keyboard gives
+// removal is canceled, and failing that the field holding the keyboard gives
 // it up, the name field reverting to what the world holds.
 //
 // Enter commits the field holding the keyboard -- the name onto the open
@@ -45,7 +45,7 @@
 // The name field is the asset's rather than the selection's, so it holds the
 // keyboard -- arrows and Tab alike -- until Enter or Escape gives it up. The
 // value field is the selection's and follows it from view to view, so it holds
-// only Left and Right, which are the caret's (`text_input_system`).
+// only Left and Right, which are the caret's (`input::text_system`).
 
 use super::*;
 use crate::components::InputKey;

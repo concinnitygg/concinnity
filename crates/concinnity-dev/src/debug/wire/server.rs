@@ -12,7 +12,7 @@
 use crate::debug_hook::DebugHook;
 use crate::ecs::World;
 use crate::gfx::animation::AnimationSystem;
-use crate::gfx::graphics_system::GraphicsSystem;
+use crate::gfx::system::GraphicsSystem;
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};

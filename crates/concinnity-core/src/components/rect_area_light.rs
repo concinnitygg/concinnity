@@ -29,14 +29,14 @@
 pub struct RectAreaLight {
     /// World-space position of the panel's center.
     pub center: [f32; 3],
-    /// Direction the panel emits. Normalised on load; defaults to `+Z` when
+    /// Direction the panel emits. Normalized on load; defaults to `+Z` when
     /// degenerate.
     pub normal: [f32; 3],
     /// Half-width and half-height of the panel, in world units.
     pub half_size: [f32; 2],
-    /// Linear-space RGB colour of the light.
+    /// Linear-space RGB color of the light.
     pub color: [f32; 3],
-    /// Intensity multiplier applied to the colour.
+    /// Intensity multiplier applied to the color.
     pub intensity: f32,
     /// Maximum reach in world units; attenuation is zero at this distance.
     pub range: f32,

@@ -196,7 +196,7 @@ pub fn sun_direction(uniforms: &LightUniforms) -> [f32; 3] {
     }
 }
 
-/// The intensity-weighted colour of the sun `sun_direction` names, white when
+/// The intensity-weighted color of the sun `sun_direction` names, white when
 /// the world declares no directional light.
 pub fn sun_color(uniforms: &LightUniforms) -> [f32; 3] {
     if uniforms.num_directional > 0 {
@@ -213,7 +213,7 @@ pub fn sun_color(uniforms: &LightUniforms) -> [f32; 3] {
 
 /// The `sun_dir` / `sun_color` lanes the transparent pass carries for its
 /// specular glint: the unit direction toward the first directional light and
-/// that light's intensity-weighted colour. Both lanes are zero when the world
+/// that light's intensity-weighted color. Both lanes are zero when the world
 /// declares no directional light, or when the one it declares has no direction,
 /// so the glint disappears rather than falling back to the neutral sun
 /// [`sun_color`] hands the fog.
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn ambient_intensity_carried_in_both_branches() {
-        // Empty (DEFAULT) branch and the populated branch both honour the
+        // Empty (DEFAULT) branch and the populated branch both honor the
         // authored multiplier.
         let empty = build_light_uniforms(vec![], vec![], &[], 2.5);
         assert!((empty.ambient_intensity - 2.5).abs() < 1e-6);
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(buf.len(), 1);
         assert_eq!(buf[0].position, [1.0, 5.0, 2.0]);
         assert_eq!(buf[0].kind, LIGHT_KIND_SPOT);
-        // The authored direction is normalised into the record.
+        // The authored direction is normalized into the record.
         assert_eq!(buf[0].direction, [0.0, -1.0, 0.0]);
         assert!((buf[0].cos_inner - 15.0f32.to_radians().cos()).abs() < 1e-6);
         assert!((buf[0].cos_outer - 30.0f32.to_radians().cos()).abs() < 1e-6);
@@ -612,7 +612,7 @@ mod tests {
 
     // The area light's center and emitting direction ride the GpuLight record.
     #[test]
-    fn area_light_centre_and_normal_map_onto_the_gpu_light() {
+    fn area_light_center_and_normal_map_onto_the_gpu_light() {
         let mut l = area([1.0, 2.0, 3.0], [1.0, 1.0]);
         l.normal = [0.0, 0.0, 1.0];
         let data = build_light_data(&[], &[], &[l]);
@@ -664,7 +664,7 @@ mod tests {
     }
 
     // The cascade projection and the fog ray-march follow the first declared
-    // directional light, and its colour is weighted by intensity so a dim sun
+    // directional light, and its color is weighted by intensity so a dim sun
     // does not light the march as brightly as a bright one.
     #[test]
     fn the_sun_is_the_first_declared_directional_light() {
@@ -680,7 +680,7 @@ mod tests {
     }
 
     // A world lit only by point lights declares no directional one, but the
-    // cascade projection still needs an axis and the fog still needs a colour
+    // cascade projection still needs an axis and the fog still needs a color
     // to integrate against, so both fall back to the neutral sun.
     #[test]
     fn a_world_with_no_directional_light_falls_back_to_a_neutral_sun() {
@@ -693,11 +693,11 @@ mod tests {
         assert_eq!(sun_color(&u), [1.0, 1.0, 1.0]);
     }
 
-    // The glint lanes normalise the authored direction, so the shader can dot
-    // them against a wave normal without normalising per fragment, and weight
-    // the colour by intensity the way the fog sun does.
+    // The glint lanes normalize the authored direction, so the shader can dot
+    // them against a wave normal without normalizing per fragment, and weight
+    // the color by intensity the way the fog sun does.
     #[test]
-    fn the_glint_lanes_carry_a_unit_direction_and_a_weighted_colour() {
+    fn the_glint_lanes_carry_a_unit_direction_and_a_weighted_color() {
         let u = uniforms(vec![dir([0.0, 3.0, 4.0], [0.5, 1.0, 0.75], 8.0)], vec![]);
         let (sun_dir, sun_color) = glint_sun(&u);
         assert_eq!(sun_dir, [0.0, 0.6, 0.8, 0.0]);

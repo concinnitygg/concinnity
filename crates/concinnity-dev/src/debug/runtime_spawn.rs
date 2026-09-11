@@ -16,7 +16,7 @@
 
 use std::sync::Mutex;
 
-use crate::gfx::graphics_system::WorldReloadState;
+use crate::gfx::system::WorldReloadState;
 
 // A runtime decal-spawn request. `texture` is the world.jsonl name of the
 // Texture asset to project; `None` (or an unresolvable name) falls back to
@@ -44,7 +44,7 @@ impl Default for DecalSpawnArgs {
 }
 
 // A runtime emitter-spawn request. Same field shape as the
-// [`crate::components::ParticleEmitter`] asset; the engine clamps + normalises
+// [`crate::components::ParticleEmitter`] asset; the engine clamps + normalizes
 // via [`crate::gfx::particles::build_particle_records`].
 #[derive(Debug, Clone)]
 pub(crate) struct EmitterSpawnArgs {
@@ -399,7 +399,7 @@ pub(crate) fn dispatch_runtime_spawn(
         RuntimeCommand::EmitterAdd { args, reply } => {
             let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
                 .map(|slot| {
-                    // Mirror the clamp / normalise rules used by
+                    // Mirror the clamp / normalize rules used by
                     // `build_particle_records` so a WS-spawned emitter and
                     // an authored one behave identically. We do not call
                     // that helper directly because it takes a
@@ -725,7 +725,7 @@ pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut crate::e
 
 // Resolve an optional Texture asset name to its pool slot index. `None` (no
 // texture authored on the spawn request) maps to slot 0 (the renderer's
-// white fallback) so the tint / colour gradient still stamps. An unknown
+// white fallback) so the tint / color gradient still stamps. An unknown
 // name returns `Err`; the WS client gets a clear error rather than a
 // silent fallback. Texture-name resolution leans on the init-time
 // `world_reload.texture_name_to_slot` snapshot, so it only succeeds under

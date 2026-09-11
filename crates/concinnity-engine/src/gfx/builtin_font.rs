@@ -24,7 +24,7 @@ pub(crate) struct BuiltinFont {
 // way to draw text with it.
 pub(crate) fn load(handle: FontHandle) -> Option<BuiltinFont> {
     let (atlas_w, atlas_h, supersample, size_px, rgba, metrics) =
-        match concinnity_core::bake::font::deserialise(BAKED_ATLAS) {
+        match concinnity_core::bake::font::deserialize(BAKED_ATLAS) {
             Ok(decoded) => decoded,
             Err(e) => {
                 tracing::error!("built-in font atlas failed to decode: {e}");
@@ -68,7 +68,7 @@ mod tests {
         for ch in [' ', 'A', 'z', '/', '.', '~'] {
             assert!(
                 loaded.metrics.contains_key(&(ch as u32)),
-                "{ch:?} is rasterised"
+                "{ch:?} is rasterized"
             );
         }
 

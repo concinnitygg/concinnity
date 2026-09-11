@@ -116,7 +116,7 @@ pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> T
             continue;
         };
         let Ok((verts, indices, _)) =
-            concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes)
+            concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes)
         else {
             out.skip();
             continue;
@@ -227,7 +227,7 @@ fn collect_models(
                 continue;
             };
             let Ok((verts, indices, _)) =
-                concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes)
+                concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes)
             else {
                 continue;
             };
@@ -292,7 +292,7 @@ fn slice_payload<'a>(payloads: &'a [Vec<u8>], loc: &PayloadLocator) -> Option<&'
 // An RGBA8 preview of a texture payload: the mip nearest the thumbnail size
 // (block formats decode just that mip), box-filtered into the size budget.
 fn texture_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let image = texture_payload::deserialise(payload).ok()?;
+    let image = texture_payload::deserialize(payload).ok()?;
     let mip = image
         .mips
         .iter()
@@ -310,7 +310,7 @@ fn texture_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 // A tonemapped face of an environment map's prefilter chain: the mip whose
 // face size is nearest the thumbnail budget.
 fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let view = concinnity_core::bake::environment_map::deserialise(payload).ok()?;
+    let view = concinnity_core::bake::environment_map::deserialize(payload).ok()?;
     let (mip_index, face) = view
         .prefilter_mip_bytes
         .iter()
@@ -433,7 +433,7 @@ mod tests {
     // A tiny RGBA8 texture payload, a box mesh payload, and their records.
     fn textured_meshed_result() -> PipelineResult {
         let mut result = empty_result();
-        let tex = texture_payload::serialise(&concinnity_core::bake::texture::TextureImage::rgba8(
+        let tex = texture_payload::serialize(&concinnity_core::bake::texture::TextureImage::rgba8(
             2,
             2,
             vec![

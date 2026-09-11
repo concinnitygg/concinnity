@@ -21,7 +21,7 @@ use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
 
 use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice};
-use crate::vulkan::pipeline::spv_module;
+use crate::vulkan::pipeline::GraphicsStages;
 use crate::vulkan::post::pass_cache::PostPassCache;
 use crate::vulkan::post::set_arena::PostSetArena;
 use crate::vulkan::slang_builtins::{self, SlangCompile};
@@ -136,7 +136,7 @@ impl VkPostDevice<'_> {
 
 impl VkPostDevice<'_> {
     // The graphics pipeline itself: a vertex-buffer-less fullscreen triangle
-    // into one colour attachment, no depth, dynamic viewport and scissor. Every
+    // into one color attachment, no depth, dynamic viewport and scissor. Every
     // fullscreen post pass has this shape, which is why it is built once here
     // instead of once per effect.
     fn build_pipeline(
@@ -147,19 +147,8 @@ impl VkPostDevice<'_> {
         blend: PostBlend,
     ) -> Result<OwnedPipeline, String> {
         let (vert_spv, frag_spv) = compile(program, self.hot_reload)?;
-        let vert_mod = spv_module(self.device, &vert_spv)?;
-        let frag_mod = spv_module(self.device, &frag_spv)?;
-        let entry = std::ffi::CString::new("main").expect("the entry point name has no NUL");
-        let stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vert_mod.handle())
-                .name(&entry),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(frag_mod.handle())
-                .name(&entry),
-        ];
+        let modules = GraphicsStages::new(self.device, &vert_spv, &frag_spv)?;
+        let stages = modules.infos();
         let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)

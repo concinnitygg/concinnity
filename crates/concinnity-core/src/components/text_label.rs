@@ -63,7 +63,7 @@ pub struct TextLabel {
     pub x: f32,
     /// Vertical position in pixels from the top edge of the window.
     pub y: f32,
-    /// Linear-space RGB text colour.
+    /// Linear-space RGB text color.
     pub color: [f32; 3],
     /// Uniform scale applied on top of the font's `size_px` (24 for the
     /// built-in face). 1.0 = native size. Ignored when `centered` is set, which
@@ -170,14 +170,12 @@ mod tests {
 
     #[test]
     fn a_wrapped_chip_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let l: TextLabel = serde_json::from_str(
+        let l: TextLabel = crate::test_support::from_json(
             r#"{"font":"body","content":"Hello there","x":20,"y":40,"color":[1,0.9,0.5],
                 "scale":1.25,"centered":true,"align":"right","fit":"cover",
                 "background":[0,0,0,0.6],"padding":6,"wrap_width":320,"max_lines":3,
                 "visible":false,"screen":"menu"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(l.font, Some(FontHandle(4)));
         assert_eq!(l.screen, Some(AssetId(4)));
         assert_eq!(l.align, TextAlign::Right);

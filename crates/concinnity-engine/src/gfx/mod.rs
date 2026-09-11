@@ -51,9 +51,6 @@ pub(crate) mod draw_list;
 /// Live reassignment of a running world's draw slots (their material and cull
 /// distance), for an editor previewing a Prop edit without a rebuild.
 pub mod draw_preview;
-/// The renderer driver. An internal system (not a declarable asset), constructed
-/// by `World::start` when the world declares a `GraphicsConfig`.
-pub mod graphics_system;
 /// Live application of the world's lighting assets to a running world, for an
 /// editor previewing sun / fog / shadow / post-process edits without a rebuild.
 pub mod lighting_preview;
@@ -63,28 +60,20 @@ pub(crate) mod material_entry;
 /// Live re-resolution of a `CharacterShape` against a running world's poses,
 /// for an editor previewing slider edits without a rebuild.
 pub mod shape_preview;
-// Per-frame input sampling + FrameInput publish. Internal system, constructed
-// alongside GraphicsSystem (same gate) and scheduled immediately after it.
-pub(crate) mod input_system;
+/// The renderer driver. An internal system (not a declarable asset), constructed
+/// by `World::start` when the world declares a `GraphicsConfig`.
+pub mod system;
 // 2D overlay draw-list build + menu-state publish. Internal system,
 // constructed alongside GraphicsSystem (same gate) and scheduled first.
 pub(crate) mod overlay;
 // Engine-side allocation authority for backend draw slots + pre-reserved
 // skinned instances (the `RenderSlots` resource).
 pub(crate) mod render_slots;
-// SettingCommand / SceneCommand application + settings snapshot ownership.
-// Internal system, constructed alongside GraphicsSystem (same gate) and
-// scheduled just before it.
-pub(crate) mod settings_system;
-// Asset-streaming home: the re-exported `no_std` policy core (`StreamPlanner`)
-// plus the `std` texture / mesh / chunk drivers it schedules.
-pub(crate) mod streaming;
-/// Asset-streaming drive (texture / mesh / voxel-world chunk pools) + the
-/// camera-relative view publish. Internal system, constructed alongside
-/// GraphicsSystem (same gate) and scheduled immediately before it. `pub` so the
-/// editor's debug server can name `StreamingStats` (its state lives in the parked
-/// `StreamingState` resource, read via `World::streaming_stats`).
-pub mod streaming_system;
+/// Asset-streaming home: the re-exported `no_std` policy core (`StreamPlanner`),
+/// the `std` texture / mesh / chunk drivers it schedules, and the system that
+/// drives them. `pub` for that system alone; everything else inside is
+/// crate-private.
+pub mod streaming;
 // Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
 // compiled only into the unit-test binary. Implements `core::render`'s
 // RenderBackend seam on a client-local type and carries a `config::Settings`,

@@ -123,7 +123,7 @@ fn cores_text(value: Option<f64>) -> String {
     }
 }
 
-// Binary scale, labelled the way the StatHud's chips already label it.
+// Binary scale, labeled the way the StatHud's chips already label it.
 fn byte_scale(largest: f64) -> (f64, &'static str) {
     const KB: f64 = 1024.0;
     const MB: f64 = 1024.0 * KB;

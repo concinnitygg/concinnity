@@ -2,17 +2,17 @@
 //
 // Backing store for the render graph's transient textures on Metal. The shared
 // `gfx::render_graph::alias` planner decides which transient resources may share
-// physical memory; this pool is where the Metal backend realises that plan.
+// physical memory; this pool is where the Metal backend realizes that plan.
 // Features stop owning these textures and read them back by label, so the pool
 // repoints several labels at one aliased allocation without touching the
 // features. This mirrors how the graph plans barriers while each backend emits
 // them, and the Vulkan / DirectX `transient_pool.rs`.
 //
-// Structure: the pool is organised into alias slots. Each slot owns one
+// Structure: the pool is organized into alias slots. Each slot owns one
 // `MTLHeap` sized to its largest member, and every member is placed at offset 0.
 // Members of a slot have pairwise-disjoint lifetimes (they are never live at the
 // same time), so reusing the bytes is safe. A single-member slot is a plain
-// placed target; a multi-member slot is a realised alias.
+// placed target; a multi-member slot is a realized alias.
 //
 // The heaps are `Placement` so the pool picks the offset (0 for every member),
 // which maps onto the planner's slot abstraction directly. They are explicitly
@@ -77,7 +77,7 @@ impl TransientTexturePool {
     // Allocate one heap per slot and place every member at offset 0. Each
     // texture starts undefined; its first-use contents come from its graph
     // producer pass exactly as when the feature owned it. (Unlike D3D12's placed
-    // resources, a Metal placed texture needs no Discard-style initialisation
+    // resources, a Metal placed texture needs no Discard-style initialization
     // before its first use.)
     pub(super) fn build(
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -295,7 +295,7 @@ impl MtlContext {
             .unwrap_or_else(|| self.ssao.white.as_ref())
     }
 
-    // The unified pre-pass's three colour channels, read straight out of the
+    // The unified pre-pass's three color channels, read straight out of the
     // pool at the point of use. Nothing caches these, and that is deliberate:
     // **a pool rebuild repacks every slot**, so a handle cached when SSAO was
     // toggled would point into a heap region that now belongs to a different
@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gbuffer_colour_targets_are_pooled_and_depth_is_not() {
+    fn the_gbuffer_color_targets_are_pooled_and_depth_is_not() {
         let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
         let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
         for want in [
@@ -375,8 +375,8 @@ mod tests {
 
     #[test]
     fn the_gbuffer_gate_is_what_places_them() {
-        // `unified_gbuffer_prepass` substitutes passes rather than adding them,
-        // so `planning_inputs` cannot force it on and the pool must follow the
+        // The pre-pass exists only where the backend built its targets, so
+        // `planning_inputs` cannot force it on and the pool must follow the
         // build. Without the gate the pre-pass node is absent and none of its
         // targets are placed -- which would leave every consumer reading a
         // label the pool never created, and the pre-pass encoder erroring out.

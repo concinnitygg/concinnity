@@ -63,11 +63,9 @@ mod tests {
 
     #[test]
     fn each_chip_binds_its_own_label_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let h: DebugHud = serde_json::from_str(
+        let h: DebugHud = crate::test_support::from_json(
             r#"{"passes_label":"passes_chip","mouse_label":"","camera_label":"cam","sys_label":6}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(h.passes_label, Some(AssetId(11)));
         assert_eq!(h.mouse_label, None);
         assert_eq!(h.camera_label, Some(AssetId(3)));

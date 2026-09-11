@@ -43,7 +43,7 @@ impl Frustum {
                 a[2] * sign + b[2],
                 a[3] * sign + b[3],
             ];
-            normalise_plane(p)
+            normalize_plane(p)
         };
 
         Self {
@@ -80,7 +80,7 @@ impl Frustum {
     }
 }
 
-fn normalise_plane(p: [f32; 4]) -> Plane {
+fn normalize_plane(p: [f32; 4]) -> Plane {
     let len = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
     let inv = if len > 1e-6 { 1.0 / len } else { 1.0 };
     Plane {

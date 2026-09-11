@@ -376,7 +376,7 @@ mod tests {
     use super::*;
     use crate::debug::state::{AssetEntry, CameraSnapshot};
     use crate::gfx::profile::RenderStats;
-    use crate::gfx::streaming_system::StreamingStats;
+    use crate::gfx::streaming::system::StreamingStats;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     // Run one request against a hand-built snapshot and parse the reply.
@@ -677,7 +677,7 @@ mod tests {
         assert_eq!(r["ok"], true);
         assert_eq!(r["reload_queued"], true);
         assert!(flag.load(Ordering::SeqCst));
-        // The world, Shader-stage, and animation reload surfaces were signalled;
+        // The world, Shader-stage, and animation reload surfaces were signaled;
         // drain them so they do not leak.
         assert!(hot_reload::take_pending_world());
         assert!(hot_reload::take_pending_shader_stages());
@@ -705,10 +705,7 @@ mod tests {
         let r = reply(r#"{"cmd":"shutdown"}"#, st);
         assert_eq!(r["ok"], true);
         assert_eq!(r["shutdown"], true);
-        assert!(
-            token.is_cancelled(),
-            "the run loop's token must be cancelled"
-        );
+        assert!(token.is_canceled(), "the run loop's token must be canceled");
     }
 
     // Each runtime-mutation command forwards to a handler in `super::commands`.

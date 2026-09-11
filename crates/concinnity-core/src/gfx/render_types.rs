@@ -98,7 +98,7 @@ pub struct MaterialUniforms {
     pub tint: [f32; 3],
     /// Padding so the field layout matches the shader-side struct.
     pub _pad0: f32,
-    /// Additive emission colour in linear space.
+    /// Additive emission color in linear space.
     pub emissive: [f32; 3],
     /// Padding so the field layout matches the shader-side struct.
     pub _pad1: f32,
@@ -182,7 +182,7 @@ pub struct DirectionalLightData {
     pub direction: [f32; 3],
     /// Radiance scale.
     pub intensity: f32,
-    /// Linear RGB light colour.
+    /// Linear RGB light color.
     pub color: [f32; 3],
     /// Padding so the field layout matches the shader-side struct.
     pub _pad: f32,
@@ -196,9 +196,9 @@ pub struct DirectionalLightData {
 pub struct PointLightData {
     /// World-space position of the light source.
     pub position: [f32; 3],
-    /// Maximum reach in metres; attenuation is zero at this distance.
+    /// Maximum reach in meters; attenuation is zero at this distance.
     pub range: f32,
-    /// Linear RGB light colour.
+    /// Linear RGB light color.
     pub color: [f32; 3],
     /// Radiance scale.
     pub intensity: f32,
@@ -213,9 +213,9 @@ pub struct PointLightData {
 pub struct GpuLight {
     /// World-space position (point / spot).
     pub position: [f32; 3],
-    /// Maximum reach in metres; attenuation reaches zero at this distance.
+    /// Maximum reach in meters; attenuation reaches zero at this distance.
     pub range: f32,
-    /// Linear RGB light colour.
+    /// Linear RGB light color.
     pub color: [f32; 3],
     /// Radiance scale.
     pub intensity: f32,
@@ -508,16 +508,16 @@ impl AreaLightData {
 }
 
 /// Compact vertex type used exclusively by the text render pass.
-/// 32 bytes: screen-pixel position, atlas UV, text colour, and sampling mode.
+/// 32 bytes: screen-pixel position, atlas UV, text color, and sampling mode.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TextVertex {
     /// Screen-space position in pixels (x from left, y from top).
     pub pos: [f32; 2],
-    /// Normalised UV into the bound atlas texture. A negative u marks a
+    /// Normalized UV into the bound atlas texture. A negative u marks a
     /// solid-fill quad (no sampling; alpha carried in v).
     pub uv: [f32; 2],
-    /// Linear-space RGB colour: text colour, fill colour, or texture tint.
+    /// Linear-space RGB color: text color, fill color, or texture tint.
     pub color: [f32; 3],
     /// 0 = SDF glyph sampling; > 0 = textured quad (RGBA sample multiplied by
     /// `color`), with the value itself as the quad's alpha multiplier.
@@ -526,7 +526,7 @@ pub struct TextVertex {
 
 /// Compact vertex type used exclusively by the line pass. 32 bytes: the
 /// expanded ribbon corner in world space, its signed position across the ribbon
-/// width (for the shader's edge fade), and the corner colour.
+/// width (for the shader's edge fade), and the corner color.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LineVertex {
@@ -571,7 +571,7 @@ pub struct PostProcessTunables {
     pub exposure: f32,
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
     pub vignette: f32,
-    /// Colour-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
+    /// Color-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
     /// composite pass. Has no effect when no `ColorLut` is declared: the
     /// renderer then binds an identity LUT, so the grade is a no-op.
     pub lut_strength: f32,
@@ -614,7 +614,7 @@ pub struct PostProcessParams {
     pub exposure: f32,
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
     pub vignette: f32,
-    /// Colour-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
+    /// Color-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
     /// composite pass. Has no effect when no `ColorLut` is declared: the
     /// renderer then binds an identity LUT, so the grade is a no-op.
     pub lut_strength: f32,
@@ -786,7 +786,7 @@ pub struct SsgiParams {
 /// a world-space ray against an acceleration structure, so it also carries the
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
-/// direction + colour the hit-shading uses. Pushed verbatim to the RT kernel,
+/// direction + color the hit-shading uses. Pushed verbatim to the RT kernel,
 /// so the layout must stay in sync with the `RtParams` struct there. 192 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
@@ -870,7 +870,7 @@ pub struct RtGeomEntry {
     /// Metallic factor [0, 1] for the hit PBR response: metals drop the diffuse
     /// term and tint the reflected environment specular by their albedo.
     pub metallic: f32,
-    /// Self-emission added to the hit colour, so glowing surfaces light up in
+    /// Self-emission added to the hit color, so glowing surfaces light up in
     /// reflections regardless of incident lighting. Fills the three words that
     /// pad `metallic` out to a 16-byte boundary (the MSL side reads it as a
     /// `packed_float3` at the same offset; the layout test pins the exact size).
@@ -880,7 +880,7 @@ pub struct RtGeomEntry {
     pub model: [[f32; 4]; 4],
     /// Bindless albedo-pool index for the emissive map (0 = none). The textured
     /// RT-hit shader multiplies the self-emission by this map sample, so glowing
-    /// textured surfaces (e.g. the bistro string lights) reflect in colour rather
+    /// textured surfaces (e.g. the bistro string lights) reflect in color rather
     /// than the scalar `emissive`; the flat fallback ignores it. Mirrors
     /// `MaterialUniforms::emissive_map_index` / `GpuObjectData::emissive_map_index`.
     pub emissive_map_index: u32,
@@ -912,7 +912,7 @@ pub struct FogParams {
     pub sun_dir: [f32; 3],
     /// Padding so the field layout matches the shader-side struct.
     pub _pad1: f32,
-    /// First directional light's colour pre-multiplied with its intensity.
+    /// First directional light's color pre-multiplied with its intensity.
     /// Drives the per-step sun in-scatter alongside the phase function.
     pub sun_color: [f32; 3],
     /// Padding so the field layout matches the shader-side struct.
@@ -966,7 +966,7 @@ pub struct FogFroxelParams {
     /// `z_far` and inverting the volume's Z mapping.
     pub _pad_align: u32,
     /// Camera near-plane in view units. The fragment sampler maps a scene
-    /// view-z to a normalised volume w via `(z - z_near) / (z_far - z_near)`
+    /// view-z to a normalized volume w via `(z - z_near) / (z_far - z_near)`
     /// for linear Z.
     pub z_near: f32,
     /// Camera far-plane mirror: `FogSettings.max_distance`. The volume
@@ -1073,7 +1073,7 @@ pub const NO_NORMAL_MAP_SLOT: usize = usize::MAX;
 /// world declares first, so an unset albedo encoded as 0 sampled that texture
 /// and tinted it. `usize::MAX` collides with no handle and lets a backend
 /// substitute the synthesized white fallback, which leaves `tint` as the
-/// object's colour without a shader branch.
+/// object's color without a shader branch.
 pub const NO_ALBEDO_SLOT: usize = usize::MAX;
 
 /// Pool entries reserved past the real textures: the flat-normal fallback at
@@ -1210,7 +1210,7 @@ pub struct GpuObjectData {
     pub tint: [f32; 3],
     /// Perceptual roughness [0, 1].
     pub roughness: f32,
-    /// Additive emission colour in linear space.
+    /// Additive emission color in linear space.
     pub emissive: [f32; 3],
     /// Metallic factor [0, 1].
     pub metallic: f32,

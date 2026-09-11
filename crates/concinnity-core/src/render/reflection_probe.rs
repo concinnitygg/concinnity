@@ -158,7 +158,7 @@ pub enum BakeAction {
 /// out a row of `false`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BakeSignals {
-    /// Every cube face has been submitted and the GPU has signalled completion.
+    /// Every cube face has been submitted and the GPU has signaled completion.
     pub faces_done: bool,
     /// Every convolution dispatch has retired on the GPU. A backend whose queue
     /// ordering already puts those writes before any frame that samples the cube,
@@ -328,14 +328,14 @@ impl PrefilterPlan {
 // `auto_seed_budget_fits_max_probes` in the metal uniforms tests.
 pub(crate) const AUTO_SEED_BUDGET: usize = 8;
 
-// Horizontal size (metres) each auto-seeded cell aims to cover -- roughly a large
+// Horizontal size (meters) each auto-seeded cell aims to cover -- roughly a large
 // room / courtyard, so a probe stays locally accurate across its cell. A 24 m
 // square scene tiles into the same 2x2 grid the original auto-seed produced.
 const AUTO_SEED_CELL_TARGET: f32 = 12.0;
 
 // Voxels along the longest horizontal axis when probing for enclosed interior space;
 // the voxel size derives from it. Bounds the detection cost (the grid is also capped
-// per axis). Fine enough that a wall a metre or two thick still seals a room.
+// per axis). Fine enough that a wall a meter or two thick still seals a room.
 const INTERIOR_VOXELS_LONG_AXIS: usize = 48;
 // Hard cap on voxels per axis so a huge scene cannot blow up the grid.
 const INTERIOR_MAX_DIM: usize = 128;
@@ -348,9 +348,9 @@ const INTERIOR_MIN_ENCLOSED: u8 = 5;
 // Smallest interior region (in voxels) that earns a probe, so a one-voxel pocket
 // wedged between props is not mistaken for a room.
 const INTERIOR_MIN_CLUSTER: usize = 4;
-// Smallest interior region (in metres, on every axis) that earns a probe. The
+// Smallest interior region (in meters, on every axis) that earns a probe. The
 // voxel floor above scales with the scene, so in a small scene a solid prop's
-// own hollow clears it: a surface voxeliser cannot tell a sealed box from a
+// own hollow clears it: a surface voxelizer cannot tell a sealed box from a
 // room, and a `ProceduralMesh` box is exactly a sealed box. This is the scale
 // test that can -- a room is a space a camera can stand in. Without it, a world
 // whose only mesh is a crate spends a probe (and a full cube bake) capturing the
@@ -440,7 +440,7 @@ fn interior_voxel_grid(
     Some((vs, dim(extent[0]), dim(extent[1]), dim(extent[2])))
 }
 
-// Mark every voxel any object AABB overlaps as solid (rasterise each box into the grid,
+// Mark every voxel any object AABB overlaps as solid (rasterize each box into the grid,
 // clamped to bounds). Coarse: a watertight single mesh's AABB fills its own interior,
 // so this cannot see the hollow -- `solid_from_triangles` is the per-surface answer.
 fn solid_from_aabbs(
@@ -490,7 +490,7 @@ fn tri_box_overlap(box_c: [f32; 3], box_h: [f32; 3], tri: &[[f32; 3]; 3]) -> boo
             a[0] * b[1] - a[1] * b[0],
         ]
     };
-    // Triangle in box-local space (box centred at the origin).
+    // Triangle in box-local space (box centered at the origin).
     let v = [sub(tri[0], box_c), sub(tri[1], box_c), sub(tri[2], box_c)];
     let edges = [sub(v[1], v[0]), sub(v[2], v[1]), sub(v[0], v[2])];
     let box_axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -518,8 +518,8 @@ fn tri_box_overlap(box_c: [f32; 3], box_h: [f32; 3], tri: &[[f32; 3]; 3]) -> boo
     !separated(cross(edges[0], edges[1]))
 }
 
-// Surface-voxelise the scene triangles: mark every voxel any triangle actually passes
-// through (`tri_box_overlap`). Unlike the AABB rasteriser this leaves the hollow
+// Surface-voxelize the scene triangles: mark every voxel any triangle actually passes
+// through (`tri_box_overlap`). Unlike the AABB rasterizer this leaves the hollow
 // interior of a watertight single mesh empty -- exactly the case AABB occupancy cannot
 // see -- so the enclosure sweep can find the room. Triangles are world-space; each is
 // tested only against the voxels in its own (clamped) AABB.
@@ -533,7 +533,7 @@ fn solid_from_triangles(
 ) -> Vec<bool> {
     let idx = |x: usize, y: usize, z: usize| (z * ny + y) * nx + x;
     let mut solid = vec![false; nx * ny * nz];
-    // Conservative voxelisation: inflate the test cell by a small voxel-relative margin
+    // Conservative voxelization: inflate the test cell by a small voxel-relative margin
     // so a triangle lying exactly on a voxel boundary (an axis-aligned wall coplanar
     // with the grid) is still counted -- the exact SAT would FP-miss it and leave a gap
     // that lets the enclosure sweep leak. The margin is far below one voxel, so it never
@@ -588,7 +588,7 @@ fn solid_from_triangles(
 // 6-connected regions; and drops one probe at the center of each region big enough to be
 // a room (`INTERIOR_MIN_CLUSTER`), largest first, up to `budget`. Returns empty for an
 // open scene (everything reachable from the sky / sides). The `solid` grid comes from
-// object AABBs (`seed_interior_probes`) or surface-voxelised triangles
+// object AABBs (`seed_interior_probes`) or surface-voxelized triangles
 // (`seed_interior_probes_tris`); everything from here on is identical.
 fn interior_probes_from_solid(
     aabb_min: [f32; 3],
@@ -688,7 +688,7 @@ fn interior_probes_from_solid(
             let z = i / (nx * ny);
             let y = (i / nx) % ny;
             let x = i % nx;
-            let neighbours = [
+            let neighbors = [
                 (x > 0).then(|| i - 1),
                 (x + 1 < nx).then_some(i + 1),
                 (y > 0).then(|| i - nx),
@@ -696,7 +696,7 @@ fn interior_probes_from_solid(
                 (z > 0).then(|| i - nx * ny),
                 (z + 1 < nz).then_some(i + nx * ny),
             ];
-            for j in neighbours.into_iter().flatten() {
+            for j in neighbors.into_iter().flatten() {
                 if is_interior(j) && label[j] == usize::MAX {
                     label[j] = cid;
                     stack.push(j);
@@ -801,7 +801,7 @@ fn seed_interior_probes(
     interior_probes_from_solid(aabb_min, vs, nx, ny, nz, &solid, budget)
 }
 
-// Interior probes from surface-voxelised triangles (the fine path): marks only the
+// Interior probes from surface-voxelized triangles (the fine path): marks only the
 // voxels a triangle actually passes through, so a watertight single mesh reads as a
 // hollow shell and its interior room is detected -- the case AABB occupancy misses.
 fn seed_interior_probes_tris(
@@ -873,7 +873,7 @@ pub fn auto_seed_probes(
 /// open coverage. An open scene finds no interiors, so it falls straight through to the
 /// grid (unchanged); a fully-enclosed scene is mostly rooms; a mixed scene gets both,
 /// cross-faded by the partition-of-unity blend. When `triangles` is non-empty, interior
-/// detection surface-voxelises them (so a watertight single mesh's hollow is found);
+/// detection surface-voxelizes them (so a watertight single mesh's hollow is found);
 /// when empty, it falls back to the coarse AABB `occupancy`. The grid fill always uses
 /// the AABB `occupancy` for its open-vantage capture-point nudge. Approximate --
 /// authored probes give per-space control -- but better than one global cube. Returns
@@ -969,7 +969,7 @@ pub fn fold_world_bounds(
 
 // Pick the eye point a single scene probe captures from: the horizontal center
 // of the scene bounds, raised to eye height above the floor. A probe serves a
-// volume rather than a viewpoint, so centring it degrades most gracefully as a
+// volume rather than a viewpoint, so centering it degrades most gracefully as a
 // first-person camera roams (the captured cube is still parallax-locked to this
 // point until box parallax correction lands). Kept pure so an authored probe
 // position can later replace this heuristic. `aabb_min`/`aabb_max` are the world
@@ -1036,12 +1036,12 @@ mod tests {
     }
 
     #[test]
-    fn probe_eye_point_centres_at_eye_height() {
+    fn probe_eye_point_centers_at_eye_height() {
         // A tall scene: probe sits at the horizontal center, eye height off the
         // floor.
         let eye = probe_eye_point([-10.0, 0.0, -4.0], [6.0, 30.0, 12.0]);
-        assert!((eye[0] - (-2.0)).abs() < 1e-6, "x not centred: {}", eye[0]);
-        assert!((eye[2] - 4.0).abs() < 1e-6, "z not centred: {}", eye[2]);
+        assert!((eye[0] - (-2.0)).abs() < 1e-6, "x not centered: {}", eye[0]);
+        assert!((eye[2] - 4.0).abs() < 1e-6, "z not centered: {}", eye[2]);
         assert!((eye[1] - 1.7).abs() < 1e-6, "y not eye height: {}", eye[1]);
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
 
     #[test]
     fn reflector_bounds_covers_the_surface_and_has_volume() {
-        // A 28 m square pool centred at the origin: the box spans its full extent
+        // A 28 m square pool centered at the origin: the box spans its full extent
         // horizontally and is a real volume vertically, so grid probes seeded over
         // it get influence boxes a point can be inside.
         let (mn, mx) = reflector_bounds([0.0, 0.0, 0.0], [14.0, 0.0, 14.0]);
@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn seed_interior_probes_ignores_a_prop_sized_hollow() {
         // The `examples/cube.rs` case: the world's only mesh is a 1.4 m
-        // `ProceduralMesh` box. A surface voxeliser cannot tell it from a room, so
+        // `ProceduralMesh` box. A surface voxelizer cannot tell it from a room, so
         // the enclosure sweep finds its inside; the span guard is what rejects it,
         // and without it the box's lit interior became the reflection every
         // uncovered surface in the world inherited.
@@ -1313,7 +1313,7 @@ mod tests {
     #[test]
     fn tri_box_overlap_detects_intersection_and_separation() {
         let h = [0.5, 0.5, 0.5];
-        // A triangle straddling the origin overlaps a unit box centred there.
+        // A triangle straddling the origin overlaps a unit box centered there.
         let through = [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         assert!(tri_box_overlap([0.0, 0.0, 0.0], h, &through));
         // Separated from a box well off to the side (a box face-axis separates).
@@ -1329,8 +1329,8 @@ mod tests {
 
     #[test]
     fn surface_voxels_leave_a_watertight_mesh_hollow() {
-        // The exact case AABB occupancy misses: a room modelled as ONE watertight mesh.
-        // Its single AABB fills the interior (no room found), but surface-voxelising its
+        // The exact case AABB occupancy misses: a room modeled as ONE watertight mesh.
+        // Its single AABB fills the interior (no room found), but surface-voxelizing its
         // triangles leaves the interior empty so the enclosure sweep finds the room.
         let scene_min = [-3.0, -3.0, -3.0];
         let scene_max = [13.0, 9.0, 13.0];
@@ -1383,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn face_centres_look_down_their_axis() {
+    fn face_centers_look_down_their_axis() {
         // The center texel of each face projects to the NDC origin.
         let eye = [0.0, 0.0, 0.0];
         for face in 0..6 {
@@ -1502,7 +1502,7 @@ mod tests {
     #[test]
     fn bake_action_prefiltering_installs_only_once_every_mip_is_dispatched() {
         // A mip still owed -> convolve it, never install early: installing here
-        // would publish a cube whose rough mips are still uninitialised.
+        // would publish a cube whose rough mips are still uninitialized.
         assert_eq!(
             next_bake_action(
                 BakePhase::Prefiltering,

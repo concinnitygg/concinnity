@@ -70,7 +70,7 @@ bool probe_set_covers(float3 world_pos)
 
 // Probe radiance for `world_pos` along world-space ray `R`, blended across
 // every probe covering the point (partition of unity); the result is the
-// weight-normalised sum of each probe's box-projected sample. Where no box
+// weight-normalized sum of each probe's box-projected sample. Where no box
 // covers, falls back to the nearest probe by capture distance -- see
 // `probe_set_covers` for when a caller should avoid asking at all.
 float3 probe_set_specular(float3 world_pos, float3 R, float lod)

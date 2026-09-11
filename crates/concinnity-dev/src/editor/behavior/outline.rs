@@ -63,9 +63,9 @@ pub(crate) enum Kind {
 }
 
 // The fixed word sets a `Choice` row steps through.
-pub(crate) const CUE_KINDS: &[&str] = &["sound", "music"];
-pub(crate) const TRANSITIONS: &[&str] = &["FadeBlack", "Cut"];
-pub(crate) const PLAYBACKS: &[&str] = &["start", "continue"];
+pub(crate) const CUE_KINDS: &[&str] = &concinnity_core::components::CueKind::NAMES;
+pub(crate) const TRANSITIONS: &[&str] = &concinnity_core::components::SceneTransition::NAMES;
+pub(crate) const PLAYBACKS: &[&str] = &concinnity_core::components::StoryPlayback::NAMES;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Row {
@@ -748,7 +748,7 @@ mod tests {
             p
         };
 
-        // By path, since the declaration list has a `query`-labelled row too.
+        // By path, since the declaration list has a `query`-labeled row too.
         let at = |path: Vec<Step>| {
             rows.iter()
                 .find(|r| r.path == path)

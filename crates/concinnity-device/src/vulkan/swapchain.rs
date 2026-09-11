@@ -84,21 +84,21 @@ impl VkContext {
     }
 
     pub(super) fn rebuild_swapchain(&mut self) -> Result<(), String> {
-        // A minimised window has a 0x0 client area, and a zero-extent swapchain
+        // A minimized window has a 0x0 client area, and a zero-extent swapchain
         // (with every attachment / framebuffer sized from it) is invalid. Skip
         // the rebuild and leave the existing resources at their last non-zero
         // size; a later frame rebuilds once the window is restored. Mirrors
-        // DirectX `maybe_handle_resize`'s minimise skip.
+        // DirectX `maybe_handle_resize`'s minimize skip.
         if self.is_minimized() {
             return Ok(());
         }
         // The window's cached client size is not enough on its own: it holds
         // whatever the last WM_SIZE delivered, and a present returning
         // SUBOPTIMAL / OUT_OF_DATE rebuilds inside the same frame, before the
-        // pump that would report the minimise. The surface reports 0x0 straight
+        // pump that would report the minimize. The surface reports 0x0 straight
         // away and is where the extent actually comes from, so gate on it too.
         // Vsync turns that race into the common case, since the frame blocks in
-        // FIFO present for as long as the minimise takes to arrive.
+        // FIFO present for as long as the minimize takes to arrive.
         if !extent_is_presentable(self.surface_extent()?) {
             return Ok(());
         }
@@ -308,7 +308,7 @@ impl VkContext {
         // roughness / velocity views below, so the merged buffer must already be
         // current. The render pass, pipelines, UBOs, and descriptor sets survive.
         if let Some(mut gb) = self.gbuffer.take() {
-            // The three colour channels are pool-owned and were reallocated by
+            // The three color channels are pool-owned and were reallocated by
             // the pool rebuild above, so the framebuffers built here reference
             // the new images.
             let pooled = self.transient_pool.gbuffer_pooled(self.frames_in_flight);
@@ -741,7 +741,7 @@ impl VkContext {
 
         // Re-point the composite descriptor sets at the rebuilt scene-input
         // image (FSR upscale output > TAA output > reflection composite output >
-        // HDR resolve) + bloom mip 0. The 3D colour LUT is resolution-independent,
+        // HDR resolve) + bloom mip 0. The 3D color LUT is resolution-independent,
         // so it survives the resize untouched and is just re-bound at binding 2.
         for (i, &set) in self.composite.sets.iter().enumerate() {
             let scene_view = if let Some(up) = &self.upscale {
@@ -825,7 +825,7 @@ pub(super) struct SwapchainConfig {
     pub width: u32,
     pub height: u32,
     pub old_swapchain: vk::SwapchainKHR,
-    // Resolved output mode, picking the swapchain (format, colour space):
+    // Resolved output mode, picking the swapchain (format, color space):
     //   - `Sdr`                        -> `B8G8R8A8_UNORM` + sRGB-nonlinear.
     //   - `Hdr{ ExtendedLinear }`      -> `R16G16B16A16_SFLOAT` +
     //     `EXTENDED_SRGB_LINEAR_EXT` (scRGB linear).
@@ -835,7 +835,7 @@ pub(super) struct SwapchainConfig {
     //     `A2B10G10R10_UNORM_PACK32` + `HDR10_ST2084_EXT`.
     // The caller has already enabled `VK_EXT_swapchain_colorspace` and gated the
     // resolved mode on the surface advertising the matching pair (see the HDR
-    // resolve in init.rs), so the chosen encoding and colour space stay in
+    // resolve in init.rs), so the chosen encoding and color space stay in
     // sync. Each arm falls back through scRGB to the SDR default if its
     // preferred pair is unexpectedly absent.
     pub hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
@@ -850,7 +850,7 @@ pub(super) struct SwapchainConfig {
 // and only then does the requested window size decide, clamped to the range the
 // surface supports. Windows always reports a real extent, which is what makes
 // this (not the window's cached client size) the authority on whether a
-// swapchain can be built at all: a minimised window reports 0x0 here.
+// swapchain can be built at all: a minimized window reports 0x0 here.
 fn resolve_swapchain_extent(
     caps: &vk::SurfaceCapabilitiesKHR,
     width: u32,
@@ -1035,7 +1035,7 @@ pub(super) fn create_swapchain_image_views(
 }
 
 // Main scene render pass. Renders linear-light HDR into an off-screen
-// `R16G16B16A16_SFLOAT` target (the MSAA colour image when multisampled, or
+// `R16G16B16A16_SFLOAT` target (the MSAA color image when multisampled, or
 // the resolve image directly otherwise) and ends with the resolve image in
 // `SHADER_READ_ONLY_OPTIMAL` so the composite pass can sample it.
 
@@ -1087,7 +1087,7 @@ pub(super) fn create_attachments(
 }
 
 // Main-pass framebuffers, one per frame-in-flight slot. Each attaches the HDR
-// colour (MSAA colour + resolve, or just the resolve image) and depth.
+// color (MSAA color + resolve, or just the resolve image) and depth.
 pub(super) fn create_main_framebuffers(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -1146,7 +1146,7 @@ pub(super) fn create_composite_framebuffers(
 }
 
 // Write a composite descriptor set: binding 0 = HDR resolve image,
-// binding 1 = bloom mip 0, binding 2 = the 3D colour-grading LUT. All sampled
+// binding 1 = bloom mip 0, binding 2 = the 3D color-grading LUT. All sampled
 // through `sampler`.
 pub(super) fn write_composite_set(
     device: &VkDevice,
@@ -1278,7 +1278,7 @@ mod tests {
     #[test]
     fn a_surface_that_reports_an_extent_decides_the_size() {
         // The requested window size gets no vote, which is the whole point of
-        // the minimise gate: the surface knows first.
+        // the minimize gate: the surface knows first.
         let resolved = resolve_swapchain_extent(&caps(extent(800, 600)), 1920, 1080);
         assert_eq!(resolved, extent(800, 600));
     }
@@ -1301,11 +1301,11 @@ mod tests {
         );
     }
 
-    // A minimised window collapses the surface to 0x0 while the window itself
-    // can still report its pre-minimise size for another frame. Resolving from
+    // A minimized window collapses the surface to 0x0 while the window itself
+    // can still report its pre-minimize size for another frame. Resolving from
     // the window there is what built a whole 0x0 attachment chain.
     #[test]
-    fn a_minimised_surface_resolves_to_an_unpresentable_extent() {
+    fn a_minimized_surface_resolves_to_an_unpresentable_extent() {
         let resolved = resolve_swapchain_extent(&caps(extent(0, 0)), 1024, 768);
         assert_eq!(resolved, extent(0, 0));
         assert!(!extent_is_presentable(resolved));

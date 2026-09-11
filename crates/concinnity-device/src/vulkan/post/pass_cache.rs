@@ -29,7 +29,7 @@ struct PassKey {
     load: PostLoadOp,
 }
 
-// The single colour attachment a fullscreen post pass writes. It ends
+// The single color attachment a fullscreen post pass writes. It ends
 // shader-readable because every consumer of a post target samples it, and it
 // begins `UNDEFINED` under a discarding load because nothing the target already
 // holds survives a full-coverage draw.

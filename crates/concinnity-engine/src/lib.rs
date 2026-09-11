@@ -99,7 +99,6 @@ pub mod resource;
 // drains), scheduled immediately before GraphicsSystem.
 pub(crate) mod spawn;
 pub(crate) mod story;
-pub(crate) mod text_input_system;
 pub(crate) mod ui;
 
 // Asset API

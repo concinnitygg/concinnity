@@ -107,7 +107,7 @@ fn largest_tick_move(sim: &mut Simulation, handles: &[BodyHandle], ticks: usize)
 }
 
 // A settled body must be still, not nearly still. Two ticks of a body that
-// creeps a tenth of a millimetre look identical; two hundred do not.
+// creeps a tenth of a millimeter look identical; two hundred do not.
 #[test]
 fn a_settled_body_does_not_creep() {
     let (mut sim, handles) = stack(1, awake_config());
@@ -625,22 +625,22 @@ fn a_stack_rides_a_moving_platform_without_being_left_behind() {
     let before = positions(&sim, &riders);
 
     // Three seconds of travel at two units a second.
-    let mut travelled = 0.0f32;
+    let mut traveled = 0.0f32;
     for _ in 0..180 {
-        travelled += 2.0 / 60.0;
-        sim.set_kinematic_translation(platform, [travelled, 0.25, 0.0]);
+        traveled += 2.0 / 60.0;
+        sim.set_kinematic_translation(platform, [traveled, 0.25, 0.0]);
         sim.step(TICK);
     }
 
     assert_eq!(
         sim.body_pose(platform).expect("live").0,
-        [travelled, 0.25, 0.0]
+        [traveled, 0.25, 0.0]
     );
     for (level, (start, now)) in before.iter().zip(positions(&sim, &riders)).enumerate() {
-        let drift = (now[0] - start[0] - travelled).abs();
+        let drift = (now[0] - start[0] - traveled).abs();
         assert!(
             drift < 0.2,
-            "rider {level} slipped {drift:.4} behind the platform's {travelled:.4}"
+            "rider {level} slipped {drift:.4} behind the platform's {traveled:.4}"
         );
         assert!(
             (now[1] - start[1]).abs() < 0.05,

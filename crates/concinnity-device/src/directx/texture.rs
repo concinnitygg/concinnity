@@ -28,7 +28,7 @@ pub(super) struct GpuResource<R = PooledTexture> {
 // Returns the still-executing list and its allocator; the caller must keep
 // both alive (and any resource the list references) until the GPU provably
 // retired the work -- either by a fence wait, or because a later frame fence
-// on the same in-order queue signalled.
+// on the same in-order queue signaled.
 pub(super) fn one_shot_submit_nowait<F>(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
@@ -78,7 +78,7 @@ where
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("one_shot fence: {e}"))?;
     let event =
-        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // SAFETY: an auto-reset, initially unsignaled event with no name and no security
         // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
             .map_err(|e| format!("one_shot event: {e}"))?;
@@ -231,7 +231,7 @@ pub(super) fn upload_buffer_padded(
 // reaches `retire_at`: the replaced pool resource (pending lists may still
 // sample it, and the per-frame flat-pool copies re-point over the next FRAMES
 // ticks) plus the upload's staging buffer and one-shot allocator + list (still
-// executing when parked; covered by the first frame fence signalled after the
+// executing when parked; covered by the first frame fence signaled after the
 // upload's submission). The handles are held only so dropping the entry
 // releases them (COM refcounts), hence never read.
 pub(super) struct StreamedUploadRetire {
@@ -537,7 +537,7 @@ fn wait_for_upload(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> Result<
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("upload fence: {e}"))?;
     let event =
-        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // SAFETY: an auto-reset, initially unsignaled event with no name and no security
         // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
             .map_err(|e| format!("upload event: {e}"))?;
@@ -945,12 +945,12 @@ pub(super) fn create_shadow_map_array(
     ))
 }
 
-// Off-screen HDR colour format. The main + instanced passes render
+// Off-screen HDR color format. The main + instanced passes render
 // linear-light HDR into a target of this format; the composite pass tonemaps
 // it down to the swapchain backbuffer.
 pub(super) const HDR_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-// Create the off-screen HDR colour render target the main pass draws into.
+// Create the off-screen HDR color render target the main pass draws into.
 // `sample_count` matches the depth buffer's MSAA; with MSAA off this target
 // is single-sample and the composite pass samples it directly. Created in the
 // RENDER_TARGET state, with an RTV written at `rtv_cpu`.
@@ -1103,12 +1103,12 @@ pub(super) fn write_hdr_srv(
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
-// Single-sample colour render targets
+// Single-sample color render targets
 //
 // Used by the TAA velocity + history images and the SSAO G-buffer / occlusion
 // targets. The bloom mip chain is its own family (see post/bloom.rs).
 
-// Create a single-sample colour render target usable as both a render target
+// Create a single-sample color render target usable as both a render target
 // and a sampled texture. Created in the PIXEL_SHADER_RESOURCE state so the
 // first frame can bind it before it has been rendered (the TAA velocity
 // buffer and the ping-pong history images). The per-frame cycle flips it to
@@ -1125,7 +1125,7 @@ pub(super) fn create_rt_target(
 }
 
 // As `create_rt_target`, but bakes `clear_color` as the resource's optimized
-// clear value. This must match the colour the caller passes to
+// clear value. This must match the color the caller passes to
 // ClearRenderTargetView every frame, else D3D12 falls back to a slower clear
 // path and warns. Defaulting to transparent black covers most targets;
 // non-zero backgrounds (e.g. roughness 1.0) pass their value here.
@@ -1653,7 +1653,7 @@ fn upload_face_major_into_cube(
     Ok(())
 }
 
-// Colour-grading LUT (3D texture)
+// Color-grading LUT (3D texture)
 
 // Write a Texture3D R8G8B8A8_UNORM SRV at the given heap slot.
 fn write_lut_srv(
@@ -1678,10 +1678,10 @@ fn write_lut_srv(
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
-// Upload a deserialised `ColorLut` payload into a 3D R8G8B8A8_UNORM texture and
+// Upload a deserialized `ColorLut` payload into a 3D R8G8B8A8_UNORM texture and
 // write its Texture3D SRV at the given heap slot. `data` is `size³ * 4` bytes
 // in red-fastest, then green, then blue order, the same texel order the
-// composite shader samples with the display-referred `(r, g, b)` colour as the
+// composite shader samples with the display-referred `(r, g, b)` color as the
 // coordinate. Mirrors `vulkan/texture.rs::upload_color_lut`.
 pub(super) fn upload_color_lut(
     alloc: &DeviceAllocator,
@@ -1884,7 +1884,7 @@ pub(super) fn upload_float_lut(
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
 
-    // Row-by-row to honour D3D12's row-pitch alignment.
+    // Row-by-row to honor D3D12's row-pitch alignment.
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
@@ -1957,7 +1957,7 @@ pub(super) fn upload_float_lut(
     })
 }
 
-// Build a 2×2×2 identity colour LUT so the composite pass always binds a valid
+// Build a 2×2×2 identity color LUT so the composite pass always binds a valid
 // Texture3D even when the world declares no `ColorLut`. With the identity LUT
 // the grade is a no-op at any `lut_strength`. Mirrors
 // `vulkan/texture.rs::create_fallback_color_lut`.

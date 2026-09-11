@@ -6,10 +6,10 @@ use crate::ecs::de_opt_texture_handle;
 
 /// A billboard particle emitter.
 ///
-/// Particles spawn from `position` in a cone centred on `direction` (half-angle
+/// Particles spawn from `position` in a cone centered on `direction` (half-angle
 /// `spread_deg`), with a speed drawn from `[speed_min, speed_max]` and a
 /// lifetime from `[lifetime_min, lifetime_max]`. Over each particle's life its
-/// size interpolates from `size_start` to `size_end` and its colour from
+/// size interpolates from `size_start` to `size_end` and its color from
 /// `color_start` to `color_end`. Each particle is drawn as a camera-facing quad
 /// textured by `texture`.
 ///
@@ -35,13 +35,13 @@ pub struct ParticleEmitter {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// [Texture](#texture) sampled per particle. `None` uses a white fallback so
-    /// the colour gradient still shows.
+    /// the color gradient still shows.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,
     /// World-space spawn origin.
     pub position: [f32; 3],
-    /// Mean emission direction. The cone of width `spread_deg` is centred on
-    /// this vector. Normalised on load; a zero vector falls back to `[0, 1, 0]`.
+    /// Mean emission direction. The cone of width `spread_deg` is centered on
+    /// this vector. Normalized on load; a zero vector falls back to `[0, 1, 0]`.
     pub direction: [f32; 3],
     /// Cone half-angle in degrees around `direction`. `0` emits a straight
     /// jet; `180` emits in all directions.
@@ -123,15 +123,13 @@ mod tests {
 
     #[test]
     fn an_authored_emitter_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let e: ParticleEmitter = serde_json::from_str(
+        let e: ParticleEmitter = crate::test_support::from_json(
             r#"{"texture":"tex_spark","position":[0,1,0],"direction":[0,0,1],"spread_deg":45,
                 "speed_min":2,"speed_max":6,"lifetime_min":0.5,"lifetime_max":1.5,
                 "gravity":[0,0,0],"spawn_rate":120,"max_particles":2048,
                 "size_start":0.05,"size_end":0.2,"color_start":[1,0.6,0.2,1],
                 "color_end":[1,0,0,0],"visible":false}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(e.texture, Some(TextureHandle(9)));
         assert!(!e.visible);
         // A spark grows as it cools, so size_end above size_start is allowed.

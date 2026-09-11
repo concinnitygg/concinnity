@@ -173,7 +173,7 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
 
 /// Clamp a `PhysicsJoint`'s authored fields into their valid ranges.
 pub fn joint(mut args: PhysicsJoint) -> PhysicsJoint {
-    // Normalise the kind string so `to_args` round-trips cleanly.
+    // Normalize the kind string so `to_args` round-trips cleanly.
     if let Some(k) = PhysicsJointKind::from_str_norm(&args.kind) {
         args.kind = k.as_str().to_string();
     }

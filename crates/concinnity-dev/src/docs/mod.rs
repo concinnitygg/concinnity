@@ -187,7 +187,7 @@ mod tests {
     fn synthetic_reference() -> (concinnity_testing::TempTree, Vec<AssetDoc>) {
         let tree = concinnity_testing::TempTree::new();
         tree.write("schema/vocabulary.rs", SOURCES);
-        // A non-Rust neighbour the walk must skip.
+        // A non-Rust neighbor the walk must skip.
         tree.write("schema/notes.md", "not rust");
 
         let components = [
@@ -225,7 +225,7 @@ mod tests {
 
         fs::write(dir.join("Gone.md"), format!("{AUTOGEN_MARKER}\n\n# Gone\n")).unwrap();
         fs::write(dir.join("notes.md"), "hand written\n").unwrap();
-        // Non-Markdown neighbours are skipped outright, marker or not.
+        // Non-Markdown neighbors are skipped outright, marker or not.
         fs::write(dir.join("diagram.png"), format!("{AUTOGEN_MARKER}\n")).unwrap();
         assert_eq!(write_pages(dir, &pages).expect("third run"), (0, 1));
         assert!(!dir.join("Gone.md").exists(), "stale page should be pruned");

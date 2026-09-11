@@ -202,7 +202,7 @@ mod tests {
     }
 
     // A feature that was not in contact last step starts cold rather than
-    // inheriting a neighbour's impulse.
+    // inheriting a neighbor's impulse.
     #[test]
     fn an_unmatched_feature_starts_from_zero() {
         let previous = [manifold(0, 1, &[(10, 5.0)])];

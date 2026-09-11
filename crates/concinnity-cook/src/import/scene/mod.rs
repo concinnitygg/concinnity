@@ -856,7 +856,7 @@ mod tests {
             .iter()
             .map(|v| v.as_f64().unwrap())
             .collect();
-        // Centre is the origin: the camera sits above (y > 0) and on the +Z
+        // Center is the origin: the camera sits above (y > 0) and on the +Z
         // side, pitched down toward the scene.
         assert!(pos[1] > 0.0);
         assert!(pos[2] > 1.0);

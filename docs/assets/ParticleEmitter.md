@@ -4,10 +4,10 @@
 
 A billboard particle emitter.
 
-Particles spawn from `position` in a cone centred on `direction` (half-angle
+Particles spawn from `position` in a cone centered on `direction` (half-angle
 `spread_deg`), with a speed drawn from `[speed_min, speed_max]` and a
 lifetime from `[lifetime_min, lifetime_max]`. Over each particle's life its
-size interpolates from `size_start` to `size_end` and its colour from
+size interpolates from `size_start` to `size_end` and its color from
 `color_start` to `color_end`. Each particle is drawn as a camera-facing quad
 textured by `texture`.
 
@@ -16,9 +16,9 @@ second, reusing slots as old particles die.
 
 ## Parameters
 
-- `texture`: A string. [Texture](Texture.md) sampled per particle. `None` uses a white fallback so the colour gradient still shows. Optional.
+- `texture`: A string. [Texture](Texture.md) sampled per particle. `None` uses a white fallback so the color gradient still shows. Optional.
 - `position`: An array of 3 floats. World-space spawn origin. Defaults to `[0.0, 0.0, 0.0]`.
-- `direction`: An array of 3 floats. Mean emission direction. The cone of width `spread_deg` is centred on this vector. Normalised on load; a zero vector falls back to `[0, 1, 0]`. Defaults to `[0.0, 1.0, 0.0]`.
+- `direction`: An array of 3 floats. Mean emission direction. The cone of width `spread_deg` is centered on this vector. Normalized on load; a zero vector falls back to `[0, 1, 0]`. Defaults to `[0.0, 1.0, 0.0]`.
 - `spread_deg`: A float. Cone half-angle in degrees around `direction`. `0` emits a straight jet; `180` emits in all directions. Defaults to `15.0`.
 - `speed_min`: A float. Lower bound on initial speed (m/s). Floored at 0. Defaults to `1.0`.
 - `speed_max`: A float. Upper bound on initial speed (m/s). Lifted to at least `speed_min`. Defaults to `2.0`.

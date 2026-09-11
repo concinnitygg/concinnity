@@ -15,7 +15,7 @@
 
 // Dielectric base reflectance for the Fresnel.
 static const float RT_F0 = 0.04;
-// Floats per `Vertex` (56-byte stride): position, normal, tangent, colour, uv.
+// Floats per `Vertex` (56-byte stride): position, normal, tangent, color, uv.
 static const uint VERTEX_FLOATS = 14u;
 // Skinned objects flag bit 31 of `normal_index`; the trace then fetches the hit
 // triangle from the deformed-vertex / skinned index buffers, which mirror
@@ -195,7 +195,7 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out
 
 #ifdef RT_TEXTURED
     // Explicit level 0: a reflected ray's screen-space UV gradients are
-    // unstable (neighbouring pixels hit unrelated triangles), so sampling the
+    // unstable (neighboring pixels hit unrelated triangles), so sampling the
     // base mip avoids gradient-driven mip thrash. Skinned hits take the same
     // path -- their textures live in the same pool and the geometry entry
     // carries the real indices.
@@ -214,7 +214,7 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out
         float3 bt = cross(n, t);
         n = normalize(t * nm.x + bt * nm.y + n * nm.z);
     }
-    // Colour the self-emission by the emissive map (the bistro string lights),
+    // Color the self-emission by the emissive map (the bistro string lights),
     // mirroring the main bindless pass. Gated on a non-zero pool index; the flat
     // variant has no pool and keeps the scalar emissive.
     if (e.emissive_map_index != 0u)

@@ -1,5 +1,5 @@
 // The font the injected HUD chips and the loading label draw with: the face
-// bundled in the binary, rasterised once for the process and appended to each
+// bundled in the binary, rasterized once for the process and appended to each
 // world's font table. Appending leaves every handle the build assigned where it
 // was.
 
@@ -10,7 +10,7 @@ use crate::ecs::{FontHandle, PipelineContext};
 use crate::error::CnError;
 use crate::resource::{FontTable, ResourceEntry};
 
-/// Pixel size the injected HUD face is rasterised at. Chips draw it minified,
+/// Pixel size the injected HUD face is rasterized at. Chips draw it minified,
 /// so the atlas is supersampled from here rather than authored larger.
 pub const HUD_FONT_SIZE_PX: u32 = 20;
 

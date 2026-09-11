@@ -23,7 +23,7 @@ unresolved references to other assets, resolved when the entry expands.
 - `collider`: A [PropCollider](PropCollider.md) object. `prop`: optional collision shape for the expanded prop.
 - `interactable`: A boolean. `prop`: whether the expanded prop is interactable. Defaults to `false`.
 - `pickup`: A boolean. `prop`: whether the expanded prop is a pickup. Defaults to `false`.
-- `light_color`: An array of 3 floats. `point_light`: linear-space RGB colour. Defaults to `[1.0, 1.0, 1.0]`.
+- `light_color`: An array of 3 floats. `point_light`: linear-space RGB color. Defaults to `[1.0, 1.0, 1.0]`.
 - `light_intensity`: A float. `point_light`: intensity multiplier. Defaults to `8.0`.
 - `light_range`: A float. `point_light`: maximum reach in world units. Defaults to `6.0`.
 - `prefab`: A string. `prefab`: name of another [Prefab](Prefab.md) to expand at this entry's transform.

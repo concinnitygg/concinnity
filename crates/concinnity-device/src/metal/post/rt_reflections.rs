@@ -26,7 +26,7 @@ use crate::metal::post::fullscreen::{
     FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
 };
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::slang_shaders::SlangLib;
+use crate::metal::slang_builtins::SlangLib;
 use objc2_foundation::ns_string;
 
 // Fragment sampler index the textured variant reads the bindless pool through.

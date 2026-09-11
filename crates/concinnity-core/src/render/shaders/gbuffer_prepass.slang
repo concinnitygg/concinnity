@@ -5,11 +5,11 @@
 //   target(0) RGBA16F  view-space normal (xyz) + positive linear view depth (a)
 //   target(1) R8       perceptual roughness
 //   target(2) RG16F    screen-space motion (prev_uv - cur_uv)
-// The rasterised position uses the JITTERED VP so coverage matches the main
+// The rasterized position uses the JITTERED VP so coverage matches the main
 // pass; the motion vector comes from the UN-jittered cur/prev VPs so jitter
 // never leaks into it. Alpha 0 in target(0) marks "no geometry".
 //
-// Every host rasterises this pre-pass off the cull records, so there are two
+// Every host rasterizes this pre-pass off the cull records, so there are two
 // entries, one per stage, each selected by a define:
 //
 //   GB_BINDLESS          - object id via first-instance, model and roughness

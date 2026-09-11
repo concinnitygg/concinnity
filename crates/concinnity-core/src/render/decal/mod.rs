@@ -3,7 +3,7 @@
 //! backends consume, and the `DecalSet` slot table they drive the pass from.
 //! Decals are stamped onto the scene depth buffer by drawing a unit-box volume
 //! per decal: the fragment shader reconstructs the world-space point of each
-//! rasterised pixel from depth and tests whether it lies inside the box.
+//! rasterized pixel from depth and tests whether it lies inside the box.
 
 mod record;
 mod set;

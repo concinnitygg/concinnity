@@ -3,7 +3,7 @@
 use crate::authoring::spec::AssetSpec;
 
 // A Panel (a titled background box) at `rect` ([x, y, w, h], window pixels). The
-// colour, corner radius, and title styling keep their defaults.
+// color, corner radius, and title styling keep their defaults.
 #[cfg(test)]
 pub(crate) fn panel(
     name: impl Into<String>,

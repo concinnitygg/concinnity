@@ -151,7 +151,7 @@ pub(crate) fn solve_limit(row: LimitRow, total: &mut f32, push: &Push) -> f32 {
 ///
 /// `budget` is the most the motor may have applied by the end of the substep,
 /// which is what turns an authored force ceiling into something a velocity
-/// solve can honour.
+/// solve can honor.
 pub(crate) fn solve_motor(error: f32, mass: f32, total: &mut f32, budget: f32) -> f32 {
     let next = (*total - mass * error).clamp(-budget, budget);
     let applied = next - *total;

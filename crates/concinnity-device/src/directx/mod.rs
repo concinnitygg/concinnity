@@ -14,7 +14,6 @@ mod decal;
 mod draw;
 mod error;
 mod fog;
-mod geometry_rebuild;
 mod glass;
 mod gpu_profile;
 mod graph_exec;

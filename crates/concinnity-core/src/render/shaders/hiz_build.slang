@@ -33,8 +33,8 @@
 // each workgroup owns. 16x16 threads each reduce a 2x2 patch, so two levels
 // come out of registers and the remaining four out of threadgroup memory.
 //
-// The 2x2 patch is what keeps the base-level read fast: neighbouring lanes
-// address neighbouring texels, and the tile stays small enough that a frame
+// The 2x2 patch is what keeps the base-level read fast: neighboring lanes
+// address neighboring texels, and the tile stays small enough that a frame
 // dispatches thousands of groups rather than a couple of hundred. A wider patch
 // per thread reduces in fewer groups but reads the depth buffer at a stride,
 // which costs more than the dispatches it saves.
@@ -262,7 +262,7 @@ void spd_reduce(float src[2][2], uint2 group_id, uint2 tid, bool write_base)
     float carried = spd_max4(src[0][0], src[0][1], src[1][0], src[1][1]);
     spd_store(1u, group_id * uint(HIZ_SPD_TILE / 2) + tid, carried);
 
-    // Levels 2..5 cross threads. Each round reads four neighbours out of
+    // Levels 2..5 cross threads. Each round reads four neighbors out of
     // threadgroup memory and writes its result back for the next one; read and
     // write are separated by a barrier because the slot a thread writes is one
     // another thread reads. Every thread reaches both barriers.

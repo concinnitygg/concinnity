@@ -36,7 +36,7 @@ float prng(inout uint state)
     return float(state >> 8) * (1.0 / 16777216.0);
 }
 
-// Sample a unit vector inside a cone of half-angle acos(cone_cos) centred on
+// Sample a unit vector inside a cone of half-angle acos(cone_cos) centered on
 // `axis`. The cap is uniformly sampled in solid angle, so the spawn cloud has
 // no axial bunching.
 float3 sample_cone(inout uint rng, float3 axis, float cone_cos)

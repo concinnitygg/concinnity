@@ -1,4 +1,4 @@
-// The one file that joins argv to behaviour: match the parsed command and call
+// The one file that joins argv to behavior: match the parsed command and call
 // the matching entry point in concinnity-dev. Everything here is a call; any
 // logic worth testing belongs on the other side of it, where `tests/cli.rs`
 // and the library's own tests can reach it.

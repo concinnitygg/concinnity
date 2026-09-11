@@ -16,7 +16,7 @@
 use crate::components::{DirectionalLight, GraphicsConfig, PostProcessConfig, VolumetricFog};
 use crate::ecs::{ActiveRenderQueues, World};
 use crate::gfx::render_config as resolve;
-use crate::gfx::settings_system::{SettingsSlot, SettingsState};
+use crate::gfx::settings::system::{SettingsSlot, SettingsState};
 use concinnity_core::render::lights::DirectionalLightSet;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::sky::SkyOrientation;
@@ -164,7 +164,7 @@ pub fn apply_post_process_config(world: &mut World, config: &PostProcessConfig) 
         state.post_process = params;
         ops.record(move |backend| backend.update_post_process(params));
 
-        let quality = crate::gfx::graphics_system::derive_quality_settings(&state.post_config);
+        let quality = crate::gfx::system::derive_quality_settings(&state.post_config);
         ops.record(move |backend| backend.update_quality_params(quality));
 
         let ambient = resolve::ambient_intensity(Some(config), &user);
@@ -522,11 +522,11 @@ mod tests {
     // rebuild forever.
     #[test]
     fn the_live_field_lists_name_real_args() {
-        let graphics = serde_json::to_value(GraphicsConfig::default()).expect("serialises");
+        let graphics = serde_json::to_value(GraphicsConfig::default()).expect("serializes");
         for field in LIVE_GRAPHICS_CONFIG_FIELDS {
             assert!(graphics.get(field).is_some(), "GraphicsConfig.{field}");
         }
-        let post = serde_json::to_value(PostProcessConfig::default()).expect("serialises");
+        let post = serde_json::to_value(PostProcessConfig::default()).expect("serializes");
         for field in LIVE_POST_PROCESS_FIELDS {
             assert!(post.get(field).is_some(), "PostProcessConfig.{field}");
         }

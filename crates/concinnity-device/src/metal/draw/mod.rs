@@ -735,7 +735,7 @@ impl MtlContext {
             rt_reflections_enabled: self.rt.accel.is_some(),
             // Metal collapses the SSR / SSAO / velocity pre-passes into one
             // GBufferPrepass node; the other backends keep them separate.
-            unified_gbuffer_prepass: true,
+            gbuffer_prepass_enabled: true,
             // An opaque menu backdrop hides the scene: the builder masks every
             // world pass off, collapsing to Main (a bare clear, fed the empty
             // scene above) -> Composite (presents the overlay).
@@ -944,7 +944,7 @@ impl MtlContext {
 
         cmd_buf.presentDrawable(ProtocolObject::from_ref(&*drawable));
 
-        // Retain this drawable's colour texture so the headless `screenshot`
+        // Retain this drawable's color texture so the headless `screenshot`
         // command can blit the last presented frame back to the host. Only
         // under `hot_reload` (the `cn debug` path that runs the WS server able
         // to request a capture, and the only path where the MTKView has
@@ -1370,7 +1370,7 @@ impl MtlContext {
     }
 
     // Rebuild the off-screen render targets whose footprint follows the
-    // drawable size: HDR colour + depth + resolve, bloom chain, TAA history +
+    // drawable size: HDR color + depth + resolve, bloom chain, TAA history +
     // velocity (when TAA is on), SSAO targets (when SSAO is on), SSR targets
     // (when SSR is on). Called at the top of every frame; only the targets
     // that actually changed dimensions are recreated.
@@ -1520,7 +1520,7 @@ impl MtlContext {
             )?);
         }
         // The pre-pass's depth attachment is render-resolution and stays
-        // feature-owned; its three colour channels were rebuilt with the pool
+        // feature-owned; its three color channels were rebuilt with the pool
         // above. Same gate, so the two halves of the pre-pass's targets are
         // always present or absent together.
         if render_changed && needs_gbuffer {

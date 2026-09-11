@@ -129,7 +129,7 @@ impl SsrResources {
     }
 }
 
-// Resolve render pass: one HDR-format colour attachment, no depth. The
+// Resolve render pass: one HDR-format color attachment, no depth. The
 // fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
 // Ends shader-readable for the bloom + composite passes.
 fn create_resolve_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
@@ -246,20 +246,8 @@ fn create_resolve_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -748,7 +736,7 @@ mod tests {
     // gfx::render_types.
     #[test]
     fn ssr_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.

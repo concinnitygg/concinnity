@@ -9,7 +9,7 @@ pub(crate) fn font(name: impl Into<String>, size_px: u32) -> AssetSpec {
     AssetSpec::new(name, "Font").set("size_px", size_px)
 }
 
-/// A TextLabel of `content` at `pos` ([x, y], window pixels), coloured `color`
+/// A TextLabel of `content` at `pos` ([x, y], window pixels), colored `color`
 /// (RGB) and aligned `align` (`"left"` / `"center"` / `"right"`). The font is a
 /// reference the caller supplies (on the world line or after materializing).
 pub fn text_label(
@@ -28,10 +28,10 @@ pub fn text_label(
 }
 
 /// A settings/menu TextLabel: `content` in `font` at `pos` ([x, y], window
-/// pixels), coloured `color` (RGB) and scaled by `scale`. `centered` is pinned
+/// pixels), colored `color` (RGB) and scaled by `scale`. `centered` is pinned
 /// false so the engine's default-font pass never recenters a menu label onto the
 /// viewport center (the menu lays labels out itself); chain
-/// `.set("align", "center")` for a label centred on `x` with real font metrics.
+/// `.set("align", "center")` for a label centered on `x` with real font metrics.
 pub(crate) fn menu_label(
     name: impl Into<String>,
     content: impl Into<String>,
@@ -50,7 +50,7 @@ pub(crate) fn menu_label(
         .set("centered", false)
 }
 
-/// An editable TextInput showing `placeholder` when empty. Geometry, colours, and
+/// An editable TextInput showing `placeholder` when empty. Geometry, colors, and
 /// length cap keep their defaults; chain `.set(...)` for the rest.
 pub fn text_input(name: impl Into<String>, placeholder: impl Into<String>) -> AssetSpec {
     AssetSpec::new(name, "TextInput").set("placeholder", placeholder.into())
@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(field("font"), Some(&ArgValue::Str("m_font".to_string())));
         assert_eq!(field("scale"), Some(&ArgValue::Float(0.5)));
         assert_eq!(field("centered"), Some(&ArgValue::Bool(false)));
-        // No align by default; a centred variant chains `.set("align", ...)`.
+        // No align by default; a centered variant chains `.set("align", ...)`.
         assert!(field("align").is_none());
     }
 

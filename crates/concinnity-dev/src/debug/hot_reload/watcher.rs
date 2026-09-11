@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::gfx::graphics_system::hot_reload_sources::*;
+use crate::gfx::system::hot_reload_sources::*;
 
 // Spawn the watcher. Mirrors the shader-watcher pattern in
 // `concinnity_device::metal::hot_reload`: 150 ms debounce, only

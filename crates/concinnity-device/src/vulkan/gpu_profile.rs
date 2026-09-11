@@ -34,7 +34,7 @@ fn probe_device() -> Option<GpuProfile> {
     let available = unsafe { entry.enumerate_instance_extension_properties(None) }.ok()?;
     let portability = super::instance_exts::select(
         &super::instance_exts::names_of(&available),
-        // The probe never presents, so it has no use for the HDR colour spaces.
+        // The probe never presents, so it has no use for the HDR color spaces.
         false,
     );
     let ext_names: Vec<*const std::os::raw::c_char> = portability

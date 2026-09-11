@@ -14,3 +14,10 @@ pub(crate) mod mesh;
 pub(crate) mod shader;
 pub(crate) mod texture;
 mod worker;
+
+/// Asset-streaming drive (texture / mesh / voxel-world chunk pools) + the
+/// camera-relative view publish. Internal system, constructed alongside
+/// GraphicsSystem (same gate) and scheduled immediately before it. `pub` so the
+/// editor's debug server can name `StreamingStats` (its state lives in the
+/// parked `StreamingState` resource, read via `World::streaming_stats`).
+pub mod system;

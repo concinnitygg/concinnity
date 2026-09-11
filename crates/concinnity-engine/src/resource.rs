@@ -6,7 +6,7 @@
 // re-exports them under the historical `crate::resource::*` paths, and adds the
 // engine-only glue: `install_resource_tables`, which builds every table from a
 // compiled blob's resource stream and inserts it as a World resource, plus the
-// dev-only source catalogues the hot-reload path captures.
+// dev-only source catalogs the hot-reload path captures.
 
 use concinnity_core::ecs::ResourceRecord;
 
@@ -33,7 +33,7 @@ pub struct TextureSource {
     pub image_index: u32,
 }
 
-/// Dev-only catalogue of texture source files, indexed by `TextureHandle`,
+/// Dev-only catalog of texture source files, indexed by `TextureHandle`,
 /// inserted as a world resource by the in-memory (`cn debug` / editor) build.
 /// `GraphicsSystem::init` reads it to seed the hot-reload watcher now that Texture
 /// is a resource without a drained `source` field. Absent in the shipped disk
@@ -41,7 +41,7 @@ pub struct TextureSource {
 #[derive(Debug, Clone, Default)]
 pub struct TextureSources(pub Vec<TextureSource>);
 
-/// Dev-only source catalogue for the singleton ColorLut, inserted by the in-memory
+/// Dev-only source catalog for the singleton ColorLut, inserted by the in-memory
 /// (`cn debug` / editor) build so `GraphicsSystem::init` can seed the hot-reload
 /// watcher now that ColorLut is a resource without a drained `source` field. The
 /// raw authored source path of the first declared ColorLut, or `None`. Absent in
@@ -67,7 +67,7 @@ pub struct EnvironmentMapSourceInfo {
     pub prefilter_clamp: f32,
 }
 
-/// Dev-only source catalogue for the singleton EnvironmentMap. `Some` only for a
+/// Dev-only source catalog for the singleton EnvironmentMap. `Some` only for a
 /// file-backed map (a procedural `generator` has nothing to watch). Mirrors
 /// [`ColorLutSources`]; absent in the shipped disk runtime.
 #[derive(Debug, Clone, Default)]
@@ -87,14 +87,14 @@ pub struct MeshSource {
     pub lod_distances: Vec<f32>,
 }
 
-/// Dev-only catalogue of mesh source files, indexed by `MeshHandle`, inserted as
+/// Dev-only catalog of mesh source files, indexed by `MeshHandle`, inserted as
 /// a world resource by the in-memory (`cn debug` / editor) build so
 /// `GraphicsSystem::init` can seed the hot-reload watcher now that Mesh is a
 /// resource without a drained `source` field. Absent in the shipped disk runtime.
 #[derive(Debug, Clone, Default)]
 pub struct MeshSources(pub Vec<MeshSource>);
 
-/// Dev-only catalogue of material identities, in `MaterialHandle` order: the
+/// Dev-only catalog of material identities, in `MaterialHandle` order: the
 /// interned asset name of each compiled `Material`. A material record carries
 /// its kind and handle, not its name, so this is what lets an editor resolve
 /// the material a Prop edit names to the handle the running world loaded it at.
@@ -109,7 +109,7 @@ pub struct MaterialNames(pub Vec<u32>);
 /// enumerated once in `concinnity_core::resource::install_tables`, shared with
 /// the typed bake builder; what this adds is the load-time accounting. Each
 /// builder MOVES its kind's data bytes out of the records, so the caller's
-/// record vec is spent scaffolding afterwards. Dev-only source catalogues
+/// record vec is spent scaffolding afterwards. Dev-only source catalogs
 /// (hot-reload) stay with the debug path that captures them, not here.
 pub fn install_resource_tables(world: &mut crate::ecs::World, records: &mut [ResourceRecord]) {
     log_resource_footprint(records);

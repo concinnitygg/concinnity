@@ -27,11 +27,11 @@ pub fn skinned_index_buffer_bytes(index_count: usize) -> usize {
 
 /// How the scene acceleration structure is kept current when props move.
 /// Selected once at init from the launch's `--rt-dynamic` request; `Auto` is
-/// the shipping behaviour and what an unset request resolves to.
+/// the shipping behavior and what an unset request resolves to.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum RtDynamicMode {
     /// Build once, never update. Forces a static BVH even if props move: the
-    /// pre-dynamic behaviour, kept as a fast path / diagnostic (`off`).
+    /// pre-dynamic behavior, kept as a fast path / diagnostic (`off`).
     Off,
     /// Default. Rebuild the TLAS + table (fresh allocations, static BLAS) only on
     /// the frames a participating transform actually changed. Static scenes never

@@ -10,7 +10,7 @@
 //! counting braces from its `fn` line, and a `{` inside a string literal is not
 //! a block: a fixture like `"{ not json"` -- exactly what a malformed-input
 //! test writes -- otherwise runs the body to the end of the file and sweeps in
-//! whatever the neighbouring tests do.
+//! whatever the neighboring tests do.
 
 use std::path::{Path, PathBuf};
 

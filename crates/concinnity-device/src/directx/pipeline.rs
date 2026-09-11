@@ -1,7 +1,7 @@
 // src/directx/pipeline.rs
 //
 // Cross-cutting D3D12 pipeline helpers shared by every pass:
-//   * Shader-compile + root-signature serialisation helpers (`compile_hlsl`,
+//   * Shader-compile + root-signature serialization helpers (`compile_hlsl`,
 //     `serialize_and_create_root_sig`, `serialize_desc_and_create`).
 //   * Vertex input layouts referenced by main + shadow + velocity + SSAO
 //     pre-pass + text pipelines (`main_input_layout`, `skinned_input_layout`,
@@ -220,7 +220,7 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // A vertex-buffer-less fullscreen triangle samples the off-screen FP16 HDR
 // scene target, composites the bloom mip, applies an exposure multiplier, the
 // Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
-// pass, a 3D-LUT colour grade, and a radial vignette, then writes the
+// pass, a 3D-LUT color grade, and a radial vignette, then writes the
 // swapchain backbuffer. Ships from `src/shaders/composite.slang`, paired with
 // the shared single-source fullscreen-triangle vertex every post pass uses.
 
@@ -240,13 +240,13 @@ pub(super) const COMPOSITE_ROOT_CONSTANTS: u32 =
 // scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV
 // table at t1 (bloom mip 0), `COMPOSITE_ROOT_CONSTANTS` 32-bit root constants
 // at b0 (`CompositeParams`), a 1-SRV descriptor table at t2 (the 3D
-// colour-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
+// color-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
 // roughness, and SSAO channels the debug view modes visualize), and static
 // linear-clamp samplers at s0..s5 -- one per source, because slangc splits each
 // combined sampler in the single source into its own texture/sampler pair. The
 // scene SRV is its own table (separate from bloom mip 0) so the runtime can
 // re-point it at the per-frame TAA output without the two needing to be
-// heap-contiguous. Clamp keeps the FXAA neighbour taps from wrapping at screen
+// heap-contiguous. Clamp keeps the FXAA neighbor taps from wrapping at screen
 // edges and the LUT taps inside the cube.
 pub(super) fn create_composite_root_signature(
     device: &ID3D12Device,
@@ -265,7 +265,7 @@ pub(super) fn create_composite_root_signature(
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // The 3D colour-grading LUT SRV is a separate, non-contiguous heap slot
+    // The 3D color-grading LUT SRV is a separate, non-contiguous heap slot
     // (it sits after the bloom mips), so it needs its own descriptor table.
     let lut_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -325,7 +325,7 @@ pub(super) fn create_composite_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [3] Descriptor table: 3D colour-grading LUT SRV (t2)
+        // [3] Descriptor table: 3D color-grading LUT SRV (t2)
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -413,10 +413,11 @@ pub(super) fn create_composite_pso(
         ps,
         rtv_format,
         concinnity_core::render::post::device::PostBlend::Replace,
+        "composite",
     )
 }
 
-// The blend state a fullscreen post pass's single colour attachment runs under.
+// The blend state a fullscreen post pass's single color attachment runs under.
 fn blend_target(
     blend: concinnity_core::render::post::device::PostBlend,
 ) -> D3D12_RENDER_TARGET_BLEND_DESC {
@@ -447,7 +448,8 @@ fn blend_target(
 }
 
 // As `create_composite_pso`, with the attachment's blend chosen by the caller.
-// The shared post-pass seam builds every fullscreen pipeline through this.
+// Every fullscreen post pass builds its pipeline through this; `label` names the
+// pass in the failure message.
 pub(super) fn create_blended_composite_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -455,6 +457,7 @@ pub(super) fn create_blended_composite_pso(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
     blend: concinnity_core::render::post::device::PostBlend,
+    label: &str,
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -509,7 +512,7 @@ pub(super) fn create_blended_composite_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create composite PSO: {e}"))
+        .map_err(|e| format!("create {label} PSO: {e}"))
 }
 
 // Text overlay pipeline

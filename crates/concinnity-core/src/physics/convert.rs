@@ -4,7 +4,9 @@
 
 use crate::physics::{ColliderShape, DynamicParams, JointMotor, JointSpec};
 
-use crate::components::{BodyDynamics, PhysicsJoint, PhysicsJointKind, PropCollider};
+use crate::components::{
+    BodyDynamics, PhysicsJoint, PhysicsJointKind, PropCollider, PropColliderShape,
+};
 
 // The `JointSpec` a `PhysicsJoint` asset describes, converting authored degrees
 // to the radians a revolute joint is specified in.
@@ -45,16 +47,17 @@ pub(crate) fn joint_spec(joint: &PhysicsJoint) -> JointSpec {
 // simulation has no separate scale concept).
 pub(crate) fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> ColliderShape {
     let [sx, sy, sz] = [scale[0].abs(), scale[1].abs(), scale[2].abs()];
-    match collider.shape.as_str() {
-        "ball" | "sphere" => ColliderShape::Ball {
+    // The build rejects a name `from_str_norm` does not recognize, so an
+    // unrecognized one here is a world that never went through it: box it.
+    match PropColliderShape::from_str_norm(&collider.shape) {
+        Some(PropColliderShape::Ball) => ColliderShape::Ball {
             radius: collider.radius * sx,
         },
-        "capsule" => ColliderShape::Capsule {
+        Some(PropColliderShape::Capsule) => ColliderShape::Capsule {
             half_height: collider.half_height * sy,
             radius: collider.radius * sx,
         },
-        // "aabb", "cuboid", and anything unrecognised fall back to a box.
-        _ => ColliderShape::Cuboid {
+        Some(PropColliderShape::Cuboid) | None => ColliderShape::Cuboid {
             half_extents: [
                 collider.half_extents[0] * sx,
                 collider.half_extents[1] * sy,

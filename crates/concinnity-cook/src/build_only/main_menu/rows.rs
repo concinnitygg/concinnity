@@ -71,10 +71,10 @@ const VIDEO_ADVANCED_ROWS: [(&str, &str); 8] = [
 ];
 // Live post-process sliders in the Advanced group. Each key's value range,
 // display format, and apply path live in the client (`concinnity_engine::gfx::settings` +
-// `graphics_system`); a row here only chooses which sliders appear. All but
+// graphics system); a row here only chooses which sliders appear. All but
 // `ambient_intensity` are pure `PostProcessParams` fields applied via
 // `update_post_process`; `ambient_intensity` rides a dedicated backend setter
-// (Metal live; see the client `graphics_system`).
+// (Metal live; see the client graphics system).
 const VIDEO_ADVANCED_SLIDERS: [(&str, &str); 8] = [
     ("exposure", "Exposure"),
     ("bloom_intensity", "Bloom"),
@@ -88,7 +88,7 @@ const VIDEO_ADVANCED_SLIDERS: [(&str, &str); 8] = [
 ];
 // Quality toggles in the Video "Quality" collapsible group (collapsed by
 // default): the heavier render features. Each is an Off/On cycle row. The
-// client (`concinnity_engine::gfx::settings` + `graphics_system`) knows each key's options and
+// client (`concinnity_engine::gfx::settings` + its system) knows each key's options and
 // applies it live by rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
 const VIDEO_QUALITY_ROWS: [(&str, &str); 15] = [
@@ -144,7 +144,7 @@ const AUDIO_ROWS: [(&str, &str); 4] = [
 const CONTROLS_SLIDERS: [(&str, &str); 1] = [("mouse_sensitivity", "Sensitivity")];
 // Rebindable gameplay actions shown under the Controls tab: (display label,
 // setting key). Each emits a clickable row that captures a new key; the client
-// (`concinnity_engine::gfx::keymap` + `graphics_system`) owns the live key map and applies a
+// (`concinnity_engine::gfx::keymap` + the graphics system) owns the live key map and applies a
 // rebind without a restart. The setting keys match `Bindable::setting_key`.
 const CONTROLS_REBINDS: [(&str, &str); 7] = [
     ("Move Forward", "key_forward"),

@@ -4,7 +4,7 @@
 // resolve that reads the resolved HDR scene plus the unified G-buffer pre-pass
 // (view normal + linear depth + roughness, from post/gbuffer.rs), ray-marches
 // the reflection, and composites it into the SSR output target. The output then
-// replaces the raw HDR resolve as the "scene" colour the TAA / bloom / composite
+// replaces the raw HDR resolve as the "scene" color the TAA / bloom / composite
 // passes consume.
 //
 // Mirrors src/metal/post/ssr.rs.
@@ -14,11 +14,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
+use concinnity_core::render::post::device::PostBlend;
+
 use crate::gfx::render_types::SsrParams;
 
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::gbuffer::GbufferResources;
 use crate::directx::slang_builtins;
@@ -27,7 +29,7 @@ use crate::directx::texture::{
     create_buffer, create_rt_target, write_format_rtv, write_format_srv,
 };
 
-// HDR-format SSR resolve output. Replaces `hdr_resolve` as the scene colour
+// HDR-format SSR resolve output. Replaces `hdr_resolve` as the scene color
 // the TAA / bloom / composite passes consume when SSR is on.
 pub(crate) const SSR_OUTPUT_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
@@ -219,72 +221,6 @@ fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
     serialize_desc_and_create(device, &desc, "ssr resolve root sig")
 }
 
-// PSO builders
-
-// PSO for the fullscreen SSR resolve pass. Writes `SSR_OUTPUT_FORMAT`; no
-// depth + no blending.
-fn create_ssr_resolve_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = SSR_OUTPUT_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create ssr resolve PSO: {e}"))
-}
-
 // Resources
 
 // SSR resolve state. Held by `SsrResources::resolve` and `Some` only when the
@@ -326,7 +262,7 @@ pub(in crate::directx) struct SsrInitInputs {
     // `None` (a SSGI-only build) the resolve output + pipeline are skipped.
     pub resolve_settings: Option<crate::gfx::ssr::SsrSettings>,
     // SSR resolve output: CPU RTV plus the (CPU, GPU) SRV pair TAA / bloom /
-    // composite consume as the scene colour.
+    // composite consume as the scene color.
     pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
 }
@@ -380,11 +316,14 @@ impl SsrResources {
                 dump_on_err(info_queue, create_ssr_resolve_root_signature(device))?;
             let resolve_pso = dump_on_err(
                 info_queue,
-                create_ssr_resolve_pso(
+                create_blended_composite_pso(
                     device,
                     &resolve_root_sig,
                     &shaders.resolve_vs,
                     &shaders.resolve_ps,
+                    SSR_OUTPUT_FORMAT,
+                    PostBlend::Replace,
+                    "ssr resolve",
                 ),
             )?;
             Some(SsrResolve {
@@ -456,11 +395,14 @@ pub(in crate::directx) fn rebuild_ssr_pipelines(
         let shaders = compile_ssr_shaders(hot_reload)?;
         Some(dump_on_err(
             info_queue,
-            create_ssr_resolve_pso(
+            create_blended_composite_pso(
                 device,
                 &r.resolve_root_sig,
                 &shaders.resolve_vs,
                 &shaders.resolve_ps,
+                SSR_OUTPUT_FORMAT,
+                PostBlend::Replace,
+                "ssr resolve",
             ),
         )?)
     } else {
@@ -534,7 +476,7 @@ impl DxContext {
 
     // GPU descriptor handle of the IBL prefilter cubemap SRV. Fixed at heap
     // slot 2; the SSR resolve and RT-reflection resolve both bind it as a miss
-    // fallback. With no `EnvironmentMap` declared, the slot holds a 1×1 grey
+    // fallback. With no `EnvironmentMap` declared, the slot holds a 1×1 gray
     // fallback cube and `prefilter_mip_count == 0` tells the resolve to skip it.
     pub(in crate::directx) fn prefilter_cube_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
         // SAFETY: a property query on a live descriptor heap; it only reads.
@@ -689,7 +631,7 @@ mod tests {
     // round-trip tests.
     #[test]
     fn ssr_resolve_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         super::compile_ssr_shaders(false).expect("ssr resolve shaders must compile");

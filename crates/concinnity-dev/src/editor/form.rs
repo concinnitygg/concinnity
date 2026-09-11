@@ -9,7 +9,7 @@
 // The field list is the type's `default_args` object (which is
 // `serde_json::to_value(Args::default())`, keys in declaration order) -- no
 // per-type descriptor to maintain. Editable kinds: string / integer / float /
-// bool; a fixed-length numeric array of 2..=4 elements (a vector or a colour),
+// bool; a fixed-length numeric array of 2..=4 elements (a vector or a color),
 // edited as comma-separated numbers; a string-enum, cycled through its variants
 // (discovered per field via `RegisteredType::field_enum_variants`); and an
 // asset-reference field (`RegisteredType::ref_fields`), cycled through `(none)` +
@@ -46,7 +46,7 @@ pub(crate) enum FieldKind {
     Bool,
     // A fixed-length numeric array of `len` (2..=4) elements, edited as
     // comma-separated numbers -- a vector (position / direction / size) or, when
-    // `color` is set, an RGB / RGBA colour (rendered with a preview swatch).
+    // `color` is set, an RGB / RGBA color (rendered with a preview swatch).
     Vec { len: usize, color: bool },
     // A string enum with a known variant set (`FormField::variants`), cycled
     // through by clicking rather than typed.
@@ -66,7 +66,7 @@ pub(crate) enum FieldKind {
 impl FieldKind {
     // Whether a field of this kind is edited through a text input (so the panel
     // seeds / reads a control for it). Bools (checkbox), enums / refs (cycle
-    // button), arrays (header), and non-colour vectors (a disclosure of per-element
+    // button), arrays (header), and non-color vectors (a disclosure of per-element
     // leaves) carry their state elsewhere, not in a text box.
     pub(crate) fn has_text_input(self) -> bool {
         !matches!(
@@ -102,7 +102,7 @@ pub(crate) struct FormField {
 
 // The editable kind of a field, from its `key` and default value `v`, or `None`
 // for a kind left at its default. A 2..=4-element all-numeric array is a vector;
-// it is a colour when the key names one (so the layout can add a swatch), which no
+// it is a color when the key names one (so the layout can add a swatch), which no
 // vector key ever does.
 fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
     match v {
@@ -174,13 +174,13 @@ pub(crate) fn set_ref_options(field: &mut FormField, names: &[String]) {
     field.variants = variants;
 }
 
-// Whether a field name denotes a colour (gets a preview swatch). Only decides the
+// Whether a field name denotes a color (gets a preview swatch). Only decides the
 // swatch among already-numeric-array fields, so it cannot turn a scalar into a
-// colour; and no vector field name (position, direction, size, extent, normal,
-// ...) contains any of these, so it never mis-flags a geometric vector as a colour.
+// color; and no vector field name (position, direction, size, extent, normal,
+// ...) contains any of these, so it never mis-flags a geometric vector as a color.
 fn is_color_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
-    ["color", "colour", "tint", "background", "emissive"]
+    ["color", "color", "tint", "background", "emissive"]
         .iter()
         .any(|needle| k.contains(needle))
 }
@@ -246,7 +246,7 @@ pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<For
     fields_for_with(ty, seed, &std::collections::HashSet::new())
 }
 
-// `fields_for` with a set of expanded (disclosed) non-colour vector paths: each
+// `fields_for` with a set of expanded (disclosed) non-color vector paths: each
 // expanded vector is followed by an editable leaf per element (`position.0` ..)
 // so its components edit one at a time; a collapsed vector is just its header row.
 pub(crate) fn fields_for_with(
@@ -361,9 +361,9 @@ fn collect_value(
             variants,
             variant_idx,
         });
-        // A non-colour vector can be disclosed into an editable leaf per element
+        // A non-color vector can be disclosed into an editable leaf per element
         // (edited one component at a time); collapsed it is only the header row. A
-        // colour vector keeps its single field + preview swatch instead.
+        // color vector keeps its single field + preview swatch instead.
         if let FieldKind::Vec { len, color: false } = kind
             && expanded.contains(path)
         {
@@ -589,7 +589,7 @@ pub(crate) fn assemble(
     for (i, field) in fields.iter().enumerate() {
         // A structural row carries no value of its own: an array header's array
         // lives in `out` already (carried via `editing_args`, grown / shrunk by add
-        // / remove), and a disclosed non-colour vector's value is written by its
+        // / remove), and a disclosed non-color vector's value is written by its
         // per-element leaves (or, collapsed, left untouched in `out`).
         if field.kind == FieldKind::Array
             || matches!(field.kind, FieldKind::Vec { color: false, .. })
@@ -710,13 +710,13 @@ mod tests {
     use super::*;
 
     // PointLight is a representative flat asset: scalar floats plus a 3-element
-    // position (a vector) and a 3-element colour (a colour vector).
+    // position (a vector) and a 3-element color (a color vector).
     #[test]
     fn fields_for_pointlight_exposes_scalars_and_vectors() {
         let fields = fields_for("PointLight", None);
         assert!(!fields.is_empty(), "PointLight exposes editable fields");
         let field = |k: &str| fields.iter().find(|f| f.key == k).cloned();
-        // The colour is offered as a colour-flagged 3-vector.
+        // The color is offered as a color-flagged 3-vector.
         assert_eq!(
             field("color").map(|f| f.kind),
             Some(FieldKind::Vec {
@@ -725,18 +725,18 @@ mod tests {
             }),
             "color is an editable RGB vector with a swatch"
         );
-        // The position is a plain (non-colour) 3-vector.
+        // The position is a plain (non-color) 3-vector.
         assert_eq!(
             field("position").map(|f| f.kind),
             Some(FieldKind::Vec {
                 len: 3,
                 color: false
             }),
-            "position is an editable vector, not a colour"
+            "position is an editable vector, not a color"
         );
         // A scalar float is still a Float.
         assert_eq!(field("intensity").map(|f| f.kind), Some(FieldKind::Float));
-        // The colour field's initial text is its default, comma-joined.
+        // The color field's initial text is its default, comma-joined.
         assert_eq!(field("color").unwrap().initial, "1.0, 1.0, 1.0");
     }
 
@@ -766,7 +766,7 @@ mod tests {
                 color: true
             })
         );
-        // A `background` RGBA box is a colour too (so TextLabel/TextInput get a swatch).
+        // A `background` RGBA box is a color too (so TextLabel/TextInput get a swatch).
         assert_eq!(
             kind_of("background", &json!([0.0, 0.0, 0.0, 0.0])),
             Some(FieldKind::Vec {
@@ -774,7 +774,7 @@ mod tests {
                 color: true
             })
         );
-        // A geometric vector is never mis-flagged as a colour.
+        // A geometric vector is never mis-flagged as a color.
         assert_eq!(
             kind_of("half_extents", &json!([10.0, 5.0, 10.0])),
             Some(FieldKind::Vec {
@@ -1308,7 +1308,7 @@ mod tests {
         assert!(get_at_path(&args, "waves.5.amplitude").is_none());
     }
 
-    // A non-colour vector is one collapsed header by default; listing its path as
+    // A non-color vector is one collapsed header by default; listing its path as
     // expanded discloses an editable Float leaf per element, seeded from the value.
     #[test]
     fn expanding_a_vector_discloses_per_element_leaves() {
@@ -1346,10 +1346,10 @@ mod tests {
         );
     }
 
-    // A colour vector never discloses element leaves even when its path is listed
+    // A color vector never discloses element leaves even when its path is listed
     // as expanded (it keeps its single field + preview swatch).
     #[test]
-    fn expanding_never_touches_a_colour_vector() {
+    fn expanding_never_touches_a_color_vector() {
         use std::collections::HashSet;
         let expanded = HashSet::from(["color".to_string()]);
         let fields = fields_for_with("PointLight", None, &expanded);
@@ -1488,9 +1488,9 @@ mod tests {
         assert!(base_args("NotARealType").is_empty());
     }
 
-    // A colour edit assembles and re-serializes cleanly through the real type.
+    // A color edit assembles and re-serializes cleanly through the real type.
     #[test]
-    fn assemble_persists_an_edited_colour_vector() {
+    fn assemble_persists_an_edited_color_vector() {
         let fields = fields_for("PointLight", None);
         let (idx, key) = fields
             .iter()

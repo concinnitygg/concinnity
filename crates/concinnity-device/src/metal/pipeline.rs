@@ -140,14 +140,14 @@ pub(super) fn build_text_pipeline(
 
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn = crate::metal::slang_shaders::entry_function(
+    let vert_fn = crate::metal::slang_builtins::entry_function(
         device,
-        &crate::metal::slang_shaders::TEXT_VERT,
+        &crate::metal::slang_builtins::TEXT_VERT,
         hot_reload,
     )?;
-    let frag_fn = crate::metal::slang_shaders::entry_function(
+    let frag_fn = crate::metal::slang_builtins::entry_function(
         device,
-        &crate::metal::slang_shaders::TEXT_FRAG,
+        &crate::metal::slang_builtins::TEXT_FRAG,
         hot_reload,
     )?;
 
@@ -224,11 +224,11 @@ pub(super) fn build_post_pipeline(
     swap_pixel_format: MTLPixelFormat,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    // Single colour attachment matches the swapchain format chosen by
+    // Single color attachment matches the swapchain format chosen by
     // `configure_mtk_view` (`BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR).
     build_slang_fullscreen_pipeline(
         device,
-        &super::slang_shaders::COMPOSITE_FRAG,
+        &super::slang_builtins::COMPOSITE_FRAG,
         swap_pixel_format,
         FullscreenBlend::Replace,
         hot_reload,

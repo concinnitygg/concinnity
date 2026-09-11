@@ -4,7 +4,7 @@
 // across sibling files by resource family:
 //
 //   textures.rs   albedo + normal-map pool slot updates, IBL envmap +
-//                 colour-grading LUT hot-swap
+//                 color-grading LUT hot-swap
 //   geometry.rs   `rebuild_static_geometry` -- hot-reload rebuild of the
 //                 shared static vertex + index buffers
 //   streaming.rs  per-mesh upload / eviction via the sub-allocators, plus

@@ -4,7 +4,7 @@
 // It is deliberately a small closed set rather than an open string registry. A
 // fixed set indexes straight into a flat array of counters, which is what lets
 // the ledger stay allocation-free and readable from a global allocator's
-// neighbourhood; it also keeps a readout's rows stable frame to frame instead of
+// neighborhood; it also keeps a readout's rows stable frame to frame instead of
 // appearing and reordering as strings are interned.
 
 /// Which memory a report is about. The two are counted separately because they

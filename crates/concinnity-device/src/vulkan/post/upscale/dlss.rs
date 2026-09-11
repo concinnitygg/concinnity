@@ -427,7 +427,7 @@ impl DlssUpscaler {
         }
 
         let mut params: *mut c_void = ptr::null_mut();
-        // SAFETY: NGX was initialised above and writes the out-param; `params` is a live local.
+        // SAFETY: NGX was initialized above and writes the out-param; `params` is a live local.
         let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&mut params) };
         if !ngx_succeeded(rc) || params.is_null() {
             tracing::warn!(

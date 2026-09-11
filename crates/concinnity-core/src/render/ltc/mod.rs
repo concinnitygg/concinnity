@@ -7,7 +7,7 @@
 //!       angles where the lobe changes fastest
 //!
 //! `matrix_texels` holds 4 floats per cell: the non-trivial entries of the inverse
-//! transform, normalised so the middle entry is 1. The shader rebuilds
+//! transform, normalized so the middle entry is 1. The shader rebuilds
 //! `[[x, 0, z], [0, 1, 0], [y, 0, w]]`, transforms the light quad's corners by it,
 //! and evaluates the closed-form clamped-cosine polygon integral.
 //!

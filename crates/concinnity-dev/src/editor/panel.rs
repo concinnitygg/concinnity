@@ -268,7 +268,7 @@ const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
 
-// Per-badge type-label colours, so provenance still reads at a glance now that
+// Per-badge type-label colors, so provenance still reads at a glance now that
 // the row's right slot carries the asset type rather than a badge caption.
 fn badge_color(badge: Badge) -> [f32; 3] {
     match badge {
@@ -1321,7 +1321,7 @@ mod tests {
     }
 
     // The header stacks under the title bar, the tree under the status line, and
-    // every row control stays inside its row without overlapping its neighbour.
+    // every row control stays inside its row without overlapping its neighbor.
     #[test]
     fn geometry_stacks_and_row_controls_stay_inside_the_row() {
         let o = test_origin();

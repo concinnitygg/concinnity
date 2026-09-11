@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 pub struct MorphDelta {
     /// Bind-space position offset.
     pub position: [f32; 3],
-    /// Normal offset; the deformed normal is re-normalised.
+    /// Normal offset; the deformed normal is re-normalized.
     pub normal: [f32; 3],
 }
 

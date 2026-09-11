@@ -13,7 +13,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn skybox_defaults_to_a_490_metre_half_extent() {
+    fn skybox_defaults_to_a_490_meter_half_extent() {
         let (verts, idxs) = build_skybox(&serde_json::json!({})).unwrap();
         assert_eq!(verts.len(), 6 * 4);
         assert_eq!(idxs.len(), 6 * 6);

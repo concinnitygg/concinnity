@@ -5,7 +5,7 @@
 // existing `encode_*` method. Every Metal pass that ever ran inline is
 // now in the graph. Composite plus Shadow, Main, Cull, AutoExposure,
 // Bloom, Velocity, TaaResolve, SsrResolve, ParticlesSim, ParticlesDraw,
-// Fog, Decals, SsrPrepass, and SsaoBlur are the dispatchable PassIds.
+// Fog, Decals, GBufferPrepass, and SsaoBlur are the dispatchable PassIds.
 // PassIds `SsaoPrepass` and `SsaoKernel` are timing-only: their per-pass
 // timing slots fire from `diagnostics.pass_timing.attach_*` calls inside
 // the bundled `encode_ssao` Rust function, but they must never appear as
@@ -103,7 +103,7 @@ use concinnity_core::render::uniforms::GBufferView;
 
 // What `execute_graph` leaves for `draw_frame` to finish. The composite pass
 // rides the command buffer `draw_frame` owns, so the graphics queue's frame
-// terminal is signalled on a buffer this executor never commits.
+// terminal is signaled on a buffer this executor never commits.
 pub(in crate::metal) struct GraphSubmission {
     // The graphics terminal value the composite command buffer signals, to be
     // handed to `MtlContext::record_graph_terminal` once it is committed.
@@ -220,7 +220,7 @@ impl MtlContext {
     // Walk a compiled render graph and dispatch each pass to its
     // existing per-backend encoder. `params` carries the per-frame state
     // that cannot live on `&mut self` (the command buffer is per-frame;
-    // the scene-colour texture is computed each frame after SSR / TAA
+    // the scene-color texture is computed each frame after SSR / TAA
     // resolve).
     //
     // Any pass not matched by the match arm below returns an error so
@@ -245,7 +245,7 @@ impl MtlContext {
         // that queue signals no later, the single-queue fallback because it
         // flattens the schedule back into one stream. This asserts both.
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_serial_order_honours_schedule(graph, "metal");
+        crate::gfx::render_graph::assert_serial_order_honors_schedule(graph, "metal");
 
         // Per-frame particle-state mutations live on `&mut self` and have
         // to happen before the read-only `encode_particles` path runs. We
@@ -376,7 +376,7 @@ impl MtlContext {
         });
 
         // Nothing has been committed yet, so an encode failure leaves the
-        // frame's event values unsignalled and unrecorded: the next frame
+        // frame's event values unsignaled and unrecorded: the next frame
         // reuses the slice rather than waiting on a value nothing reaches.
         if let Some(err) = first_error.into_inner().unwrap_or(None) {
             return Err(err);
@@ -639,17 +639,8 @@ impl MtlContext {
                 )?;
                 self.encode_bloom(cmd_buf, scene_color)?
             }
-            PassId::Velocity | PassId::SsrPrepass => {
-                // Merged into GBufferPrepass on Metal: the builder emits the
-                // unified node (unified_gbuffer_prepass = true) and never these.
-                return Err(format!(
-                    "graph executor (metal): pass {} is merged into GBufferPrepass \
-                     and should not appear in the frame graph",
-                    pass_id.name()
-                ));
-            }
             PassId::GBufferPrepass => {
-                // The jittered VP rasterises; the un-jittered cur/prev VPs (from
+                // The jittered VP rasterizes; the un-jittered cur/prev VPs (from
                 // vel_uniforms, when velocity is active) drive the motion vector.
                 let gview = match params.vel_uniforms {
                     Some(v) => GBufferView {

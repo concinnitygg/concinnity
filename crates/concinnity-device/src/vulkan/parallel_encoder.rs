@@ -44,7 +44,7 @@
 //   6. The owning device handle (`VkDevice`), reachable through `&VkContext`
 //      from every owned pipeline / layout / render pass. It is `Arc` +
 //      `Mutex`, so cloning it here and retiring a handle from here are both
-//      sound. That is not a spare tyre: several passes on this fan-out
+//      sound. That is not a spare tire: several passes on this fan-out
 //      (`encode_main_pass`, `encode_main_pass_phase2`, the shadow, probe and RT
 //      passes) do clone it, and while it was `Rc` that raced the refcount and
 //      tore the device down early. An earlier version of this note argued the

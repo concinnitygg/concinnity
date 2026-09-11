@@ -32,7 +32,7 @@ impl DxContext {
     // `draw_frame`, rebuild every render-target-sized GPU resource. Called at
     // the top of `draw_frame` before any rendering happens. Returns `Ok(())`
     // when no work was needed, when the work succeeded, or when the window is
-    // minimised (one or both dimensions zero: we just skip the frame's
+    // minimized (one or both dimensions zero: we just skip the frame's
     // resize cycle and leave the targets at their previous size; the next
     // non-zero size restores them).
     pub(super) fn maybe_handle_resize(&mut self) -> Result<(), String> {
@@ -180,7 +180,7 @@ impl DxContext {
         // error instead of reading a stale buffer.
         self.swapchain.last_present_index = None;
 
-        // 2) Main HDR colour + (optional) HDR resolve + depth. The HDR scene
+        // 2) Main HDR color + (optional) HDR resolve + depth. The HDR scene
         //    SRV (`hdr_srv_gpu`) and the decal/fog main-depth SRV
         //    (`decal_depth_srv_gpu` on `DecalResources` / `FogResources`) are
         //    rewritten into their existing heap slots, so the consumers don't
@@ -342,7 +342,7 @@ impl DxContext {
             ssr.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
         }
 
-        // 7-gbuffer) Unified G-buffer pre-pass: the three colour targets are
+        // 7-gbuffer) Unified G-buffer pre-pass: the three color targets are
         // pooled and were relocated by the rebuild above, so this re-points
         // their views; the private depth is feature-owned and recreated.
         if let Some(pooled) = self.transient_pool.gbuffer_pooled()
@@ -408,7 +408,7 @@ impl DxContext {
             transparent.resize_to(&self.device, render_w, render_h)?;
         }
 
-        // 7d) Planar reflections: recreate the shared mirror colour + depth + the
+        // 7d) Planar reflections: recreate the shared mirror color + depth + the
         //     per-plane resolves at the new render dims and rewrite their RTV / DSV /
         //     SRVs in place, so each reflector's resolve binding stays valid.
         if let Some(planar) = self.planar_reflection.as_mut() {

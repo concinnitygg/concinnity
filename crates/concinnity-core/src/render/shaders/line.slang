@@ -5,7 +5,7 @@
 // only applies the camera VP.
 //
 // Alpha does the two things a line needs: `edge` fades the outer pixel of the
-// ribbon so the line antialiases without MSAA, and the vertex colour's own
+// ribbon so the line antialiases without MSAA, and the vertex color's own
 // alpha carries the CPU-side distance fade. The pass binds no depth attachment
 // -- it runs after the main pass resolved -- so the fragment tests the resolved
 // scene depth itself, which is what lets an occluded line fade instead of
@@ -42,7 +42,7 @@ struct LineView
 [[vk::binding(1, 0)]] Texture2D<float> scene_depth;
 #endif
 
-// Matches `LineVertex` (32 B: pos at 0, edge at 12, colour at 16), which the
+// Matches `LineVertex` (32 B: pos at 0, edge at 12, color at 16), which the
 // host input layouts declare and `line_vertex_layout_matches_shaders` pins.
 struct LineVertexIn
 {

@@ -20,7 +20,7 @@ use crate::ecs::StepResult;
 pub fn install_ctrlc_handler(app: &App) {
     let token = app.shutdown_token();
     let installed = ctrlc::set_handler(move || {
-        tracing::info!("CTRL+C received, cancelling all subsystems");
+        tracing::info!("CTRL+C received, canceling all subsystems");
         token.cancel();
     });
     // A host that already owns the signal (an embedding application, or a
@@ -44,7 +44,7 @@ pub fn activate_app_macos() {
 }
 
 /// Drive the world loop to completion. Each iteration: exit if the shutdown token
-/// is cancelled; on macOS, when `pump_events` is set (a window is present), drain
+/// is canceled; on macOS, when `pump_events` is set (a window is present), drain
 /// the pending AppKit/CoreFoundation events so the window stays responsive and
 /// Metal drawable callbacks fire; run the per-tick `on_tick` hook; then step the
 /// world, stopping on Stop/Done. `on_tick` is where the interpreted debug path
@@ -57,8 +57,8 @@ pub fn run_loop(app: &mut App, pump_events: bool, mut on_tick: impl FnMut(&mut A
     let shutdown = app.shutdown_token();
 
     loop {
-        if shutdown.is_cancelled() {
-            tracing::info!("Shutdown token cancelled, exiting loop");
+        if shutdown.is_canceled() {
+            tracing::info!("Shutdown token canceled, exiting loop");
             return;
         }
 

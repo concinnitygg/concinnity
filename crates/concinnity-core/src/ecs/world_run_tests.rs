@@ -16,7 +16,7 @@ use crate::ecs::{
 };
 
 // Steps until it has run `stop_after` times, then reports Done. Each phase
-// leaves a labelled marker in the world, so a test reads the order the world
+// leaves a labeled marker in the world, so a test reads the order the world
 // ran them in out of the component column.
 #[derive(Debug)]
 struct Marker {

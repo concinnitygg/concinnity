@@ -94,7 +94,7 @@ pub(super) fn position_debug_hud(
 
 // Pack the StatHud chips (fps, vram, ev, edr) into a tight strip from the
 // top-left of the window. Measured each frame (same timing rationale as the
-// DebugHud stack) so a chip that changes width re-packs its neighbours.
+// DebugHud stack) so a chip that changes width re-packs its neighbors.
 pub(super) fn position_stat_hud(
     ctx: &mut PipelineContext,
     chip_ids: &[AssetId],
@@ -110,7 +110,7 @@ pub(super) fn position_stat_hud(
 
 // Place one chip strip: each chip measured from its current (last-frame)
 // content and packed along the strip's axis. A blank chip (a hidden readout,
-// or a stat the backend cannot supply) reserves no space, so neighbours close
+// or a stat the backend cannot supply) reserves no space, so neighbors close
 // the gap. HUD labels are literal window pixels (no overlay scaling), so this
 // positions in window space directly. Measure and write share one lookup per
 // chip.
@@ -317,7 +317,7 @@ mod tests {
     }
 
     // A label that cannot be measured is dropped from the layout: it reserves no
-    // width and keeps its own position, so its row neighbours close the gap.
+    // width and keeps its own position, so its row neighbors close the gap.
     #[test]
     fn apply_label_layout_drops_labels_it_cannot_measure() {
         let mut w = TestWorld::new();

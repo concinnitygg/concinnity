@@ -18,11 +18,11 @@
 #[serde(default)]
 pub struct DirectionalLight {
     /// Direction pointing toward the light source. Does not need to be
-    /// normalised.
+    /// normalized.
     pub direction: [f32; 3],
-    /// Linear-space RGB colour of the light.
+    /// Linear-space RGB color of the light.
     pub color: [f32; 3],
-    /// Intensity multiplier applied to the colour.
+    /// Intensity multiplier applied to the color.
     pub intensity: f32,
 }
 

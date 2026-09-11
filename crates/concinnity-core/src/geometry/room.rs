@@ -1,8 +1,8 @@
 // Room interior geometry.
 //
-// Each face is two CCW triangles. Vertex colour distinguishes surfaces:
-// warm dark grey floor, light grey ceiling, slightly different greys per wall.
-// UV coordinates tile at one repeat per metre.
+// Each face is two CCW triangles. Vertex color distinguishes surfaces:
+// warm dark gray floor, light gray ceiling, slightly different grays per wall.
+// UV coordinates tile at one repeat per meter.
 
 use alloc::vec::Vec;
 
@@ -12,7 +12,7 @@ use super::Vert;
 ///
 /// Returns `(vertices, indices)` where each vertex is `(pos, normal, color, uv)`.
 /// Winding is CCW when viewed from inside. UV coordinates tile at one repeat
-/// per metre. Normals point inward so diffuse lighting is correct for a camera
+/// per meter. Normals point inward so diffuse lighting is correct for a camera
 /// inside the room.
 pub fn build_room_geometry(
     half_width: f32,
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn room_normals_point_into_the_interior() {
         // Every face's normal is a unit axis pointing at the room center, which
-        // for an origin-centred box means normal . position is negative.
+        // for an origin-centered box means normal . position is negative.
         let (verts, _) = build_room_geometry(3.0, 4.0, -1.0, 1.0);
         for (pos, normal, ..) in &verts {
             let len =
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn room_uvs_tile_once_per_metre() {
+    fn room_uvs_tile_once_per_meter() {
         let (verts, _) = build_room_geometry(3.0, 4.0, 0.0, 2.5);
         // The floor quad is emitted first and tiles across the full 6x8 extent.
         let floor_uvs: Vec<[f32; 2]> = verts[..4].iter().map(|v| v.3).collect();

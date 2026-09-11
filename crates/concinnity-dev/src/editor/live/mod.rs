@@ -10,7 +10,7 @@
 // change in the edit is turned into an `Apply` first; a single one that cannot
 // be expressed against the live world abandons the whole attempt and the
 // caller rebuilds. So the world is never left holding half of an edit, and a
-// type this module does not understand degrades to exactly the old behaviour.
+// type this module does not understand degrades to exactly the old behavior.
 
 mod component;
 mod diff;

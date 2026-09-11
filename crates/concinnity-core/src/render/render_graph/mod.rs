@@ -42,7 +42,7 @@ pub use types::{
 };
 pub(crate) use types::{BufferDesc, TextureSize, full_mip_levels};
 pub use validate::{
-    SyncGap, SyncGapKind, assert_serial_order_honours_schedule, barrier_coverage_gaps_for_driven,
+    SyncGap, SyncGapKind, assert_serial_order_honors_schedule, barrier_coverage_gaps_for_driven,
     final_states, sync_point_gaps,
 };
 pub use view_mask::apply_view;

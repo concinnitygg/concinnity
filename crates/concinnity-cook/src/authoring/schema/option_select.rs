@@ -28,7 +28,7 @@
 #[serde(default)]
 pub struct OptionSelect {
     /// Engine setting this row controls (e.g. `"vsync"`). Must be a setting the
-    /// runtime recognises; an unknown key renders but does nothing on click.
+    /// runtime recognizes; an unknown key renders but does nothing on click.
     pub setting: String,
     /// Display name shown at the left of the row.
     pub label: String,

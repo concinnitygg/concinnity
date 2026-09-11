@@ -49,13 +49,14 @@ const _: () = assert!(concinnity_core::render::uniforms::MAX_PROBES == 8);
 
 // Reflect `program` on every target its mirrors name and compare each against
 // what that target's layout rules produced. Skipped when slangc is absent, the
-// way concinnity-slang's own round-trip tests are.
+// way concinnity-slang's own round-trip tests are; a host that declares it
+// carries the toolchain (`strict-shader-tests`) panics there instead.
 //
 // A target no mirror names is not compiled at all. That is how a program opts
 // out of a target it cannot build on, which is otherwise indistinguishable from
 // a layout failure.
 fn check(program: &Program, cases: &[Case]) {
-    if !concinnity_slang::slangc_available() {
+    if !concinnity_slang::shader_tests_enabled() {
         return;
     }
     let mut drift = Vec::new();
@@ -149,7 +150,7 @@ fn main_bindless_layouts_match_the_shader() {
 // parameter nothing fills and sample undefined contents.
 #[test]
 fn the_metal_main_pass_declares_no_discrete_texture_or_sampler() {
-    if !concinnity_slang::slangc_available() {
+    if !concinnity_slang::shader_tests_enabled() {
         return;
     }
     let json = programs::reflection(&programs::MAIN_BINDLESS_VERT, Target::Metal)

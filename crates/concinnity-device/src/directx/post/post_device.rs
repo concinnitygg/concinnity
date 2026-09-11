@@ -180,6 +180,7 @@ impl PostPassDevice for DxPostDevice<'_> {
                 &ps,
                 dxgi_format(format),
                 blend,
+                program.label(),
             ),
         )?;
         Ok(PostPipeline {

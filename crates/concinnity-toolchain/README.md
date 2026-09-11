@@ -49,6 +49,3 @@ The backend is resolved as if `native` were on, matching what `concinnity`'s
 own defaults give for the target. A build script cannot see the features its
 dependencies were built with, so a package that took `concinnity`'s `vulkan`
 feature says so by carrying a `vulkan` feature of its own.
-
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.

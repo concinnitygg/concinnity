@@ -16,7 +16,7 @@
 /// what the pipeline layout declares.
 pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
 
-/// The GPU-cull push constant (cull.slang): six already-normalised frustum
+/// The GPU-cull push constant (cull.slang): six already-normalized frustum
 /// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
 /// the build-time object count, then the shader-bucket routing (120 B total).
 #[derive(Copy, Clone)]

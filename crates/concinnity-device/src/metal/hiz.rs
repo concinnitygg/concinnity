@@ -7,8 +7,11 @@
 // projects each `DrawObject` AABB through the previous frame's un-jittered
 // view-projection, picks the Hi-Z mip whose texels are ~the size of the
 // projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
-// its nearest projected NDC depth is strictly behind. Mirrors the DirectX
-// implementation in `directx/hiz.rs`.
+// its nearest projected NDC depth is strictly behind.
+//
+// DirectX and Vulkan build the same pyramid from the SPD kernels, two dispatches
+// over 64x64 tiles. Metal keeps the per-mip init + downsample chain because the
+// tile win those two measured did not reproduce on this backend.
 //
 // Two compute kernels come from the single-source `src/shaders/hiz_build.slang`
 // (one precompiled variant library each):
@@ -98,16 +101,16 @@ pub(super) fn build_hiz_pipelines(
 ) -> Result<HizPipelines, String> {
     let (init_lib, init_entry) = if sample_count > 1 {
         (
-            super::slang_shaders::HIZ_INIT_MSAA.library(device, hot_reload)?,
+            super::slang_builtins::HIZ_INIT_MSAA.library(device, hot_reload)?,
             "hiz_init_msaa",
         )
     } else {
         (
-            super::slang_shaders::HIZ_INIT_SINGLE.library(device, hot_reload)?,
+            super::slang_builtins::HIZ_INIT_SINGLE.library(device, hot_reload)?,
             "hiz_init_single",
         )
     };
-    let downsample_lib = super::slang_shaders::HIZ_DOWNSAMPLE.library(device, hot_reload)?;
+    let downsample_lib = super::slang_builtins::HIZ_DOWNSAMPLE.library(device, hot_reload)?;
     let init_fn = init_lib
         .newFunctionWithName(&ns_str(init_entry))
         .ok_or("hiz init entry not found in hiz library")?;
@@ -335,7 +338,7 @@ mod tests {
 
     #[test]
     fn mip_count_clamps_zero() {
-        // A zero dimension (minimised window) must not underflow.
+        // A zero dimension (minimized window) must not underflow.
         assert_eq!(hiz_mip_count(0, 0), 1);
         assert_eq!(hiz_mip_count(0, 8), 4);
     }

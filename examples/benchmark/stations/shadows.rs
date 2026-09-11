@@ -1,7 +1,7 @@
 //! A grove on broken ground under a rank of casting spot lights: the densest
 //! stand of shadow casters in the corridor.
 //!
-//! Every caster here is rasterised once for the frame, once into each of the
+//! Every caster here is rasterized once for the frame, once into each of the
 //! sun's cascades, and once into each spot's slice. The cascades follow the
 //! camera, so whatever that costs is spent while the camera is here. The ground
 //! under the grove is a displaced grid rather than a plane, which is the
@@ -30,7 +30,7 @@ const CANOPY_RADIUS: f32 = 1.9;
 // A crown is an ellipsoid rather than a ball, so no two throw the same shadow.
 const CANOPY_SCALE: [f32; 3] = [1.35, 0.68, 0.82];
 
-// The lights over it. Each casts, so each rasterises the grove into a slice of
+// The lights over it. Each casts, so each rasterizes the grove into a slice of
 // the spot shadow array every frame. The array holds sixteen slices; a light
 // past the last one is lit but throws nothing, so the count stays under it.
 const SPOTS: usize = 8;

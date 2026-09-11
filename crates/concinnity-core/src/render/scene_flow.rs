@@ -4,6 +4,7 @@
 //! The SceneControl trait decouples this module from any specific backend;
 //! callers supply a concrete backend that implements the two mutation methods.
 
+use crate::components::SceneTransition;
 use crate::ecs::asset_id::AssetId;
 use alloc::vec::Vec;
 
@@ -173,14 +174,16 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
         return;
     }
 
-    match transition {
-        "FadeBlack" => {
+    // An unknown name cuts, which is what an authored world that never went
+    // through the build gets.
+    match SceneTransition::from_str_norm(transition) {
+        Some(SceneTransition::FadeBlack) => {
             flow.fade = FadePhase::ToBlack {
                 started_at: elapsed,
                 next: target_scene,
             };
         }
-        _ => {
+        Some(SceneTransition::Cut) | None => {
             flow.current = target_scene;
             flow.fade = FadePhase::None;
             set_scene_visibility(visibility, target_scene, backend);

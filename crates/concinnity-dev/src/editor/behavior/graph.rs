@@ -60,7 +60,7 @@ pub(crate) struct Card {
     pub behavior: Option<usize>,
 }
 
-// A card-to-card link, labelled when the pair needs saying which way out of the
+// A card-to-card link, labeled when the pair needs saying which way out of the
 // parent it leaves by (a branch) or what carries it (a variable).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Wire {
@@ -355,7 +355,7 @@ pub(crate) fn expr_text(value: &Value, depth: usize) -> String {
     }
 }
 
-// One operand of a nested expression, parenthesised when it is itself infix so
+// One operand of a nested expression, parenthesized when it is itself infix so
 // the precedence a reader assumes is the one the tree has.
 fn operand(value: Option<&Value>, depth: usize) -> String {
     let Some(value) = value.filter(|v| !v.is_null()) else {

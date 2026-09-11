@@ -15,9 +15,9 @@ not consider them.
 ## Parameters
 
 - `position`: An array of 3 floats. World-space position of the light source. Defaults to `[0.0, 4.0, 0.0]`.
-- `direction`: An array of 3 floats. Direction the cone points, away from the light. Does not need to be normalised; defaults to straight down when degenerate.
-- `color`: An array of 3 floats. Linear-space RGB colour of the light. Defaults to `[1.0, 1.0, 1.0]`.
-- `intensity`: A float. Intensity multiplier applied to the colour. Defaults to `20.0`.
+- `direction`: An array of 3 floats. Direction the cone points, away from the light. Does not need to be normalized; defaults to straight down when degenerate.
+- `color`: An array of 3 floats. Linear-space RGB color of the light. Defaults to `[1.0, 1.0, 1.0]`.
+- `intensity`: A float. Intensity multiplier applied to the color. Defaults to `20.0`.
 - `range`: A float. Maximum reach in world units; attenuation is zero at this distance. Defaults to `10.0`.
 - `inner_angle`: A float. Half-angle in degrees of the fully lit inner cone. Clamped to `outer_angle`. Defaults to `18.0`.
 - `outer_angle`: A float. Half-angle in degrees at which the cone fades to black. Clamped to (0, 89.9]. Defaults to `30.0`.

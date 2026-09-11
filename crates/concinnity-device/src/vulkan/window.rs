@@ -295,7 +295,7 @@ impl GlfwWindow {
     }
 
     // Push the cursor mode resolved from the two independent intents onto the
-    // window. Centralised because GLFW exposes one mode enum where Metal /
+    // window. Centralized because GLFW exposes one mode enum where Metal /
     // DirectX keep two independent ref-counts.
     fn apply_cursor_mode(&mut self) {
         self.window.set_cursor_mode(resolve_cursor_mode(

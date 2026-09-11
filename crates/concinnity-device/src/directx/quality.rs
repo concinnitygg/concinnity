@@ -113,7 +113,7 @@ impl DxContext {
         // the last consumer leaves it resident until the next launch / resize),
         // which is harmless: with no consumer the graph omits its readers.
         if gbuffer_needed && self.gbuffer.is_none() {
-            // Its three colour targets are pooled, so the pool has to place them
+            // Its three color targets are pooled, so the pool has to place them
             // before the feature can view them. Rebuilding with the G-buffer gate
             // on also relocates `ao_output` / `bloom_top`, which the rebuild
             // re-points.
@@ -121,7 +121,7 @@ impl DxContext {
             let pooled = self
                 .transient_pool
                 .gbuffer_pooled()
-                .ok_or("transient pool missing the gbuffer colour targets after enable")?;
+                .ok_or("transient pool missing the gbuffer color targets after enable")?;
             let gbuffer = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx { alloc: &self.alloc },
                 super::post::gbuffer::GbufferExtent {
@@ -362,7 +362,7 @@ impl DxContext {
     }
 
     // Rebuild the transient pool with the given gates (which of `ao_output` and
-    // the G-buffer colour targets it places), then re-point every consumer of a
+    // the G-buffer color targets it places), then re-point every consumer of a
     // pooled resource. Mirrors `handle_resize`'s transient-pool + bloom +
     // G-buffer steps (the device is idle when this is reached).
     //

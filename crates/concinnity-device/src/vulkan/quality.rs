@@ -84,7 +84,7 @@ impl VkContext {
         // the last consumer leaves it resident until the next launch / resize),
         // which is harmless: with no consumer the graph omits its readers.
         if gbuffer_needed && self.gbuffer.is_none() {
-            // Its three colour channels are pool-owned, so the pool has to place
+            // Its three color channels are pool-owned, so the pool has to place
             // them before the pre-pass framebuffers can reference them. Rebuild
             // with the G-buffer gate on first; the `rebuild_swapchain` later in
             // this call rebuilds the pool once more and re-points every reader.

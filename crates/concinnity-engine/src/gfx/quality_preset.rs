@@ -151,7 +151,7 @@ pub(crate) fn coarser_reflection_blur(
 // resolves to a named tier.
 // The engine maxima for the SSGI sub-quality caps, used wherever a tier imposes
 // no SSGI ceiling: `Full` gather resolution, and the upper clamp bounds the
-// gather honours (rays <= 32, steps <= 64). A world's authored value always
+// gather honors (rays <= 32, steps <= 64). A world's authored value always
 // stands under these.
 const SSGI_RES_MAX: SsgiResolution = SsgiResolution::Full;
 const SSGI_RAYS_MAX: u32 = 32;

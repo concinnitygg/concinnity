@@ -18,7 +18,7 @@ use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
 };
-use crate::metal::slang_shaders::{BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, SlangLib};
+use crate::metal::slang_builtins::{BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, SlangLib};
 
 // Pixel format of every mip in the bloom chain, including the `bloom_top` mip
 // the transient pool backs.
@@ -139,7 +139,7 @@ impl MtlContext {
     // fullscreen-triangle draw into a bloom mip; Metal inserts the texture
     // read/write hazards between passes automatically. On return `mips[0]`
     // holds the accumulated bloom that the composite pass samples.
-    // `scene_color` is the post-TAA scene colour (or `hdr_resolve` when TAA
+    // `scene_color` is the post-TAA scene color (or `hdr_resolve` when TAA
     // is off) that the prefilter pass thresholds.
     pub(in crate::metal) fn encode_bloom(
         &self,

@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn plane_defaults_to_a_two_metre_square() {
+    fn plane_defaults_to_a_two_meter_square() {
         let (verts, _) = build_plane(&serde_json::json!({})).unwrap();
         let (mn, mx) = bounds(&verts);
         assert_eq!(mn, [-1.0, 0.0, -1.0]);

@@ -61,7 +61,7 @@ ConstantBuffer<ProbePrefilterParams> params;
 [[vk::push_constant]] ConstantBuffer<ProbePrefilterParams> params;
 #endif
 
-// Direction a face texel at (u, v) in [-1, 1] looks along, not normalised.
+// Direction a face texel at (u, v) in [-1, 1] looks along, not normalized.
 // Mirrors `gfx::cubemap::face_dir`, which is also the hardware cube convention,
 // so a face rendered into cube slice `face` is the face a sampler finds there.
 float3 probe_face_dir(uint face, float u, float v)
@@ -144,7 +144,7 @@ RWTexture2DArray<float4> dst_mip;
 
 // One level of the capture pyramid: the 2x2 box average of the level above,
 // each tap clamped first so a firefly cannot smuggle its energy down the chain.
-// Per-face, so the corner texels average slightly fewer neighbours than a
+// Per-face, so the corner texels average slightly fewer neighbors than a
 // seamless filter would; the GGX kernel taps the finished pyramid through a cube
 // sampler, which is where cross-face continuity actually matters.
 [shader("compute")]

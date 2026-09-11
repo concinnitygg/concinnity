@@ -52,7 +52,7 @@ float4 reflection_blur_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_
     float radius = saturate(roughness / REFLECTION_ROUGHNESS_CUT) * REFL_BLUR_MAX;
 
     // Weight each tap by its own coverage so weightless (non-reflecting) taps
-    // cannot drag their colour in; a reflective edge then fades smoothly.
+    // cannot drag their color in; a reflective edge then fades smoothly.
     float3 sum_rw = c.rgb * c.a;
     float sum_w = c.a;
     float taps = 1.0;
@@ -93,7 +93,7 @@ float4 reflection_composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) 
     float depth = gbuffer.Sample(uv).a;
     float4 c = reflection.Sample(uv);
     // Background, or a pixel that does not reflect (weight 0): keep the scene.
-    // A tiny weight is still honoured so the composite is exact at the edges.
+    // A tiny weight is still honored so the composite is exact at the edges.
     if (depth <= 0.0 || c.a <= 0.0)
     {
         return float4(lerp(base, c.rgb, c.a), 1.0);

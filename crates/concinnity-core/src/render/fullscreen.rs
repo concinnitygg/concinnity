@@ -6,7 +6,7 @@
 //!
 //! Two associated types absorb the only real divergence, so the trait names no
 //! backend types: `Rec` hides the per-backend command recorder, and `Args`
-//! carries the per-invocation binding context (DirectX passes the scene-colour
+//! carries the per-invocation binding context (DirectX passes the scene-color
 //! SRV its prefilter samples; Vulkan threads the frame-in-flight index that
 //! selects its per-frame framebuffers + descriptor sets). Everything else each
 //! impl reads from `&self`, consistent with the read-only parallel-encode
@@ -32,7 +32,7 @@ use alloc::string::String;
 /// wherever a window's logical units are pixels (Windows, unscaled X11), leaving
 /// a pure clamp; on a hi-DPI surface (macOS retina, scaled Wayland) the
 /// attachment is larger by the backing scale and the rect scales up with it. A
-/// zero logical dimension (minimised / mid-resize) falls back to a 1.0 scale
+/// zero logical dimension (minimized / mid-resize) falls back to a 1.0 scale
 /// rather than dividing by zero.
 pub fn clip_rect_to_scissor(
     clip: [f32; 4],
@@ -82,7 +82,7 @@ pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
 pub trait BloomEncoder {
     /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
     type Rec;
-    /// Per-invocation binding context (DX scene-colour SRV handle, VK frame index).
+    /// Per-invocation binding context (DX scene-color SRV handle, VK frame index).
     type Args;
 
     /// Number of bloom mips; zero means bloom is off and the driver no-ops.
@@ -92,7 +92,7 @@ pub trait BloomEncoder {
     /// per-mip hooks (DX root signature / heap / IA state and the post-process
     /// root constants; VK the post-process push constants).
     fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args);
-    /// Prefilter: scene colour -> mip 0 (soft-knee threshold + Karis average).
+    /// Prefilter: scene color -> mip 0 (soft-knee threshold + Karis average).
     fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args);
     /// Downsample: mip `dst - 1` -> mip `dst`.
     fn bloom_downsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize);
@@ -135,7 +135,7 @@ pub fn encode_bloom_chain<E: BloomEncoder>(enc: &E, rec: &E::Rec, args: E::Args)
 /// the surrounding pass left in place.
 ///
 /// Both queries record as they answer, so a caller must ask only where it goes on
-/// to bind: asking and then skipping the bind desynchronises the cache from the
+/// to bind: asking and then skipping the bind desynchronizes the cache from the
 /// recorder.
 #[derive(Default)]
 pub struct TextBindCache {
@@ -210,7 +210,7 @@ pub trait CompositeEncoder {
 
 /// The composite + text orchestration, previously hand-duplicated in each
 /// backend's `encode_composite_and_text`. An error mid-text propagates without
-/// closing the pass, matching the prior DX/VK behaviour (the frame fails either
+/// closing the pass, matching the prior DX/VK behavior (the frame fails either
 /// way: the target is just left mis-stated). This is unused on Metal, where a
 /// render encoder must be `endEncoding`-ed before the command buffer commits:
 /// skipping `end_composite` on a text error would crash at commit, so Metal's
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn a_zero_logical_size_falls_back_to_an_unscaled_clip() {
-        // Minimised / mid-resize: no divide by zero, and the rect is still
+        // Minimized / mid-resize: no divide by zero, and the rect is still
         // clamped into the attachment.
         assert_eq!(
             clip_rect_to_scissor([10.0, 20.0, 100.0, 100.0], (0.0, 0.0), (1280, 720)),
@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn composite_chain_propagates_text_error_without_ending() {
         // The first text draw fails: the error propagates and, matching the
-        // prior DX/VK behaviour, the pass is left open (no `end_composite`) and
+        // prior DX/VK behavior, the pass is left open (no `end_composite`) and
         // the remaining text calls are skipped.
         let enc = MockComposite::new(true, Some(0));
         let calls = [text_call(), text_call()];

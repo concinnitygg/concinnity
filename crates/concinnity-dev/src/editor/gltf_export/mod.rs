@@ -111,7 +111,7 @@ fn inverse_bind_matrices(skeleton: &[SkeletonJoint]) -> Vec<Mat4> {
     world.iter().map(|m| mat4_affine_inverse(*m)).collect()
 }
 
-// Serialise `mesh` into a GLB byte stream.
+// Serialize `mesh` into a GLB byte stream.
 pub(crate) fn export_glb(mesh: &ExportMesh) -> Result<Vec<u8>, String> {
     mesh.validate()?;
     let n = mesh.positions.len();
@@ -145,7 +145,7 @@ pub(crate) fn export_glb(mesh: &ExportMesh) -> Result<Vec<u8>, String> {
         &acc,
         &buf,
     );
-    let json_bytes = serde_json::to_vec(&doc).map_err(|e| format!("serialise glTF json: {e}"))?;
+    let json_bytes = serde_json::to_vec(&doc).map_err(|e| format!("serialize glTF json: {e}"))?;
     Ok(container::wrap_glb(json_bytes, buf.bytes))
 }
 

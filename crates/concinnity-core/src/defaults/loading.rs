@@ -16,7 +16,7 @@ use super::Minter;
 // The reference canvas the injected pieces are laid out on.
 const CANVAS_WIDTH: f32 = 1280.0;
 const CANVAS_HEIGHT: f32 = 720.0;
-// The progress bar: a centred strip near the bottom of the canvas.
+// The progress bar: a centered strip near the bottom of the canvas.
 const BAR_X: f32 = 400.0;
 const BAR_Y: f32 = 600.0;
 const BAR_WIDTH: f32 = 480.0;

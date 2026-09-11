@@ -55,7 +55,7 @@ use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
 use crate::directx::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
-// + colour + uv = 14 floats). The BLAS reads positions at this stride and the
+// + color + uv = 14 floats). The BLAS reads positions at this stride and the
 // shader fetches attributes at this stride. The deformed (posed) skinned vertex
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
@@ -1030,7 +1030,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     let scratch = ScratchRing::new(device, FRAMES, max_scratch)?;
     let scratch_gva = scratch.gva(0);
 
-    // Record every BLAS build (UAV-barrier-serialised over the shared scratch),
+    // Record every BLAS build (UAV-barrier-serialized over the shared scratch),
     // then the TLAS build, on a one-shot command list; fence-wait so the BVH is
     // ready before the first trace.
     // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
@@ -1168,7 +1168,7 @@ where
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("RT build fence: {e}"))?;
     let event =
-        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // SAFETY: an auto-reset, initially unsignaled event with no name and no security
         // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
             .map_err(|e| format!("RT build event: {e}"))?;
@@ -1511,7 +1511,7 @@ impl RtAccelData {
             .expect("RT geometry table was sized by write_upload_ring above");
         let tlas = slot.tlas.clone().expect("RT TLAS buffer was sized above");
 
-        // Record the fresh draw-BLAS builds (UAV-barrier-serialised over the shared
+        // Record the fresh draw-BLAS builds (UAV-barrier-serialized over the shared
         // scratch), then the TLAS build. Infallible from here on.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -1987,7 +1987,7 @@ impl RtAccelData {
         // claiming a tree a later refit could not update.
         let update = ring.refit.plan(shapes, storage_changed);
 
-        // Record the skinned BLAS updates (UAV-barrier-serialised over the shared
+        // Record the skinned BLAS updates (UAV-barrier-serialized over the shared
         // scratch), then the TLAS build, on `cmd`. A `Build` is a full rebuild
         // (`SourceAccelerationStructureData = 0`) into the ring buffer, overwriting
         // the prior frame's structure; a `Refit` names that same structure as the

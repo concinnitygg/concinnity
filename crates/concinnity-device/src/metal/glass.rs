@@ -22,7 +22,7 @@ use crate::gfx::mesh_payload::Vertex;
 
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use super::slang_shaders;
+use super::slang_builtins;
 use super::transparent::{TransparentDraw, bytes_of};
 use concinnity_core::render::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 
@@ -76,7 +76,7 @@ pub(in crate::metal) fn build_glass_panel_record(
 
     // Flatten into the standard Vertex layout. Tangent is a placeholder (the
     // glass shader rebuilds its frame from the panel normal) and per-vertex
-    // colour is unused.
+    // color is unused.
     let mut packed: Vec<Vertex> = Vec::with_capacity(verts.len());
     for (pos, normal, color, uv) in verts {
         packed.push(Vertex {
@@ -128,7 +128,7 @@ pub(super) fn build_glass_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_FRAG)
+    build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG)
 }
 
 // Build the ray-traced glass pipeline: the same vertex layout + blend, but the
@@ -140,7 +140,7 @@ pub(super) fn build_glass_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_FRAG_RT)
+    build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG_RT)
 }
 
 // Build the ray-traced see-through glass MESH pipeline: the same 5-attribute
@@ -152,7 +152,7 @@ pub(super) fn build_glass_mesh_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_mesh_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_MESH_FRAG_RT)
+    build_glass_mesh_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_MESH_FRAG_RT)
 }
 
 // The textured see-through glass MESH variant: reflected hits sample the bindless
@@ -164,7 +164,7 @@ pub(super) fn build_glass_mesh_pipeline_rt_textured(
     build_glass_mesh_pipeline_slang(
         device,
         hot_reload,
-        &slang_shaders::GLASS_MESH_FRAG_RT_TEXTURED,
+        &slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED,
     )
 }
 
@@ -176,7 +176,7 @@ pub(super) fn build_glass_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_FRAG_RT_TEXTURED)
+    build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG_RT_TEXTURED)
 }
 
 // The pane pipelines, whose stages come from the single-source `glass.slang`.
@@ -185,10 +185,10 @@ pub(super) fn build_glass_pipeline_rt_textured(
 fn build_glass_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    fragment: &slang_shaders::SlangLib,
+    fragment: &slang_builtins::SlangLib,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_fn = slang_shaders::entry_function(device, &slang_shaders::GLASS_VERT, hot_reload)?;
-    let frag_fn = slang_shaders::entry_function(device, fragment, hot_reload)?;
+    let vert_fn = slang_builtins::entry_function(device, &slang_builtins::GLASS_VERT, hot_reload)?;
+    let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 
@@ -198,11 +198,11 @@ fn build_glass_pipeline_slang(
 fn build_glass_mesh_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    fragment: &slang_shaders::SlangLib,
+    fragment: &slang_builtins::SlangLib,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     let vert_fn =
-        slang_shaders::entry_function(device, &slang_shaders::GLASS_MESH_VERT, hot_reload)?;
-    let frag_fn = slang_shaders::entry_function(device, fragment, hot_reload)?;
+        slang_builtins::entry_function(device, &slang_builtins::GLASS_MESH_VERT, hot_reload)?;
+    let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 
@@ -342,9 +342,7 @@ impl MtlContext {
                 ));
             }
             let c = panel.center;
-            let sort_distance =
-                ((c[0] - cam[0]).powi(2) + (c[1] - cam[1]).powi(2) + (c[2] - cam[2]).powi(2))
-                    .sqrt();
+            let sort_distance = crate::gfx::transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
                 vertex_buffer: panel.vertex_buffer.clone(),

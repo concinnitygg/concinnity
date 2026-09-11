@@ -145,7 +145,7 @@ pub(in crate::vulkan) struct RtReflectionsResources {
 // whole struct lives inside `VkContext`, which is already `unsafe impl Send`.
 unsafe impl Send for RtReflectionsResources {}
 
-// RT render pass: one HDR-format colour attachment (`output`), no depth. The
+// RT render pass: one HDR-format color attachment (`output`), no depth. The
 // fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
 // Ends shader-readable for the bloom + composite passes. Mirrors the SSR resolve
 // render pass.
@@ -165,7 +165,7 @@ fn create_rt_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let subpass = vk::SubpassDescription::default()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .color_attachments(std::slice::from_ref(&color_ref));
-    // Broad SUBPASS_EXTERNAL dep: synchronise every prior colour write + shader
+    // Broad SUBPASS_EXTERNAL dep: synchronize every prior color write + shader
     // read (the main pass's hdr_resolve, the SSR pre-pass G-buffer / roughness,
     // and the start-buffer's acceleration-structure build) against this pass's
     // reads + write. Same shape as the SSR resolve dep.
@@ -201,20 +201,8 @@ fn create_rt_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -1077,7 +1065,7 @@ impl VkContext {
 
     // Encode the RT-reflection resolve: a fullscreen triangle that traces each
     // glossy pixel's reflection ray against the scene TLAS and composites the
-    // reflected colour into `rt_reflections.output`, which then becomes the scene
+    // reflected color into `rt_reflections.output`, which then becomes the scene
     // the bloom / composite / TAA passes consume. No-op when RT is off (the graph
     // only schedules this pass when RT is live, so the guard is defensive).
     pub(in crate::vulkan) fn encode_rt_reflections(
@@ -1195,7 +1183,7 @@ mod tests {
     // `rt_params_layout_*` / `rt_geom_entry_*` tests in gfx::render_types.
     #[test]
     fn rt_reflections_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.

@@ -62,18 +62,10 @@ const RT_PARAMS_UBO_SIZE: u64 = 144;
 use concinnity_core::render::uniforms::GlassMeshParams;
 pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
 
-// Which producer a record belongs to, and so which pipeline draws it. The
-// records themselves are identical in shape, so this is the only thing the
-// combined draw loop needs to tell them apart.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(in crate::directx) enum Producer {
-    Glass,
-    Water,
-    GlassMesh,
-}
+pub(in crate::directx) use crate::gfx::transparent::Producer;
 
 // One drawable record of either producer: a static world-space (glass) or
-// origin-centred grid (water) VB + IB plus a per-record uniform CBV. Both are
+// origin-centered grid (water) VB + IB plus a per-record uniform CBV. Both are
 // built once at init and never change at runtime, so there is no per-frame work
 // beyond projection.
 pub(in crate::directx) struct TransparentRecord {
@@ -352,57 +344,7 @@ unsafe impl Send for TransparentResources {}
 // them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for TransparentResources {}
 
-// World-space distance from the camera to a record center. Larger = farther =
-// drawn first. Pure; unit tested.
-fn sort_distance(center: [f32; 3], cam: [f32; 3]) -> f32 {
-    let dx = center[0] - cam[0];
-    let dy = center[1] - cam[1];
-    let dz = center[2] - cam[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-// Every visible record of every producer, ordered farthest-camera-distance
-// first. Pure; unit tested. Invisible records are excluded, and the producers
-// interleave so a pane standing in a pool composites in the right order; the
-// visible set is sorted via the shared `gfx::transparent::back_to_front_order`.
-//
-// The mesh slice is already filtered to this frame's visible meshes (the encoder
-// builds it), so every entry it carries is live.
-fn ordered_visible(
-    glass: &[([f32; 3], bool)],
-    water: &[([f32; 3], bool)],
-    meshes: &[[f32; 3]],
-    cam: [f32; 3],
-) -> Vec<(Producer, usize)> {
-    let live_of = |records: &[([f32; 3], bool)], kind: Producer| -> Vec<(Producer, usize)> {
-        records
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, vis))| *vis)
-            .map(|(i, _)| (kind, i))
-            .collect()
-    };
-    let live: Vec<(Producer, usize)> = live_of(glass, Producer::Glass)
-        .into_iter()
-        .chain(live_of(water, Producer::Water))
-        .chain((0..meshes.len()).map(|i| (Producer::GlassMesh, i)))
-        .collect();
-    let dists: Vec<f32> = live
-        .iter()
-        .map(|&(kind, i)| {
-            let center = match kind {
-                Producer::Glass => glass[i].0,
-                Producer::Water => water[i].0,
-                Producer::GlassMesh => meshes[i],
-            };
-            sort_distance(center, cam)
-        })
-        .collect();
-    crate::gfx::transparent::back_to_front_order(&dists)
-        .into_iter()
-        .map(|oi| live[oi])
-        .collect()
-}
+use crate::gfx::transparent::ordered_visible;
 
 // Root-signature layout (binds 1:1 with the `DXIL_ABI` declarations in
 // glass.slang and water.slang, which are deliberately identical):
@@ -1136,8 +1078,8 @@ impl DxContext {
     // into its slot of the producer's ring. Only called while RT is live.
     //
     // Each mesh resolves its own LOD slice by camera distance exactly as the
-    // opaque passes do, so a mesh rerouted here rasterises the same triangles it
-    // would have rasterised opaque.
+    // opaque passes do, so a mesh rerouted here rasterizes the same triangles it
+    // would have rasterized opaque.
     fn collect_mesh_draws(
         &self,
         transparent: &TransparentResources,
@@ -1233,15 +1175,15 @@ impl DxContext {
             rt_live && self.cull.main_bindless_pso.is_some() && transparent.rt_textured_ready();
 
         // This frame's see-through mesh draws. Empty unless RT is live: the
-        // per-pixel trace is the feature, and with RT off those meshes rasterise
+        // per-pixel trace is the feature, and with RT off those meshes rasterize
         // opaque in the main pass instead.
         let mesh_draws = if rt_live {
             self.collect_mesh_draws(transparent, frame_idx, cam)
         } else {
             Vec::new()
         };
-        let mesh_centres: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
-        let order = transparent.draw_order(&mesh_centres, cam);
+        let mesh_centers: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
+        let order = transparent.draw_order(&mesh_centers, cam);
         if order.is_empty() {
             return Ok(());
         }
@@ -1504,91 +1446,5 @@ impl DxContext {
         // The scene target and main depth are both graph resources; the next
         // consumer's barrier takes the scene back out of RENDER_TARGET.
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sort_distance_is_euclidean_and_monotone() {
-        let cam = [0.0, 0.0, 0.0];
-        let near = sort_distance([0.0, 0.0, 1.0], cam);
-        let far = sort_distance([0.0, 0.0, 5.0], cam);
-        assert!((near - 1.0).abs() < 1e-5);
-        assert!((far - 5.0).abs() < 1e-5);
-        assert!(far > near);
-    }
-
-    #[test]
-    fn ordered_visible_excludes_hidden_and_sorts_back_to_front() {
-        // Pane 1 is hidden; 0 (dist 5) and 2 (dist 3) are visible. Farthest
-        // first => [0, 2]; the hidden pane never appears.
-        let glass = [
-            ([0.0, 0.0, 5.0], true),
-            ([0.0, 0.0, 9.0], false),
-            ([0.0, 0.0, 3.0], true),
-        ];
-        let order = ordered_visible(&glass, &[], &[], [0.0, 0.0, 0.0]);
-        assert_eq!(order, vec![(Producer::Glass, 0), (Producer::Glass, 2)]);
-    }
-
-    #[test]
-    fn ordered_visible_interleaves_the_two_producers() {
-        // A pane standing in a pool has to composite in distance order, not in
-        // producer order: the far pane draws first, then the water, then the near
-        // pane.
-        let glass = [([0.0, 0.0, 9.0], true), ([0.0, 0.0, 1.0], true)];
-        let water = [([0.0, 0.0, 5.0], true), ([0.0, 0.0, 7.0], false)];
-        let order = ordered_visible(&glass, &water, &[], [0.0, 0.0, 0.0]);
-        assert_eq!(
-            order,
-            vec![
-                (Producer::Glass, 0),
-                (Producer::Water, 0),
-                (Producer::Glass, 1),
-            ]
-        );
-    }
-
-    #[test]
-    fn ordered_visible_interleaves_mesh_draws_with_the_static_producers() {
-        // A see-through mesh sorts against panes and water by the same camera
-        // distance, so it is not simply appended after them. Every mesh entry the
-        // encoder passes is already visible, which is why the slice carries
-        // centers alone.
-        let glass = [([0.0, 0.0, 9.0], true)];
-        let water = [([0.0, 0.0, 3.0], true)];
-        let meshes = [[0.0, 0.0, 6.0], [0.0, 0.0, 1.0]];
-        let order = ordered_visible(&glass, &water, &meshes, [0.0, 0.0, 0.0]);
-        assert_eq!(
-            order,
-            vec![
-                (Producer::Glass, 0),
-                (Producer::GlassMesh, 0),
-                (Producer::Water, 0),
-                (Producer::GlassMesh, 1),
-            ]
-        );
-    }
-
-    #[test]
-    fn ordered_visible_orders_meshes_alone_back_to_front() {
-        // A world whose only transparent content is see-through meshes: the pass
-        // still runs, and they still sort farthest first.
-        let meshes = [[0.0, 0.0, 2.0], [0.0, 0.0, 8.0]];
-        let order = ordered_visible(&[], &[], &meshes, [0.0, 0.0, 0.0]);
-        assert_eq!(
-            order,
-            vec![(Producer::GlassMesh, 1), (Producer::GlassMesh, 0)]
-        );
-    }
-
-    #[test]
-    fn ordered_visible_is_empty_with_no_visible_records() {
-        let glass = [([0.0, 0.0, 5.0], false)];
-        let water = [([0.0, 0.0, 3.0], false)];
-        assert!(ordered_visible(&glass, &water, &[], [0.0, 0.0, 0.0]).is_empty());
     }
 }

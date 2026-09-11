@@ -13,7 +13,7 @@
 // every entry sharing its phase, so an outside registration anchors to a phase
 // and never to an entry. The four bands:
 //   * Early     -- the menu gate and the sky, before any logic runs.
-//   * Logic     -- the world's behaviours, whose requests drain later this tick.
+//   * Logic     -- the world's behaviors, whose requests drain later this tick.
 //   * PreRender -- the request drains and the streaming, before the frame goes.
 //   * Late      -- the frame itself and everything downstream of it (input,
 //                  physics, cameras, animation, story, audio, UI).
@@ -94,28 +94,28 @@ crate::define_systems! {
         after: [BehaviorSystem],
         before: [GraphicsSystem],
     },
-    SettingsSystem => crate::gfx::settings_system::SettingsSystem {
+    SettingsSystem => crate::gfx::settings::system::SettingsSystem {
         gate: schedule::settings,
         present_when: "the world declares a GraphicsConfig",
         phase: PreRender,
         after: [],
         before: [GraphicsSystem],
     },
-    StreamingSystem => crate::gfx::streaming_system::StreamingSystem {
+    StreamingSystem => crate::gfx::streaming::system::StreamingSystem {
         gate: schedule::streaming,
         present_when: "the world declares a GraphicsConfig",
         phase: PreRender,
         after: [],
         before: [GraphicsSystem],
     },
-    GraphicsSystem => crate::gfx::graphics_system::GraphicsSystem {
+    GraphicsSystem => crate::gfx::system::GraphicsSystem {
         gate: schedule::graphics,
         present_when: "the world declares a GraphicsConfig",
         phase: Late,
         after: [SpawnSystem, SettingsSystem, StreamingSystem],
         before: [InputSystem],
     },
-    InputSystem => crate::gfx::input_system::InputSystem {
+    InputSystem => crate::input::system::InputSystem {
         gate: schedule::input,
         present_when: "the world declares a GraphicsConfig",
         phase: Late,
@@ -206,7 +206,7 @@ crate::define_systems! {
         after: [LoadingOverlaySystem],
         before: [],
     },
-    TextInputSystem => crate::text_input_system::TextInputSystem {
+    TextInputSystem => crate::input::text_system::TextInputSystem {
         gate: schedule::text_input,
         present_when: "the world declares any TextInput",
         phase: Late,

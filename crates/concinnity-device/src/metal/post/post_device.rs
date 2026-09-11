@@ -27,7 +27,7 @@ use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     encode_fullscreen_pass,
 };
-use crate::metal::slang_shaders::{SlangLib, TAA_FRAG};
+use crate::metal::slang_builtins::{SlangLib, TAA_FRAG};
 use crate::metal::transient_pool::{pixel_format, texture_descriptor_for};
 
 // The Metal handles a shared post pass builds and encodes through. Borrowed

@@ -1,13 +1,13 @@
-// Coloured glass-panel schema.
+// Colored glass-panel schema.
 
 use crate::ecs::asset_id::AssetId;
 
-/// A flat translucent panel of coloured glass. A fixed-orientation rectangular
+/// A flat translucent panel of colored glass. A fixed-orientation rectangular
 /// quad that refracts and tints the scene behind it and brightens the
 /// grazing-angle rim with a Fresnel highlight.
 ///
 /// Unlike [WaterSurface](#watersurface) it has no animation, no surface
-/// displacement, and no depth-based colour. It's a simple building block for
+/// displacement, and no depth-based color. It's a simple building block for
 /// translucent surfaces such as windows, ice, holograms, or force fields.
 ///
 /// The panel is positioned by `center`, oriented by `normal` (the facing
@@ -34,12 +34,12 @@ pub struct GlassPanel {
     pub asset_id: AssetId,
     /// World-space position of the panel's center.
     pub center: [f32; 3],
-    /// Facing direction of the panel. Normalised on load; defaults to +Z when
+    /// Facing direction of the panel. Normalized on load; defaults to +Z when
     /// degenerate.
     pub normal: [f32; 3],
     /// Half-width and half-height of the panel, in world units.
     pub half_size: [f32; 2],
-    /// Linear-space RGB colour the glass tints the scene behind it.
+    /// Linear-space RGB color the glass tints the scene behind it.
     pub tint: [f32; 3],
     /// How opaque the glass is, in [0, 1]. 0 = clear, 1 = fully opaque tint.
     pub opacity: f32,

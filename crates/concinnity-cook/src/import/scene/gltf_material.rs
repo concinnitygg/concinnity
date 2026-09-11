@@ -78,7 +78,7 @@ pub(super) fn map_material(prefix: &str, mat: &gltf::Material) -> MappedMaterial
         serde_json::json!([e[0], e[1], e[2]]),
     );
 
-    // MASK is the cutout mode the opaque pass can honour with a discard. BLEND
+    // MASK is the cutout mode the opaque pass can honor with a discard. BLEND
     // stays unmapped: Concinnity's `transparent` means refracting glass, which
     // is not what a blended leaf card or decal wants.
     if mat.alpha_mode() == gltf::material::AlphaMode::Mask {

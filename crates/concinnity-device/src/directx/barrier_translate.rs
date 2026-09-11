@@ -4,7 +4,7 @@
 // class, into the concrete `D3D12_RESOURCE_STATES` the executor passes to
 // `transition_barrier`. The graph tracks only Undefined / Read / Write; the
 // resource class (assigned by the executor's resolver) disambiguates what a
-// `Write` means: a colour render target writes `RENDER_TARGET`, a depth target
+// `Write` means: a color render target writes `RENDER_TARGET`, a depth target
 // writes `DEPTH_WRITE`.
 //
 // A `Read` maps by the consuming-stage union (`ReadStages`) carried on the
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn class_state_mapping_is_pinned() {
-        // Colour target: ao_output. Sampled read, render-target write.
+        // Color target: ao_output. Sampled read, render-target write.
         assert_eq!(
             d3d12_state(GraphResourceClass::ColorTarget, ResourceState::Read, FRAG),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
@@ -339,7 +339,7 @@ mod tests {
         // after the discard that re-initializes it, instead of returning it to
         // rest for the producing pass to open again: the pass's own first-write
         // transition, opened from the discard state rather than from rest,
-        // collapses to nothing for a colour target.
+        // collapses to nothing for a color target.
         assert_eq!(
             d3d12_barrier(
                 GraphResourceClass::ColorTarget,
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn transition_threads_compute_read_stage() {
-        // A compute consumer of a colour resource (the hdr_resolve / AutoExposure
+        // A compute consumer of a color resource (the hdr_resolve / AutoExposure
         // shape, once that resource migrates): the consumer Write -> Read resolves
         // its after-state to NON_PIXEL_SHADER_RESOURCE off the COMPUTE union, and
         // a mixed compute+fragment run resolves to both bits.

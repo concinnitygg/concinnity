@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::debug::catalog::{self, Command};
 
-/// Every catalogued verb as a `tools/list` entry.
+/// Every catalogd verb as a `tools/list` entry.
 pub(super) fn list() -> Vec<Value> {
     catalog::all().iter().map(descriptor).collect()
 }
@@ -60,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn every_catalogued_verb_becomes_one_tool() {
+    fn every_catalogd_verb_becomes_one_tool() {
         let tools = list();
         assert_eq!(tools.len(), catalog::all().len());
         for (tool, command) in tools.iter().zip(catalog::all()) {

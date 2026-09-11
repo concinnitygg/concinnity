@@ -17,7 +17,7 @@
 //   [atlas_base_slot..]            text atlas SRVs
 //   [hdr_srv_slot]                 HDR scene target SRV (composite pass)
 //   [bloom_srv_base_slot..]        bloom mip SRVs
-//   [lut_srv_slot]                 3D colour-grading LUT SRV
+//   [lut_srv_slot]                 3D color-grading LUT SRV
 //   [post_srv_base_slot..]         POST_TARGET_SLOTS shared post-pass target SRVs
 //   [ssao_srv_base_slot..]         (SSAO) ao_raw + ao_blurred
 //   [ssao_white_srv_slot]          1x1 white occlusion fallback (always)

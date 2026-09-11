@@ -16,7 +16,7 @@ use crate::access::{self, ExclusiveAccess};
 
 /// Exclusive use of the process-global state, for as long as the value lives.
 ///
-/// Acquiring it serialises against every other holder in the process and gives
+/// Acquiring it serializes against every other holder in the process and gives
 /// the test a private [`TempTree`] to point that state at.
 ///
 /// ```

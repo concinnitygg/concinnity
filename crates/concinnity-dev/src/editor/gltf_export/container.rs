@@ -4,7 +4,7 @@
 // padded to a 4-byte boundary as the glTF 2.0 spec requires (JSON with spaces,
 // BIN with zeros).
 
-// Wrap serialised glTF JSON and its binary buffer into a GLB byte stream.
+// Wrap serialized glTF JSON and its binary buffer into a GLB byte stream.
 pub(crate) fn wrap_glb(mut json: Vec<u8>, mut bin: Vec<u8>) -> Vec<u8> {
     while !json.len().is_multiple_of(4) {
         json.push(b' ');

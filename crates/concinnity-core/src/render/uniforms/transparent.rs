@@ -15,7 +15,7 @@ pub struct TransparentView {
     /// World-space camera position (xyz). `.w` is ignored by the shader.
     pub camera_pos: [f32; 4],
     /// Render-target width / height in pixels: the shader uses this to
-    /// turn its fragment position into a normalised screen UV.
+    /// turn its fragment position into a normalized screen UV.
     pub viewport: [f32; 2],
     /// Wall-clock seconds since startup, fed to the Gerstner sum.
     pub time: f32,
@@ -30,7 +30,7 @@ pub struct TransparentView {
     /// `[x, y, z, _]`: unit direction toward the scene's sun, the first
     /// directional light. Zero when the world declares none.
     pub sun_dir: [f32; 4],
-    /// `[r, g, b, _]`: that light's colour times its intensity, which the water
+    /// `[r, g, b, _]`: that light's color times its intensity, which the water
     /// glint scales by. Zero when the world declares no directional light, and
     /// the shader draws no glint.
     pub sun_color: [f32; 4],
@@ -46,7 +46,7 @@ pub struct GlassParams {
     pub center: [f32; 4],
     /// `[nx, ny, nz, _]`: unit panel normal (facing direction).
     pub normal: [f32; 4],
-    /// `[r, g, b, _]`: colour multiplied into the refracted scene.
+    /// `[r, g, b, _]`: color multiplied into the refracted scene.
     pub tint: [f32; 4],
     /// Base alpha at normal incidence.
     pub opacity: f32,
@@ -74,7 +74,7 @@ pub struct GlassParams {
 pub struct GlassMeshParams {
     /// Column-major local-to-world model matrix.
     pub model: [[f32; 4]; 4],
-    /// `[r, g, b, _]`: colour multiplied into the refracted scene (material tint).
+    /// `[r, g, b, _]`: color multiplied into the refracted scene (material tint).
     pub tint: [f32; 4],
     /// Base alpha at normal incidence (from `Material.opacity`).
     pub opacity: f32,
@@ -114,7 +114,7 @@ pub struct WaterParams {
     pub deep_color: [f32; 4],
     /// `[r, g, b, _]`: water tint just above the seabed.
     pub shallow_color: [f32; 4],
-    /// Depth over which the tint blends from shallow to deep, in metres.
+    /// Depth over which the tint blends from shallow to deep, in meters.
     pub depth_falloff: f32,
     /// Width of the shoreline foam band, in world units.
     pub foam_width: f32,

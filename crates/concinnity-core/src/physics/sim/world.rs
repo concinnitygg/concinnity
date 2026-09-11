@@ -332,7 +332,7 @@ impl Simulation {
         ))
     }
 
-    /// Add a position-driven character capsule centred on `center`: a
+    /// Add a position-driven character capsule centered on `center`: a
     /// cylinder of `2 * half_height` capped by hemispheres of `radius`.
     ///
     /// Gravity does not move it and the solver does not push it. Resolve a
@@ -488,7 +488,7 @@ impl Simulation {
     ///
     /// `heights` is a `rows * cols` row-major grid of world-space `y` values,
     /// with rows running along `z` and columns along `x`. `scale` is the whole
-    /// extent `[width, height_multiplier, depth]`, and the grid is centred on
+    /// extent `[width, height_multiplier, depth]`, and the grid is centered on
     /// `pos`.
     ///
     /// `None` when the pool is full or the grid names no surface: fewer than
@@ -798,7 +798,7 @@ impl Simulation {
         self.broadphase.set_proxy(slot, proxy);
         // Whatever was resting against the body where it stood has to be
         // re-examined without it.
-        self.wake_neighbours(slot);
+        self.wake_neighbors(slot);
         true
     }
 
@@ -955,7 +955,7 @@ impl Simulation {
         self.broadphase.remove(slot);
         // Whatever this body was touching or holding has to be re-examined
         // without it, which has to happen before the joints are dropped.
-        self.wake_neighbours(slot);
+        self.wake_neighbors(slot);
         self.joints.remove_incident(slot);
         true
     }
@@ -1223,7 +1223,7 @@ impl Simulation {
         }
     }
 
-    /// Change a body's kind and put the broad phase and its neighbours back
+    /// Change a body's kind and put the broad phase and its neighbors back
     /// in step with the change.
     fn reclassify(&mut self, handle: BodyHandle, change: impl FnOnce(&mut Body) -> bool) -> bool {
         let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
@@ -1237,7 +1237,7 @@ impl Simulation {
         let proxy = proxy_for(body);
         let slot = handle.index();
         self.broadphase.set_proxy(slot, proxy);
-        self.wake_neighbours(slot);
+        self.wake_neighbors(slot);
         true
     }
 
@@ -1259,13 +1259,13 @@ impl Simulation {
         self.broadphase.insert(slot);
         self.broadphase.set_proxy(slot, proxy);
         // A body arriving inside a settled stack has to be able to disturb it.
-        self.wake_neighbours(slot);
+        self.wake_neighbors(slot);
         Some(body_handle(handle))
     }
 
     /// Wake whatever the given slot was in contact with or jointed to, so a
     /// change at one body reaches the island it belonged to.
-    fn wake_neighbours(&mut self, slot: u32) {
+    fn wake_neighbors(&mut self, slot: u32) {
         let Simulation {
             bodies,
             contacts,
@@ -2111,7 +2111,7 @@ mod tests {
         assert!(cast([0.0, 0.0, 1.0], 0.0).is_none(), "no reach");
         assert!(cast([0.0, 0.0, 1.0], -1.0).is_none());
         assert!(cast([f32::NAN, 0.0, 0.0], 100.0).is_none());
-        // An unnormalised direction is the same ray.
+        // An unnormalized direction is the same ray.
         assert!((cast([0.0, 0.0, 7.0], 100.0).expect("a hit").distance - 4.5).abs() < 1.0e-4);
     }
 
@@ -2225,7 +2225,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shape_cast_honours_its_layer_filter_and_its_exclusion() {
+    fn a_shape_cast_honors_its_layer_filter_and_its_exclusion() {
         let mut sim = Simulation::with_capacity(2);
         let near = sim
             .add_fixed(
@@ -2458,7 +2458,7 @@ mod tests {
             (landed[1] - 0.5).abs() < 0.02,
             "back on the floor: {landed:?}"
         );
-        assert!(landed[2] > 0.5, "and it travelled: {landed:?}");
+        assert!(landed[2] > 0.5, "and it traveled: {landed:?}");
         assert_eq!(sim.body_count(), 2);
         assert_eq!(sim.collider_count(), sim.body_count());
     }

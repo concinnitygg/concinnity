@@ -11,11 +11,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::Vert;
-use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalise};
+use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
 
 /// Build a displaced terrain grid. `subdivisions` is the grid resolution per
 /// axis (clamped to 4..=255); `amplitude` is the peak height above the base
-/// plane in metres.
+/// plane in meters.
 pub fn build_terrain(
     half_width: f32,
     half_depth: f32,
@@ -74,7 +74,7 @@ pub fn build_terrain(
 
     for i in 0..cols * rows {
         let [x, y, z] = positions[i];
-        let normal = vec3_normalise(normals[i]);
+        let normal = vec3_normalize(normals[i]);
         verts.push(([x, y, z], normal, color, [x, z]));
     }
 
@@ -117,8 +117,8 @@ fn terrain_height(col: u32, row: u32, subdivisions: u32, amplitude: f32) -> f32 
         weight_sum += weight;
     }
 
-    let normalised = sum / weight_sum;
-    (normalised - 0.05).max(0.0) * amplitude
+    let normalized = sum / weight_sum;
+    (normalized - 0.05).max(0.0) * amplitude
 }
 
 fn lattice_val(x: u32, y: u32) -> f32 {
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn lattice_values_are_normalised_and_position_dependent() {
+    fn lattice_values_are_normalized_and_position_dependent() {
         for x in 0..16u32 {
             for y in 0..16u32 {
                 let v = lattice_val(x, y);

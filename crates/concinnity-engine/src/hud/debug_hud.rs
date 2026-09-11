@@ -35,7 +35,7 @@ const PASSES_CHIP_TOP_N: usize = 6;
 // sum to a frame total: the async-compute queue overlaps the graphics
 // one, and the vertex/tiling bubbles between render passes belong to no
 // pass. The chip's "PASSES" header is meant to make that obvious at a
-// glance: there is no row labelled "total".
+// glance: there is no row labeled "total".
 fn passes_text(slots: &[PassTiming]) -> String {
     let mut entries: Vec<(&'static str, u32)> = slots
         .iter()

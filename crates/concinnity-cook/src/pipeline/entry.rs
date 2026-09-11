@@ -403,7 +403,7 @@ pub fn build_compiled_with_progress(
     // Lock-file provenance for the resource stream: `compiled.resources` is
     // emitted in `resource_jobs` order, so the two zip index-aligned. Texture
     // and Mesh records also carry their hot-reload source info so a blob boot
-    // can reconstruct the catalogues without the authored args.
+    // can reconstruct the catalogs without the authored args.
     let resource_locks: Vec<crate::blob::LockedResource> = resource_jobs
         .iter()
         .zip(compiled.resources.iter())
@@ -817,7 +817,7 @@ mod tests {
             }
         );
 
-        // The lock records mirror the catalogues so a blob boot can rebuild
+        // The lock records mirror the catalogs so a blob boot can rebuild
         // them without the authored args.
         let lock_tex: Vec<_> = result
             .resource_locks

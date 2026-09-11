@@ -19,6 +19,3 @@ context type.
   `concinnity-core`; this crate consumes its output.
 - macOS Vulkan runs over the MoltenVK ICD and is a testing path, not a
   shipping one.
-
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.

@@ -29,6 +29,3 @@ procedural geometry, and the payload codecs.
 - **Bake**: turning authored data into the runtime form; the decoders and
   shared payload types live here under `bake`/`decode`.
 - **Blob (`.cnb`)**: the compiled binary container the runtime loads.
-
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.

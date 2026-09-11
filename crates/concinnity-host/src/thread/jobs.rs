@@ -1,4 +1,4 @@
-//! Backend-agnostic job pool for parallelising expensive per-frame CPU work.
+//! Backend-agnostic job pool for parallelizing expensive per-frame CPU work.
 //!
 //! Systems run serially in the frame loop, each holding `&mut PipelineContext`.
 //! This pool does not change that: it lets a single system fan its own

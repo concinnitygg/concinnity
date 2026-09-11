@@ -148,7 +148,7 @@ pub(crate) fn card_rect(card: &Card, band: [f32; 4], pan: [f32; 2]) -> [f32; 4] 
 }
 
 // The pan that brings `card` fully inside the band, moving no further than it
-// has to so selecting a neighbour does not re-center the whole chart.
+// has to so selecting a neighbor does not re-center the whole chart.
 pub(crate) fn pan_to(card: &Card, canvas: [f32; 2], pan: [f32; 2], chart: &Chart) -> [f32; 2] {
     let x = MARGIN + card.column as f32 * PITCH_X;
     let y = MARGIN + card.row as f32 * PITCH_Y;
@@ -647,10 +647,10 @@ mod tests {
                 assert!(!overlaps(rect, *run), "'{}' over a wire {run:?}", l.content);
             }
         }
-        assert!(checked >= 2, "both branches are labelled");
+        assert!(checked >= 2, "both branches are labeled");
     }
 
-    // A map of cards at the given places, wired `from -> to` and labelled: the
+    // A map of cards at the given places, wired `from -> to` and labeled: the
     // shapes the overview makes that a body never does.
     fn wired(places: &[(usize, usize)], wires: &[(usize, usize, &str)]) -> Chart {
         Chart {
@@ -713,7 +713,7 @@ mod tests {
         apply(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
 
         let drawn = label_rects(&world);
-        assert_eq!(drawn.len(), 2, "both wires are labelled");
+        assert_eq!(drawn.len(), 2, "both wires are labeled");
         assert!(!overlaps(drawn[0], drawn[1]), "{drawn:?} share a place");
         // And each still sits in the gap before the card it points at.
         for (r, card) in drawn.iter().zip([&chart.cards[1], &chart.cards[2]]) {

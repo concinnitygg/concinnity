@@ -303,7 +303,7 @@ mod tests {
         ];
         super::resolve_scene_refs(&mut assets);
 
-        // Already an id, not a recognised prefix, and an empty target: all
+        // Already an id, not a recognized prefix, and an empty target: all
         // pass through unchanged.
         assert_eq!(assets[0].args["action"], "screen:toggle:3");
         assert_eq!(assets[1].args["action"], "quit");

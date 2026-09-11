@@ -7,7 +7,7 @@ use super::decode::*;
 use super::passes::*;
 use super::state::*;
 use super::watcher::*;
-use crate::gfx::graphics_system::hot_reload_sources::*;
+use crate::gfx::system::hot_reload_sources::*;
 use notify::{Event, EventKind};
 use std::path::PathBuf;
 
@@ -73,7 +73,7 @@ fn hdr_extension_matches_case_insensitively() {
 
 #[test]
 fn unrelated_extension_is_not_an_asset_event() {
-    // `.jsonl` (the world file) is now a recognised asset event; pick an
+    // `.jsonl` (the world file) is now a recognized asset event; pick an
     // extension nothing in the engine cares about as the negative case.
     let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
         .add_path(PathBuf::from("/tmp/world.txt"));
@@ -427,9 +427,9 @@ fn procedural_mesh_source_map_round_trips_empty() {
 }
 
 #[test]
-fn procedural_mesh_args_normalise_via_round_trip() {
+fn procedural_mesh_args_normalize_via_round_trip() {
     // The init pipeline captures args as `serde_json::to_value(component)`;
-    // the reload pipeline normalises new on-disk args through
+    // the reload pipeline normalizes new on-disk args through
     // `ProceduralMesh::deserialize → serialize`. Same input must produce
     // the same JSON value on both sides, otherwise an unchanged JSONL
     // would still trigger a spurious regen.
@@ -439,7 +439,7 @@ fn procedural_mesh_args_normalise_via_round_trip() {
     });
 
     // Init-side: parse + re-serialize (mirroring what `serde_json::to_value`
-    // on the deserialised component yields).
+    // on the deserialized component yields).
     let init_component: crate::components::ProceduralMesh =
         serde_json::from_value(user_args.clone()).unwrap();
     let init_norm = serde_json::to_value(&init_component).unwrap();
@@ -454,7 +454,7 @@ fn procedural_mesh_args_normalise_via_round_trip() {
 
 #[test]
 fn procedural_mesh_args_diff_detects_real_changes() {
-    // A meaningful arg change must produce a distinct normalised value so
+    // A meaningful arg change must produce a distinct normalized value so
     // the diff fires.
     let v1: crate::components::ProceduralMesh = serde_json::from_value(serde_json::json!({
         "generator": "box",
@@ -1810,7 +1810,7 @@ fn reload_volumetric_fog_bad_args_keep_the_previous_state() {
 
 // reload_procedural_meshes
 
-fn normalised_box_args(half: f32) -> crate::components::ProceduralMesh {
+fn normalized_box_args(half: f32) -> crate::components::ProceduralMesh {
     serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [half, half, half],
@@ -1848,7 +1848,7 @@ fn reload_procedural_meshes_with_an_empty_map_short_circuits() {
 #[test]
 fn reload_procedural_meshes_missing_file_regenerates_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     let r = reload_procedural_meshes(
         dir.path().join("gone.jsonl").to_str().unwrap(),
@@ -1863,7 +1863,7 @@ fn reload_procedural_meshes_missing_file_regenerates_nothing() {
 fn reload_procedural_meshes_skips_unchanged_args() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(dir.path(), &box_world_line("box_mesh", 0.5));
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 1, 0));
@@ -1877,7 +1877,7 @@ fn reload_procedural_meshes_treats_a_missing_jsonl_entry_as_unchanged() {
         dir.path(),
         r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
     );
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 1, 0));
@@ -1893,7 +1893,7 @@ fn reload_procedural_meshes_treats_unparseable_args_as_unchanged() {
         dir.path(),
         r#"{"name":"box_mesh","type":"ProceduralMesh","args":{"generator":42}}"#,
     );
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 1, 0));
@@ -1903,7 +1903,7 @@ fn reload_procedural_meshes_treats_unparseable_args_as_unchanged() {
 fn reload_procedural_meshes_regenerates_changed_args_in_place() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (1, 0, 0));
@@ -1911,14 +1911,14 @@ fn reload_procedural_meshes_regenerates_changed_args_in_place() {
     // per draw slot, and the captured args advance to the new snapshot.
     assert_eq!(backend.mesh_updates, vec![0, 1]);
     assert!(backend.static_rebuild_change_counts.is_empty());
-    assert_eq!(map.entries[0].args, normalised_box_args(1.0));
+    assert_eq!(map.entries[0].args, normalized_box_args(1.0));
 }
 
 #[test]
 fn reload_procedural_meshes_keeps_args_when_the_backend_rejects_the_update() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend {
         fail_mesh_updates: true,
         ..Default::default()
@@ -1927,28 +1927,28 @@ fn reload_procedural_meshes_keeps_args_when_the_backend_rejects_the_update() {
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 1));
     // The captured args stay at the pre-edit snapshot so the next reload
     // still sees the pending change.
-    assert_eq!(map.entries[0].args, normalised_box_args(0.5));
+    assert_eq!(map.entries[0].args, normalized_box_args(0.5));
 }
 
 #[test]
 fn reload_procedural_meshes_rebuilds_on_size_change() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     backend.geometry_sizes.insert(0, (1, 1));
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (1, 0, 0));
     assert!(backend.mesh_updates.is_empty());
     assert_eq!(backend.static_rebuild_change_counts, vec![2]);
-    assert_eq!(map.entries[0].args, normalised_box_args(1.0));
+    assert_eq!(map.entries[0].args, normalized_box_args(1.0));
 }
 
 #[test]
 fn reload_procedural_meshes_failed_rebuild_keeps_captured_args() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
-    let mut map = one_proc_mesh_map("box_mesh", normalised_box_args(0.5));
+    let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend {
         fail_static_rebuild: true,
         ..Default::default()
@@ -1956,7 +1956,7 @@ fn reload_procedural_meshes_failed_rebuild_keeps_captured_args() {
     backend.geometry_sizes.insert(0, (1, 1));
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 1));
-    assert_eq!(map.entries[0].args, normalised_box_args(0.5));
+    assert_eq!(map.entries[0].args, normalized_box_args(0.5));
 }
 
 // reload_stories (edge cases beyond the round-trip test above)
@@ -2024,7 +2024,7 @@ fn state_reload_flag_round_trips() {
 }
 
 #[test]
-fn state_debug_format_summarises_the_catalogue() {
+fn state_debug_format_summarises_the_catalog() {
     let mut map = TextureSourceMap::new();
     map.push_texture("standalone.png".to_string(), 0, 0);
     let state = AssetHotReloadState::from_sources(HotReloadSources {
@@ -2262,10 +2262,10 @@ fn drive_run_frame(
     Option<crate::gfx::volumetric_fog::FogSettings>,
 ) {
     let mut backend = RecordingBackend::default();
-    let world_reload: Option<crate::gfx::graphics_system::WorldReloadState> = None;
+    let world_reload: Option<crate::gfx::system::WorldReloadState> = None;
     let mut last_fog: Option<crate::gfx::volumetric_fog::FogSettings> = None;
     let effects = {
-        let mut apply = crate::gfx::graphics_system::HotReloadApplyParts {
+        let mut apply = crate::gfx::system::HotReloadApplyParts {
             backend: &mut backend,
             world_reload: &world_reload,
             last_fog_settings: &mut last_fog,
@@ -2290,7 +2290,7 @@ fn run_frame_with_no_pending_flags_returns_empty_effects() {
 }
 
 #[test]
-fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalogue() {
+fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalog() {
     let _guard = crate::test_support::lock();
     clear_pending_flags();
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());

@@ -23,7 +23,7 @@ pub(crate) struct SkinnedMeshNameIndex(pub HashMap<AssetId, SkinnedMeshHandle>);
 // Each skinned mesh's source-file skin selector, indexed by handle and
 // published alongside the name index. An animation clip re-imported at
 // hot-reload must resolve against the same skin its target mesh was cooked
-// from; the reload catalogue reads the selector from here at init.
+// from; the reload catalog reads the selector from here at init.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SkinnedMeshSkinIndex(pub Vec<u32>);
 

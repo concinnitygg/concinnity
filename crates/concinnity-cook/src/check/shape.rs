@@ -181,7 +181,7 @@ fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     }
 }
 
-// A Material naming a Shader may only be used where the renderer can honour it.
+// A Material naming a Shader may only be used where the renderer can honor it.
 // Instanced, skinned, and voxel-chunk draws render under the world's default
 // Shader, so a custom Shader on their material would silently shade them as if
 // it were not there. No filler: this is a pure authoring constraint.

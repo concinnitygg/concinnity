@@ -100,7 +100,7 @@ pub fn environment_map(map: &EnvironmentMap) -> Result<Vec<u8>, String> {
     )
 }
 
-/// Rasterise a [`Font`] into its glyph-atlas payload. Only the built-in face
+/// Rasterize a [`Font`] into its glyph-atlas payload. Only the built-in face
 /// bakes; a `path` naming a TTF file needs the cook module's importer.
 pub fn font(font: &Font) -> Result<Vec<u8>, String> {
     concinnity_core::bake::payload::font(font)
@@ -227,7 +227,7 @@ mod tests {
             ..Default::default()
         })
         .expect("the sky bakes");
-        let view = concinnity_core::bake::environment_map::deserialise(&payload)
+        let view = concinnity_core::bake::environment_map::deserialize(&payload)
             .expect("the payload reads back");
         assert_eq!(view.prefilter_face, 16);
 

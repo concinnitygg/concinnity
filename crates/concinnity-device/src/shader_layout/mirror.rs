@@ -289,7 +289,7 @@ mod tests {
         assert!(size_findings(128, 128, 128).is_empty());
     }
 
-    // The rounding is trailing pad, not licence for the Rust side to drift:
+    // The rounding is trailing pad, not license for the Rust side to drift:
     // short of the members, or between the members and the block, both fail.
     #[test]
     fn a_rust_struct_that_does_not_end_at_the_members_fails() {

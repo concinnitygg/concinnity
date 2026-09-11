@@ -10,7 +10,7 @@ use crate::gfx::render_types::FogParams;
 // Henyey-Greenstein factor. 10/world-unit is already pea-soup territory.
 const MAX_DENSITY: f32 = 10.0;
 // Largest sensible height-falloff rate. Beyond this the density drops to
-// nothing within centimetres above the reference height, which is not
+// nothing within centimeters above the reference height, which is not
 // useful (and is rounding-error fragile in the shader's `exp`).
 const MAX_HEIGHT_FALLOFF: f32 = 4.0;
 // Cap on the ray-march distance. The marcher takes a fixed number of steps,
@@ -19,7 +19,7 @@ const MAX_HEIGHT_FALLOFF: f32 = 4.0;
 // real visual win.
 const MAX_DISTANCE_CAP: f32 = 2_000.0;
 // Floor on the ray-march distance. The shader divides by it, and the
-// per-step length collapses to zero past about a millimetre.
+// per-step length collapses to zero past about a millimeter.
 const MIN_DISTANCE: f32 = 1.0;
 // Floor on the viewport short edge so a zero-sized swapchain (initial layout)
 // cannot poison the reciprocal the shader uses to convert screen to NDC.
@@ -30,7 +30,7 @@ const MIN_VIEWPORT: f32 = 1.0;
 /// `VolumetricFog`: the renderer then skips the fog pass entirely.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FogSettings {
-    /// Linear RGB colour.
+    /// Linear RGB color.
     pub color: [f32; 3],
     /// Fog density at the height reference.
     pub density: f32,
@@ -93,7 +93,7 @@ impl FogSettings {
     /// camera. `inv_vp` is the inverse view-projection used to reconstruct
     /// world positions from depth; `cam_pos` is the camera origin; `sun_dir`
     /// and `sun_color` are the first directional light's direction (toward
-    /// the light) and `intensity * colour`. `viewport` is the HDR resolve
+    /// the light) and `intensity * color`. `viewport` is the HDR resolve
     /// target's pixel dimensions.
     pub fn params(
         &self,

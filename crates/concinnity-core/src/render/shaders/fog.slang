@@ -5,7 +5,7 @@
 // fullscreen `fog_fragment` samples it by (screen_uv, view_z) instead of
 // marching per pixel. The scatter integral is the same for every pixel inside a
 // froxel column, so the per-slice work (density + CSM shadow tap +
-// Henyey-Greenstein phase) amortises across many pixels -- which is also what
+// Henyey-Greenstein phase) amortizes across many pixels -- which is also what
 // buys the per-slice sun shadowing an inline ray-march could not afford at 32
 // shadow taps per pixel.
 //
@@ -52,7 +52,7 @@ struct FogParams
     // xyz = first directional light's world-space direction (toward the light),
     // w = pad.
     float4 sun_dir;
-    // xyz = that light's colour pre-multiplied with its intensity, w = pad.
+    // xyz = that light's color pre-multiplied with its intensity, w = pad.
     float4 sun_color;
     // Base density at height_reference, per world unit.
     float density;
@@ -160,7 +160,7 @@ float fog_shadow_factor(float3 world_pos, float view_depth)
 
     float4 light_clip = mul(shadow_uni.light_vps[cascade], float4(world_pos, 1.0));
     float3 ndc = light_clip.xyz / light_clip.w;
-    // Flip Y: the shadow pass rasterises through a negative-height viewport on
+    // Flip Y: the shadow pass rasterizes through a negative-height viewport on
     // Vulkan and has a top-left origin on Metal / DirectX, so the sampled UV
     // mirrors Y on every backend alike.
     float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
@@ -171,7 +171,7 @@ float fog_shadow_factor(float3 world_pos, float view_depth)
     float bias = 0.0015 * (1.0 + float(cascade) * 0.7);
     float3 uv_layer = float3(uv, float(cascade));
     // Explicit LOD, not the implicit one the hand-written shaders used. A
-    // compute kernel has no fragment quad to derive a mip from -- neighbouring
+    // compute kernel has no fragment quad to derive a mip from -- neighboring
     // threads are unrelated froxel columns -- so an implicit-LOD compare makes
     // slangc declare SPV_KHR_compute_shader_derivatives, which MoltenVK does not
     // support. The cascade array has one mip, so level zero is the same tap.
@@ -221,7 +221,7 @@ void fog_froxel_kernel(uint3 tid : SV_DispatchThreadID)
         return;
     }
 
-    // Interleaved gradient noise: a per-(x, y) tile offset so neighbouring
+    // Interleaved gradient noise: a per-(x, y) tile offset so neighboring
     // columns sample density and shadows at slightly different Z. Trilinear
     // filtering at sample time plus TAA smear it into smooth illumination.
     float2 tile_xy = float2(float(tid.x), float(tid.y));
@@ -291,7 +291,7 @@ void fog_froxel_kernel(uint3 tid : SV_DispatchThreadID)
 
 // The fragment reads no varying: `uv` has to come from SV_Position, because the
 // shared vertex's varying is the texture-space map (unflipped on Vulkan, which
-// rasterises through a negative-height viewport) while both uses here -- the
+// rasterizes through a negative-height viewport) while both uses here -- the
 // depth unprojection and the froxel volume, which the kernel fills in screen
 // tile order -- want the framebuffer-relative one.
 [shader("fragment")]
@@ -340,7 +340,7 @@ float4 fog_fragment(
         view_z = froxel.z_far;
     }
 
-    // Normalised volume W. Clamped so the skybox and anything past the volume's
+    // Normalized volume W. Clamped so the skybox and anything past the volume's
     // far edge sample the fully-integrated last slice.
     float z01 = saturate((view_z - froxel.z_near) / max(froxel.z_far - froxel.z_near, 1e-4));
 

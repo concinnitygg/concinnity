@@ -95,10 +95,10 @@ pub(crate) fn build_main_pipeline(
     // The static pass is always GPU-driven now.
     let (vert_fn, main_frag_fn) = match world {
         None => {
-            let vert_library = super::super::slang_shaders::MAIN_BINDLESS_VERT
+            let vert_library = super::super::slang_builtins::MAIN_BINDLESS_VERT
                 .library(device, hot_reload)
                 .map_err(|e| format!("failed to load engine vertex library: {e}"))?;
-            let frag_library = super::super::slang_shaders::MAIN_BINDLESS_FRAG
+            let frag_library = super::super::slang_builtins::MAIN_BINDLESS_FRAG
                 .library(device, hot_reload)
                 .map_err(|e| format!("failed to load engine fragment library: {e}"))?;
             let vert_fn = vert_library
@@ -127,7 +127,7 @@ pub(crate) fn build_main_pipeline(
     pipeline_desc.setVertexDescriptor(Some(vert_desc));
     pipeline_desc.setVertexFunction(Some(&vert_fn));
     pipeline_desc.setFragmentFunction(Some(&main_frag_fn));
-    // Off-screen HDR pass: RGBA16Float colour at the world's resolved sample
+    // Off-screen HDR pass: RGBA16Float color at the world's resolved sample
     // count. Output is linear light; ACES tonemap + gamma + FXAA run in the
     // composite pass.
     pipeline_desc.setRasterSampleCount(sample_count as usize);
@@ -156,9 +156,9 @@ pub(crate) fn build_main_pipeline(
     // that is not there.
     let encoder_frag_fn = match world {
         None => main_frag_fn.clone(),
-        Some(_) => super::super::slang_shaders::entry_function(
+        Some(_) => super::super::slang_builtins::entry_function(
             device,
-            &super::super::slang_shaders::MAIN_BINDLESS_FRAG,
+            &super::super::slang_builtins::MAIN_BINDLESS_FRAG,
             hot_reload,
         )?,
     };
@@ -300,9 +300,9 @@ pub(crate) fn build_shadow_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_fn = super::super::slang_shaders::entry_function(
+    let shadow_fn = super::super::slang_builtins::entry_function(
         device,
-        &super::super::slang_shaders::SHADOW_VERT,
+        &super::super::slang_builtins::SHADOW_VERT,
         hot_reload,
     )?;
     let shadow_pipeline_desc = MTLRenderPipelineDescriptor::new();
@@ -328,9 +328,9 @@ pub(crate) fn build_shadow_bindless_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_fn = super::super::slang_shaders::entry_function(
+    let shadow_fn = super::super::slang_builtins::entry_function(
         device,
-        &super::super::slang_shaders::SHADOW_VERT_BINDLESS,
+        &super::super::slang_builtins::SHADOW_VERT_BINDLESS,
         hot_reload,
     )?;
     let shadow_pipeline_desc = MTLRenderPipelineDescriptor::new();

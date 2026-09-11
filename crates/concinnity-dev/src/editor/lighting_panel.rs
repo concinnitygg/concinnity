@@ -3,7 +3,7 @@
 // The Lighting panel's layout half: a floating panel of themed sections (see
 // `lighting.rs` for the bindings) with a status line + Apply button in its
 // header row. Each field row is a caption plus one control -- a text input, a
-// checkbox, or a text input with a colour swatch -- backed by a per-binding
+// checkbox, or a text input with a color swatch -- backed by a per-binding
 // control pool at reserved ids. Like the rest of the editor HUD it is plain
 // `Sprite` / `TextLabel` / `TextInput` components driven each frame by the
 // editor hook; the hook owns seeding, focus, and the commit path.
@@ -134,7 +134,7 @@ pub(crate) fn row_rect(o: [f32; 2], w: f32, i: usize) -> [f32; 4] {
     ]
 }
 
-// The control area on a field row's right side; a colour field's input is
+// The control area on a field row's right side; a color field's input is
 // narrowed to leave room for its swatch.
 fn control_rect(row: [f32; 4], color: bool) -> [f32; 4] {
     let x = row[0] + LABEL_COL;
@@ -160,8 +160,8 @@ fn check_rect(row: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-// A colour field's swatch tint, parsed from its comma-separated text (3 or 4
-// components); an unparseable value shows white rather than stale colour.
+// A color field's swatch tint, parsed from its comma-separated text (3 or 4
+// components); an unparseable value shows white rather than stale color.
 fn parse_color(text: &str) -> [f32; 4] {
     let parts: Vec<f32> = text
         .split(|c: char| c == ',' || c.is_whitespace())
@@ -474,7 +474,7 @@ mod tests {
             .find(|l| l.asset_id == row_label(0))
             .unwrap();
         assert_eq!(header.content, "Sun");
-        // The sun colour binding shows a swatch tinted by its current value; the
+        // The sun color binding shows a swatch tinted by its current value; the
         // fog toggle shows a checkbox; the intensity field shows a text input.
         let sun_color = 3;
         assert!(

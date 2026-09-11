@@ -5,7 +5,7 @@
 Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does
 not have to hand-place every chip. Each row lays its labels out left to
 right; rows stack top to bottom. The container owns the labels' on-screen
-position: the labels keep their own styling (font, colour, background,
+position: the labels keep their own styling (font, color, background,
 padding) but their `x`/`y` are overwritten each frame.
 
 Sizing is content-driven: a label is measured at its current text, so the

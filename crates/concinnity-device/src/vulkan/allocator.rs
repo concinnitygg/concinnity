@@ -23,7 +23,7 @@
 //   tiling class     Vulkan requires linear and optimal-tiling resources
 //                    sharing an allocation to be separated by
 //                    `bufferImageGranularity`. Separate pools remove the
-//                    constraint rather than paying to honour it.
+//                    constraint rather than paying to honor it.
 //   device address   `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` is a property of
 //                    the allocation, not the buffer, so ray-tracing buffers
 //                    that need `vkGetBufferDeviceAddress` need their own blocks

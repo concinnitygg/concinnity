@@ -221,7 +221,7 @@ mod tests {
     }
 
     // A label naming no Font compiles no atlas for one: the renderer draws it
-    // with the face baked into the binary, so injecting a second rasterisation
+    // with the face baked into the binary, so injecting a second rasterization
     // of that same face would cost blob space for nothing.
     #[test]
     fn text_naming_no_font_injects_none() {

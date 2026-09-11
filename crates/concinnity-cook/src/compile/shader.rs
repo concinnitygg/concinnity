@@ -164,7 +164,7 @@ mod tests {
     // the engine's own projection for the vertex hook.
     #[test]
     fn a_fragment_only_shader_compiles_every_program_of_its_host() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let sources = Sources {
@@ -194,7 +194,7 @@ mod tests {
     // A vertex file replaces the engine's projection in every vertex variant.
     #[test]
     fn a_vertex_file_compiles_into_every_vertex_variant() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let sources = Sources {
@@ -213,7 +213,7 @@ mod tests {
     // at build time rather than at a renderer's init.
     #[test]
     fn a_fragment_without_the_hook_fails_naming_it() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let sources = Sources {
@@ -230,7 +230,7 @@ mod tests {
     // declaration; the compile fails and the message says which function.
     #[test]
     fn a_hook_with_the_wrong_signature_fails() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let sources = Sources {

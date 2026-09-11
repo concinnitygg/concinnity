@@ -11,7 +11,3 @@ The surface is one world's lifecycle inside a view the host owns: `cn_init`,
 `cn_world_open`, `cn_world_step`, `cn_world_close`. A host whose OS owns the run
 loop calls `cn_world_step` once per display refresh. Authoring lives in the dev
 tooling and is deliberately not here.
-
-`private/scripts/release.py build ios-aarch64` packages the device and
-simulator slices as an `.xcframework`. See `private/docs/mobile-port.md` for
-what each platform can drive today.

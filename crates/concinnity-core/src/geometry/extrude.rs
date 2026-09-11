@@ -45,7 +45,7 @@ pub fn build_extrude(
     }
     let corner_segments = corner_segments.max(1) as usize;
 
-    // Normalise to CCW-math (positive shoelace area in (x, z)). Ear clipping
+    // Normalize to CCW-math (positive shoelace area in (x, z)). Ear clipping
     // assumes this orientation; the top-cap triangle indices are emitted in
     // reversed winding so the geometric normal still resolves to +Y.
     if signed_area(&profile) < 0.0 {
@@ -303,7 +303,7 @@ mod tests {
         assert!(rounded > sharp, "rounded {rounded} <= sharp {sharp}");
     }
 
-    // Either winding is accepted: a clockwise profile is normalised to the
+    // Either winding is accepted: a clockwise profile is normalized to the
     // orientation ear clipping assumes, so it extrudes to the same mesh as the
     // counter-clockwise one.
     #[test]

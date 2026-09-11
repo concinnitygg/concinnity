@@ -88,7 +88,7 @@ pub struct AnimationTrack {
 ///
 /// Several `Animation` assets may target the same [SkinnedMesh](#skinnedmesh);
 /// they are then blended into one pose, weighted by each clip's `weight` (a
-/// normalised weighted average). A single clip plays at full strength
+/// normalized weighted average). A single clip plays at full strength
 /// regardless of its `weight`.
 ///
 /// **File import.** A clip may be authored entirely by hand (`tracks` filled
@@ -239,7 +239,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deserialises_with_defaults() {
+    fn deserializes_with_defaults() {
         let a: Animation = serde_json::from_str("{}").unwrap();
         assert_eq!(a.duration, 1.0);
         assert!(a.looping);
@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialises_glb_source_fields() {
+    fn deserializes_glb_source_fields() {
         crate::test_support::reset_interner();
         let json = r#"{
             "target":"hero",
@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialises_inline_tracks() {
+    fn deserializes_inline_tracks() {
         crate::test_support::reset_interner();
         let json = r#"{
             "target":"flag",

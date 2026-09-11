@@ -1,7 +1,7 @@
 // src/metal/draw/main.rs
 //
 // Main pass (off-screen HDR + 4x MSAA). Renders the visible scene into the
-// HDR colour + depth attachments, multisample-resolving to `hdr_resolve`.
+// HDR color + depth attachments, multisample-resolving to `hdr_resolve`.
 //
 // One geometry path: the GPU-driven bindless pass, issued through the cull's
 // indirect command buffers. Static objects, folded instances and the folded
@@ -60,7 +60,7 @@ pub(in crate::metal) struct GpuFrameBuffers<'a> {
 }
 
 // The reflection-probe face attachments `encode_main_into_face` renders into
-// instead of the HDR targets: a square MSAA colour + depth, resolving colour
+// instead of the HDR targets: a square MSAA color + depth, resolving color
 // into `resolve`. A face reuses the main pipelines, so it carries whatever
 // sample count they were built at: at one sample `color_msaa` is `None` and the
 // pass draws straight into `resolve`.
@@ -116,12 +116,12 @@ impl MtlContext {
         // Only `object_buffer` gates the descriptor's store action below; the
         // rest of `gpu` travels intact into `encode_main_static_into`.
         let object_buffer = gpu.object_buffer;
-        // Build the HDR render pass descriptor. Colour writes into the MSAA
+        // Build the HDR render pass descriptor. Color writes into the MSAA
         // attachment and resolves into the single-sample target at end-of-pass;
         // depth lives entirely on the MSAA attachment and is discarded unless
         // a later pass (projected decals, volumetric fog) needs to sample it.
         // Under two-pass occlusion the phase-2 main pass (`Main2`) loads this
-        // pass's MSAA colour to draw the disoccluded geometry on top, so the
+        // pass's MSAA color to draw the disoccluded geometry on top, so the
         // MSAA samples must be stored, not just resolved away. `Main2`
         // performs the final resolve. Without two-pass we resolve-and-discard
         // the MSAA samples as before. The decision mirrors the graph's two-pass
@@ -148,7 +148,7 @@ impl MtlContext {
                     MTLStoreAction::MultisampleResolve
                 });
             } else {
-                // The colour attachment *is* the spine, so there is nothing to
+                // The color attachment *is* the spine, so there is nothing to
                 // resolve and the pass just stores what it drew.
                 ca.setStoreAction(MTLStoreAction::Store);
             }
@@ -163,7 +163,7 @@ impl MtlContext {
             da.setTexture(Some(self.hdr_targets.depth_attachment()));
             da.setLoadAction(MTLLoadAction::Clear);
             da.setClearDepth(1.0);
-            // `depth_resolve` is the canonical post-rasterise scene depth the
+            // `depth_resolve` is the canonical post-rasterize scene depth the
             // post chain consumes: raymarch writes hit depth into it, and
             // water / decal / fog sample it. Multisampled, the Main pass
             // produces it by resolving with the `Sample0` filter (single-sample
@@ -229,10 +229,10 @@ impl MtlContext {
     // Render the main pass into one reflection-probe cube face instead of the
     // HDR targets. A thin sibling of `encode_main_pass`: same three geometry
     // sub-paths and shared bindings, but the render-pass descriptor points at a
-    // square MSAA colour + depth (resolving colour into `face_resolve`), and the
+    // square MSAA color + depth (resolving color into `face_resolve`), and the
     // view + view-projection are the caller's face matrices (not `self.*`), so
     // the capture never disturbs the frame's camera state. Depth is cleared and
-    // discarded -- the probe consumes only the resolved colour. Driven by
+    // discarded -- the probe consumes only the resolved color. Driven by
     // `capture_reflection_probe` (metal/probe.rs), once at first frame.
     pub(in crate::metal) fn encode_main_into_face(
         &self,
@@ -323,7 +323,7 @@ impl MtlContext {
     }
 
     // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not
-    // clear) the HDR colour + depth that `encode_main_pass` (phase 1) wrote
+    // clear) the HDR color + depth that `encode_main_pass` (phase 1) wrote
     // and re-runs the bindless indirect draw through `cull_icb_2` (the phase-2
     // cull's output), depth-compositing the disoccluded geometry with phase 1.
     // Folded instances AND folded skinned objects ride the unified cull buffers
@@ -332,7 +332,7 @@ impl MtlContext {
     // them and the rebuilt pyramid (Cull2) disoccludes them. The shared
     // `execute_bindless_static_icb` issues the static+instance range then the
     // skinned tail of `cull_icb_2` (the phase-2 cull resets every already-drawn
-    // slot, so nothing double-draws). Resolves colour + depth at end-of-pass so
+    // slot, so nothing double-draws). Resolves color + depth at end-of-pass so
     // the post-decoration stack reads the combined result. A no-op (returns 0)
     // when there is nothing to redraw: two-pass off, no bindless geometry, or
     // the phase-2 ICB was not built.
@@ -362,7 +362,7 @@ impl MtlContext {
             return Ok(0);
         };
 
-        // Load the phase-1 MSAA colour + depth (phase 1 stored them under
+        // Load the phase-1 MSAA color + depth (phase 1 stored them under
         // two-pass), draw the disoccluded geometry on top, and resolve both at
         // end-of-pass: this resolve is the one the post stack consumes.
         let main_pass_desc = MTLRenderPassDescriptor::new();

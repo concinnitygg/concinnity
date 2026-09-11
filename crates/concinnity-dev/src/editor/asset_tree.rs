@@ -162,7 +162,7 @@ pub(crate) enum TreeRow {
         index: usize,
         name: String,
         asset_type: String,
-        // Colours the row's type caption, and marks an authored line: only one
+        // Colors the row's type caption, and marks an authored line: only one
         // of those has a world.jsonl entry the row menu can delete.
         badge: Badge,
     },

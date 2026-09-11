@@ -88,7 +88,7 @@ pub struct ChunkPlan {
     pub to_evict: Vec<ChunkCoord>,
 }
 
-/// Decides which chunks stream in and out of the camera-centred view window,
+/// Decides which chunks stream in and out of the camera-centered view window,
 /// and at which detail.
 ///
 /// The window owns only residency *bookkeeping* -- it never generates a chunk

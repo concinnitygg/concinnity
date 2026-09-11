@@ -1,6 +1,6 @@
 // src/metal/resources/textures.rs
 //
-// Texture-pool slot updates + IBL / colour-grading hot-swap. Driven both by
+// Texture-pool slot updates + IBL / color-grading hot-swap. Driven both by
 // the streaming subsystem (per-slot upload + eviction placeholders) and by
 // asset hot-reload (`cn debug` only) for envmaps + LUTs.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -32,11 +32,11 @@ impl MtlContext {
         Ok(())
     }
 
-    // Reset albedo texture-pool `slot` to a 1x1 mid-grey placeholder.
+    // Reset albedo texture-pool `slot` to a 1x1 mid-gray placeholder.
     //
     // Used by the asset-streaming subsystem to mark a slot whose texture is
     // not yet resident; a later `update_texture_slot` brings the real texture
-    // back. The grey is distinct from the white no-texture fallback so a
+    // back. The gray is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
     pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         if slot >= self.textures.len() {
@@ -51,7 +51,7 @@ impl MtlContext {
         Ok(())
     }
 
-    // Swap the live 3D colour-grading LUT for a fresh payload. Driven by
+    // Swap the live 3D color-grading LUT for a fresh payload. Driven by
     // asset hot-reload (`cn debug` only). The composite pass binds
     // `self.color_lut` every frame, so the new texture is sampled on the
     // next `draw_frame` with no pipeline rebuild.
@@ -68,7 +68,7 @@ impl MtlContext {
     // rebuild. The new payload may declare different mip / face sizes than
     // the original -- `EnvironmentMapTextures` is replaced wholesale.
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::bake::environment_map::deserialise(payload)
+        let view = crate::bake::environment_map::deserialize(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {}", e))?;
         let new_env = crate::metal::texture::upload_environment_map(
             &self.allocator,

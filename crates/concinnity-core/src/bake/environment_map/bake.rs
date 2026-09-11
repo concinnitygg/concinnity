@@ -20,7 +20,7 @@ pub const DEFAULT_IRRADIANCE_THETA_SAMPLES: u32 = 16;
 
 // Cube sampling
 
-// Cube-face sampler: project a normalised direction onto the dominant axis
+// Cube-face sampler: project a normalized direction onto the dominant axis
 // to pick a face, then bilinearly sample within that face. Edges are clamped
 // per-face (no seamless filtering).
 fn sample_cube(faces: &[Vec<f32>; 6], face_size: u32, dir: [f32; 3]) -> [f32; 3] {
@@ -732,7 +732,7 @@ mod tests {
     fn prefilter_solid_color_stays_solid_at_high_roughness() {
         let source = solid_cube(16, [0.5, 0.5, 0.5]);
         let mips = compute_prefilter(&source, 16, 4, 32, 0.0, false);
-        // Last mip should still be ~0.5 grey since input is uniform.
+        // Last mip should still be ~0.5 gray since input is uniform.
         let mean = face_mean(&mips[3][0]);
         for (c, m) in mean.iter().enumerate() {
             assert!((m - 0.5).abs() < 0.02, "channel {} mean {}", c, m);

@@ -48,7 +48,7 @@ mod resources;
 mod rt_ring;
 mod scoped_encoder;
 mod screenshot;
-mod slang_shaders;
+mod slang_builtins;
 mod streaming;
 mod text_upload;
 mod texture;

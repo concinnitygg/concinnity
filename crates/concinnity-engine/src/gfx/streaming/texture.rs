@@ -61,7 +61,7 @@ impl PayloadSource for MemPayloadSource {
             .payloads
             .get(id)
             .ok_or_else(|| format!("no payload for streamed texture {}", id))?;
-        let image = crate::bake::texture::deserialise(bytes)?;
+        let image = crate::bake::texture::deserialize(bytes)?;
         Ok(DecodedTexture { image })
     }
 }
@@ -104,7 +104,7 @@ impl PayloadSource for DiskPayloadSource {
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed texture {}", id))?;
         let bytes = super::file_range::read_at(&loc.path, loc.file_offset, loc.len)?;
-        let image = crate::bake::texture::deserialise(&bytes)?;
+        let image = crate::bake::texture::deserialize(&bytes)?;
         Ok(DecodedTexture { image })
     }
 }
@@ -310,10 +310,10 @@ mod tests {
         assert_eq!(nearest_sq_distance(&[], [5.0, 5.0, 5.0]), 0.0);
     }
 
-    // Build a minimal compiled RGBA8 texture payload via the shared serialiser.
+    // Build a minimal compiled RGBA8 texture payload via the shared serializer.
     fn make_payload(w: u32, h: u32, fill: u8) -> Vec<u8> {
         let pixels = std::iter::repeat_n(fill, (w * h * 4) as usize).collect();
-        crate::bake::texture::serialise(&TextureImage::rgba8(w, h, pixels))
+        crate::bake::texture::serialize(&TextureImage::rgba8(w, h, pixels))
     }
 
     #[test]

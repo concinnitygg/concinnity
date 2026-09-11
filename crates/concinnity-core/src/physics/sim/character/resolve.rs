@@ -1,6 +1,6 @@
 // One character move, resolved by sweeping and deflecting rather than by
 // simulating. A character is not a rigid body: it has to stop dead against a
-// wall, climb a kerb it would otherwise trip on, and stay stuck to the ground
+// wall, climb a curb it would otherwise trip on, and stay stuck to the ground
 // over a lip, none of which a solver produces from mass and impulses.
 //
 // The whole of it is sweeps against the same storage the step reads, so this

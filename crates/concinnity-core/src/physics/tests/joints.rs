@@ -210,7 +210,7 @@ fn a_hinge_motor_reaches_the_speed_it_was_given() {
     assert!((held - 1.0).abs() < 0.02, "hanging {held} out");
 }
 
-// The ceiling is the point of the motor: gravity asks 20 newton-metres of the
+// The ceiling is the point of the motor: gravity asks 20 newton-meters of the
 // arm held out horizontally, so a motor with one of them can never carry it
 // over the top however long it is left running.
 #[test]
@@ -237,7 +237,7 @@ fn a_hinge_motor_lifts_nothing_past_its_force_ceiling() {
     let stalled = highest(1.0);
     assert!(
         stalled < 0.05,
-        "a one-newton-metre motor cannot lift the arm above its hinge: {stalled}"
+        "a one-newton-meter motor cannot lift the arm above its hinge: {stalled}"
     );
     let driving = highest(200.0);
     assert!(

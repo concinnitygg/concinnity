@@ -94,7 +94,7 @@ pub(crate) fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32
         sum += integrate_edge(clipped[i], clipped[(i + 1) % n]);
     }
 
-    // The edge sum is twice the irradiance, and dividing by pi normalises the
+    // The edge sum is twice the irradiance, and dividing by pi normalizes the
     // clamped cosine, so the covered fraction is sum / (2 * pi).
     let form_factor = sum / (2.0 * core::f32::consts::PI);
     if two_sided {

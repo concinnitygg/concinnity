@@ -99,7 +99,7 @@ fn position(sim: &Simulation, handle: BodyHandle) -> [f32; 3] {
 }
 
 // The first thing terrain has to do, and the one that fails quietly: hold a
-// body up without letting it settle a millimetre lower every second.
+// body up without letting it settle a millimeter lower every second.
 #[test]
 fn a_body_rests_on_flat_terrain_without_sinking() {
     let (mut sim, _ground) = flat(2);
@@ -457,7 +457,7 @@ fn terrain_added_last(capacity: usize) -> (Simulation, BodyHandle) {
     (sim, ball)
 }
 
-// Which body a pair names first is an artefact of insertion order, not of the
+// Which body a pair names first is an artifact of insertion order, not of the
 // scene: a grid that happens to be the second body of a pair has to produce
 // the same contact as one that is the first, normal flipped to still point up
 // out of the surface. Otherwise a world would push its props into the ground

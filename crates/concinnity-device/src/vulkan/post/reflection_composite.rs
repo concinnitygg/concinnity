@@ -49,7 +49,7 @@ pub(in crate::vulkan) struct ReflectionCompositeResources {
     blur_framebuffer: OwnedFramebuffer,
     blur_extent: vk::Extent2D,
 
-    // One render pass (RGBA16F colour, DONT_CARE load, ends shader-readable) shared
+    // One render pass (RGBA16F color, DONT_CARE load, ends shader-readable) shared
     // by both passes; the framebuffer selects the target.
     render_pass: OwnedRenderPass,
 
@@ -134,7 +134,7 @@ pub(in crate::vulkan) fn rebuild_reflection_composite_pipelines(
     Ok(RebuiltReflectionComposite { blur, composite })
 }
 
-// Composite render pass: one HDR-format colour attachment, no depth. The fullscreen
+// Composite render pass: one HDR-format color attachment, no depth. The fullscreen
 // triangle overwrites every pixel so DONT_CARE is safe on load. Ends shader-readable
 // for the next pass (composite -> bloom/TAA; blur -> composite). Mirrors the SSR
 // resolve render pass.
@@ -154,7 +154,7 @@ fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, St
     let subpass = vk::SubpassDescription::default()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .color_attachments(std::slice::from_ref(&color_ref));
-    // Synchronise every prior colour write + shader read (the resolve output, the
+    // Synchronize every prior color write + shader read (the resolve output, the
     // pass-1 blur write, the scene + G-buffer) against this pass's reads + write.
     let dep = vk::SubpassDependency::default()
         .src_subpass(vk::SUBPASS_EXTERNAL)
@@ -189,7 +189,7 @@ pub(in crate::vulkan) struct CompositeInputViews<'a> {
     pub roughness_views: &'a [vk::ImageView],
 }
 
-// One full-screen colour target pre-transitioned to SHADER_READ_ONLY_OPTIMAL so the
+// One full-screen color target pre-transitioned to SHADER_READ_ONLY_OPTIMAL so the
 // descriptor sets bound to it at init see a valid layout before the first encode.
 fn create_target(ctx: &GpuUploadContext, width: u32, height: u32) -> Result<GpuImage, String> {
     let &GpuUploadContext {
@@ -239,20 +239,8 @@ fn create_composite_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -667,7 +655,7 @@ mod tests {
     // CPU<->GPU layout to assert.
     #[test]
     fn reflection_composite_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let shaders = super::compile_reflection_composite_shaders(false)

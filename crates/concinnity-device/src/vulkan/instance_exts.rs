@@ -13,7 +13,7 @@ use ash::vk;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct OptionalInstanceExts {
     // VK_EXT_swapchain_colorspace, which widens the surface-format query to the
-    // extended-range colour spaces the HDR output path looks for. Only ever set
+    // extended-range color spaces the HDR output path looks for. Only ever set
     // when the world asked for HDR.
     pub swapchain_colorspace: bool,
     // VK_KHR_portability_enumeration. The loader hides portability drivers
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn portability_follows_the_loader_alone() {
-        // Unlike the colour space, nothing requests portability: enable it
+        // Unlike the color space, nothing requests portability: enable it
         // wherever the loader has it so MoltenVK is enumerable.
         assert!(select(&[PORTABILITY], false).portability_enumeration);
         assert!(select(&[PORTABILITY], true).portability_enumeration);
@@ -108,7 +108,7 @@ mod tests {
             vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
         );
 
-        // The colour space carries no create flag of its own.
+        // The color space carries no create flag of its own.
         let colorspace_only = select(&[COLORSPACE], true);
         assert_eq!(colorspace_only.names(), vec![COLORSPACE]);
         assert_eq!(colorspace_only.flags(), vk::InstanceCreateFlags::empty());

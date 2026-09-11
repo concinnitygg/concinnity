@@ -18,7 +18,7 @@
 //!    for (width, height, RGBA pixels).
 //! 3. No other files need to change.
 
-// The pre-compiled payload `deserialise` / `serialise` and the resolution-cap
+// The pre-compiled payload `deserialize` / `serialize` and the resolution-cap
 // `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
@@ -27,7 +27,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use concinnity_core::bake::texture::{
-    TextureFormat, TextureImage, TextureMip, downscale_rgba, serialise,
+    TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
 };
 use concinnity_core::components::Texture;
 
@@ -70,7 +70,7 @@ pub(crate) fn compile_texture_payload(
         other => return Err(format!("unknown texture generator '{other}'")),
     };
 
-    Ok(serialise(&image))
+    Ok(serialize(&image))
 }
 
 fn rgba8_image((width, height, pixels): (u32, u32, Vec<u8>)) -> TextureImage {
@@ -221,7 +221,7 @@ fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
 
 // Decode a JPEG file to RGBA. The `jpeg-decoder` crate (already on the
 // dep tree for glb image fallback) handles baseline + progressive JPEGs
-// in RGB / Grayscale / CMYK colour modes; we normalise to RGBA so the
+// in RGB / Grayscale / CMYK color modes; we normalize to RGBA so the
 // pipeline downstream of this function doesn't need a per-format branch.
 // Used for PolyHaven-style PBR sets where the diffuse + roughness
 // channels ship as `.jpg`.
@@ -312,7 +312,7 @@ fn decode_png_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let height = info.height;
     let raw = &img_data[..info.buffer_size()];
 
-    // normalise all color types to RGBA
+    // normalize all color types to RGBA
     let pixels = match info.color_type {
         ColorType::Rgba => raw.to_vec(),
         ColorType::Rgb => {
@@ -399,7 +399,7 @@ fn load_gltf_image(
     decode_glb_image_from_doc(&doc, source, image_index)
 }
 
-/// Pulled out of `load_glb_image` so the caller can amortise `parse_glb`
+/// Pulled out of `load_glb_image` so the caller can amortize `parse_glb`
 /// across every texture / mesh / skinned mesh that shares a `.glb` in a
 /// single asset hot-reload pass: the worker thread keeps a
 /// `HashMap<String, gltf::Gltf>` and calls this entry point per texture
@@ -426,7 +426,7 @@ pub fn decode_glb_image_from_doc(
     }
 }
 
-// 8x8 grey/white checkerboard tiled across the requested resolution.
+// 8x8 gray/white checkerboard tiled across the requested resolution.
 // Cell size scales so the pattern stays visually consistent regardless of
 // resolution.
 fn generate_checker(resolution: u32) -> (u32, u32, Vec<u8>) {
@@ -444,7 +444,7 @@ fn generate_checker(resolution: u32) -> (u32, u32, Vec<u8>) {
     (size, size, pixels)
 }
 
-// Running-bond brick pattern: warm terracotta bricks separated by light grey
+// Running-bond brick pattern: warm terracotta bricks separated by light gray
 // mortar lines.  Every other row is offset by half a brick width.
 fn generate_brick(resolution: u32) -> (u32, u32, Vec<u8>) {
     let size = resolution.max(8);
@@ -493,7 +493,7 @@ fn generate_concrete(resolution: u32) -> (u32, u32, Vec<u8>) {
     for y in 0..size {
         for x in 0..size {
             let v = smooth_noise(x, y, size);
-            // concrete sits in the 140-190 grey range
+            // concrete sits in the 140-190 gray range
             let g = 140u8.saturating_add((v >> 2) as u8).min(190);
             pixels.extend_from_slice(&[g, g, g, 255]);
         }
@@ -578,23 +578,23 @@ fn generate_grass(resolution: u32) -> (u32, u32, Vec<u8>) {
 //
 // The texture is 4 pixels wide and `resolution` pixels tall. Metal maps
 // V = 0 to the first row stored in memory and V = 1 to the last row, with
-// V = 0 at the top of the image. Row 0 is therefore the zenith colour (deep
-// azure) and the last row is the horizon colour (pale blue-white). The skybox
+// V = 0 at the top of the image. Row 0 is therefore the zenith color (deep
+// azure) and the last row is the horizon color (pale blue-white). The skybox
 // mesh sets V = 0 on wall top edges (zenith) and V = 1 on wall bottom edges
 // (horizon), so the gradient renders correctly from ground level to overhead.
 //
 // Width 4 is sufficient because the gradient varies only in V; any
-// horizontal filtering artefacts are invisible on a featureless sky.
+// horizontal filtering artifacts are invisible on a featureless sky.
 fn generate_sky(resolution: u32) -> (u32, u32, Vec<u8>) {
     let height = resolution.max(64);
     let width = 4u32;
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);
 
-    // zenith colour: deep azure
+    // zenith color: deep azure
     let zenith = [28u8, 82u8, 185u8];
-    // mid-sky colour: clear cornflower blue
+    // mid-sky color: clear cornflower blue
     let mid = [100u8, 160u8, 220u8];
-    // horizon colour: pale blue-white
+    // horizon color: pale blue-white
     let horizon = [195u8, 220u8, 240u8];
 
     // row 0 = V = 0 = zenith (dark azure, overhead);
@@ -682,7 +682,7 @@ fn generate_wood(resolution: u32) -> (u32, u32, Vec<u8>) {
     (size, size, pixels)
 }
 
-// Ceramic tile: square light-grey tiles separated by narrow dark grout lines.
+// Ceramic tile: square light-gray tiles separated by narrow dark grout lines.
 fn generate_tile(resolution: u32) -> (u32, u32, Vec<u8>) {
     let size = resolution.max(64);
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
@@ -718,7 +718,7 @@ fn generate_tile(resolution: u32) -> (u32, u32, Vec<u8>) {
     (size, size, pixels)
 }
 
-// Brushed metal: cool grey base with horizontal brush-stroke bands plus
+// Brushed metal: cool gray base with horizontal brush-stroke bands plus
 // a fine vertical highlight stripe to simulate directional polishing.
 fn generate_metal(resolution: u32) -> (u32, u32, Vec<u8>) {
     let size = resolution.max(64);
@@ -733,7 +733,7 @@ fn generate_metal(resolution: u32) -> (u32, u32, Vec<u8>) {
             let highlight_u = (x as f32 / size as f32 - 0.5).abs();
             let highlight = (1.0 - highlight_u * 6.0).clamp(0.0, 1.0) * 0.15;
 
-            // Base: cool grey [165, 172, 178] modulated by band noise.
+            // Base: cool gray [165, 172, 178] modulated by band noise.
             let base = 165.0 + band * 30.0 + highlight * 60.0;
             let r = (base * 0.97).clamp(0.0, 255.0) as u8;
             let g = (base).clamp(0.0, 255.0) as u8;
@@ -747,8 +747,8 @@ fn generate_metal(resolution: u32) -> (u32, u32, Vec<u8>) {
 // Natural terrain ground: earthy soil and rock blended via smooth noise.
 //
 // The terrain mesh assigns UV = [world_x, world_z], so this texture tiles
-// across the surface at roughly one repeat per metre. Two noise octaves produce
-// broad colour zones (sand → earthy brown → rocky grey) with finer variation
+// across the surface at roughly one repeat per meter. Two noise octaves produce
+// broad color zones (sand → earthy brown → rocky gray) with finer variation
 // layered on top for ground-level detail.
 fn generate_terrain(resolution: u32) -> (u32, u32, Vec<u8>) {
     let size = resolution.max(64);
@@ -769,7 +769,7 @@ fn generate_terrain(resolution: u32) -> (u32, u32, Vec<u8>) {
             // Blend between three ground types by zone value:
             //   0.0-0.35  sandy soil  [185, 155, 100]
             //   0.35-0.65 earthy brown [130, 100, 65]
-            //   0.65-1.0  rocky grey  [120, 115, 108]
+            //   0.65-1.0  rocky gray  [120, 115, 108]
             let (base_r, base_g, base_b) = if zone < 0.35 {
                 let t = zone / 0.35;
                 (
@@ -798,16 +798,16 @@ fn generate_terrain(resolution: u32) -> (u32, u32, Vec<u8>) {
     (size, size, pixels)
 }
 
-// Rough-cut stone: dark grey base with natural variation and faint horizontal
+// Rough-cut stone: dark gray base with natural variation and faint horizontal
 // stratification lines, suitable for cave walls, dungeon floors, or fortress
-// exteriors. Colour sits in the 60-120 grey range with a cool blue-grey cast.
+// exteriors. Color sits in the 60-120 gray range with a cool blue-gray cast.
 fn generate_stone(resolution: u32) -> (u32, u32, Vec<u8>) {
     let size = resolution.max(64);
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
     for y in 0..size {
         for x in 0..size {
-            // Base noise: mid-frequency variation in cool grey tones.
+            // Base noise: mid-frequency variation in cool gray tones.
             let base = smooth_noise(x, y, size) as f32 / 255.0;
             // Fine detail: higher-frequency grain.
             let detail = smooth_noise(
@@ -824,7 +824,7 @@ fn generate_stone(resolution: u32) -> (u32, u32, Vec<u8>) {
             // strat adds subtle horizontal banding.
             let t = base * 0.6 + detail * 0.25 + strat * 0.15;
 
-            // Cool grey-blue stone: [60, 65, 75] to [115, 118, 125]
+            // Cool gray-blue stone: [60, 65, 75] to [115, 118, 125]
             let r = (60.0 + t * 55.0) as u8;
             let g = (65.0 + t * 53.0) as u8;
             let b = (75.0 + t * 50.0) as u8;
@@ -837,7 +837,7 @@ fn generate_stone(resolution: u32) -> (u32, u32, Vec<u8>) {
 
 // Smooth painted plaster: near-white base with very low-frequency noise that
 // simulates slight surface irregularities from hand-application. Suitable for
-// interior room walls, ceilings, and any neutral indoor surface. Colour sits
+// interior room walls, ceilings, and any neutral indoor surface. Color sits
 // in the 200-240 range, slightly warm (cream-white rather than pure white).
 fn generate_plaster(resolution: u32) -> (u32, u32, Vec<u8>) {
     let size = resolution.max(64);
@@ -1014,7 +1014,7 @@ mod tests {
         let (sof, precision) = if lossless { (0xC3u8, 16u8) } else { (0xC0, 8) };
         let mut v = vec![0xFF, 0xD8]; // SOI
         if !lossless {
-            // DQT: table 0 with unit quantisation.
+            // DQT: table 0 with unit quantization.
             v.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
             v.extend_from_slice(&[1u8; 64]);
         }
@@ -1250,8 +1250,8 @@ mod tests {
 
     // compile_texture_payload: file-backed branch and payload envelope
 
-    fn deserialise(payload: &[u8]) -> concinnity_core::bake::texture::TextureImage {
-        concinnity_core::bake::texture::deserialise(payload).expect("deserialise payload")
+    fn deserialize(payload: &[u8]) -> concinnity_core::bake::texture::TextureImage {
+        concinnity_core::bake::texture::deserialize(payload).expect("deserialize payload")
     }
 
     #[test]
@@ -1265,7 +1265,7 @@ mod tests {
         );
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src}), None).expect("ok");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (2, 1));
         assert_eq!(image.mips.len(), 1);
@@ -1284,7 +1284,7 @@ mod tests {
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}), None)
                 .expect("ok");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!((image.width(), image.height()), (2, 2));
         assert_eq!(image.mips[0].data.len(), 2 * 2 * 4);
     }
@@ -1301,7 +1301,7 @@ mod tests {
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src, "max_size": 64}), None)
                 .expect("ok");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!((image.width(), image.height()), (2, 1));
         assert_eq!(image.mips[0].data, data);
     }
@@ -1318,13 +1318,13 @@ mod tests {
         );
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!(image.mips.len(), 2);
         assert_eq!((image.width(), image.height()), (4, 4));
     }
 
-    // A compressed chain honours `max_size` by starting at a smaller stored
+    // A compressed chain honors `max_size` by starting at a smaller stored
     // level instead of resampling, which would need a block encoder.
     #[test]
     fn compile_texture_payload_caps_a_compressed_chain_by_dropping_mips() {
@@ -1337,7 +1337,7 @@ mod tests {
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}), None)
                 .expect("compile");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!((image.width(), image.height()), (2, 2));
         assert_eq!(image.mips.len(), 1);
@@ -1402,14 +1402,14 @@ mod tests {
         let src = write_file(&dir, "t.dds", &bc1_dds(8, 8, 4));
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!(image.mips.len(), 4);
         assert_eq!((image.width(), image.height()), (8, 8));
         assert_eq!((image.mips[3].width, image.mips[3].height), (1, 1));
     }
 
-    // A DDS chain honours `max_size` by starting at a smaller stored level;
+    // A DDS chain honors `max_size` by starting at a smaller stored level;
     // scenes that cap imported textures must not ship the full-size blocks.
     #[test]
     fn compile_texture_payload_caps_a_dds_chain_by_dropping_mips() {
@@ -1418,7 +1418,7 @@ mod tests {
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src, "max_size": 2}), None)
                 .expect("compile");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Bc1);
         assert_eq!((image.width(), image.height()), (2, 2));
         assert_eq!(image.mips.len(), 2);
@@ -1437,7 +1437,7 @@ mod tests {
 
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
 
         assert_eq!(image.format, TextureFormat::Bc5);
         assert_eq!((image.width(), image.height()), (8, 8));
@@ -1453,7 +1453,7 @@ mod tests {
         let src = write_file(&dir, "t.dds", &bc1_dds(4, 4, 1));
         let payload =
             compile_texture_payload(&serde_json::json!({"source": src}), None).expect("compile");
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (4, 4));
         assert!(
@@ -1541,7 +1541,7 @@ mod tests {
         )
         .expect("ok");
         // Sky is always 4 pixels wide by `resolution` tall.
-        let image = deserialise(&payload);
+        let image = deserialize(&payload);
         assert_eq!((image.width(), image.height()), (4, 64));
         assert_eq!(image.mips[0].data.len(), 4 * 64 * 4);
     }
@@ -1694,7 +1694,7 @@ mod tests {
     fn generate_metal_pixel_values_in_valid_range() {
         let (_, _, px) = generate_metal(64);
         for chunk in px.chunks(4) {
-            // All channels should be plausible grey values, not black or white.
+            // All channels should be plausible gray values, not black or white.
             assert!(chunk[0] > 50 && chunk[0] < 250);
         }
     }
@@ -1712,13 +1712,13 @@ mod tests {
     }
 
     #[test]
-    fn generate_stone_is_dark_grey() {
+    fn generate_stone_is_dark_gray() {
         let (_, _, px) = generate_stone(64);
         let avg_r = px.chunks(4).map(|c| c[0] as u32).sum::<u32>() / (64 * 64);
         // stone should be noticeably darker than white (avg R in 60-130 range)
         assert!(
             avg_r > 55 && avg_r < 135,
-            "expected dark grey, avg_r={avg_r}"
+            "expected dark gray, avg_r={avg_r}"
         );
     }
 
@@ -1739,7 +1739,7 @@ mod tests {
             let args = serde_json::json!({"generator": generator, "resolution": res});
             let payload = compile_texture_payload(&args, None)
                 .unwrap_or_else(|e| panic!("{generator} should compile: {e}"));
-            let image = deserialise(&payload);
+            let image = deserialize(&payload);
             assert_eq!(
                 (image.width(), image.height()),
                 (res, res),

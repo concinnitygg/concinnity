@@ -4,7 +4,7 @@
 /// thicker near the ground and thinning with height, with extra glow around the
 /// sun.
 ///
-/// Only one `VolumetricFog` is honoured: the first declared instance wins;
+/// Only one `VolumetricFog` is honored: the first declared instance wins;
 /// later instances are silently dropped. With none declared, there is no fog.
 ///
 /// ```rust
@@ -23,7 +23,7 @@
 pub struct VolumetricFog {
     /// Master toggle. `false` disables the fog even when this asset is present.
     pub enabled: bool,
-    /// Linear-space RGB tint of the fog: the colour the camera sees in the far
+    /// Linear-space RGB tint of the fog: the color the camera sees in the far
     /// distance.
     pub color: [f32; 3],
     /// Base thickness of the fog at `height_reference` (per world unit). Higher
@@ -42,7 +42,7 @@ pub struct VolumetricFog {
     /// around the sun (haloes), negative values scatter away from it, 0 is
     /// uniform.
     pub phase_g: f32,
-    /// Constant ambient brightness so the fog keeps some colour in shaded areas.
+    /// Constant ambient brightness so the fog keeps some color in shaded areas.
     pub ambient: f32,
 }
 

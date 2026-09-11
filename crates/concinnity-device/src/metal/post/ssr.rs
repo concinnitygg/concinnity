@@ -21,7 +21,7 @@ use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
 };
-use crate::metal::slang_shaders::{REFLECTION_BLUR, REFLECTION_COMPOSITE, SSR_RESOLVE};
+use crate::metal::slang_builtins::{REFLECTION_BLUR, REFLECTION_COMPOSITE, SSR_RESOLVE};
 
 // All screen-space-reflection feature state grouped into one unit: the
 // resolved tunables, the resolve-output target, and the resolve pipeline.
@@ -109,7 +109,7 @@ pub(crate) struct SsrTargets {
     // radiance in `.rgb` and the Fresnel/gloss composite weight in `.a` here,
     // and the reflection composite blurs + composites it into `output`.
     pub reflection: Retained<ProtocolObject<dyn MTLTexture>>,
-    // Scene with reflections composited in. Becomes the scene colour the TAA /
+    // Scene with reflections composited in. Becomes the scene color the TAA /
     // bloom / composite passes consume when SSR or RT reflections are on.
     pub output: Retained<ProtocolObject<dyn MTLTexture>>,
     // Reduced-resolution roughness blur of `reflection` (the blur pass writes it,
@@ -199,7 +199,7 @@ impl MtlContext {
                 enc.set_fragment_texture(gb_normal_depth, 1);
                 enc.set_fragment_texture(gb_roughness, 2);
                 // The IBL prefilter cubemap is the miss / screen-edge fallback.
-                // It is always valid (a grey fallback when no EnvironmentMap is
+                // It is always valid (a gray fallback when no EnvironmentMap is
                 // bound); `SsrParams.prefilter_mip_count == 0` tells the shader to
                 // ignore it in that case.
                 enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);

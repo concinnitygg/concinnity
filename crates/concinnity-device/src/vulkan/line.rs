@@ -1,7 +1,7 @@
 // src/vulkan/line.rs
 //
 // World-space line pass for the Vulkan backend. Runs at the tail of the
-// hdr_resolve decoration chain, after the main pass resolved colour into the
+// hdr_resolve decoration chain, after the main pass resolved color into the
 // HDR scene target and depth into the main depth image, so the lines layer over
 // the lit scene and SSR / TAA treat them like any other scene content.
 //
@@ -13,8 +13,6 @@
 //
 // Mirrors src/directx/line.rs and src/metal/line.rs.
 
-use std::ffi::CString;
-
 use ash::vk;
 
 use crate::vulkan::owned::{
@@ -24,7 +22,7 @@ use crate::vulkan::owned::{
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::pipeline::spv_module;
+use super::pipeline::GraphicsStages;
 use crate::gfx::render_types::LineVertex;
 use crate::vulkan::slang_builtins::SlangCompile;
 
@@ -92,7 +90,7 @@ pub(in crate::vulkan) struct LineResources {
     view_sets: Vec<vk::DescriptorSet>,
 
     // One framebuffer per frame-in-flight slot, each binding its frame slot's
-    // `hdr_resolve_images[i].view` as the sole colour attachment.
+    // `hdr_resolve_images[i].view` as the sole color attachment.
     framebuffers: Vec<OwnedFramebuffer>,
 
     sampler: vk::Sampler,
@@ -107,7 +105,7 @@ pub(in crate::vulkan) struct LineDeviceContext<'a> {
 }
 
 // Render-target inputs the line pass writes into / samples from: the resolved
-// HDR colour attachment (format + per-frame views), the main depth views, the
+// HDR color attachment (format + per-frame views), the main depth views, the
 // shared sampler, and the framebuffer extent.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct LinePassTargets<'a> {
@@ -293,7 +291,7 @@ fn create_line_render_pass(
     device: &VkDevice,
     format: vk::Format,
 ) -> Result<OwnedRenderPass, String> {
-    // One colour attachment: the resolved HDR scene. The preceding pass left it
+    // One color attachment: the resolved HDR scene. The preceding pass left it
     // in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT during the
     // subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so SSR / TAA / bloom
     // / composite can sample it. Mirrors the decal render pass.
@@ -462,20 +460,9 @@ fn create_line_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
-    // `LineVertex` (position, edge, colour) at 32 bytes, asserted by
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
+    // `LineVertex` (position, edge, color) at 32 bytes, asserted by
     // `line_vertex_layout_matches_shaders`.
     let bindings = [vk::VertexInputBindingDescription::default()
         .binding(0)
@@ -514,7 +501,7 @@ fn create_line_pipeline(
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0);
     let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        // The pass writes the SINGLE-SAMPLE resolved HDR, not the MSAA colour.
+        // The pass writes the SINGLE-SAMPLE resolved HDR, not the MSAA color.
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(false)
@@ -628,7 +615,7 @@ impl VkContext {
 
     // Encode the line pass: one unindexed triangle list covering every expanded
     // ribbon, alpha-blended into the resolved HDR target. `vp` is the same
-    // view-projection the main pass rasterised with (jittered under TAA), so a
+    // view-projection the main pass rasterized with (jittered under TAA), so a
     // line sits on the pixel its geometry did.
     pub(in crate::vulkan) fn encode_lines(
         &self,
@@ -670,7 +657,7 @@ impl VkContext {
             .framebuffer(lines.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
 
-        // Negative-height viewport matches the main pass so the rasterised
+        // Negative-height viewport matches the main pass so the rasterized
         // pixel grid lines up with the depth attachment being sampled.
         let vp_state = vk::Viewport {
             x: 0.0,

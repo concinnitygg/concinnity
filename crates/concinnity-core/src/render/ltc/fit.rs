@@ -10,7 +10,7 @@
 // shading becomes: fetch `Minv`, transform the quad's corners, evaluate the
 // closed-form polygon integral.
 //
-// This module fits `M` per (roughness, view angle) cell by minimising the error
+// This module fits `M` per (roughness, view angle) cell by minimizing the error
 // between the LTC distribution and the real GGX lobe, then stores the inverse.
 //
 // SELF-CONTAINED BY DESIGN: the only dependency is `rayon`, which both the crate
@@ -20,7 +20,7 @@
 // Table layout (see `fit_table`):
 //   axis x = roughness in [0, 1], alpha = roughness^2
 //   axis y = sqrt(1 - cos(theta_view)), so grazing angles get more resolution
-//   matrix entry = the 4 non-trivial entries of Minv, normalised so Minv[1][1] = 1
+//   matrix entry = the 4 non-trivial entries of Minv, normalized so Minv[1][1] = 1
 //   magnitude entry = (directional albedo, Fresnel weight) for the Schlick split
 
 // Number of stratified samples per axis when estimating the fit error. The error
@@ -276,7 +276,7 @@ fn compute_avg_terms(v: Vec3, alpha: f32) -> (f32, f32, Vec3) {
 
 // Fit error between the LTC and the real GGX lobe. Draws from both
 // distributions and weights each sample by the sum of the two pdfs, so neither
-// tail dominates. The cubed difference penalises large local errors harder than
+// tail dominates. The cubed difference penalizes large local errors harder than
 // an L2 norm would, which is what keeps highlight shapes faithful.
 fn compute_error(ltc: &Ltc, v: Vec3, alpha: f32) -> f32 {
     let mut error = 0.0_f64;
@@ -323,7 +323,7 @@ fn compute_error(ltc: &Ltc, v: Vec3, alpha: f32) -> f32 {
     (error / (n * n) as f64) as f32
 }
 
-// Downhill-simplex minimisation over `dim` parameters (2 at normal incidence,
+// Downhill-simplex minimization over `dim` parameters (2 at normal incidence,
 // where the skew is pinned to zero, otherwise 3). Chosen over a gradient method
 // because the error estimator is a stochastic-ish sum with no analytic gradient.
 fn nelder_mead<F: FnMut(&[f32]) -> f32>(
@@ -464,7 +464,7 @@ fn fit_cell(v: Vec3, alpha: f32, seed: &Ltc, isotropic: bool) -> Ltc {
     ltc
 }
 
-// The four stored entries of `Minv`, normalised so its middle entry is 1.
+// The four stored entries of `Minv`, normalized so its middle entry is 1.
 //
 // Only the direction of a transformed vertex matters to the polygon integral, so
 // a uniform scale of `Minv` cancels; dividing through by the middle entry is what
@@ -503,7 +503,7 @@ pub(crate) fn fit_table(size: usize) -> LtcTable {
             let mut row_matrix = Vec::with_capacity(size);
             let mut row_magnitude = Vec::with_capacity(size);
             for t in 0..size {
-                // Parameterised by sqrt(1 - cos), which spends more of the axis
+                // Parameterized by sqrt(1 - cos), which spends more of the axis
                 // on grazing angles where the lobe changes fastest.
                 let x = t as f32 / (size - 1) as f32;
                 let cos_theta = (1.0 - x * x).clamp(-1.0, 1.0);
@@ -702,7 +702,7 @@ mod tests {
         }
     }
 
-    // The middle entry is normalised away, so the stored matrix must reproduce
+    // The middle entry is normalized away, so the stored matrix must reproduce
     // the same transformed *direction* as the full inverse.
     #[test]
     fn the_packed_matrix_preserves_transformed_directions() {

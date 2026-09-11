@@ -17,11 +17,11 @@
 // that target's SRV. Mirrors src/metal/post/ssr.rs (the composite half).
 
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
 
-use crate::directx::com;
 use crate::directx::context::{DxContext, dump_on_err};
-use crate::directx::pipeline::serialize_desc_and_create;
+use concinnity_core::render::post::device::PostBlend;
+
+use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
 use crate::directx::slang_builtins;
@@ -117,70 +117,6 @@ fn srv_table_root_sig(
     serialize_desc_and_create(device, &desc, name)
 }
 
-// Fullscreen PSO writing `SSR_OUTPUT_FORMAT` (RGBA16F): no depth, no blend, no
-// vertex input.
-fn create_fullscreen_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = SSR_OUTPUT_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create reflection composite PSO: {e}"))
-}
-
 // Resources
 
 // Reflection-composite resources, held by `DxContext` when SSR resolve OR RT
@@ -188,7 +124,7 @@ fn create_fullscreen_pso(
 // scene-with-reflections the post stack consumes via `scene_srv_for_post`.
 pub(in crate::directx) struct ReflectionCompositeResources {
     // Composited scene (full render resolution): the blurred reflection over the
-    // scene. Becomes the scene colour TAA / bloom / composite / glass consume.
+    // scene. Becomes the scene color TAA / bloom / composite / glass consume.
     pub(in crate::directx) output: ID3D12Resource,
     pub(in crate::directx) output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(in crate::directx) output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -262,15 +198,26 @@ impl ReflectionCompositeResources {
         )?;
         let blur_pso = dump_on_err(
             info_queue,
-            create_fullscreen_pso(device, &blur_root_sig, &shaders.vs, &shaders.blur_ps),
+            create_blended_composite_pso(
+                device,
+                &blur_root_sig,
+                &shaders.vs,
+                &shaders.blur_ps,
+                SSR_OUTPUT_FORMAT,
+                PostBlend::Replace,
+                "reflection blur",
+            ),
         )?;
         let composite_pso = dump_on_err(
             info_queue,
-            create_fullscreen_pso(
+            create_blended_composite_pso(
                 device,
                 &composite_root_sig,
                 &shaders.vs,
                 &shaders.composite_ps,
+                SSR_OUTPUT_FORMAT,
+                PostBlend::Replace,
+                "reflection composite",
             ),
         )?;
 
@@ -346,15 +293,26 @@ pub(in crate::directx) fn rebuild_reflection_composite_pipelines(
     let shaders = compile_refl_composite_shaders(hot_reload)?;
     let blur_pso = dump_on_err(
         info_queue,
-        create_fullscreen_pso(device, &rc.blur_root_sig, &shaders.vs, &shaders.blur_ps),
+        create_blended_composite_pso(
+            device,
+            &rc.blur_root_sig,
+            &shaders.vs,
+            &shaders.blur_ps,
+            SSR_OUTPUT_FORMAT,
+            PostBlend::Replace,
+            "reflection blur",
+        ),
     )?;
     let composite_pso = dump_on_err(
         info_queue,
-        create_fullscreen_pso(
+        create_blended_composite_pso(
             device,
             &rc.composite_root_sig,
             &shaders.vs,
             &shaders.composite_ps,
+            SSR_OUTPUT_FORMAT,
+            PostBlend::Replace,
+            "reflection composite",
         ),
     )?;
     Ok(RebuiltReflectionComposite {
@@ -453,7 +411,7 @@ mod tests {
     // slangc, matching `concinnity_slang`'s own round-trip tests.
     #[test]
     fn reflection_composite_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         super::compile_refl_composite_shaders(false)

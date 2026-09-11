@@ -1,7 +1,7 @@
 // Build-time HDR source primitives shared by the CubemapTexture and
 // EnvironmentMap compilers: a Radiance `.hdr` (RGBE) decoder, an
 // equirectangular-to-cubemap resampler, and the raw six-face cube payload
-// format (magic / header / `deserialise`). All build-only: the runtime plays
+// format (magic / header / `deserialize`). All build-only: the runtime plays
 // the compiled payloads and never decodes an HDR source or an equirect.
 //
 // Cube payload format (little-endian), written by the CubemapTexture compiler:
@@ -22,11 +22,11 @@ pub(crate) const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
 pub(crate) const CUBE_FORMAT_RGBA32F: u32 = 0;
 pub(crate) const CUBE_PAYLOAD_HEADER_BYTES: usize = 16;
 
-// Deserialise a cubemap payload back into (face_size, RGBA32F bytes for 6 faces).
+// Deserialize a cubemap payload back into (face_size, RGBA32F bytes for 6 faces).
 // The byte slice returned is borrowed from the input; callers can reinterpret
 // it as `&[f32]` after a length check.
 #[cfg(test)]
-pub(crate) fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
+pub(crate) fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     let mut r = ByteReader::open_payload(
         bytes,
         CUBE_PAYLOAD_MAGIC,
@@ -365,7 +365,7 @@ mod tests {
         assert!(err.contains("magic"), "got: {}", err);
     }
 
-    // Cube payload deserialise
+    // Cube payload deserialize
 
     // A CUBE payload header followed by `faces` complete RGBA32F faces, which
     // is six for a well-formed payload and fewer for the truncation tests.
@@ -381,8 +381,8 @@ mod tests {
     }
 
     #[test]
-    fn deserialise_rejects_a_payload_shorter_than_the_header() {
-        let err = deserialise(&[0u8; 8]).unwrap_err();
+    fn deserialize_rejects_a_payload_shorter_than_the_header() {
+        let err = deserialize(&[0u8; 8]).unwrap_err();
         assert_eq!(
             err,
             "cubemap payload too short: 8 bytes (need at least 16 for header)"
@@ -390,29 +390,29 @@ mod tests {
     }
 
     #[test]
-    fn deserialise_rejects_a_foreign_magic() {
+    fn deserialize_rejects_a_foreign_magic() {
         let mut v = cube_payload(2, 1, CUBE_FORMAT_RGBA32F, 6);
         v[0..4].copy_from_slice(&0xdead_beefu32.to_le_bytes());
-        let err = deserialise(&v).unwrap_err();
+        let err = deserialize(&v).unwrap_err();
         assert!(err.contains("0xdeadbeef"), "got: {err}");
     }
 
     #[test]
-    fn deserialise_rejects_a_multi_mip_payload() {
-        let err = deserialise(&cube_payload(2, 2, CUBE_FORMAT_RGBA32F, 6)).unwrap_err();
+    fn deserialize_rejects_a_multi_mip_payload() {
+        let err = deserialize(&cube_payload(2, 2, CUBE_FORMAT_RGBA32F, 6)).unwrap_err();
         assert!(err.contains("mip_count 2"), "got: {err}");
     }
 
     #[test]
-    fn deserialise_rejects_an_unknown_format_id() {
-        let err = deserialise(&cube_payload(2, 1, 7, 6)).unwrap_err();
+    fn deserialize_rejects_an_unknown_format_id() {
+        let err = deserialize(&cube_payload(2, 1, 7, 6)).unwrap_err();
         assert!(err.contains("format_id 7"), "got: {err}");
     }
 
     #[test]
-    fn deserialise_rejects_a_payload_missing_faces() {
+    fn deserialize_rejects_a_payload_missing_faces() {
         // face_size 4 needs 16 + 6 * 256 bytes; only four faces are present.
-        let err = deserialise(&cube_payload(4, 1, CUBE_FORMAT_RGBA32F, 4)).unwrap_err();
+        let err = deserialize(&cube_payload(4, 1, CUBE_FORMAT_RGBA32F, 4)).unwrap_err();
         assert_eq!(
             err,
             "cubemap payload too short for face_size 4: need 1552 bytes, got 1040"
@@ -422,12 +422,12 @@ mod tests {
     // `6 * face_size^2 * 16` wraps at this face size. The footprint must be
     // reported rather than wrapped into a length the payload appears to hold.
     #[test]
-    fn deserialise_rejects_a_face_size_that_overflows_its_footprint() {
+    fn deserialize_rejects_a_face_size_that_overflows_its_footprint() {
         let mut v = CUBE_PAYLOAD_MAGIC.to_le_bytes().to_vec();
         v.extend_from_slice(&u32::MAX.to_le_bytes());
         v.extend_from_slice(&1u32.to_le_bytes());
         v.extend_from_slice(&CUBE_FORMAT_RGBA32F.to_le_bytes());
-        let err = deserialise(&v).unwrap_err();
+        let err = deserialize(&v).unwrap_err();
         assert!(err.contains("overflow"), "got: {err}");
     }
 

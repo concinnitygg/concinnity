@@ -2,7 +2,7 @@
 //! crate. The file -> pixels decoders (PNG / JPEG / DDS / TGA / KTX2 /
 //! glb-embedded images) live in `concinnity_cook::compile::texture`; this module keeps
 //! only what a running engine needs with no image-decode dependencies: turning a
-//! compiled payload back into a [`TextureImage`] (`deserialise`) and the
+//! compiled payload back into a [`TextureImage`] (`deserialize`) and the
 //! box-filter `downscale_rgba` the build pipeline uses to cap oversized source
 //! maps.
 //!
@@ -177,10 +177,10 @@ impl TextureImage {
     }
 }
 
-/// Serialise a [`TextureImage`] into the tagged payload the runtime reads. The
+/// Serialize a [`TextureImage`] into the tagged payload the runtime reads. The
 /// build crate writes payloads through this so the reader and writer share one
 /// format definition.
-pub fn serialise(image: &TextureImage) -> Vec<u8> {
+pub fn serialize(image: &TextureImage) -> Vec<u8> {
     let total: usize = HEADER_BYTES + image.mips.iter().map(|m| 12 + m.data.len()).sum::<usize>();
     let mut buf = Vec::with_capacity(total);
     buf.extend_from_slice(&TEXTURE_PAYLOAD_MAGIC.to_le_bytes());
@@ -195,11 +195,11 @@ pub fn serialise(image: &TextureImage) -> Vec<u8> {
     buf
 }
 
-/// Deserialise a tagged payload back into a [`TextureImage`].
+/// Deserialize a tagged payload back into a [`TextureImage`].
 ///
 /// Called by GraphicsSystem at runtime to recover texture format, dimensions,
 /// and mip data before uploading to the GPU.
-pub fn deserialise(bytes: &[u8]) -> Result<TextureImage, String> {
+pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, String> {
     let mut r = ByteReader::open_payload(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
     let format_id = r.u32()?;
     let format = TextureFormat::from_id(format_id)
@@ -291,8 +291,8 @@ mod tests {
     use super::*;
 
     fn round_trip(image: &TextureImage) -> TextureImage {
-        let bytes = serialise(image);
-        deserialise(&bytes).expect("deserialise")
+        let bytes = serialize(image);
+        deserialize(&bytes).expect("deserialize")
     }
 
     #[test]
@@ -329,23 +329,23 @@ mod tests {
     }
 
     #[test]
-    fn deserialise_rejects_bad_magic() {
-        let mut bytes = serialise(&TextureImage::rgba8(1, 1, vec![0, 0, 0, 0]));
+    fn deserialize_rejects_bad_magic() {
+        let mut bytes = serialize(&TextureImage::rgba8(1, 1, vec![0, 0, 0, 0]));
         bytes[0] ^= 0xFF;
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("magic"), "got: {err}");
     }
 
     #[test]
-    fn deserialise_rejects_unknown_format() {
-        let mut bytes = serialise(&TextureImage::rgba8(1, 1, vec![0, 0, 0, 0]));
+    fn deserialize_rejects_unknown_format() {
+        let mut bytes = serialize(&TextureImage::rgba8(1, 1, vec![0, 0, 0, 0]));
         bytes[4..8].copy_from_slice(&99u32.to_le_bytes());
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("unknown format_id"), "got: {err}");
     }
 
     #[test]
-    fn deserialise_rejects_wrong_mip_length() {
+    fn deserialize_rejects_wrong_mip_length() {
         // Declare a BC7 4x4 mip (needs 16 bytes) but supply 8.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&TEXTURE_PAYLOAD_MAGIC.to_le_bytes());
@@ -355,7 +355,7 @@ mod tests {
         bytes.extend_from_slice(&4u32.to_le_bytes());
         bytes.extend_from_slice(&8u32.to_le_bytes());
         bytes.extend_from_slice(&[0u8; 8]);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("format needs 16"), "got: {err}");
     }
 
@@ -371,26 +371,26 @@ mod tests {
     }
 
     #[test]
-    fn deserialise_rejects_a_payload_shorter_than_the_header() {
-        let full = serialise(&TextureImage::rgba8(1, 1, vec![0; 4]));
+    fn deserialize_rejects_a_payload_shorter_than_the_header() {
+        let full = serialize(&TextureImage::rgba8(1, 1, vec![0; 4]));
         for len in 0..HEADER_BYTES {
-            assert!(deserialise(&full[..len]).is_err(), "len {} decoded", len);
+            assert!(deserialize(&full[..len]).is_err(), "len {} decoded", len);
         }
     }
 
     #[test]
-    fn deserialise_rejects_a_truncated_mip_header() {
+    fn deserialize_rejects_a_truncated_mip_header() {
         let mut bytes = header(TextureFormat::Rgba8, 1, 2, 2, 16);
         bytes.truncate(HEADER_BYTES + 6);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("unexpected end"), "got: {err}");
     }
 
     #[test]
-    fn deserialise_rejects_truncated_mip_data() {
+    fn deserialize_rejects_truncated_mip_data() {
         let mut bytes = header(TextureFormat::Rgba8, 1, 2, 2, 16);
         bytes.extend_from_slice(&[0u8; 8]);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("unexpected end"), "got: {err}");
     }
 
@@ -398,25 +398,25 @@ mod tests {
     // must be rejected on the overflow rather than compared against a
     // wrapped-around footprint.
     #[test]
-    fn deserialise_rejects_dimensions_that_overflow_the_footprint() {
+    fn deserialize_rejects_dimensions_that_overflow_the_footprint() {
         let bytes = header(TextureFormat::Rgba8, 1, u32::MAX, u32::MAX, 16);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("overflow"), "got: {err}");
     }
 
     // A mip count near u32::MAX must be rejected on the declared value, not
     // by attempting to reserve for it.
     #[test]
-    fn deserialise_rejects_an_absurd_mip_count() {
+    fn deserialize_rejects_an_absurd_mip_count() {
         let bytes = header(TextureFormat::Rgba8, u32::MAX, 1, 1, 4);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("mip levels"), "got: {err}");
     }
 
     #[test]
-    fn deserialise_rejects_zero_mips() {
+    fn deserialize_rejects_zero_mips() {
         let bytes = header(TextureFormat::Rgba8, 0, 1, 1, 4);
-        assert!(deserialise(&bytes).is_err());
+        assert!(deserialize(&bytes).is_err());
     }
 
     #[test]

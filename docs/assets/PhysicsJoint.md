@@ -15,7 +15,7 @@ pattern.
 
 `axis` only applies to `revolute` and `prismatic`: it is the single free
 axis (rotation or translation) in each body's local frame. The vector is
-normalised on load; a zero axis falls back to `[0, 1, 0]`.
+normalized on load; a zero axis falls back to `[0, 1, 0]`.
 
 `limits_enabled` clamps the free axis: angle in degrees for revolute,
 distance in world units for prismatic. `motor_target_velocity` and

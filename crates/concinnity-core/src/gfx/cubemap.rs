@@ -11,7 +11,7 @@
 
 use crate::gfx::projection::normalize3;
 
-/// Direction a face texel at `(u, v)` in `[-1, 1]` looks along, not normalised.
+/// Direction a face texel at `(u, v)` in `[-1, 1]` looks along, not normalized.
 ///
 /// # Panics
 ///
@@ -90,7 +90,7 @@ mod tests {
     ];
 
     #[test]
-    fn a_face_centre_looks_straight_down_its_axis() {
+    fn a_face_center_looks_straight_down_its_axis() {
         for (face, axis) in AXES.iter().enumerate() {
             assert_eq!(face_dir(face, 0.0, 0.0), *axis, "face {face}");
         }
@@ -99,7 +99,7 @@ mod tests {
     // An even face size has no texel exactly on the center, so the nearest one
     // only leans along the axis; what must hold is that it leans the right way.
     #[test]
-    fn a_centre_texel_leans_along_its_face_axis() {
+    fn a_center_texel_leans_along_its_face_axis() {
         for (face, axis) in AXES.iter().enumerate() {
             let d = texel_dir(face, 4, 4, 8);
             let along = d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2];

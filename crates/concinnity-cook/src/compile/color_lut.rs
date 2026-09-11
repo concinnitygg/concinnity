@@ -1,6 +1,6 @@
 //! Compiles a ColorLut component's args into the binary payload the renderer
-//! uploads as a 3D colour-grading LUT. The runtime samples this LUT in the
-//! composite (post-process) pass with the display-referred sRGB colour as the
+//! uploads as a 3D color-grading LUT. The runtime samples this LUT in the
+//! composite (post-process) pass with the display-referred sRGB color as the
 //! texture coordinate, blending the graded result by `PostProcessConfig`'s
 //! `lut_strength`.
 //!
@@ -24,11 +24,11 @@
 //! The texel order matches both the Metal 3D-texture upload layout and the
 //! `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
-// The no-dependency `.cube` parse, the classifier, the (de)serialisers, and the
+// The no-dependency `.cube` parse, the classifier, the (de)serializers, and the
 // size validator stay in concinnity-core; the `.png` slice-strip decode below
 // lives here in the build crate alongside the `png` crate.
 use concinnity_core::bake::color_lut::{
-    LutFormat, classify_source, parse_cube, serialise, validate_size,
+    LutFormat, classify_source, parse_cube, serialize, validate_size,
 };
 use std::path::Path;
 
@@ -57,14 +57,14 @@ pub(crate) fn compile_color_lut_payload(
     let (size, data) = decode(&concinnity_host::store::source::resolve_source_path(
         source, assets_dir,
     ))?;
-    Ok(serialise(size, &data))
+    Ok(serialize(size, &data))
 }
 
 /// Decode the ColorLut source at `path` the same way `compile_color_lut_payload`
 /// does at build time. Dispatches between `.cube` text parse and PNG-strip parse
 /// based on the file extension. Exposed for the runtime asset hot-reload path
 /// (`cn debug` only); production reads the compiled payload via
-/// `concinnity_core::bake::color_lut::deserialise` instead. `path` is read as
+/// `concinnity_core::bake::color_lut::deserialize` instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
 pub fn decode_source(path: &str) -> Result<(u32, Vec<u8>), String> {
     decode(path)
@@ -119,8 +119,8 @@ pub(crate) fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), String> {
     Ok((size, data))
 }
 
-// Decode a PNG into (width, height, RGBA8 pixels). Only RGB / RGBA colour
-// types are accepted: a LUT strip is always full colour.
+// Decode a PNG into (width, height, RGBA8 pixels). Only RGB / RGBA color
+// types are accepted: a LUT strip is always full color.
 fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
     use png::ColorType;
     let file = std::fs::File::open(path)
@@ -150,7 +150,7 @@ fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
         }
         other => {
             return Err(format!(
-                "ColorLut strip '{}' has unsupported PNG colour type {:?} (need RGB/RGBA)",
+                "ColorLut strip '{}' has unsupported PNG color type {:?} (need RGB/RGBA)",
                 path, other
             ));
         }
@@ -254,7 +254,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_png(&dir, "s.png", 4, 2, png::ColorType::Grayscale, &[0u8; 8]);
         let err = parse_png_strip(&src).unwrap_err();
-        assert!(err.contains("unsupported PNG colour type"), "got: {err}");
+        assert!(err.contains("unsupported PNG color type"), "got: {err}");
     }
 
     #[test]

@@ -35,7 +35,7 @@ const SAMPLERS_PER_FRAME: u32 = SETS_PER_FRAME * 8;
 pub(in crate::vulkan) struct PostSetArena {
     // One pool per frame in flight, plus the frame tick it was last reset on.
     // `Mutex` because the graph executor allocates from worker threads holding
-    // `&self`, and Vulkan requires external synchronisation over a pool.
+    // `&self`, and Vulkan requires external synchronization over a pool.
     slots: Vec<Mutex<PoolSlot>>,
 }
 

@@ -161,7 +161,7 @@ mod tests {
             mesh.positions[2]
         );
         assert!(mesh.morph_target_names.is_empty() && mesh.morph_deltas.is_empty());
-        // The lifted normal tilted by its delta and was re-normalised.
+        // The lifted normal tilted by its delta and was re-normalized.
         let nrm = mesh.normals[2];
         assert!((vec3::length(nrm) - 1.0).abs() < 1e-5);
         assert!(nrm[1] > 0.0, "{nrm:?}");

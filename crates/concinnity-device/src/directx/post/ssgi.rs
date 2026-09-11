@@ -6,7 +6,7 @@
 // fullscreen passes on the hdr_resolve RMW chain after the main pass:
 //
 //   * gather:    per pixel, a cone of cosine-weighted hemisphere rays marched
-//                against the G-buffer, accumulating the lit scene colour at
+//                against the G-buffer, accumulating the lit scene color at
 //                each on-screen hit into an off-screen `gi` target.
 //   * composite: a depth-aware blur of that noisy `gi` target, additively
 //                blended (ONE / ONE) into `hdr_resolve` so the near-field
@@ -16,17 +16,18 @@
 // single unit. Mirrors src/metal/post/ssgi.rs.
 
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::texture::transition_barrier;
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
+use concinnity_core::render::post::device::PostBlend;
+
 use crate::gfx::render_types::SsgiParams;
 use crate::gfx::ssgi::SsgiSettings;
 
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
@@ -139,90 +140,6 @@ fn create_ssgi_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
     serialize_desc_and_create(device, &desc, "ssgi root sig")
 }
 
-// PSO builder
-
-// PSO for one SSGI fullscreen pass. Writes `HDR_FORMAT`; no depth, no vertex
-// input (fullscreen triangle from `SV_VertexID`). `additive` configures an
-// `ONE / ONE` add blend (the composite blends the indirect term into the scene)
-// vs. a plain write (the gather fills its own `gi` target).
-fn create_ssgi_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-    additive: bool,
-) -> Result<ID3D12PipelineState, String> {
-    let blend = if additive {
-        D3D12_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: true.into(),
-            SrcBlend: D3D12_BLEND_ONE,
-            DestBlend: D3D12_BLEND_ONE,
-            BlendOp: D3D12_BLEND_OP_ADD,
-            SrcBlendAlpha: D3D12_BLEND_ONE,
-            DestBlendAlpha: D3D12_BLEND_ONE,
-            BlendOpAlpha: D3D12_BLEND_OP_ADD,
-            RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-            ..Default::default()
-        }
-    } else {
-        D3D12_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: false.into(),
-            RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-            ..Default::default()
-        }
-    };
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = HDR_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = blend;
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create ssgi PSO: {e}"))
-}
-
 // Resources
 
 // SSGI resources held by `DxContext` when `PostProcessConfig.indirect_lighting`
@@ -318,11 +235,27 @@ impl SsgiResources {
         let root_sig = dump_on_err(info_queue, create_ssgi_root_signature(device))?;
         let gather_pso = dump_on_err(
             info_queue,
-            create_ssgi_pso(device, &root_sig, &shaders.vs, &shaders.gather_ps, false),
+            create_blended_composite_pso(
+                device,
+                &root_sig,
+                &shaders.vs,
+                &shaders.gather_ps,
+                HDR_FORMAT,
+                PostBlend::Replace,
+                "ssgi gather",
+            ),
         )?;
         let composite_pso = dump_on_err(
             info_queue,
-            create_ssgi_pso(device, &root_sig, &shaders.vs, &shaders.composite_ps, true),
+            create_blended_composite_pso(
+                device,
+                &root_sig,
+                &shaders.vs,
+                &shaders.composite_ps,
+                HDR_FORMAT,
+                PostBlend::Additive,
+                "ssgi composite",
+            ),
         )?;
 
         Ok(Self {
@@ -385,22 +318,26 @@ pub(in crate::directx) fn rebuild_ssgi_pipelines(
     let shaders = compile_ssgi_shaders(hot_reload)?;
     let gather_pso = dump_on_err(
         info_queue,
-        create_ssgi_pso(
+        create_blended_composite_pso(
             device,
             &ssgi.root_sig,
             &shaders.vs,
             &shaders.gather_ps,
-            false,
+            HDR_FORMAT,
+            PostBlend::Replace,
+            "ssgi gather",
         ),
     )?;
     let composite_pso = dump_on_err(
         info_queue,
-        create_ssgi_pso(
+        create_blended_composite_pso(
             device,
             &ssgi.root_sig,
             &shaders.vs,
             &shaders.composite_ps,
-            true,
+            HDR_FORMAT,
+            PostBlend::Additive,
+            "ssgi composite",
         ),
     )?;
     Ok(RebuiltSsgiPipelines {

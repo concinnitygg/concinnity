@@ -35,7 +35,7 @@ pub struct PropBody {
     pub restitution: f32,
     /// Multiplier applied to world gravity for this body. 1.0 is normal.
     pub gravity_scale: f32,
-    /// Linear velocity damping, modelling air drag.
+    /// Linear velocity damping, modeling air drag.
     pub linear_damping: f32,
     /// Optional [AudioClip](#audioclip) played at the contact point when this
     /// body collides hard enough to pass the world's `contact_min_impulse`
@@ -79,12 +79,10 @@ mod tests {
 
     #[test]
     fn a_bouncy_floating_body_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let b: PropBody = serde_json::from_str(
+        let b: PropBody = crate::test_support::from_json(
             r#"{"prop_name":"ball","mass":2.5,"friction":0.1,"restitution":0.9,
                 "gravity_scale":0,"linear_damping":0.2}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(b.prop_name, Some(AssetId(4)));
         assert_eq!(b.gravity_scale, 0.0);
 

@@ -1,7 +1,7 @@
 //! Decodes a Targa (.tga) image into RGBA8. Handles the variants the asset set
-//! uses: uncompressed and RLE true-colour (24/32-bit, stored BGRA) and 8-bit
-//! grayscale. Colour-mapped images are not supported. The image-descriptor origin
-//! bit is honoured so bottom-left-origin files are flipped to top-row-first.
+//! uses: uncompressed and RLE true-color (24/32-bit, stored BGRA) and 8-bit
+//! grayscale. Color-mapped images are not supported. The image-descriptor origin
+//! bit is honored so bottom-left-origin files are flipped to top-row-first.
 
 use concinnity_core::decode::checked_product;
 
@@ -23,7 +23,7 @@ pub(crate) fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let top_origin = descriptor & 0x20 != 0;
 
     if color_map_type != 0 {
-        return Err("colour-mapped TGA images are not supported".to_string());
+        return Err("color-mapped TGA images are not supported".to_string());
     }
     if width == 0 || height == 0 {
         return Err(format!("TGA has zero dimension {}x{}", width, height));
@@ -235,11 +235,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_colour_mapped_image() {
+    fn rejects_a_color_mapped_image() {
         let mut v = header(1, 1, 1, 24, true);
-        v[1] = 1; // colour-map type
+        v[1] = 1; // color-map type
         let err = decode_tga(&v).unwrap_err();
-        assert_eq!(err, "colour-mapped TGA images are not supported");
+        assert_eq!(err, "color-mapped TGA images are not supported");
     }
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn rejects_an_unsupported_image_type() {
-        // Type 1 is colour-mapped image data, which this decoder does not read.
+        // Type 1 is color-mapped image data, which this decoder does not read.
         let v = header(1, 1, 1, 24, true);
         let err = decode_tga(&v).unwrap_err();
         assert_eq!(err, "unsupported TGA image type 1");

@@ -10,7 +10,7 @@
 // listed, because they are separate declarations that can drift apart.
 //
 // The defines mirror the backends' own program tables
-// (`{vulkan,directx}/slang_builtins.rs`, `metal/slang_shaders.rs`): a variant
+// (`{vulkan,directx}/slang_builtins.rs`, `metal/slang_builtins.rs`): a variant
 // compiles only with its gate, and each backend adds its own host-shape gate on
 // top -- `METAL_ABI` or `METAL_BINDINGS` where the Metal slots are pinned,
 // `DXIL_ABI` where the root signature is. Reflecting a family without its gate

@@ -1,7 +1,7 @@
 // src/directx/line.rs
 //
 // World-space line pass for the D3D12 backend. Runs at the tail of the
-// hdr_resolve decoration chain, after the main pass resolved colour into the
+// hdr_resolve decoration chain, after the main pass resolved color into the
 // HDR scene target and depth into the main depth buffer, so the lines layer
 // over the lit scene and SSR / TAA treat them like any other scene content.
 //
@@ -331,7 +331,7 @@ impl DxContext {
 
     // Encode the line pass: one unindexed triangle list covering every expanded
     // ribbon, alpha-blended into the resolved HDR target. `vp` is the same
-    // view-projection the main pass rasterised with (jittered under TAA), so a
+    // view-projection the main pass rasterized with (jittered under TAA), so a
     // line sits on the pixel its geometry did.
     pub(in crate::directx) fn encode_lines(
         &self,

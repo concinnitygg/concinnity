@@ -31,7 +31,7 @@ mod tests {
     fn reads_png_dimensions_from_the_header() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("portrait.png");
-        // A 6x9 grey PNG, encoded in memory to a temp file.
+        // A 6x9 gray PNG, encoded in memory to a temp file.
         let file = std::fs::File::create(&path).unwrap();
         let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 6, 9);
         encoder.set_color(png::ColorType::Grayscale);

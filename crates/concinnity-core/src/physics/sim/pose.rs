@@ -14,7 +14,7 @@ pub fn quat_from_euler_deg(euler_deg: [f32; 3]) -> [f32; 4] {
 }
 
 /// Engine Euler degrees `[pitch, yaw, roll]` for an `[x, y, z, w]` rotation
-/// quaternion, which need not be normalised.
+/// quaternion, which need not be normalized.
 ///
 /// The decomposition is lossy at +-90 degrees of pitch, where yaw and roll
 /// fold into one angle: the whole rotation is reported as yaw.
@@ -45,7 +45,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unnormalised_quaternion_decomposes_the_same_way() {
+    fn an_unnormalized_quaternion_decomposes_the_same_way() {
         let q = quat_from_euler_deg([12.0, 45.0, -30.0]);
         let scaled = [q[0] * 4.0, q[1] * 4.0, q[2] * 4.0, q[3] * 4.0];
         let (a, b) = (euler_deg_from_quat(q), euler_deg_from_quat(scaled));

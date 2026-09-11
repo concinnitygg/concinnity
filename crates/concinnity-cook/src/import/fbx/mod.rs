@@ -46,9 +46,9 @@ pub(crate) struct FbxMaterial {
     pub orm: Option<String>,
     /// Emissive texture path, when the material names one.
     pub emissive: Option<String>,
-    /// Diffuse colour, linear RGB.
+    /// Diffuse color, linear RGB.
     pub diffuse: [f32; 3],
-    /// Emissive colour, linear RGB.
+    /// Emissive color, linear RGB.
     pub emissive_factor: [f32; 3],
     /// Surface opacity in [0, 1]; 1 = fully opaque. Read from the FBX Opacity /
     /// TransparencyFactor property (glass/windows export < 1). 1.0 when absent.
@@ -253,7 +253,7 @@ fn rot_ordered_xyz(r_deg: [f64; 3]) -> Mat4 {
     rot_ordered(r_deg, 0)
 }
 
-// Euler composition honouring an FBX RotationOrder enum: 0 XYZ, 1 XZY,
+// Euler composition honoring an FBX RotationOrder enum: 0 XYZ, 1 XZY,
 // 2 YZX, 3 YXZ, 4 ZXY, 5 ZYX (application order; matrices multiply
 // right-to-left for column vectors). SphericXYZ (6) falls back to XYZ.
 fn rot_ordered(r_deg: [f64; 3], order: i32) -> Mat4 {
@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn node_scene_local_honours_the_rotation_order_property() {
+    fn node_scene_local_honors_the_rotation_order_property() {
         let tree = fx::tree(vec![fx::model(1, "Joint", "LimbNode").child(
             fx::properties70(vec![
                 fx::p_vec3("Lcl Rotation", [90.0, 0.0, 90.0]),
@@ -1277,7 +1277,7 @@ mod tests {
             fx::op(401, 300, "NormalMap"),
             fx::op(402, 300, "SpecularColor"),
             fx::op(403, 300, "EmissiveColor"),
-            // An unrecognised texture slot is ignored.
+            // An unrecognized texture slot is ignored.
             fx::op(401, 300, "AmbientColor"),
         ];
         let file = doc.write();

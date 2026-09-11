@@ -1,6 +1,6 @@
 //! The backend seam a shared fullscreen post pass encodes through.
 //!
-//! Three operations, modelled on what a post pass on the thinnest of the three
+//! Three operations, modeled on what a post pass on the thinnest of the three
 //! backends already does: build a pipeline from a program identity plus an
 //! output format, create a persistent target from a render-graph texture
 //! description, and encode one fullscreen draw. Everything a pass needs beyond
@@ -21,7 +21,7 @@ use crate::render::render_graph::{PassId, PixelFormat, TextureDesc, TransientTex
 
 use super::program::PostProgram;
 
-/// Blending on a post pass's single colour attachment.
+/// Blending on a post pass's single color attachment.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PostBlend {
     /// The fragment replaces the destination. Every pass that writes a fresh
@@ -29,7 +29,7 @@ pub enum PostBlend {
     Replace,
     /// Additive accumulation onto content the pass loaded.
     Additive,
-    /// Premultiplied "over": the fragment already folded coverage into colour.
+    /// Premultiplied "over": the fragment already folded coverage into color.
     PremultipliedOver,
 }
 
@@ -78,7 +78,7 @@ impl<D: PostPassDevice + ?Sized> Copy for PostBind<'_, D> {}
 /// Everything one fullscreen post draw needs: where it writes, what it runs,
 /// what it binds, and where it sits in the GPU-timing span.
 pub struct PostDraw<'a, 't, D: PostPassDevice + ?Sized + 't> {
-    /// The colour target the draw writes.
+    /// The color target the draw writes.
     pub target: &'a D::Target,
     /// What happens to that target's contents on load.
     pub load: PostLoadOp,
@@ -108,7 +108,7 @@ pub struct PostExtent {
 }
 
 impl PostExtent {
-    /// The extent, with both axes floored to at least one pixel so a minimised
+    /// The extent, with both axes floored to at least one pixel so a minimized
     /// or mid-resize window never asks a backend for a zero-sized texture.
     pub fn clamped(self) -> Self {
         Self {
@@ -124,7 +124,7 @@ impl PostExtent {
 /// Every method takes `&self`, matching the read-only parallel-encode contract
 /// the graph executors record under: a backend that needs interior state (a
 /// cached render pass, a per-frame descriptor cursor) owns that state's
-/// synchronisation itself.
+/// synchronization itself.
 pub trait PostPassDevice {
     /// The per-backend command recorder a draw is encoded into.
     type Recorder: ?Sized;
@@ -137,7 +137,7 @@ pub trait PostPassDevice {
     type TextureRef<'a>: Copy;
 
     /// Build a fullscreen-triangle pipeline running `program`'s fragment against
-    /// a single colour attachment of `format` with `blend`.
+    /// a single color attachment of `format` with `blend`.
     fn create_pipeline(
         &self,
         program: PostProgram,
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn a_zero_extent_never_reaches_a_backend() {
-        // Minimised or mid-resize: the drawable is zero, and a texture of that
+        // Minimized or mid-resize: the drawable is zero, and a texture of that
         // size is a creation failure on every backend.
         let d = desc(TextureSize::Drawable, TextureSize::Drawable);
         assert_eq!(

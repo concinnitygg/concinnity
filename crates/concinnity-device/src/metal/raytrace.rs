@@ -72,7 +72,7 @@ pub(crate) use crate::gfx::rt_geom::RtDynamicMode;
 use concinnity_core::render::uniforms::SkinParams;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
-// + colour + uv = 14 floats). The RT kernel reads positions at this stride; the
+// + color + uv = 14 floats). The RT kernel reads positions at this stride; the
 // main-pass skinned fold sizes its deformed buffer by it too.
 pub(in crate::metal) const VERTEX_STRIDE: usize = 56;
 
@@ -459,7 +459,7 @@ pub(crate) fn pack_instance_transform(model: [[f32; 4]; 4]) -> MTLPackedFloat4x3
 // `usage` is `Refit` only for the skinned structures the
 // per-frame update re-fits in place; Metal requires it at build time for a later
 // refit to be legal, and it is left `None` everywhere else so the static
-// structures keep the better-optimised default tree.
+// structures keep the better-optimized default tree.
 fn prim_desc_for(
     vertex_buffer: &ProtocolObject<dyn MTLBuffer>,
     index_buffer: &ProtocolObject<dyn MTLBuffer>,
@@ -1270,7 +1270,7 @@ fn objects_current(object_indices: &[usize], draw_objects: &[DrawObject]) -> boo
     })
 }
 
-// The participating draw objects in BLAS order, without materialising a `Vec`.
+// The participating draw objects in BLAS order, without materializing a `Vec`.
 // Only meaningful once `objects_current` has passed; a stale index is skipped
 // rather than panicking.
 fn objects_in_blas_order<'a>(
@@ -1996,7 +1996,7 @@ pub(crate) fn build_rt_skin_pipeline(
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>, String> {
     use objc2_metal::{MTLDevice as _, MTLLibrary as _};
-    let library = crate::metal::slang_shaders::RT_SKIN.library(device, hot_reload)?;
+    let library = crate::metal::slang_builtins::RT_SKIN.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&crate::metal::pipeline::ns_str("rt_skin"))
         .ok_or("rt_skin kernel not found")?;

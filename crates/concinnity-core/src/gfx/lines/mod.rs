@@ -4,13 +4,13 @@
 //! whatever is in front of them.
 //!
 //! [`build_vertices`] expands each segment into the camera-facing ribbon the
-//! line pass rasterises.
+//! line pass rasterizes.
 
 mod expand;
 
 pub use expand::{LineCamera, build_vertices, build_vertices_into};
 
-/// One world-space line to draw this frame. Colour is per endpoint, so a line
+/// One world-space line to draw this frame. Color is per endpoint, so a line
 /// that fades out with distance is a single request with a transparent far end.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Line {

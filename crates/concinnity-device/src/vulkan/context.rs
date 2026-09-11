@@ -20,7 +20,7 @@ use crate::gfx::input::RenderInput;
 
 // Off-screen HDR render-target format. The main pass renders linear-light
 // radiance into this; the composite pass tonemaps it down to the swapchain's
-// 8-bit format. `R16G16B16A16_SFLOAT` is universally supported as a colour
+// 8-bit format. `R16G16B16A16_SFLOAT` is universally supported as a color
 // attachment + sampled image on desktop GPUs.
 pub(super) const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
@@ -517,9 +517,9 @@ impl VkCull {
 // (`current_frame`) and depth (`frames_in_flight`) stay flat on `VkContext`:
 // they are read pervasively and are frame-pacing counters, not sync handles.
 pub(super) struct VkFrameSync {
-    // Signalled by `acquire_next_image`, waited on by that frame's submit.
+    // Signaled by `acquire_next_image`, waited on by that frame's submit.
     pub(super) image_available: Vec<vk::Semaphore>,
-    // Signalled by the frame's submit, waited on by its present. Indexed by
+    // Signaled by the frame's submit, waited on by its present. Indexed by
     // swapchain image, so one per swapchain image (not per frame-in-flight).
     pub(super) render_finished: Vec<vk::Semaphore>,
     // Per-frame-in-flight submission fence; gates reuse of that slot's
@@ -726,8 +726,8 @@ pub(super) struct ParticleState {
 // swapchain, with the text overlay drawn here too, post-tonemap. The
 // framebuffers are one per swapchain image; `sets` is one per frame-in-flight
 // slot, binding the matching HDR resolve image (binding 0), bloom mip 0
-// (binding 1), and the 3D colour LUT (binding 2). `sampler` is the linear-clamp
-// sampler the composite + bloom shaders read HDR images with, the colour LUT
+// (binding 1), and the 3D color LUT (binding 2). `sampler` is the linear-clamp
+// sampler the composite + bloom shaders read HDR images with, the color LUT
 // included.
 pub(super) struct CompositeState {
     pub render_pass: OwnedRenderPass,
@@ -958,11 +958,11 @@ pub(crate) struct VkContext {
     // Off-screen HDR attachments, one set per frame-in-flight slot (indexed by
     // `current_frame`). The main pass renders into these; the composite pass
     // samples `hdr_resolve_images`.
-    pub(super) color_images: Vec<GpuImage>, // MSAA HDR colour; empty when msaa == 1
+    pub(super) color_images: Vec<GpuImage>, // MSAA HDR color; empty when msaa == 1
     pub(super) depth_images: Vec<GpuImage>, // MSAA depth
     pub(super) hdr_resolve_images: Vec<GpuImage>, // single-sample HDR resolve target
 
-    // Main-pass framebuffers (one per frame-in-flight slot): HDR colour +
+    // Main-pass framebuffers (one per frame-in-flight slot): HDR color +
     // depth (+ resolve when multisampled).
     pub(super) framebuffers: Vec<OwnedFramebuffer>,
 
@@ -997,7 +997,7 @@ pub(crate) struct VkContext {
     // HUD text pass. See [`TextState`].
     pub(super) text: TextState,
 
-    // 3D colour-grading LUT sampled in the composite pass. Holds the declared
+    // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares none.
     // Resolution-independent, so it is never rebuilt on swapchain resize.
     pub(super) color_lut: GpuImage,
@@ -1082,7 +1082,7 @@ pub(crate) struct VkContext {
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer of the merged buffer is on (SSR resolve OR SSGI OR RT OR SSAO OR
-    // velocity for TAA / upscale): one jittered traversal rasterises the
+    // velocity for TAA / upscale): one jittered traversal rasterizes the
     // normal+depth / roughness / velocity MRT every reader samples, replacing
     // the separate SSR / SSAO / velocity pre-passes (the `PassId::GBufferPrepass`
     // node). Mirrors `DxContext::gbuffer`.
@@ -1157,8 +1157,8 @@ pub(crate) struct VkContext {
     // `SdfVolume` whose `fragment_shader` is a `.glsl` payload; the `Raymarch`
     // pass is omitted from the frame graph otherwise. Built at init; the encoder
     // composites each visible volume into the scene between `AutoExposure` and
-    // `Decals`. While present, the main pass switches to a STORE-colour render
-    // pass (MSAA) so this pass can load + re-resolve the multisampled colour.
+    // `Decals`. While present, the main pass switches to a STORE-color render
+    // pass (MSAA) so this pass can load + re-resolve the multisampled color.
     pub(super) raymarch: Option<crate::vulkan::raymarch::RaymarchResources>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
@@ -1177,18 +1177,18 @@ pub(crate) struct VkContext {
     // planar slot. Mirrors `src/directx/planar.rs`.
     pub(super) planar_reflection: Option<crate::vulkan::planar::PlanarReflectionSet>,
 
-    // Resolved swapchain colour-output mode, selected when the world's
+    // Resolved swapchain color-output mode, selected when the world's
     // `PostProcessConfig.hdr_display` was on AND the surface advertised a
-    // matching HDR colour space via the `VK_EXT_swapchain_colorspace` instance
-    // extension. Two HDR flavours: `HdrEncoding::ExtendedLinear` runs the
+    // matching HDR color space via the `VK_EXT_swapchain_colorspace` instance
+    // extension. Two HDR flavors: `HdrEncoding::ExtendedLinear` runs the
     // swapchain in `R16G16B16A16_SFLOAT` + `EXTENDED_SRGB_LINEAR_EXT` (scRGB
     // linear) and the composite emits linear extended-range values;
     // `HdrEncoding::Pq` (requested via `hdr_pq`, only when an `HDR10_ST2084_EXT`
-    // pair is advertised) runs the swapchain in that colour space and the
+    // pair is advertised) runs the swapchain in that color space and the
     // composite PQ-encodes (SMPTE ST 2084) in-shader. On SDR the swapchain runs
     // in `BGRA8_UNORM` + sRGB-nonlinear and the ACES + gamma + FXAA + LUT path
     // runs unchanged. Mirrors `DxContext::hdr_mode`. Stored so the swapchain
-    // rebuild path preserves the format + colour space on resize.
+    // rebuild path preserves the format + color space on resize.
     pub(super) hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
 
     // GPU-compute particle system. See [`ParticleState`].
@@ -1417,12 +1417,12 @@ impl VkContext {
             }
         }
 
-        // Minimised window: the client area is 0x0. Vulkan rejects every
+        // Minimized window: the client area is 0x0. Vulkan rejects every
         // zero-extent operation (swapchain, render area, viewport, image copy),
         // so park the whole frame (no acquire / record / submit / present) until
         // the window is restored. `window_closed` keeps pumping the message loop
         // each tick, so the restore is picked up. Mirrors the DirectX backend,
-        // which skips its resize + present while minimised.
+        // which skips its resize + present while minimized.
         if self.frame_is_parked() {
             return Ok(());
         }
@@ -1457,7 +1457,7 @@ impl VkContext {
         // copy at the swapped-in views (legal now -- the fence wait above
         // retired every command buffer that binds this slot's set), and free
         // the old images / upload transients this slot parked on its previous
-        // trip (this slot's fence signalling also covers the older frames that
+        // trip (this slot's fence signaling also covers the older frames that
         // last sampled them, and every pool copy has been re-pointed since).
         self.apply_streamed_texture_rewrites(frame);
 
@@ -1594,7 +1594,7 @@ impl VkContext {
             // EDR headroom for the StatHud `EDR x.X` chip, taken from the
             // `HdrOutputMode` resolved at init. `Some` only on the HDR path
             // (Vulkan has no portable max-EDR query, so the value is the
-            // synthesised placeholder set in `init`); `None` on SDR blanks the
+            // synthesized placeholder set in `init`); `None` on SDR blanks the
             // chip. Mirrors `DxContext` / `MtlContext::render_stats`.
             max_edr: match self.hdr_mode {
                 crate::gfx::hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
@@ -1606,7 +1606,7 @@ impl VkContext {
         // every image, so it is the display-paced half of the frame's GPU wait.
         let acquire = gpu_wait.measure(|| {
             // SAFETY: `self.swapchain.handle` is the live swapchain and `image_available[frame]` is
-            // an unsignalled semaphore from this device's own pool for this frame slot.
+            // an unsignaled semaphore from this device's own pool for this frame slot.
             unsafe {
                 self.swapchain.loader.acquire_next_image(
                     self.swapchain.handle,
@@ -1636,7 +1636,7 @@ impl VkContext {
             Err(e) => return Err(super::error::map_vk_result(e, "acquire swapchain image")),
         };
 
-        // SAFETY: the fence belongs to this frame slot and was just waited on, so it is signalled
+        // SAFETY: the fence belongs to this frame slot and was just waited on, so it is signaled
         // and not in use by a pending submission.
         unsafe { device.reset_fences(std::slice::from_ref(&self.frame_sync.in_flight[frame])) }
             .map_err(|e| format!("reset fences: {e}"))?;
@@ -1720,7 +1720,7 @@ impl VkContext {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
         // SAFETY: `present_info` borrows the swapchain, image index, and wait semaphore for the
-        // call; the semaphore is signalled by the submission above.
+        // call; the semaphore is signaled by the submission above.
         let present_result = unsafe {
             self.swapchain
                 .loader
@@ -1807,8 +1807,8 @@ impl VkContext {
             .expect("VkContext window taken by reload_world")
     }
 
-    // True while the window is minimised: the client area has collapsed to 0x0
-    // (WM_SIZE reports zero on minimise; the GLFW / AppKit windows report the
+    // True while the window is minimized: the client area has collapsed to 0x0
+    // (WM_SIZE reports zero on minimize; the GLFW / AppKit windows report the
     // same). Vulkan forbids a zero-extent swapchain, render area, viewport, or
     // image copy, so `draw_frame` and `rebuild_swapchain` park their work until
     // the window is restored. Mirrors the DirectX backend, whose
@@ -1821,7 +1821,7 @@ impl VkContext {
 
     // True while this frame cannot be presented, which is what `draw_frame`
     // parks on. The window's own size is not enough: it is tracked from WM_SIZE,
-    // so a window that was already minimised when it was created never saw a
+    // so a window that was already minimized when it was created never saw a
     // zero and reports its requested size for the whole run, while the surface
     // reports 0x0 from the start. Without the surface check that run builds a
     // zero-extent swapchain and then renders into it every frame -- a render
@@ -1866,7 +1866,7 @@ impl VkContext {
     // `VK_EXT_memory_budget`. Sums `heap_usage` on every DEVICE_LOCAL heap;
     // returns 0 when the extension is unavailable (so the chip degrades
     // gracefully on adapters that don't expose budgets, matching DirectX's
-    // behaviour on pre-WDDM-2.0 adapters).
+    // behavior on pre-WDDM-2.0 adapters).
     pub(super) fn query_vram_bytes(&self) -> u64 {
         if !self.memory_budget_supported || self.device_local_heaps.is_empty() {
             return 0;
@@ -2438,9 +2438,9 @@ impl Drop for VkContext {
     }
 }
 
-// Whether a client-area extent counts as minimised (collapsed): a zero, or
+// Whether a client-area extent counts as minimized (collapsed): a zero, or
 // defensively negative, width or height. Split from `is_minimized` so the
-// minimise gate is unit-testable without a live window / surface.
+// minimize gate is unit-testable without a live window / surface.
 fn extent_minimized(width: i32, height: i32) -> bool {
     width <= 0 || height <= 0
 }
@@ -2451,10 +2451,10 @@ mod tests {
 
     #[test]
     fn extent_minimized_gates_on_zero_or_negative_dimensions() {
-        // A live window (both dimensions positive) is not minimised.
+        // A live window (both dimensions positive) is not minimized.
         assert!(!extent_minimized(1280, 720));
         assert!(!extent_minimized(1, 1));
-        // Minimise collapses one or both dimensions to zero.
+        // Minimize collapses one or both dimensions to zero.
         assert!(extent_minimized(0, 0));
         assert!(extent_minimized(1280, 0));
         assert!(extent_minimized(0, 720));

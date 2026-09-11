@@ -1,9 +1,9 @@
-//! Backend-agnostic representation of the renderer's swapchain colour-output
+//! Backend-agnostic representation of the renderer's swapchain color-output
 //! mode. Built from the world's `PostProcessConfig.hdr_display` request plus
 //! the active display's measured EDR capability (the backend supplies the
 //! capability; this module is pure CPU). The result drives:
 //!
-//!   1. the swapchain pixel format + colour space chosen at window setup
+//!   1. the swapchain pixel format + color space chosen at window setup
 //!      (BGRA8Unorm for SDR; RGBA16Float + extendedLinearDisplayP3 for HDR);
 //!   2. whether `PostProcessParams.hdr_output` ships to the shader as `1.0`
 //!      so the composite pass skips ACES + gamma + FXAA + ColorLut and emits
@@ -23,26 +23,26 @@ use crate::gfx::render_types::{PostProcessParams, PostProcessTunables};
 pub(crate) const HDR_MAX_EDR_FLOOR: f32 = 1.001;
 
 /// HDR encoding the composite shader emits on the EDR path. Drives both
-/// the swapchain colour-space choice (CAMetalLayer on Metal,
+/// the swapchain color-space choice (CAMetalLayer on Metal,
 /// `SetColorSpace1` on DirectX) and the shader's per-pixel encode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HdrEncoding {
-    /// Pass linear extended-range values through. Swapchain colour space is
+    /// Pass linear extended-range values through. Swapchain color space is
     /// `kCGColorSpaceExtendedLinearDisplayP3`; the OS compositor handles the
     /// final encode to whatever the panel needs. `1.0` = SDR reference white;
     /// values above drive the panel's headroom.
     ExtendedLinear,
     /// PQ-encode (SMPTE ST 2084) the linear scene before write. Swapchain
-    /// colour space is `kCGColorSpaceDisplayP3_PQ`; the panel decodes via
+    /// color space is `kCGColorSpaceDisplayP3_PQ`; the panel decodes via
     /// the PQ EOTF. Suitable for HDR10 / HDR1000 monitors that prefer
     /// PQ-encoded values directly. SDR reference white maps to 203 nits per
     /// ITU-R BT.2408.
     Pq,
 }
 
-/// Resolved swapchain colour-output mode. Threaded into Metal + DirectX at
-/// init (both honour `Hdr` end-to-end, including the PQ-encoded branch);
-/// Vulkan honours the `ExtendedLinear` `Hdr` arm but ignores the PQ
+/// Resolved swapchain color-output mode. Threaded into Metal + DirectX at
+/// init (both honor `Hdr` end-to-end, including the PQ-encoded branch);
+/// Vulkan honors the `ExtendedLinear` `Hdr` arm but ignores the PQ
 /// encoding flag and falls back to SDR on a panel that reports no EDR
 /// headroom.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,18 +51,18 @@ pub enum HdrOutputMode {
     /// swapchain. FXAA + ColorLut run.
     Sdr,
     /// Drive an EDR-capable swapchain (`RGBA16Float`, Display P3 family
-    /// colour space, `wantsExtendedDynamicRangeContent = true`). The
+    /// color space, `wantsExtendedDynamicRangeContent = true`). The
     /// composite shader's `hdr_output` branch skips the tonemap, gamma
     /// encode, FXAA, and LUT. `encoding` picks between scRGB-linear
     /// passthrough and PQ-encoded output. `max_edr` is the panel-reported
     /// headroom (e.g. 2.0 on an HDR400 panel, 8.0+ on HDR1000), surfaced
     /// via the StatHud `EDR` chip.
     Hdr {
-        /// Reported maximum extended-range colour-component multiplier; SDR
+        /// Reported maximum extended-range color-component multiplier; SDR
         /// reference white is 1.0, so values above that drive HDR.
         max_edr: f32,
         /// Whether the composite shader emits PQ-encoded values or linear
-        /// extended-range values. Drives both the colour-space tag and the
+        /// extended-range values. Drives both the color-space tag and the
         /// shader branch.
         encoding: HdrEncoding,
     },
@@ -73,7 +73,7 @@ impl HdrOutputMode {
     /// measured EDR multiplier. The asset toggle is the gate: even on a
     /// capable display, no HDR unless `hdr_display = true`. The reverse
     /// (`hdr_display = true` on an SDR panel) falls back to [`Self::Sdr`]
-    /// and is logged once by the backend. `pq_requested` is honoured only
+    /// and is logged once by the backend. `pq_requested` is honored only
     /// when HDR resolves to on; off-by-default keeps the existing
     /// extended-linear path as the safer fallback.
     pub fn resolve(hdr_display_requested: bool, pq_requested: bool, max_edr: f32) -> Self {

@@ -24,7 +24,7 @@ pub const SCENE_TAP: &str = "sampleSceneRefracted";
 ///
 /// The tap is the only way in: the scene snapshot is reached through this
 /// helper and is named by no other declaration a field can see. A renderer
-/// copies the frame's colour target for the pass only when some visible volume
+/// copies the frame's color target for the pass only when some visible volume
 /// answers `true` here, so a world of opaque volumes pays nothing.
 ///
 /// A field that spells the name in a comment reads as tapping. That is the
@@ -38,7 +38,7 @@ pub fn field_taps_scene(field: &str) -> bool {
 /// first two, plus the third when it casts shadows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
-    /// An opaque surface writing colour and depth.
+    /// An opaque surface writing color and depth.
     Surface,
     /// A participating medium blended over the scene.
     Volumetric,
@@ -60,7 +60,7 @@ impl Family {
 /// Whether an entry runs at the vertex or the fragment stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    /// Rasterises the bounding-box proxy.
+    /// Rasterizes the bounding-box proxy.
     Vertex,
     /// Marches the field and writes the draw's output.
     Fragment,

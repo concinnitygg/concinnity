@@ -41,7 +41,7 @@
 // (`probe.rendering` / `probe.prefiltering`): once a probe's faces are captured its
 // draw resources (the reserved ring slot included) are freed, so the NEXT probe starts
 // rendering while the prior probe's cube convolves -- shortening the warm-up vs
-// serialising render-then-convolve per probe. Only ONE probe renders at a time (so a
+// serializing render-then-convolve per probe. Only ONE probe renders at a time (so a
 // single reserved ring slot suffices, GPU lifetime unchanged) and only ONE convolves
 // at a time (so installs stay in queue order, keeping `probe.maps` aligned with the
 // placement list). A re-placement (`set_reflection_probes`) parks BOTH slots' GPU
@@ -253,7 +253,7 @@ impl MtlContext {
         // Permanent ineligibility: the capture renders through the bindless ICB
         // (needs the GPU-driven static path); a world with no real geometry keeps
         // the sky; and a probe only adds value over a real environment (a world on
-        // the 1x1 grey fallback has no prefilter chain). The environment is built at
+        // the 1x1 gray fallback has no prefilter chain). The environment is built at
         // init, so its readiness never changes for a world. None of these can become
         // eligible later, so abandon the queue rather than re-checking it forever.
         // Any in-flight work is parked behind the fence rather than leaked (its
@@ -323,7 +323,7 @@ impl MtlContext {
         // placement. Gating `StartPrefilter` on the prefiltering slot being free keeps at
         // most one probe convolving, so installs stay in queue order -- and the next
         // probe's render overlaps the prior probe's convolution, so the warm-up no longer
-        // serialises render-then-convolve per probe.
+        // serializes render-then-convolve per probe.
         let rendering_occupied = self.probe.rendering.is_some();
         // `done` only matters once every face is submitted; the completion handler is
         // attached on the last face, so it cannot be set while faces remain.
@@ -449,10 +449,10 @@ impl MtlContext {
                 None
             };
 
-        // One reused colour + depth pair (faces render serially across frames),
+        // One reused color + depth pair (faces render serially across frames),
         // and the capture cube each face resolves its own slice of. The sample
         // count is the main pipelines' -- a face binds them -- so a
-        // single-sample world skips the colour attachment entirely.
+        // single-sample world skips the color attachment entirely.
         let samples = self.hdr_targets.sample_count;
         let msaa_color = (samples > 1)
             .then(|| make_face_color(&self.device, PLAN.face_size(), samples))
@@ -718,13 +718,13 @@ impl MtlContext {
     // World-space bounds over every static draw object, skipping degenerate
     // (non-finite) AABBs. `None` for an empty scene. Folded instances + skinned
     // objects sit inside the static extent for the scenes this bakes, so the
-    // static objects' union is a good probe-centring volume.
+    // static objects' union is a good probe-centering volume.
     pub(in crate::metal) fn scene_world_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         reflection_probe::fold_world_bounds(self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)))
     }
 }
 
-// Multisample HDR colour face: RGBA16Float, render-target only -- matches the
+// Multisample HDR color face: RGBA16Float, render-target only -- matches the
 // main pipeline's attachment format + sample count so `self.pipeline_state`
 // binds. Built only when the world resolved to more than one sample.
 fn make_face_color(
@@ -744,11 +744,11 @@ fn make_face_color(
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or_else(|| "probe: failed to create colour face".into())
+        .ok_or_else(|| "probe: failed to create color face".into())
 }
 
 // Depth face: Depth32Float, render-target only, at the main pipelines' sample
-// count. Cleared per face and discarded -- the probe consumes only the colour.
+// count. Cleared per face and discarded -- the probe consumes only the color.
 fn make_face_depth(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,

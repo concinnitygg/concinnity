@@ -100,11 +100,9 @@ mod tests {
 
     #[test]
     fn an_emitter_attached_to_a_prop_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let e: AudioEmitter = serde_json::from_str(
+        let e: AudioEmitter = crate::test_support::from_json(
             r#"{"clip":"hum","prop":"lamp","position":[1,2,3],"volume":0.5,"looping":false}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(e.clip, Some(AudioClipHandle(3)));
         assert_eq!(e.prop, Some(AssetId(4)));
         assert_eq!(e.position, [1.0, 2.0, 3.0]);
@@ -119,11 +117,9 @@ mod tests {
 
     #[test]
     fn authored_rolloff_and_bus_parse_and_round_trip() {
-        crate::test_support::install_resolvers();
-        let e: AudioEmitter = serde_json::from_str(
+        let e: AudioEmitter = crate::test_support::from_json(
             r#"{"clip":"hum","min_distance":2.5,"max_distance":80.0,"rolloff":"linear","bus":"voice"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(e.min_distance, 2.5);
         assert_eq!(e.max_distance, 80.0);
         assert_eq!(e.rolloff, Rolloff::Linear);
@@ -135,7 +131,7 @@ mod tests {
         assert_eq!(back.rolloff, Rolloff::Linear);
         assert_eq!(back.bus, Some(crate::components::AudioBus::Voice));
 
-        let none: AudioEmitter = serde_json::from_str(r#"{"rolloff":"none"}"#).unwrap();
+        let none: AudioEmitter = crate::test_support::from_json(r#"{"rolloff":"none"}"#);
         assert_eq!(none.rolloff, Rolloff::None);
     }
 }

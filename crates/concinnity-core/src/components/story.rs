@@ -372,10 +372,41 @@ pub enum StoryPlayback {
     Continue,
 }
 
+impl StoryPlayback {
+    /// Every command, in the order an editor picker steps through them.
+    pub const ALL: [StoryPlayback; 2] = [StoryPlayback::Start, StoryPlayback::Continue];
+
+    /// Every command's authored name, in [`StoryPlayback::ALL`] order. The
+    /// editor's picker list.
+    pub const NAMES: [&'static str; 2] = ["start", "continue"];
+
+    /// The command's authored name: what serde writes for it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            StoryPlayback::Start => "start",
+            StoryPlayback::Continue => "continue",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
+
+    // NAMES is what the editor's picker offers, so it has to be what serde
+    // accepts. A variant added without extending both lists fails here.
+    #[test]
+    fn every_playback_name_is_what_serde_writes() {
+        assert_eq!(StoryPlayback::ALL.len(), StoryPlayback::NAMES.len());
+        for (cmd, name) in StoryPlayback::ALL.iter().zip(StoryPlayback::NAMES) {
+            assert_eq!(cmd.as_str(), name);
+            assert_eq!(
+                serde_json::to_string(cmd).expect("serializes"),
+                alloc::format!("\"{name}\"")
+            );
+        }
+    }
 
     #[test]
     fn a_blank_story_has_no_nodes_and_types_at_the_default_speed() {
@@ -406,7 +437,7 @@ mod tests {
         // A gate written with only a name and a value reads as "flag is set",
         // which is the common case in an imported markdown story.
         assert_eq!(StoryCompareOp::default(), StoryCompareOp::Ne);
-        let g: StoryGate = serde_json::from_str(r#"{"name":"met_ana","target":3}"#).unwrap();
+        let g: StoryGate = crate::test_support::from_json(r#"{"name":"met_ana","target":3}"#);
         assert_eq!(g.op, StoryCompareOp::Ne);
         assert!(g.op.eval(1, 0));
     }
@@ -438,8 +469,7 @@ mod tests {
 
     #[test]
     fn a_compiled_graph_parses_its_pages_choices_and_audio() {
-        crate::test_support::install_resolvers();
-        let s: Story = serde_json::from_str(
+        let s: Story = crate::test_support::from_json(
             r#"{"title":"Ash","text_speed":30.0,"save_key":"ash",
                 "nodes":[{"slug":"intro",
                   "pages":[{"speaker":{"name":"Ana","color":[1,0,0]},"text":"Hello",
@@ -450,8 +480,7 @@ mod tests {
                   "choices":[{"label":"Stay","target":1,
                               "condition":{"name":"visits","op":"ge","value":1}}],
                   "choice_sounds":["click"]}]}"#,
-        )
-        .unwrap();
+        );
 
         assert_eq!(s.title, "Ash");
         assert_eq!(s.text_speed, 30.0);

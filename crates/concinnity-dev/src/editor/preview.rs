@@ -118,7 +118,7 @@ pub(crate) struct PreviewState {
     pub align: bool,
 }
 
-// Position + show the panel at origin `o`, colouring each checkbox by state.
+// Position + show the panel at origin `o`, coloring each checkbox by state.
 pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: [f32; 2]) {
     let rows = [
         Row::checkbox("Play (Ctrl+P)", state.playing),

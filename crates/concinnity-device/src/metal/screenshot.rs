@@ -2,7 +2,7 @@
 //
 // Headless frame capture for the Metal backend. The `cn debug` WS server's
 // `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
-// the most recently presented drawable's colour texture into a host-readable
+// the most recently presented drawable's color texture into a host-readable
 // texture and encode it to a PNG on disk. This is the on-GPU verification path
 // the renderer otherwise leaves to a human eyeballing the live window: a
 // headless probe can now assert on actual pixels. Mirrors
@@ -41,7 +41,7 @@ impl MtlContext {
     pub(in crate::metal) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
         // `None` both before the first present and in production (capture is a
         // `cn debug`-only feature; see `last_present_texture`). The retained
-        // texture keeps the drawable's colour surface alive for the read-back.
+        // texture keeps the drawable's color surface alive for the read-back.
         let src = self
             .last_present_texture
             .clone()
@@ -70,7 +70,7 @@ impl MtlContext {
             .newTextureWithDescriptor(&desc)
             .ok_or("screenshot: failed to create staging texture")?;
 
-        // One-shot blit: drawable colour -> staging. Committed after every
+        // One-shot blit: drawable color -> staging. Committed after every
         // frame command buffer on the shared queue, so FIFO order has the
         // composite pass (which wrote the drawable) complete first; the
         // `waitUntilCompleted` then guarantees the copy is done before the read.
@@ -134,7 +134,7 @@ impl MtlContext {
     }
 }
 
-// Bytes per texel for the swapchain colour formats this backend can present.
+// Bytes per texel for the swapchain color formats this backend can present.
 // The MTKView only ever presents `BGRA8Unorm` for SDR or `RGBA16Float` for the
 // HDR EDR path (see `metal/init/window.rs::swap_pixel_format`). Unknown formats
 // default to 4, the common 32-bit-texel case.
@@ -145,7 +145,7 @@ fn swapchain_bytes_per_pixel(format: MTLPixelFormat) -> u32 {
     }
 }
 
-// Classify the swapchain colour format (+ resolved HDR encoding) into the
+// Classify the swapchain color format (+ resolved HDR encoding) into the
 // backend-free `PixelLayout` the shared decoder understands. The MTKView only
 // presents `BGRA8Unorm`/`_sRGB` for SDR or `RGBA16Float` for the HDR EDR path;
 // `encoding` (None on SDR) only matters for the float swapchain.

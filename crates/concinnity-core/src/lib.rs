@@ -10,7 +10,7 @@
 //!
 //! Above that vocabulary, the kernels that compute over it and belong to no
 //! single consumer: skinning and pose blending, IK, LOD decimation,
-//! rasterisation, IBL convolution, the procedural geometry generators, and the
+//! rasterization, IBL convolution, the procedural geometry generators, and the
 //! payload codecs (`build`, `decode`). Each asset's AUTHORED schema (what a
 //! world.jsonl declares) sits in `components` beside the runtime half it bakes
 //! into; the build-only assets, which never reach a running world, live with
@@ -49,7 +49,7 @@ extern crate std;
 ///
 /// - reordering a serialized struct's fields, or an enum's variants
 /// - swapping a serialized field's type for one that encodes to the same width
-/// - changing what a `build` payload serialiser writes
+/// - changing what a `build` payload serializer writes
 ///
 /// Adding or removing a serialized field needs no bump: a blob frame is
 /// length-delimited and `blob::decode_exact` rejects one that does not decode

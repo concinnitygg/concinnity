@@ -2,7 +2,7 @@
 //
 // Per-frame encoder for the raymarched SDF volume pass on D3D12. Runs at
 // `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
-// hdr_resolve RMW chain. Each `SdfVolume` rasterises the back faces of
+// hdr_resolve RMW chain. Each `SdfVolume` rasterizes the back faces of
 // its world-space bounding box and runs a user-authored HLSL fragment
 // shader that sphere-traces the SDF inside the box. HLSL port of
 // `src/metal/raymarch.rs`: same shader interface, same
@@ -21,7 +21,7 @@
 //   * Per-volume `SdfVolumeUniforms` cbuffer (static: `center`, `extent`,
 //     `params`, ... don't change frame-to-frame) allocated once at init.
 //   * Per-frame `RaymarchView` cbuffer ring (triple-buffered).
-//   * Colour attachment = `hdr_resolve` (LOAD, opaque write). Depth
+//   * Color attachment = `hdr_resolve` (LOAD, opaque write). Depth
 //     attachment = the main depth buffer in `DEPTH_WRITE`: the fragment
 //     writes hit depth via `SV_DepthLessEqual` so downstream passes
 //     (decals, fog, SSR, TAA, ...) see the raymarched surface.
@@ -35,10 +35,10 @@
 // files and declare one `SdfVolume` per backend.
 //
 // Currently unimplemented on DirectX:
-//   * No `depth_copy` snapshot, so no in-shader rasterised-depth early-
+//   * No `depth_copy` snapshot, so no in-shader rasterized-depth early-
 //     out (hardware depth test still composites correctly: see the
 //     template's caveat). Volumes whose bbox sits fully behind
-//     rasterised geometry pay the full march cost.
+//     rasterized geometry pay the full march cost.
 
 use std::ffi::c_void;
 
@@ -290,7 +290,7 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSig
 }
 
 // Build the per-volume PSO. Front-face culled so back faces of the
-// proxy cube rasterise (which works regardless of whether the camera
+// proxy cube rasterize (which works regardless of whether the camera
 // is inside or outside the bbox). Depth attachment is the main scene
 // depth (D32_FLOAT); the shader writes hit depth via
 // `SV_DepthLessEqual` so downstream passes see raymarched-surface
@@ -403,7 +403,7 @@ fn compile_volume_pso(
 }
 
 // Volumetric variant of the raymarch PSO: same root signature + same
-// vertex layout (cube proxy back faces), but the colour output
+// vertex layout (cube proxy back faces), but the color output
 // alpha-blends over the existing scene and the depth stencil keeps
 // early-z (DepthFunc LESS_EQUAL) without writing: volumetrics are
 // translucent and never update the depth buffer.
@@ -939,7 +939,7 @@ pub(in crate::directx) struct RaymarchDescriptorHandles {
 
 impl RaymarchResources {
     // Build every raymarch resource and the per-volume records. `sdf_volumes`
-    // is the drained-and-payload-paired list from `graphics_system::init`;
+    // is the drained-and-payload-paired list from `gfx::system::init`;
     // each volume's `fragment_shader` path is checked here: `.hlsl`
     // payloads compile, anything else (today: `.metal` for Metal-first
     // authors) is skipped with a logged warning. Returns `Ok(None)`
@@ -1235,7 +1235,7 @@ impl DxContext {
         // re-resolve hdr_color → hdr_resolve so all downstream
         // single-sample post-stack passes (Decals, Fog, SsrResolve,
         // TaaResolve, Bloom, Composite) pick up the raymarched
-        // colour AND the raymarched-surface depth (which flowed into
+        // color AND the raymarched-surface depth (which flowed into
         // `depth.resource` via SV_DepthLessEqual). The MSAA-off path
         // skips the resolve and renders into hdr_color directly.
         let msaa = self.hdr.resolve.is_some();
@@ -1283,7 +1283,7 @@ impl DxContext {
         // hdr_color is already in RENDER_TARGET: with MSAA on the graph rests it
         // there, and with MSAA off it is the spine this pass declares a write
         // on. Depth stays in DEPTH_WRITE; the DSV is writable + the LESS_EQUAL
-        // test composites against existing rasterised depth.
+        // test composites against existing rasterized depth.
 
         let w = self.extent.render_width;
         let h = self.extent.render_height;
@@ -1398,19 +1398,19 @@ impl DxContext {
     // Encode the raymarched SDF shadow casters into the existing CSM
     // shadow DSVs, right before `encode_shadow_pass` transitions the
     // shadow map array to `PIXEL_SHADER_RESOURCE`. One draw per visible
-    // caster per cascade; the proxy unit cube rasterises through the
+    // caster per cascade; the proxy unit cube rasterizes through the
     // cascade's light VP (front-face cull means back faces produce one
     // fragment per texel inside the box), the depth-only fragment
     // marches the SDF, and writes the hit's NDC.z via
     // `SV_DepthLessEqual` so the cascade DSV's existing LESS depth test
-    // keeps only the nearest caster between rasterised and raymarched.
+    // keeps only the nearest caster between rasterized and raymarched.
     //
     // Uploads `view` into the same per-frame cbuffer ring
     // `encode_raymarch` uses. Bytes for the same frame_idx are written
     // twice (once here, once by `encode_raymarch` later in the frame);
     // both writes are byte-identical when the caller passes the same
     // view, and the shadow march only reads `view_time` so even if the
-    // later write differs in fields the shadow path ignores, behaviour
+    // later write differs in fields the shadow path ignores, behavior
     // is unchanged.
     pub(in crate::directx) fn encode_sdf_shadow_casters(
         &self,
@@ -1483,7 +1483,7 @@ impl DxContext {
             cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
         }
 
-        // Only cast into cascades the rasterised shadow pass re-rendered this
+        // Only cast into cascades the rasterized shadow pass re-rendered this
         // frame: a skipped cascade's slice must stay exactly as it was last fully
         // rendered (raster + SDF), so we neither clear nor add to it. The 0
         // sentinel falls back to all cascades. Mirrors Metal.

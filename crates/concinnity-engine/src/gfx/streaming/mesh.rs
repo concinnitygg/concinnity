@@ -157,7 +157,7 @@ impl MeshPayloadSource for SceneDeferredMeshSource {
 // Decode a compiled mesh payload into LOD0 geometry (streamed draws strip
 // their LOD alternates, so only LOD0 is ever uploaded).
 fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
-    let (vertices, indices, _) = crate::gfx::mesh_payload::deserialise_with_lods(bytes)?;
+    let (vertices, indices, _) = crate::gfx::mesh_payload::deserialize_with_lods(bytes)?;
     Ok(DecodedMesh { vertices, indices })
 }
 
@@ -199,7 +199,7 @@ pub(crate) fn default_scratch_path() -> String {
         .into_owned()
 }
 
-// Serialise one mesh's geometry into the scratch-file record format:
+// Serialize one mesh's geometry into the scratch-file record format:
 // `u32 vertex_count`, the vertices as 56-byte records, `u32 index_count`,
 // the indices as little-endian `u16`s.
 fn encode_mesh(mesh: &DecodedMesh) -> Vec<u8> {

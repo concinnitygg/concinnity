@@ -501,8 +501,8 @@ impl FsrUpscaler {
             // (the engine writes 0 at near, 1 at far; Direct3D default).
             // The depth-infinite flag would force FFX's heuristic for
             // skybox masking; we have a real far plane so leave it off.
-            // Auto-exposure: FFX computes its own mid-grey heuristic
-            // from the colour buffer when this is on, useful because
+            // Auto-exposure: FFX computes its own mid-gray heuristic
+            // from the color buffer when this is on, useful because
             // the engine's `PostProcessConfig.auto_exposure` runs after
             // upscaling, so the input scene is *un*-exposed.
             flags: FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE,
@@ -833,7 +833,7 @@ impl super::UpscaleBackend for FsrUpscaler {
             )
         };
         // Touch `desc` past the dispatch so the compiler doesn't
-        // re-order any of its initialisation past the call.
+        // re-order any of its initialization past the call.
         let _ = &mut desc.header;
         if rc != FFX_API_RETURN_OK {
             return Err(format!("ffxDispatch (upscale) returned {rc}"));
@@ -845,7 +845,7 @@ impl super::UpscaleBackend for FsrUpscaler {
 impl crate::directx::context::DxContext {
     // Encode the FSR3 temporal upscale onto `cmd`. Runs after SSR
     // resolve / Fog / ParticlesDraw (so the input scene is the
-    // fully-decorated post-SSR colour) and before Bloom + Composite
+    // fully-decorated post-SSR color) and before Bloom + Composite
     // (which sample the upscaler's output via `scene_srv_for_post`).
     // Caller (the executor) already routed this onto the
     // `PassId::Upscale` per-pass cmd list.
@@ -899,7 +899,7 @@ impl crate::directx::context::DxContext {
         //            resource state.
         //   depth  : `gbuffer.depth` (single-sample D32F at render-res;
         //            the unified G-buffer pre-pass writes it). Not a graph
-        //            resource -- the `gbuffer` handle covers the three colour
+        //            resource -- the `gbuffer` handle covers the three color
         //            targets -- so its flip stays here.
         //   mv     : `gbuffer.velocity` (RG16F screen-space motion), part of
         //            the graph-driven `gbuffer`.
@@ -930,7 +930,7 @@ impl crate::directx::context::DxContext {
         unsafe { cmd.ResourceBarrier(&barriers[..count]) };
 
         // Per-frame inputs FSR consumes. Clamp dt to a sane range:
-        // `upscale_prev_elapsed` initialises to 0.0, so the first
+        // `upscale_prev_elapsed` initializes to 0.0, so the first
         // frame's raw `(now - prev)` is whatever elapsed-since-startup
         // happens to be (often seconds), and a stalled frame can yield
         // arbitrarily large values too. FSR's heuristics expect

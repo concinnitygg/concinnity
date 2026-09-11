@@ -204,7 +204,7 @@ type BloomMips = (Vec<ID3D12Resource>, Vec<(u32, u32)>);
 // has resolution `(width >> (i+1), height >> (i+1))`, floored at one texel, so
 // `mips[0]` is half-res. `mips[0]` (`bloom_top`) is the transient pool's placed
 // resource passed in as `top` (so the graph can alias its memory); the finer
-// mips are committed single-sample `HDR_FORMAT` colour targets usable as both a
+// mips are committed single-sample `HDR_FORMAT` color targets usable as both a
 // render target and a sampled texture, created in the PIXEL_SHADER_RESOURCE
 // state so the composite pass can bind `mips[0]` even when bloom is disabled and
 // the bloom passes never run.
@@ -307,7 +307,7 @@ pub(in crate::directx) fn write_color_rtv(
 // Encoder
 
 // The bloom chain orchestration lives once in `gfx::fullscreen`; this impl binds
-// + draws each sub-pass in D3D12. `Args` is the scene-colour SRV the prefilter
+// + draws each sub-pass in D3D12. `Args` is the scene-color SRV the prefilter
 // samples (post-TAA when TAA is on, the HDR scene SRV otherwise). Each sub-pass
 // transitions its destination mip to RENDER_TARGET for the draw and back to
 // PIXEL_SHADER_RESOURCE so the next pass (or composite) can sample it; every mip

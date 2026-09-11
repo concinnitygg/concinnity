@@ -17,6 +17,6 @@ probes are baked once and do not turn.
 
 ## Parameters
 
-- `axis`: An array of 3 floats. The celestial pole in world space: the axis the sphere turns about. Does not need to be normalised. Defaults to `[1.0, 0.0, 0.0]`.
+- `axis`: An array of 3 floats. The celestial pole in world space: the axis the sphere turns about. Does not need to be normalized. Defaults to `[1.0, 0.0, 0.0]`.
 - `degrees_per_second`: A float. Turn rate in degrees per second. Negative runs the sky backwards. Defaults to `1.0`.
 - `angle_deg`: A float. The angle the sky starts at, in degrees. Defaults to `0.0`.

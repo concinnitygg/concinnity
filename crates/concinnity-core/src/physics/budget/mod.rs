@@ -29,7 +29,7 @@ use super::props::{PropCollSnap, PropPhysics};
 use super::rig::RigPhysics;
 
 // Contacts one dynamic body can report in a single tick. A body wedged against
-// several neighbours reports one per pair; four keeps the drain scratch from
+// several neighbors reports one per pair; four keeps the drain scratch from
 // growing mid-frame without reserving for a pile-up.
 const CONTACTS_PER_DYNAMIC_BODY: usize = 4;
 // A sensor reports at most an entry and an exit per body crossing it.

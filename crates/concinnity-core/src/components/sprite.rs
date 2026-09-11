@@ -12,7 +12,7 @@ use crate::ecs::de_opt_texture_handle;
 ///
 /// A sprite with a `texture` draws that image, multiplied by the tint (use a
 /// white tint to show the image unchanged; the tint's alpha fades it).
-/// Without one, the tint is drawn as a solid-coloured rectangle.
+/// Without one, the tint is drawn as a solid-colored rectangle.
 ///
 /// ```rust
 /// # use concinnity_core::components::Sprite;
@@ -43,7 +43,7 @@ pub struct Sprite {
     /// multiplied by `tint`. Omitted, the sprite is a solid `tint` fill.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,
-    /// RGBA colour the rectangle is filled with, each channel in [0, 1].
+    /// RGBA color the rectangle is filled with, each channel in [0, 1].
     pub tint: [f32; 4],
     /// When true, the sprite acts as an in-engine cursor: it is drawn on top of
     /// the other overlays as an arrow pointer tracking the mouse, with the
@@ -74,7 +74,7 @@ pub struct Sprite {
     /// under the ring; a translucent fill keeps the whole rect, so the ring
     /// sits over its edge and whatever is behind still shows through.
     pub border_width: f32,
-    /// RGBA colour of the border stroke, each channel in [0, 1]. Ignored when
+    /// RGBA color of the border stroke, each channel in [0, 1]. Ignored when
     /// `border_width` is `0`.
     pub border_color: [f32; 4],
 }
@@ -140,7 +140,7 @@ mod tests {
         assert!(!s.follow_cursor);
         assert_eq!(s.fit, SpriteFit::Fit);
         assert_eq!(s.corner_radius, 0.0);
-        // Zero width is what suppresses the border, so its colour is irrelevant.
+        // Zero width is what suppresses the border, so its color is irrelevant.
         assert_eq!(s.border_width, 0.0);
         assert!(s.texture.is_none());
         assert!(s.screen.is_none());
@@ -161,13 +161,11 @@ mod tests {
 
     #[test]
     fn a_cursor_sprite_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let s: Sprite = serde_json::from_str(
+        let s: Sprite = crate::test_support::from_json(
             r#"{"x":10,"y":20,"width":32,"height":32,"texture":"tex_cursor",
                 "tint":[1,1,1,0.8],"follow_cursor":true,"visible":false,"screen":"menu",
                 "fit":"cover","corner_radius":4,"border_width":2,"border_color":[1,0,0,1]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(s.texture, Some(TextureHandle(10)));
         assert_eq!(s.screen, Some(AssetId(4)));
         assert!(s.follow_cursor);

@@ -254,7 +254,7 @@ pub enum GpuVendor {
     Amd,
     /// Intel.
     Intel,
-    /// A vendor the probe does not recognise.
+    /// A vendor the probe does not recognize.
     Other,
 }
 
@@ -766,7 +766,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// values from its stored `*Settings` structs into a per-frame uniform every
     /// draw, so mutating them takes effect on the next frame with no pipeline /
     /// target rebuild and no TAA-history reset. Only the fields of a feature that is
-    /// currently on are honoured (its settings are present); a value for an off
+    /// currently on are honored (its settings are present); a value for an off
     /// feature is ignored here and applies when the feature next turns on. The
     /// structural sub-knobs (gather resolution, ray / step counts) are NOT live and
     /// still ride `apply_quality_settings`. Default no-op: a backend that reads
@@ -785,7 +785,7 @@ pub trait RenderBackend: SceneControl + Send {
         None
     }
 
-    /// Replace the live colour-grading LUT with a fresh `size³` RGBA8 payload.
+    /// Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
     /// Driven by asset hot-reload (`cn debug` only). Default no-op: backends
     /// that have not implemented the swap leave the LUT bound at whatever
     /// payload was uploaded at init.
@@ -888,7 +888,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// Update a skinned slot's joint count and resize the backend's per-slot
     /// joint-matrix buffers to match. Driven by asset hot-reload (`cn debug`
     /// only) when a re-imported `.glb`'s skeleton has a different joint
-    /// count than the slot was initialised with. Shrinking truncates the
+    /// count than the slot was initialized with. Shrinking truncates the
     /// per-slot Vec; growing seeds the new entries to identity so the slot
     /// renders undeformed on the next `update_skinned_pose`. The skinned
     /// shaders consume the joints buffer through a pointer (not a fixed-
@@ -932,7 +932,7 @@ pub trait RenderBackend: SceneControl + Send {
     }
 
     /// Replace the live IBL environment map with a freshly precomputed payload.
-    /// `payload` is the serialised byte format emitted by
+    /// `payload` is the serialized byte format emitted by
     /// `crate::bake::environment_map::compile_environment_map_payload`
     /// (header + irradiance cube + prefilter mip chain), so init and hot-reload
     /// share a single byte format. Driven by asset hot-reload (`cn debug`
@@ -1121,7 +1121,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// Driven by the `cn editor` live SAVE: after a structural edit recompiles the
     /// blobs, GraphicsSystem transplants the running backend into the rebuilt
     /// world and calls this so the edit applies without recreating the OS window
-    /// or re-initialising the GPU device. The backend waits for the GPU to idle,
+    /// or re-initializing the GPU device. The backend waits for the GPU to idle,
     /// drops the old world's content resources, and rebuilds them from `init` on
     /// the retained hardware. Only ever called when [`Self::hot_swap_config`]
     /// reported a config matching `init.swapchain_config()`, so the swapchain

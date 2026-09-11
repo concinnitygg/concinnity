@@ -57,7 +57,7 @@ pub struct MeshPart<'a> {
     pub verts: &'a [Vertex],
     /// Triangle indices into `verts`.
     pub indices: &'a [u16],
-    /// Linear RGB colour.
+    /// Linear RGB color.
     pub color: [f32; 3],
 }
 

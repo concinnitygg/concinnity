@@ -14,7 +14,7 @@ use alloc::string::String;
 /// block. The user shader casts the bound buffer to its own typed
 /// struct; the engine just transports the bytes. Sized to comfortably
 /// fit a flow-water shader (flow speed, wave coefficients, deep + shallow
-/// colours, foam params, ...) without forcing schema design.
+/// colors, foam params, ...) without forcing schema design.
 pub const SDF_PARAMS_LEN: usize = 32;
 
 /// A raymarched signed-distance-field volume. It occupies a world-space
@@ -59,7 +59,7 @@ pub struct SdfVolume {
     pub max_gradient: f32,
     /// Maximum cone-march steps per pixel. Clamped to `[8, 256]`.
     pub max_steps: u32,
-    /// Maximum march distance in metres. Must be ≥ 0.1.
+    /// Maximum march distance in meters. Must be ≥ 0.1.
     pub max_distance: f32,
     /// Generic parameter block passed to the shader as a uniform buffer; the
     /// shader interprets it however it likes. Up to 32 values.
@@ -73,7 +73,7 @@ pub struct SdfVolume {
     /// When true, the volume renders as a participating medium (clouds, smoke,
     /// fog blobs, energy fields) instead of an opaque surface. The shader must
     /// define `sampleVolume(p, params, time)` returning per-point density,
-    /// scattering colour, and emission instead of `map` / `shade`. Volumetrics
+    /// scattering color, and emission instead of `map` / `shade`. Volumetrics
     /// never cast shadows (`cast_shadows` is forced off). The medium fills the
     /// whole bounding box, so don't overlap it with geometry it should render
     /// behind.

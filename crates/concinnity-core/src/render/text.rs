@@ -25,7 +25,7 @@ pub struct LoadedFont {
     pub atlas_w: u32,
     /// Atlas height in pixels.
     pub atlas_h: u32,
-    /// Rasterisation height (px) used to position glyphs vertically.
+    /// Rasterization height (px) used to position glyphs vertically.
     pub size_px: f32,
     /// Cap height (logical px): the bearing of an uppercase reference glyph, used
     /// to vertically center the visible text within its line box. The full em
@@ -121,7 +121,7 @@ pub fn widest_line_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
 }
 
 /// Advance width of `content` in scaled pixels for the given font, for placing a
-/// caret, sizing a field's text, or centring a line. Newlines carry no advance,
+/// caret, sizing a field's text, or centering a line. Newlines carry no advance,
 /// so a multi-line string measures as if its lines were concatenated.
 pub fn text_advance_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
     content
@@ -292,7 +292,7 @@ fn with_ellipsis(line: &str, font: &LoadedFont, scale: f32, width: f32) -> Strin
 
 // Baseline position relative to a label's top-left `y`, so the cap-height band
 // is vertically centered within the line box `[y, y + line_height]`. Pinning the
-// baseline to the box bottom (the old behaviour) left a large gap above the
+// baseline to the box bottom (the old behavior) left a large gap above the
 // glyphs; centering the cap band makes short UI text sit centered in its box.
 fn baseline_offset(font: &LoadedFont, scale: f32) -> f32 {
     let line_height = font.size_px * scale;

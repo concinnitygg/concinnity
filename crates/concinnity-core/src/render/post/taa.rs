@@ -1,6 +1,6 @@
 //! Temporal anti-aliasing, written once for every backend.
 //!
-//! The resolve blends the current scene with its own reprojected, neighbourhood
+//! The resolve blends the current scene with its own reprojected, neighborhood
 //! clipped output from the previous frame, reading per-pixel motion from the
 //! G-buffer's velocity channel. Everything that shape needs -- the accumulation
 //! targets, the ring that decides which one this frame writes, the gate that
@@ -73,7 +73,7 @@ pub struct TaaInputs<'t, D: PostPassDevice + ?Sized + 't> {
 /// The temporal resolve: its pipeline, its accumulation targets, and the ring
 /// that walks them.
 ///
-/// Parameterised by the two resource types rather than by the device, so a
+/// Parameterized by the two resource types rather than by the device, so a
 /// backend whose device value borrows (a Metal device plus a sampler, a Vulkan
 /// device plus its per-frame arena) can still store the pass: the pipeline and
 /// the target are owned handles with no lifetime of their own, and the device is
@@ -89,7 +89,7 @@ pub struct TaaPass<Pipeline, Target> {
 // debug naming.
 const TARGET_LABEL: &str = "taa_history";
 
-/// The accumulation target's shape: a full-resolution single-sample HDR colour
+/// The accumulation target's shape: a full-resolution single-sample HDR color
 /// target that is both rendered to and sampled. Declared as a render-graph
 /// description so a backend creates it through the same translation its
 /// transient pool already applies to a pooled resource, rather than through a
@@ -256,7 +256,7 @@ mod tests {
     use crate::render::post::device::resolve_extent;
 
     #[test]
-    fn the_accumulation_target_is_a_sampled_full_resolution_hdr_colour_target() {
+    fn the_accumulation_target_is_a_sampled_full_resolution_hdr_color_target() {
         let d = target_desc();
         assert_eq!(d.format, PixelFormat::Rgba16Float);
         assert_eq!(d.sample_count, 1);

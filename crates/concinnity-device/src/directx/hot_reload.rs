@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use super::context::DxContext;
+use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
+use windows::Win32::Graphics::Direct3D12::ID3D12PipelineState;
 
 // Rebuild a feature's PSO(s) into a temporary only when the feature is live,
 // propagating any compile/create error out of the enclosing `reload_shaders`.
@@ -643,5 +645,66 @@ fn swap_ssr_pipelines(
 ) {
     if let (Some(pso), Some(resolve)) = (rebuilt.resolve_pso, ssr.resolve.as_mut()) {
         resolve.resolve_pso = pso;
+    }
+}
+
+// World-Shader runtime hot-swap (RenderBackend::update_world_shader_pipelines)
+
+// cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots,
+// live in the concinnity binary. See the note on the analogous block in
+// [directx/particle.rs].
+impl DxContext {
+    // Rebuild bucket 0 of the GPU-driven main pass from a freshly compiled world
+    // Shader and hot-swap it, for the live-reload path (`reload_shader_stages`
+    // -> here). Buckets past 0 and the shadow, G-buffer and cull pipelines are
+    // engine-internal or scene-owned and are not rebuilt here.
+    //
+    // The replacement is built first; a compile / PSO-create failure
+    // early-returns with the live pipeline untouched, mirroring
+    // `reload_shaders`. Mirrors `MtlContext::update_world_shader_pipelines`.
+    pub(crate) fn update_world_shader_pipelines(
+        &mut self,
+        programs: &concinnity_core::components::ShaderPrograms,
+    ) -> Result<(), String> {
+        let new_main = self.build_world_main_pso(Some(programs), &self.bindless_main_shaders)?;
+        // Drain the GPU before the swap releases the displaced PSO: a command
+        // list does not keep one alive, and the debug reload drive does not
+        // wait for us.
+        self.wait_idle();
+        self.cull.main_bindless_pso = Some(new_main);
+        self.world_shader = Some(programs.clone());
+        self.invalidate_wireframe_pipelines();
+        Ok(())
+    }
+
+    // Bucket 0's PSO against the live bindless root signature: the world default
+    // Shader's pair where `world` declares one, `engine_default` otherwise.
+    // Errors when the GPU-driven pass is not live, which means the world has
+    // nothing to draw.
+    pub(super) fn build_world_main_pso(
+        &self,
+        world: Option<&concinnity_core::components::ShaderPrograms>,
+        engine_default: &super::init::pipelines::BindlessMainShaders,
+    ) -> Result<ID3D12PipelineState, String> {
+        let root_sig = self
+            .cull
+            .main_bindless_root_sig
+            .as_ref()
+            .ok_or_else(|| "the GPU-driven main pass is not live".to_string())?;
+        build_bucket_pipeline(
+            &self.device,
+            self.diagnostics.info_queue.as_ref(),
+            BucketPipelineTargets {
+                root_sig,
+                msaa_samples: self.hdr.msaa_samples,
+                engine_default,
+                hot_reload: self.hot_reload.enabled,
+            },
+            0,
+            crate::gfx::backend_init::WorldShader {
+                programs: world,
+                deferred: false,
+            },
+        )
     }
 }

@@ -31,7 +31,7 @@ pub(super) struct TerrainParams {
 // world-Y grid) as a trailer on the payload, so the collider tracks the
 // rendered surface vertex-for-vertex without decoding the source image at
 // runtime. The terrain mesh's blob is held resident past GraphicsSystem init
-// for exactly this read (see the release sweep in `graphics_system::init`).
+// for exactly this read (see the release sweep in `gfx::system::init`).
 pub(super) fn build_heightfield_collider(
     world: &mut Simulation,
     mesh: &ProceduralMesh,
@@ -46,7 +46,7 @@ pub(super) fn build_heightfield_collider(
     let bytes = ctx
         .read_payload(locator)
         .map_err(|e| format!("read terrain payload: {e:?}"))?;
-    let grid = crate::gfx::mesh_payload::deserialise_heightfield(bytes)?
+    let grid = crate::gfx::mesh_payload::deserialize_heightfield(bytes)?
         .ok_or("terrain mesh payload has no baked heightfield collider")?;
     if grid.rows < 2 || grid.cols < 2 {
         return Err(format!(
@@ -139,8 +139,8 @@ fn terrain_height_at(world_x: f32, world_z: f32, t: &TerrainParams) -> f32 {
         weight_sum += weight;
     }
 
-    let normalised = sum / weight_sum;
-    (normalised - 0.05).max(0.0) * t.amplitude
+    let normalized = sum / weight_sum;
+    (normalized - 0.05).max(0.0) * t.amplitude
 }
 
 fn lattice_val(x: u32, y: u32) -> f32 {
@@ -162,7 +162,7 @@ mod tests {
         Arena, ComponentStorage, FrameContext, NoPayloads, PayloadLocator, PayloadStore, Resources,
     };
     use crate::error::CnError;
-    use crate::gfx::mesh_payload::serialise_heightfield_trailer;
+    use crate::gfx::mesh_payload::serialize_heightfield_trailer;
     use crate::gfx::profile::FrameProfile;
     use crate::physics::{SimConfig, Simulation};
     use alloc::boxed::Box;
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn terrain_height_is_continuous_and_bounded() {
         let t = terrain(4.0);
-        // Height never exceeds the amplitude and neighbouring samples are close.
+        // Height never exceeds the amplitude and neighboring samples are close.
         let mut prev = terrain_height_at(-32.0, 0.0, &t);
         let mut x = -32.0;
         while x <= 32.0 {
@@ -266,7 +266,7 @@ mod tests {
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         if let Some((rows, cols, heights)) = grid {
-            bytes.extend_from_slice(&serialise_heightfield_trailer(rows, cols, &heights));
+            bytes.extend_from_slice(&serialize_heightfield_trailer(rows, cols, &heights));
         }
         bytes
     }

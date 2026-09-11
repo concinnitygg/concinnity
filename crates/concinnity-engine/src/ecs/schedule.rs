@@ -57,42 +57,42 @@ pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
 // settings/scene command batches against the backend graphics owns and holds
 // the settings snapshot GraphicsSystem's init resolves. Scheduled just before
 // GraphicsSystem so a change lands for this frame's submit.
-pub(crate) fn settings(world: &World) -> Option<crate::gfx::settings_system::SettingsSystem> {
+pub(crate) fn settings(world: &World) -> Option<crate::gfx::settings::system::SettingsSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::settings_system::SettingsSystem::new())
+        .map(|_| crate::gfx::settings::system::SettingsSystem::new())
 }
 
 // StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
 // streaming pools and publishes the camera-relative screen graphics draws.
 // Scheduled immediately before GraphicsSystem so a chunk world's screen rebase is
 // ready for this frame's submit and any texture/mesh upload lands before it.
-pub(crate) fn streaming(world: &World) -> Option<crate::gfx::streaming_system::StreamingSystem> {
+pub(crate) fn streaming(world: &World) -> Option<crate::gfx::streaming::system::StreamingSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::streaming_system::StreamingSystem::new())
+        .map(|_| crate::gfx::streaming::system::StreamingSystem::new())
 }
 
 // GraphicsSystem: present whenever the world declares a `GraphicsConfig`
 // (the render marker).
-pub(crate) fn graphics(world: &World) -> Option<crate::gfx::graphics_system::GraphicsSystem> {
+pub(crate) fn graphics(world: &World) -> Option<crate::gfx::system::GraphicsSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::graphics_system::GraphicsSystem::new(crate::ecs::state_tree(world)))
+        .map(|_| crate::gfx::system::GraphicsSystem::new(crate::ecs::state_tree(world)))
 }
 
 // InputSystem: paired with GraphicsSystem (same gate) -- it samples the window
 // backend graphics drives. Scheduled immediately after it so the snapshot is
 // taken right after the draw (the OS event pump on Metal runs inside
 // draw_frame) and is fresh for every consumer below.
-pub(crate) fn input(world: &World) -> Option<crate::gfx::input_system::InputSystem> {
+pub(crate) fn input(world: &World) -> Option<crate::input::system::InputSystem> {
     world
         .query::<crate::components::GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::input_system::InputSystem::new())
+        .map(|_| crate::input::system::InputSystem::new())
 }
 
 // StatHud: present whenever the world declares a `StatHud`; built from that
@@ -325,11 +325,11 @@ pub(crate) fn ui_input(world: &World) -> Option<crate::ui::UiInputSystem> {
 // TextInputSystem: present whenever the world declares any `TextInput`. It
 // edits the focused field in place from the frame's typed character and
 // caret keys, so it runs after GraphicsSystem deposits `FrameInput`.
-pub(crate) fn text_input(world: &World) -> Option<crate::text_input_system::TextInputSystem> {
+pub(crate) fn text_input(world: &World) -> Option<crate::input::text_system::TextInputSystem> {
     world
         .query::<crate::components::TextInput>()
         .next()
-        .map(|_| crate::text_input_system::TextInputSystem::new())
+        .map(|_| crate::input::text_system::TextInputSystem::new())
 }
 
 #[cfg(test)]

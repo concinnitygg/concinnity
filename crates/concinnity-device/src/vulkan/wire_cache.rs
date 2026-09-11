@@ -22,7 +22,7 @@ impl<T: Copy + PartialEq> WireCache<T> {
 
     // True when `value` differs from what `frame_idx` was last wired with, which
     // also records it as the slot's new contents. A frame index past the end
-    // reports stale and memoises nothing, so an out-of-range caller degrades to
+    // reports stale and memoizes nothing, so an out-of-range caller degrades to
     // the unconditional write rather than silently skipping one.
     pub(in crate::vulkan) fn changed(&mut self, frame_idx: usize, value: T) -> bool {
         match self.wired.get_mut(frame_idx) {
@@ -70,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    fn slots_memoise_independently() {
+    fn slots_memoize_independently() {
         let mut cache = WireCache::new(2);
         assert!(cache.changed(0, 7u32));
         // Slot 1 has never seen the value even though slot 0 holds it.

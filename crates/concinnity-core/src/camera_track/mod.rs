@@ -3,7 +3,7 @@
 //! plays them, and where it has reached.
 //!
 //! The track's two lists are played against one clock and never read each
-//! other, so travelling and turning compose without either bending the other.
+//! other, so traveling and turning compose without either bending the other.
 //! That clock is the fixed simulation step, which is what makes a run
 //! repeatable: a slower machine samples the same path at the same track times,
 //! just at fewer of them.

@@ -13,15 +13,15 @@ use std::sync::atomic::AtomicBool;
 use crate::debug_hook::DebugHook;
 use crate::ecs::World;
 use crate::gfx::animation::AnimationSystem;
-use crate::gfx::graphics_system::GraphicsSystem;
+use crate::gfx::system::GraphicsSystem;
 
 use super::state::{AssetHotReloadState, FrameHotReloadEffects, run_frame};
 
 pub(crate) struct HotReloadDriver {
-    // Reload catalogue + filesystem watcher + in-flight decode handles. Armed
+    // Reload catalog + filesystem watcher + in-flight decode handles. Armed
     // from the GraphicsSystem's init-captured sources on the first tick that
     // finds them, and re-armed whenever a fresh capture appears (the editor's
-    // live preview rebuild re-runs init), so the catalogue never goes stale
+    // live preview rebuild re-runs init), so the catalog never goes stale
     // against the current backend slots.
     state: Option<AssetHotReloadState>,
     // The editor's toast queue, when driving inside an editor session: the
@@ -52,12 +52,12 @@ impl HotReloadDriver {
         self.state.as_ref().map(|s| Arc::clone(&s.pending))
     }
 
-    // Rebuild the reload state from a freshly captured source catalogue.
+    // Rebuild the reload state from a freshly captured source catalog.
     // Dropping the previous state stops its watcher and abandons any
     // in-flight decode aimed at the replaced world's slots.
     pub(crate) fn arm(
         &mut self,
-        sources: crate::gfx::graphics_system::hot_reload_sources::HotReloadSources,
+        sources: crate::gfx::system::hot_reload_sources::HotReloadSources,
     ) {
         self.state = Some(AssetHotReloadState::from_sources(sources));
     }

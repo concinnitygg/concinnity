@@ -7,7 +7,7 @@
 // one thread or several.
 //
 // The trait is generic in the item and the body rather than object safe. A step
-// hands out a small fixed array of work units, so the fan-out is monomorphised
+// hands out a small fixed array of work units, so the fan-out is monomorphized
 // into the step that used it and nothing is boxed or dispatched dynamically.
 //
 // `scope` is the second half of that, and it is what makes the first one

@@ -324,8 +324,8 @@ const COMMANDS: &[Command] = &[
             ),
             optional("size_start", Kind::Number, "Particle size at birth."),
             optional("size_end", Kind::Number, "Particle size at death."),
-            optional("color_start", Kind::Vec4, "Linear RGBA colour at birth."),
-            optional("color_end", Kind::Vec4, "Linear RGBA colour at death."),
+            optional("color_start", Kind::Vec4, "Linear RGBA color at birth."),
+            optional("color_end", Kind::Vec4, "Linear RGBA color at death."),
         ],
     },
     Command {
@@ -648,13 +648,13 @@ mod tests {
             "the dispatch scan found only {} verbs: {dispatched:?}",
             dispatched.len()
         );
-        let catalogued: BTreeSet<String> = all().iter().map(|c| c.name.to_string()).collect();
-        let missing: Vec<_> = dispatched.difference(&catalogued).collect();
+        let catalogd: BTreeSet<String> = all().iter().map(|c| c.name.to_string()).collect();
+        let missing: Vec<_> = dispatched.difference(&catalogd).collect();
         assert!(
             missing.is_empty(),
             "dispatched but not in the catalog: {missing:?}"
         );
-        let extra: Vec<_> = catalogued.difference(&dispatched).collect();
+        let extra: Vec<_> = catalogd.difference(&dispatched).collect();
         assert!(
             extra.is_empty(),
             "in the catalog but never dispatched: {extra:?}"
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn parameterless_commands_declare_empty_schemas() {
-        let ping = find("ping").expect("ping is catalogued");
+        let ping = find("ping").expect("ping is catalogd");
         assert_eq!(
             ping.schema(),
             json!({ "type": "object", "properties": {}, "additionalProperties": false })

@@ -26,7 +26,7 @@ pub struct ModelUniforms {
 pub struct CullUniforms {
     /// The six frustum planes (left/right/bottom/top/near/far), each
     /// `[normal.x, normal.y, normal.z, d]`, extracted CPU-side and already
-    /// normalised so the kernel's plane test matches `gfx::frustum` exactly.
+    /// normalized so the kernel's plane test matches `gfx::frustum` exactly.
     pub planes: [[f32; 4]; 6],
     /// World-space camera position in `xyz`; `w` is unused. A whole lane
     /// because the shader-side `float3` is 16 bytes on Metal.
@@ -89,7 +89,7 @@ pub struct EncodeParams {
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct VelocityUniforms {
-    /// Jittered current view-projection: drives the rasterised position so
+    /// Jittered current view-projection: drives the rasterized position so
     /// the pre-pass covers exactly the same pixels as the main pass.
     pub jittered_vp: [[f32; 4]; 4],
     /// Un-jittered current view-projection: keeps the stored motion vector

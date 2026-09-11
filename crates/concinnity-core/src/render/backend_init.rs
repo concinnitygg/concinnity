@@ -44,7 +44,7 @@ pub struct SceneData<'a> {
     /// Worst-case resident chunk count for a streaming VoxelWorld (0
     /// otherwise). Reserves a chunk record region in the shared GPU-cull
     /// buffers at init; resident chunks fold into the indirect path each
-    /// frame. Honoured by DirectX + Vulkan; Metal's per-frame rebuild already
+    /// frame. Honored by DirectX + Vulkan; Metal's per-frame rebuild already
     /// covers chunks, so it needs no reserve.
     pub n_chunk_max: usize,
 }
@@ -64,7 +64,7 @@ pub struct WorldShader<'a> {
     pub deferred: bool,
 }
 
-/// Decoded image payloads: texture pools, glyph atlases, and the serialised
+/// Decoded image payloads: texture pools, glyph atlases, and the serialized
 /// IBL / grading payloads (None = the backend binds identity fallbacks).
 pub struct MediaPayloads<'a> {
     /// Decoded textures for the shared handle-indexed pool: one `TextureImage`
@@ -76,10 +76,10 @@ pub struct MediaPayloads<'a> {
     pub textures: &'a [crate::bake::texture::TextureImage],
     /// Glyph atlas textures for text rendering; empty = no text support.
     pub text_atlases: Vec<(u32, u32, Vec<u8>)>,
-    /// Serialised EnvironmentMap payload (irradiance + prefilter cubemaps).
-    /// None disables IBL; the runtime binds 1x1 grey fallback cubes.
+    /// Serialized EnvironmentMap payload (irradiance + prefilter cubemaps).
+    /// None disables IBL; the runtime binds 1x1 gray fallback cubes.
     pub env_map_bytes: Option<&'a [u8]>,
-    /// Serialised ColorLut payload (3D grading LUT). None = identity LUT.
+    /// Serialized ColorLut payload (3D grading LUT). None = identity LUT.
     pub color_lut_bytes: Option<&'a [u8]>,
 }
 
@@ -109,9 +109,9 @@ pub struct PostSettings {
     pub post_process: PostProcessTunables,
     /// Whether the temporal anti-aliasing pass runs.
     pub taa_enabled: bool,
-    /// Sample count for the off-screen HDR colour + depth attachments, resolved
+    /// Sample count for the off-screen HDR color + depth attachments, resolved
     /// by [`crate::components::hdr_sample_count`] from the anti-aliasing mode
-    /// and the upscaling request. `1` means no multisampling: the colour target
+    /// and the upscaling request. `1` means no multisampling: the color target
     /// is the scene spine and no resolve step runs. Each backend clamps it to
     /// what the device reports for the HDR format.
     pub hdr_samples: u32,
@@ -137,10 +137,10 @@ pub struct PostSettings {
     /// Authored exposure_ev carried as a bias on the adapted EV when
     /// auto-exposure is on; otherwise baked into post_process.exposure.
     pub auto_exposure_bias_ev: f32,
-    /// HDR display request; each backend gates it on its own EDR / colour-
+    /// HDR display request; each backend gates it on its own EDR / color-
     /// space capability probe and falls back to SDR with a warning.
     pub hdr_display: bool,
-    /// PQ-encoded HDR output; honoured by Metal today, accepted elsewhere.
+    /// PQ-encoded HDR output; honored by Metal today, accepted elsewhere.
     pub hdr_pq: bool,
     /// Whether temporal upscaling runs.
     pub temporal_upscaling: bool,
@@ -370,7 +370,7 @@ impl<'a> BackendInit<'a> {
     /// a live SAVE can reuse the existing window (`reload_world`) or must rebuild.
     pub fn swapchain_config(&self) -> SwapchainConfig {
         SwapchainConfig {
-            // Normalise to at least 1 to match how the backends size their ring
+            // Normalize to at least 1 to match how the backends size their ring
             // buffers (e.g. Metal stores `frames_in_flight.max(1)`), so an
             // out-of-range authored 0 does not read as a swapchain change vs a
             // backend that already clamped it, spuriously forcing a full rebuild.

@@ -5,15 +5,15 @@
 // completed work on a later frame and push it through the backend `update_*`
 // calls. Keeps the (seconds-long) decode off the render thread.
 
-use crate::gfx::graphics_system::hot_reload_sources::*;
+use crate::gfx::system::hot_reload_sources::*;
 
 use super::state::*;
 
 // Trigger a hot-reload pass. Spawns at most two worker threads: one for the
 // IBL convolution (when an EnvironmentMap is declared) and one for the rest
-// of the captured catalogue (textures, ColorLut, file-backed Mesh /
+// of the captured catalog (textures, ColorLut, file-backed Mesh /
 // SkinnedMesh decode). The decode work is CPU-bound (PNG/JPEG inflate, glTF
-// parse, vertex normalisation) and used to stall the render thread for
+// parse, vertex normalization) and used to stall the render thread for
 // several seconds on a 43-texture / 14-mesh world; moving it off-thread lets
 // the render loop keep drawing while the worker runs. [`poll_pending_assets`]
 // + [`poll_pending_envmap`] drain the workers' results on a later frame and
@@ -25,7 +25,7 @@ pub(crate) fn reload_assets(state: &AssetHotReloadState) {
 }
 
 // Spawn the texture + ColorLut + Mesh + SkinnedMesh decode worker if any
-// source catalogue carries entries. The previous batch's receiver is
+// source catalog carries entries. The previous batch's receiver is
 // consulted first: if a decode is already in flight, this pass logs and
 // skips so the user re-triggers after the result lands. Sources are cloned
 // into the worker closure so the worker has no reference back to
@@ -155,7 +155,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
 // results into a `DecodedAssetBatch`. Per-entry failures are logged at
 // `error` and counted in `decode_failures` but never abort the rest of the
 // batch: a half-written file is picked up on the next reload when the
-// writer finishes. `parsed_glb_cache` amortises `parse_glb` across every
+// writer finishes. `parsed_glb_cache` amortizes `parse_glb` across every
 // texture / mesh / skinned mesh that shares the same `.glb` (the showcase
 // world fans 43 textures + 35 meshes out of a single 43 MB ABeautifulGame
 // chess set, so without the cache the parse cost dominates the worker).
@@ -264,7 +264,7 @@ pub(super) fn decode_asset_batch(
     // Static Meshes: re-import each via the shared glb cache. Serial: the
     // per-mesh decode is fast enough that the parallel-decode-then-collect
     // shape isn't worth the bookkeeping (most meshes share their parsed
-    // doc, so the parse is amortised regardless).
+    // doc, so the parse is amortized regardless).
     for (entry_idx, entry) in meshes.iter().enumerate() {
         let doc = match load_glb(&entry.source) {
             Ok(d) => d,

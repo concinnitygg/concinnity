@@ -1,4 +1,4 @@
-// Reads the compiled font payload back: the write half is `payload::serialise`,
+// Reads the compiled font payload back: the write half is `payload::serialize`,
 // and the two must agree field for field.
 
 use crate::gfx::font::GlyphMetrics;
@@ -13,12 +13,12 @@ use crate::decode::{ByteReader, checked_product};
 const GLYPH_STRIDE: usize = 4 + 2 + 2 + 2 + 2 + 4 + 4 + 4;
 
 // Decoded font payload: atlas width, atlas height, supersample factor,
-// rasterisation size (px), RGBA atlas pixels, and per-glyph metrics.
+// rasterization size (px), RGBA atlas pixels, and per-glyph metrics.
 pub(crate) type DecodedFont = (u32, u32, u32, u32, Vec<u8>, Vec<GlyphMetrics>);
 
-/// Deserialise a font payload back into atlas dimensions, the atlas supersample
-/// factor, the rasterisation size, RGBA pixels, and metrics.
-pub fn deserialise(bytes: &[u8]) -> Result<DecodedFont, String> {
+/// Deserialize a font payload back into atlas dimensions, the atlas supersample
+/// factor, the rasterization size, RGBA pixels, and metrics.
+pub fn deserialize(bytes: &[u8]) -> Result<DecodedFont, String> {
     let mut r = ByteReader::new(bytes, "font payload");
     let atlas_w = r.u32()?;
     let atlas_h = r.u32()?;
@@ -105,7 +105,7 @@ mod tests {
     fn decodes_a_well_formed_payload() {
         let glyphs = [glyph(b'A' as u32), glyph(b'B' as u32)];
         let bytes = payload(4, 2, &glyphs);
-        let (w, h, ss, size_px, rgba, metrics) = deserialise(&bytes).unwrap();
+        let (w, h, ss, size_px, rgba, metrics) = deserialize(&bytes).unwrap();
         assert_eq!((w, h, ss, size_px), (4, 2, 2, 32));
         assert_eq!(rgba.len(), 4 * 2 * 4);
         assert!(rgba.iter().all(|b| *b == 0xAB));
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn decodes_a_payload_with_no_glyphs() {
-        let (_, _, _, _, _, metrics) = deserialise(&payload(1, 1, &[])).unwrap();
+        let (_, _, _, _, _, metrics) = deserialize(&payload(1, 1, &[])).unwrap();
         assert!(metrics.is_empty());
     }
 
@@ -127,7 +127,7 @@ mod tests {
     fn rejects_a_payload_shorter_than_the_header() {
         for len in 0..16 {
             let bytes = vec![0u8; len];
-            assert!(deserialise(&bytes).is_err(), "len {} decoded", len);
+            assert!(deserialize(&bytes).is_err(), "len {} decoded", len);
         }
     }
 
@@ -135,21 +135,21 @@ mod tests {
     fn rejects_a_payload_truncated_mid_atlas() {
         let mut bytes = payload(8, 8, &[glyph(b'x' as u32)]);
         bytes.truncate(16 + 40);
-        assert!(deserialise(&bytes).is_err());
+        assert!(deserialize(&bytes).is_err());
     }
 
     #[test]
     fn rejects_a_payload_truncated_before_the_glyph_count() {
         let full = payload(2, 2, &[]);
         let bytes = &full[..full.len() - 2];
-        assert!(deserialise(bytes).is_err());
+        assert!(deserialize(bytes).is_err());
     }
 
     #[test]
     fn rejects_a_payload_truncated_mid_metrics() {
         let mut bytes = payload(2, 2, &[glyph(b'q' as u32), glyph(b'r' as u32)]);
         bytes.truncate(bytes.len() - 5);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("truncated"), "{}", err);
     }
 
@@ -162,7 +162,7 @@ mod tests {
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("overflow"), "{}", err);
     }
 
@@ -175,7 +175,7 @@ mod tests {
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&[0u8; 64]);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("unexpected end"), "{}", err);
     }
 
@@ -186,7 +186,7 @@ mod tests {
         let mut bytes = payload(1, 1, &[]);
         let count_at = bytes.len() - 4;
         bytes[count_at..].copy_from_slice(&u32::MAX.to_le_bytes());
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("truncated"), "{}", err);
     }
 }

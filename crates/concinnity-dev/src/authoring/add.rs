@@ -228,7 +228,7 @@ pub(crate) fn try_retarget_environment_map(
 // file is missing and the target can't bootstrap one: only `.glb`, `.txt`,
 // and `.md` are allowed to create a world from nothing.
 //
-// `template` picks which scaffold flavour to inject. Unknown names error
+// `template` picks which scaffold flavor to inject. Unknown names error
 // out before any file I/O so the user sees the typo immediately. An unknown
 // template is treated as an error even when scaffolding wouldn't fire
 // (e.g. existing world with a renderer trigger), since silently ignoring
@@ -279,7 +279,7 @@ fn scaffold_to_inject(
 // `concinnity_cook::authoring::template` registry. Returns:
 //   - `Ok(None)`              when no template was requested (use default scaffold)
 //   - `Ok(Some(entries))`     when the named template is known
-//   - `Err(InvalidInput)`     when the name is unrecognised (typo → fail fast)
+//   - `Err(InvalidInput)`     when the name is unrecognized (typo → fail fast)
 fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_json::Value>>> {
     let Some(name) = template else {
         return Ok(None);
@@ -1637,7 +1637,7 @@ mod tests {
     fn inline_json_rejects_build_config() {
         let err = entry_from_inline_json(r#"{"type":"BuildConfig"}"#).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        // The underscore spelling is caught by the same normalisation.
+        // The underscore spelling is caught by the same normalization.
         let err = entry_from_inline_json(r#"{"type":"build_config"}"#).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -1860,7 +1860,7 @@ mod tests {
     // is_path_like
 
     #[test]
-    fn is_path_like_recognises_separators_prefixes_and_dotted_files() {
+    fn is_path_like_recognizes_separators_prefixes_and_dotted_files() {
         assert!(is_path_like("models/scene.glb"));
         assert!(is_path_like("models\\scene.glb"));
         assert!(is_path_like("./scene.glb"));

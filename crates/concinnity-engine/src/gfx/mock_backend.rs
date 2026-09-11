@@ -115,7 +115,7 @@ pub(crate) enum Call {
     SetWindowSize(u32, u32),
     SetDisplayMode(crate::gfx::display_mode::DisplayMode),
     SetAmbientIntensity(f32),
-    // The directional lights pushed, as (direction, colour, intensity) per light.
+    // The directional lights pushed, as (direction, color, intensity) per light.
     UpdateDirectionalLights(Vec<([f32; 3], [f32; 3], f32)>),
     UpdateFogSettings(Option<crate::gfx::volumetric_fog::FogSettings>),
     SetKeymap,
@@ -171,7 +171,7 @@ pub(crate) struct MockState {
     // over the top of the frame. Set before a step to stand in for it.
     pub(crate) top_inset: f32,
     // Capabilities reported to init, which uses them to gray out the settings
-    // rows the device cannot honour. Set before `init_graphics` to stand in for
+    // rows the device cannot honor. Set before `init_graphics` to stand in for
     // a device missing a feature.
     pub caps: DeviceCapabilities,
 }

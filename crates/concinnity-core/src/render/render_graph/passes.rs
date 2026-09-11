@@ -48,8 +48,6 @@ pass_ids! {
     Cull => "cull",
     /// Directional shadow cascades and spot shadow slices.
     Shadow => "shadow",
-    /// Depth / normal prepass feeding screen-space reflections.
-    SsrPrepass => "ssr_prepass",
     /// Depth / normal prepass feeding ambient occlusion.
     SsaoPrepass => "ssao_prepass",
     /// The ambient-occlusion gather.
@@ -70,8 +68,6 @@ pass_ids! {
     ParticlesDraw => "particles_draw",
     /// Reflection trace and composite.
     SsrResolve => "ssr_resolve",
-    /// Screen-space velocity, for TAA and motion blur.
-    Velocity => "velocity",
     /// Temporal anti-aliasing resolve.
     TaaResolve => "taa_resolve",
     /// Bloom down/upsample chain.
@@ -97,7 +93,7 @@ pass_ids! {
     /// Transparent / translucent geometry pass. Runs after `SsrResolve`
     /// (so water + glass see opaque reflections) and before
     /// `TaaResolve` / `Upscale` (so translucents pick up temporal
-    /// accumulation). Reads the latest scene-pre-taa colour + main
+    /// accumulation). Reads the latest scene-pre-taa color + main
     /// depth as sampled textures; writes scene-pre-taa blended
     /// (SRC_ALPHA / ONE_MINUS_SRC_ALPHA). Each transparent draw owns
     /// its own pipeline + descriptor set; the pass aggregates them as
@@ -105,15 +101,15 @@ pass_ids! {
     /// `FrameGraphInputs::transparent_enabled`; when no consumer is
     /// in the world, the slot is omitted entirely.
     Transparent => "transparent",
-    /// Raymarched SDF volume pass. Rasterises the back faces of each
+    /// Raymarched SDF volume pass. Rasterizes the back faces of each
     /// `SdfVolume`'s world-space bounding box and runs the user-authored
     /// fragment shader, which sphere-traces a signed distance field
-    /// inside the box. Hit fragments write opaque colour into
+    /// inside the box. Hit fragments write opaque color into
     /// `hdr_resolve` (RMW between `AutoExposure` and `Decals`) and
     /// update the main depth attachment so the raymarched surface
-    /// composites with rasterised geometry naturally: decals, fog,
+    /// composites with rasterized geometry naturally: decals, fog,
     /// SSR-resolve, and TAA all consume the post-Raymarch depth and
-    /// colour. Gated on `FrameGraphInputs::raymarch_enabled`; when no
+    /// color. Gated on `FrameGraphInputs::raymarch_enabled`; when no
     /// `SdfVolume` is in the world the slot is omitted entirely.
     Raymarch => "raymarch",
     /// Mid-frame Hi-Z (depth-mip pyramid) rebuild for two-pass occlusion
@@ -134,7 +130,7 @@ pass_ids! {
     /// Gated on `FrameGraphInputs::two_pass_occlusion_enabled`.
     Cull2 => "cull2",
     /// Phase-2 main pass for two-pass occlusion. Loads (does not clear) the
-    /// HDR colour + depth `Main` wrote and re-runs only the bindless-static
+    /// HDR color + depth `Main` wrote and re-runs only the bindless-static
     /// indirect draw through `Cull2`'s command buffer, depth-compositing the
     /// disoccluded geometry with phase 1. Instanced + skinned geometry is not
     /// Hi-Z-culled, so it is fully drawn in phase 1 and not repeated here.
@@ -148,7 +144,7 @@ pass_ids! {
     /// of along one reflection vector. Sits on the hdr_resolve RMW chain (after
     /// `Raymarch`, before `Decals`): it reads the lit scene as the bounce
     /// radiance source and additively composites the gathered + denoised
-    /// indirect term back into it, so the near-field colour bleed layers on top
+    /// indirect term back into it, so the near-field color bleed layers on top
     /// of the IBL ambient. Gated on `FrameGraphInputs::ssgi_enabled`; when
     /// `indirect_lighting` is IBL-only the slot is omitted entirely.
     Ssgi => "ssgi",
@@ -158,18 +154,17 @@ pass_ids! {
     /// builder inserts it and omits `SsrResolve` (a world may author both; RT
     /// runs where available, SSR is the fallback). It still relies on the SSR
     /// depth + normal + roughness
-    /// pre-pass (so `SsrPrepass` is forced on), but instead of a screen-space
+    /// pre-pass (so `ssr_prepass_enabled` is forced on), but instead of a screen-space
     /// march it traces a world-space reflection ray against an acceleration
     /// structure built over the static scene geometry, so off-screen reflected
     /// geometry appears. Gated on `FrameGraphInputs::rt_reflections_enabled`,
     /// and so only on GPUs that report ray-tracing support.
     RtReflections => "rt_reflections",
-    /// Unified geometry G-buffer pre-pass. One jittered traversal of the visible
-    /// set writes view-space normal + linear depth, perceptual roughness, and
-    /// screen-space motion into a single MRT (plus a sampleable depth), replacing
-    /// the separate `SsrPrepass` + `Velocity` (and the SSAO-owned prepass): every
-    /// consumer (SSR, SSAO, SSGI, RT, TAA, upscaler) reads this one output. Gated
-    /// on `FrameGraphInputs::unified_gbuffer_prepass`.
+    /// Geometry G-buffer pre-pass. One jittered traversal of the visible set
+    /// writes view-space normal + linear depth, perceptual roughness, and
+    /// screen-space motion into a single MRT (plus a sampleable depth): every
+    /// consumer (SSR, SSAO, SSGI, RT, TAA, upscaler) reads this one output.
+    /// Gated on `FrameGraphInputs::gbuffer_prepass_enabled` plus any consumer.
     GBufferPrepass => "gbuffer_prepass",
     /// Roughness-aware reflection composite. Not a standalone graph node: it is
     /// encoded inline at the tail of the `SsrResolve` / `RtReflections` pass
@@ -193,7 +188,7 @@ pass_ids! {
     /// `ShadowUpdate::Hybrid`. Runs when the world has a shadow-casting spot.
     SpotShadow => "spot_shadow",
     /// World-space line geometry (trajectories, tethers, path previews, the
-    /// editor's origin axes). Blend-writes the resolved scene colour after the
+    /// editor's origin axes). Blend-writes the resolved scene color after the
     /// world decorations, sampling the resolved scene depth so a line behind
     /// geometry is occluded by it. Gated on `FrameGraphInputs::lines_enabled`:
     /// a frame that submits no lines omits the node entirely, so a frame that

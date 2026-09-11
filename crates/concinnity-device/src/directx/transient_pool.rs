@@ -2,7 +2,7 @@
 //
 // Backing store for the render graph's transient render targets on D3D12. The
 // shared `gfx::render_graph::alias` planner decides which transients can share
-// physical memory; this pool realises that on D3D12 with placed resources on an
+// physical memory; this pool realizes that on D3D12 with placed resources on an
 // `ID3D12Heap` (the analogue of Vulkan's aliased `VkImage`s on a shared
 // `VkDeviceMemory`). Features stop owning these resources and read them back by
 // label, so the pool can repoint several labels at one heap region without
@@ -10,7 +10,7 @@
 //
 // Buffering: D3D12 is single-buffered for these targets. The command queue runs
 // frames in submission order and the per-resource state-transition barriers
-// serialise a frame's writes against a prior frame's reads of the same resource,
+// serialize a frame's writes against a prior frame's reads of the same resource,
 // so a single resource is safe across frames in flight (unlike Vulkan, whose
 // explicit-layout model led that backend to per-frame buffer its bloom chain).
 // So a DX alias slot is ONE shared heap region (not per-frame): making the
@@ -231,7 +231,7 @@ impl TransientResourcePool {
         self.allocated_bytes
     }
 
-    // The three pooled G-buffer colour targets, or `None` when the pool was
+    // The three pooled G-buffer color targets, or `None` when the pool was
     // built without the G-buffer gate (no screen-space consumer, so the
     // pre-pass node is absent and nothing was placed). All three are placed
     // together or not at all, so a partial result is a planner bug rather than
@@ -296,7 +296,7 @@ fn index_labels(slots: &[TransientSlot]) -> HashMap<&'static str, LabelEntry> {
 // desc. D3D12 matches this against the value a real `Clear*View` passes: a
 // mismatch is a debug-layer warning and costs the fast-clear path, so it is the
 // graph's business rather than a constant here. A depth target carries a depth
-// value; every colour target carries four floats.
+// value; every color target carries four floats.
 fn clear_value(m: &TransientTexture) -> D3D12_CLEAR_VALUE {
     let format = dxgi_format(m.format);
     match m.clear {
@@ -372,7 +372,7 @@ fn resource_flags(usage: TextureUsage) -> D3D12_RESOURCE_FLAGS {
 
 // Where a pooled target sits between frames, which is also the state it is
 // created in so its first derived transition names a state it is really in.
-// Colour targets rest sampled, matching the barrier registry; a depth target
+// Color targets rest sampled, matching the barrier registry; a depth target
 // would rest as its attachment, which is why this follows the declared usage
 // rather than being one constant.
 fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
@@ -489,8 +489,8 @@ mod tests {
     }
 
     #[test]
-    fn the_gbuffer_colour_targets_are_pooled_and_depth_is_not() {
-        // The G-buffer group migration: the three colour targets join the pool,
+    fn the_gbuffer_color_targets_are_pooled_and_depth_is_not() {
+        // The G-buffer group migration: the three color targets join the pool,
         // and `gbuffer_depth` stays feature-owned because D3D12 needs a typeless
         // resource format for a shader-readable depth target (see `pooled`).
         let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
@@ -510,8 +510,8 @@ mod tests {
 
     #[test]
     fn the_gbuffer_gate_is_what_places_them() {
-        // `unified_gbuffer_prepass` substitutes passes rather than adding them,
-        // so `planning_inputs` cannot force it on and the pool must follow the
+        // The pre-pass exists only where the backend built its targets, so
+        // `planning_inputs` cannot force it on and the pool must follow the
         // build. Without the gate the pre-pass node is absent and none of its
         // targets are placed -- which would leave every consumer reading a
         // resource the pool never created.
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!((bloom_desc.Width, bloom_desc.Height), (960, 540));
         assert_eq!(bloom_desc.Format, super::super::texture::HDR_FORMAT);
 
-        // The G-buffer colour targets. A format divergence here would silently
+        // The G-buffer color targets. A format divergence here would silently
         // mis-back the resource the pre-pass MRT binds, and the render-target
         // flag is what makes it bindable at all.
         use super::super::post::gbuffer::{
@@ -590,10 +590,10 @@ mod tests {
         ] {
             let desc = rt_desc(&member(label));
             assert_eq!(desc.Format, format, "{label}");
-            // Render resolution, not the drawable: the pre-pass rasterises at
+            // Render resolution, not the drawable: the pre-pass rasterizes at
             // the scene resolution, which differs under temporal upscaling.
             assert_eq!((desc.Width, desc.Height), (1024, 768), "{label}");
-            assert_eq!(desc.SampleDesc.Count, 1, "{label} rasterises once");
+            assert_eq!(desc.SampleDesc.Count, 1, "{label} rasterizes once");
             assert_eq!(
                 desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
                 "{label}"
@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
         assert_eq!(resting_state(&depth), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         // A depth target's optimized clear must be the depth arm: handing
-        // D3D12 a colour for a D32 resource is a creation failure.
+        // D3D12 a color for a D32 resource is a creation failure.
         assert_eq!(
             // SAFETY: the union arm is the one `clear_value` just wrote for a `ClearValue::Depth`,
             // which the assertion above pins.

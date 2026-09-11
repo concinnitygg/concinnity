@@ -191,7 +191,7 @@ mod tests {
         );
     }
 
-    // `vendor/` holds whatever else a checkout needs, and a neighbour can share
+    // `vendor/` holds whatever else a checkout needs, and a neighbor can share
     // the prefix without being a release for this platform.
     #[test]
     fn unrelated_vendor_entries_are_ignored() {

@@ -482,7 +482,7 @@ unsafe extern "system" fn wnd_proc(
                 }
             }
             WM_CHAR => {
-                // `TranslateMessage` (in `pump_messages`) synthesises WM_CHAR
+                // `TranslateMessage` (in `pump_messages`) synthesizes WM_CHAR
                 // from WM_KEYDOWN with the layout / Shift / dead-key resolution
                 // already applied, so wParam is the final UTF-16 code unit. Feed
                 // printable glyphs to text-input fields; `on_char` filters out the
@@ -588,7 +588,7 @@ unsafe extern "system" fn wnd_proc(
                 // Accumulate the wheel delta for scrollable UI while the cursor is
                 // free. The high word of wParam is a signed multiple of
                 // WHEEL_DELTA (120) per notch, positive when rotated away from the
-                // user; normalise to notches and convert to a scroll_delta
+                // user; normalize to notches and convert to a scroll_delta
                 // increment (matching the Metal sign convention).
                 if !state.cursor_captured {
                     let raw = (wparam.0 >> 16) as i16 as f32;

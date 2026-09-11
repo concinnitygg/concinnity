@@ -1,4 +1,4 @@
-// Predicate recognising a panorama sphere in a parsed glTF document.
+// Predicate recognizing a panorama sphere in a parsed glTF document.
 //
 // Every criterion below has to hold. They are checked in declaration order and
 // the first miss is returned as the reason, so `cn add` can explain why a file
@@ -21,7 +21,7 @@ const UV_EDGE_TOLERANCE: f32 = 0.02;
 // by accident.
 const MIN_VERTICES: usize = 64;
 
-// A base colour at or under this counts as black. The panorama has to be
+// A base color at or under this counts as black. The panorama has to be
 // unlit: an emissive image over a black base is what makes it immune to scene
 // lighting, and it is how every one of these files is packaged.
 const BLACK_EPSILON: f32 = 1.0 / 255.0;
@@ -33,7 +33,7 @@ const BLACK_EPSILON: f32 = 1.0 / 255.0;
 const MIN_IMAGE_ASPECT: f32 = 1.5;
 const MAX_IMAGE_ASPECT: f32 = 4.0;
 
-/// A `.glb` recognised as a panorama sphere: an environment image wrapped on a
+/// A `.glb` recognized as a panorama sphere: an environment image wrapped on a
 /// sphere rather than scene geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PanoramaSphere {
@@ -41,7 +41,7 @@ pub(crate) struct PanoramaSphere {
     pub image_index: u32,
 }
 
-/// Recognise a panorama sphere, or report the first criterion the document
+/// Recognize a panorama sphere, or report the first criterion the document
 /// missed. Callers that import geometry treat any error as "ordinary scene
 /// file" rather than a failure.
 pub(crate) fn detect(doc: &GltfDoc) -> Result<PanoramaSphere, String> {
@@ -110,7 +110,7 @@ pub(crate) fn detect(doc: &GltfDoc) -> Result<PanoramaSphere, String> {
 }
 
 // The image has to arrive entirely on the emissive channel over a black base
-// colour, with nothing else bound. That combination renders the panorama at
+// color, with nothing else bound. That combination renders the panorama at
 // full brightness regardless of scene lighting, which is the whole point of
 // the packaging, and it is what separates these files from a textured ball.
 fn check_emissive_only(material: &gltf::Material<'_>) -> Result<(), String> {
@@ -126,12 +126,12 @@ fn check_emissive_only(material: &gltf::Material<'_>) -> Result<(), String> {
         return Err("material's emissive factor is zero, so the panorama would not show".into());
     }
     if pbr.base_color_texture().is_some() {
-        return Err("material has a base colour texture, so it is lit geometry".to_string());
+        return Err("material has a base color texture, so it is lit geometry".to_string());
     }
     let base = pbr.base_color_factor();
     if base[..3].iter().any(|c| *c > BLACK_EPSILON) {
         return Err(format!(
-            "material's base colour {:?} is not black, so it is lit geometry",
+            "material's base color {:?} is not black, so it is lit geometry",
             &base[..3]
         ));
     }
@@ -419,13 +419,13 @@ mod tests {
     }
 
     #[test]
-    fn a_panorama_sphere_is_recognised() {
+    fn a_panorama_sphere_is_recognized() {
         let found = detect(&doc(&panorama_glb())).expect("panorama");
         assert_eq!(found, PanoramaSphere { image_index: 0 });
     }
 
     #[test]
-    fn a_sixteen_bit_panorama_is_recognised() {
+    fn a_sixteen_bit_panorama_is_recognized() {
         // The packaging the galaxy file ships in: 16-bit RGBA rather than 8-bit.
         let shape = PanoramaShape {
             png: panorama_png16(4, 2, 30000),
@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lit_sphere_is_rejected_for_its_base_colour() {
+    fn a_lit_sphere_is_rejected_for_its_base_color() {
         let err = reject(PanoramaShape {
             base_color: [0.8, 0.8, 0.8, 1.0],
             ..Default::default()

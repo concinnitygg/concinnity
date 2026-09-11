@@ -450,7 +450,7 @@ impl DxContext {
 
         // Resolve the HDR scene target so the post stack can sample it. Under
         // two-pass occlusion the resolve is deferred to `Main2` (which re-runs
-        // the disoccluded geometry on top of this pass's colour + depth), so the
+        // the disoccluded geometry on top of this pass's color + depth), so the
         // post stack sees the combined phase-1 + phase-2 scene. Skipping it here
         // leaves both targets in RENDER_TARGET, exactly as `Main2` expects to
         // load them.
@@ -504,7 +504,7 @@ impl DxContext {
     }
 
     // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not clear)
-    // the HDR colour + depth `encode_main_pass` (phase 1) wrote and re-runs the
+    // the HDR color + depth `encode_main_pass` (phase 1) wrote and re-runs the
     // bindless indirect draw through this frame's second indirect buffer (the
     // phase-2 cull's output), depth-compositing the disoccluded geometry with
     // phase 1. Static + instances + skinned all ride the shared cull buffers, so
@@ -533,7 +533,7 @@ impl DxContext {
         } = gpu;
         let depth_dsv = self.depth.dsv;
 
-        // Load (do not clear) the phase-1 colour + depth: Main2 composites the
+        // Load (do not clear) the phase-1 color + depth: Main2 composites the
         // disoccluded geometry on top.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.

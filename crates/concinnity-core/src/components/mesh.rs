@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 pub struct VertexData {
     /// Vertex position `[x, y, z]` in model space.
     pub pos: [f32; 3],
-    /// Vertex colour `[r, g, b]` in [0, 1]. Use `[0.75, 0.74, 0.72]` for a
+    /// Vertex color `[r, g, b]` in [0, 1]. Use `[0.75, 0.74, 0.72]` for a
     /// neutral surface that takes the material albedo.
     pub color: [f32; 3],
     /// Texture coordinates in [0, 1] space.  Defaults to [0, 0] when omitted.
@@ -99,7 +99,7 @@ mod tests {
         assert_eq!(v.pos, [1.0, 2.0, 3.0]);
         assert_eq!(v.color, [1.0, 0.0, 0.0]);
         assert_eq!(v.uv, [0.0, 0.0]);
-        // Position and colour are required: geometry with neither is a mistake,
+        // Position and color are required: geometry with neither is a mistake,
         // not a default.
         assert!(serde_json::from_str::<VertexData>(r#"{"pos":[0,0,0]}"#).is_err());
     }

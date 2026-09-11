@@ -11,7 +11,7 @@ use alloc::string::String;
 ///
 /// **Source formats:** a Radiance `.hdr`, or a panorama-sphere `.glb` /
 /// `.gltf` -- the packaging where an environment image is painted on the
-/// emissive channel of a sphere you stand inside. `cn add` recognises the
+/// emissive channel of a sphere you stand inside. `cn add` recognizes the
 /// latter and produces an EnvironmentMap instead of scene geometry.
 ///
 /// **Dynamic range:** a `.hdr` carries real radiance, so its sun can be
@@ -42,7 +42,7 @@ use alloc::string::String;
 /// `"sky": false` to use the map for image-based lighting only, with the
 /// background left to `clear_color` or your own geometry.
 ///
-/// A skybox mesh, injected or declared, is kept centred on the camera, so it
+/// A skybox mesh, injected or declared, is kept centered on the camera, so it
 /// covers the horizon anywhere in a world however far the camera travels.
 ///
 /// ```rust
@@ -88,7 +88,7 @@ pub struct EnvironmentMap {
 }
 
 // The face-size / sample-count defaults below are the single source of truth:
-// the build pipeline deserialises args through this struct, so a field absent
+// the build pipeline deserializes args through this struct, so a field absent
 // from a JSONL entry inherits these values rather than a constant duplicated in
 // the build crate. They are chosen for ~32 MB payloads and a few seconds of
 // build cost on the dev box. `prefilter_face_size` does double duty: mips 1..N

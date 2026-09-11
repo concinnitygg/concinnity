@@ -156,7 +156,7 @@ impl Cli {
 }
 
 // The argv face of the launch-time render knobs the engine reads through
-// `dev_flags`. Each is a diagnostic: omitting it leaves the shipping behaviour,
+// `dev_flags`. Each is a diagnostic: omitting it leaves the shipping behavior,
 // and none is persisted, so a probe run can force one without writing settings.
 // Flattened into every command that launches a world (`run` / `debug` /
 // `editor`); `arm` is what hands them to the engine before the world is built.
@@ -431,7 +431,7 @@ pub(crate) struct ExportArgs {
 // When a render command requests graphics validation on macOS, relaunch the
 // process with Metal's API-validation layer (`MTL_DEBUG_LAYER`) set in the
 // environment, then return into the replacement image. Metal reads that
-// variable during early framework initialisation, so it cannot be toggled from
+// variable during early framework initialization, so it cannot be toggled from
 // a process that has already touched Metal -- and `std::env::set_var` is
 // unsound once worker threads exist (the frameworks call `getenv` off-thread).
 // Re-exec sidesteps both: the child starts with the variable present from PID
@@ -500,7 +500,7 @@ mod tests {
     }
 
     // Every world-launching command carries the render flags, and each one
-    // defaults to absent (which the engine resolves to today's behaviour).
+    // defaults to absent (which the engine resolves to today's behavior).
     #[test]
     fn the_render_flags_default_to_absent_on_every_launch_command() {
         for argv in [

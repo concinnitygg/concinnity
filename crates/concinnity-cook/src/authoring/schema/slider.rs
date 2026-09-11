@@ -33,7 +33,7 @@
 #[serde(default)]
 pub struct Slider {
     /// Engine setting this row controls (e.g. `"exposure"`). Must be a setting
-    /// the runtime recognises as a slider; an unknown key renders but does
+    /// the runtime recognizes as a slider; an unknown key renders but does
     /// nothing on drag.
     pub setting: String,
     /// Display name shown at the left of the row.

@@ -27,7 +27,7 @@
 use super::compile::CompiledGraph;
 use super::passes::PassId;
 use super::reach::Reachability;
-use super::schedule::{PassQueue, realised_reachability};
+use super::schedule::{PassQueue, realized_reachability};
 use super::types::{BarrierOp, ReadStages, ResourceState};
 use alloc::format;
 use alloc::string::String;
@@ -90,7 +90,7 @@ pub(crate) fn barrier_coverage_gaps(graph: &CompiledGraph) -> Vec<BarrierGap> {
 /// for. A backend calls this on the graphs a real session builds, so it covers the
 /// input combinations a headless sweep does not reach, and it asserts specifically
 /// that everything the backend claims to drive is fully covered. Resources outside
-/// the driven set keep whatever synchronisation their encoder owns and are skipped.
+/// the driven set keep whatever synchronization their encoder owns and are skipped.
 pub fn barrier_coverage_gaps_for_driven(graph: &CompiledGraph, driven: &[bool]) -> Vec<BarrierGap> {
     gaps_over(graph, &|i| driven.get(i).copied().unwrap_or(false))
 }
@@ -124,7 +124,7 @@ pub enum SyncGapKind {
     /// A dependency crossing queues that neither the waits nor the per-queue
     /// order puts in order, so the consumer may start before the producer has
     /// finished.
-    Unsynchronised,
+    Unsynchronized,
     /// A wait whose producer does not signal the waiting pass's queue: the two
     /// halves of the handoff disagree.
     MissingSignal,
@@ -135,7 +135,7 @@ pub enum SyncGapKind {
     /// A wait naming a producer the compiled order records later, which no
     /// single serial recording of the passes could satisfy.
     WaitBeforeSignal,
-    /// A pass signalling a queue on which nothing waits for it.
+    /// A pass signaling a queue on which nothing waits for it.
     UnusedSignal,
 }
 
@@ -148,7 +148,7 @@ pub struct SyncGap {
     /// The consuming side, `None` for a gap with only one.
     pub consumer: Option<PassId>,
     /// The queue the gap is about: the producer's queue for a wait-side gap,
-    /// the signalled queue for [`SyncGapKind::UnusedSignal`].
+    /// the signaled queue for [`SyncGapKind::UnusedSignal`].
     pub queue: PassQueue,
     /// What is wrong.
     pub kind: SyncGapKind,
@@ -157,7 +157,7 @@ pub struct SyncGap {
 impl core::fmt::Display for SyncGap {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let what = match self.kind {
-            SyncGapKind::Unsynchronised => "is not ordered by any sync point",
+            SyncGapKind::Unsynchronized => "is not ordered by any sync point",
             SyncGapKind::MissingSignal => "waits without a matching signal",
             SyncGapKind::SpuriousWait => "waits on a producer it does not depend on",
             SyncGapKind::WaitBeforeSignal => "waits on a producer recorded later",
@@ -191,7 +191,7 @@ impl core::fmt::Display for SyncGap {
 /// instead of being justified by the derivation that dropped it.
 pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
     let n = graph.passes.len();
-    let realised = realised_reachability(&graph.passes);
+    let realized = realized_reachability(&graph.passes);
     let mut gaps = Vec::new();
 
     for (consumer, pass) in graph.passes.iter().enumerate() {
@@ -245,7 +245,7 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
         for consumer in 0..n {
             if graph.passes[producer].queue == graph.passes[consumer].queue
                 || !graph.depends_on(producer, consumer)
-                || realised.reaches(producer, consumer)
+                || realized.reaches(producer, consumer)
             {
                 continue;
             }
@@ -253,7 +253,7 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
                 producer: graph.passes[producer].id,
                 consumer: Some(graph.passes[consumer].id),
                 queue: graph.passes[producer].queue,
-                kind: SyncGapKind::Unsynchronised,
+                kind: SyncGapKind::Unsynchronized,
             });
         }
     }
@@ -261,7 +261,7 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
     gaps
 }
 
-/// Panic unless recording `graph.passes` in index order honours the schedule.
+/// Panic unless recording `graph.passes` in index order honors the schedule.
 ///
 /// Every backend executor relies on this, whether it flattens the schedule or
 /// not. Vulkan and DirectX record one serial stream, which is legal exactly
@@ -270,17 +270,17 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
 /// do it, so each queue's commit order is that queue's graph order and every
 /// wait names a value its producing queue signals no later. `backend` names the
 /// caller in the message.
-pub fn assert_serial_order_honours_schedule(graph: &CompiledGraph, backend: &str) {
+pub fn assert_serial_order_honors_schedule(graph: &CompiledGraph, backend: &str) {
     let problems = serial_order_problems(graph);
     assert!(
         problems.is_empty(),
-        "render graph ({backend}): the serial pass order does not honour the schedule: {}",
+        "render graph ({backend}): the serial pass order does not honor the schedule: {}",
         problems.join(", ")
     );
 }
 
 // Everything that would stop a single serial recording of `graph.passes` from
-// honouring the schedule, as human-readable lines.
+// honoring the schedule, as human-readable lines.
 fn serial_order_problems(graph: &CompiledGraph) -> Vec<String> {
     let mut problems = Vec::new();
     for (i, pass) in graph.passes.iter().enumerate() {
@@ -313,7 +313,7 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
     // Rebuilt from the passes' own queues and waits, for the same reason
     // `sync_point_gaps` rebuilds it: the replay has to be able to disagree with
     // the schedule the compile pass planned.
-    let realised = realised_reachability(&graph.passes);
+    let realized = realized_reachability(&graph.passes);
     let mut state = vec![ResourceState::Undefined; n_resources];
     // Stage union carried by the barrier that opened each resource's current read
     // run; meaningless unless that resource is in `Read`.
@@ -392,18 +392,18 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
             }
             if let Some(b) = setter[i]
                 && b != pass_idx
-                && !realised.reaches(b, pass_idx)
+                && !realized.reaches(b, pass_idx)
             {
                 report(i, GapKind::UnorderedTransition);
             }
-            if concurrent_conflict(graph, &realised, pass_idx, i) {
+            if concurrent_conflict(graph, &realized, pass_idx, i) {
                 report(i, GapKind::ConcurrentAccess);
             }
         }
         // A producer-side transition runs once this pass's own work has
         // completed, so it lands after the pass's accesses have been checked
         // against the state it was itself given. Every consumer of it is a
-        // descendant of this pass on the realised relation, which is what the
+        // descendant of this pass on the realized relation, which is what the
         // `UnorderedTransition` check above tests for them.
         apply(
             &pass.barriers_after,
@@ -423,7 +423,7 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
 // stable for its duration.
 fn concurrent_conflict(
     graph: &CompiledGraph,
-    realised: &Reachability,
+    realized: &Reachability,
     pass_idx: usize,
     i: usize,
 ) -> bool {
@@ -437,7 +437,7 @@ fn concurrent_conflict(
     graph.resources[i]
         .touches
         .iter()
-        .any(|&other| realised.concurrent(pass_idx, other) && (mine || writes(other)))
+        .any(|&other| realized.concurrent(pass_idx, other) && (mine || writes(other)))
 }
 
 #[cfg(test)]
@@ -501,11 +501,11 @@ mod tests {
             "sync-point gaps for {names:?}: {}",
             joined(&gaps)
         );
-        assert_serial_order_honours_schedule(&graph, "sweep");
-        let shared = unsynchronised_sharing(&graph);
+        assert_serial_order_honors_schedule(&graph, "sweep");
+        let shared = unsynchronized_sharing(&graph);
         assert!(
             shared.is_empty(),
-            "unsynchronised cross-queue sharing for {names:?}: {}",
+            "unsynchronized cross-queue sharing for {names:?}: {}",
             joined(&shared)
         );
     }
@@ -532,7 +532,7 @@ mod tests {
 
     // Every such race in `graph`. Concurrent reads are left alone: only a write
     // on one of the two sides makes the overlap a hazard.
-    fn unsynchronised_sharing(graph: &CompiledGraph) -> Vec<SharedRace> {
+    fn unsynchronized_sharing(graph: &CompiledGraph) -> Vec<SharedRace> {
         let mut races = Vec::new();
         for (i, res) in graph.resources.iter().enumerate() {
             let writes = |p: usize| {
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn the_driven_subset_check_ignores_resources_outside_it() {
         // A backend drives only the resources its registry resolves; the rest keep
-        // whatever synchronisation their encoder owns. Stripping a barrier for an
+        // whatever synchronization their encoder owns. Stripping a barrier for an
         // undriven resource must stay silent, and the same strip on a driven one
         // must report -- otherwise the subset check would either alarm on every
         // partially-migrated frame or never alarm at all.
@@ -626,7 +626,7 @@ mod tests {
             }
         }
         // Multisampled, so the separate `hdr_color` attachment is in the graph;
-        // without MSAA the single colour target is the spine and only
+        // without MSAA the single color target is the spine and only
         // `hdr_resolve` is declared.
         inputs.hdr_sample_count = 4;
         let graph = build_frame_graph(&inputs).expect("compiles");
@@ -645,7 +645,7 @@ mod tests {
             ("hiz_pyramid", C::StorageImage),
             // The unified pre-pass's four attachments are four resources, and
             // the depth one is why: it is a different class from its three
-            // colour siblings, so one handle could not have carried it.
+            // color siblings, so one handle could not have carried it.
             ("gbuffer_normal_depth", C::ColorTarget),
             ("gbuffer_roughness", C::ColorTarget),
             ("gbuffer_velocity", C::ColorTarget),
@@ -672,7 +672,7 @@ mod tests {
         // The same singles + pairs space as the barrier sweep, over the schedule
         // instead: the pass set changes which compute passes have independent
         // graphics work, so a pair that moves one onto the async queue is where
-        // an unsynchronised handoff would first appear.
+        // an unsynchronized handoff would first appear.
         assert_scheduled(&[]);
         for a in 0..FLAGS.len() {
             assert_scheduled(&[a]);
@@ -858,7 +858,7 @@ mod tests {
     fn a_dropped_wait_is_reported() {
         // Negative control: strip the consumer's wait and both halves of the
         // handoff must report -- the dependency is no longer ordered, and the
-        // producer is left signalling a queue nothing waits on.
+        // producer is left signaling a queue nothing waits on.
         let mut g = cross_queue_graph();
         let main = g.pass_index(PassId::Main).expect("present");
         g.passes[main].waits_before.clear();
@@ -866,7 +866,7 @@ mod tests {
         let gaps = sync_point_gaps(&g);
         assert!(
             gaps.iter()
-                .any(|gap| gap.kind == SyncGapKind::Unsynchronised
+                .any(|gap| gap.kind == SyncGapKind::Unsynchronized
                     && gap.producer == PassId::Cull
                     && gap.consumer == Some(PassId::Main)),
             "{gaps:?}"
@@ -1041,7 +1041,7 @@ mod tests {
             .to_string()
         };
         assert_eq!(
-            gap(SyncGapKind::Unsynchronised, Some(PassId::Main)),
+            gap(SyncGapKind::Unsynchronized, Some(PassId::Main)),
             "Cull (async_compute) -> Main is not ordered by any sync point"
         );
         assert_eq!(

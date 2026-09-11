@@ -90,7 +90,7 @@ pub(super) fn build_model_history_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    let library = super::slang_shaders::MODEL_HISTORY.library(device, hot_reload)?;
+    let library = super::slang_builtins::MODEL_HISTORY.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&ns_str("model_history_kernel"))
         .ok_or("model_history_kernel not found")?;

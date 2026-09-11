@@ -17,7 +17,7 @@ use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, Cluster
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::pipeline::spv_module;
+use super::pipeline::{SHADER_ENTRY, spv_module};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Byte size of the per-cluster light-index buffer: CLUSTER_COUNT blocks of
@@ -151,11 +151,10 @@ pub(in crate::vulkan) fn build_light_cull(
     let spirv =
         super::slang_builtins::LIGHT_CULL.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spirv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(SHADER_ENTRY);
     let pipeline_info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(pipeline_layout.handle());

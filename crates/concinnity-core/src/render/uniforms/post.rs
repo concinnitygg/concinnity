@@ -21,7 +21,7 @@ pub struct AutoExposureParams {
     /// Width of the log2(luminance) span the histogram covers (max - min).
     pub lum_log2_range: f32,
     /// `HISTOGRAM_BINS / lum_log2_range`. The build kernel multiplies the
-    /// centred log-luminance by this to derive a bin index.
+    /// centered log-luminance by this to derive a bin index.
     pub lum_to_bin_scale: f32,
     /// Padding so the field layout matches the shader-side struct.
     pub _pad: f32,

@@ -1,7 +1,7 @@
 // The JSON front half of mesh compilation: per-generator arg parsing and the
 // `compile_*_payload` functions that pack generator output into the binary
 // blob. The generators themselves (room, extrude, primitives, terrain, skybox,
-// heightfield) and the payload tail (tangents, LOD alternates, serialisation)
+// heightfield) and the payload tail (tangents, LOD alternates, serialization)
 // live in `concinnity_core::geometry` / `concinnity_core::bake::mesh`; this
 // module parses world.jsonl args and calls down into them.
 //
@@ -19,7 +19,7 @@ mod terrain;
 
 use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
 use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
-use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalise};
+use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
 
 // Re-exported so cook code that also needs the runtime-side joint conversion
 // (mesh_reimport) can reach it through `crate::compile::geometry`.
@@ -111,7 +111,7 @@ pub(crate) fn compile_heightfield_payload(
     // tail consumes the vertices.
     let (n, heights) = heightfield_collider_grid(&vertices)?;
     let mut payload = finish_mesh_payload(vertices, indices, args)?;
-    payload.extend_from_slice(&crate::gfx::mesh_payload::serialise_heightfield_trailer(
+    payload.extend_from_slice(&crate::gfx::mesh_payload::serialize_heightfield_trailer(
         n, n, &heights,
     ));
     Ok(payload)
@@ -175,7 +175,7 @@ pub(crate) fn compile_mesh_from_vertex_data(
         .zip(tangents)
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
-    Ok(crate::gfx::mesh_payload::serialise(&verts5, indices))
+    Ok(crate::gfx::mesh_payload::serialize(&verts5, indices))
 }
 
 // The level-of-detail request of a skinned mesh: `levels` includes LOD0 (so
@@ -229,7 +229,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
     let pnt: Vec<Vert> = vertex_data
         .iter()
         .enumerate()
-        .map(|(i, v)| (v.pos, vec3_normalise(normals[i]), v.color, v.uv))
+        .map(|(i, v)| (v.pos, vec3_normalize(normals[i]), v.color, v.uv))
         .collect();
     let tangents = compute_tangents(&pnt, indices);
 
@@ -320,7 +320,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
     )
     .map_err(|e| format!("SkinnedMesh {e}"))?;
 
-    Ok(crate::gfx::mesh_payload::serialise_skinned_with_lods(
+    Ok(crate::gfx::mesh_payload::serialize_skinned_with_lods(
         &skinned,
         indices,
         &payload_joints,
@@ -562,15 +562,15 @@ mod tests {
     use super::*;
     use crate::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
     use crate::gfx::mesh_payload::{
-        Vertex, deserialise_heightfield, deserialise_skinned_with_lods, deserialise_with_lods,
+        Vertex, deserialize_heightfield, deserialize_skinned_with_lods, deserialize_with_lods,
     };
 
-    // core's plain `deserialise` is `#[cfg(test)]`-scoped to that crate, so it is
+    // core's plain `deserialize` is `#[cfg(test)]`-scoped to that crate, so it is
     // not linkable here; recover the (vertices, indices) pair from the public
     // with-LODs reader (it ignores any collider trailer, so heightfield payloads
     // read back fine too).
-    fn deserialise(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
-        let (verts, indices, _) = deserialise_with_lods(bytes)?;
+    fn deserialize(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
+        let (verts, indices, _) = deserialize_with_lods(bytes)?;
         Ok((verts, indices))
     }
 
@@ -612,7 +612,7 @@ mod tests {
             "generator": "water_grid",
             "half_width": 2.0, "half_depth": 3.0, "subdivisions": 8,
         });
-        let (verts, indices) = deserialise(&compile_mesh_payload(&args).unwrap()).unwrap();
+        let (verts, indices) = deserialize(&compile_mesh_payload(&args).unwrap()).unwrap();
         assert_eq!(verts.len(), 9 * 9);
         assert_eq!(indices.len(), 8 * 8 * 6);
         assert!(verts.iter().all(|v| v.pos[1] == 0.0));
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn compile_mesh_payload_water_grid_defaults_to_a_sixty_four_subdivision_grid() {
         let args = serde_json::json!({"generator": "water_grid"});
-        let (verts, _) = deserialise(&compile_mesh_payload(&args).unwrap()).unwrap();
+        let (verts, _) = deserialize(&compile_mesh_payload(&args).unwrap()).unwrap();
         assert_eq!(verts.len(), 65 * 65);
     }
 
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn inline_mesh_round_trips_with_derived_normals_and_tangents() {
         let payload = compile_mesh_payload(&quad_args()).unwrap();
-        let (verts, indices) = deserialise(&payload).unwrap();
+        let (verts, indices) = deserialize(&payload).unwrap();
         assert_eq!(verts.len(), 4);
         assert_eq!(indices, vec![0, 1, 2, 2, 3, 0]);
         for v in &verts {
@@ -799,7 +799,7 @@ mod tests {
             ],
             "indices": [0, 1, 2],
         });
-        let (verts, _) = deserialise(&compile_mesh_payload(&args).unwrap()).unwrap();
+        let (verts, _) = deserialize(&compile_mesh_payload(&args).unwrap()).unwrap();
         assert!(verts.iter().all(|v| v.uv == [0.0, 0.0]));
     }
 
@@ -813,7 +813,7 @@ mod tests {
             "lod_levels": 3,
         });
         let (verts, lod0, alternates) =
-            deserialise_with_lods(&compile_mesh_payload(&args).unwrap()).unwrap();
+            deserialize_with_lods(&compile_mesh_payload(&args).unwrap()).unwrap();
         assert_eq!(verts.len(), 3);
         assert!(lod0.is_empty());
         assert!(alternates.is_empty());
@@ -836,9 +836,9 @@ mod tests {
         // A uniform white 2x2 source image maps every sample to elevation_max.
         let rgba = vec![255u8; 2 * 2 * 4];
         let payload = compile_heightfield_payload(&args, 2, 2, rgba).unwrap();
-        let (verts, _) = deserialise(&payload).unwrap();
+        let (verts, _) = deserialize(&payload).unwrap();
         assert_eq!(verts.len(), 25);
-        let grid = deserialise_heightfield(&payload)
+        let grid = deserialize_heightfield(&payload)
             .unwrap()
             .expect("collider trailer");
         assert_eq!((grid.rows, grid.cols), (5, 5));
@@ -885,7 +885,7 @@ mod tests {
             "lod_levels": 3,
         });
         let payload = compile_mesh_payload(&args).unwrap();
-        let (_, lod0, alternates) = deserialise_with_lods(&payload).unwrap();
+        let (_, lod0, alternates) = deserialize_with_lods(&payload).unwrap();
         assert_eq!(alternates.len(), 2);
         assert!(alternates[0].1.len() < lod0.len());
         assert!(alternates[1].1.len() <= alternates[0].1.len());
@@ -897,7 +897,7 @@ mod tests {
     fn single_lod_payload_keeps_the_one_level_format() {
         let args = serde_json::json!({"generator": "box"});
         let one = compile_mesh_payload(&args).unwrap();
-        let (_, _, alternates) = deserialise_with_lods(&one).unwrap();
+        let (_, _, alternates) = deserialize_with_lods(&one).unwrap();
         assert!(alternates.is_empty());
         let explicit = serde_json::json!({"generator": "box", "lod_levels": 1});
         assert_eq!(compile_mesh_payload(&explicit).unwrap(), one);
@@ -919,7 +919,7 @@ mod tests {
             "lod_levels": 2, "lod_distances": [42.0],
         });
         let (_, _, alternates) =
-            deserialise_with_lods(&compile_mesh_payload(&args).unwrap()).unwrap();
+            deserialize_with_lods(&compile_mesh_payload(&args).unwrap()).unwrap();
         assert_eq!(alternates.len(), 1);
         assert_eq!(alternates[0].0, 42.0);
     }
@@ -983,7 +983,7 @@ mod tests {
             vd([0.0, 1.0, 0.0], [0.0, 1.0]),
         ];
         let payload = compile_mesh_from_vertex_data(&verts, &[0, 1, 2]).unwrap();
-        let (out, indices) = deserialise(&payload).unwrap();
+        let (out, indices) = deserialize(&payload).unwrap();
         assert_eq!(indices, vec![0, 1, 2]);
         assert!(out.iter().all(|v| (v.normal[2] - 1.0).abs() < 1e-5));
 
@@ -1020,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn skinned_mesh_normalises_weights_and_keeps_the_skeleton() {
+    fn skinned_mesh_normalizes_weights_and_keeps_the_skeleton() {
         let verts = [
             skinned_vertex([0.0, 0.0, 0.0], [2.0, 2.0, 0.0, 0.0]),
             skinned_vertex([1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
@@ -1038,13 +1038,13 @@ mod tests {
             },
         )
         .unwrap();
-        let p = deserialise_skinned_with_lods(&payload).unwrap();
+        let p = deserialize_skinned_with_lods(&payload).unwrap();
         let (out, indices, joints, alternates) = (p.vertices, p.indices, p.joints, p.lods);
         assert_eq!(indices, vec![0, 1, 2]);
         assert!(alternates.is_empty());
         assert_eq!(joints.len(), 1);
         assert_eq!(joints[0].name, "root");
-        // Authored weights are normalised to sum 1.
+        // Authored weights are normalized to sum 1.
         assert_eq!(out[0].weights, [0.5, 0.5, 0.0, 0.0]);
         // Unweighted vertices bind fully to joint 0.
         assert_eq!(out[2].weights, [1.0, 0.0, 0.0, 0.0]);
@@ -1136,7 +1136,7 @@ mod tests {
             },
         )
         .unwrap();
-        let p = deserialise_skinned_with_lods(&payload).unwrap();
+        let p = deserialize_skinned_with_lods(&payload).unwrap();
         let (lod0, alternates) = (p.indices, p.lods);
         assert_eq!(lod0.len(), indices.len());
         assert_eq!(alternates.len(), 1);
@@ -1194,7 +1194,7 @@ mod tests {
             },
         )
         .unwrap();
-        let p = deserialise_skinned_with_lods(&payload).unwrap();
+        let p = deserialize_skinned_with_lods(&payload).unwrap();
         assert_eq!(p.morphs.names, vec!["smile".to_string()]);
         assert_eq!(p.morphs.entries.len(), 3);
         let dense = p.morphs.to_dense();
@@ -1242,7 +1242,7 @@ mod tests {
             },
         )
         .unwrap();
-        let lods = deserialise_skinned_with_lods(&payload).unwrap().lods;
+        let lods = deserialize_skinned_with_lods(&payload).unwrap().lods;
         assert_eq!(lods.len(), 2);
         // The default cascade doubles per level off the bounding-sphere radius.
         assert!(lods[0].0 > 0.0);
@@ -1270,7 +1270,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            deserialise_skinned_with_lods(&payload)
+            deserialize_skinned_with_lods(&payload)
                 .unwrap()
                 .lods
                 .is_empty()
@@ -1290,7 +1290,7 @@ mod tests {
         let args = voxel_args([1, 1, 1], vec![0]);
         let lookup = |_: &str| Some(serde_json::json!({"solid": true}));
         let payload = compile_voxel_chunk_payload(&args, lookup).unwrap();
-        let (verts, indices) = deserialise(&payload).unwrap();
+        let (verts, indices) = deserialize(&payload).unwrap();
         assert_eq!(verts.len(), 6 * 4);
         assert_eq!(indices.len(), 6 * 6);
     }
@@ -1300,7 +1300,7 @@ mod tests {
         let args = voxel_args([1, 1, 1], vec![0]);
         let lookup = |_: &str| Some(serde_json::json!({"solid": false}));
         let payload = compile_voxel_chunk_payload(&args, lookup).unwrap();
-        let (verts, indices) = deserialise(&payload).unwrap();
+        let (verts, indices) = deserialize(&payload).unwrap();
         assert!(verts.is_empty());
         assert!(indices.is_empty());
     }

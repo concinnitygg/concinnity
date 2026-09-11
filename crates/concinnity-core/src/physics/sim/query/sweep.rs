@@ -203,8 +203,8 @@ mod tests {
             Vec3::ZERO,
         )
         .expect("a hit");
-        let travelled = hit.toi * 8.0;
-        assert!((travelled - 3.75).abs() < 1.0e-2, "{hit:?}");
+        let traveled = hit.toi * 8.0;
+        assert!((traveled - 3.75).abs() < 1.0e-2, "{hit:?}");
         assert!((hit.normal + Vec3::Z).length() < 1.0e-2, "{hit:?}");
         assert!(!hit.started_touching);
         assert!((hit.point.z + 0.5).abs() < 1.0e-2, "{hit:?}");

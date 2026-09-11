@@ -129,7 +129,7 @@ impl VkContext {
         self.stream.pool_rewrites.queue(slot);
         // `+ 1`: the swap lands between frames, after the previous frame's
         // submit, so the first frame fence that covers the upload submission
-        // is the one signalled by the NEXT draw -- waited `frames_in_flight`
+        // is the one signaled by the NEXT draw -- waited `frames_in_flight`
         // ticks after that draw's own tick.
         self.stream.retires.push(StreamedUploadRetire {
             _image: old,
@@ -140,17 +140,17 @@ impl VkContext {
         Ok(())
     }
 
-    // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
+    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
     pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        let grey = crate::bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
-        Ok(self.update_texture_slot(slot, &grey)?)
+        let gray = crate::bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        Ok(self.update_texture_slot(slot, &gray)?)
     }
 
     // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
     // right after frame slot `frame`'s fence wait: re-point this slot's
     // bindless pool copy at any swapped slots (legal now -- the wait retired
     // every command buffer that binds this copy), then free retires whose
-    // covering fence has signalled.
+    // covering fence has signaled.
     pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
         self.stream.frame += 1;
         if !self.stream.pool_rewrites.is_empty() {
@@ -188,7 +188,7 @@ impl VkContext {
         }
     }
 
-    // Replace the live colour-grading LUT with a fresh `size³` RGBA8 payload.
+    // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
     // Driven by asset hot-reload (`cn debug` only) when the file-backed
     // `ColorLut` source is saved. `wait_idle` first guarantees no in-flight
     // command buffer still references the old image. Builds the replacement
@@ -238,7 +238,7 @@ impl VkContext {
 
     // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
     // Driven by asset hot-reload (`cn debug` only). Decodes the byte stream
-    // emitted by `gfx::build::environment_map::serialise`, then re-uploads
+    // emitted by `gfx::build::environment_map::serialize`, then re-uploads
     // the irradiance + prefilter cubes via the same `upload_environment_map`
     // the init path uses. Every consumer that captured the old image views is
     // re-pointed at the new ones: each `global_sets` entry (irradiance +
@@ -252,7 +252,7 @@ impl VkContext {
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::bake::environment_map::deserialise(payload)
+        let view = crate::bake::environment_map::deserialize(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(

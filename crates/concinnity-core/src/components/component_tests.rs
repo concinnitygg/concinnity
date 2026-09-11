@@ -45,7 +45,7 @@ mod graphics_config {
         let cfg: GraphicsConfig =
             serde_json::from_str(r#"{"shadow_map_size":1024}"#).expect("parse");
         assert!(!cfg.vsync);
-        // Explicit true is honoured.
+        // Explicit true is honored.
         let cfg: GraphicsConfig = serde_json::from_str(r#"{"vsync":true}"#).expect("parse");
         assert!(cfg.vsync);
     }
@@ -57,7 +57,7 @@ mod graphics_config {
         let cfg: GraphicsConfig =
             serde_json::from_str(r#"{"shadow_map_size":1024}"#).expect("parse");
         assert_eq!(cfg.fps_cap, 0);
-        // Explicit cap is honoured.
+        // Explicit cap is honored.
         let cfg: GraphicsConfig = serde_json::from_str(r#"{"fps_cap":60}"#).expect("parse");
         assert_eq!(cfg.fps_cap, 60);
     }
@@ -87,7 +87,7 @@ mod graphics_config {
     fn anisotropy_defaults_to_16_and_round_trips() {
         // The GPU maximum: the quality preset caps it back down per tier.
         assert_eq!(GraphicsConfig::default().anisotropy, 16);
-        // An authored value is honoured; omitting the field falls back to 16.
+        // An authored value is honored; omitting the field falls back to 16.
         let cfg: GraphicsConfig = serde_json::from_str(r#"{"anisotropy":4}"#).expect("parse");
         assert_eq!(cfg.anisotropy, 4);
         let cfg: GraphicsConfig =
@@ -339,7 +339,7 @@ mod streaming_config {
     }
 
     #[test]
-    fn deserialises_from_jsonl_args_with_defaults_for_omitted_fields() {
+    fn deserializes_from_jsonl_args_with_defaults_for_omitted_fields() {
         let c: StreamingConfig =
             serde_json::from_str(r#"{"texture_budget":2,"mesh_budget":2}"#).expect("parse");
         assert_eq!(c.texture_budget, 2);
@@ -427,7 +427,7 @@ mod voxel_world {
     }
 
     #[test]
-    fn deserialises_from_jsonl_args_with_defaults_for_omitted_fields() {
+    fn deserializes_from_jsonl_args_with_defaults_for_omitted_fields() {
         let w: VoxelWorld = serde_json::from_str(r#"{"seed":7,"view_radius":8}"#).expect("parse");
         assert_eq!(w.seed, 7);
         assert_eq!(w.view_radius(), 8);

@@ -11,7 +11,7 @@
 // not available in a `no_std` crate, and is unwelcome underneath a global
 // allocator in any case -- its lazy initialization allocates, which re-enters
 // the allocator. The mapping is approximate: a deep call stack can land a thread
-// in a neighbouring shard, and a block allocated on one thread is often freed on
+// in a neighboring shard, and a block allocated on one thread is often freed on
 // another. `live` is therefore a wrapping counter, which leaves the individual
 // shards free to disagree and their sum exact -- and the sum is the only figure
 // anyone reads.

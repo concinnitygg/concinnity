@@ -2,7 +2,7 @@
 //
 // The editor chrome's shared visual theme: one palette and metric set so the
 // top bar and every floating panel read as a single surface. Panels keep local
-// tints only for colours that are truly their own (e.g. the delete-red row);
+// tints only for colors that are truly their own (e.g. the delete-red row);
 // anything that repeats across panels lives here.
 
 // The HUD font is 20px; editor labels draw a step smaller for a denser, cleaner
@@ -48,12 +48,12 @@ pub(crate) const SELECTED_TINT: [f32; 4] = [0.18, 0.28, 0.46, 1.0];
 pub(crate) const BUTTON_TINT: [f32; 4] = [0.19, 0.20, 0.25, 1.0];
 pub(crate) const ACCENT_TINT: [f32; 4] = [0.26, 0.42, 0.66, 1.0];
 
-// Label colours: normal body text, dimmed secondary text, and headings.
+// Label colors: normal body text, dimmed secondary text, and headings.
 pub(crate) const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 pub(crate) const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];
 pub(crate) const HEADING: [f32; 3] = [0.93, 0.94, 0.97];
 
-// Console log-line colours by severity, plus the dimmed echo of a submitted
+// Console log-line colors by severity, plus the dimmed echo of a submitted
 // command line.
 pub(crate) const LOG_INFO: [f32; 3] = LABEL;
 pub(crate) const LOG_WARN: [f32; 3] = [0.95, 0.78, 0.45];

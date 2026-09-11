@@ -33,7 +33,7 @@ pub(crate) struct SynthInput<'a> {
 }
 
 impl SynthInput<'_> {
-    // Each influence (joint, normalised weight) of `v` that is in the region.
+    // Each influence (joint, normalized weight) of `v` that is in the region.
     pub(crate) fn region_influences(&self, v: &SkinnedVertexData) -> Vec<(usize, f32)> {
         let sum: f32 = v.weights.iter().sum();
         if sum <= 1e-6 {
@@ -60,7 +60,7 @@ pub(crate) fn vertex_normals(positions: &[[f32; 3]], indices: &[u16]) -> Vec<[f3
         vec3::vec3_add(&mut normals[b], n);
         vec3::vec3_add(&mut normals[c], n);
     }
-    normals.iter().map(|n| vec3::vec3_normalise(*n)).collect()
+    normals.iter().map(|n| vec3::vec3_normalize(*n)).collect()
 }
 
 // Dense deltas for a displacement: the positions as given, the normals as
@@ -89,7 +89,7 @@ pub(crate) fn finish(
 
 // The targets a displacement yields under a polarity: the displacement
 // itself as `name` (or `name+`), and its negation as `name-`.
-pub(crate) fn polarised(
+pub(crate) fn polarized(
     name: &str,
     polarity: KeyPolarity,
     input: &SynthInput,
@@ -180,7 +180,7 @@ pub(crate) mod test_support {
         (verts, idx, skeleton)
     }
 
-    // A unit UV sphere centred at the origin bound to joint 0.
+    // A unit UV sphere centered at the origin bound to joint 0.
     pub(crate) fn sphere(segs: usize, rings: usize) -> (Vec<SkinnedVertexData>, Vec<u16>) {
         let mut verts = Vec::new();
         for r in 0..=rings {
@@ -279,7 +279,7 @@ mod tests {
         let mut disp = vec![[0.0; 3]; fx.vertices.len()];
         let top = fx.vertices.len() - 1;
         disp[top] = [0.0, -0.5, 0.0];
-        let out = polarised("cap", KeyPolarity::Bipolar, &fx.input(), disp.clone());
+        let out = polarized("cap", KeyPolarity::Bipolar, &fx.input(), disp.clone());
         assert_eq!(out[0].0, "cap+");
         assert_eq!(out[1].0, "cap-");
         assert_eq!(out[0].1[top].position, [0.0, -0.5, 0.0]);
@@ -292,7 +292,7 @@ mod tests {
         let n_minus = out[1].1[ring].normal;
         assert!(n_plus[0] < 0.0, "{n_plus:?}");
         assert!(n_minus[0] > 0.0, "{n_minus:?}");
-        let uni = polarised("cap", KeyPolarity::Unipolar, &fx.input(), disp);
+        let uni = polarized("cap", KeyPolarity::Unipolar, &fx.input(), disp);
         assert_eq!(uni.len(), 1);
         assert_eq!(uni[0].0, "cap");
         assert!(unit([0.0; 3]).is_none());

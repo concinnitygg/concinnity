@@ -90,7 +90,7 @@ pub(super) struct FrameSlot {
 }
 
 impl FrameSlot {
-    // Take the slot's single release. The handle must be signalled exactly once;
+    // Take the slot's single release. The handle must be signaled exactly once;
     // after this the guard's `Drop` is a no-op, so the slot is never
     // double-released.
     fn into_gpu_release(mut self) -> DispatchRetained<DispatchSemaphore> {

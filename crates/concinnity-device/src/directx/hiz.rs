@@ -6,7 +6,7 @@
 // reduction). The *next* frame's `Cull` pass projects each `DrawObject` AABB
 // through the previous frame's view-projection, picks the Hi-Z mip whose
 // texels are roughly the size of the projected rect, and culls the AABB when
-// its nearest projected depth is behind the rasterised occluder depth.
+// its nearest projected depth is behind the rasterized occluder depth.
 //
 // Three compute kernels build it (see `src/shaders/hiz_build.slang`):
 //

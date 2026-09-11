@@ -76,7 +76,7 @@ pub(crate) struct Solver {
     /// Slots the step integrates, in slot order.
     active: Vec<u32>,
     /// Grown to the most constraints any step has held and reused, so a step
-    /// pays for the slots it uses and never for initialising them again.
+    /// pays for the slots it uses and never for initializing them again.
     constraints: Vec<ContactConstraint>,
     /// What each constraint carried, in manifold order. Only the pairs the
     /// step actually solved appear, which is what keeps a settled pair's

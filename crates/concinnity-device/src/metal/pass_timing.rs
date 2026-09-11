@@ -25,7 +25,7 @@
 // cost: the render passes then read monotonically through graph order and their
 // sum runs well past the frame's own GPU span. Render passes are bracketed
 // start-of-fragment to end-of-fragment instead, which is the pass's occupancy
-// of the fragment pipeline -- the phase that serialises across passes on one
+// of the fragment pipeline -- the phase that serializes across passes on one
 // queue, and where the work is on this hardware. Compute passes have one stage
 // and keep their encoder boundaries.
 //
@@ -35,7 +35,7 @@
 // timestamp on Apple silicon (measured: vertex and fragment phases resolve to
 // distinct, ordered values), so there is no boundary to work around here.
 //
-// Summing. Fragment phases serialise on a queue in the common case, so the
+// Summing. Fragment phases serialize on a queue in the common case, so the
 // graphics queue's per-pass sum is bounded by the frame's GPU span and falls
 // short of it by the vertex/tiling bubbles no fragment phase covers. Two things
 // break the bound rather than the measurement: the async-compute queue's passes

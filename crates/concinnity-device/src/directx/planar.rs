@@ -68,12 +68,12 @@ pub(in crate::directx) fn pane_plane(normal: [f32; 3], center: [f32; 3]) -> [f32
     ]
 }
 
-// Where a plane's mirror render lands. Multisampled planes share one MSAA colour
+// Where a plane's mirror render lands. Multisampled planes share one MSAA color
 // target and resolve out of it a plane at a time, the way the probe shares one
 // face target across its six faces. Single-sampled planes have nothing to resolve,
 // so each renders straight into its own resolve through a render-target view of
 // it: no shared target, and no full-target copy per plane. Mirrors the Vulkan
-// planar set, whose shared colour is likewise `Some` only under MSAA.
+// planar set, whose shared color is likewise `Some` only under MSAA.
 enum PlanarColor {
     // The shared target every plane renders into, resolved into the plane's own
     // resolve before the next plane overwrites it.
@@ -84,7 +84,7 @@ enum PlanarColor {
 
 // The set of distinct reflection planes for the world, each rendering its mirror
 // into its own shader-readable resolve (directly, or through the shared MSAA
-// colour). A pane samples the resolve of the slot it was assigned at init (see
+// color). A pane samples the resolve of the slot it was assigned at init (see
 // `gfx::planar_reflection::assign_planar_slots`). Rebuilt on resize alongside the
 // HDR targets; the planes + slot assignment are fixed at init.
 pub(in crate::directx) struct PlanarReflectionSet {
@@ -94,7 +94,7 @@ pub(in crate::directx) struct PlanarReflectionSet {
     sample_count: u32,
     clear_color: [f32; 4],
 
-    // The mirror render's colour attachment(s) plus the depth shared across
+    // The mirror render's color attachment(s) plus the depth shared across
     // planes. Own non-shader-visible RTV / DSV heaps: RTV slot 0 is the shared
     // MSAA target, or slot `i` is plane `i`'s resolve when single-sampled.
     color: PlanarColor,
@@ -148,9 +148,9 @@ unsafe impl Sync for PlanarReflectionSet {}
 pub(in crate::directx) struct PlanarConfig {
     // MSAA sample count matching the main pass.
     pub sample_count: u32,
-    // Shared colour + depth target width in pixels.
+    // Shared color + depth target width in pixels.
     pub width: u32,
-    // Shared colour + depth target height in pixels.
+    // Shared color + depth target height in pixels.
     pub height: u32,
     // Build-time draw-record count (`DxContext::cull_count`): sizes each plane's
     // region of the per-frame mirror-cull indirect buffer.
@@ -158,7 +158,7 @@ pub(in crate::directx) struct PlanarConfig {
 }
 
 // Per-plane resolve descriptor handles (one entry per plane) plus the shared
-// colour clear value.
+// color clear value.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct PlanarTargets<'a> {
     pub resolve_srv_cpu: &'a [D3D12_CPU_DESCRIPTOR_HANDLE],
@@ -167,7 +167,7 @@ pub(in crate::directx) struct PlanarTargets<'a> {
 }
 
 impl PlanarReflectionSet {
-    // Build the planar set: shared colour + depth at `width`x`height` (matching
+    // Build the planar set: shared color + depth at `width`x`height` (matching
     // the main pass's formats + sample count so the bindless face render binds the
     // standard pipeline), one resolve per plane with its SRV written into the
     // reserved heap slot, and the per-(plane, frame) reflected-view CBV ring.
@@ -297,7 +297,7 @@ impl PlanarReflectionSet {
         })
     }
 
-    // Recreate the depth + per-plane resolves + colour attachment(s) at new
+    // Recreate the depth + per-plane resolves + color attachment(s) at new
     // render-target dimensions and rewrite the RTV / DSV / resolve SRVs in place.
     // The descriptor slots do not move, so the glass pass's GPU handles stay valid.
     // Mirrors the other `resize_to` resources.
@@ -368,7 +368,7 @@ impl PlanarReflectionSet {
 
     // Open plane `slot`'s mirror render. Only the single-sampled path renders into
     // the resolve itself, so only it needs the state flip; under MSAA the render
-    // targets the shared colour, which never leaves RENDER_TARGET.
+    // targets the shared color, which never leaves RENDER_TARGET.
     fn begin_plane(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
         if !matches!(self.color, PlanarColor::PerPlane) {
             return;
@@ -386,7 +386,7 @@ impl PlanarReflectionSet {
 
     // Close plane `slot`'s mirror render, leaving its resolve in
     // PIXEL_SHADER_RESOURCE for the glass sample. A multisampled render resolves
-    // the shared colour into it and puts the colour back in RENDER_TARGET for the
+    // the shared color into it and puts the color back in RENDER_TARGET for the
     // next plane; a single-sampled one already wrote the resolve and only flips it
     // back.
     fn end_plane(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
@@ -441,7 +441,7 @@ impl DxContext {
     // dedicated reflected-frustum mirror cull fills the plane's region of this
     // frame's indirect buffer (reading the frame's camera-independent object +
     // draw-args), then the bindless face render draws that region from the reflected
-    // view into the shared colour + depth, and resolves into the plane's resolve.
+    // view into the shared color + depth, and resolves into the plane's resolve.
     // Encoded on `cmd` before the transparent pass samples the resolves; same-cmd
     // -list ordering retires each resolve before its glass sample. Each plane is
     // oriented toward the camera so the oblique near-plane clip keeps the camera's
@@ -532,7 +532,7 @@ impl DxContext {
         );
 
         // Per plane: render the culled region from the reflected view into the
-        // plane's colour attachment + the shared depth (against the frame's object
+        // plane's color attachment + the shared depth (against the frame's object
         // buffer), then leave the plane's resolve shader-readable.
         let frame_object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
         let indirect = set.indirect(params.frame_idx);
@@ -566,7 +566,7 @@ impl DxContext {
     }
 }
 
-// The non-shader-visible RTV heap for the planar colour attachments: slot 0 is
+// The non-shader-visible RTV heap for the planar color attachments: slot 0 is
 // the shared MSAA target, or slot `i` is plane `i`'s resolve when single-sampled.
 // Sized for the wider case so the sample count can pick either.
 fn create_rtv_heap(
@@ -585,7 +585,7 @@ fn create_rtv_heap(
 }
 
 // Render dimensions, sample count and RTV heap slots for building the planar
-// colour attachment(s) over a set's per-plane resolves.
+// color attachment(s) over a set's per-plane resolves.
 struct PlanarColorBuild<'a> {
     width: u32,
     height: u32,
@@ -597,7 +597,7 @@ struct PlanarColorBuild<'a> {
 }
 
 // Which RTV heap slot plane `slot` renders through. A multisampled set shares one
-// colour target in slot 0; a single-sampled one gives each plane the slot holding
+// color target in slot 0; a single-sampled one gives each plane the slot holding
 // the view of its own resolve, so the slot IS the plane. Getting this wrong points
 // every plane at one target, which reads as every mirror showing the first plane's
 // reflection.
@@ -605,7 +605,7 @@ fn rtv_slot_index(multisampled: bool, slot: usize) -> usize {
     if multisampled { 0 } else { slot }
 }
 
-// Build the colour attachment(s) and write their RTVs: one shared MSAA target in
+// Build the color attachment(s) and write their RTVs: one shared MSAA target in
 // slot 0 when multisampled, else a view of each plane's resolve so the mirror
 // render lands there directly. Called at init and again on resize, where the
 // descriptor slots stay put and only the resources behind them change.
@@ -655,7 +655,7 @@ fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
 }
 
 // Create the shared planar depth target (D32_FLOAT, matching the main pass's DSV
-// format + the colour's sample count) and write its DSV. Created in DEPTH_WRITE
+// format + the color's sample count) and write its DSV. Created in DEPTH_WRITE
 // and left there (the face render clears it every plane). Mirrors
 // `probe::create_bake_depth` at a rectangular render resolution.
 fn create_planar_depth(
@@ -728,7 +728,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_plane_passes_through_centre_with_unit_normal() {
+    fn pane_plane_passes_through_center_with_unit_normal() {
         // A pane facing +z through (1, 2, 3): the plane constant places the center
         // on the surface (n . c + d == 0), and the normal is carried unchanged.
         let p = pane_plane([0.0, 0.0, 1.0], [1.0, 2.0, 3.0]);
@@ -738,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_plane_offset_is_negative_normal_dot_centre() {
+    fn pane_plane_offset_is_negative_normal_dot_center() {
         // Tilted normal: d == -(n . c).
         let n = [0.6, 0.0, 0.8];
         let c = [2.0, 5.0, -1.0];
@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn multisampled_planes_share_rtv_slot_zero() {
-        // One shared colour target, so every plane renders through the same view.
+        // One shared color target, so every plane renders through the same view.
         for slot in 0..MAX_PLANAR_PLANES {
             assert_eq!(rtv_slot_index(true, slot), 0);
         }

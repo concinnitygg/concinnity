@@ -1,7 +1,7 @@
 // How a host lends the simulation its threads.
 //
 // `crate::physics::Fanout` is generic in the item and the body so a step's
-// work units are monomorphised into it rather than boxed, which is what a
+// work units are monomorphized into it rather than boxed, which is what a
 // system holding one as a trait object cannot be. So the seam is drawn one
 // level up: a host answers "advance this simulation by dt", and the fan-out it
 // reaches for on the way stays inside its own answer.

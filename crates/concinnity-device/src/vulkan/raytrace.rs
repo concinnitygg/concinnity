@@ -70,11 +70,11 @@ use concinnity_core::render::uniforms::SkinParams;
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use super::pipeline::spv_module;
+use super::pipeline::{SHADER_ENTRY, spv_module};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
-// + colour + uv = 14 floats). The BLAS reads positions at this stride and the
+// + color + uv = 14 floats). The BLAS reads positions at this stride and the
 // shader fetches attributes at this stride. The deformed (posed) skinned vertex
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
@@ -609,7 +609,7 @@ pub(super) struct RtAccelData {
     instance_count: u32,
     // Frames-in-flight depth; a retired structure is freed this many frames
     // after the rebuild that displaced it (by then its frame's fence has
-    // signalled, so no in-flight trace can still read it).
+    // signaled, so no in-flight trace can still read it).
     frames_in_flight: u64,
 
     // Per-frame update state.
@@ -1039,11 +1039,10 @@ pub(super) fn build_skin_pipeline(
             format!("rt skin pipeline layout: {e}")
         })?;
 
-    let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(SHADER_ENTRY);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(pipeline_layout.handle());
@@ -1355,7 +1354,7 @@ pub(super) fn build_rt_accel(
     let scratch = ScratchRing::new(alloc, device, frames_in_flight.max(1), max_scratch, align)?;
     let scratch_addr = scratch.addr(0);
 
-    // Record every BLAS build (build-barrier-serialised over the one scratch slot
+    // Record every BLAS build (build-barrier-serialized over the one scratch slot
     // they share), then the TLAS build, on a one-shot command buffer; fence-wait so the BVH is
     // ready before the first trace.
     super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
@@ -1925,7 +1924,7 @@ impl RtAccelData {
         )?;
         let tlas = slot.tlas.as_ref().expect("TLAS sized above").accel;
 
-        // Record the fresh draw-BLAS builds (build-barrier-serialised over the one
+        // Record the fresh draw-BLAS builds (build-barrier-serialized over the one
         // scratch slot they share), then the TLAS build, on `cmd`. Infallible from here on.
         for (p, j) in &fresh_params {
             let geo = blas_geometry(p, self.ibuf_addr);
@@ -2178,7 +2177,7 @@ impl RtAccelData {
 
         // Publish this slot's structures as the live BVH; the slot keeps owning
         // them until the cursor comes back around a full ring cycle later (by then
-        // its fence has signalled, so no in-flight trace still reads it).
+        // its fence has signaled, so no in-flight trace still reads it).
         let geom = slot.geom.as_ref().expect("geometry table written above");
         self.live_tlas = tlas;
         self.live_geom = geom.buffer;
@@ -2405,7 +2404,7 @@ impl RtAccelData {
                 target_count: 0,
             };
             // SAFETY: `SkinParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
-            // padding and all 16 of its bytes are initialised; the slice borrows it and does not
+            // padding and all 16 of its bytes are initialized; the slice borrows it and does not
             // outlive it.
             let bytes = unsafe {
                 std::slice::from_raw_parts(
@@ -2437,7 +2436,7 @@ impl RtAccelData {
 
         // Order the skin writes before the BLAS build (AS-build input geometry)
         // and the later hit-shader read (the trace samples the deformed buffer as
-        // an SSBO in a fragment shader). An AS build does not auto-synchronise
+        // an SSBO in a fragment shader). An AS build does not auto-synchronize
         // against a prior compute write to its input vertex buffer, so this
         // cross-pass residency barrier is required (Metal / DirectX document the
         // same).
@@ -2639,7 +2638,7 @@ impl RtAccelData {
         // claiming a tree a later update could not continue.
         let update = slot.refit.plan(shapes, storage_changed);
 
-        // Record the skinned BLAS updates (build-barrier-serialised over the one
+        // Record the skinned BLAS updates (build-barrier-serialized over the one
         // scratch slot they share), then the TLAS build, on `cmd`. A `Build` writes the structure
         // from scratch; a `Refit` names it as its own source, which the spec defines
         // as an in-place update.
@@ -3074,7 +3073,7 @@ impl super::context::VkContext {
                     .unwrap_or(0),
             };
             // SAFETY: `SkinParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
-            // padding and all 16 of its bytes are initialised; the slice borrows it and does not
+            // padding and all 16 of its bytes are initialized; the slice borrows it and does not
             // outlive it.
             let bytes = unsafe {
                 std::slice::from_raw_parts(
@@ -3274,7 +3273,7 @@ mod tests {
 
     #[test]
     fn rt_skin_kernel_compiles() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         // The skin compute kernel compiles to SPIR-V. Its payload offsets and

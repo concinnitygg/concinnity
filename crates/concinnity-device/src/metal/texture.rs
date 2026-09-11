@@ -320,10 +320,10 @@ pub(super) fn create_fallback_cubemap(
     Ok(texture)
 }
 
-// Upload a 3D colour-grading LUT from a ColorLut payload. `bytes` is the raw
+// Upload a 3D color-grading LUT from a ColorLut payload. `bytes` is the raw
 // RGBA8 data emitted by build/color_lut.rs: `size`³ texels ordered with the
 // red axis fastest, then green, then blue. The result is sampled in the
-// composite pass with the tonemapped sRGB colour as the texture coordinate.
+// composite pass with the tonemapped sRGB color as the texture coordinate.
 pub(super) fn upload_color_lut(
     alloc: &DeviceAllocator,
     size: u32,
@@ -377,7 +377,7 @@ pub(super) fn upload_color_lut(
     Ok(texture)
 }
 
-// Build a 2x2x2 identity colour LUT: the eight corners of the unit RGB cube.
+// Build a 2x2x2 identity color LUT: the eight corners of the unit RGB cube.
 // Trilinear interpolation across the corners reproduces the input exactly, so
 // the composite pass becomes a no-op when no `ColorLut` asset is declared.
 // The 3D LUT binding must still resolve to a valid texture regardless.
@@ -532,7 +532,7 @@ pub(super) fn create_shadow_map_array(
 // `MTLMultisampleDepthResolveFilter::Sample0`) that the raymarch pass uses as
 // a writable depth attachment, and that post-Raymarch passes like
 // water/decal/fog sample so they "see" raymarched surface depth alongside
-// rasterised depth. The canonical post-rasterise scene depth target going
+// rasterized depth. The canonical post-rasterize scene depth target going
 // forward; any future post-pass that needs to write depth should bind this
 // rather than introduce its own depth target.
 //
@@ -548,9 +548,9 @@ pub(super) fn create_shadow_map_array(
 // 1440p) is small relative to the existing HDR target footprint and
 // keeps the allocation logic branch-free.
 pub(super) struct HdrTargets {
-    // The multisample colour attachment, or `None` when the world resolved to
+    // The multisample color attachment, or `None` when the world resolved to
     // one sample: there is then no resolve step and `hdr_resolve` is both the
-    // Main pass's colour attachment and the scene spine.
+    // Main pass's color attachment and the scene spine.
     pub hdr_color: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     pub hdr_resolve: Retained<ProtocolObject<dyn MTLTexture>>,
     pub hdr_resolve_copy: Retained<ProtocolObject<dyn MTLTexture>>,
@@ -585,7 +585,7 @@ impl HdrTargets {
         self.hdr_color.is_some()
     }
 
-    // The Main pass's colour attachment.
+    // The Main pass's color attachment.
     pub(super) fn color_attachment(&self) -> &ProtocolObject<dyn MTLTexture> {
         match &self.hdr_color {
             Some(c) => c.as_ref(),
@@ -618,7 +618,7 @@ pub(super) fn create_hdr_targets(
     let multisampled = sample_count > 1;
 
     // MSAA HDR color: RGBA16Float, multi-sample 2D, render-target only. Absent
-    // at one sample, where `hdr_resolve` is the Main pass's colour attachment.
+    // at one sample, where `hdr_resolve` is the Main pass's color attachment.
     let hdr_color = if multisampled {
         let color_desc = TextureDesc {
             kind: MTLTextureType::Type2DMultisample,
@@ -697,7 +697,7 @@ pub(super) fn create_hdr_targets(
     // `MTLStoreAction::MultisampleResolve` with depth filter Sample0. The
     // raymarch pass binds this as its writable depth attachment; water /
     // decal / fog sample it so they see raymarched surface depth alongside
-    // rasterised depth.
+    // rasterized depth.
     let depth_resolve_desc = TextureDesc {
         format: MTLPixelFormat::Depth32Float,
         width: w,

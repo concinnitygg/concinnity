@@ -36,9 +36,9 @@ pub(super) fn probe_cube_arg_encoder(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLArgumentEncoder>>, String> {
-    let frag = super::slang_shaders::entry_function(
+    let frag = super::slang_builtins::entry_function(
         device,
-        &super::slang_shaders::SSR_RESOLVE,
+        &super::slang_builtins::SSR_RESOLVE,
         hot_reload,
     )?;
     // SAFETY: the buffer index the five probe-sampling fragments pin their

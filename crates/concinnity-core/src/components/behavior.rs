@@ -412,7 +412,7 @@ pub enum BehaviorNode {
         /// The scene jumped to.
         #[serde(default, deserialize_with = "de_opt_asset_ref")]
         scene: Option<AssetId>,
-        /// The transition: `"Cut"` or `"FadeBlack"`.
+        /// The transition. See [SceneTransition](crate::components::SceneTransition).
         #[serde(default = "default_transition")]
         transition: String,
     },
@@ -475,7 +475,7 @@ fn unit_volume() -> f32 {
 }
 
 fn default_transition() -> String {
-    String::from("FadeBlack")
+    String::from(crate::components::SceneTransition::FadeBlack.as_str())
 }
 
 #[cfg(test)]
@@ -483,7 +483,7 @@ mod tests {
     use super::*;
 
     fn parse(json: &str) -> Behavior {
-        serde_json::from_str(json).expect("behavior parses")
+        crate::test_support::from_json(json)
     }
 
     // Destructuring helpers, each `None` for any other kind. The parse tests
@@ -625,17 +625,16 @@ mod tests {
     #[test]
     fn the_spatial_expressions_parse_from_their_named_operands() {
         let expr: BehaviorExpr =
-            serde_json::from_str(r#"{"nearest":{"query":"enemies","of":"self"}}"#).unwrap();
+            crate::test_support::from_json(r#"{"nearest":{"query":"enemies","of":"self"}}"#);
         let BehaviorExpr::Nearest { query, of } = expr else {
             panic!("expected a nearest, got {expr:?}");
         };
         assert_eq!(query, "enemies");
         assert_eq!(*of, BehaviorExpr::SelfEntity);
 
-        let expr: BehaviorExpr = serde_json::from_str(
+        let expr: BehaviorExpr = crate::test_support::from_json(
             r#"{"count_within":{"query":"props","of":{"vec3":[0.0,0.0,0.0]},"radius":{"float":5.0}}}"#,
-        )
-        .unwrap();
+        );
         let BehaviorExpr::CountWithin { query, of, radius } = expr else {
             panic!("expected a count_within, got {expr:?}");
         };
@@ -643,10 +642,9 @@ mod tests {
         assert_eq!(*of, BehaviorExpr::Vec3([0.0; 3]));
         assert_eq!(*radius, BehaviorExpr::Float(5.0));
 
-        let expr: BehaviorExpr = serde_json::from_str(
+        let expr: BehaviorExpr = crate::test_support::from_json(
             r#"{"raycast":{"query":"blockers","from":"self","dir":{"vec3":[0.0,0.0,-1.0]},"distance":{"float":20.0}}}"#,
-        )
-        .unwrap();
+        );
         let BehaviorExpr::Raycast {
             query,
             from,
@@ -664,9 +662,9 @@ mod tests {
 
     #[test]
     fn an_after_node_parses_its_wait_and_block() {
-        let node: BehaviorNode =
-            serde_json::from_str(r#"{"after":{"seconds":{"float":2.0},"do":[{"save":null}]}}"#)
-                .unwrap();
+        let node: BehaviorNode = crate::test_support::from_json(
+            r#"{"after":{"seconds":{"float":2.0},"do":[{"save":null}]}}"#,
+        );
         let BehaviorNode::After { seconds, body } = node else {
             panic!("expected an after, got {node:?}");
         };
@@ -712,7 +710,6 @@ mod tests {
 
     #[test]
     fn a_scene_node_fades_unless_told_to_cut() {
-        crate::test_support::install_resolvers();
         let b = parse(r#"{"do":[{"scene":{"scene":"hub"}},{"scene":{"transition":"Cut"}}]}"#);
         assert!(matches!(
             (&b.body[0], &b.body[1]),

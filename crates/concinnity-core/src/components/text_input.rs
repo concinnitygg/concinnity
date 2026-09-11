@@ -57,13 +57,13 @@ pub struct TextInput {
     /// Uniform scale applied on top of the font's `size_px` (24 for the
     /// built-in face). 1.0 = native size.
     pub scale: f32,
-    /// Linear-space RGB colour of the typed text.
+    /// Linear-space RGB color of the typed text.
     pub text_color: [f32; 3],
-    /// Linear-space RGB colour of the placeholder prompt.
+    /// Linear-space RGB color of the placeholder prompt.
     pub placeholder_color: [f32; 3],
     /// RGBA fill of the field's background box, each channel in [0, 1].
     pub background: [f32; 4],
-    /// Linear-space RGB colour of the caret bar.
+    /// Linear-space RGB color of the caret bar.
     pub caret_color: [f32; 3],
     /// Corner rounding radius of the background box, in field pixels.
     pub corner_radius: f32,
@@ -85,7 +85,7 @@ pub struct TextInput {
     /// field. Not authored and not serialized to a blob.
     #[serde(skip)]
     pub focused: bool,
-    /// Runtime inline-completion suffix, drawn in the placeholder colour after
+    /// Runtime inline-completion suffix, drawn in the placeholder color after
     /// the typed content while the field holds focus. Set by whoever drives the
     /// field (e.g. an autocomplete); never edited by typing. Not authored and
     /// not serialized to a blob.
@@ -153,12 +153,10 @@ mod tests {
 
     #[test]
     fn edit_state_is_runtime_only_and_never_rides_the_wire() {
-        crate::test_support::install_resolvers();
-        let t: TextInput = serde_json::from_str(
+        let t: TextInput = crate::test_support::from_json(
             r#"{"font":"body","content":"hello","placeholder":"name","max_len":32,
                 "screen":"menu","focused":true,"caret":5,"ghost":"world"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(t.font, Some(FontHandle(4)));
         assert_eq!(t.content, "hello");
         assert_eq!(t.screen, Some(AssetId(4)));
@@ -179,13 +177,12 @@ mod tests {
 
     #[test]
     fn an_authored_style_parses_and_round_trips_through_postcard() {
-        let t: TextInput = serde_json::from_str(
+        let t: TextInput = crate::test_support::from_json(
             r#"{"x":12,"y":24,"width":300,"height":36,"scale":1.5,"text_color":[1,1,1],
                 "placeholder_color":[0.4,0.4,0.4],"background":[0,0,0,1],
                 "caret_color":[1,0,0],"corner_radius":0,"padding":4,"visible":false,
                 "fit":"bottom"}"#,
-        )
-        .unwrap();
+        );
         let bytes = postcard::to_allocvec(&t).unwrap();
         let back: TextInput = postcard::from_bytes(&bytes).unwrap();
         assert_eq!((back.x, back.y), (12.0, 24.0));

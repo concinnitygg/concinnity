@@ -5,7 +5,7 @@
 // adapted EV, and the histogram build + average compute dispatches that
 // produce next frame's average. The compute passes are encoded after the
 // main HDR resolve (where `hdr_resolve_images[frame_idx]` carries this
-// frame's scene colour in SHADER_READ_ONLY_OPTIMAL) and the result is
+// frame's scene color in SHADER_READ_ONLY_OPTIMAL) and the result is
 // copied into a per-frame HOST_VISIBLE readback buffer that the CPU reads
 // at the top of a later frame, so there is `frames_in_flight` frames of
 // latency between the scene's actual luminance and the exposure applied,
@@ -24,7 +24,7 @@ use concinnity_core::render::uniforms::AutoExposureParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::pipeline::spv_module;
+use super::pipeline::{SHADER_ENTRY, spv_module};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Compile the auto-exposure build + average compute kernels. Used at init
@@ -392,11 +392,10 @@ fn create_compute_pipeline(
     spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(SHADER_ENTRY);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
@@ -449,7 +448,7 @@ impl VkContext {
         // fence wait above this call already gated the GPU work that wrote
         // it, so the HOST_COHERENT mapping reflects the committed value.
         // SAFETY: `ptr` is the HOST_COHERENT mapping of this slot's output buffer, which holds one
-        // f32; the fence wait above gated the GPU write, so the value is committed and initialised.
+        // f32; the fence wait above gated the GPU write, so the value is committed and initialized.
         let avg_log_lum = unsafe { ptr.read() };
         let avg_log_lum = if avg_log_lum.is_finite() {
             avg_log_lum

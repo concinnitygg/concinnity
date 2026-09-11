@@ -4,8 +4,8 @@
 //! which of its assets can create collider-bearing props while it runs.
 
 use crate::authoring::world::WorldJsonlAsset;
+use concinnity_core::components::PropColliderShape;
 
-const COLLIDER_SHAPES: [&str; 5] = ["aabb", "cuboid", "ball", "sphere", "capsule"];
 const BUILTIN_LAYERS: [&str; 4] = ["world", "prop", "character", "trigger"];
 // An interaction group is 32 bits: the built-ins plus at most 28 more.
 const MAX_USER_LAYERS: usize = 32 - BUILTIN_LAYERS.len();
@@ -20,14 +20,14 @@ pub(crate) fn check_collider_shape(name: &str, args: &serde_json::Value) -> Resu
     else {
         return Ok(());
     };
-    if COLLIDER_SHAPES.contains(&shape) {
+    if PropColliderShape::from_str_norm(shape).is_some() {
         return Ok(());
     }
     Err(format!(
         "Asset '{}': unknown collider shape '{}'; expected one of {}",
         name,
         shape,
-        COLLIDER_SHAPES.join(", ")
+        PropColliderShape::NAMES.join(", ")
     ))
 }
 

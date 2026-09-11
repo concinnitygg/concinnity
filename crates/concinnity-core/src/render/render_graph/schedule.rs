@@ -20,7 +20,7 @@
 //      queue runs its own passes in order.
 //   3. Builds the two happens-before relations the rest of the graph reasons
 //      with: `dependency`, the closure of the dependency DAG (what correctness
-//      requires), and `realised`, the closure of each queue's serial order plus
+//      requires), and `realized`, the closure of each queue's serial order plus
 //      the wait edges (what the schedule delivers). `super::validate` checks the
 //      first is contained in the second; the aliasing planner packs against the
 //      second, so a missing sync point makes it more conservative rather than
@@ -44,7 +44,7 @@ use super::types::PassKind;
 /// The hardware queue an executor records a pass onto.
 ///
 /// A backend that has not created a compute queue records every pass onto its
-/// one graphics queue and honours the schedule by keeping the serial order; the
+/// one graphics queue and honors the schedule by keeping the serial order; the
 /// assignment is then a plan the executor is free to flatten.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum PassQueue {
@@ -120,7 +120,7 @@ impl PassQueue {
 /// queue rewrites. A backend that creates the queue owes that frame-start wait
 /// in both directions; Metal's is in `metal/graph_events.rs`.
 ///
-/// Metal creates the queue and honours both halves. Vulkan and DirectX create
+/// Metal creates the queue and honors both halves. Vulkan and DirectX create
 /// no compute queue yet, so neither native barrier half above is implemented
 /// there and both flatten the schedule into one serial stream.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -148,7 +148,7 @@ pub(crate) struct Schedule {
     dependency: Reachability,
     // Closure of each queue's serial order plus the cross-queue wait edges: the
     // ordering the schedule actually delivers.
-    realised: Reachability,
+    realized: Reachability,
 }
 
 impl Schedule {
@@ -167,12 +167,12 @@ impl Schedule {
     // barrier at every slot reuse boundary. Weakening either of those weakens
     // this relation, and the aliasing planner rests on it.
     pub(crate) fn precedes(&self, a: usize, b: usize) -> bool {
-        self.realised.reaches(a, b)
+        self.realized.reaches(a, b)
     }
 
     // Whether the schedule leaves two distinct passes free to run at once.
     pub(crate) fn may_overlap(&self, a: usize, b: usize) -> bool {
-        self.realised.concurrent(a, b)
+        self.realized.concurrent(a, b)
     }
 }
 
@@ -234,10 +234,10 @@ pub(crate) fn schedule(
 
     derive_sync_points(passes, dag);
 
-    let realised = Reachability::new(n, &realised_edges(passes));
+    let realized = Reachability::new(n, &realized_edges(passes));
     Schedule {
         dependency,
-        realised,
+        realized,
     }
 }
 
@@ -339,15 +339,15 @@ fn derive_sync_points(passes: &mut [CompiledPass], dag: &[Vec<usize>]) {
 // queue assignments and waits. `super::validate` calls it rather than reading
 // the relation the compile pass cached, so a missing signal / wait pair shows up
 // there instead of being justified by the same derivation that dropped it.
-pub(super) fn realised_reachability(passes: &[CompiledPass]) -> Reachability {
-    Reachability::new(passes.len(), &realised_edges(passes))
+pub(super) fn realized_reachability(passes: &[CompiledPass]) -> Reachability {
+    Reachability::new(passes.len(), &realized_edges(passes))
 }
 
 // The edges the schedule actually delivers: each queue's consecutive passes in
 // serial order, plus one edge per cross-queue wait. Both point forward, since a
 // wait's producer always precedes its consumer in the compiled order; a wait
 // that does not is dropped here and reported by `super::validate` instead.
-fn realised_edges(passes: &[CompiledPass]) -> Vec<Vec<usize>> {
+fn realized_edges(passes: &[CompiledPass]) -> Vec<Vec<usize>> {
     let n = passes.len();
     let mut edges: Vec<Vec<usize>> = vec![Vec::new(); n];
     for queue in PassQueue::ALL {
@@ -444,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn a_serialised_compute_pass_stays_on_graphics() {
+    fn a_serialized_compute_pass_stays_on_graphics() {
         // Every render pass is either an ancestor or a descendant of the compute
         // pass, so moving it buys no overlap and the serial order must not change
         // for it.
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn the_realised_order_serialises_each_queue() {
+    fn the_realized_order_serializes_each_queue() {
         // Two async-compute passes with no edge between them are still ordered,
         // because one queue runs its own passes in order. That is what keeps the
         // aliasing planner from treating them as concurrent.
@@ -687,8 +687,8 @@ mod tests {
         ] {
             let i = g.pass_index(id).expect("present");
             assert_eq!(g.passes[i].queue, PassQueue::Graphics, "{id:?}");
-            // Asked of the dependency DAG, not of the realised relation: the
-            // latter serialises the graphics queue, so every graphics pair looks
+            // Asked of the dependency DAG, not of the realized relation: the
+            // latter serializes the graphics queue, so every graphics pair looks
             // ordered there and the claim would be vacuous.
             assert!(
                 !g.passes

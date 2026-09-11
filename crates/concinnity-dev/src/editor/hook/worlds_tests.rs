@@ -3,7 +3,7 @@
 // Tests for the Worlds panel's actions: the listing the hook builds, what
 // opening a world retargets, the naming rules a New has to pass, and the two
 // confirmations (delete, and switching away from unsaved edits). The start
-// screen's own behaviour is next door in `worlds_start_tests.rs`, which shares
+// screen's own behavior is next door in `worlds_start_tests.rs`, which shares
 // these fixtures.
 
 use super::*;

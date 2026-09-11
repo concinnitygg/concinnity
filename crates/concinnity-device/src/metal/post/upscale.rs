@@ -31,9 +31,9 @@ pub(crate) struct UpscaleState {
     pub scaler: Option<MetalFXUpscaler>,
     // The per-axis input-to-output ratio the world asked for, `1.0` when the
     // scaler is absent. Kept so a resize can rebuild the scaler from the same
-    // request. Deliberately not the realised `input / output`: that is rounded
+    // request. Deliberately not the realized `input / output`: that is rounded
     // to whole pixels, and reusing it as the next request would shrink the input
-    // further on every resize. The realised size lives on the scaler itself.
+    // further on every resize. The realized size lives on the scaler itself.
     pub scale: f32,
     // Pixel-space jitter offset the projection applied this frame. Written on
     // the main thread before fan-out, read by `encode_upscale` on a worker;
@@ -41,7 +41,7 @@ pub(crate) struct UpscaleState {
     pub jitter: UpscaleJitter,
     // Whether the scaler should discard its temporal history on the next
     // encode. Raised after a scaler rebuild (resize / startup); cleared by
-    // `encode_upscale` after honouring it.
+    // `encode_upscale` after honoring it.
     pub reset_pending: std::sync::atomic::AtomicBool,
 }
 
@@ -88,7 +88,7 @@ pub(crate) fn temporal_scaler_supported(
 // inverse of the user-facing scale, so the request is flipped into the device's
 // units, clamped, and flipped back.
 //
-// The one place this arithmetic happens. The realised size does not round-trip:
+// The one place this arithmetic happens. The realized size does not round-trip:
 // `input / output` is whole pixels over whole pixels, so re-deriving a render
 // size from it lands up to a pixel below what the scaler was built for, and
 // MetalFX asserts that the input content exceeds the input texture. Callers take
@@ -158,7 +158,7 @@ impl MetalFXUpscaler {
             descriptor.setInputHeight(input_height as usize);
             descriptor.setOutputWidth(output_width as usize);
             descriptor.setOutputHeight(output_height as usize);
-            // We do not author a pre-exposed colour buffer (the input is
+            // We do not author a pre-exposed color buffer (the input is
             // linear HDR fresh from the SSR / HDR resolve), so leave
             // auto-exposure off and let MetalFX use its built-in heuristic.
             descriptor.setAutoExposureEnabled(false);
@@ -213,7 +213,7 @@ impl MtlContext {
     // pass's `hdr_resolve`). The scaler needs its `depthTexture` to be
     // the depth that produced `scene_pre_taa`: we use the single-sample
     // depth the velocity pre-pass already writes at render resolution,
-    // which is rasterised from the same geometry the main pass shaded.
+    // which is rasterized from the same geometry the main pass shaded.
     //
     // Reset is requested whenever the scaler was just rebuilt (resize or
     // first frame); after the encode the flag is cleared via the atomic
@@ -303,7 +303,7 @@ impl MtlContext {
 
 // Per-axis upscale-jitter holder. Two `f32` slots packed atomically so the
 // main thread (which computes Halton samples) and the worker thread (which
-// reads them in `encode_upscale`) can synchronise without a mutex. Bit-cast
+// reads them in `encode_upscale`) can synchronize without a mutex. Bit-cast
 // through `u64` since `AtomicU64` is widely available on the targets
 // MetalFX runs on (macOS 13+, aarch64 / x86_64).
 #[derive(Default)]
@@ -331,9 +331,9 @@ mod tests {
     const RANGE: (f32, f32) = (1.0, 3.0);
 
     #[test]
-    fn the_realised_scale_does_not_round_trip() {
+    fn the_realized_scale_does_not_round_trip() {
         // The bug this guards. A 2048x1536 drawable at the default 2/3 quality
-        // scale gives a 1365x1024 input. Feeding the realised ratio
+        // scale gives a 1365x1024 input. Feeding the realized ratio
         // (1365/2048) back in as a request yields 1023 rows -- one short of what
         // the scaler was built for, which MetalFX rejects outright rather than
         // tolerating. So the render resolution is read off the scaler, and the
@@ -342,8 +342,8 @@ mod tests {
         let built = scaler_input_size(out, 2.0 / 3.0, RANGE);
         assert_eq!(built, (1365, 1024));
 
-        let realised = built.0 as f32 / out.0 as f32;
-        let rederived = scaler_input_size(out, realised, RANGE);
+        let realized = built.0 as f32 / out.0 as f32;
+        let rederived = scaler_input_size(out, realized, RANGE);
         assert_ne!(
             rederived, built,
             "if this ever round-trips the guard below is measuring nothing"

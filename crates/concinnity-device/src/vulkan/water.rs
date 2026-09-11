@@ -64,8 +64,8 @@ fn water_params_from(surface: &WaterSurface, planar: bool) -> WaterParams {
             surface.shallow_color[2],
             0.0,
         ],
-        depth_falloff: surface.depth_falloff_metres,
-        foam_width: surface.foam_width_metres,
+        depth_falloff: surface.depth_falloff_meters,
+        foam_width: surface.foam_width_meters,
         foam_intensity: surface.foam_intensity,
         fresnel_power: surface.fresnel_power,
         roughness: surface.roughness,
@@ -146,9 +146,9 @@ fn build_surface_record(
     let (verts, idxs) =
         build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)?;
 
-    // Flatten into the standard engine `Vertex` layout. Tangent and colour are
+    // Flatten into the standard engine `Vertex` layout. Tangent and color are
     // placeholders: the water shader rebuilds its normal frame analytically from
-    // the wave derivatives and the fragment ignores per-vertex colour.
+    // the wave derivatives and the fragment ignores per-vertex color.
     let packed: Vec<Vertex> = verts
         .into_iter()
         .map(|(pos, normal, color, uv)| Vertex {
@@ -293,8 +293,8 @@ mod tests {
             center: [1.0, 2.0, 3.0],
             deep_color: [0.02, 0.05, 0.12],
             shallow_color: [0.1, 0.3, 0.4],
-            depth_falloff_metres: 3.0,
-            foam_width_metres: 0.2,
+            depth_falloff_meters: 3.0,
+            foam_width_meters: 0.2,
             foam_intensity: 0.5,
             fresnel_power: 4.0,
             roughness: 0.08,
@@ -337,7 +337,7 @@ mod tests {
     // regression fails the suite without a GPU.
     #[test]
     fn water_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.
@@ -353,7 +353,7 @@ mod tests {
     // `RT_TEXTURED` split) fails the suite without a GPU.
     #[test]
     fn water_rt_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         for &msaa in &[true, false] {

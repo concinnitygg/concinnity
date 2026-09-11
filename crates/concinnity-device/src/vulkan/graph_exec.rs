@@ -303,13 +303,13 @@ fn emit_graph_restores(
 // Emit the aliasing barriers for a pass: for each pooled transient this pass
 // first-writes whose memory is reused from an earlier transient in the same slot
 // (`images`), order that earlier resource's prior use before this write. The
-// members are colour targets, so the dependency is the colour/fragment domain:
+// members are color targets, so the dependency is the color/fragment domain:
 // the predecessor's last use is either a fragment-shader sample (e.g.
-// `ao_output` read by Main) or a colour write, and this member's first use is a
-// colour write (e.g. the bloom prefilter). `UNDEFINED -> COLOR_ATTACHMENT`
+// `ao_output` read by Main) or a color write, and this member's first use is a
+// color write (e.g. the bloom prefilter). `UNDEFINED -> COLOR_ATTACHMENT`
 // discards the predecessor's contents in the shared memory (the member is fully
 // rewritten before it is read). Per-resource stage derivation can refine this
-// when a non-colour member is aliased.
+// when a non-color member is aliased.
 fn emit_alias_barriers(device: &Device, cmd: vk::CommandBuffer, images: &[vk::Image]) {
     for &image in images {
         let barrier = vk::ImageMemoryBarrier::default()
@@ -497,7 +497,7 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // picks.
     pub cam_pos: [f32; 3],
     // Jittered view-projection matrix (with TAA Halton jitter when
-    // TAA is on). Consumed by the G-buffer pre-pass to rasterise the
+    // TAA is on). Consumed by the G-buffer pre-pass to rasterize the
     // normal+depth / roughness / velocity MRT.
     pub vp_mat: [[f32; 4]; 4],
     // Un-jittered current-frame view-projection matrix. The G-buffer
@@ -522,7 +522,7 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // each Z slab onto the linear-Z `[near, max_distance]` volume range.
     pub near: f32,
     // Camera far-plane in view units. The temporal-upscale dispatch (FSR;
-    // DLSS / XeSS ignore it) needs the near + far + FOV to linearise depth for
+    // DLSS / XeSS ignore it) needs the near + far + FOV to linearize depth for
     // its reprojection.
     pub far: f32,
 }
@@ -535,7 +535,7 @@ impl VkContext {
     // writes the swapchain image + allocates transient text buffers. Returns
     // the per-pass buffers in graph (toposort) order; the caller submits
     // `[start, ...returned, end]` in one `vkQueueSubmit`, so submission order =
-    // GPU order and every encoder's inline barrier still synchronises against
+    // GPU order and every encoder's inline barrier still synchronizes against
     // the prior pass across the command-buffer boundary. Any not-yet-migrated
     // `PassId` returns a clear error.
     pub(in crate::vulkan) fn execute_graph(
@@ -608,7 +608,7 @@ impl VkContext {
         // queues at once and that every wait names an already-recorded producer,
         // which is what this asserts.
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_serial_order_honours_schedule(graph, "vulkan");
+        crate::gfx::render_graph::assert_serial_order_honors_schedule(graph, "vulkan");
         // Per-pass aliasing barriers for the pooled transients that share memory
         // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
         // slot is shared.
@@ -768,7 +768,7 @@ impl VkContext {
         // Collect the per-pass buffers in ascending graph index = toposort
         // order (the `None` Composite slot is skipped). Never sort: the submit
         // array order must equal toposort order for the inline barriers to
-        // synchronise correctly across buffer boundaries.
+        // synchronize correctly across buffer boundaries.
         let ordered: Vec<vk::CommandBuffer> = worker_slots
             .into_inner()
             .unwrap()
@@ -968,7 +968,7 @@ impl VkContext {
             // `gbuffer_*` channels. Each is a render pass attachment whose
             // initial / final layouts move it between the attachment and sampled
             // layouts, and whose external subpass dependencies order it against
-            // the neighbouring passes -- a form the driver can fold into the
+            // the neighboring passes -- a form the driver can fold into the
             // pass, which a standalone barrier is not. So the ops the graph
             // derives for them are deliberately dropped here rather than
             // pending. Adding an entry above means taking the layout and the
@@ -1035,15 +1035,6 @@ impl VkContext {
                     pass_id.name()
                 ));
             }
-            PassId::SsrPrepass => {
-                // Merged into GBufferPrepass on Vulkan: the builder emits the
-                // unified node (unified_gbuffer_prepass = true) and never this.
-                return Err(format!(
-                    "graph executor (vulkan): pass {} is merged into GBufferPrepass \
-                     and should not appear in the frame graph",
-                    pass_id.name()
-                ));
-            }
             PassId::SsrResolve => {
                 self.encode_ssr_resolve(
                     cmd,
@@ -1071,15 +1062,6 @@ impl VkContext {
                     params.aspect,
                     params.cam_pos,
                 );
-            }
-            PassId::Velocity => {
-                // Merged into GBufferPrepass on Vulkan: the builder emits the
-                // unified node (unified_gbuffer_prepass = true) and never this.
-                return Err(format!(
-                    "graph executor (vulkan): pass {} is merged into GBufferPrepass \
-                     and should not appear in the frame graph",
-                    pass_id.name()
-                ));
             }
             PassId::TaaResolve => {
                 self.encode_taa(cmd, params.frame_idx);
@@ -1158,7 +1140,7 @@ impl VkContext {
             }
             PassId::Raymarch => {
                 // Composite each visible SDF volume into the scene. Uses the
-                // jittered VP (the matrix the main pass rasterised depth with)
+                // jittered VP (the matrix the main pass rasterized depth with)
                 // so the reprojected hit depth shares the scene's depth space.
                 let view = self.build_raymarch_view(params.vp_mat, params.cam_pos, params.elapsed);
                 self.encode_raymarch(cmd, params.frame_idx, &view)?;
@@ -1169,7 +1151,7 @@ impl VkContext {
                 // `FrameGraphInputs::transparent_enabled` (set from
                 // `transparent.any_visible()`), so it only appears when the world
                 // declared a visible `GlassPanel` or `WaterSurface`. Uses the
-                // jittered VP (the matrix the main pass rasterised depth with) so a
+                // jittered VP (the matrix the main pass rasterized depth with) so a
                 // record's clip-space depth matches the stored main-depth the
                 // fragment shader tests against.
                 // Planar reflections run inline at the head of the pass (same cmd
@@ -1226,7 +1208,7 @@ impl VkContext {
                 // normal+depth, roughness, and motion for every screen-space
                 // consumer (SSR / SSAO / SSGI / TAA / FSR), replacing the
                 // separate SSR / SSAO / velocity pre-passes. `params.vp_mat` is
-                // the jittered VP (rasterisation, matching the main pass);
+                // the jittered VP (rasterization, matching the main pass);
                 // `params.cur_vp` is the un-jittered VP the shader uses with the
                 // previous VP for the motion vector. The velocity channel carries
                 // real motion only when a consumer reads it (TAA or FSR active);

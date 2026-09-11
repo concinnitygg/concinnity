@@ -37,7 +37,7 @@ mod tests {
             if vec3::length(radial) < 1e-6 {
                 assert_eq!(*d, [0.0; 3], "pole vertices sit on the axis and stay");
             } else {
-                let expected = vec3::scale(vec3::vec3_normalise(radial), 0.1);
+                let expected = vec3::scale(vec3::vec3_normalize(radial), 0.1);
                 assert!(
                     vec3::length(vec3::sub(*d, expected)) < 1e-5,
                     "{d:?} vs {expected:?}"

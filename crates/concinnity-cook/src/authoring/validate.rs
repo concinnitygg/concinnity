@@ -55,7 +55,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn deserialises_with_defaults() {
+        fn deserializes_with_defaults() {
             let d: Decal = serde_json::from_str("{}").unwrap();
             assert_eq!(d.position, [0.0, 0.0, 0.0]);
             assert_eq!(d.size, [1.0, 1.0, 1.0]);
@@ -65,7 +65,7 @@ mod tests {
         }
 
         #[test]
-        fn deserialises_with_all_fields() {
+        fn deserializes_with_all_fields() {
             crate::ecs::asset_id::reset_interner();
             let json = r#"{
                 "texture":"tex_bullet",
@@ -88,13 +88,13 @@ mod tests {
         fn clamps_alpha_through_from_args() {
             let json = r#"{"tint":[1,1,1,5.0]}"#;
             let parsed: Decal = serde_json::from_str(json).unwrap();
-            let normalised = super::super::decal(parsed);
-            assert_eq!(normalised.tint[3], 1.0);
+            let normalized = super::super::decal(parsed);
+            assert_eq!(normalized.tint[3], 1.0);
 
             let json = r#"{"tint":[1,1,1,-0.5]}"#;
             let parsed: Decal = serde_json::from_str(json).unwrap();
-            let normalised = super::super::decal(parsed);
-            assert_eq!(normalised.tint[3], 0.0);
+            let normalized = super::super::decal(parsed);
+            assert_eq!(normalized.tint[3], 0.0);
         }
     }
 
@@ -141,7 +141,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn deserialises_with_defaults() {
+        fn deserializes_with_defaults() {
             let j: PhysicsJoint = serde_json::from_str("{}").unwrap();
             assert_eq!(j.kind, "fixed");
             assert_eq!(j.anchor_a, [0.0, 0.0, 0.0]);
@@ -151,7 +151,7 @@ mod tests {
         }
 
         #[test]
-        fn deserialises_all_fields() {
+        fn deserializes_all_fields() {
             crate::ecs::asset_id::reset_interner();
             let json = r#"{
                 "kind":"revolute",
@@ -193,11 +193,11 @@ mod tests {
         }
 
         #[test]
-        fn from_args_normalises_kind_string() {
+        fn from_args_normalizes_kind_string() {
             let json = r#"{"kind":"HINGE"}"#;
             let parsed: PhysicsJoint = serde_json::from_str(json).unwrap();
-            let normalised = super::super::joint(parsed);
-            assert_eq!(normalised.kind, "revolute");
+            let normalized = super::super::joint(parsed);
+            assert_eq!(normalized.kind, "revolute");
         }
 
         #[test]
@@ -214,7 +214,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn deserialises_with_defaults() {
+        fn deserializes_with_defaults() {
             let p: ParticleEmitter = serde_json::from_str("{}").unwrap();
             assert_eq!(p.position, [0.0, 0.0, 0.0]);
             assert_eq!(p.direction, [0.0, 1.0, 0.0]);
@@ -224,7 +224,7 @@ mod tests {
         }
 
         #[test]
-        fn deserialises_with_all_fields() {
+        fn deserializes_with_all_fields() {
             crate::ecs::asset_id::reset_interner();
             let json = r#"{
                 "texture":"tex_spark","position":[1,2,3],"direction":[0,1,0],
@@ -293,7 +293,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn deserialises_with_defaults() {
+        fn deserializes_with_defaults() {
             let f: VolumetricFog = serde_json::from_str("{}").unwrap();
             assert!(f.enabled);
             assert_eq!(f.color, [0.7, 0.78, 0.85]);
@@ -302,7 +302,7 @@ mod tests {
         }
 
         #[test]
-        fn deserialises_with_explicit_fields() {
+        fn deserializes_with_explicit_fields() {
             let json = r#"{
                 "enabled":false,"density":0.12,"color":[0.5,0.6,0.7],
                 "height_falloff":0.3,"height_reference":1.5,
@@ -477,8 +477,8 @@ mod tests {
                 ..Default::default()
             };
             v.params[7] = 0.42;
-            let json = serde_json::to_value(v.clone()).expect("serialises");
-            let back: SdfVolume = serde_json::from_value(json).expect("deserialises");
+            let json = serde_json::to_value(v.clone()).expect("serializes");
+            let back: SdfVolume = serde_json::from_value(json).expect("deserializes");
             let back = super::super::sdf_volume(back);
             assert_eq!(back.center, [1.0, 2.0, 3.0]);
             assert_eq!(back.extent, [4.0, 5.0, 6.0]);

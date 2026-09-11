@@ -58,7 +58,7 @@ enum TargetMode {
 /// `pub` (with public fields) because the editor crate's hot-reload drive reads
 /// these to re-import the clip from source, then pushes the result back through
 /// `AnimationSystem::apply_reloaded_clip`. The GLB decode itself lives in the
-/// editor crate; the runtime crate only stores the catalogue.
+/// editor crate; the runtime crate only stores the catalog.
 #[derive(Debug, Clone)]
 pub struct AnimationReloadEntry {
     /// EntityTarget `SkinnedMesh` handle, also the key into

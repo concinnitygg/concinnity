@@ -30,7 +30,7 @@ use alloc::vec::Vec;
 /// When an edge is popped we check whether either endpoint has already
 /// been merged into another vertex; if so the edge is skipped. This is
 /// the "lazy" variant: quality is good enough for distance-keyed LOD
-/// swaps without the expense of recomputing every neighbour's cost after
+/// swaps without the expense of recomputing every neighbor's cost after
 /// each collapse.
 ///
 /// Returns a new index list addressing the same `positions` slice; empty
@@ -64,7 +64,7 @@ pub fn decimate_by_qem(
         let p0 = positions[i0];
         let p1 = positions[i1];
         let p2 = positions[i2];
-        let n = face_normal_unnormalised(p0, p1, p2);
+        let n = face_normal_unnormalized(p0, p1, p2);
         let mag = sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
         if mag < 1e-12 {
             continue;
@@ -273,7 +273,7 @@ fn resolve_remap(remap: &mut [u32], mut v: u32) -> u32 {
     v
 }
 
-fn face_normal_unnormalised(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
+fn face_normal_unnormalized(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
     [
@@ -301,7 +301,7 @@ pub fn target_tri_count_for_level(lod0_tri_count: usize, level: u32) -> usize {
 /// bounding-sphere radius. Each level doubles the previous threshold so
 /// distant LODs swap in progressively further out. The base distance
 /// (LOD1) is `radius * 12`, picked so a 1-unit-radius prop swaps at 12 m,
-/// far enough that the cluster artefacts are not obvious in the showcase
+/// far enough that the cluster artifacts are not obvious in the showcase
 /// but close enough that the LOD pass shows visible work in the debug
 /// renderer.
 pub fn default_distance_for_level(radius: f32, level: u32) -> f32 {

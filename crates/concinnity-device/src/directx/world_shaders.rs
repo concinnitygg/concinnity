@@ -118,7 +118,7 @@ impl DxContext {
     // already bound. Used by the depth / velocity pre-pass, which shades nothing
     // and so runs every bucket through its own single pipeline -- but still has to
     // skip a non-resident bucket, or the pre-pass would lay down depth and motion
-    // for geometry the colour pass omits.
+    // for geometry the color pass omits.
     pub(in crate::directx) fn execute_bucket_regions_shared_pso(
         &self,
         cmd: &ID3D12GraphicsCommandList,

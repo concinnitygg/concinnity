@@ -2,13 +2,13 @@
 //
 // Backing store for the render graph's transient images. Stage 1's
 // `gfx::render_graph::alias` planner decides which transient resources may
-// share physical memory; this pool is where the Vulkan backend realises that
+// share physical memory; this pool is where the Vulkan backend realizes that
 // plan. Features stop owning these images and read them back by label, so the
 // pool can repoint several labels at one shared allocation without touching the
 // features. This mirrors how the graph plans barriers while each backend emits
 // them.
 //
-// Structure: the pool is organised into alias *slots*. A slot owns one
+// Structure: the pool is organized into alias *slots*. A slot owns one
 // `VkDeviceMemory` per frame in flight; every member image of a slot binds into
 // that one allocation at offset 0. Members of a slot must have pairwise-disjoint
 // lifetimes (they are never live at the same time), so reusing the bytes is
@@ -16,7 +16,7 @@
 // flight (the single-frame planner does not model frames-in-flight, so the
 // backend supplies the per-frame buffering). A single-member slot is just a
 // per-frame target with its own memory (no sharing); a multi-member slot is a
-// realised alias.
+// realized alias.
 //
 // A resource is "managed" iff its owning feature is enabled at build time (e.g.
 // `ao_output` only when SSAO is on); the `*_for` lookups return `None`
@@ -101,7 +101,7 @@ impl TransientImagePool {
     // allocation: what aliasing makes undefined is an image's *contents*, and a
     // frame with no producer reads nothing meaningful out of a pooled target
     // either way. The layout is per-image state, and each member needs a legal
-    // one -- initialising only the last leaves `gbuffer_normal_depth` in
+    // one -- initializing only the last leaves `gbuffer_normal_depth` in
     // `UNDEFINED` while the masked Composite samples it, which is 1110 layout
     // errors over a 1036-frame `depth_consumers_masked` run.
     pub(super) fn build(
@@ -231,7 +231,7 @@ impl TransientImagePool {
         self.allocated_bytes
     }
 
-    // The pooled G-buffer colour channels for every frame in flight. Empty
+    // The pooled G-buffer color channels for every frame in flight. Empty
     // `Vec`s when the pool was built without the G-buffer gate (no screen-space
     // consumer, so the pre-pass node is absent and nothing was allocated); the
     // caller treats that as "the feature is not built" rather than an error,
@@ -578,7 +578,7 @@ mod tests {
             super::super::context::HDR_FORMAT
         );
 
-        // The G-buffer colour channels. A format divergence here would silently
+        // The G-buffer color channels. A format divergence here would silently
         // mis-back an MRT attachment the pre-pass render pass declares, which is
         // a framebuffer-incompatibility error rather than a wrong picture.
         use super::super::post::gbuffer::{
@@ -591,7 +591,7 @@ mod tests {
         ] {
             let m = member(label);
             assert_eq!(image_format(m.format), format, "{label}");
-            // Render extent, not the drawable: the pre-pass rasterises at the
+            // Render extent, not the drawable: the pre-pass rasterizes at the
             // scene resolution, which differs under temporal upscaling.
             assert_eq!((m.width, m.height), (1024, 768), "{label}");
             assert_eq!(
@@ -603,9 +603,9 @@ mod tests {
     }
 
     #[test]
-    fn the_gbuffer_gate_places_its_colour_channels() {
-        // `unified_gbuffer_prepass` substitutes passes rather than adding them,
-        // so `planning_inputs` cannot force it on and the pool follows the build
+    fn the_gbuffer_gate_places_its_color_channels() {
+        // The pre-pass exists only where the backend built its targets, so
+        // `planning_inputs` cannot force it on and the pool follows the build
         // gate. Off, none of the channels are placed -- and the pre-pass
         // framebuffers would have nothing to attach, which is why init derives
         // the gate once and uses it for both.
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn a_slot_with_no_allocated_images_still_reports_its_predecessor() {
-        // `slot_labels` is the plan and `images` the realisation; with no frames
+        // `slot_labels` is the plan and `images` the realization; with no frames
         // allocated the entries exist with empty frame lists, so a lookup finds
         // no image while `alias_predecessor` still answers.
         let slots = vec![vec!["ao_output", "bloom_top"]];

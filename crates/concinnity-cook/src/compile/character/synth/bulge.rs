@@ -1,4 +1,4 @@
-// `bulge`: a gaussian lobe centred at `along` on each region bone, `sigma`
+// `bulge`: a gaussian lobe centered at `along` on each region bone, `sigma`
 // wide, pushing in `direction` (model space) on the side of the bone that
 // faces it, or radially when no direction is given.
 

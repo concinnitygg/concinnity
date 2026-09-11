@@ -50,7 +50,7 @@ mod tests {
         if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
         }
-        let present: Vec<bool> = crate::metal::slang_shaders::ALL
+        let present: Vec<bool> = crate::metal::slang_builtins::ALL
             .iter()
             .map(|lib| embedded_metallib(lib.name).is_some_and(|(_, b)| !b.is_empty()))
             .collect();
@@ -76,7 +76,7 @@ mod tests {
         if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
         }
-        for lib in crate::metal::slang_shaders::ALL {
+        for lib in crate::metal::slang_builtins::ALL {
             let (digest, _) = embedded_metallib(lib.name)
                 .unwrap_or_else(|| panic!("{}: no precompiled metallib embedded", lib.name));
             let source = concinnity_core::render::slang_source::assemble(lib.file, lib.defines);
@@ -97,7 +97,7 @@ mod tests {
         if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
         }
-        for lib in crate::metal::slang_shaders::ALL {
+        for lib in crate::metal::slang_builtins::ALL {
             let (digest, _) = embedded_metallib(lib.name).expect("embedded");
             let source = crate::slang_source::assemble(true, lib.file, lib.defines, &[]);
             assert_eq!(digest, source_digest(&source), "{}", lib.name);
@@ -116,7 +116,7 @@ mod tests {
         if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
         }
-        let lib = crate::metal::slang_shaders::ALL[0];
+        let lib = crate::metal::slang_builtins::ALL[0];
         let (digest, _) = embedded_metallib(lib.name).expect("embedded");
         let edited = format!(
             "{}\n// an edit\n",

@@ -1,14 +1,14 @@
 // The raymarched SDF volume pass: three families of proxy-cube draw over one
 // authored distance field.
 //
-// A volume rasterises the back faces of its world-space bounding box and the
+// A volume rasterizes the back faces of its world-space bounding box and the
 // fragment sphere-traces the field inside it. The world's `SdfVolume` supplies
 // the field itself, spliced at SDF_BODY between the helpers that forward-declare
 // it and the entry points that call it, so this source is only complete once a
 // world is loaded.
 //
 // RAYMARCH_SURFACE, RAYMARCH_VOLUMETRIC and RAYMARCH_SHADOW select the family:
-// an opaque surface writing colour and depth, a participating medium blended
+// an opaque surface writing color and depth, a participating medium blended
 // over the scene, and a depth-only caster marched from the light side.
 //
 // RAYMARCH_METAL / RAYMARCH_DXIL select the host's binding layout. These slots
@@ -59,7 +59,7 @@ float3 prefilter_sample_lod(float3 d, float lod)
 float3 scene_sample(float2 uv) { return scene_color.SampleLevel(scene_samp, uv, 0.0).rgb; }
 
 // Metal is the one host that binds the main pass's depth, so it is the one that
-// can clip the march to the rasterised surface instead of paying for a march
+// can clip the march to the rasterized surface instead of paying for a march
 // the depth test would discard. The other two return a distance past any
 // `max_distance`, which makes the clip a no-op there.
 //
@@ -71,7 +71,7 @@ float3 scene_sample(float2 uv) { return scene_color.SampleLevel(scene_samp, uv, 
 // declaration stays single-sample whatever the frame's sample count is.
 #define RAYMARCH_READS_SCENE_DEPTH 1
 
-float rasterised_distance(float2 px, float3 cam, float4 sv_pos)
+float rasterized_distance(float2 px, float3 cam, float4 sv_pos)
 {
     float depth_ndc = main_depth.Load(int3(int2(px), 0));
     float2 ndc_xy = (sv_pos.xy / view_cb.viewport) * 2.0 - 1.0;
@@ -122,8 +122,8 @@ float3 prefilter_sample_lod(float3 d, float lod)
 float3 scene_sample(float2 uv) { return scene_color.SampleLevel(scene_samp, uv, 0.0).rgb; }
 
 // No scene depth is bound here: the hardware depth test against the writable
-// DSV is what composites this pass against rasterised geometry.
-float rasterised_distance(float2 px, float3 cam, float4 sv_pos) { return 1e30; }
+// DSV is what composites this pass against rasterized geometry.
+float rasterized_distance(float2 px, float3 cam, float4 sv_pos) { return 1e30; }
 
 #else
 
@@ -155,7 +155,7 @@ float3 irradiance_sample(float3 d) { return irradiance_cube.SampleLevel(d, 0.0).
 float3 prefilter_sample_lod(float3 d, float lod) { return prefilter_cube.SampleLevel(d, lod).rgb; }
 float3 scene_sample(float2 uv) { return scene_color.SampleLevel(uv, 0.0).rgb; }
 
-float rasterised_distance(float2 px, float3 cam, float4 sv_pos) { return 1e30; }
+float rasterized_distance(float2 px, float3 cam, float4 sv_pos) { return 1e30; }
 
 #endif
 
@@ -220,7 +220,7 @@ struct RaymarchFragOut
 {
     float4 color : SV_Target;
     // Writing a nearer depth keeps early-Z while letting the hit composite
-    // against rasterised geometry, and feeds the raymarched surface's depth to
+    // against rasterized geometry, and feeds the raymarched surface's depth to
     // the passes downstream that sample it.
     float depth : SV_DepthLessEqual;
 };
@@ -231,7 +231,7 @@ RaymarchFragOut raymarch_fragment(RaymarchVertexOut input)
     float3 cam = VIEW.cam_pos.xyz;
     float3 ray_dir = normalize(input.world_pos - cam);
 
-    // The proxy's back faces rasterised, so `world_pos` is on the far side of
+    // The proxy's back faces rasterized, so `world_pos` is on the far side of
     // the box. The slab test gives entry and exit both, and handles a camera
     // inside the box uniformly.
     float3 box_min = VOL.center.xyz - VOL.extent.xyz;
@@ -240,7 +240,7 @@ RaymarchFragOut raymarch_fragment(RaymarchVertexOut input)
     if (box_t.y < max(box_t.x, 0.0)) discard;
     float t_enter = max(box_t.x, 0.001);
 
-    float t_raster = rasterised_distance(input.sv_pos.xy, cam, input.sv_pos);
+    float t_raster = rasterized_distance(input.sv_pos.xy, cam, input.sv_pos);
     float t_max = min(box_t.y, min(t_raster, VOL.max_distance));
     if (t_enter >= t_max) discard;
 
@@ -268,8 +268,8 @@ RaymarchFragOut raymarch_fragment(RaymarchVertexOut input)
     // Whatever the authored shader wants to show through, already attenuated.
     color += surf.transmitted;
 
-    // Reprojecting through the same matrix the proxy rasterised with puts the
-    // hit in the rasterised geometry's depth space exactly.
+    // Reprojecting through the same matrix the proxy rasterized with puts the
+    // hit in the rasterized geometry's depth space exactly.
     float4 hit_clip = mul(VIEW.vp, float4(hit_pos, 1.0));
     RaymarchFragOut o;
     o.color = float4(color, 1.0);
@@ -341,7 +341,7 @@ float4 raymarch_volumetric_fragment(RaymarchVertexOut input) : SV_Target
 
 // The caster draws once per cascade into that cascade's slice, projected through
 // the light rather than the camera. The slice's depth test composites it with
-// the rasterised casters already there: the nearer occluder wins per texel.
+// the rasterized casters already there: the nearer occluder wins per texel.
 [shader("vertex")]
 RaymarchVertexOut raymarch_shadow_vertex(RaymarchVertexIn v)
 {
@@ -374,8 +374,8 @@ float raymarch_shadow_fragment(RaymarchVertexOut input) : SV_DepthLessEqual
     RayHit hit = coneRaymarch(origin, ray_dir, t_enter, t_max, VIEW.time);
     if (!hit.hit) discard;
 
-    // Reprojecting through the same cascade matrix the vertex rasterised with
-    // shares the rasterised casters' depth space in this slice. The march is
+    // Reprojecting through the same cascade matrix the vertex rasterized with
+    // shares the rasterized casters' depth space in this slice. The march is
     // bounded by the box exit, so the hit is never behind the back face and the
     // SV_DepthLessEqual contract holds.
     float3 hit_pos = origin + ray_dir * hit.t;

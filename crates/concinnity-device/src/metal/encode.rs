@@ -130,7 +130,7 @@ impl RenderEncode for ProtocolObject<dyn MTLRenderCommandEncoder> {
         let len = size_of::<T>();
         check_inline_len(len);
         // SAFETY: the pointer and length both describe `value`, which is live
-        // for the call and holds no uninitialised bytes, and the index is
+        // for the call and holds no uninitialized bytes, and the index is
         // within the buffer argument table.
         unsafe {
             self.setVertexBytes_length_atIndex(std::ptr::NonNull::from(value).cast(), len, index);
@@ -142,7 +142,7 @@ impl RenderEncode for ProtocolObject<dyn MTLRenderCommandEncoder> {
         let len = size_of::<T>();
         check_inline_len(len);
         // SAFETY: the pointer and length both describe `value`, which is live
-        // for the call and holds no uninitialised bytes, and the index is
+        // for the call and holds no uninitialized bytes, and the index is
         // within the buffer argument table.
         unsafe {
             self.setFragmentBytes_length_atIndex(std::ptr::NonNull::from(value).cast(), len, index);
@@ -218,7 +218,7 @@ impl ComputeEncode for ProtocolObject<dyn MTLComputeCommandEncoder> {
         let len = size_of::<T>();
         check_inline_len(len);
         // SAFETY: the pointer and length both describe `value`, which is live
-        // for the call and holds no uninitialised bytes, and the index is
+        // for the call and holds no uninitialized bytes, and the index is
         // within the buffer argument table.
         unsafe {
             self.setBytes_length_atIndex(std::ptr::NonNull::from(value).cast(), len, index);

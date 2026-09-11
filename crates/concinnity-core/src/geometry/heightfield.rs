@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 use super::Vert;
 use crate::math::floor;
-use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalise};
+use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
 
 /// The field a heightmap image displaces: grid extents, resolution, and the
 /// elevation range the red channel maps into.
@@ -114,7 +114,7 @@ pub fn build_heightfield_from_pixels(
 
     for i in 0..cols * rows {
         let [x, y, z] = positions[i];
-        let normal = vec3_normalise(normals[i]);
+        let normal = vec3_normalize(normals[i]);
         verts.push(([x, y, z], normal, color, [x, z]));
     }
 
@@ -131,7 +131,7 @@ pub fn build_heightfield_from_pixels(
     Ok((verts, idxs))
 }
 
-// Bilinear-sample the heightmap's red channel at normalised UV (s, t) in [0,1]
+// Bilinear-sample the heightmap's red channel at normalized UV (s, t) in [0,1]
 // and map [0, 255] to [elevation_min, elevation_max].
 fn sample_height_bilinear(
     rgba: &[u8],

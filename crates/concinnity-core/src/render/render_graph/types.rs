@@ -94,7 +94,7 @@ impl BufferHandle {
 /// Dense resource identifier. `u32::MAX` reserved as the "invalid"
 /// sentinel; everything else is a valid index into the compiled graph's
 /// `resources` Vec. The executor uses `index()` to look up a resource's
-/// realised GPU object.
+/// realized GPU object.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ResourceId(pub(super) u32);
 
@@ -165,7 +165,7 @@ pub enum ResourceState {
 
 /// How a graph resource a backend drives from `barriers_before` is used, so
 /// the backend can translate the coarse `ResourceState` into a concrete native
-/// state: the same `Write` means a colour render target for one resource and a
+/// state: the same `Write` means a color render target for one resource and a
 /// depth-stencil target for another, which map to different
 /// `D3D12_RESOURCE_STATES` / `vk::ImageLayout`s. The backend resolver assigns a
 /// class to each migrated resource; the backend's barrier translator maps
@@ -173,7 +173,7 @@ pub enum ResourceState {
 /// (storage / compute targets, ...) migrate.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum GraphResourceClass {
-    /// Sampled colour render target (e.g. the SSAO occlusion `ao_output`).
+    /// Sampled color render target (e.g. the SSAO occlusion `ao_output`).
     ColorTarget,
     /// Sampled depth-stencil render target (e.g. the CSM `shadow_map`).
     DepthTarget,
@@ -388,10 +388,10 @@ pub struct TextureDesc {
 }
 
 /// What a target's clear resolves to. Split by kind rather than carried as four
-/// floats so a depth target cannot silently be given a colour.
+/// floats so a depth target cannot silently be given a color.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ClearValue {
-    /// Colour clear value, linear RGBA.
+    /// Color clear value, linear RGBA.
     Color([f32; 4]),
     /// Depth clear value; stencil is always 0 (no engine target has stencil).
     Depth(f32),
@@ -462,9 +462,9 @@ impl PixelFormat {
     }
 
     /// Whether this is a depth format. The aliasing planner keeps depth and
-    /// colour resources in separate memory pools because their backend memory
+    /// color resources in separate memory pools because their backend memory
     /// requirements (heap flags / memory type) differ; the finer per-usage
-    /// compatibility is the backend's concern when it realises the plan.
+    /// compatibility is the backend's concern when it realizes the plan.
     pub const fn is_depth(self) -> bool {
         matches!(self, PixelFormat::Depth32Float)
     }
@@ -558,7 +558,7 @@ impl TextureDesc {
         Self { mip_levels, ..self }
     }
 
-    /// Override the colour a target clears to. Only for a target whose cleared
+    /// Override the color a target clears to. Only for a target whose cleared
     /// background carries meaning; see `clear`.
     pub(crate) const fn with_clear_color(self, color: [f32; 4]) -> Self {
         Self {
@@ -606,7 +606,7 @@ pub struct TextureUsage(pub u32);
 impl TextureUsage {
     /// Sampled or otherwise read from a shader.
     pub const SHADER_READ: Self = Self(1 << 0);
-    /// Bound as a colour render target.
+    /// Bound as a color render target.
     pub const RENDER_TARGET: Self = Self(1 << 1);
     /// Bound as a depth / stencil target.
     pub const DEPTH_STENCIL: Self = Self(1 << 2);

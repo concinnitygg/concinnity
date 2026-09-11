@@ -1,5 +1,5 @@
 //! Per-glyph metrics of a compiled font atlas: where a glyph sits in the atlas
-//! texture and how the pen moves across it. Shared by the build-time rasteriser
+//! texture and how the pen moves across it. Shared by the build-time rasterizer
 //! that writes the payload, the decoder that reads it back, and the text layout
 //! that turns it into quads, none of which owns the layout.
 

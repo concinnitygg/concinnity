@@ -5,7 +5,7 @@
 //
 //   SSGI_GATHER    - per pixel, cast cosine-weighted hemisphere rays around the
 //                    surface normal, screen-march each against the SSR pre-pass
-//                    G-buffer, and accumulate the lit scene colour at each
+//                    G-buffer, and accumulate the lit scene color at each
 //                    on-screen hit. Misses contribute nothing (the IBL ambient
 //                    already covers the off-screen / sky term). The
 //                    cosine-weighted importance sampling folds the cos(theta) /

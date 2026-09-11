@@ -160,7 +160,7 @@ impl KeyState {
     }
 
     // Record a printable glyph from a WM_CHAR message. `TranslateMessage`
-    // synthesises WM_CHAR from WM_KEYDOWN after layout / modifier resolution, so
+    // synthesizes WM_CHAR from WM_KEYDOWN after layout / modifier resolution, so
     // `c` is the final text character. Control characters (Backspace, Tab,
     // Enter, Escape, delete) are filtered out -- those editing / navigation keys
     // ride `captured_key` via `key_from_vk` instead.

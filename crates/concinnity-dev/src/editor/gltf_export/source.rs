@@ -9,7 +9,7 @@
 
 use super::ExportMesh;
 use crate::components::CharacterShape;
-use crate::gfx::mesh_payload::{SkinnedPayload, deserialise_skinned_with_lods};
+use crate::gfx::mesh_payload::{SkinnedPayload, deserialize_skinned_with_lods};
 use crate::world::WorldJsonlAsset;
 use concinnity_core::ecs::ResourceKind;
 use concinnity_core::geometry::payload_joints_to_defs;
@@ -53,7 +53,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     let bytes = result
         .resource_payload(ResourceKind::SkinnedMesh, mesh)
         .ok_or_else(|| format!("'{mesh}' compiled without a skinned payload"))?;
-    let payload = deserialise_skinned_with_lods(bytes)?;
+    let payload = deserialize_skinned_with_lods(bytes)?;
     let mut export = export_mesh_from_payload(mesh, payload);
     if bake && let Some(shape) = &shape {
         super::bake::bake_shape(&mut export, shape);
@@ -82,7 +82,7 @@ fn shape_targeting(assets: &[WorldJsonlAsset], mesh: &str) -> Option<CharacterSh
 }
 
 // The export form of a compiled skinned payload: LOD0 geometry, the bind
-// skeleton, and the dense morph set. Uniform white vertex colour (the
+// skeleton, and the dense morph set. Uniform white vertex color (the
 // payload's fill-in default) is left out of the file.
 fn export_mesh_from_payload(name: &str, p: SkinnedPayload) -> ExportMesh {
     let colors = if p.vertices.iter().all(|v| v.color == [1.0, 1.0, 1.0]) {
@@ -171,7 +171,7 @@ mod tests {
             .filter_map(|n| n["name"].as_str())
             .collect();
         assert_eq!(names, ["root", "tip", "prism"]);
-        // The compile normalised the geometry and baked normals in.
+        // The compile normalized the geometry and baked normals in.
         let attrs = &doc["meshes"][0]["primitives"][0]["attributes"];
         assert!(attrs.get("NORMAL").is_some());
         assert!(attrs.get("JOINTS_0").is_some());

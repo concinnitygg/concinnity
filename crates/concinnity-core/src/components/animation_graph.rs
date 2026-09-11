@@ -44,7 +44,7 @@ pub struct AnimationBlendPoint {
 /// not cyclic gaits.
 #[derive(Debug, Clone)]
 pub enum AnimationBlend {
-    /// Clips along one parameter. The parameter picks the two neighbouring
+    /// Clips along one parameter. The parameter picks the two neighboring
     /// `points` (by ascending `value`) and blends them; outside the range
     /// the nearest end clip plays alone.
     Blend1d {
@@ -56,7 +56,7 @@ pub enum AnimationBlend {
         sync: bool,
     },
     /// Clips on a regular grid over two parameters, blended bilinearly
-    /// between the four grid neighbours of the parameter point (clamped at
+    /// between the four grid neighbors of the parameter point (clamped at
     /// the grid edges).
     Blend2d {
         /// Name of the parameter along the grid's x axis.
@@ -555,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialises_full_graph() {
+    fn deserializes_full_graph() {
         crate::test_support::reset_interner();
         let g: AnimationGraph = serde_json::from_value(graph_json()).unwrap();
         assert!(g.target.is_some());
@@ -569,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialises_with_defaults() {
+    fn deserializes_with_defaults() {
         let g: AnimationGraph = serde_json::from_str("{}").unwrap();
         assert!(g.target.is_none());
         assert!(g.states.is_empty());

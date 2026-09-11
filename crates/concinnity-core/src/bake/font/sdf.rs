@@ -1,6 +1,6 @@
-// Signed distance field conversion for rasterised glyph cells.
+// Signed distance field conversion for rasterized glyph cells.
 //
-// Each atlas texel stores a normalised SDF value in [0, 1] where 0.5 = the glyph
+// Each atlas texel stores a normalized SDF value in [0, 1] where 0.5 = the glyph
 // outline. Values > 0.5 are inside; values < 0.5 are outside. The fragment
 // shader uses smoothstep + fwidth to reconstruct crisp, scale-independent alpha.
 
@@ -76,7 +76,7 @@ fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
 }
 
 // 2-D squared Euclidean distance transform via two separable 1-D passes.
-// `out` must be pre-initialised by the caller: 0.0 for foreground, INF for background.
+// `out` must be pre-initialized by the caller: 0.0 for foreground, INF for background.
 // The scratch buffers are caller-provided to avoid per-call allocation.
 fn edt_2d(w: usize, h: usize, out: &mut [f32], edt: &mut EdtScratch) {
     let EdtScratch {
@@ -111,7 +111,7 @@ fn edt_2d(w: usize, h: usize, out: &mut [f32], edt: &mut EdtScratch) {
 
 // Convert the R channel of an RGBA cell buffer from raw coverage (0-255) to SDF.
 // All buffers are caller-provided so no heap allocation happens per call.
-// After conversion every channel holds the normalised distance in [0, 255]:
+// After conversion every channel holds the normalized distance in [0, 255]:
 //   128 ≈ glyph outline, >128 = inside, <128 = outside.
 pub(crate) fn cell_coverage_to_sdf(
     cell: &mut [u8],
@@ -128,7 +128,7 @@ pub(crate) fn cell_coverage_to_sdf(
         edt,
     } = scratch;
 
-    // Initialise EDT grids directly from coverage, skipping the bool_buf pass.
+    // Initialize EDT grids directly from coverage, skipping the bool_buf pass.
     for i in 0..n {
         let fg = cell[i * 4] > 127;
         inside_dist2[i] = if fg { 0.0 } else { INF };
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn cell_coverage_to_sdf_puts_the_outline_at_mid_grey() {
+    fn cell_coverage_to_sdf_puts_the_outline_at_mid_gray() {
         // An 8x8 cell whose left half is covered: the field must fall across
         // the vertical edge, saturating away from it on both sides.
         let (w, h) = (8usize, 8usize);
@@ -217,7 +217,7 @@ mod tests {
         cell_coverage_to_sdf(&mut cell, w, h, 4.0, &mut scratch);
 
         let at = |x: usize, y: usize| cell[(y * w + x) * 4];
-        // Inside stays above mid-grey, outside below, and the value decreases
+        // Inside stays above mid-gray, outside below, and the value decreases
         // monotonically left to right across the edge.
         assert!(at(0, 4) > 128, "deep inside: {}", at(0, 4));
         assert!(at(7, 4) < 128, "far outside: {}", at(7, 4));

@@ -1,7 +1,7 @@
 // src/editor/asset_list.rs
 //
 // The editor's "grouped asset list": the world's assets shown under a type
-// sub-header with the names indented and alphabetised. Both the Assets browse
+// sub-header with the names indented and alphabetized. Both the Assets browse
 // panel (`panel.rs`) and the Template detail panel (`template_panel.rs`) render
 // this identical list, so the row model, the grouping, the row geometry / style,
 // and the per-row + scrollbar draw all live here once. The two panels differ only
@@ -26,7 +26,7 @@ pub(crate) const INDENT: f32 = 16.0;
 pub(crate) const SCROLLBAR_W: f32 = 5.0;
 pub(crate) const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 
-// Base tints / colours. Interactive tints (hover / selected) belong to the
+// Base tints / colors. Interactive tints (hover / selected) belong to the
 // Assets panel; these are the shared baseline both lists draw from.
 pub(crate) const ROW_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.0];
 pub(crate) const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
@@ -110,8 +110,8 @@ pub(crate) fn grouped_rows(
 }
 
 // Draw one grouped-list row into (`bg_id`, `label_id`) at `rect` with background
-// `tint`: a type sub-header (no indent, header colour) or an indented asset name
-// (name colour). The caller chooses the tint (a plain read-only row, or the
+// `tint`: a type sub-header (no indent, header color) or an indented asset name
+// (name color). The caller chooses the tint (a plain read-only row, or the
 // Assets panel's hover / selected tint). A name row's background draws as a
 // rounded highlight inset from the row rect; a header's spans the full row.
 pub(crate) fn place_row(
@@ -254,10 +254,10 @@ mod tests {
         world
     }
 
-    // A header row draws its caption at the base pad in the header colour; a name
-    // row indents and uses the name colour.
+    // A header row draws its caption at the base pad in the header color; a name
+    // row indents and uses the name color.
     #[test]
-    fn place_row_indents_names_and_colours_headers() {
+    fn place_row_indents_names_and_colors_headers() {
         let mut world = world_with(&[AssetId(1), AssetId(2)]);
         let hdr = ListRow {
             is_header: true,

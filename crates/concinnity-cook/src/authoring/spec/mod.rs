@@ -36,7 +36,7 @@ pub enum ArgValue {
 }
 
 impl ArgValue {
-    /// A numeric array from float components (colours, positions, sizes).
+    /// A numeric array from float components (colors, positions, sizes).
     pub(crate) fn floats(vals: &[f32]) -> ArgValue {
         ArgValue::Array(vals.iter().map(|&v| ArgValue::Float(v as f64)).collect())
     }

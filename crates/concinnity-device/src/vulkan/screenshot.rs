@@ -155,7 +155,7 @@ impl VkContext {
     }
 }
 
-// A whole-image colour barrier on a swapchain image, used to flip between
+// A whole-image color barrier on a swapchain image, used to flip between
 // PRESENT_SRC and TRANSFER_SRC for the readback copy.
 fn image_barrier(
     image: vk::Image,
@@ -181,7 +181,7 @@ fn image_barrier(
         })
 }
 
-// Bytes per texel for the swapchain colour formats this backend can present.
+// Bytes per texel for the swapchain color formats this backend can present.
 // The swapchain only ever resolves to one of these (see `create_swapchain_inner`
 // in swapchain.rs): `BGRA8_UNORM` for SDR, `R16G16B16A16_SFLOAT` for the scRGB /
 // PQ-float HDR path, or `A2B10G10R10_UNORM_PACK32` for the packed PQ fallback.
@@ -193,7 +193,7 @@ fn swapchain_bytes_per_pixel(format: vk::Format) -> u32 {
     }
 }
 
-// Classify the swapchain colour format (+ resolved HDR encoding) into the
+// Classify the swapchain color format (+ resolved HDR encoding) into the
 // backend-free `PixelLayout` the shared decoder understands. Almost always BGRA8
 // on Windows; the float HDR swapchain and the packed 2-10-10-10 PQ fallback are
 // handled too. `encoding` (None on SDR) only matters for the float swapchain.

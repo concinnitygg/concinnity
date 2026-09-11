@@ -23,7 +23,7 @@ pub enum ShadowUpdate {
     Hybrid,
 }
 
-/// Rendering settings for the world: frame pacing, shadows, and clear colour.
+/// Rendering settings for the world: frame pacing, shadows, and clear color.
 /// One per world. The GPU backend is chosen by the engine for the platform and
 /// is not user-configurable.
 ///
@@ -60,7 +60,7 @@ pub struct GraphicsConfig {
     /// `vsync`: the more restrictive of the two wins. Useful for limiting heat,
     /// fan noise, and power draw, or matching a fixed refresh.
     pub fps_cap: u32,
-    /// Background clear colour [r, g, b, a] in linear 0..1 space.
+    /// Background clear color [r, g, b, a] in linear 0..1 space.
     pub clear_color: [f32; 4],
     /// Shadow map resolution in texels. `4096` by default, capped by the quality
     /// preset down to 1024 on the lowest tier. Set to 0 to disable shadows.

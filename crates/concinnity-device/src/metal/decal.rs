@@ -47,10 +47,10 @@ pub(crate) struct DecalState {
 impl MtlContext {
     // Encode the projected-decal pass. Caller has ended the main pass, so
     // `hdr_targets.depth` (MSAA) holds the scene depth and
-    // `hdr_targets.hdr_resolve` holds the resolved scene colour. The pass
+    // `hdr_targets.hdr_resolve` holds the resolved scene color. The pass
     // alpha-blends one textured stamp per decal into `hdr_resolve`.
     //
-    // `vp` is the same view-projection the main pass rasterised with:
+    // `vp` is the same view-projection the main pass rasterized with:
     // jittered when TAA is on, so the reconstructed world position lands on
     // the same pixel the main pass shaded.
     // pub(in crate::metal) so the render-graph executor in
@@ -163,13 +163,13 @@ impl MtlContext {
 }
 
 // Build the projected-decal pipeline. The pass runs after the main HDR pass:
-// a per-decal unit cube is rasterised, and the fragment shader reconstructs
+// a per-decal unit cube is rasterized, and the fragment shader reconstructs
 // the world-space sample point at each pixel from the main pass's MSAA depth
 // attachment, transforms it into decal-local space, and stamps the decal
 // texture onto whatever sits inside the unit box. The output is alpha-blended
 // into the resolved HDR target (`hdr_resolve`).
 //
-// Depth state is `Always` / no write -- every rasterised pixel inside the box
+// Depth state is `Always` / no write -- every rasterized pixel inside the box
 // is a candidate; the shader's own bounds test does the volumetric culling.
 pub(super) fn build_decal_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -177,14 +177,14 @@ pub(super) fn build_decal_pipeline(
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn = super::slang_shaders::entry_function(
+    let vert_fn = super::slang_builtins::entry_function(
         device,
-        &super::slang_shaders::DECAL_VERT,
+        &super::slang_builtins::DECAL_VERT,
         hot_reload,
     )?;
-    let frag_fn = super::slang_shaders::entry_function(
+    let frag_fn = super::slang_builtins::entry_function(
         device,
-        &super::slang_shaders::DECAL_FRAG,
+        &super::slang_builtins::DECAL_FRAG,
         hot_reload,
     )?;
 

@@ -1,5 +1,5 @@
 // The expansion that turns a world-space `Line` into the camera-facing ribbon
-// the line pass rasterises.
+// the line pass rasterizes.
 //
 // A hardware line primitive cannot carry a pixel width portably, so each segment
 // expands into a quad whose corners are offset perpendicular to the line and
@@ -77,7 +77,7 @@ fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
-// A segment trimmed to the part in front of the near plane, with its colours
+// A segment trimmed to the part in front of the near plane, with its colors
 // interpolated to wherever the trim landed.
 struct Clipped {
     start: [f32; 3],
@@ -287,10 +287,10 @@ mod tests {
     }
 
     #[test]
-    fn clipping_interpolates_the_endpoint_colour() {
+    fn clipping_interpolates_the_endpoint_color() {
         let cam = camera();
         // Half the run is behind the camera, so the near-plane end takes
-        // (nearly) the midpoint colour rather than the authored start colour.
+        // (nearly) the midpoint color rather than the authored start color.
         let l = Line {
             start: [0.0, 0.0, 10.0],
             end: [0.0, 0.0, -10.0],

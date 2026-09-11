@@ -351,7 +351,7 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     float d3 = hiz_tex.Load(int3(hi.x, hi.y, mip));
     float occluder_depth = max(max(d0, d1), max(d2, d3));
     // If the AABB's closest projected depth is strictly behind the farthest
-    // previously-rasterised surface in this region, the whole AABB is hidden.
+    // previously-rasterized surface in this region, the whole AABB is hidden.
     return aabb_min_depth > occluder_depth;
 }
 

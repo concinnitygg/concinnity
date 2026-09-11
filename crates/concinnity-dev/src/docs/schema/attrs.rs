@@ -209,7 +209,7 @@ mod tests {
             (Some("SCREAMING_SNAKE_CASE"), "VERTEX_INSTANCED"),
             (Some("kebab-case"), "vertex-instanced"),
             (Some("camelCase"), "vertexInstanced"),
-            (Some("unrecognised"), "VertexInstanced"),
+            (Some("unrecognized"), "VertexInstanced"),
         ] {
             assert_eq!(apply_case("VertexInstanced", rule), want, "rule {rule:?}");
         }

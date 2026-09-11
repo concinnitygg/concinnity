@@ -880,7 +880,7 @@ const SLANG_WATER_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
 // (the key layout, and what an entry stores) and each backend's compiler
 // invocation. A cache key already covers the assembled shader source, the entry
 // point, the target and the caller's option word, so what it cannot see is a
-// change to the invocation around them -- a different optimisation level, an
+// change to the invocation around them -- a different optimization level, an
 // added flag, a reworked entry format. Hashing these sources in closes that
 // gap, so such a change misses instead of loading bytes the old invocation
 // produced. Every backend's module participates on every build, which keeps the
@@ -902,7 +902,7 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
     "src/directx/pipeline.rs",
     "src/directx/slang_builtins.rs",
     "src/metal/msl_cache.rs",
-    "src/metal/slang_shaders.rs",
+    "src/metal/slang_builtins.rs",
     "src/vulkan/pipeline.rs",
     "src/vulkan/slang_builtins.rs",
 ];
@@ -1019,7 +1019,7 @@ fn main() {
 // `.slang` sources pin the loose buffers with register()
 // numbers, but the bindless pair's two parameter blocks and every per-draw
 // texture and sampler land on first-free slot assignment, which is compiler
-// behaviour rather than an annotation. Assert the emitted MSL here so a slangc
+// behavior rather than an annotation. Assert the emitted MSL here so a slangc
 // upgrade that moves a slot fails the build instead of binding garbage at draw
 // time. Skipped when slangc is absent (the runtime compile path reports its own
 // error then).

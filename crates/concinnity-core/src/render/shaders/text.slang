@@ -35,7 +35,7 @@ ConstantBuffer<TextUniforms> uni : register(b0);
 // what that host binds.
 [[vk::binding(0, 0)]] Sampler2D<float4> atlas;
 
-// Matches `TextVertex` (32 B: pos at 0, uv at 8, colour at 16, mode at 28),
+// Matches `TextVertex` (32 B: pos at 0, uv at 8, color at 16, mode at 28),
 // which the host input layouts declare and `text_vertex_layout_matches_shaders`
 // pins.
 //
@@ -65,7 +65,7 @@ struct TextVertexOut
 };
 
 // Vulkan is the exception rather than the rule, exactly as in `fullscreen.slang`:
-// the composite pass rasterises through a standard positive-height viewport
+// the composite pass rasterizes through a standard positive-height viewport
 // there, so pixel (0,0) already maps to NDC (-1,-1) and the remap is linear.
 // Metal and DirectX put NDC +1 at the top of the screen, so they flip.
 float text_ndc_y(float pixel_y, float win_height)
@@ -98,14 +98,14 @@ TextVertexOut text_vertex_main(TextVertexIn v)
 float4 text_fragment_main(TextVertexOut i) : SV_Target
 {
     // A negative u marks a solid background-box vertex (a TextLabel.background
-    // quad emitted by gfx::text::build_text_calls): emit the colour directly,
+    // quad emitted by gfx::text::build_text_calls): emit the color directly,
     // alpha carried through in v, no atlas sample.
     if (i.uv.x < 0.0)
     {
         return float4(i.color, i.uv.y);
     }
     // A positive mode marks a textured quad (a Sprite with a texture): the
-    // bound atlas is the sprite's own RGBA image, tinted by the vertex colour
+    // bound atlas is the sprite's own RGBA image, tinted by the vertex color
     // with the mode value as the quad's alpha multiplier.
     if (i.mode > 0.0)
     {

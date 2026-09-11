@@ -1,5 +1,5 @@
 //! What a pipeline run hands back: the compiled defs and packed blobs, plus the
-//! dev-only source catalogues a `cn debug` build reads back by handle.
+//! dev-only source catalogs a `cn debug` build reads back by handle.
 
 use concinnity_core::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
 
@@ -148,7 +148,7 @@ mod tests {
             .resource_payload(ResourceKind::SkinnedMesh, "prism")
             .expect("named payload");
         let payload =
-            concinnity_core::gfx::mesh_payload::deserialise_skinned_with_lods(bytes).unwrap();
+            concinnity_core::gfx::mesh_payload::deserialize_skinned_with_lods(bytes).unwrap();
         assert_eq!(payload.vertices.len(), 3);
         assert_eq!(payload.joints[0].name, "root");
         // The wrong name or the wrong kind finds nothing.

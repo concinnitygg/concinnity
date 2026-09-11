@@ -9,7 +9,7 @@ mesh's skeleton. Joints with no track hold their bind pose.
 
 Several `Animation` assets may target the same [SkinnedMesh](SkinnedMesh.md);
 they are then blended into one pose, weighted by each clip's `weight` (a
-normalised weighted average). A single clip plays at full strength
+normalized weighted average). A single clip plays at full strength
 regardless of its `weight`.
 
 **File import.** A clip may be authored entirely by hand (`tracks` filled

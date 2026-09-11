@@ -10,7 +10,7 @@ use alloc::string::String;
 ///
 /// **Built-in generators:**
 ///
-/// **Choosing a room texture**: for neutral indoor spaces prefer `plaster` (cream-white) or `concrete` (grey). `brick` is reddish-orange, only use it when you explicitly want that look. `stone` (dark grey-blue) suits dungeons or medieval rooms.
+/// **Choosing a room texture**: for neutral indoor spaces prefer `plaster` (cream-white) or `concrete` (gray). `brick` is reddish-orange, only use it when you explicitly want that look. `stone` (dark gray-blue) suits dungeons or medieval rooms.
 ///
 /// ```rust
 /// # use concinnity_core::components::Texture;

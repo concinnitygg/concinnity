@@ -1,6 +1,6 @@
-// Rasterises the printable ASCII glyphs of a TTF face with fontdue, packs them
+// Rasterizes the printable ASCII glyphs of a TTF face with fontdue, packs them
 // into a power-of-two RGBA atlas as a signed distance field, and encodes the
-// result as the blob payload `decode::deserialise` reads back.
+// result as the blob payload `decode::deserialize` reads back.
 
 use super::payload;
 use super::sdf::{EdtScratch, SdfScratch, cell_coverage_to_sdf};
@@ -14,9 +14,9 @@ use alloc::vec::Vec;
 // (in low-resolution / atlas pixels).
 const SDF_SPREAD: f32 = 4.0;
 
-// Glyphs are rasterised at this multiple of the requested size, the SDF is
+// Glyphs are rasterized at this multiple of the requested size, the SDF is
 // computed at that high resolution, and then box-filtered down to the atlas
-// resolution. Oversampling avoids the staircase artefacts that come from
+// resolution. Oversampling avoids the staircase artifacts that come from
 // thresholding a low-resolution coverage bitmap; the box filter averages
 // OVERSAMPLE² high-res samples per atlas texel, so curves stay smooth.
 const OVERSAMPLE: u32 = 8;
@@ -47,11 +47,11 @@ pub const BUILTIN_FONT_FILE: &str = "Questrial-Regular.ttf";
 /// required to compile an atlas.
 pub const BUILTIN_FONT_BYTES: &[u8] = include_bytes!("fonts/Questrial-Regular.ttf");
 
-/// Rasterise `ttf_bytes` at `size_px` and encode the atlas as a blob payload.
+/// Rasterize `ttf_bytes` at `size_px` and encode the atlas as a blob payload.
 /// `source` names the face in error messages.
 pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, String> {
     let logical_size_px = size_px as f32;
-    // The whole pipeline (rasterise, SDF, pack) runs at the supersampled size, so
+    // The whole pipeline (rasterize, SDF, pack) runs at the supersampled size, so
     // the atlas and its texel-space metrics come out SUPERSAMPLE times larger.
     // Positional metrics are divided back to `logical_size_px` units at emit time.
     let raster_size_px = logical_size_px * SUPERSAMPLE as f32;
@@ -63,7 +63,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     let font = fontdue::Font::from_bytes(ttf_bytes, settings)
         .map_err(|e| format!("Font: failed to parse '{}': {}", source, e))?;
 
-    // Rasterise every printable ASCII character (32-126) at OVERSAMPLE × the
+    // Rasterize every printable ASCII character (32-126) at OVERSAMPLE × the
     // target size. The SDF is computed at this high resolution and box-filtered
     // back down to atlas resolution; the resulting low-res field captures
     // sub-pixel edge positions that a same-resolution threshold would lose.
@@ -118,7 +118,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     // Each glyph is processed in its own cell buffer rather than a shared
     // high-res atlas. This keeps the EDT and box-filter working on a small
     // region (~cell_w×cell_h pixels) instead of the full atlas (~33M pixels),
-    // which makes a large difference in unoptimised (debug) builds.
+    // which makes a large difference in unoptimized (debug) builds.
     let cell_w_hi = max_glyph_w_hi as u32; // includes 2×pad_hi on each axis
     let cell_h_hi = max_glyph_h_hi as u32;
     let cell_w_lo = cell_w_hi / OVERSAMPLE;
@@ -232,7 +232,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
         });
     }
 
-    Ok(payload::serialise(
+    Ok(payload::serialize(
         atlas_w,
         atlas_h,
         SUPERSAMPLE,
@@ -249,13 +249,13 @@ fn round_up_to(n: u16, mult: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bake::font::deserialise;
+    use crate::bake::font::deserialize;
 
     #[test]
     fn builtin_face_compiles_to_a_decodable_atlas() {
         let bytes = compile(BUILTIN_FONT_BYTES, 32, "<built-in>").expect("builtin face compiles");
         let (aw, ah, supersample, size_px, rgba, metrics) =
-            deserialise(&bytes).expect("payload decodes");
+            deserialize(&bytes).expect("payload decodes");
 
         assert_eq!(size_px, 32);
         assert_eq!(supersample, SUPERSAMPLE);

@@ -33,7 +33,7 @@ pub(crate) struct ImportedSkinnedMesh {
 }
 
 // Same as [`import_skinned_glb`] but takes a pre-parsed glTF document. The
-// asset hot-reload pass uses this directly so it can amortise the `.glb`
+// asset hot-reload pass uses this directly so it can amortize the `.glb`
 // parse across every Mesh / SkinnedMesh entry that references the same file.
 pub(crate) fn import_skinned_from_doc(
     doc: &GltfDoc,
@@ -103,7 +103,7 @@ pub fn parse_glb(source: &str, assets_dir: Option<&Path>) -> Result<GltfDoc, Str
 // Import the indexed primitive (flattened across glTF meshes in declaration
 // order) from a parsed `.glb` into a static `Mesh`'s `(vertices, indices)`.
 // UVs are taken from `TEXCOORD_0` when present; vertex colors fall back to
-// neutral grey so the material albedo controls surface color.
+// neutral gray so the material albedo controls surface color.
 //
 // Only TRIANGLES topology is supported. POINTS/LINES/strip variants
 // error out so a regression is obvious rather than silently mis-rendered.
@@ -223,12 +223,12 @@ pub(crate) fn read_primitive_geometry(
 // chunks that each fit in u16. Each chunk has its own vertex buffer containing
 // only the vertices its triangles use; indices are remapped to that local
 // buffer. The split is greedy by triangle order: fast and stable, with no
-// attempt at locality optimisation. Vertices are duplicated across chunks
+// attempt at locality optimization. Vertices are duplicated across chunks
 // when a triangle straddles a flush boundary; for chess-piece geometry the
 // duplication is well under one percent.
 // Number of u16-safe chunks `split_into_u16_chunks` would produce, walking the
 // index stream only. The importer needs the count to name one Mesh per chunk;
-// materialising the chunks themselves just to call `.len()` clones every vertex.
+// materializing the chunks themselves just to call `.len()` clones every vertex.
 pub(crate) fn count_u16_chunks(indices: &[u32]) -> usize {
     let limit: usize = u16::MAX as usize + 1;
     let mut chunks = 0usize;
@@ -596,7 +596,7 @@ pub struct ImportedAnimation {
 
 // Same as [`import_glb_animations`] but takes a pre-parsed glTF document.
 // The asset hot-reload pass uses this directly so a single reload pass can
-// amortise the `.glb` parse across every Animation entry that references
+// amortize the `.glb` parse across every Animation entry that references
 // the same file.
 pub(crate) fn import_glb_animations_from_doc(
     doc: &GltfDoc,

@@ -1,6 +1,6 @@
 //! Sprite quad assembly. Piggybacks on the text render pass: a plain Sprite is
 //! emitted as a TextDrawCall containing a single quad with the sentinel UV
-//! (u < 0) the text shader interprets as a solid-coloured fill (alpha carried
+//! (u < 0) the text shader interprets as a solid-colored fill (alpha carried
 //! in v); a Sprite with a `texture` is emitted with real 0..1 UVs and a
 //! positive vertex `mode` so the shader samples the sprite's texture, which
 //! lives in the same atlas pool as the font atlases. Either way, screen-space
@@ -30,7 +30,7 @@ pub fn covers_canvas(s: &Sprite) -> bool {
 // a solid-fill call binds (the shader does not sample for sentinel-UV verts,
 // but the backend still expects a valid slot). Pass the slot of any loaded
 // font; returns an empty list when there are no fonts (the text pipeline
-// isn't initialised in that case). `texture_slots` maps a Sprite's Texture
+// isn't initialized in that case). `texture_slots` maps a Sprite's Texture
 // asset to its slot in the atlas pool; a textured sprite whose texture never
 // made it there falls back to a solid fill. `viewport` is the live logical
 // window size: view-owned sprites are overlay UI authored in the reference
@@ -160,7 +160,7 @@ pub fn build_sprite_calls_into(
             };
             if a <= 0.0 {
                 // A transparent fill cannot cover an outer quad (blending
-                // leaves the border colour showing through), so an outline
+                // leaves the border color showing through), so an outline
                 // is a hollow stroke with nothing inside.
                 stroke_geometry(
                     &mut vertices,
@@ -173,7 +173,7 @@ pub fn build_sprite_calls_into(
                 );
             } else if a < 1.0 {
                 // A translucent fill cannot hide an outer rect drawn under it,
-                // which would read as a panel in the border colour rather than
+                // which would read as a panel in the border color rather than
                 // as the world showing through. The fill takes the whole rect
                 // and the stroke is a hollow ring laid over its edge.
                 rect_geometry(&mut vertices, &mut indices, [x0, y0, x1, y1], radius, a, v);
@@ -188,8 +188,8 @@ pub fn build_sprite_calls_into(
                 );
             } else {
                 // Border stroke under an opaque fill: an outer rounded rect in
-                // the border colour, with the fill inset by the stroke width
-                // drawn on top so a ring of the border colour is left showing.
+                // the border color, with the fill inset by the stroke width
+                // drawn on top so a ring of the border color is left showing.
                 rect_geometry(
                     &mut vertices,
                     &mut indices,
@@ -521,7 +521,7 @@ mod tests {
             &no_layers(),
         );
         assert_eq!(calls.len(), 1, "the border ring draws");
-        // Four edge strips, every vertex in the border colour at full alpha:
+        // Four edge strips, every vertex in the border color at full alpha:
         // nothing is drawn inside the ring, so the object shows through.
         let verts = &calls[0].vertices;
         assert_eq!(verts.len(), 16);
@@ -558,7 +558,7 @@ mod tests {
 
     // A translucent panel is a wash over whatever is behind it, so nothing may
     // be drawn under its fill: the stroke is a hollow ring, not a slab of the
-    // border colour with the fill laid over it.
+    // border color with the fill laid over it.
     #[test]
     fn a_translucent_fill_is_not_backed_by_its_border() {
         let mut panel = sprite(0.0, 0.0, 100.0, 50.0, [0.1, 0.1, 0.12, 0.5]);
@@ -738,14 +738,14 @@ mod tests {
         );
         assert_eq!(calls.len(), 1);
         let vs = &calls[0].vertices;
-        // Both the border-coloured outer layer and the tinted fill are present.
+        // Both the border-colored outer layer and the tinted fill are present.
         assert!(
             vs.iter().any(|v| v.color == [0.8, 0.4, 0.2]),
-            "border colour present"
+            "border color present"
         );
         assert!(
             vs.iter().any(|v| v.color == [0.1, 0.2, 0.3]),
-            "fill colour present"
+            "fill color present"
         );
         // The border reaches the authored outer edge; the tinted fill is inset
         // by the stroke width on every side.
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn zero_border_stays_a_single_layer() {
         let mut s = sprite(0.0, 0.0, 100.0, 100.0, [0.2, 0.3, 0.4, 1.0]);
-        // A colour but no width draws no border (just the fill quad).
+        // A color but no width draws no border (just the fill quad).
         s.border_width = 0.0;
         s.border_color = [1.0, 0.0, 0.0, 1.0];
         let calls = build_sprite_calls(

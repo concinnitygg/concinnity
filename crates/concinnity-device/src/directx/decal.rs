@@ -70,7 +70,7 @@ const CUBE_VERTS: [f32; 24] = [
 ];
 
 // 36 indices forming 12 triangles wound CCW outward. Matches the Metal
-// index list so the rasterised cube exactly mirrors the reference.
+// index list so the rasterized cube exactly mirrors the reference.
 const CUBE_INDICES: [u16; 36] = [
     // -Z face                +Z face
     0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, // -Y                     +Y
@@ -229,7 +229,7 @@ fn create_decal_pso(
             // Cull front faces: the camera may be inside a decal box. With
             // back-face culling on (the default) entering the volume would
             // make the unit cube disappear; culling the front face keeps the
-            // back faces rasterised in both cases.
+            // back faces rasterized in both cases.
             CullMode: D3D12_CULL_MODE_FRONT,
             FrontCounterClockwise: true.into(),
             DepthClipEnable: false.into(),
@@ -455,7 +455,7 @@ impl DxContext {
     // and the SSR resolve so a decal is reflected by SSR and tracked by
     // TAA's history buffer like the rest of the scene.
     //
-    // `vp` is the same jittered view-projection the main pass rasterised
+    // `vp` is the same jittered view-projection the main pass rasterized
     // with; the inverse drives the world-space reconstruction in the
     // fragment shader.
     pub(in crate::directx) fn encode_decals(

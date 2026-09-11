@@ -54,7 +54,7 @@ enum Reason {
     // A frame-path transition on a resource the graph *does* model, whose encoder
     // still owns it because the executor's barrier registry does not resolve it
     // yet. Each entry disappears as its resource joins the registry; a table with
-    // no `Inline` rows means every modelled resource is graph-derived.
+    // no `Inline` rows means every modeled resource is graph-derived.
     Inline,
     // A Vulkan render pass's attachment layout declaration. These are frame-path
     // transitions the driver performs at pass boundaries rather than calls the
@@ -154,7 +154,7 @@ const AUDITS: &[BackendAudit] = &[
             // private snapshot and sample that, because a fragment cannot read
             // the attachment it is blending into. The pair opens the copy and
             // closes it, restoring the scene image to the layout the render
-            // pass's colour LOAD declares -- so no net state crosses the node
+            // pass's color LOAD declares -- so no net state crosses the node
             // boundary and there is no graph edge to derive it from. The
             // snapshot itself is not a graph resource.
             (
@@ -164,7 +164,7 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::IntraPass,
             ),
             ("raymarch.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
-            ("main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
+            ("draw/main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
             (
                 "post/upscale/mod.rs",
                 "cmd_pipeline_barrier",
@@ -288,11 +288,28 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::IntraPass,
             ),
             ("allocator.rs", ".ResourceBarrier(", 1, Reason::Upload),
-            ("resources.rs", ".ResourceBarrier(", 5, Reason::Upload),
+            (
+                "resources/geometry.rs",
+                ".ResourceBarrier(",
+                2,
+                Reason::Upload,
+            ),
+            (
+                "resources/skinning.rs",
+                ".ResourceBarrier(",
+                1,
+                Reason::Upload,
+            ),
+            (
+                "resources/streaming.rs",
+                ".ResourceBarrier(",
+                2,
+                Reason::Upload,
+            ),
             ("texture.rs", ".ResourceBarrier(", 6, Reason::Upload),
             ("transient_pool.rs", ".ResourceBarrier(", 2, Reason::Upload),
             (
-                "geometry_rebuild.rs",
+                "resources/geometry_rebuild.rs",
                 ".ResourceBarrier(",
                 6,
                 Reason::OutOfFrame,

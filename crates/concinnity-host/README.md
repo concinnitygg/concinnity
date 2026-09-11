@@ -10,6 +10,3 @@ Two charters that share nothing but this crate:
 
 They stay separate all the way down: nothing in `store` reaches into
 `thread`, and nothing in `thread` names a path.
-
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.

@@ -1,6 +1,6 @@
 //! Compiles a ColorLut component's args into the binary payload the renderer
-//! uploads as a 3D colour-grading LUT. The runtime samples this LUT in the
-//! composite (post-process) pass with the display-referred sRGB colour as the
+//! uploads as a 3D color-grading LUT. The runtime samples this LUT in the
+//! composite (post-process) pass with the display-referred sRGB color as the
 //! texture coordinate, blending the graded result by `PostProcessConfig`'s
 //! `lut_strength`.
 //!
@@ -60,7 +60,7 @@ pub fn classify_source(source: &str) -> Result<LutFormat, String> {
 }
 
 /// Validate a LUT edge length against the accepted range. Shared by the
-/// runtime [`deserialise`], the `.cube` parser, and the build crate's PNG-strip
+/// runtime [`deserialize`], the `.cube` parser, and the build crate's PNG-strip
 /// parser so all three reject the same out-of-range sizes.
 pub fn validate_size(size: u32) -> Result<(), String> {
     if !(MIN_LUT_SIZE..=MAX_LUT_SIZE).contains(&size) {
@@ -136,12 +136,12 @@ pub fn parse_cube(text: &str) -> Result<(u32, Vec<u8>), String> {
 // The `.png` slice-strip decode (`parse_png_strip` / `load_png_rgba8`) and the
 // file-reading `decode_source` live in `concinnity_cook::compile::color_lut`; this
 // module keeps the no-dependency `.cube` text parse, the format classifier, the
-// payload (de)serialisers, and the shared size validator.
+// payload (de)serializers, and the shared size validator.
 
-// (de)serialisation
+// (de)serialization
 
 /// Pack a cube LUT of edge `size` into its blob payload.
-pub fn serialise(size: u32, data: &[u8]) -> Vec<u8> {
+pub fn serialize(size: u32, data: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(LUT_PAYLOAD_HEADER_BYTES + data.len());
     buf.extend_from_slice(&LUT_PAYLOAD_MAGIC.to_le_bytes());
     buf.extend_from_slice(&size.to_le_bytes());
@@ -150,10 +150,10 @@ pub fn serialise(size: u32, data: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// Deserialise a LUT payload back into `(size, RGBA8 bytes)`. The byte slice
+/// Deserialize a LUT payload back into `(size, RGBA8 bytes)`. The byte slice
 /// is borrowed from the input. Called by the Metal, Vulkan, and DirectX
 /// backends at upload time.
-pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
+pub fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     let mut r = ByteReader::open_payload(
         bytes,
         LUT_PAYLOAD_MAGIC,
@@ -252,19 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn payload_round_trip_via_deserialise() {
+    fn payload_round_trip_via_deserialize() {
         let (size, data) = parse_cube(&identity_cube(3)).expect("parse");
-        let blob = serialise(size, &data);
-        let (got_size, got) = deserialise(&blob).expect("deserialise");
+        let blob = serialize(size, &data);
+        let (got_size, got) = deserialize(&blob).expect("deserialize");
         assert_eq!(got_size, 3);
         assert_eq!(got, data.as_slice());
     }
 
     #[test]
-    fn deserialise_rejects_bad_magic() {
-        let mut blob = serialise(2, &[0u8; 2 * 2 * 2 * 4]);
+    fn deserialize_rejects_bad_magic() {
+        let mut blob = serialize(2, &[0u8; 2 * 2 * 2 * 4]);
         blob[0] ^= 0xff;
-        assert!(deserialise(&blob).unwrap_err().contains("magic"));
+        assert!(deserialize(&blob).unwrap_err().contains("magic"));
     }
 
     // A 1D LUT is a different thing entirely, so it is named as unsupported
@@ -277,16 +277,16 @@ mod tests {
     }
 
     // The payload names its pixel format, and the backends only upload RGBA8,
-    // so anything else is refused at deserialise rather than uploaded as the
+    // so anything else is refused at deserialize rather than uploaded as the
     // wrong layout.
     #[test]
-    fn deserialise_rejects_an_unknown_pixel_format() {
+    fn deserialize_rejects_an_unknown_pixel_format() {
         let (size, data) = parse_cube(&identity_cube(2)).expect("the identity cube parses");
-        let mut bytes = serialise(size, &data);
+        let mut bytes = serialize(size, &data);
         // The format id is the third word of the header.
         bytes[8..12].copy_from_slice(&7u32.to_le_bytes());
 
-        let err = deserialise(&bytes).expect_err("an unknown format is refused");
+        let err = deserialize(&bytes).expect_err("an unknown format is refused");
         assert!(err.contains("format_id 7"), "{err}");
         assert!(err.contains("RGBA8"), "{err}");
     }
@@ -294,12 +294,12 @@ mod tests {
     // A truncated payload names how many bytes the declared size needs against
     // what arrived, so a short read is diagnosable rather than a bare failure.
     #[test]
-    fn deserialise_rejects_a_payload_too_short_for_its_declared_size() {
+    fn deserialize_rejects_a_payload_too_short_for_its_declared_size() {
         let (size, data) = parse_cube(&identity_cube(2)).expect("the identity cube parses");
-        let full = serialise(size, &data);
+        let full = serialize(size, &data);
         let truncated = &full[..full.len() - 4];
 
-        let err = deserialise(truncated).expect_err("a short payload is refused");
+        let err = deserialize(truncated).expect_err("a short payload is refused");
         assert!(err.contains("too short"), "{err}");
         assert!(err.contains(&format!("size {size}")), "{err}");
     }

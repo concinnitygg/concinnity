@@ -34,9 +34,9 @@ pub(super) struct DeviceAndWindow {
     // expose the v3 interface (very old WDDM 1.x drivers); the HUD then reads
     // `VRAM 0 MB` and the rest of the overlay still works.
     pub adapter: Option<IDXGIAdapter3>,
-    // Resolved swapchain colour-output mode. When `Hdr`, the swapchain was
+    // Resolved swapchain color-output mode. When `Hdr`, the swapchain was
     // created in `RGBA16Float` and `SetColorSpace1` was called with the
-    // matching colour space: scRGB linear
+    // matching color space: scRGB linear
     // (`DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`) for
     // `HdrEncoding::ExtendedLinear`, HDR10 PQ
     // (`DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`) for `HdrEncoding::Pq`.
@@ -201,9 +201,9 @@ pub(super) fn setup(
 
     // Swapchain
     // SDR: BGRA8Unorm (the historical default). HDR: RGBA16Float so the
-    // compositor receives linear extended-range floats. The scRGB colour space
+    // compositor receives linear extended-range floats. The scRGB color space
     // is set via `SetColorSpace1` after the cast to `IDXGISwapChain3` below;
-    // CreateSwapChain itself does not take a colour-space parameter.
+    // CreateSwapChain itself does not take a color-space parameter.
     let swapchain_format = if hdr_mode.is_hdr() {
         HDR_SWAPCHAIN_FORMAT
     } else {
@@ -262,8 +262,8 @@ pub(super) fn setup(
         .cast()
         .map_err(|e| format!("SwapChain3 cast: {e}"))?;
 
-    // On the HDR path, tell DXGI which colour space the swapchain pixels
-    // carry. Two flavours, picked by `hdr_mode.encoding`:
+    // On the HDR path, tell DXGI which color space the swapchain pixels
+    // carry. Two flavors, picked by `hdr_mode.encoding`:
     //
     //   - `ExtendedLinear` → `DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`
     //     (scRGB linear). The compositor maps `1.0` to SDR reference white
@@ -304,7 +304,7 @@ pub(super) fn setup(
             (primary_support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32) != 0;
         let mut applied = false;
         if primary_ok {
-            // SAFETY: the swapchain is live and the colour space is a plain enum value.
+            // SAFETY: the swapchain is live and the color space is a plain enum value.
             if let Err(e) = unsafe { swapchain.SetColorSpace1(primary) } {
                 tracing::warn!(
                     "HDR display enabled but SetColorSpace1({primary_label}) failed ({e}); \
@@ -329,11 +329,11 @@ pub(super) fn setup(
                      HDR10 PQ support (CheckColorSpaceSupport flags = {primary_support:#x}); \
                      falling back to scRGB linear extended-range output"
                 );
-                // SAFETY: the swapchain is live and the colour space is a plain enum value.
+                // SAFETY: the swapchain is live and the color space is a plain enum value.
                 if let Err(e) = unsafe { swapchain.SetColorSpace1(HDR_LINEAR_COLOR_SPACE) } {
                     tracing::warn!(
                         "scRGB linear fallback also failed ({e}); leaving the swapchain at \
-                         its default colour space"
+                         its default color space"
                     );
                 } else {
                     // Rewrite the encoding so the caller's
@@ -352,14 +352,14 @@ pub(super) fn setup(
                     "HDR display + hdr_pq:true requested but neither HDR10 PQ \
                      (flags={primary_support:#x}) nor scRGB linear (flags={fallback_support:#x}) \
                      are advertised by this swapchain; leaving the swapchain at its default \
-                     colour space"
+                     color space"
                 );
             }
         } else if !applied {
             tracing::warn!(
                 "HDR display enabled but the swapchain does not advertise {primary_label} \
                  support (CheckColorSpaceSupport flags = {primary_support:#x}); leaving the \
-                 swapchain at its default colour space"
+                 swapchain at its default color space"
             );
         }
     }
@@ -388,19 +388,19 @@ pub(super) fn setup(
 // precision; an 8-bit format cannot represent the extended range.
 const HDR_SWAPCHAIN_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-// DXGI colour space for scRGB linear: Rec.709 primaries, gamma 1.0 (linear),
+// DXGI color space for scRGB linear: Rec.709 primaries, gamma 1.0 (linear),
 // extended range. `1.0` is SDR reference white; values above that map to the
 // panel's HDR headroom. The standard DXGI signal for "linear HDR", supported
 // on every recent driver alongside the older HDR10 (PQ) path.
 const HDR_LINEAR_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
 
-// DXGI colour space for HDR10 PQ: Rec.2020 primaries, SMPTE ST 2084 EOTF
+// DXGI color space for HDR10 PQ: Rec.2020 primaries, SMPTE ST 2084 EOTF
 // (PQ), absolute-luminance signal capped at 10,000 cd/m². The shader emits
 // PQ-encoded values directly; the panel decodes via the PQ EOTF. SDR
 // reference white maps to 203 nits per BT.2408.
 const HDR_PQ_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
 
-// Largest extended-range colour-component multiplier any output on this
+// Largest extended-range color-component multiplier any output on this
 // adapter reports. Returns `1.0` on an SDR-only adapter (or when no output
 // is available, a head-less unit test) so the resolver stays on the SDR
 // path. An HDR output's `MaxLuminance` is in cd/m²; SDR reference white is
@@ -426,7 +426,7 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
             Ok(d) => d,
             Err(_) => continue,
         };
-        // The colour-space field is the canonical "HDR available" signal:
+        // The color-space field is the canonical "HDR available" signal:
         // PQ here means the output is wired to an HDR-capable display.
         let hdr_advertised = desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
         if !hdr_advertised {
@@ -499,8 +499,8 @@ mod tests {
     #[test]
     fn a_multisample_request_clamps_to_adapter_support() {
         assert_eq!(resolve_sample_count(4, 4), 4);
-        // An adapter that only reaches 2x still honours a 4x request at 2x,
-        // the behaviour `query_msaa_samples` had on its own.
+        // An adapter that only reaches 2x still honors a 4x request at 2x,
+        // the behavior `query_msaa_samples` had on its own.
         assert_eq!(resolve_sample_count(2, 4), 2);
         assert_eq!(resolve_sample_count(1, 4), 1);
     }

@@ -1262,7 +1262,7 @@ mod tests {
     // Success-path handler tests. Each handler blocks on a reply channel the
     // per-frame drive normally fulfils; here a worker thread runs the handler
     // while the test drains the process-global queue and answers in its place.
-    // Serialised behind the shared test lock because the queue is
+    // Serialized behind the shared test lock because the queue is
     // process-global; any unrelated command drained alongside is re-enqueued
     // untouched.
 

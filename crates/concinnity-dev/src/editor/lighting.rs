@@ -96,7 +96,7 @@ pub(crate) fn section_base(s: usize) -> usize {
 
 // The `FormField`s backing section `s` for an entry's args (the type defaults
 // when adding), in the section's declared order. Derived through the same
-// `fields_for_with` the edit form uses, so kinds / current values / colour
+// `fields_for_with` the edit form uses, so kinds / current values / color
 // detection all match; a curated path missing from the derivation (a schema
 // change) is simply dropped from the panel rather than erroring.
 pub(crate) fn section_fields(s: &Section, args: Option<&Map<String, Value>>) -> Vec<FormField> {
@@ -156,7 +156,7 @@ mod tests {
     }
 
     // The derived kinds are what the panel renders: text for numbers, a checkbox
-    // for the fog toggle, colour fields flagged for a swatch.
+    // for the fog toggle, color fields flagged for a swatch.
     #[test]
     fn derived_kinds_match_the_panel_controls() {
         use super::super::form::FieldKind;

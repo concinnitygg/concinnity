@@ -1,5 +1,5 @@
 // Body orientation. Quaternions rather than matrices because integrating an
-// angular velocity and renormalising afterwards is exact and cheap here, and
+// angular velocity and renormalizing afterwards is exact and cheap here, and
 // because the pose crossing the crate boundary is already a quaternion.
 //
 // The Euler conversions use the engine's YXZ order in degrees, the same order
@@ -115,7 +115,7 @@ impl Quat {
     }
 
     /// Advance an orientation by `angular_velocity` (radians per second) over
-    /// `dt`, renormalising so repeated steps do not drift off the unit sphere.
+    /// `dt`, renormalizing so repeated steps do not drift off the unit sphere.
     pub(crate) fn integrate(self, angular_velocity: Vec3, dt: f32) -> Quat {
         let w = Quat {
             x: angular_velocity.x,
@@ -196,10 +196,10 @@ mod tests {
         assert!(close(yaw.mul(yaw.conjugate()).rotate(Vec3::X), Vec3::X));
     }
 
-    // Integration must both turn the body and keep the quaternion normalised:
+    // Integration must both turn the body and keep the quaternion normalized:
     // a thousand steps of spin should still be a unit quaternion.
     #[test]
-    fn integrating_a_spin_stays_normalised() {
+    fn integrating_a_spin_stays_normalized() {
         let mut q = Quat::IDENTITY;
         let spin = vec3(0.0, core::f32::consts::TAU, 0.0);
         for _ in 0..1000 {
@@ -233,7 +233,7 @@ mod tests {
     // cannot be scaled back to one, so it reads as the identity instead of
     // dividing by zero.
     #[test]
-    fn normalising_a_zero_length_rotation_yields_the_identity() {
+    fn normalizing_a_zero_length_rotation_yields_the_identity() {
         let zero = Quat {
             x: 0.0,
             y: 0.0,

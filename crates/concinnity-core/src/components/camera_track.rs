@@ -120,7 +120,7 @@ pub struct CameraTrackArgs {
     pub travel: Vec<CameraTravel>,
     /// Where the camera looks, leg by leg. Played against the same clock as
     /// `travel` and independent of it, so the camera can turn one way while
-    /// travelling another.
+    /// traveling another.
     pub turn: Vec<CameraTurn>,
 }
 
@@ -165,7 +165,7 @@ pub struct CameraTurnKey {
 ///
 /// The track has two independent lists played against one clock. `travel` is
 /// where the camera goes and `turn` is where it looks, so a leg of each runs
-/// at the same time and the camera can turn toward one thing while travelling
+/// at the same time and the camera can turn toward one thing while traveling
 /// toward another. Each list runs from the camera's authored pose; when one
 /// runs out the camera holds that list's last value while the other finishes.
 ///
@@ -227,7 +227,7 @@ impl CameraTrack {
             end_seconds += travel_seconds(leg);
             offset = vec3::add(
                 offset,
-                vec3::scale(vec3::vec3_normalise(leg.direction), leg.distance),
+                vec3::scale(vec3::vec3_normalize(leg.direction), leg.distance),
             );
             travel.push(CameraTravelKey {
                 offset,
@@ -407,7 +407,7 @@ mod tests {
         );
         assert_eq!(t.segments, ["shadows", "rays"]);
         assert_eq!(t.travel[0].segment, Some(0));
-        // An unlabelled leg stays in the segment the one before it opened.
+        // An unlabeled leg stays in the segment the one before it opened.
         assert_eq!(t.travel[1].segment, Some(0));
         assert_eq!(t.travel[2].segment, Some(1));
         // A repeated label re-enters its segment rather than declaring another.

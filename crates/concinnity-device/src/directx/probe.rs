@@ -17,7 +17,7 @@
 //
 // DirectX simplification vs Metal: a per-face fence VALUE gives ordered GPU
 // completion for free (the queue is FIFO), so there is no completion handler / atomic
-// -- a face is done when `frame_sync.fence` reaches the value signalled after it. The
+// -- a face is done when `frame_sync.fence` reaches the value signaled after it. The
 // bake never calls `wait_idle` (that would reintroduce a multi-hundred-ms freeze);
 // the convolution is deferred until the fence reaches the last face's value.
 //
@@ -74,7 +74,7 @@ pub(in crate::directx) struct ProbeCube {
 }
 
 // The GPU resources + state of one in-flight capture. The six faces share one
-// (MSAA) colour + depth target reused across frames; each face has its own view
+// (MSAA) color + depth target reused across frames; each face has its own view
 // CBV + command allocator/list (held until the convolution starts, so the fence
 // guarantees their GPU work has retired before they drop).
 pub(in crate::directx) struct RenderingBake {
@@ -111,7 +111,7 @@ pub(in crate::directx) struct RenderingBake {
     // starts (the fence proves their GPU work retired before they drop).
     cmd_allocs: Vec<ID3D12CommandAllocator>,
     cmd_lists: Vec<ID3D12GraphicsCommandList>,
-    // Fence value signalled after the LAST face; the convolution waits for the
+    // Fence value signaled after the LAST face; the convolution waits for the
     // shared `frame_sync.fence` to reach it.
     last_fence_value: u64,
 }
@@ -130,11 +130,11 @@ pub(in crate::directx) struct PrefilteringBake {
     cursor: u32,
     cmd_allocs: Vec<ID3D12CommandAllocator>,
     cmd_lists: Vec<ID3D12GraphicsCommandList>,
-    // Fence value signalled after the LAST dispatch submitted so far.
+    // Fence value signaled after the LAST dispatch submitted so far.
     last_fence_value: u64,
 }
 
-// Colour + depth attachments for a probe-face / planar mirror capture.
+// Color + depth attachments for a probe-face / planar mirror capture.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct FaceTargets {
     pub rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -451,7 +451,7 @@ impl DxContext {
         let sample_count = self.hdr.msaa_samples.max(1);
         let size = PROBE_FACE_SIZE;
 
-        // One MSAA (or single-sample) colour + depth pair, reused across the six faces.
+        // One MSAA (or single-sample) color + depth pair, reused across the six faces.
         let rtv_heap = create_rtv_heap(device)?;
         let dsv_heap = create_dsv_heap(device)?;
         // SAFETY: a property query on a live descriptor heap; it only reads.
@@ -686,8 +686,8 @@ impl DxContext {
         Ok(())
     }
 
-    // Resolve (when MSAA) + copy the just-rendered face colour into slice `face` of
-    // the capture cube. The colour rests in RENDER_TARGET and is restored to it for
+    // Resolve (when MSAA) + copy the just-rendered face color into slice `face` of
+    // the capture cube. The color rests in RENDER_TARGET and is restored to it for
     // the next face; the resolve target rests in PIXEL_SHADER_RESOURCE. Face order is
     // the hardware cube order (`gfx::cubemap`), so slice `face` is the face a sampler
     // finds looking that way.
@@ -863,7 +863,7 @@ impl DxContext {
     }
 
     // Record and submit one convolution step on a fresh allocator + list, registering
-    // both on the bake so a later failure still reclaims them, and signalling a fence
+    // both on the bake so a later failure still reclaims them, and signaling a fence
     // value the install waits for. The shader-visible descriptor heaps are bound
     // first: every dispatch addresses its cubes through the SRV heap.
     fn record_prefilter_step(
@@ -1122,7 +1122,7 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> Result<(PooledBuf
     Ok((cbv, gva))
 }
 
-// A one-entry non-shader-visible RTV heap for a probe face colour target.
+// A one-entry non-shader-visible RTV heap for a probe face color target.
 fn create_rtv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
@@ -1149,7 +1149,7 @@ fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
 }
 
 // Create a probe face depth target (D32_FLOAT, matching the main pass's DSV format
-// + the face colour's sample count) and write its DSV. Created in DEPTH_WRITE and
+// + the face color's sample count) and write its DSV. Created in DEPTH_WRITE and
 // left there (only the bake uses it; it is cleared every face).
 fn create_bake_depth(
     device: &ID3D12Device,

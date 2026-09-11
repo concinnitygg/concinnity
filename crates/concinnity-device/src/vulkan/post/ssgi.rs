@@ -6,7 +6,7 @@
 // passes on the hdr_resolve RMW chain after the main pass:
 //
 //   * gather:    per pixel, a cone of cosine-weighted hemisphere rays marched
-//                against the G-buffer, accumulating the lit scene colour at
+//                against the G-buffer, accumulating the lit scene color at
 //                each on-screen hit into an off-screen `gi` target.
 //   * composite: a depth-aware blur of that noisy `gi` target, additively
 //                blended (ONE / ONE) into `hdr_resolve` so the near-field
@@ -100,9 +100,9 @@ pub(in crate::vulkan) struct SsgiResources {
 }
 
 // Broad SUBPASS_EXTERNAL dependencies shared by both SSGI render passes. The
-// `dep_in` synchronises every prior colour write *and* shader read (the main
+// `dep_in` synchronizes every prior color write *and* shader read (the main
 // pass's hdr_resolve, the SSR pre-pass's G-buffer, the gather's gi) against this
-// pass's reads + writes; the `dep_out` makes this pass's colour write available
+// pass's reads + writes; the `dep_out` makes this pass's color write available
 // to the next pass's fragment sample. Same shape as the SSR resolve + decal
 // render-pass dependencies that already run clean under the validation layer.
 fn ssgi_external_deps() -> [vk::SubpassDependency; 2] {
@@ -133,7 +133,7 @@ fn ssgi_external_deps() -> [vk::SubpassDependency; 2] {
     [dep_in, dep_out]
 }
 
-// Gather render pass: one HDR-format colour attachment (`gi`). The gather
+// Gather render pass: one HDR-format color attachment (`gi`). The gather
 // overwrites every pixel so `DONT_CARE` is safe on load; ends shader-readable
 // for the composite to sample.
 fn create_gather_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
@@ -192,7 +192,7 @@ fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, St
         .map_err(|e| format!("SSGI composite render pass: {e}"))
 }
 
-// Allocate a single-format colour render target usable as both attachment and
+// Allocate a single-format color render target usable as both attachment and
 // sampled texture. Mirrors the SSR `create_color_target`.
 fn create_gi_target(
     alloc: &DeviceAllocator,
@@ -229,20 +229,8 @@ fn create_ssgi_pipeline(
     frag_spv: &[u8],
     additive: bool,
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -739,7 +727,7 @@ impl FullscreenPass for SsgiFullscreenPass<'_> {
         let cmd = *cmd;
         let device = &self.ctx.device;
         // SAFETY: `SsgiParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no padding
-        // and all 32 of its bytes are initialised; the slice borrows it and does not outlive it.
+        // and all 32 of its bytes are initialized; the slice borrows it and does not outlive it.
         let push = unsafe {
             std::slice::from_raw_parts(
                 self.params as *const SsgiParams as *const u8,
@@ -781,7 +769,7 @@ mod tests {
     // `ssgi_params_layout_matches_shaders` in gfx::render_types.
     #[test]
     fn ssgi_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         super::compile_ssgi_shaders(false).expect("ssgi shaders compile");

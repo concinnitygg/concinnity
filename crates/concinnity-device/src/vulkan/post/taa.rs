@@ -84,7 +84,7 @@ fn post_extent(extent: vk::Extent2D) -> PostExtent {
 
 impl VkContext {
     // Encode the TAA resolve pass: one fullscreen-triangle draw blending this
-    // frame's scene with the reprojected, neighbourhood-clipped history into
+    // frame's scene with the reprojected, neighborhood-clipped history into
     // frame slot `frame_idx`'s accumulation image. Runs before bloom, and only
     // when TAA is on.
     pub(in crate::vulkan) fn encode_taa(&self, cmd: vk::CommandBuffer, frame_idx: usize) {

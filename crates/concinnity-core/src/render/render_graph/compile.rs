@@ -36,7 +36,7 @@ use super::types::{
 };
 
 // Compiler error. Returned by [`GraphBuilder::compile`]; the call site
-// typically panics (these are programmer errors, not runtime conditions).
+// typically panics (these are programr errors, not runtime conditions).
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphError {
     // No pass declared `presents()`. Every graph must terminate at the
@@ -168,7 +168,7 @@ pub struct CompiledResource {
     pub(super) touches: Vec<usize>,
     /// Texture shape (format / size / sample count / layers), `None` for a
     /// buffer. The aliasing planner uses it to size each transient resource;
-    /// the backend will use it to allocate the realised resource.
+    /// the backend will use it to allocate the realized resource.
     pub tex_desc: Option<TextureDesc>,
     // Buffer shape (size / usage), `None` for a texture. Carried so a backend can
     // derive the resource's barrier class from its declared usage.
@@ -438,11 +438,11 @@ impl GraphBuilder {
             row.dedup();
         }
 
-        // Step 5: realise compiled passes in execution order
+        // Step 5: realize compiled passes in execution order
         let mut compiled_passes: Vec<CompiledPass> = order
             .iter()
             .map(|&orig_idx| {
-                // `order` is a permutation, so each pass is realised exactly
+                // `order` is a permutation, so each pass is realized exactly
                 // once and nothing reads the declaration after this.
                 let decl = &mut passes[orig_idx];
                 CompiledPass {
@@ -534,7 +534,7 @@ impl GraphBuilder {
 // compute consumer and a fragment consumer needs ONE producer barrier that
 // makes the write visible to both stages, so the deriver must see the whole run
 // before emitting that first barrier. A per-consumer read-to-read barrier would
-// not carry the producing write and so would not synchronise the second stage.
+// not carry the producing write and so would not synchronize the second stage.
 fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
     // Per-pass effective access to one resource: a write (which wins over any
     // read the same pass declares) or a read in the pass's shader stage.
@@ -939,7 +939,7 @@ mod tests {
         let mut b = GraphBuilder::new();
         let t = b.create_texture("t", tex());
 
-        // Skip the write; directly synthesise a handle at version 1
+        // Skip the write; directly synthesize a handle at version 1
         // (which write_texture would have returned).
         let phantom = super::super::types::TextureHandle {
             resource: t.resource,

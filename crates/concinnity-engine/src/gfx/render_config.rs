@@ -9,10 +9,10 @@
 
 use crate::components::{PostProcessConfig, PostProcessResolve, ShadowUpdate};
 use crate::config::GraphicsSettings;
-use crate::gfx::graphics_system::{clamp_quality_cycle, set_quality_toggle};
 use crate::gfx::quality_preset::{QualityCeiling, clamp_shadow_update};
 use crate::gfx::render_types::PostProcessTunables;
 use crate::gfx::settings::slider_apply_value;
+use crate::gfx::system::{clamp_quality_cycle, set_quality_toggle};
 
 /// Shadow map resolution. Restart-required: the cascade array is sized once at
 /// backend init.

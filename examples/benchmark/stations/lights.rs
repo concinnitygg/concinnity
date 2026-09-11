@@ -23,7 +23,7 @@ const PILLAR_RADIUS: f32 = 0.55;
 const PILLAR_HEIGHT: f32 = 9.0;
 
 // The light field: a grid of point lights, each reaching only a little past its
-// neighbours so a cluster's list stays short and the count is what costs.
+// neighbors so a cluster's list stays short and the count is what costs.
 const LIGHTS: [usize; 3] = [5, 3, 4];
 const LIGHT_SPACING: [f32; 3] = [5.0, 3.6, 5.6];
 const LIGHT_BASE_HEIGHT: f32 = 2.6;
@@ -121,7 +121,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
                             LIGHT_BASE_HEIGHT + y as f32 * LIGHT_SPACING[1],
                             center[2] + spread(z, LIGHTS[2], LIGHT_SPACING[2]),
                         ],
-                        color: bulb_colour(index),
+                        color: bulb_color(index),
                         intensity: LIGHT_INTENSITY,
                         range: LIGHT_RANGE,
                     },
@@ -181,9 +181,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     );
 }
 
-// A repeating spread of warm and cool bulbs, so neighbouring clusters never
+// A repeating spread of warm and cool bulbs, so neighboring clusters never
 // hold identical lists.
-fn bulb_colour(index: usize) -> [f32; 3] {
+fn bulb_color(index: usize) -> [f32; 3] {
     const WHEEL: [[f32; 3]; 5] = [
         [1.00, 0.62, 0.36],
         [0.42, 0.72, 1.00],
@@ -208,10 +208,10 @@ mod tests {
         assert_eq!(point_light_count(), 60);
     }
 
-    // Neighbouring lights have to overlap, or the clusters between them hold
+    // Neighboring lights have to overlap, or the clusters between them hold
     // nothing and the culling path is never asked a hard question.
     #[test]
-    fn the_bulbs_reach_past_their_neighbours() {
+    fn the_bulbs_reach_past_their_neighbors() {
         for step in LIGHT_SPACING {
             assert!(LIGHT_RANGE > step, "a bulb stops short of the next one");
         }

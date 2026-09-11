@@ -513,11 +513,11 @@ impl MtlContext {
         };
 
         // IBL: either upload the supplied EnvironmentMap payload or build a
-        // 1x1 grey fallback cube pair so texture(3) / texture(4) are always
+        // 1x1 gray fallback cube pair so texture(3) / texture(4) are always
         // bound. The fragment shader uses `prefilter_mip_count == 0` to
         // detect the fallback and skip IBL math.
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::bake::environment_map::deserialise(bytes)
+            let view = crate::bake::environment_map::deserialize(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
                 &allocator,
@@ -534,11 +534,11 @@ impl MtlContext {
             }
         };
 
-        // Colour-grading LUT: upload the declared ColorLut payload, or build a
+        // Color-grading LUT: upload the declared ColorLut payload, or build a
         // 2x2x2 identity LUT so the composite pass always binds a valid 3D
         // texture. With the identity LUT the grade is a no-op at any strength.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::bake::color_lut::deserialise(bytes)
+            let (size, data) = crate::bake::color_lut::deserialize(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {}", e))?;
             upload_color_lut(&allocator, size, data)?
         } else {
@@ -595,7 +595,7 @@ impl MtlContext {
         // Window + MTKView + initial drawable sizing. A geometry-less world
         // is clamped to 1x1 HDR/bloom/effect targets so the composite pass
         // alone runs at the full drawable size (it samples the 1x1 uniformly).
-        // Window setup also resolves the swapchain colour-output mode
+        // Window setup also resolves the swapchain color-output mode
         // (`HdrOutputMode::Sdr` vs `Hdr`); the post + text pipelines that
         // target the drawable need to know that mode to pick BGRA8Unorm vs
         // RGBA16Float, so this hop happens before pipeline construction.
@@ -685,7 +685,7 @@ impl MtlContext {
             desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
             desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
             // Clamp the R axis too -- the same sampler trilinearly filters the
-            // 3D colour LUT in the composite pass.
+            // 3D color LUT in the composite pass.
             desc.setRAddressMode(MTLSamplerAddressMode::ClampToEdge);
             device
                 .newSamplerStateWithDescriptor(&desc)
@@ -938,7 +938,7 @@ impl MtlContext {
             };
         // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
         // arg, which implies `transparent`): see-through only looks right when the
-        // space behind the glass is modelled. A material that is `transparent` but
+        // space behind the glass is modeled. A material that is `transparent` but
         // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
         // reflections) = tinted reflective glass that hides the interior. This list
         // drives the producer + the opaque-pass skip (`mesh_glass_active`) + the

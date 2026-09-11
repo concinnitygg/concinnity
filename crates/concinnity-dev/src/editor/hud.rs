@@ -190,7 +190,7 @@ pub(crate) fn hit_test(
     }
 }
 
-// Re-anchor the bar to the window width from the live viewport and colour the
+// Re-anchor the bar to the window width from the live viewport and color the
 // Save + View chips by state. Hides the entire HUD when `state.visible` is
 // false (F1). A no-op until a `FrameInput` exists (frame 0) or a zero-width
 // window.
@@ -423,7 +423,7 @@ fn centered(rect: [f32; 4]) -> [f32; 2] {
     [rect[0] + rect[2] * 0.5, rect[1] + LABEL_TOP]
 }
 
-// Position + colour + retitle a transport chip's label (the Play chip reads
+// Position + color + retitle a transport chip's label (the Play chip reads
 // "Pause" while the world runs).
 fn place_caption(world: &mut World, id: AssetId, pos: [f32; 2], content: &str, color: [f32; 3]) {
     if let Some(l) = widget::label_mut(world, id) {
@@ -438,7 +438,7 @@ fn place_caption(world: &mut World, id: AssetId, pos: [f32; 2], content: &str, c
     }
 }
 
-// Position + colour + show/hide a fixed-content label (a top-bar chip).
+// Position + color + show/hide a fixed-content label (a top-bar chip).
 fn place_label(
     world: &mut World,
     id: AssetId,
@@ -683,7 +683,7 @@ mod tests {
         );
     }
 
-    // The bar spans the window and the chips are shown, Save coloured by dirty.
+    // The bar spans the window and the chips are shown, Save colored by dirty.
     #[test]
     fn apply_layout_shows_bar_and_chips() {
         let mut world = hud_world(1024.0, (0.0, 0.0));

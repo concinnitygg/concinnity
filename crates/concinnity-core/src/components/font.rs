@@ -4,14 +4,14 @@ use crate::ecs::PayloadLocator;
 use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
-/// Rasterises a TrueType font into a glyph atlas at build time.
+/// Rasterizes a TrueType font into a glyph atlas at build time.
 ///
 /// Reference a Font by name from a [TextLabel](#textlabel). Declaring one is
 /// optional: text naming no Font draws with the engine's built-in face at 24px,
 /// and compiles no atlas at all. Declare a Font to pick the face, or to pick the
-/// size the glyphs are rasterised at.
+/// size the glyphs are rasterized at.
 ///
-/// An empty `path` rasterises that same built-in face, which is how to get it at
+/// An empty `path` rasterizes that same built-in face, which is how to get it at
 /// a different `size_px`.
 ///
 /// ```rust
@@ -30,7 +30,7 @@ pub struct Font {
     pub asset_id: AssetId,
     /// Path to the TTF file, relative to the project root.
     pub path: String,
-    /// Rasterisation size in pixels. Determines the rendered glyph height.
+    /// Rasterization size in pixels. Determines the rendered glyph height.
     pub size_px: u32,
     /// Filled by inject_locator after the build step packs the payload.
     #[serde(skip)]
@@ -53,7 +53,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_blank_font_rasterises_at_a_readable_body_size() {
+    fn a_blank_font_rasterizes_at_a_readable_body_size() {
         let f = Font::default();
         assert!(f.path.is_empty());
         assert_eq!(f.size_px, 20);

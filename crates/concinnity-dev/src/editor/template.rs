@@ -47,7 +47,7 @@ pub(crate) enum TemplatesAction {
     Consume,
 }
 
-// Where the panel sits until the user drags it: below the top bar, centred so it
+// Where the panel sits until the user drags it: below the top bar, centered so it
 // clears the Assets panel (right) and the View / Preview panels (left).
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [vw * 0.5 - TEMPLATES_W * 0.5, super::hud::body_top()]

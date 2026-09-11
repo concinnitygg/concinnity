@@ -9,7 +9,7 @@ use crate::compile::geometry::{
     SkinnedLods, compile_mesh_payload, compile_skinned_mesh_payload_with_lods,
     payload_joints_to_defs,
 };
-use concinnity_core::gfx::mesh_payload::{deserialise_skinned, deserialise_with_lods};
+use concinnity_core::gfx::mesh_payload::{deserialize_skinned, deserialize_with_lods};
 
 // LOD alternates: (switch_distance, index buffer) pairs.
 type LodAlternates = Vec<(f32, Vec<u16>)>;
@@ -26,10 +26,10 @@ type SkinnedImport = (
 /// `Vertex` / index form with normals + tangents + optional LOD alternates baked
 /// in. Used by the asset hot-reload path (`cn debug` only); production reads the
 /// compiled payload from a blob locator and goes through
-/// `deserialise_with_lods` instead.
+/// `deserialize_with_lods` instead.
 ///
 /// The caller is responsible for parsing the `.glb` (via
-/// [`crate::import::glb::parse_glb`]) so a single reload pass can amortise the
+/// [`crate::import::glb::parse_glb`]) so a single reload pass can amortize the
 /// parse across every `Mesh` that references the same file: `ABeautifulGame`
 /// alone fans 35+ Mesh assets out of one `.glb`.
 ///
@@ -54,7 +54,7 @@ pub fn decode_mesh_from_parsed_glb(
     let (vertex_data, indices) =
         crate::import::glb::import_static_glb_primitive_from_doc(doc, source, primitive_index)?;
     // Rebuild the JSON args the desugar pass would have produced, then run the
-    // existing compile + deserialise cycle. This keeps the runtime path
+    // existing compile + deserialize cycle. This keeps the runtime path
     // byte-identical to the build pass so any difference is a build bug, not a
     // reload-only divergence.
     let args = serde_json::json!({
@@ -64,7 +64,7 @@ pub fn decode_mesh_from_parsed_glb(
         "lod_distances": lod_distances,
     });
     let payload = compile_mesh_payload(&args)?;
-    deserialise_with_lods(&payload)
+    deserialize_with_lods(&payload)
 }
 
 /// A skinned mesh re-imported to its inline (authored) form: the fields the
@@ -106,10 +106,10 @@ pub fn decode_skinned_inline_from_parsed_glb(
 /// `SkinnedVertex` / index form (normals + tangents baked in) plus the imported
 /// bind-pose skeleton. Used by the asset hot-reload path (`cn debug` only);
 /// production reads the compiled payload from a blob locator and goes through
-/// `deserialise_skinned` instead.
+/// `deserialize_skinned` instead.
 ///
 /// The caller is responsible for parsing the `.glb` (via
-/// [`crate::import::glb::parse_glb`]) so a single reload pass can amortise the
+/// [`crate::import::glb::parse_glb`]) so a single reload pass can amortize the
 /// parse across every `Mesh` / `SkinnedMesh` that references the same file. The
 /// skeleton is returned in the same `SkeletonJoint` form the `SkinnedMesh`
 /// asset args carry; the reload helper checks it against the init-time joint
@@ -131,7 +131,7 @@ pub fn decode_skinned_from_parsed_glb(
             distances: &[],
         },
     )?;
-    let (verts, idxs, payload_joints) = deserialise_skinned(&payload)?;
+    let (verts, idxs, payload_joints) = deserialize_skinned(&payload)?;
     let skeleton = payload_joints_to_defs(payload_joints);
     Ok((verts, idxs, skeleton))
 }

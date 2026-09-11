@@ -63,7 +63,7 @@ resource_handles! {
     CubemapTextureHandle,
     /// Index into the runtime environment-map table.
     EnvironmentMapHandle,
-    /// Index into the runtime colour-LUT table.
+    /// Index into the runtime color-LUT table.
     ColorLutHandle,
     /// Index into the runtime skinned-mesh table.
     SkinnedMeshHandle,
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(table[MeshHandle(2).index()], "c");
     }
 
-    use crate::test_support::{NoneDeserializer, install_resolvers, len_handle_resolver};
+    use crate::test_support::{NoneDeserializer, len_handle_resolver};
 
     #[derive(serde::Deserialize)]
     struct Holder {
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn de_opt_texture_handle_resolves_a_name_through_the_seam() {
-        install_resolvers();
+        crate::test_support::install_resolvers();
         let h: Holder = serde_json::from_str("{\"tex\":\"floor\"}").unwrap();
         assert_eq!(h.tex, Some(TextureHandle(5)));
     }
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn de_opt_audio_clip_handle_reads_integers_and_resolves_names() {
-        install_resolvers();
+        crate::test_support::install_resolvers();
         // Already-resolved integer passes through; a name resolves via the seam.
         let h: AudioHolder = serde_json::from_str("{\"clip\":7}").unwrap();
         assert_eq!(h.clip, Some(AudioClipHandle(7)));
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn de_audio_clip_handle_vec_resolves_mixed_and_drops_empties() {
-        install_resolvers();
+        crate::test_support::install_resolvers();
         // A mix of integers and names; empty entries drop out.
         let h: AudioHolder = serde_json::from_str("{\"sounds\":[3,\"door\",\"\"]}").unwrap();
         assert_eq!(h.sounds, vec![AudioClipHandle(3), AudioClipHandle(4)]);
@@ -477,10 +477,10 @@ mod tests {
 
     #[test]
     fn de_opt_skinned_mesh_handle_reads_integers_and_resolves_names() {
+        crate::test_support::install_resolvers();
         // The correlation-reference seam (Animation/AnimationGraph/FollowController
         // `target`): an already-resolved integer passes through, a name resolves
         // through the installed skinned-mesh resolver, empty/null/missing are None.
-        install_resolvers();
         let h: TargetHolder = serde_json::from_str("{\"target\":3}").unwrap();
         assert_eq!(h.target, Some(SkinnedMeshHandle(3)));
         let h: TargetHolder = serde_json::from_str("{\"target\":\"hero\"}").unwrap();
@@ -506,7 +506,7 @@ mod tests {
         ($name:ident, $helper:literal, $helper_fn:path, $handle:ident, $expected:literal) => {
             #[test]
             fn $name() {
-                install_resolvers();
+                crate::test_support::install_resolvers();
 
                 #[derive(Debug, serde::Deserialize)]
                 struct Holder {
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn required_texture_handle_accepts_integers_and_names() {
-        install_resolvers();
+        crate::test_support::install_resolvers();
         let parse = |s: &str| serde_json::from_str::<StageHolder>(s).unwrap().stage;
 
         assert_eq!(parse(r#"{"stage":6}"#), TextureHandle(6));
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn audio_clip_handle_vec_resolves_owned_strings() {
-        install_resolvers();
+        crate::test_support::install_resolvers();
         // The serde_json::Value bridge hands each element over as an owned string.
         let h: AudioHolder =
             serde_json::from_value(serde_json::json!({"sounds": ["door", "unknown_x"]})).unwrap();

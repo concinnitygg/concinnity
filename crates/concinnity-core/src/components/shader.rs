@@ -62,7 +62,7 @@ pub enum ShaderStage {
 ///                     float3 color, float2 uv);
 /// ```
 ///
-/// `shade` returns the surface's linear-light colour with alpha. `od` is the
+/// `shade` returns the surface's linear-light color with alpha. `od` is the
 /// surface's material record whichever path drew it: `tint_roughness`,
 /// `emissive_metallic`, `albedo_index`, `normal_index`, `emissive_map_index`,
 /// `orm_map_index` and `bb_max_alpha_cutoff.w` are the fields a surface

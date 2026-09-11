@@ -130,7 +130,7 @@ impl JointSolver {
     /// Called wherever a pose moves and nowhere else, which is once a substep.
     /// The masses are the reason it has to happen at all: a lever that has
     /// turned since is a different mass, and an impulse solved through the old
-    /// one overshoots the row it was aimed at instead of cancelling it. A few
+    /// one overshoots the row it was aimed at instead of canceling it. A few
     /// degrees of turn per substep is enough for that overshoot to grow rather
     /// than settle, which is a joint given a speed rather than released from
     /// rest.

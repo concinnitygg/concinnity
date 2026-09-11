@@ -15,7 +15,7 @@
 //
 // Runs between the projected-decal pass and the SSR resolve so the fog wraps
 // the decal-stamped scene and SSR reflects through it; TAA history then
-// reprojects the integrated fog colour and transmittance.
+// reprojects the integrated fog color and transmittance.
 //
 // Mirrors src/metal/fog.rs.
 
@@ -267,7 +267,7 @@ fn create_fog_froxel_root_signature(device: &ID3D12Device) -> Result<ID3D12RootS
 }
 
 // PSO for the fog pass. Writes the resolved HDR target with `(scattered,
-// 1 - T)` over scene blending: the fragment emits the in-scattered colour
+// 1 - T)` over scene blending: the fragment emits the in-scattered color
 // at `1 - transmittance` alpha and the blend resolves to
 // `scene * T + scattered`. No depth attachment; the shader handles the
 // depth-based ray-length termination itself.
@@ -749,7 +749,7 @@ impl DxContext {
     // `FogFroxel` compute pass populated this frame. Caller has already
     // ended the main HDR pass + the projected-decal pass (if any), so
     // `depth.resource` (MSAA when MSAA is on) holds the scene depth and
-    // the resolved scene target holds the resolved scene + decal colour.
+    // the resolved scene target holds the resolved scene + decal color.
     // The pass alpha-blends `(scattered, 1 - T)` over the resolved HDR
     // target.
     pub(in crate::directx) fn encode_fog(

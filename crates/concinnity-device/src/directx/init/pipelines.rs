@@ -1244,7 +1244,7 @@ mod tests {
     // on a GPU host.
     #[test]
     fn bindless_main_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         super::compile_main_bindless_shaders(false).expect("bindless main shaders must compile");

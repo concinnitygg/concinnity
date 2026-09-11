@@ -58,7 +58,7 @@ macro_rules! forward {
 // The same forwarding, for the entry points whose implementation lives on the
 // shared AppKit window layer (`crate::appkit::AppKitWindow`) rather than on
 // `MtlContext` itself. Metal and Vulkan share that layer, so these arms carry no
-// backend-specific behaviour; only the main-thread assertion differs from a
+// backend-specific behavior; only the main-thread assertion differs from a
 // direct call.
 macro_rules! forward_win {
     () => {};

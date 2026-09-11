@@ -45,7 +45,7 @@ use std::path::Path;
 //
 // The three tunables (prefilter/irradiance face size, prefilter sample count)
 // have a single source of truth: the `EnvironmentMap` `Default` impl in
-// concinnity-core. Args are deserialised through that struct, so a field absent
+// concinnity-core. Args are deserialized through that struct, so a field absent
 // from the JSONL inherits that default instead of a constant duplicated here.
 
 fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
@@ -88,7 +88,7 @@ fn is_supported_source(source: &str) -> bool {
 
 // Load an equirectangular source from disk. A Radiance `.hdr` is already
 // linear radiance; a `.glb` carries a display-encoded panorama on a sphere,
-// which `crate::import::panorama` unwraps and linearises (see that module
+// which `crate::import::panorama` unwraps and linearizes (see that module
 // for the range an LDR panorama implies for the baked lighting).
 fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
     let lower = resolved.to_ascii_lowercase();
@@ -132,7 +132,7 @@ pub(crate) fn compile_environment_map_payload(
     ))
 }
 
-// Convolve an equirectangular source into the serialised IBL payload (header +
+// Convolve an equirectangular source into the serialized IBL payload (header +
 // irradiance + prefilter mips): the core bake, fanned out over the job pool.
 // The single bake both the build pass and the hot-reload decode run, so a
 // preview can never diverge from the built asset.
@@ -155,7 +155,7 @@ fn bake_payload(
 
 /// Decode the EnvironmentMap source at `path` the same way
 /// `compile_environment_map_payload` does at build time, returning the
-/// serialised payload (header + irradiance + prefilter mips). Exposed for the
+/// serialized payload (header + irradiance + prefilter mips). Exposed for the
 /// asset hot-reload path (`cn debug` only), which the editor drives; production
 /// reads the compiled payload from a blob locator instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
@@ -185,7 +185,7 @@ pub fn decode_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::bake::environment_map::deserialise;
+    use concinnity_core::bake::environment_map::deserialize;
 
     #[test]
     fn validate_environment_map_args_requires_source_or_generator() {
@@ -224,7 +224,7 @@ mod tests {
             "prefilter_samples": 32,
         });
         let blob = compile_environment_map_payload(&args, None).expect("compile");
-        let view = deserialise(&blob).expect("deserialise");
+        let view = deserialize(&blob).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
     }
@@ -323,7 +323,7 @@ mod tests {
             "prefilter_samples": 32,
         });
         let blob = compile_environment_map_payload(&args, None).expect("compile");
-        let view = deserialise(&blob).expect("deserialise");
+        let view = deserialize(&blob).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
         // Prefilter mips for face_size 16: 16, 8, 4 → 3 levels.
@@ -381,7 +381,7 @@ mod tests {
         let tree = concinnity_testing::TempTree::new();
         let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.0, 0.0, 0.0]));
         let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
-        let view = deserialise(&payload).expect("deserialise");
+        let view = deserialize(&payload).expect("deserialize");
         for (i, texel) in view.irradiance_bytes.chunks_exact(4).enumerate() {
             if i % 4 == 3 {
                 continue; // alpha
@@ -392,13 +392,13 @@ mod tests {
     }
 
     #[test]
-    fn decode_source_round_trips_through_deserialise() {
-        // Write a tiny solid-colour HDR into a tempfile, decode it, and verify
-        // the resulting payload deserialises with the requested sizes.
+    fn decode_source_round_trips_through_deserialize() {
+        // Write a tiny solid-color HDR into a tempfile, decode it, and verify
+        // the resulting payload deserializes with the requested sizes.
         let tree = concinnity_testing::TempTree::new();
         let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.6, 0.3, 0.15]));
         let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
-        let view = deserialise(&payload).expect("deserialise");
+        let view = deserialize(&payload).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
         // mip chain for face_size 16: 16, 8, 4 → 3 levels.

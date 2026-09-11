@@ -7,7 +7,7 @@
 // vertex compiles once and every fragment links against it.
 //
 // The Y flip is the one genuinely target-specific line, and Vulkan is the
-// exception rather than the rule: it rasterises its HDR targets through a
+// exception rather than the rule: it rasterizes its HDR targets through a
 // negative-height viewport, so the sampled image is already upright there and a
 // plain [0,1] map is correct. Metal and DirectX both have a top-left texture
 // origin and no such flip, so they map it here.

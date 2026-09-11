@@ -9,13 +9,13 @@
 // of Gerstner waves; the fragment shader composites:
 //   * Refraction: sample the pre-transparent scene snapshot at a
 //     normal-perturbed screen UV.
-//   * Tint: shallow to deep colour mix by water-column thickness derived from
+//   * Tint: shallow to deep color mix by water-column thickness derived from
 //     the difference between the main depth and the water surface depth.
 //   * Foam: a soft mask where the seabed is just below the surface.
 //   * Reflection: the sharp planar reflection where the surface has one, else
 //     the box-projected reflection-probe set, else the IBL prefilter cubemap,
 //     else a hand-tuned sky gradient.
-//   * Fresnel: Schlick-power mix of refraction-tinted vs. reflected colour.
+//   * Fresnel: Schlick-power mix of refraction-tinted vs. reflected color.
 // Output blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA into `scene_pre_taa`.
 //
 // The shaders are the shared `shaders/water.slang`, the single source all three
@@ -40,7 +40,7 @@ use crate::gfx::mesh_payload::Vertex;
 
 use super::context::MtlContext;
 use super::glass::build_transparent_pipeline_stages;
-use super::slang_shaders;
+use super::slang_builtins;
 use super::transparent::{TransparentDraw, bytes_of};
 use concinnity_core::render::uniforms::TransparentView;
 use concinnity_core::render::uniforms::{WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
@@ -71,9 +71,9 @@ pub(in crate::metal) fn build_water_surface_record(
     let (verts, idxs) =
         build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)?;
 
-    // Flatten into the standard Vertex layout. Tangent + colour are filled
+    // Flatten into the standard Vertex layout. Tangent + color are filled
     // with placeholders since the water shader rebuilds the normal frame
-    // analytically and the fragment ignores per-vertex colour.
+    // analytically and the fragment ignores per-vertex color.
     let packed: Vec<Vertex> = verts
         .into_iter()
         .map(|(pos, normal, color, uv)| Vertex {
@@ -140,8 +140,8 @@ fn water_params_from(surface: &WaterSurface) -> WaterParams {
             surface.shallow_color[2],
             0.0,
         ],
-        depth_falloff: surface.depth_falloff_metres,
-        foam_width: surface.foam_width_metres,
+        depth_falloff: surface.depth_falloff_meters,
+        foam_width: surface.foam_width_meters,
         foam_intensity: surface.foam_intensity,
         fresnel_power: surface.fresnel_power,
         roughness: surface.roughness,
@@ -227,7 +227,7 @@ impl MtlContext {
             ];
             // Select the sharp planar reflection when the planar pass ran this
             // frame and this surface was assigned a slot; bind that slot's resolve
-            // at the planar slot. Both fragments honour the flag, so this outranks the
+            // at the planar slot. Both fragments honor the flag, so this outranks the
             // trace as well. Otherwise the shader keeps the trace / probe / sky path.
             if planar_live
                 && let Some(targets) = surface
@@ -241,9 +241,7 @@ impl MtlContext {
                 ));
             }
             let c = surface.center;
-            let sort_distance =
-                ((c[0] - cam[0]).powi(2) + (c[1] - cam[1]).powi(2) + (c[2] - cam[2]).powi(2))
-                    .sqrt();
+            let sort_distance = crate::gfx::transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
                 vertex_buffer: surface.vertex_buffer.clone(),
@@ -270,7 +268,7 @@ pub(super) fn build_water_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_water_pipeline_slang(device, hot_reload, &slang_shaders::WATER_FRAG)
+    build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG)
 }
 
 // Build the ray-traced water pipeline: the same vertex layout + blend, but the
@@ -284,7 +282,7 @@ pub(super) fn build_water_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_water_pipeline_slang(device, hot_reload, &slang_shaders::WATER_FRAG_RT)
+    build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG_RT)
 }
 
 // Build the textured ray-traced water pipeline: the same trace as the flat RT
@@ -295,7 +293,7 @@ pub(super) fn build_water_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_water_pipeline_slang(device, hot_reload, &slang_shaders::WATER_FRAG_RT_TEXTURED)
+    build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG_RT_TEXTURED)
 }
 
 // The water pipelines, whose stages come from the single-source `water.slang`.
@@ -304,10 +302,10 @@ pub(super) fn build_water_pipeline_rt_textured(
 fn build_water_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    fragment: &slang_shaders::SlangLib,
+    fragment: &slang_builtins::SlangLib,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_fn = slang_shaders::entry_function(device, &slang_shaders::WATER_VERT, hot_reload)?;
-    let frag_fn = slang_shaders::entry_function(device, fragment, hot_reload)?;
+    let vert_fn = slang_builtins::entry_function(device, &slang_builtins::WATER_VERT, hot_reload)?;
+    let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 
@@ -339,8 +337,8 @@ mod tests {
             center: [1.0, 2.0, 3.0],
             deep_color: [0.02, 0.05, 0.12],
             shallow_color: [0.1, 0.3, 0.4],
-            depth_falloff_metres: 3.0,
-            foam_width_metres: 0.2,
+            depth_falloff_meters: 3.0,
+            foam_width_meters: 0.2,
             foam_intensity: 0.5,
             fresnel_power: 4.0,
             roughness: 0.08,

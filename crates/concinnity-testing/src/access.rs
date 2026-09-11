@@ -3,7 +3,7 @@
 //! Cargo runs a binary's tests on parallel threads, so anything process-wide is
 //! shared by every test running at that moment. A test that reaches such a
 //! state takes [`exclusive`] and runs alone against every other holder in the
-//! binary. This generalises the discipline the engine's development flags
+//! binary. This generalizes the discipline the engine's development flags
 //! already used, so that every crate reaches the same lock instead of each
 //! keeping its own.
 //!
@@ -18,7 +18,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 // One per test binary. Cargo gives each crate's tests their own process, so
-// this never spans crates: it serialises the tests of one binary against each
+// this never spans crates: it serializes the tests of one binary against each
 // other, which is the only place they can collide.
 static ACCESS: Mutex<()> = Mutex::new(());
 

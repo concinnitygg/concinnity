@@ -47,7 +47,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognised_kind_names_the_asset() {
+    fn an_unrecognized_kind_names_the_asset() {
         let args = serde_json::json!({"path": "model.xyz", "kind": "xyz"});
         let err = File::compile_payload(&args, &ctx()).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);

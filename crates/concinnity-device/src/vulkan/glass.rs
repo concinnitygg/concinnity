@@ -114,7 +114,7 @@ fn build_panel_record(
 
     // Flatten into the standard engine `Vertex` layout. Tangent is a placeholder
     // (the glass shader rebuilds its frame from the panel normal) and per-vertex
-    // colour is unused.
+    // color is unused.
     let packed: Vec<Vertex> = verts
         .into_iter()
         .map(|(pos, normal, color, uv)| Vertex {
@@ -315,7 +315,7 @@ mod tests {
     // init failure on a GPU host.
     #[test]
     fn glass_mesh_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         for msaa in [false, true] {
@@ -352,7 +352,7 @@ mod tests {
     // guards.
     #[test]
     fn glass_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.
@@ -371,7 +371,7 @@ mod tests {
     // in gfx::render_types.
     #[test]
     fn glass_rt_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         for &msaa in &[true, false] {

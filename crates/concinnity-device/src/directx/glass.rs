@@ -11,7 +11,7 @@
 //   * A see-through glass MESH -- an imported `Material` flagged `see_through`,
 //     drawn from the shared scene buffers with a per-pixel reflection ray. It is
 //     ray-traced only, so it builds nothing without DXR and its meshes then
-//     rasterise opaque in the main pass instead.
+//     rasterize opaque in the main pass instead.
 //
 // The shaders are the shared `shaders/glass.slang` and `shaders/glass_mesh.slang`,
 // compiled through `slang_builtins`; the ray-traced fragments need shader model
@@ -179,7 +179,7 @@ pub(in crate::directx) fn build_glass_producer(
 
         // Flatten into the standard Vertex layout. Tangent is a placeholder (the
         // glass shader rebuilds its frame from the panel normal) and per-vertex
-        // colour is unused.
+        // color is unused.
         let packed: Vec<Vertex> = verts
             .into_iter()
             .map(|(pos, normal, color, uv)| Vertex {
@@ -321,7 +321,7 @@ mod tests {
     // skips rather than failing.
     #[test]
     fn glass_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         for msaa in [1u32, 4] {
@@ -336,7 +336,7 @@ mod tests {
     // `compile_glass_rt_shaders`.
     #[test]
     fn glass_rt_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         for msaa in [1u32, 4] {
@@ -349,7 +349,7 @@ mod tests {
     // applies the model matrix) and whose fragments carry the same SM 6.5 trace.
     #[test]
     fn glass_mesh_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         for msaa in [1u32, 4] {

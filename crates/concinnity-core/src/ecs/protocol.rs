@@ -162,7 +162,7 @@ pub struct TraceRequest {
 /// per-behavior locals; `hit` the first executed breakpoint, if any.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionTrace {
-    /// Increments per published tick, so stale data is recognisable.
+    /// Increments per published tick, so stale data is recognizable.
     pub frame: u64,
     /// The nodes that ran this tick, deduplicated.
     pub events: alloc::vec::Vec<TraceEvent>,
@@ -396,7 +396,7 @@ pub struct DropdownView {
     pub font: Option<FontHandle>,
     /// Text scale of the row's value label.
     pub scale: f32,
-    /// Linear RGB text colour of the row's value label.
+    /// Linear RGB text color of the row's value label.
     pub color: [f32; 3],
 }
 

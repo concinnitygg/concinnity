@@ -22,7 +22,7 @@ Rotation notes:
 - `rotation_deg`: An array of 3 floats. Euler rotation in degrees [pitch, yaw, roll], applied in YXZ order (yaw first so that rotating around the vertical axis is intuitive). Defaults to `[0.0, 0.0, 0.0]`.
 - `scale`: An array of 3 floats. Non-uniform scale [x, y, z]. Defaults to [1, 1, 1].
 - `collider`: A [PropCollider](PropCollider.md) object. Optional collision volume. When present, the prop blocks the player; when absent the prop is non-solid.
-- `interactable`: A boolean. When true, the player can interact with this prop: pressing the interact key (E) while close and facing it triggers its rotation behaviour. Defaults to `false`.
+- `interactable`: A boolean. When true, the player can interact with this prop: pressing the interact key (E) while close and facing it triggers its rotation behavior. Defaults to `false`.
 - `pickup`: A boolean. When true, the player can pick up and carry this prop with the interact key (E). A companion [PropBody](PropBody.md) must also be declared so the prop falls correctly after being dropped. Defaults to `false`.
 - `parent`: A string. Another [Prop](Prop.md) whose world transform this prop inherits. When set, `position`, `rotation_deg`, and `scale` are relative to the parent's world transform. The parent must be declared in the same world; circular chains are treated as an error. Optional.
 - `scene`: A string. [Scene](Scene.md) this prop belongs to. Resolved automatically from the naming convention (a prop named `<scene>_*` belongs to scene `<scene>`); you don't set this directly. `None` means the prop is visible in every scene. Used by scene switches for per-scene visibility. Optional.

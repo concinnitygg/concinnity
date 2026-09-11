@@ -75,7 +75,7 @@ impl EditorHook {
 
     // Open the native file picker at the project directory and take what the
     // user picks. The dialog blocks the frame loop while it is up (it is a
-    // modal OS window over the editor); cancelling leaves the field alone.
+    // modal OS window over the editor); canceling leaves the field alone.
     // This wrapper is the only untestable step -- what the pick feeds is all in
     // `accept_browsed_path`.
     pub(super) fn browse_import(&mut self, world: &mut World) {

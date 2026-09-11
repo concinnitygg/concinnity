@@ -245,7 +245,7 @@ impl WorldBuilder {
 
         // Load the compiled resource stream into the per-kind tables the
         // systems read by handle. Kinds that have left the component registry
-        // (textures, audio clips, fonts, colour LUTs, environment maps) live
+        // (textures, audio clips, fonts, color LUTs, environment maps) live
         // here, not in `defs`, so without this the renderer sees an empty
         // texture pool and every material's albedo handle resolves out of
         // range. Same call the runtime makes when it loads a blob file.

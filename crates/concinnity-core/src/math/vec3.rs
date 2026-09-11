@@ -1,7 +1,7 @@
 //! The crate's shared 3-component vector math. Every module that needs a dot,
 //! cross, or component-wise op reaches for these rather than redeclaring them.
 //!
-//! Normalisation deliberately stays with its caller: the degenerate-input rule
+//! Normalization deliberately stays with its caller: the degenerate-input rule
 //! differs by site (a fallback axis vs `None` vs a clamped length), and folding
 //! those together would change behavior at grazing inputs.
 
@@ -51,7 +51,7 @@ pub fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 }
 
 /// Accumulate `src` into `dst` in place. Used by the smooth-normal passes, which
-/// sum every incident face normal per vertex before normalising once.
+/// sum every incident face normal per vertex before normalizing once.
 pub fn vec3_add(dst: &mut [f32; 3], src: [f32; 3]) {
     dst[0] += src[0];
     dst[1] += src[1];
@@ -60,7 +60,7 @@ pub fn vec3_add(dst: &mut [f32; 3], src: [f32; 3]) {
 
 /// Unit-length `n`, falling back to `+Y` when it is too short to have a
 /// direction.
-pub fn vec3_normalise(n: [f32; 3]) -> [f32; 3] {
+pub fn vec3_normalize(n: [f32; 3]) -> [f32; 3] {
     let len = length(n);
     if len < 1e-6 {
         [0.0, 1.0, 0.0]
@@ -72,7 +72,7 @@ pub fn vec3_normalise(n: [f32; 3]) -> [f32; 3] {
 /// Newell-style face normal from three CCW positions. Shared with the cook
 /// generators' smooth-normal pass.
 pub fn vec3_face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
-    vec3_normalise(cross(sub(b, a), sub(c, a)))
+    vec3_normalize(cross(sub(b, a), sub(c, a)))
 }
 
 #[cfg(test)]
@@ -109,9 +109,9 @@ mod tests {
     }
 
     #[test]
-    fn normalise_falls_back_on_a_degenerate_vector() {
-        assert_eq!(vec3_normalise([0.0, 0.0, 0.0]), [0.0, 1.0, 0.0]);
-        assert_eq!(vec3_normalise([0.0, 0.0, 2.0]), [0.0, 0.0, 1.0]);
+    fn normalize_falls_back_on_a_degenerate_vector() {
+        assert_eq!(vec3_normalize([0.0, 0.0, 0.0]), [0.0, 1.0, 0.0]);
+        assert_eq!(vec3_normalize([0.0, 0.0, 2.0]), [0.0, 0.0, 1.0]);
     }
 
     #[test]

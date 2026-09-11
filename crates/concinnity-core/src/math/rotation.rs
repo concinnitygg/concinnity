@@ -34,7 +34,7 @@ fn about_axis(axis: usize, angle_rad: f32) -> Quat {
 }
 
 /// The rotation quaternion for `angle_rad` about `axis`, which need not be
-/// normalised. An axis too short to have a direction yields the identity.
+/// normalized. An axis too short to have a direction yields the identity.
 pub fn quat_from_axis_angle(axis: [f32; 3], angle_rad: f32) -> Quat {
     let len = sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
     if len < 1e-12 {
@@ -69,7 +69,7 @@ pub fn quat_from_euler_yxz_deg(euler_deg: [f32; 3]) -> Quat {
 }
 
 /// Engine Euler degrees `[pitch, yaw, roll]` for a rotation quaternion, which
-/// need not be normalised.
+/// need not be normalized.
 ///
 /// The decomposition is lossy at +-90 degrees of pitch, where yaw and roll fold
 /// into one angle: the whole rotation is reported as yaw.
@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn a_degenerate_quaternion_normalises_to_the_identity() {
+    fn a_degenerate_quaternion_normalizes_to_the_identity() {
         assert_eq!(quat_normalize([0.0; 4]), [0.0, 0.0, 0.0, 1.0]);
         assert_eq!(euler_yxz_deg_from_quat([0.0; 4]), [0.0, 0.0, 0.0]);
     }

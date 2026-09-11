@@ -410,7 +410,7 @@ mod tests {
             );
         }
 
-        // The View button is labelled "View".
+        // The View button is labeled "View".
         assert_eq!(
             world
                 .query::<TextLabel>()

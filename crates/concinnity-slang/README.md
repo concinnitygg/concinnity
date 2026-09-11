@@ -25,6 +25,3 @@ the renderer's content-addressed shader cache key it.
   two and starts at `PATH`. A host without any of them degrades gracefully: the
   build emits a stub and the renderer compiles at startup, reporting a clear
   error if `slangc` is absent or too old.
-
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.

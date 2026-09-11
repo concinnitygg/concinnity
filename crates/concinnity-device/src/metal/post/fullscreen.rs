@@ -3,7 +3,7 @@
 // Shared builders for fullscreen-triangle post-process passes. Every
 // screen-space effect (SSAO, SSR, SSGI, TAA, bloom, fog, RT reflections, the
 // final composite) draws one `[[vertex_id]]`-generated triangle into a single
-// colour attachment with no vertex descriptor and no depth, differing only in
+// color attachment with no vertex descriptor and no depth, differing only in
 // shader source, attachment format, and blend. These helpers fold that shared
 // pipeline-descriptor boilerplate into one place so each effect file keeps only
 // what is unique to it.
@@ -22,9 +22,9 @@ use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::pass_timing::PassId;
 use crate::metal::pipeline::ns_str;
-use crate::metal::slang_shaders::{FULLSCREEN_VERT, SlangLib};
+use crate::metal::slang_builtins::{FULLSCREEN_VERT, SlangLib};
 
-// Blend configuration for a fullscreen pass's single colour attachment.
+// Blend configuration for a fullscreen pass's single color attachment.
 #[derive(Clone, Copy)]
 pub(crate) enum FullscreenBlend {
     // No blending; the fragment output replaces the destination. Used by every
@@ -36,7 +36,7 @@ pub(crate) enum FullscreenBlend {
     // SSGI composite.
     Additive,
     // Premultiplied "over" (`src·1 + dst·(1 − srcA)`): the fragment already
-    // folded coverage into its colour, so the source factor is `One`. Used by
+    // folded coverage into its color, so the source factor is `One`. Used by
     // the volumetric-fog composite.
     PremultipliedOver,
 }
@@ -53,7 +53,7 @@ pub(crate) struct FullscreenStages<'a> {
 }
 
 // Build a render pipeline state for a fullscreen-triangle post pass: the two
-// named functions from their libraries, a single colour attachment at `format`
+// named functions from their libraries, a single color attachment at `format`
 // with the requested `blend`, single-sample, no vertex descriptor, no depth. The
 // pipeline-create error is tagged with the fragment name so a failure points at
 // the exact entry point.
@@ -168,7 +168,7 @@ pub(crate) enum PassTimer {
     Last(PassId),
 }
 
-// The per-pass setup a fullscreen-triangle encode needs: the colour target it
+// The per-pass setup a fullscreen-triangle encode needs: the color target it
 // writes, that attachment's load action, where the pass sits in the GPU-timing
 // span, the pipeline it runs, and the encoder debug label.
 pub(in crate::metal) struct FullscreenPass<'a> {
@@ -183,7 +183,7 @@ pub(in crate::metal) struct FullscreenPass<'a> {
 // `pass.target` (with the given `pass.load` action and an always-`Store`),
 // attach GPU timing per `pass.timer`, set `pass.pipeline`, let `bind` set the
 // pass's fragment inputs, draw the `[[vertex_id]]` triangle, and end encoding.
-// Centralises the encoder open / draw / close skeleton every screen-space
+// Centralizes the encoder open / draw / close skeleton every screen-space
 // effect repeats so each `encode_*` supplies only its unique bindings.
 //
 // A free function over the timing resources rather than a method on the

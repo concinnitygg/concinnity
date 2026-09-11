@@ -1,5 +1,5 @@
 //! Mesh payload baking: derive tangents from the UV gradient, build the
-//! optional LOD alternate index lists, and serialise the packed mesh payload.
+//! optional LOD alternate index lists, and serialize the packed mesh payload.
 //! The shared tail every mesh generator's output runs through before it can be
 //! played, whether the caller is the cook pipeline or a runtime bake.
 
@@ -10,14 +10,14 @@ use alloc::vec::Vec;
 use crate::components::VertexData;
 use crate::geometry::{Vert, compute_tangents};
 use crate::math::sqrt;
-use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalise};
+use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
 
-// Tangent-bearing vertex form the payload serialiser packs:
+// Tangent-bearing vertex form the payload serializer packs:
 // position, normal, tangent, color, uv.
 type VertT = ([f32; 3], [f32; 3], [f32; 3], [f32; 3], [f32; 2]);
 
 /// Derive the generator-form vertices of raw `Mesh` geometry: each vertex
-/// takes the normalised sum of the face normals of the triangles that share
+/// takes the normalized sum of the face normals of the triangles that share
 /// it, so a vertex the triangles of one flat face own is flat-shaded and one
 /// shared across a curve is smooth. A triangle that indexes past the vertex
 /// list is an error.
@@ -39,7 +39,7 @@ pub fn vertices_from_data(data: &[VertexData], indices: &[u16]) -> Result<Vec<Ve
     Ok(data
         .iter()
         .zip(normals)
-        .map(|(v, n)| (v.pos, vec3_normalise(n), v.color, v.uv))
+        .map(|(v, n)| (v.pos, vec3_normalize(n), v.color, v.uv))
         .collect())
 }
 
@@ -64,7 +64,7 @@ pub fn finish_mesh_payload(
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
     let alternates = build_lod_alternates(lod_levels, lod_distances, &verts5, &indices)?;
-    Ok(crate::gfx::mesh_payload::serialise_with_lods(
+    Ok(crate::gfx::mesh_payload::serialize_with_lods(
         &verts5,
         &indices,
         &alternates,
@@ -143,13 +143,13 @@ pub fn bounding_sphere_radius(positions: &[[f32; 3]]) -> f32 {
 mod tests {
     use super::*;
     use crate::geometry::{build_box, build_sphere};
-    use crate::gfx::mesh_payload::deserialise_with_lods;
+    use crate::gfx::mesh_payload::deserialize_with_lods;
 
     #[test]
     fn single_lod_payload_carries_no_alternates() {
         let (verts, indices) = build_box([0.5, 0.5, 0.5]);
         let payload = finish_mesh_payload(verts, indices, 1, &[]).unwrap();
-        let (out, lod0, alternates) = deserialise_with_lods(&payload).unwrap();
+        let (out, lod0, alternates) = deserialize_with_lods(&payload).unwrap();
         assert_eq!(out.len(), 24);
         assert_eq!(lod0.len(), 36);
         assert!(alternates.is_empty());
@@ -159,7 +159,7 @@ mod tests {
     fn lod_levels_emit_decimated_alternates_with_rising_distances() {
         let (verts, indices) = build_sphere(1.0, 16, 24).unwrap();
         let payload = finish_mesh_payload(verts, indices, 3, &[]).unwrap();
-        let (_, lod0, alternates) = deserialise_with_lods(&payload).unwrap();
+        let (_, lod0, alternates) = deserialize_with_lods(&payload).unwrap();
         assert_eq!(alternates.len(), 2);
         assert!(alternates[0].1.len() < lod0.len());
         assert!(alternates[1].1.len() <= alternates[0].1.len());

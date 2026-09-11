@@ -27,7 +27,7 @@ pub struct HistoryRing {
 impl HistoryRing {
     /// A ring of `slots` targets whose write index advances under `stride`.
     ///
-    /// `slots` is floored at two: one target cannot be both the pass's colour
+    /// `slots` is floored at two: one target cannot be both the pass's color
     /// attachment and one of its sampled sources. `stride` is clamped into
     /// `1..=slots`; a stride below `slots` leaves the tail targets unwritten,
     /// which is what a single frame in flight does to a two-target ring.

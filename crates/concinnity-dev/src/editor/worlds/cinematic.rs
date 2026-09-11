@@ -66,7 +66,7 @@ pub(crate) enum Shot {
     // A full turn on the spot, from the world's own camera: the view the
     // author set up, looking around from where they left it.
     Spin,
-    // A lateral truck across the world, holding it centred.
+    // A lateral truck across the world, holding it centered.
     Drift,
 }
 
@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn the_drift_trucks_sideways_holding_the_centre() {
+    fn the_drift_trucks_sideways_holding_the_center() {
         let f = framing();
         let mut c = at(Shot::Drift);
         let opened = c.pose(&f);
@@ -537,13 +537,13 @@ mod tests {
             c.advance(MAX_DT);
         }
         let closed = c.pose(&f);
-        let travelled = ((closed.position[0] - opened.position[0]).powi(2)
+        let traveled = ((closed.position[0] - opened.position[0]).powi(2)
             + (closed.position[2] - opened.position[2]).powi(2))
         .sqrt();
         let span = DRIFT_SPAN * f.radius;
         assert!(
-            travelled > span * 0.9 && travelled <= span + 1e-3,
-            "the truck covers its span: {travelled} of {span}"
+            traveled > span * 0.9 && traveled <= span + 1e-3,
+            "the truck covers its span: {traveled} of {span}"
         );
         assert!(
             (closed.position[1] - opened.position[1]).abs() < 1e-6,

@@ -14,7 +14,7 @@ pub(super) fn create_main_render_pass(
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
     // When multisampled the resolve attachment ends shader-readable; the MSAA
-    // colour image is transient. When single-sampled, attachment [0] is itself
+    // color image is transient. When single-sampled, attachment [0] is itself
     // the resolve image, so it ends shader-readable.
     let color_final_layout = if multisampled {
         vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
@@ -117,11 +117,11 @@ pub(super) fn create_main_render_pass(
 // this builder, selected by `load`:
 //
 //   * `load = false` (phase 1, `Main`): same as `create_main_render_pass` but
-//     the MSAA colour is STORE'd (not DONT_CARE) so the phase-2 pass can load
-//     the samples back and composite onto them. Colour ends
+//     the MSAA color is STORE'd (not DONT_CARE) so the phase-2 pass can load
+//     the samples back and composite onto them. Color ends
 //     COLOR_ATTACHMENT_OPTIMAL so `Main2` loads it directly.
 //   * `load = true` (phase 2, `Main2`): loads (does not clear) the phase-1
-//     colour + depth, redraws the disoccluded statics, and resolves the
+//     color + depth, redraws the disoccluded statics, and resolves the
 //     combined scene into `hdr_resolve` for the post stack.
 //
 // Both are render-pass-compatible with the existing main framebuffers (same
@@ -137,10 +137,10 @@ pub(super) fn create_main_render_pass_two_pass(
 ) -> Result<OwnedRenderPass, String> {
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
-    // Phase 1 leaves the colour in COLOR_ATTACHMENT_OPTIMAL for phase 2 to
-    // load. Phase 2 ends shader-readable when single-sampled (the colour image
+    // Phase 1 leaves the color in COLOR_ATTACHMENT_OPTIMAL for phase 2 to
+    // load. Phase 2 ends shader-readable when single-sampled (the color image
     // is itself the resolve target the post stack samples); when multisampled
-    // the resolve attachment carries that role and the MSAA colour stays
+    // the resolve attachment carries that role and the MSAA color stays
     // transient in COLOR_ATTACHMENT_OPTIMAL.
     let color_final_layout = if multisampled || !load {
         vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
@@ -169,7 +169,7 @@ pub(super) fn create_main_render_pass_two_pass(
     };
 
     let mut attachments = vec![
-        // [0] colour (MSAA HDR, or the single-sample HDR resolve image). STORE
+        // [0] color (MSAA HDR, or the single-sample HDR resolve image). STORE
         // unconditionally: phase 1 must keep the MSAA samples for phase 2's
         // load, and the single-sample image is the post-stack input.
         vk::AttachmentDescription::default()
@@ -232,7 +232,7 @@ pub(super) fn create_main_render_pass_two_pass(
     // which were created against `main_render_pass`; render-pass compatibility
     // (validated on `vkCmdBeginRenderPass` / `vkCmdDraw`) treats differing
     // dependencies as incompatible, so the dependency must match. Phase 2's
-    // LOAD of the phase-1 colour + depth is instead ordered by an explicit
+    // LOAD of the phase-1 color + depth is instead ordered by an explicit
     // `vkCmdPipelineBarrier` in `encode_main_pass_phase2` (this backend owns
     // its cross-pass sync inline anyway).
     let dependency = vk::SubpassDependency::default()
@@ -344,7 +344,7 @@ pub(super) fn create_composite_render_pass(
 // frame-in-flight). Returns `(msaa_color, depth, hdr_resolve)`; `msaa_color`
 // is empty when MSAA is disabled, in which case the main pass renders
 // straight into the resolve image.
-// A bloom-chain render pass: one single-sample HDR colour attachment, no
+// A bloom-chain render pass: one single-sample HDR color attachment, no
 // depth. With `load` set the attachment is loaded (the additive upsample
 // blends onto existing content) and its initial layout is the
 // shader-readable layout the prior write pass left it in; otherwise the

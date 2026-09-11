@@ -11,7 +11,7 @@ controller: a world declaring a track is driven by the track, whatever
 
 The track has two independent lists played against one clock. `travel` is
 where the camera goes and `turn` is where it looks, so a leg of each runs
-at the same time and the camera can turn toward one thing while travelling
+at the same time and the camera can turn toward one thing while traveling
 toward another. Each list runs from the camera's authored pose; when one
 runs out the camera holds that list's last value while the other finishes.
 
@@ -24,4 +24,4 @@ simulation.
 ## Parameters
 
 - `travel`: An array of [CameraTravel](CameraTravel.md) objects. Where the camera goes, leg by leg.
-- `turn`: An array of [CameraTurn](CameraTurn.md) objects. Where the camera looks, leg by leg. Played against the same clock as `travel` and independent of it, so the camera can turn one way while travelling another.
+- `turn`: An array of [CameraTurn](CameraTurn.md) objects. Where the camera looks, leg by leg. Played against the same clock as `travel` and independent of it, so the camera can turn one way while traveling another.

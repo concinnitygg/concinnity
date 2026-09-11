@@ -5,7 +5,7 @@
 // Everything is prefixed with the menu's own name so the build pipeline's
 // `<screen>_*` rule scopes each generated UI element to the menu's Screen. The menu
 // shows/hides at runtime purely as a Screen visibility flip; this pass adds no
-// runtime behaviour, only the assets the existing UI systems already drive.
+// runtime behavior, only the assets the existing UI systems already drive.
 
 mod rows;
 mod screen;
@@ -32,7 +32,7 @@ use settings_tab::emit_settings_tab;
 const TOP_MARGIN_FRAC: f32 = 0.07;
 
 // An RGB accent lifted to an opaque RGBA fill: the active-tab underline marker
-// and the scrollbar thumb draw the hover colour at full alpha.
+// and the scrollbar thumb draw the hover color at full alpha.
 fn opaque(rgb: [f32; 3]) -> [f32; 4] {
     [rgb[0], rgb[1], rgb[2], 1.0]
 }

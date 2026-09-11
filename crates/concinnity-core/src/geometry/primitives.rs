@@ -15,7 +15,7 @@ type BoxFace = ([f32; 3], [f32; 3], [f32; 3], [f32; 3], [f32; 3], f32, f32);
 ///
 /// All six faces are included, wound CCW from the outside. Each face carries
 /// its outward-facing normal. UV coordinates tile once across each face,
-/// scaling with the face dimensions (one repeat per metre).
+/// scaling with the face dimensions (one repeat per meter).
 pub fn build_box(half_extents: [f32; 3]) -> (Vec<Vert>, Vec<u16>) {
     let [hx, hy, hz] = half_extents;
 
@@ -103,7 +103,7 @@ pub fn build_box(half_extents: [f32; 3]) -> (Vec<Vert>, Vec<u16>) {
 
 /// Build an upright cylinder from radius, height, and segment count.
 ///
-/// Centred on the origin: bottom cap at y = -height/2, top cap at y = +height/2.
+/// Centered on the origin: bottom cap at y = -height/2, top cap at y = +height/2.
 /// Sides use cylindrical UV projection; caps use planar UV. `segments` is
 /// clamped to at least 3.
 pub fn build_cylinder(radius: f32, height: f32, segments: u32) -> (Vec<Vert>, Vec<u16>) {
@@ -197,7 +197,7 @@ pub fn build_cylinder(radius: f32, height: f32, segments: u32) -> (Vec<Vert>, Ve
 
 /// Build a flat horizontal plane from half-width and half-depth.
 ///
-/// Lies in the XZ plane at Y = 0, facing up. UV tiles at one repeat per metre.
+/// Lies in the XZ plane at Y = 0, facing up. UV tiles at one repeat per meter.
 pub fn build_plane(half_width: f32, half_depth: f32) -> (Vec<Vert>, Vec<u16>) {
     let normal = [0.0f32, 1.0, 0.0];
     let color = [0.80f32, 0.79, 0.78];
@@ -217,8 +217,8 @@ pub fn build_plane(half_width: f32, half_depth: f32) -> (Vec<Vert>, Vec<u16>) {
 
 /// Build a UV sphere from radius, ring count, and segment count.
 ///
-/// Centred on the origin; poles at Y = ±radius. UV mapping is spherical, and
-/// the normal at every point equals `normalise(pos)`. `rings` is clamped to at
+/// Centered on the origin; poles at Y = ±radius. UV mapping is spherical, and
+/// the normal at every point equals `normalize(pos)`. `rings` is clamped to at
 /// least 2 and `segments` to at least 3; a tessellation past the u16 index
 /// limit is refused.
 pub fn build_sphere(

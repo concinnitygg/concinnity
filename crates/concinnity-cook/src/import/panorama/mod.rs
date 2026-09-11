@@ -1,6 +1,6 @@
-//! Recognises the "panorama sphere" packaging a lot of downloadable environment
+//! Recognizes the "panorama sphere" packaging a lot of downloadable environment
 //! images ship in: a `.glb` holding one inverted sphere you stand inside, its
-//! image painted on the emissive channel over a black base colour so nothing
+//! image painted on the emissive channel over a black base color so nothing
 //! lights or shades it. Imported as geometry that file renders as a ball in the
 //! middle of the scene; what the author wanted was a sky.
 //!
@@ -62,7 +62,7 @@ mod tests {
     }
 
     #[test]
-    fn a_panorama_glb_on_disk_is_recognised_and_decodes() {
+    fn a_panorama_glb_on_disk_is_recognized_and_decodes() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "sky.glb", &panorama_glb());
         assert!(file_is_panorama_sphere(&path));

@@ -208,22 +208,22 @@ mod tests {
     fn an_omitted_controller_still_gets_the_inspector() {
         // `#[serde(default)]` on the struct would make an absent field `None`,
         // so the field carries its own default fn.
-        let args: Camera3DArgs = serde_json::from_str(r#"{"fov_y_degrees":60}"#).unwrap();
+        let args: Camera3DArgs = crate::test_support::from_json(r#"{"fov_y_degrees":60}"#);
         assert_eq!(args.fov_y_degrees, 60.0);
         assert!(args.controller.expect("inspector controller").free_fly);
     }
 
     #[test]
     fn an_explicit_null_controller_leaves_the_camera_undriven() {
-        let args: Camera3DArgs = serde_json::from_str(r#"{"controller":null}"#).unwrap();
+        let args: Camera3DArgs = crate::test_support::from_json(r#"{"controller":null}"#);
         assert!(args.controller.is_none());
     }
 
     #[test]
     fn a_ground_walker_turns_free_fly_off() {
-        let args: Camera3DArgs =
-            serde_json::from_str(r#"{"controller":{"free_fly":false,"player_radius":0.4}}"#)
-                .unwrap();
+        let args: Camera3DArgs = crate::test_support::from_json(
+            r#"{"controller":{"free_fly":false,"player_radius":0.4}}"#,
+        );
         let c = args.controller.expect("controller");
         assert!(!c.free_fly);
         assert_eq!(c.player_radius, 0.4);
@@ -233,17 +233,15 @@ mod tests {
 
     #[test]
     fn a_follow_controller_drives_from_root_motion_unless_told_otherwise() {
-        crate::test_support::install_resolvers();
         let f = FollowController::default();
         assert_eq!(f.drive, FollowDrive::RootMotion);
         assert_eq!(f.speed_parameter, "speed");
         assert_eq!((f.distance, f.height), (4.0, 1.5));
         assert_eq!(f.jump_height, 0.0);
 
-        let args: Camera3DArgs = serde_json::from_str(
+        let args: Camera3DArgs = crate::test_support::from_json(
             r#"{"controller":{"follow":{"target":"hero","drive":"direct","jump_height":1.2}}}"#,
-        )
-        .unwrap();
+        );
         let f = args
             .controller
             .expect("controller")
@@ -267,11 +265,10 @@ mod tests {
 
     #[test]
     fn an_authored_camera_round_trips_through_postcard() {
-        let args: Camera3DArgs = serde_json::from_str(
+        let args: Camera3DArgs = crate::test_support::from_json(
             r#"{"fov_y_degrees":60,"position":[1,2,3],"yaw":0.5,"pitch":-0.2,
                 "controller":{"free_fly":false,"follow":{"distance":6.0}}}"#,
-        )
-        .unwrap();
+        );
         let bytes = postcard::to_allocvec(&args).unwrap();
         let back: Camera3DArgs = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.position, [1.0, 2.0, 3.0]);

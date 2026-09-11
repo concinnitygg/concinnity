@@ -6,7 +6,7 @@
 // main pass:
 //
 //   * gather:    per pixel, cone of cosine-weighted hemisphere rays marched
-//                against the G-buffer, accumulating the lit scene colour at
+//                against the G-buffer, accumulating the lit scene color at
 //                each on-screen hit into an off-screen `gi` target.
 //   * composite: a depth-aware blur of that noisy `gi` target, additively
 //                blended (ONE / ONE) into `hdr_resolve` so the near-field
@@ -31,7 +31,7 @@ use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
 };
-use crate::metal::slang_shaders::{SSGI_COMPOSITE, SSGI_GATHER, SlangLib};
+use crate::metal::slang_builtins::{SSGI_COMPOSITE, SSGI_GATHER, SlangLib};
 
 // All screen-space-GI feature state grouped into one unit: the resolved
 // tunables, the `gi` gather target, and the gather + composite pipelines.

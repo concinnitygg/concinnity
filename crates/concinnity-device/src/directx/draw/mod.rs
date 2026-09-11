@@ -294,7 +294,7 @@ impl DxContext {
             // for every screen-space consumer, replacing the separate SSR /
             // SSAO / velocity geometry pre-passes. On whenever the G-buffer
             // resources exist (any of SSR / SSGI / SSAO / TAA / FSR enabled).
-            unified_gbuffer_prepass: self.gbuffer.is_some(),
+            gbuffer_prepass_enabled: self.gbuffer.is_some(),
             // An opaque menu backdrop hides the scene: the shared builder masks
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).

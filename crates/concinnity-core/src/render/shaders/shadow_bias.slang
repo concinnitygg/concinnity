@@ -1,5 +1,5 @@
 // SHADOW_BIAS marker: the depth-compare offset a cascade sample is taken with,
-// shared by the rasterised main pass and the raymarched surfaces so both take
+// shared by the rasterized main pass and the raymarched surfaces so both take
 // the shadow the other would at the same point.
 //
 // Needs `SHADOW_UNI` and `shadow_map_size()` from the including shader.
@@ -12,8 +12,8 @@ static const float SHADOW_BIAS_TEXELS = 2.0;
 // Compare offset for one cascade, in that cascade's NDC depth units.
 //
 // Row 0 of the cascade's VP is the ortho x scale (1 / radius), so the shadow
-// texel measures `2 / (|row0| * map size)` metres; row 2 is the ortho z scale,
-// which converts a metre along the light back into NDC depth. A distant
+// texel measures `2 / (|row0| * map size)` meters; row 2 is the ortho z scale,
+// which converts a meter along the light back into NDC depth. A distant
 // cascade covers more world per texel, so its offset grows with it.
 //
 // Slang indexes HLSL-style (`m[i][j]` is row i, column j), unlike the GLSL and

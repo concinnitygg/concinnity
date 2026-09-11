@@ -7,7 +7,7 @@
 // not overlay sprites: they go through the renderer's line pass, so
 // scene geometry in front of an axis occludes it.
 //
-// Colours match the translate gizmo's handles (X red, Y green, Z blue), so the
+// Colors match the translate gizmo's handles (X red, Y green, Z blue), so the
 // two teach the same axis mapping.
 
 use concinnity_core::gfx::lines::Line;
@@ -105,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn both_runs_of_an_axis_share_its_colour() {
+    fn both_runs_of_an_axis_share_its_color() {
         let l = lines(200.0);
         for (pair, rgb) in l.chunks(2).zip(AXIS_COLORS) {
             assert_eq!(pair[0].start_color[..3], rgb);

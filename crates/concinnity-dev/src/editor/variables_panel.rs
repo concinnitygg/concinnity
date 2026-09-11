@@ -455,9 +455,9 @@ fn layout_rows(world: &mut World, view: &VariablesView, o: [f32; 2], s: [f32; 2]
             true,
         );
         let y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
-        // An undeclared name reads in the warning colour and says so in the type
+        // An undeclared name reads in the warning color and says so in the type
         // column: the row is a prompt, not a declaration. A live session's
-        // behavior local reads in the command colour: inspectable, not part of
+        // behavior local reads in the command color: inspectable, not part of
         // the table.
         let (color, ty) = if row.local {
             (theme::LOG_COMMAND, format!("{} local", row.ty))
@@ -548,7 +548,7 @@ fn tint(base: [f32; 4], live: bool, hovered: bool) -> [f32; 4] {
     if hovered { theme::HOVER_TINT } else { base }
 }
 
-// A chip's caption, centred in its rect.
+// A chip's caption, centered in its rect.
 fn label_at(rect: [f32; 4], caption: &str) -> [f32; 2] {
     let text_w = caption.chars().count() as f32 * CHAR_W;
     [

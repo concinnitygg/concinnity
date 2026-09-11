@@ -11,7 +11,7 @@ pub const MAX_WATER_WAVES: usize = 4;
 /// One wave in a water surface's motion. A surface sums up to four of these
 /// to displace its flat grid. Each wave travels
 /// horizontally along `direction`, rising and falling with `amplitude` peak
-/// height, `wavelength` distance between crests, and `speed` metres per second.
+/// height, `wavelength` distance between crests, and `speed` meters per second.
 /// `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier
 /// water).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -21,7 +21,7 @@ pub struct WaterWave {
     pub amplitude: f32,
     /// Distance between successive crests, in world units.
     pub wavelength: f32,
-    /// Horizontal travel speed, in metres per second.
+    /// Horizontal travel speed, in meters per second.
     pub speed: f32,
     /// Horizontal travel direction `[x, z]`.
     pub direction: [f32; 2],
@@ -46,7 +46,7 @@ impl Default for WaterWave {
 ///
 /// A flat, subdivided horizontal surface whose vertices ripple with summed
 /// waves. It refracts and reflects the scene, blends from a shallow to a deep
-/// colour with depth, and adds shoreline foam.
+/// color with depth, and adds shoreline foam.
 ///
 /// The surface is positioned by `center` and sized by `extent` (XZ
 /// half-widths). The mesh itself is flat; all height variation comes from the
@@ -77,14 +77,14 @@ pub struct WaterSurface {
     /// The waves summed to animate the surface (up to 4). Defaults to a single
     /// gentle wave.
     pub waves: Vec<WaterWave>,
-    /// Linear-space RGB colour of deep water.
+    /// Linear-space RGB color of deep water.
     pub deep_color: [f32; 3],
-    /// Linear-space RGB colour of shallow water near the shore.
+    /// Linear-space RGB color of shallow water near the shore.
     pub shallow_color: [f32; 3],
-    /// Depth over which the colour blends from shallow to deep, in metres.
-    pub depth_falloff_metres: f32,
-    /// Width of the shoreline foam band, in metres.
-    pub foam_width_metres: f32,
+    /// Depth over which the color blends from shallow to deep, in meters.
+    pub depth_falloff_meters: f32,
+    /// Width of the shoreline foam band, in meters.
+    pub foam_width_meters: f32,
     /// Strength of the shoreline foam, in [0, 1].
     pub foam_intensity: f32,
     /// Sharpness of the grazing-angle reflection. Higher confines reflections to
@@ -110,8 +110,8 @@ impl Default for WaterSurface {
             waves: vec![WaterWave::default()],
             deep_color: [0.02, 0.05, 0.15],
             shallow_color: [0.20, 0.50, 0.55],
-            depth_falloff_metres: 4.0,
-            foam_width_metres: 0.30,
+            depth_falloff_meters: 4.0,
+            foam_width_meters: 0.30,
             foam_intensity: 0.8,
             fresnel_power: 5.0,
             roughness: 0.05,
@@ -146,8 +146,8 @@ mod tests {
         // what reads as water rather than a tinted mirror.
         assert!(s.deep_color[2] > s.deep_color[0]);
         assert!(s.shallow_color[1] > s.deep_color[1]);
-        assert_eq!(s.depth_falloff_metres, 4.0);
-        assert_eq!(s.foam_width_metres, 0.3);
+        assert_eq!(s.depth_falloff_meters, 4.0);
+        assert_eq!(s.foam_width_meters, 0.3);
         assert_eq!(s.foam_intensity, 0.8);
         assert_eq!(s.fresnel_power, 5.0);
         assert_eq!(s.roughness, 0.05);
@@ -162,7 +162,7 @@ mod tests {
                 "waves":[{"amplitude":0.4,"wavelength":12,"direction":[0.7,0.7]},
                          {"amplitude":0.05,"wavelength":1.5,"speed":2.5,"steepness":0.1}],
                 "deep_color":[0,0.02,0.1],"shallow_color":[0.1,0.4,0.45],
-                "depth_falloff_metres":8,"foam_width_metres":0.6,"foam_intensity":1.2,
+                "depth_falloff_meters":8,"foam_width_meters":0.6,"foam_intensity":1.2,
                 "fresnel_power":4,"roughness":0.02,"refraction_strength":0.3,
                 "visible":false}"#,
         )
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(back.extent, [40.0, 25.0]);
         assert_eq!(back.subdivisions, 128);
         assert_eq!(back.waves[1].speed, 2.5);
-        assert_eq!(back.depth_falloff_metres, 8.0);
+        assert_eq!(back.depth_falloff_meters, 8.0);
         assert_eq!(back.foam_intensity, 1.2);
         assert_eq!(back.refraction_strength, 0.3);
         assert_eq!(back.asset_id, AssetId::default());

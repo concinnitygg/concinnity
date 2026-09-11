@@ -11,7 +11,7 @@ reflection stays anchored to the surrounding geometry as the camera moves.
 Place several across a level so reflections stay accurate as a first-person
 camera moves between areas (a room, a courtyard, a corridor): each surface
 uses the probe whose box it sits deepest inside, and cross-fades into the
-neighbouring box near a shared boundary so reflections don't pop as the camera
+neighboring box near a shared boundary so reflections don't pop as the camera
 crosses between them. When a world declares no `ReflectionProbe`, the renderer
 auto-seeds a small grid of probes from the scene bounds, so existing scenes
 still get local reflections without authoring.

@@ -8,7 +8,7 @@
 // per-frame keys, so tangent shaping carries no extra information there; a
 // sparsely keyed cubic curve from another tool bakes with linear error.
 //
-// Rotations honour each node's RotationOrder and PreRotation. Nonzero
+// Rotations honor each node's RotationOrder and PreRotation. Nonzero
 // pivots / offsets / PostRotation are outside the supported envelope and log
 // a warning instead of silently mis-posing.
 
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn import_fbx_animation_honours_the_node_rotation_order() {
+    fn import_fbx_animation_honors_the_node_rotation_order() {
         let mut doc = animated_rig(100.0);
         doc.attach(
             fx::TIP_BONE_ID,

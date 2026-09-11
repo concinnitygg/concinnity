@@ -165,7 +165,7 @@ impl VkContext {
         };
         let device = &self.device;
 
-        // Pack the six already-normalised frustum planes for the kernel.
+        // Pack the six already-normalized frustum planes for the kernel.
         let mut params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,

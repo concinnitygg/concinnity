@@ -60,7 +60,7 @@ impl AutoExposureState {
     ) -> f32 {
         // The target EV shifts the scene's geometric-mean luminance onto the
         // configured pivot: scene-white on the SDR path (target_log_lum=0,
-        // ACES then compresses), perceptual middle-grey on the HDR path
+        // ACES then compresses), perceptual middle-gray on the HDR path
         // (target_log_lum=log2(0.18), no ACES). `exposure = 2^target_ev`
         // then satisfies `avg_lum * exposure = 2^target_log_lum` modulo bias.
         let target = (settings.target_log_lum - avg_log_lum + ev_bias)
@@ -106,7 +106,7 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::auto_exposure::HDR_MIDDLE_GREY_LOG2;
+    use crate::gfx::auto_exposure::HDR_MIDDLE_GRAY_LOG2;
 
     #[test]
     fn update_pulls_current_ev_toward_target() {
@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn update_honours_ev_bias() {
+    fn update_honors_ev_bias() {
         let settings = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, false);
         let mut state = AutoExposureState { current_ev: 0.0 };
         // avg_log_lum = 0, bias = +1 -> target_ev = +1 (over-expose by one stop).
@@ -166,19 +166,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_shifts_to_middle_grey_on_hdr() {
-        // HDR worlds shift AE's pivot to perceptual middle-grey (0.18 linear)
+    fn resolve_shifts_to_middle_gray_on_hdr() {
+        // HDR worlds shift AE's pivot to perceptual middle-gray (0.18 linear)
         // because there is no ACES tonemap to compress scene-white down. The
         // pivot is `log2(0.18) ≈ -2.473`.
         let s = AutoExposureSettings::resolve(-8.0, 8.0, 1.5, true);
-        assert!((s.target_log_lum - HDR_MIDDLE_GREY_LOG2).abs() < 1.0e-6);
+        assert!((s.target_log_lum - HDR_MIDDLE_GRAY_LOG2).abs() < 1.0e-6);
     }
 
     #[test]
     fn update_shifts_target_by_target_log_lum_on_hdr() {
         // With HDR-aware settings, the EV the EMA converges on is shifted
         // ~2.47 stops DOWN compared to the SDR default, i.e. the scene gets
-        // darker post-exposure so the same input renders at middle-grey
+        // darker post-exposure so the same input renders at middle-gray
         // instead of scene-white.
         let sdr = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, false);
         let hdr = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, true);
@@ -190,7 +190,7 @@ mod tests {
         }
         // SDR settles at 0.0; HDR at log2(0.18) ≈ -2.47.
         assert!(state_sdr.current_ev.abs() < 1.0e-3);
-        assert!((state_hdr.current_ev - HDR_MIDDLE_GREY_LOG2).abs() < 1.0e-3);
+        assert!((state_hdr.current_ev - HDR_MIDDLE_GRAY_LOG2).abs() < 1.0e-3);
     }
 
     #[test]
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn average_log_luminance_single_bin_returns_bin_centre() {
+    fn average_log_luminance_single_bin_returns_bin_center() {
         let mut histogram = [0u32; HISTOGRAM_BINS];
         histogram[128] = 10;
         let avg = average_log_luminance(&histogram);

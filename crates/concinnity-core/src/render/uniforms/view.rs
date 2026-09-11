@@ -49,7 +49,7 @@ pub struct ViewUniforms {
 }
 
 /// Per-frame view inputs to the unified G-buffer pre-pass. The jittered current
-/// VP drives the rasterised position (matching the main pass); `view` takes the
+/// VP drives the rasterized position (matching the main pass); `view` takes the
 /// normal + position into view space (where SSR / SSAO / SSGI / RT work); the
 /// un-jittered cur/prev VPs derive a jitter-free motion vector. Matches `GbView`
 /// in `shaders/gbuffer_prepass.slang`. 256 bytes (four float4x4, all naturally

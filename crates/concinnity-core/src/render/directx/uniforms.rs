@@ -11,7 +11,7 @@
 //! morph kernels, the raymarch SDF templates, the legacy per-draw main and
 //! velocity passes, and Metal's water.
 
-/// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalised
+/// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalized
 /// frustum planes, the camera position sharing its row with the object count, the
 /// previous frame's view-projection, the Hi-Z metadata (dims, mip count, enable
 /// flag), then the shader-bucket routing. DirectX fuses the cull + Hi-Z uniforms

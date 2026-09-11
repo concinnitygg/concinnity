@@ -2,8 +2,8 @@
 //
 // Per-frame encoder for the volumetric-fog pass. Runs after the main HDR
 // pass (and after the decal pass, so fog sits on top of decals just like it
-// does for any other resolved scene colour) and before SSR / TAA, so the
-// reflections and history reproject through the integrated fog colour and
+// does for any other resolved scene color) and before SSR / TAA, so the
+// reflections and history reproject through the integrated fog color and
 // transmittance.
 //
 // The pass is a single fullscreen triangle: the fragment shader samples the
@@ -35,7 +35,7 @@ use super::post::fullscreen::{
     FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
 };
 use super::scoped_encoder::ScopedEncoder;
-use super::slang_shaders::{FOG_FRAG, FOG_FROXEL};
+use super::slang_builtins::{FOG_FRAG, FOG_FROXEL};
 use objc2_foundation::ns_string;
 
 // All volumetric-fog state grouped into one feature unit: the resolved
@@ -75,7 +75,7 @@ impl MtlContext {
     // Encode the volumetric-fog pass. Caller has already ended the main HDR
     // pass (and the decal pass, if any), so `hdr_targets.depth` (MSAA) holds
     // the scene depth and `hdr_targets.hdr_resolve` holds the resolved
-    // scene + decals colour. The pass alpha-blends a single lit ray-march
+    // scene + decals color. The pass alpha-blends a single lit ray-march
     // over `hdr_resolve`.
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.

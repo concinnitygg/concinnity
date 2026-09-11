@@ -3,7 +3,7 @@
 // The Console panel's layout half: a terminal-style floating panel with a
 // scrollable log window filling the body and a single command line pinned to
 // the bottom (the panel's one TextInput, which also carries the /del name
-// autocomplete as ghost text). Log lines colour by severity (`theme::LOG_*`).
+// autocomplete as ghost text). Log lines color by severity (`theme::LOG_*`).
 // The log model and command dispatch live in `console.rs` and
 // `hook/console_edit.rs`.
 

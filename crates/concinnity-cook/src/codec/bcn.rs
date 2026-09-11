@@ -9,7 +9,7 @@
 use concinnity_core::bake::texture::TextureFormat;
 use concinnity_core::decode::checked_product;
 
-// Expand a 16-bit 565 colour to RGB888.
+// Expand a 16-bit 565 color to RGB888.
 fn rgb565(c: u16) -> [u8; 3] {
     let r = ((c >> 11) & 0x1F) as u32;
     let g = ((c >> 5) & 0x3F) as u32;
@@ -21,9 +21,9 @@ fn rgb565(c: u16) -> [u8; 3] {
     ]
 }
 
-// Decode one BC1 colour block (8 bytes) into 16 RGBA pixels in row-major order.
-// When `opaque` is false the 1-bit punch-through alpha mode is honoured (used by
-// standalone BC1); inside BC3 the colour block is always the 4-colour opaque mode.
+// Decode one BC1 color block (8 bytes) into 16 RGBA pixels in row-major order.
+// When `opaque` is false the 1-bit punch-through alpha mode is honored (used by
+// standalone BC1); inside BC3 the color block is always the 4-color opaque mode.
 fn decode_bc1_block(block: &[u8], opaque: bool) -> [[u8; 4]; 16] {
     let c0 = u16::from_le_bytes([block[0], block[1]]);
     let c1 = u16::from_le_bytes([block[2], block[3]]);
@@ -148,7 +148,7 @@ where
     Ok(out)
 }
 
-// Decode a BC1 (DXT1) buffer into RGBA8. Honours 1-bit punch-through alpha.
+// Decode a BC1 (DXT1) buffer into RGBA8. Honors 1-bit punch-through alpha.
 pub(crate) fn decode_bc1(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     assemble(data, width, height, 8, |block| {
         decode_bc1_block(block, false)
@@ -156,7 +156,7 @@ pub(crate) fn decode_bc1(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>
 }
 
 // Decode a BC3 (DXT5) buffer into RGBA8: an 8-byte alpha block followed by an
-// 8-byte opaque BC1 colour block per 4x4 tile.
+// 8-byte opaque BC1 color block per 4x4 tile.
 pub(crate) fn decode_bc3(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     assemble(data, width, height, 16, |block| {
         let alpha = decode_bc4_block(&block[0..8]);
@@ -208,7 +208,7 @@ pub(crate) fn decode(
 mod tests {
     use super::*;
 
-    // A BC1 block with c0 > c1 and all indices 0 yields a solid colour0 fill.
+    // A BC1 block with c0 > c1 and all indices 0 yields a solid color0 fill.
     #[test]
     fn bc1_solid_color0() {
         // color0 = pure red 565 (0xF800), color1 = 0x0000, indices all 0.
@@ -230,7 +230,7 @@ mod tests {
             assert_eq!(
                 chunk,
                 &[0, 0, 0, 0],
-                "index-3 in 4-colour-or-less mode is transparent"
+                "index-3 in 4-color-or-less mode is transparent"
             );
         }
     }
@@ -242,7 +242,7 @@ mod tests {
         block[0] = 200; // a0
         block[1] = 10; // a1 (a0 > a1)
         // alpha indices all 0 (bytes 2..8 = 0) -> alpha 200
-        // colour block: color0 = white 565, indices 0 -> white
+        // color block: color0 = white 565, indices 0 -> white
         block[8] = 0xFF;
         block[9] = 0xFF;
         let px = decode_bc3(&block, 4, 4).unwrap();

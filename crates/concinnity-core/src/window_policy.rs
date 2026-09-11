@@ -1,6 +1,6 @@
 //! Whether this process is allowed to open a window.
 //!
-//! A backend stands up its window from deep inside device initialisation, and
+//! A backend stands up its window from deep inside device initialization, and
 //! a process that reaches that point without an operating system to drive it
 //! does not fail: it blocks on an event loop that never ends. Under a test
 //! harness that is a hang with no failing assertion to read.

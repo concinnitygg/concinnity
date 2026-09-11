@@ -237,11 +237,11 @@ pub(crate) fn quat_to_mat3(q: Quat) -> Mat3 {
 }
 
 // Scale a quaternion to unit length, falling back to identity when it is too
-// short to normalise.
+// short to normalize.
 
 // Spherical linear interpolation between two unit quaternions. Negates `b`
 // when the pair points to opposite hemispheres so the interpolation always
-// takes the shorter arc, and falls back to a normalised lerp when the two
+// takes the shorter arc, and falls back to a normalized lerp when the two
 // rotations are nearly parallel (the slerp denominator approaches zero there
 // and nlerp is visually identical at that angle). `f` is clamped to `[0, 1]`.
 pub(crate) fn quat_slerp(a: Quat, mut b: Quat, f: f32) -> Quat {

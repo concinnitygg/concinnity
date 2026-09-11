@@ -93,12 +93,10 @@ mod tests {
 
     #[test]
     fn an_authored_instance_list_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let p: InstancedProp = serde_json::from_str(
+        let p: InstancedProp = crate::test_support::from_json(
             r#"{"mesh":"tree_mesh","material":"bark","cull_distance":120,
                 "instances":[{"position":[1,0,2]},{"position":[3,0,4],"scale":[2,2,2]}]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(p.mesh, Some(MeshHandle(9)));
         assert_eq!(p.material, Some(MaterialHandle(4)));
         assert_eq!(p.instances.len(), 2);

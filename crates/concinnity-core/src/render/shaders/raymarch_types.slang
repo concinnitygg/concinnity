@@ -64,9 +64,9 @@ struct RaymarchShadowCascade
 };
 
 // The per-point material an authored `shade` returns. The template runs PBR on
-// it so a raymarched surface reads like a rasterised one. `transmitted` is an
+// it so a raymarched surface reads like a rasterized one. `transmitted` is an
 // additive contribution added after the PBR sun and IBL terms: opaque shaders
-// leave it zero, refractive ones set it to the scene-tap colour they want to
+// leave it zero, refractive ones set it to the scene-tap color they want to
 // show through, already attenuated.
 struct SdfSurface
 {

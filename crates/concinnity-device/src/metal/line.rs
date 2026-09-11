@@ -1,7 +1,7 @@
 // src/metal/line.rs
 //
 // Per-frame encoder for the world-space line pass. Runs at the tail of
-// the hdr_resolve decoration chain, after the main pass resolved colour into
+// the hdr_resolve decoration chain, after the main pass resolved color into
 // `hdr_targets.hdr_resolve` and depth into `hdr_targets.depth_resolve`, so the
 // lines layer over the lit scene and SSR / TAA treat them like any other scene
 // content.
@@ -96,7 +96,7 @@ impl MtlContext {
 
     // Encode the line pass: one unindexed triangle list covering every
     // expanded ribbon, alpha-blended into `hdr_resolve`. `vp` is the same
-    // view-projection the main pass rasterised with (jittered under TAA), so a
+    // view-projection the main pass rasterized with (jittered under TAA), so a
     // line sits on the pixel its geometry did. Returns the draw-call count.
     // pub(in crate::metal) so the render-graph executor in metal/graph_exec.rs
     // can dispatch this pass from a CompiledGraph.
@@ -162,12 +162,18 @@ fn build_line_pipeline(
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn =
-        super::slang_shaders::entry_function(device, &super::slang_shaders::LINE_VERT, hot_reload)?;
-    let frag_fn =
-        super::slang_shaders::entry_function(device, &super::slang_shaders::LINE_FRAG, hot_reload)?;
+    let vert_fn = super::slang_builtins::entry_function(
+        device,
+        &super::slang_builtins::LINE_VERT,
+        hot_reload,
+    )?;
+    let frag_fn = super::slang_builtins::entry_function(
+        device,
+        &super::slang_builtins::LINE_FRAG,
+        hot_reload,
+    )?;
 
-    // Vertex layout: `LineVertex` (position, edge, colour) at 32 bytes,
+    // Vertex layout: `LineVertex` (position, edge, color) at 32 bytes,
     // asserted by `line_vertex_layout_matches_shaders`.
     let vert_desc = vertex_descriptor(
         &[

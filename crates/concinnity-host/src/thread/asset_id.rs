@@ -126,7 +126,7 @@ mod tests {
     }
 
     // The single-id counterpart to `name_table`. A blank slot reads as absent
-    // rather than as an empty name, so a caller labelling by id falls back to
+    // rather than as an empty name, so a caller labeling by id falls back to
     // its own placeholder instead of printing nothing.
     #[test]
     fn name_of_resolves_one_id_and_reports_unnamed_slots_as_absent() {

@@ -30,7 +30,7 @@ pub struct SkyRotation {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The celestial pole in world space: the axis the sphere turns about.
-    /// Does not need to be normalised.
+    /// Does not need to be normalized.
     pub axis: [f32; 3],
     /// Turn rate in degrees per second. Negative runs the sky backwards.
     pub degrees_per_second: f32,

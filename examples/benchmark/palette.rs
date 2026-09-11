@@ -31,7 +31,7 @@ pub(crate) const SOOT: &str = "tex_plaster";
 /// The texture a decal projects.
 pub(crate) const SCUFF: &str = "tex_checker";
 
-// Colour maps are generated at this edge length. Large enough that a surface
+// Color maps are generated at this edge length. Large enough that a surface
 // filling the frame is not obviously a small tile, small enough that the eight
 // of them generate in well under the opening hold.
 const MAP_RESOLUTION: u32 = 512;
@@ -50,10 +50,10 @@ pub(crate) fn declare(world: &mut WorldBuilder) {
         ("tex_wood", "wood"),
         ("tex_grass", "grass"),
     ] {
-        world.add(name, colour_map(generator, MAP_RESOLUTION));
+        world.add(name, color_map(generator, MAP_RESOLUTION));
     }
-    world.add(SOOT, colour_map("plaster", PATTERN_RESOLUTION));
-    world.add(SCUFF, colour_map("checker", PATTERN_RESOLUTION));
+    world.add(SOOT, color_map("plaster", PATTERN_RESOLUTION));
+    world.add(SCUFF, color_map("checker", PATTERN_RESOLUTION));
 
     // The concrete map is bound a second time as occlusion-roughness-metallic,
     // so the floor's gloss varies across it the way a worn surface does and the
@@ -119,7 +119,7 @@ pub(crate) fn declare(world: &mut WorldBuilder) {
         .reference("emissive_map", SCUFF);
 }
 
-fn colour_map(generator: &str, resolution: u32) -> Texture {
+fn color_map(generator: &str, resolution: u32) -> Texture {
     Texture {
         generator: generator.to_string(),
         resolution,

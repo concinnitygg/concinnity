@@ -12,12 +12,12 @@
 //      single per-frame upload ring.
 //   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
 //      respawn each pool.
-//   4. Transitions visible pools to NON_PIXEL_SHADER_RESOURCE and rasterises
+//   4. Transitions visible pools to NON_PIXEL_SHADER_RESOURCE and rasterizes
 //      one alpha-blended billboard quad per live particle into `hdr_resolve`.
 //
 // The render pass alpha-blends into the resolved HDR target after the
 // volumetric-fog pass and before SSR / TAA so particles appear in screen-
-// space reflections and are temporally stabilised by TAA history. Mirrors
+// space reflections and are temporally stabilized by TAA history. Mirrors
 // src/metal/particle.rs.
 
 use windows::Win32::Foundation::RECT;
@@ -250,7 +250,7 @@ fn create_render_pso(
             BytecodeLength: ps.len(),
         },
         // No input layout; the vertex shader reads the pool by SV_InstanceID
-        // and synthesises the quad corner from SV_VertexID.
+        // and synthesizes the quad corner from SV_VertexID.
         PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
         NumRenderTargets: 1,
         RTVFormats: {
@@ -441,7 +441,7 @@ impl ParticleResources {
     }
 }
 
-// Allocate the per-emitter GPU state: a zero-initialised pool buffer (UAV)
+// Allocate the per-emitter GPU state: a zero-initialized pool buffer (UAV)
 // and a 4-byte atomic spawn counter (UAV). Both resting in UNORDERED_ACCESS.
 pub(in crate::directx) fn build_emitter_gpu_state(
     alloc: &DeviceAllocator,
@@ -474,7 +474,7 @@ pub(in crate::directx) fn build_emitter_gpu_state(
     })
 }
 
-// Zero-initialise a freshly-created (COMMON) default-heap buffer by uploading
+// Zero-initialize a freshly-created (COMMON) default-heap buffer by uploading
 // from a temporary upload-heap buffer through a one-shot command list. The target
 // is transitioned COMMON → COPY_DEST for the copy and then to UNORDERED_ACCESS,
 // its resting state for the per-frame compute passes.
@@ -555,7 +555,7 @@ fn zero_default_buffer(
     // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
         let event =
-            // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+            // SAFETY: an auto-reset, initially unsignaled event with no name and no security
             // attributes; the call borrows nothing.
             unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
                 .map_err(|e| format!("zero_default_buffer: event: {e}"))?;

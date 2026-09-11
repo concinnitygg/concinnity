@@ -137,7 +137,7 @@ fn key_from_parts(
 ) -> String {
     let mut hasher = Sha256::new();
     // Covers the runtime half of the pipeline the binary identity in the
-    // segment header does not: the payload serialisers in
+    // segment header does not: the payload serializers in
     // `concinnity_core::bake`, and the asset schema the baked records inside a
     // payload encode against.
     hasher.update(concinnity_core::SCHEMA_VERSION.to_le_bytes());

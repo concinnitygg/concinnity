@@ -83,7 +83,7 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // Draws the default stats HUD: an `FPS` chip, a `GPU WAIT` chip, a `VRAM` chip,
 // an `EV` chip (when auto-exposure is on), and an `EDR` chip (when the renderer
 // is on the HDR display path), each written into its own `TextLabel`. Give the
-// labels a `background` colour for the boxed look.
+// labels a `background` color for the boxed look.
 //
 // The `FPS`, `GPU WAIT`, and `VRAM` chips are shown or hidden from the in-game
 // video settings ("Display performance stats" + per-readout toggles); the `EV`
@@ -110,7 +110,7 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // the chip stays blank otherwise so a world without auto-exposure has no orphan
 // reading.
 //
-// `EDR` is the active panel's maximum extended-range colour-component
+// `EDR` is the active panel's maximum extended-range color-component
 // multiplier (e.g. `EDR x2.0` on an HDR400 panel, `x8.0` on HDR1000).
 // Filled on Metal when `PostProcessConfig.hdr_display = true` AND the
 // platform reports an EDR headroom above SDR reference white; the chip

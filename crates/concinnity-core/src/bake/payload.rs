@@ -80,7 +80,7 @@ pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<Vec<u8>, String> {
             mesh.half_depth,
             mesh.subdivisions.unwrap_or(WATER_SUBDIVISIONS),
         )?,
-        // The heightfield generator reads a greyscale image, which is an
+        // The heightfield generator reads a grayscale image, which is an
         // importer's job.
         "heightfield" => {
             return Err(
@@ -149,7 +149,7 @@ pub fn environment_map<S: RowScheduler>(map: &EnvironmentMap, rows: &S) -> Resul
     ))
 }
 
-/// Rasterise a `Font` into its glyph-atlas payload.
+/// Rasterize a `Font` into its glyph-atlas payload.
 pub fn font(font: &Font) -> Result<Vec<u8>, String> {
     if !font.path.is_empty() {
         return Err(
@@ -167,7 +167,7 @@ pub fn font(font: &Font) -> Result<Vec<u8>, String> {
 /// material has no blob payload: the clamped parameters are the whole of it.
 pub fn material(material: Material) -> Result<Vec<u8>, String> {
     postcard::to_allocvec(&validate::material(material))
-        .map_err(|e| alloc::format!("Material serialise: {e}"))
+        .map_err(|e| alloc::format!("Material serialize: {e}"))
 }
 
 #[cfg(test)]
@@ -201,7 +201,7 @@ mod tests {
             extrude,
         ] {
             let payload = procedural_mesh(&m).unwrap_or_else(|e| panic!("{}: {e}", m.generator));
-            let read = mesh_payload::deserialise(&payload)
+            let read = mesh_payload::deserialize(&payload)
                 .unwrap_or_else(|e| panic!("{}: {e}", m.generator));
             assert!(!read.0.is_empty(), "{} has vertices", m.generator);
         }
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn raw_geometry_bakes_with_derived_normals() {
         let payload = super::mesh(&triangle()).expect("a triangle bakes");
-        let (verts, indices) = mesh_payload::deserialise(&payload).expect("the payload reads back");
+        let (verts, indices) = mesh_payload::deserialize(&payload).expect("the payload reads back");
         assert_eq!(indices, alloc::vec![0, 1, 2]);
         assert!(verts.iter().all(|v| (v.normal[2] - 1.0).abs() < 1e-5));
     }
@@ -290,7 +290,7 @@ mod tests {
         };
         let payload = environment_map(&map, &Serial).expect("the sky bakes");
         let view =
-            crate::bake::environment_map::deserialise(&payload).expect("the payload reads back");
+            crate::bake::environment_map::deserialize(&payload).expect("the payload reads back");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
     }
@@ -325,14 +325,14 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_face_rasterises_and_a_file_one_does_not() {
+    fn the_builtin_face_rasterizes_and_a_file_one_does_not() {
         let payload = font(&Font {
             size_px: 12,
             ..Default::default()
         })
         .expect("the built-in face bakes");
         let (_, _, _, size_px, _, metrics) =
-            crate::bake::font::deserialise(&payload).expect("the atlas reads back");
+            crate::bake::font::deserialize(&payload).expect("the atlas reads back");
         assert_eq!(size_px, 12);
         assert!(!metrics.is_empty());
 

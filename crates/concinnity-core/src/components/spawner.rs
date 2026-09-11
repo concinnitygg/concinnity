@@ -43,9 +43,8 @@ mod tests {
 
     #[test]
     fn an_authored_spawner_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
         let s: SpawnerArgs =
-            serde_json::from_str(r#"{"template":"spark","interval":0.25,"lifetime":3}"#).unwrap();
+            crate::test_support::from_json(r#"{"template":"spark","interval":0.25,"lifetime":3}"#);
         assert_eq!(s.template, AssetId(5));
         assert_eq!(s.interval, 0.25);
 

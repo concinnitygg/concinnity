@@ -115,7 +115,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
                 &composite as *const CompositeParams as *const std::ffi::c_void,
                 0,
             );
-            // Root param [3]: 3D colour-grading LUT SRV (t2).
+            // Root param [3]: 3D color-grading LUT SRV (t2).
             cmd.SetGraphicsRootDescriptorTable(3, self.color_lut.srv_gpu);
             // Root params [4..6]: the G-buffer channel sources the debug view
             // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO). The

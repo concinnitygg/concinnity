@@ -60,7 +60,7 @@ pub struct ShadowUniformInputs {
     /// Far end of the last cascade. Cascades cover [near, shadow_distance].
     pub shadow_distance: f32,
     /// Unit vector pointing TOWARD the light. Same convention as
-    /// `DirectionalLight.direction`; renormalised internally.
+    /// `DirectionalLight.direction`; renormalized internally.
     pub light_dir_to_source: [f32; 3],
     /// Per-cascade texture resolution; used for texel snapping.
     pub shadow_map_size: u32,
@@ -165,7 +165,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         let r = normalize3(cross(f, up_l));
         let u = cross(r, f);
 
-        // Texel-grid snap. Quantise the cascade center along the light's right
+        // Texel-grid snap. Quantize the cascade center along the light's right
         // and up axes to whole shadow texels so the texel grid stays anchored in
         // world space; the texels then stop crawling under camera translation
         // (the shadow stops chasing the camera). The snap must happen in world
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn point_inside_first_cascade_projects_into_unit_box() {
-        // A point a few metres in front of the camera should project into the
+        // A point a few meters in front of the camera should project into the
         // first cascade's light NDC, inside the [-1, 1] xy box (depth [0, 1]).
         let u = compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
@@ -465,7 +465,7 @@ mod tests {
         // its shadow vanishes the moment the receiver drops into a small near
         // cascade, and the clip boundary slides across the world as the camera
         // moves. The ortho near plane is extended toward the light for exactly
-        // this. A caster 30m up sits well beyond the few-metre cascade-0 sphere
+        // this. A caster 30m up sits well beyond the few-meter cascade-0 sphere
         // radius, so without the extension it projects to ndc.z < 0 (clipped).
         let cam = [0.0_f32, 0.0, 0.0];
         let light = [0.0_f32, 0.85, 0.3]; // mostly overhead

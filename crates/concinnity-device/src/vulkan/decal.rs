@@ -14,7 +14,6 @@
 
 use concinnity_core::gfx::transform::mat4_inverse;
 use std::cell::Cell;
-use std::ffi::CString;
 
 use ash::vk;
 
@@ -31,7 +30,7 @@ use concinnity_core::render::uniforms::DecalView;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::pipeline::spv_module;
+use super::pipeline::GraphicsStages;
 use super::texture::GpuImage;
 use crate::vulkan::slang_builtins::SlangCompile;
 
@@ -48,7 +47,7 @@ const CUBE_VERTS: [f32; 24] = [
 ];
 
 // 36 indices forming 12 triangles wound CCW outward. Matches the
-// DirectX / Metal index list so the rasterised cube exactly mirrors the
+// DirectX / Metal index list so the rasterized cube exactly mirrors the
 // reference.
 const CUBE_INDICES: [u16; 36] = [
     // -Z face                +Z face
@@ -106,7 +105,7 @@ pub(in crate::vulkan) struct DecalResources {
     pub(in crate::vulkan) albedo_sets: Vec<vk::DescriptorSet>,
 
     // One framebuffer per frame-in-flight slot, each binding its frame
-    // slot's `hdr_resolve_images[i].view` as the sole colour attachment.
+    // slot's `hdr_resolve_images[i].view` as the sole color attachment.
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     pub(in crate::vulkan) sampler: vk::Sampler,
@@ -129,7 +128,7 @@ pub(in crate::vulkan) struct DecalDeviceContext<'a> {
 }
 
 // Render-target inputs the decal pass writes into / samples from: the
-// resolved HDR colour attachment (format + per-frame views), the main
+// resolved HDR color attachment (format + per-frame views), the main
 // depth views, the shared sampler, and the framebuffer extent.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct DecalPassTargets<'a> {
@@ -245,7 +244,7 @@ impl DecalResources {
         let albedo_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &albedo_layouts)?;
 
         // Per-frame framebuffers (one per frame slot binding that slot's
-        // hdr_resolve view as the colour attachment).
+        // hdr_resolve view as the color attachment).
         let mut framebuffers = Vec::with_capacity(frames);
         for &view in hdr_resolve_views.iter().take(frames) {
             let attachments = [view];
@@ -343,7 +342,7 @@ fn create_decal_render_pass(
     device: &VkDevice,
     format: vk::Format,
 ) -> Result<OwnedRenderPass, String> {
-    // One colour attachment: the resolved HDR scene. The main pass left
+    // One color attachment: the resolved HDR scene. The main pass left
     // it in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT
     // during the subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so
     // SSR / TAA / bloom / composite can sample it. The subpass
@@ -582,19 +581,8 @@ fn create_decal_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     let bindings = [vk::VertexInputBindingDescription::default()
         .binding(0)
         .stride(12) // vec3 position
@@ -617,14 +605,14 @@ fn create_decal_pipeline(
         // Cull front faces: the camera may be inside the decal volume.
         // With back-face culling on (the default) entering the volume
         // would make the unit cube disappear; culling the front face
-        // keeps the back faces rasterised in both cases. Mirrors
+        // keeps the back faces rasterized in both cases. Mirrors
         // DirectX / Metal.
         .cull_mode(vk::CullModeFlags::FRONT)
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0);
     let multisample = vk::PipelineMultisampleStateCreateInfo::default()
         // The decal pass writes the SINGLE-SAMPLE resolved HDR, not the
-        // MSAA colour. Sample count here matches the attachment, not the
+        // MSAA color. Sample count here matches the attachment, not the
         // main pass's MSAA count.
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -713,7 +701,7 @@ impl VkContext {
     // tracked by TAA's history buffer like the rest of the scene.
     //
     // `vp` is the same jittered view-projection the main pass
-    // rasterised with; the inverse drives the world-space reconstruction
+    // rasterized with; the inverse drives the world-space reconstruction
     // in the fragment shader.
     pub(in crate::vulkan) fn encode_decals(
         &self,
@@ -757,7 +745,7 @@ impl VkContext {
             .render_area(vk::Rect2D::default().extent(extent));
 
         // Negative-height viewport matches the main pass so the
-        // rasterised pixel grid lines up with the depth attachment we're
+        // rasterized pixel grid lines up with the depth attachment we're
         // sampling. Without this, the cube would be drawn Y-flipped
         // relative to the scene depth.
         let vp_state = vk::Viewport {

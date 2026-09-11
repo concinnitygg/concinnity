@@ -110,12 +110,10 @@ mod tests {
 
     #[test]
     fn a_passthrough_hud_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let s: Screen = serde_json::from_str(
+        let s: Screen = crate::test_support::from_json(
             r#"{"initial":true,"fade_in_secs":0.5,"toggle_key":"Tab","input":"passthrough",
                 "pauses_world":false,"focus":"first_button","layer":-1}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(s.input, ScreenInput::Passthrough);
         assert!(!s.pauses_world);
         assert!(s.initial);

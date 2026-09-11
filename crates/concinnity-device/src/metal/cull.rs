@@ -160,7 +160,7 @@ pub(super) fn metal_flat_pool_indices(
     let tc = texture_count as u32;
     let clamp = |i: u32| i.min(cap);
     // The emissive / ORM indices already carry their final shared-pool handle
-    // (cook / graphics_system resolve them, `0` = unset), so they index the
+    // (cook / the graphics system resolve them, `0` = unset), so they index the
     // pool directly.
     FlatPoolIndices {
         albedo: clamp(albedo_pool_index(texture_slot, tc)),
@@ -642,7 +642,7 @@ impl MtlContext {
             return Ok(());
         }
 
-        // Pack the six already-normalised frustum planes for the kernel.
+        // Pack the six already-normalized frustum planes for the kernel.
         let mut planes = [[0.0f32; 4]; 6];
         for (i, p) in frustum.planes.iter().enumerate() {
             planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -1186,10 +1186,10 @@ fn compute_pipeline(
 
 fn decision_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    lib: &super::slang_shaders::SlangLib,
+    lib: &super::slang_builtins::SlangLib,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    let function = super::slang_shaders::entry_function(device, lib, hot_reload)?;
+    let function = super::slang_builtins::entry_function(device, lib, hot_reload)?;
     compute_pipeline(device, &function, lib.name)
 }
 
@@ -1202,8 +1202,8 @@ pub(super) fn build_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<CullPipeline, String> {
-    let decide = decision_pipeline(device, &super::slang_shaders::CULL_PHASE1, hot_reload)?;
-    let decide_phase2 = decision_pipeline(device, &super::slang_shaders::CULL_PHASE2, hot_reload)?;
+    let decide = decision_pipeline(device, &super::slang_builtins::CULL_PHASE1, hot_reload)?;
+    let decide_phase2 = decision_pipeline(device, &super::slang_builtins::CULL_PHASE2, hot_reload)?;
     let library = shader_library(device, hot_reload, "cull_encode.metal")?;
     let encode_fn = library
         .newFunctionWithName(&ns_str("cull_encode"))
@@ -1230,7 +1230,7 @@ pub(super) fn build_shadow_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    decision_pipeline(device, &super::slang_shaders::CULL_SHADOW, hot_reload)
+    decision_pipeline(device, &super::slang_builtins::CULL_SHADOW, hot_reload)
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 // previous frame's average log-luminance, an EMA step that updates the adapted
 // EV, and the histogram build + average compute dispatches that produce next
 // frame's average. The compute passes are encoded after the main HDR resolve
-// (where `hdr_resolve` carries this frame's scene colour) and read CPU-side at
+// (where `hdr_resolve` carries this frame's scene color) and read CPU-side at
 // the top of the next frame, so there is one frame of latency between the
 // scene's actual luminance and the exposure applied to it: invisible at
 // human-scale eye-adaptation rates.
@@ -226,8 +226,8 @@ pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<AutoExposurePipelines, String> {
-    let build_lib = super::slang_shaders::AUTO_EXPOSURE_BUILD.library(device, hot_reload)?;
-    let average_lib = super::slang_shaders::AUTO_EXPOSURE_AVERAGE.library(device, hot_reload)?;
+    let build_lib = super::slang_builtins::AUTO_EXPOSURE_BUILD.library(device, hot_reload)?;
+    let average_lib = super::slang_builtins::AUTO_EXPOSURE_AVERAGE.library(device, hot_reload)?;
     let build_fn = build_lib
         .newFunctionWithName(&ns_str("histogram_build"))
         .ok_or("histogram_build not found in auto_exposure library")?;

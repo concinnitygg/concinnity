@@ -116,7 +116,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
         if !source.to_lowercase().ends_with(".fbx") {
             continue;
         }
-        // Honour the same content-addressed cache the glTF pass uses: a probe
+        // Honor the same content-addressed cache the glTF pass uses: a probe
         // hit means the compiled payload is already in hand, so skip the parse.
         if matches!(
             mesh_cache.get(&asset.name),

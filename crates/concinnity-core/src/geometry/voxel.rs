@@ -3,7 +3,7 @@
 // Hidden-face mesher for VoxelChunk assets.
 //
 // For each block whose palette entry has solid=true, emit a quad for any of
-// its six faces whose neighbour is either outside the chunk or non-solid.
+// its six faces whose neighbor is either outside the chunk or non-solid.
 // Faces between two solid blocks are skipped entirely, so the interior of a
 // filled volume contributes no triangles.
 //
@@ -11,14 +11,14 @@
 // uv_side) fall back to uv_min/uv_max when None.
 //
 // Greedy merging of adjacent same-block faces into larger quads is a future
-// optimisation; this pass only does hidden-face culling.
+// optimization; this pass only does hidden-face culling.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 /// One entry resolved from a VoxelChunk palette.  `None` slots are
-/// non-solid (air) and emit no geometry; their neighbours treat them as empty.
+/// non-solid (air) and emit no geometry; their neighbors treat them as empty.
 /// Public so the cook crate's `compile_voxel_chunk_payload` (build-time mesher)
 /// can build the palette this crate's runtime `build_chunk_mesh` also consumes.
 pub struct PaletteSlot {

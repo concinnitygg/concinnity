@@ -38,7 +38,7 @@ use crate::metal::post::{
     create_bloom_targets, create_gbuffer_targets, create_ssao_targets, create_ssgi_targets,
     create_ssr_targets,
 };
-use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
+use crate::metal::slang_builtins::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::texture::create_fallback_texture;
 use crate::metal::transient_pool::{TransientTexturePool, transient_slots};
 
@@ -267,7 +267,7 @@ pub(crate) fn build_quality_effects(
 
     // Whether the unified G-buffer pre-pass runs at all. Derived once, here,
     // because it gates two things that must agree: the pool (which owns the
-    // pre-pass's three colour channels) and the pre-pass's own targets +
+    // pre-pass's three color channels) and the pre-pass's own targets +
     // pipelines below. If they disagreed, a consumer would read a label the
     // pool never created.
     let needs_ssr_prepass =
@@ -391,12 +391,12 @@ pub(crate) fn build_quality_effects(
         (
             Some(build_rt_reflection_pipeline(
                 device,
-                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG,
+                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG,
                 hot_reload,
             )?),
             Some(build_rt_reflection_pipeline(
                 device,
-                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG_TEXTURED,
+                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED,
                 hot_reload,
             )?),
         )
@@ -417,7 +417,7 @@ pub(crate) fn build_quality_effects(
     };
 
     // Auto-exposure pipelines + persistent compute buffers. Every buffer is
-    // zero-initialised so the build kernel's first dispatch sees an empty
+    // zero-initialized so the build kernel's first dispatch sees an empty
     // histogram and the readback ring's first reads see a finite average.
     let (
         auto_exposure_pipelines,
@@ -556,7 +556,7 @@ pub(crate) fn build_effects(
     };
 
     // Particle compute + render pipelines, plus one persistent GPU pool per
-    // emitter. Pools are zero-initialised so every slot starts dead; the
+    // emitter. Pools are zero-initialized so every slot starts dead; the
     // compute kernel spawns into them on its first dispatch.
     let (particle_pipelines, particle_emitter_state) = if !particles.is_empty() {
         let pipelines = build_particle_pipelines(device, hot_reload)?;

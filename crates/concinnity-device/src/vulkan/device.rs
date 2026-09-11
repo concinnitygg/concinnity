@@ -581,7 +581,7 @@ fn enable_bindless_features(head: *mut c_void) {
 // The requested HDR sample count clamped to what this device reports for the
 // HDR format. `requested` is 1 whenever a temporal technique is active (see
 // `concinnity_core::components::hdr_sample_count`), which collapses the whole
-// main pass to the single-sample path: no resolve attachment, and the colour
+// main pass to the single-sample path: no resolve attachment, and the color
 // image is the scene spine.
 pub(super) fn resolve_sample_count(
     supported: vk::SampleCountFlags,
@@ -635,8 +635,8 @@ mod tests {
             resolve_sample_count(vk::SampleCountFlags::TYPE_4, 4),
             vk::SampleCountFlags::TYPE_4
         );
-        // A device that only reaches 2x still honours a 4x request at 2x, the
-        // behaviour `get_max_usable_sample_count` had on its own.
+        // A device that only reaches 2x still honors a 4x request at 2x, the
+        // behavior `get_max_usable_sample_count` had on its own.
         assert_eq!(
             resolve_sample_count(vk::SampleCountFlags::TYPE_2, 4),
             vk::SampleCountFlags::TYPE_2

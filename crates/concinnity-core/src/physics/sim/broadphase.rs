@@ -154,12 +154,12 @@ impl SweepPrune {
             proxies: alloc::vec![empty; capacity],
             order: Vec::with_capacity(capacity),
             axis: 0,
-            // A body in a settled stack touches a handful of neighbours; this
+            // A body in a settled stack touches a handful of neighbors; this
             // is where that guess is spent, once, so stepping never allocates.
             pairs: Vec::with_capacity(capacity * 4),
             // Sensors are a small minority of a world's bodies, so their
             // pairs are reserved against the body count rather than against
-            // the neighbour count.
+            // the neighbor count.
             sensor_pairs: Vec::with_capacity(capacity),
             max_extent: 0.0,
             dirty: true,
@@ -476,7 +476,7 @@ mod tests {
     }
 
     /// A world of `roles`, each a half-unit box a half unit along from the
-    /// last, so every neighbouring pair overlaps.
+    /// last, so every neighboring pair overlaps.
     fn touching(roles: &[Role]) -> SweepPrune {
         let mut sap = SweepPrune::with_capacity(roles.len().max(1));
         for (slot, &role) in roles.iter().enumerate() {

@@ -615,7 +615,7 @@ fn apply_reloaded_clip_refreshes_graph_clip_duration() {
     assert_eq!(report.state, "idle");
 }
 
-// With hot-reload off (no `cn debug`) and inline clips, the reload catalogue
+// With hot-reload off (no `cn debug`) and inline clips, the reload catalog
 // is empty: the getter returns an empty slice.
 #[test]
 fn reload_entries_is_empty_without_captured_sources() {
@@ -625,7 +625,7 @@ fn reload_entries_is_empty_without_captured_sources() {
     assert_eq!(count, 0);
 }
 
-// The Debug impl summarizes the bucket and reload-catalogue counts rather than
+// The Debug impl summarizes the bucket and reload-catalog counts rather than
 // dumping their contents.
 #[test]
 fn debug_impl_summarizes_target_and_reload_counts() {

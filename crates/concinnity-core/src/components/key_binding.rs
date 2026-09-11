@@ -59,9 +59,8 @@ mod tests {
 
     #[test]
     fn a_screen_scoped_binding_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
         let b: KeyBinding =
-            serde_json::from_str(r#"{"key":"Escape","action":"back","screen":"menu"}"#).unwrap();
+            crate::test_support::from_json(r#"{"key":"Escape","action":"back","screen":"menu"}"#);
         assert_eq!(b.key, "Escape");
         assert_eq!(b.action, "back");
         assert_eq!(b.screen, Some(AssetId(4)));

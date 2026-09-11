@@ -219,7 +219,7 @@ pub(crate) fn apply(world: &mut World, snap: &HealthSnapshot, o: [f32; 2], mouse
 
 // One breakdown line: what holds the memory, which realm it is in, and how much
 // -- against its budget when it has one. A tag past its budget reads in the
-// same warning colour a meter near capacity does.
+// same warning color a meter near capacity does.
 fn place_tag_row(world: &mut World, o: [f32; 2], y: f32, i: usize, row: &TagRow) {
     let cy = y + TAG_ROW_H * 0.5;
     place_text(
@@ -692,10 +692,10 @@ mod tests {
         );
     }
 
-    // A tag past its budget reads in the warning colour, like a meter near
+    // A tag past its budget reads in the warning color, like a meter near
     // capacity.
     #[test]
-    fn a_row_past_its_budget_is_coloured_as_a_warning() {
+    fn a_row_past_its_budget_is_colored_as_a_warning() {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 8 * GB);
         ledger.set_budget(MemTag::Textures, Realm::Device, Some(4 * GB));

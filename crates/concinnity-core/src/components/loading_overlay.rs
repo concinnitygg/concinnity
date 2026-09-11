@@ -68,11 +68,9 @@ mod tests {
 
     #[test]
     fn each_piece_binds_its_own_asset_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let o: LoadingOverlay = serde_json::from_str(
+        let o: LoadingOverlay = crate::test_support::from_json(
             r#"{"screen":"load","backdrop":"dim","track":"bar_bg","fill":"bar","label":"pct"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(o.screen, Some(AssetId(4)));
         assert_eq!(o.backdrop, Some(AssetId(3)));
         assert_eq!(o.track, Some(AssetId(6)));

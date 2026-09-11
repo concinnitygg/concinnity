@@ -131,7 +131,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             })?
         };
 
-        // Convert ImportedAnimation -> the asset's serialised track shape.
+        // Convert ImportedAnimation -> the asset's serialized track shape.
         let tracks_json: Vec<serde_json::Value> = imported
             .tracks
             .iter()

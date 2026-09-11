@@ -4,9 +4,9 @@
 // (`cn debug` and `cn editor`). Moved out of the library into the binary
 // tree: the watcher, off-thread decode, and the reload passes are driven once
 // per frame from a `DebugHook::tick` (see `driver::HotReloadDriver`). The
-// passive source catalogues these consume are captured at
+// passive source catalogs these consume are captured at
 // `GraphicsSystem::init` and live in the library
-// (`crate::gfx::graphics_system::hot_reload_sources`); the per-frame backend
+// (`crate::gfx::system::hot_reload_sources`); the per-frame backend
 // + Prop-tracking handle comes from `GraphicsSystem::hot_reload_apply_parts`.
 //
 // Split by responsibility:

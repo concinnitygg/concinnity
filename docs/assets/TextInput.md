@@ -24,10 +24,10 @@ naming convention (`<screen>_*`), or is always shown when it has none.
 - `width`: A float. Field width in screen pixels. Defaults to `240.0`.
 - `height`: A float. Field height in screen pixels. Defaults to `40.0`.
 - `scale`: A float. Uniform scale applied on top of the font's `size_px` (24 for the built-in face). 1.0 = native size. Defaults to `1.0`.
-- `text_color`: An array of 3 floats. Linear-space RGB colour of the typed text. Defaults to `[0.95, 0.95, 0.97]`.
-- `placeholder_color`: An array of 3 floats. Linear-space RGB colour of the placeholder prompt. Defaults to `[0.55, 0.55, 0.60]`.
+- `text_color`: An array of 3 floats. Linear-space RGB color of the typed text. Defaults to `[0.95, 0.95, 0.97]`.
+- `placeholder_color`: An array of 3 floats. Linear-space RGB color of the placeholder prompt. Defaults to `[0.55, 0.55, 0.60]`.
 - `background`: An array of 4 floats. RGBA fill of the field's background box, each channel in [0, 1]. Defaults to `[0.10, 0.10, 0.13, 1.0]`.
-- `caret_color`: An array of 3 floats. Linear-space RGB colour of the caret bar. Defaults to `[0.95, 0.95, 0.97]`.
+- `caret_color`: An array of 3 floats. Linear-space RGB color of the caret bar. Defaults to `[0.95, 0.95, 0.97]`.
 - `corner_radius`: A float. Corner rounding radius of the background box, in field pixels. Defaults to `4.0`.
 - `padding`: A float. Inner horizontal inset from the box edge to the text, in pixels. Defaults to `8.0`.
 - `max_len`: An integer. Maximum number of characters accepted. 0 means no limit. Defaults to `0`.

@@ -2,7 +2,7 @@
 //
 // Per-frame encoder for the raymarched SDF volume pass. Runs at
 // `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
-// hdr_resolve RMW chain. Each `SdfVolume` rasterises the back faces of
+// hdr_resolve RMW chain. Each `SdfVolume` rasterizes the back faces of
 // its world-space bounding box and runs a user-authored fragment
 // shader that sphere-traces the SDF inside the box.
 //
@@ -108,7 +108,7 @@ pub(in crate::metal) struct RaymarchVolumeRecord {
     pub(in crate::metal) refractive: bool,
     // Asset-side AABB center / half-widths. `encode_raymarch` derives the
     // world-space AABB from these to frustum-cull the volume each frame.
-    pub(in crate::metal) world_centre: [f32; 3],
+    pub(in crate::metal) world_center: [f32; 3],
     pub(in crate::metal) world_extent: [f32; 3],
 }
 
@@ -220,12 +220,12 @@ pub(in crate::metal) fn build_raymarch_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
-    // SAFETY: plain descriptor property setters; attachment 0 is the only colour attachment this
+    // SAFETY: plain descriptor property setters; attachment 0 is the only color attachment this
     // pipeline declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        // This variant writes opaque colour (the surface is opaque);
+        // This variant writes opaque color (the surface is opaque);
         // blending off keeps the per-pixel cost low. Volumetric
         // raymarching is the case that needs blend.
         ca.setBlendingEnabled(false);
@@ -249,7 +249,7 @@ pub(in crate::metal) fn build_raymarch_pipeline(
 // Compile a per-volume depth-only shadow-caster pipeline. Wraps the user
 // source between the helpers and the shadow template (the main template is
 // *not* included: this library defines only `raymarch_shadow_vertex` /
-// `raymarch_shadow_fragment`), then builds a render pipeline with no colour
+// `raymarch_shadow_fragment`), then builds a render pipeline with no color
 // attachment and a `Depth32Float` depth attachment matching the CSM
 // `shadow_map`. Mirrors `directx/raymarch.rs::compile_volume_shadow_pso`.
 pub(in crate::metal) fn build_raymarch_shadow_pipeline(
@@ -281,7 +281,7 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
     desc.setVertexDescriptor(Some(&vert_desc));
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
-    // Shadow map is single-sample; no colour attachment is bound in the
+    // Shadow map is single-sample; no color attachment is bound in the
     // shadow pass (depth-only). Only the depth format is declared.
     desc.setRasterSampleCount(1);
     desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
@@ -335,7 +335,7 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
-    // SAFETY: plain descriptor property setters; attachment 0 is the only colour attachment this
+    // SAFETY: plain descriptor property setters; attachment 0 is the only color attachment this
     // pipeline declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
@@ -351,7 +351,7 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
         ca.setAlphaBlendOperation(MTLBlendOperation::Add);
     }
     // No depth write for volumetrics: they're translucent and don't update depth.
-    // Depth test is still enabled to early-out against rasterised geometry.
+    // Depth test is still enabled to early-out against rasterized geometry.
     desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
 
     device
@@ -400,7 +400,7 @@ pub(in crate::metal) fn build_raymarch_volume_record(
         volumetric: volume.volumetric,
         cast_shadows: volume.cast_shadows,
         refractive: crate::raymarch_source::taps_scene(&programs),
-        world_centre: volume.center,
+        world_center: volume.center,
         world_extent: volume.extent,
     })
 }
@@ -425,7 +425,7 @@ fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
 // every custom mesh shader expect). 8 corners in `[-0.5, 0.5]^3`; the
 // vertex shader scales by `vol.extent` and translates by `vol.center`.
 // Indices wind 36 CCW triangles (the encoder culls front faces so the
-// rasteriser only fires for back faces).
+// rasterizer only fires for back faces).
 type RaymarchCubeBuffers = (
     Retained<ProtocolObject<dyn MTLBuffer>>,
     Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -525,7 +525,7 @@ impl MtlContext {
             .raymarch
             .volumes
             .iter()
-            .map(|v| v.visible && volume_in_frustum(v.world_centre, v.world_extent, frustum))
+            .map(|v| v.visible && volume_in_frustum(v.world_center, v.world_extent, frustum))
             .collect();
         if !visible.iter().any(|&v| v) {
             return Ok(0);
@@ -549,7 +549,7 @@ impl MtlContext {
         // `hdr_resolve` into `hdr_resolve_copy` so user SDF shaders can
         // sample the scene below the surface without violating Metal's
         // attachment-aliasing rule (the same `hdr_resolve` we'd want to
-        // read is also the colour attachment we're about to write).
+        // read is also the color attachment we're about to write).
         // Single full-screen blit per frame; AutoExposure has already
         // sampled `hdr_resolve_v1`, so this captures the same un-
         // decorated scene the next post-Main pass starts with.
@@ -564,8 +564,8 @@ impl MtlContext {
             .zip(&visible)
             .any(|(v, &vis)| vis && v.refractive);
         // The scene-depth snapshot the cone-march early-out reads. Unlike the
-        // colour copy it is unconditional: every visible volume's fragment
-        // clips against the rasterised surface, and the pass writes the depth
+        // color copy it is unconditional: every visible volume's fragment
+        // clips against the rasterized surface, and the pass writes the depth
         // target it would otherwise sample.
         {
             let blit = cmd_buf
@@ -591,7 +591,7 @@ impl MtlContext {
         }
 
         let pass_desc = MTLRenderPassDescriptor::new();
-        // SAFETY: plain descriptor property setters; attachment 0 is the only colour attachment
+        // SAFETY: plain descriptor property setters; attachment 0 is the only color attachment
         // this pass declares, and every texture set is owned by `self`.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
@@ -599,12 +599,12 @@ impl MtlContext {
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
             // Bind the single-sample depth resolve as the
-            // writable depth attachment. `Load` keeps the rasterised
+            // writable depth attachment. `Load` keeps the rasterized
             // depth that the Main pass resolved into it, so the
             // hardware depth test rejects raymarched fragments behind
             // existing geometry (and behind earlier raymarch volumes
             // in this pass). `Store` keeps the new depth (the min of
-            // rasterised and raymarched per pixel) alive for
+            // rasterized and raymarched per pixel) alive for
             // water / decal / fog to consume.
             let da = pass_desc.depthAttachment();
             da.setTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
@@ -630,7 +630,7 @@ impl MtlContext {
         enc.setCullMode(MTLCullMode::Front);
         // Standard forward-render depth state: compare = less, write
         // = on. The fragment shader's `[[depth(less)]]` output further
-        // gates: even if the rasterised proxy fragment passes the
+        // gates: even if the rasterized proxy fragment passes the
         // depth test, the actual raymarch hit depth has to be < the
         // existing value to commit.
         enc.set_depth_stencil(self.depth_state.as_ref());
@@ -733,14 +733,14 @@ impl MtlContext {
     }
 
     // Encode raymarched SDF shadow casters into the CSM cascades. Called from
-    // `encode_shadow_pass` after the rasterised + skinned casters, on the same
+    // `encode_shadow_pass` after the rasterized + skinned casters, on the same
     // command buffer so the writes land before the Main pass samples the
     // shadow map. For each cascade this opens a depth-only render pass on that
-    // `shadow.map` slice with `Load` / `Store` (keeping the rasterised depth
+    // `shadow.map` slice with `Load` / `Store` (keeping the rasterized depth
     // already written into the slice), then draws each caster's proxy cube
     // with front faces culled. The depth-only fragment cone-marches the SDF
     // from the light side and writes the hit's NDC.z via `[[depth(less)]]`;
-    // the slice's LESS depth test keeps the nearest caster (rasterised or
+    // the slice's LESS depth test keeps the nearest caster (rasterized or
     // raymarched) per texel. A no-op (returns 0) when no volume casts.
     pub(in crate::metal) fn encode_sdf_shadow_casters(
         &self,
@@ -765,7 +765,7 @@ impl MtlContext {
         let shadow_uniforms = self.shadow.uniforms;
 
         let mut draws: u32 = 0;
-        // Only cast into cascades the rasterised shadow pass re-rendered this
+        // Only cast into cascades the rasterized shadow pass re-rendered this
         // frame: a skipped cascade's slice must stay exactly as it was last
         // fully rendered (raster + SDF), so we neither clear nor add to it.
         let render_mask = if self.shadow.render_mask == 0 {
@@ -781,7 +781,7 @@ impl MtlContext {
             let da = pass_desc.depthAttachment();
             da.setTexture(Some(self.shadow.map.as_ref()));
             da.setSlice(cascade_idx);
-            // Load the rasterised depth this cascade already holds, draw the
+            // Load the rasterized depth this cascade already holds, draw the
             // SDF casters on top, and keep the merged depth for the Main pass.
             da.setLoadAction(MTLLoadAction::Load);
             da.setStoreAction(MTLStoreAction::Store);
@@ -796,7 +796,7 @@ impl MtlContext {
             );
             // Front-face cull → exactly one fragment per texel inside the box's
             // light-space projection. Same depth state (compare = less, write
-            // on) as the rasterised casters so the two layers composite.
+            // on) as the rasterized casters so the two layers composite.
             enc.setCullMode(MTLCullMode::Front);
             enc.set_depth_stencil(self.depth_state.as_ref());
 

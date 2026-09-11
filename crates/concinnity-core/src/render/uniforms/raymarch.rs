@@ -46,7 +46,7 @@ pub struct RaymarchVolumeUniforms {
     pub _pad1: f32,
     /// `1 / max_gradient`; the cone-step scale factor.
     pub cone_ratio: f32,
-    /// Per-volume march far clip, in metres.
+    /// Per-volume march far clip, in meters.
     pub max_distance: f32,
     /// Per-volume step cap, clamped at load.
     pub max_steps: i32,

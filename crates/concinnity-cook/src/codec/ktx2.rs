@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn a_single_level_bc3_falls_back_to_rgba8() {
-        // Alpha endpoints 200/10 with index 0, then an opaque white colour block.
+        // Alpha endpoints 200/10 with index 0, then an opaque white color block.
         let mut block = vec![0u8; 16];
         block[0] = 200;
         block[1] = 10;
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn a_single_level_bc5_falls_back_to_rgba8() {
-        // Red and green both mid-grey: the flat normal.
+        // Red and green both mid-gray: the flat normal.
         let mut block = vec![0u8; 16];
         block[0] = 128;
         block[1] = 128;
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn decode_rgba8_expands_a_bc3_mip_chain_base_level() {
-        // Alpha endpoints 200/10 with index 0, then an opaque white colour block.
+        // Alpha endpoints 200/10 with index 0, then an opaque white color block.
         let mut block = vec![0u8; 16];
         block[0] = 200;
         block[1] = 10;
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn decode_rgba8_expands_a_bc5_mip_chain_base_level() {
-        // Red and green both mid-grey: the flat normal.
+        // Red and green both mid-gray: the flat normal.
         let mut block = vec![0u8; 16];
         block[0] = 128;
         block[1] = 128;
@@ -751,7 +751,7 @@ mod tests {
     // Basis Universal
     //
     // Real ETC1S fixtures need the BasisLZ codebooks, which cannot be
-    // synthesised here; UASTC LDR blocks can, so the transcode path is driven
+    // synthesized here; UASTC LDR blocks can, so the transcode path is driven
     // through a hand-built container.
 
     // DFD color model 166 (UASTC LDR) with an RGBA sample channel.
@@ -768,7 +768,7 @@ mod tests {
         *bit_ofs += bits;
     }
 
-    // A UASTC LDR solid-colour block: mode 8 (Huffman code 0x17, five bits)
+    // A UASTC LDR solid-color block: mode 8 (Huffman code 0x17, five bits)
     // followed by the eight-bit R, G, B and A channels.
     fn uastc_solid_block(rgba: [u8; 4]) -> Vec<u8> {
         let mut block = [0u8; 16];
@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn rejects_an_unparseable_basis_payload() {
         // vkFormat UNDEFINED routes to the Basis path, but the stub DFD is not
-        // one the transcoder recognises.
+        // one the transcoder recognizes.
         let levels = vec![(4, 4, vec![0u8; 16])];
         let err = compile_ktx2(&build_ktx2(0, 0, 4, 4, &levels)).unwrap_err();
         assert!(err.starts_with("KTX2 Basis parse failed"), "got: {err}");
@@ -893,13 +893,13 @@ mod tests {
 
     #[test]
     fn a_single_level_uastc_transcodes_to_rgba8() {
-        let colour = [200u8, 60, 30, 255];
-        let levels = vec![(4, 4, uastc_solid_block(colour))];
+        let color = [200u8, 60, 30, 255];
+        let levels = vec![(4, 4, uastc_solid_block(color))];
         let image = compile_ktx2(&uastc_ktx2(4, 4, &levels)).expect("compile");
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (4, 4));
         assert!(
-            image.mips[0].data.chunks_exact(4).all(|c| c == colour),
+            image.mips[0].data.chunks_exact(4).all(|c| c == color),
             "solid UASTC block should transcode to a solid RGBA8 image"
         );
     }

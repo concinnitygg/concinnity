@@ -26,7 +26,7 @@ const MIN_LIFETIME: f32 = 0.001;
 pub struct ParticleEmitterRecord {
     /// Index of the albedo texture in the renderer's bindless / per-frame
     /// texture pool. `0` means "no texture authored": the renderer's white
-    /// fallback at slot 0 is sampled and the colour gradient still shows.
+    /// fallback at slot 0 is sampled and the color gradient still shows.
     pub texture_slot: usize,
     /// World-space spawn origin.
     pub position: [f32; 3],
@@ -68,7 +68,7 @@ impl ParticleEmitterRecord {
     /// kernel still ticks so the pool keeps evolving while the camera looks
     /// away.
     ///
-    /// The bound is a sphere centred on the emission point and is intentionally
+    /// The bound is a sphere centered on the emission point and is intentionally
     /// loose: it ignores the cone-spread restriction (`spread_cos`) so the
     /// same AABB also covers full-sphere emitters, and it sums the worst-case
     /// ballistic terms: `speed_max * lifetime_max` (straight-line reach),
@@ -151,7 +151,7 @@ pub fn build_particle_records(
                 slot
             }
         };
-        let direction = normalise_direction(e.direction);
+        let direction = normalize_direction(e.direction);
         let spread_cos = cos(e.spread_deg.clamp(0.0, 180.0).to_radians());
         let lifetime_min = e.lifetime_min.max(MIN_LIFETIME);
         let lifetime_max = e.lifetime_max.max(lifetime_min);
@@ -171,14 +171,14 @@ pub fn build_particle_records(
             max_particles,
             size_start: e.size_start.max(0.0),
             size_end: e.size_end.max(0.0),
-            color_start: sanitised_color(e.color_start),
-            color_end: sanitised_color(e.color_end),
+            color_start: sanitized_color(e.color_start),
+            color_end: sanitized_color(e.color_end),
         });
     }
     out
 }
 
-fn normalise_direction(d: [f32; 3]) -> [f32; 3] {
+fn normalize_direction(d: [f32; 3]) -> [f32; 3] {
     let len = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
     if !len.is_finite() || len < 1e-6 {
         // A zero / non-finite direction falls back to world-up so the cone
@@ -190,7 +190,7 @@ fn normalise_direction(d: [f32; 3]) -> [f32; 3] {
     }
 }
 
-fn sanitised_color(c: [f32; 4]) -> [f32; 4] {
+fn sanitized_color(c: [f32; 4]) -> [f32; 4] {
     let mut out = c;
     for x in out.iter_mut() {
         if !x.is_finite() {
@@ -275,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn build_normalises_direction() {
+    fn build_normalizes_direction() {
         let e = ParticleEmitter {
             direction: [0.0, 5.0, 0.0],
             ..Default::default()
@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn aabb_centres_on_emission_origin() {
+    fn aabb_centers_on_emission_origin() {
         let r = make_record([3.0, 4.0, -5.0]);
         let (mn, mx) = r.aabb();
         let cx = 0.5 * (mn[0] + mx[0]);
@@ -484,16 +484,16 @@ mod tests {
         assert_eq!(record.params(-1.0, 0, 0).dt, 0.0);
     }
 
-    // A non-finite authored colour would propagate NaN through the gradient
+    // A non-finite authored color would propagate NaN through the gradient
     // the kernel lerps, so it reads as zero instead.
     #[test]
-    fn a_non_finite_colour_channel_reads_as_zero() {
+    fn a_non_finite_color_channel_reads_as_zero() {
         assert_eq!(
-            sanitised_color([f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0]),
+            sanitized_color([f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0]),
             [0.0, 0.0, 0.0, 1.0]
         );
         assert_eq!(
-            sanitised_color([0.25, 0.5, 0.75, 1.0]),
+            sanitized_color([0.25, 0.5, 0.75, 1.0]),
             [0.25, 0.5, 0.75, 1.0]
         );
     }

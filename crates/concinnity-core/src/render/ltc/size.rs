@@ -1,4 +1,4 @@
-/// Edge of the square lookup table. 64 matches the resolution the parameterisation
+/// Edge of the square lookup table. 64 matches the resolution the parameterization
 /// was chosen for: finer buys little once `sqrt(1 - cos)` has spread the grazing
 /// angles out, and the fit cost grows with the square.
 ///

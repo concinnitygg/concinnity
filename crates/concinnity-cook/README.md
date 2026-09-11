@@ -28,6 +28,3 @@ drive the run).
 - **Expansion**: build-time rewriting that resolves build-only types into
   the runtime vocabulary.
 - **Blob (`.cnb`)**: the compiled binary container the runtime loads.
-
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.

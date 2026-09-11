@@ -172,7 +172,7 @@ pub(super) fn create_image_view(
 // Record and submit a short-lived command buffer without waiting for it.
 // Returns the still-executing command buffer; the caller must not free it (or
 // destroy anything it references) until the GPU provably retired it -- either
-// by a queue/device wait, or because a later fence on the same queue signalled
+// by a queue/device wait, or because a later fence on the same queue signaled
 // (fence signals cover all prior submissions on the queue).
 pub(super) fn one_shot_submit_nowait<F>(
     device: &VkDevice,
@@ -452,7 +452,7 @@ pub(super) struct UploadInFlight {
 // reaches `retire_at`: the replaced pool image (pending frames may still
 // sample it, and the per-frame pool copies re-point over the next
 // `frames_in_flight` ticks) plus the upload's in-flight transients (still
-// executing when parked; covered by the first frame fence signalled after the
+// executing when parked; covered by the first frame fence signaled after the
 // upload's submission). The image and staging buffer retire through the
 // allocator when this drops; only the command buffer is freed by hand.
 pub(super) struct StreamedUploadRetire {
@@ -761,7 +761,7 @@ pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext) -> Result<GpuI
     upload_texture(ctx, 1, 1, &[128u8, 128, 255, 255])
 }
 
-// Upload a 3D colour-grading LUT from a `ColorLut` payload. `data` is the raw
+// Upload a 3D color-grading LUT from a `ColorLut` payload. `data` is the raw
 // RGBA8 emitted by `build/color_lut.rs`: `size`³ texels ordered red-fastest,
 // then green, then blue, which is the natural row/slice order of a `TYPE_3D`
 // image, so the byte slice copies in verbatim. The returned `GpuImage` has a
@@ -1010,7 +1010,7 @@ pub(super) fn upload_float_lut(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
-// Build a 2x2x2 identity colour LUT: the eight corners of the unit RGB cube.
+// Build a 2x2x2 identity color LUT: the eight corners of the unit RGB cube.
 // Mirrors `metal/texture.rs::create_fallback_color_lut`. With the identity LUT
 // the composite grade is a no-op at any `lut_strength`, so the `sampler3D`
 // binding stays valid even when the world declares no `ColorLut`.
@@ -1076,7 +1076,7 @@ pub(super) fn create_shadow_map_array(
     // Rest the cascades sampled. The graph's Shadow producer barrier transitions
     // them to DEPTH_STENCIL_ATTACHMENT before each shadow loop and Main's consumer
     // returns them here, so the cross-frame reset is the graph's producer barrier,
-    // not an inline end-of-frame transition. Initialising sampled makes frame 0's
+    // not an inline end-of-frame transition. Initializing sampled makes frame 0's
     // producer barrier (SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT) start from
     // the image's real layout.
     one_shot_submit(device, command_pool, queue, |cmd| {
@@ -1232,7 +1232,7 @@ pub(super) fn create_msaa_color_image(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
-// Create a single-sample colour image usable as both a render target and a
+// Create a single-sample color image usable as both a render target and a
 // sampled texture. This is the HDR resolve target: the main pass resolves
 // (or, with MSAA off, draws directly) into it, and the composite pass samples
 // it to tonemap. No pre-transition is needed: the main render pass declares

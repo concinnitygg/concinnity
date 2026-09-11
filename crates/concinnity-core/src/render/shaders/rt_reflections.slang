@@ -229,7 +229,7 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_T
     float depth = g.a;
     // Background / sky, or a non-reflecting (too-rough) surface: weight 0 so the
     // reflection composite keeps the scene there. The pass writes reflected
-    // radiance (.rgb) + composite weight (.a), not a blended colour.
+    // radiance (.rgb) + composite weight (.a), not a blended color.
     if (depth <= 0.0)
     {
         return float4(base, 0.0);

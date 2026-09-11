@@ -20,7 +20,7 @@ pub(crate) const BOX_EDGES: usize = 12;
 // Side lines connecting a cone's apex to its base circle.
 pub(crate) const CONE_SIDES: usize = 4;
 
-// Per-shape draw style: one colour and pixel width for every segment.
+// Per-shape draw style: one color and pixel width for every segment.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct Stroke {
     pub color: [f32; 4],

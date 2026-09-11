@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn camera_distance_uses_the_aabb_centre_and_falls_back_to_the_translation() {
+    fn camera_distance_uses_the_aabb_center_and_falls_back_to_the_translation() {
         let mut obj = draw_object();
         obj.bb_min = [-1.0, -1.0, -1.0];
         obj.bb_max = [1.0, 1.0, 1.0];

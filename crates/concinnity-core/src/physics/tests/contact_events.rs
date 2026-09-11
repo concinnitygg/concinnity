@@ -142,7 +142,7 @@ fn raising_the_threshold_silences_a_weaker_landing() {
 
     // The same threshold still lets a real fall through.
     let (_, hard) = drop_ball(5.0, 5.0, 1.0);
-    assert!(!hard.is_empty(), "a five metre drop passes 5");
+    assert!(!hard.is_empty(), "a five meter drop passes 5");
 }
 
 // Only a freely simulated body is a source. Two walls touching, or a driven

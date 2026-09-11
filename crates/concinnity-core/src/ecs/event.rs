@@ -70,7 +70,7 @@ impl<E> Events<E> {
     /// reader does this every frame. The cursor advances here rather than as the
     /// iterator is consumed, so a caller that reads only part of the run still
     /// ends up past all of it -- the same thing a returned collection did, and
-    /// the only behaviour that makes "every reader sees every event exactly
+    /// the only behavior that makes "every reader sees every event exactly
     /// once" hold for a partial read.
     pub fn read(&self, cursor: &mut EventCursor) -> impl Iterator<Item = &E> {
         // Visit buffers oldest-first so events come back in send order.

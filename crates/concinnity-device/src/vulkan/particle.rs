@@ -12,18 +12,17 @@
 //      `vkCmdUpdateBuffer` (the value fits in the inline-update 64 KiB cap).
 //   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
 //      respawn each pool.
-//   4. Rasterises one alpha-blended billboard quad per live particle into
+//   4. Rasterizes one alpha-blended billboard quad per live particle into
 //      `hdr_resolve_images[frame_idx]`, its vertex stage reading the pool the
 //      dispatch wrote. The compute -> vertex transition is the graph's: the two
 //      halves are the `ParticlesSim` and `ParticlesDraw` nodes, and the pool set
 //      is the `particle_pool` graph resource.
 //
 // Runs after the volumetric-fog pass and before SSR / TAA so particles
-// appear in screen-space reflections and are temporally stabilised by the
+// appear in screen-space reflections and are temporally stabilized by the
 // TAA history. Mirrors src/directx/particle.rs and src/metal/particle.rs.
 
 use std::cell::Cell;
-use std::ffi::CString;
 
 use ash::vk;
 
@@ -39,7 +38,7 @@ use concinnity_core::render::uniforms::ParticleView;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
-use super::pipeline::spv_module;
+use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
 use super::texture::GpuUploadContext;
 use crate::vulkan::slang_builtins::SlangCompile;
 
@@ -139,7 +138,7 @@ pub(in crate::vulkan) struct ParticleResources {
     pub(in crate::vulkan) view_sets: Vec<vk::DescriptorSet>,
 
     // One framebuffer per frame-in-flight slot, each binding its frame
-    // slot's `hdr_resolve_images[i].view` as the sole colour attachment.
+    // slot's `hdr_resolve_images[i].view` as the sole color attachment.
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     // Linear-clamp sampler shared by every emitter's albedo binding.
@@ -206,7 +205,7 @@ impl ParticleResources {
         }
 
         // Per-frame framebuffers (one per frame slot binding that slot's
-        // hdr_resolve view as the colour attachment).
+        // hdr_resolve view as the color attachment).
         let mut framebuffers = Vec::with_capacity(frames);
         for &view in hdr_resolve_views.iter().take(frames) {
             let attachments = [view];
@@ -306,7 +305,7 @@ impl ParticleResources {
     }
 }
 
-// Allocate the per-emitter GPU state: a zero-initialised pool SSBO and a
+// Allocate the per-emitter GPU state: a zero-initialized pool SSBO and a
 // 4-byte atomic spawn counter SSBO, both DEVICE_LOCAL. Also allocates the
 // emitter's compute + render descriptor sets and writes the pool/counter
 // bindings. The albedo binding stays unwritten; `add_emitter` writes it
@@ -378,7 +377,7 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 // Render pass / descriptor / pipeline construction
 
 fn create_render_pass(device: &VkDevice, format: vk::Format) -> Result<OwnedRenderPass, String> {
-    // One colour attachment: the resolved HDR scene. The fog pass left
+    // One color attachment: the resolved HDR scene. The fog pass left
     // it in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT
     // during the subpass and SHADER_READ_ONLY_OPTIMAL again on exit so
     // SSR / TAA / bloom / composite can sample it. Mirrors the decal /
@@ -482,7 +481,7 @@ fn create_render_set_layouts(
 
 // Push-constant range covering the full 112-byte `ParticleParams` block.
 // Visible to vertex (size_start/end, color_start/end) + fragment (none:
-// vertex emits the colour; fragment reads it via varyings) + compute
+// vertex emits the color; fragment reads it via varyings) + compute
 // (every field). The vertex stage actually only reads the gradient + size
 // fields, but binding the full struct keeps the host upload single-shot.
 const PARTICLE_PUSH_BYTES: u32 = 112;
@@ -654,11 +653,10 @@ fn create_compute_pipeline(
     spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
-    let entry = CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(SHADER_ENTRY);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
@@ -674,19 +672,8 @@ fn create_render_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     // No vertex buffers: the vertex shader emits the quad from
     // gl_VertexIndex and reads the particle from the pool by
     // gl_InstanceIndex.
@@ -739,7 +726,7 @@ fn create_render_pipeline(
     Ok(pipeline)
 }
 
-// Zero-initialise a DEVICE_LOCAL buffer by recording a `vkCmdFillBuffer`
+// Zero-initialize a DEVICE_LOCAL buffer by recording a `vkCmdFillBuffer`
 // inside a one-shot command buffer. Cheaper than the staging-buffer
 // alternative and trivially correct since `vkCmdFillBuffer` writes a
 // 32-bit pattern; `bytes` is guaranteed to be a multiple of 4 for both
@@ -1039,7 +1026,7 @@ impl VkContext {
         resources.view_ubos[frame_idx].write_val(0, &view_uni);
 
         // Begin the render pass into this frame's framebuffer (which
-        // binds the resolved HDR target as colour attachment 0). The
+        // binds the resolved HDR target as color attachment 0). The
         // render pass declares the round-trip
         // SHADER_READ_ONLY_OPTIMAL → COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
         // via its subpass dependencies, so no explicit image barrier is

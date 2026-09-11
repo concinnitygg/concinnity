@@ -81,25 +81,25 @@ pub(crate) fn synthesize(
             params: &target.params,
         };
         let outputs = match target.generator.as_str() {
-            "girth" => synth::polarised(
+            "girth" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
                 synth::girth::displace(&input),
             ),
-            "taper" => synth::polarised(
+            "taper" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
                 synth::taper::displace(&input),
             ),
-            "bulge" => synth::polarised(
+            "bulge" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
                 synth::bulge::displace(&input),
             ),
-            "surface_offset" => synth::polarised(
+            "surface_offset" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,

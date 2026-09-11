@@ -11,7 +11,7 @@ use super::bake::{CubeBake, prefilter_mip0};
 use super::schedule::RowScheduler;
 use super::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, max_mip_count,
-    prefilter_roughness, serialise_payload,
+    prefilter_roughness, serialize_payload,
 };
 use crate::math::{acos, atan2, exp, floor, powi, sqrt};
 
@@ -112,7 +112,7 @@ fn fetch_wrap(hdr: &HdrImage, x: i32, y: i32) -> [f32; 3] {
     hdr.pixels[(yc * w + xw) as usize]
 }
 
-/// Convolve an equirectangular source into the serialised IBL payload:
+/// Convolve an equirectangular source into the serialized IBL payload:
 /// header, irradiance cube, prefilter mips. One bake serves the cook
 /// pipeline, the editor's hot-reload preview, and a runtime bake, so no path
 /// can diverge from the built asset; `rows` spreads each convolution's
@@ -157,7 +157,7 @@ pub fn bake_payload<S: RowScheduler>(
             .bake(rows),
         );
     }
-    serialise_payload(
+    serialize_payload(
         irradiance_face,
         prefilter_face,
         prefilter_mips,
@@ -231,7 +231,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::deserialise;
+    use super::super::deserialize;
     use super::super::schedule::Serial;
     use super::*;
 
@@ -240,7 +240,7 @@ mod tests {
         let hdr = generate_sky_equirect();
         assert_eq!((hdr.width, hdr.height), (256, 128));
         let payload = bake_payload(&hdr, 16, 8, 32, 12.0, &Serial);
-        let view = deserialise(&payload).expect("deserialise");
+        let view = deserialize(&payload).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
         // Prefilter mips for face_size 16: 16, 8, 4 → 3 levels.

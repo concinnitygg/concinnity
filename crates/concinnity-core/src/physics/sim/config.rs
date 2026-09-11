@@ -27,8 +27,8 @@ pub struct SimConfig {
     pub contact_damping_ratio: f32,
     /// Joint stiffness as a frequency in hertz, clamped against the substep
     /// rate the same way the contact one is. Joints are held stiffer than
-    /// contacts because a contact that sinks a millimetre is still right and
-    /// a joint that gives a millimetre reads as broken.
+    /// contacts because a contact that sinks a millimeter is still right and
+    /// a joint that gives a millimeter reads as broken.
     pub joint_hertz: f32,
     /// Joint damping ratio. Far lower than the contact one, and damped at all
     /// only so a joint built out of place settles rather than ringing as it

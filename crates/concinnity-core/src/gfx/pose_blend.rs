@@ -185,10 +185,10 @@ mod tests {
     }
 
     #[test]
-    fn blend_many_normalises_weights() {
+    fn blend_many_normalizes_weights() {
         // Three pure-yaw poses at 0/30/90 deg blended 1:1:2 must land on the
         // weighted-average yaw 52.5 deg. Equal scaling of every weight (the
-        // normalisation) must not move the result.
+        // normalization) must not move the result.
         let yaw = |deg: f32| vec![pose([0.0; 3], [0.0, deg, 0.0], [1.0; 3])];
         let poses = vec![yaw(0.0), yaw(30.0), yaw(90.0)];
         let recover = |out: &[Mat4]| (-out[0][0][2]).atan2(out[0][0][0]).to_degrees();

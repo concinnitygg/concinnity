@@ -38,8 +38,7 @@ mod tests {
 
     #[test]
     fn a_named_label_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let c: FpsCounter = serde_json::from_str(r#"{"label":"fps_chip"}"#).unwrap();
+        let c: FpsCounter = crate::test_support::from_json(r#"{"label":"fps_chip"}"#);
         assert_eq!(c.label, Some(AssetId(8)));
 
         let bytes = postcard::to_allocvec(&c).unwrap();

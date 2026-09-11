@@ -128,7 +128,7 @@ pub struct LockedResource {
     pub args_hash: String,
     /// which blob holds this resource's payload, if any
     pub payload_blob: Option<u32>,
-    /// Dev source info mirrored from the build's hot-reload catalogues, so a
+    /// Dev source info mirrored from the build's hot-reload catalogs, so a
     /// blob boot can reconstruct them without the asset's args (a SceneImport
     /// product has none the boot can see). Present for every Texture / Mesh
     /// resource; an empty `source` means nothing to watch.

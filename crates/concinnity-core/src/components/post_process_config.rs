@@ -22,7 +22,7 @@ use crate::math::exp2;
 /// workstation. A world that wants a cheaper look regardless of hardware turns
 /// the effects off here; a ceiling only ever reduces, so it cannot undo that.
 ///
-/// Colour-LUT grading is a separate [ColorLut](#colorlut) asset; `lut_strength`
+/// Color-LUT grading is a separate [ColorLut](#colorlut) asset; `lut_strength`
 /// here is the blend amount applied to whichever [ColorLut](#colorlut) the world
 /// declares.
 ///
@@ -53,7 +53,7 @@ pub struct PostProcessConfig {
     pub exposure_ev: f32,
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
     pub vignette_strength: f32,
-    /// Colour-LUT blend in `[0, 1]`. Mixes the graded colour over the ungraded
+    /// Color-LUT blend in `[0, 1]`. Mixes the graded color over the ungraded
     /// one by this amount. Only matters when the world declares a
     /// [ColorLut](#colorlut); with none, grading is a no-op at any strength.
     pub lut_strength: f32,
@@ -73,7 +73,7 @@ pub struct PostProcessConfig {
     /// Ambient-occlusion strength, clamped to `[0, 4]`. 1.0 is the natural
     /// amount; higher values exaggerate the contact darkening.
     pub ssao_intensity: f32,
-    /// Screen-space reflection toggle. Mixes reflected scene colour over glossy
+    /// Screen-space reflection toggle. Mixes reflected scene color over glossy
     /// surfaces (water, polished floors). On by default, forced off below the
     /// high quality tier.
     pub ssr: bool,
@@ -100,7 +100,7 @@ pub struct PostProcessConfig {
     pub reflection_blur_resolution: ReflectionBlurResolution,
     /// Indirect-diffuse lighting source. `ibl` uses the environment map's
     /// ambient alone. `ssgi` (default) adds a screen-space global-illumination
-    /// pass on top, so nearby lit surfaces bleed colour onto one another; the
+    /// pass on top, so nearby lit surfaces bleed color onto one another; the
     /// environment ambient still covers the off-screen / sky fallback. Clamped
     /// back to `ibl` below the high quality tier.
     pub indirect_lighting: IndirectLighting,
@@ -273,7 +273,7 @@ impl AaMode {
 }
 
 /// Sample count the off-screen HDR render target uses when no temporal
-/// technique is active. The pre-post-process colour and depth attachments, the
+/// technique is active. The pre-post-process color and depth attachments, the
 /// pipelines that write them, and the planar-mirror and probe-bake faces that
 /// reuse those pipelines all carry this count.
 pub const HDR_MULTISAMPLE_COUNT: u32 = 4;
@@ -289,7 +289,7 @@ pub const HDR_MULTISAMPLE_COUNT: u32 = 4;
 ///
 /// This is the *requested* count: a backend clamps it to what the device
 /// reports for the HDR format, and a backend whose temporal upscaler fails to
-/// initialise keeps the single-sample target rather than rebuilding every
+/// initialize keeps the single-sample target rather than rebuilding every
 /// pipeline that baked the count.
 pub fn hdr_sample_count(aa_mode: AaMode, temporal_upscaling: bool) -> u32 {
     if aa_mode.taa_enabled() || temporal_upscaling {
@@ -694,7 +694,7 @@ impl PostProcessResolve for PostProcessConfig {
     fn auto_exposure_settings(&self) -> Option<crate::gfx::auto_exposure::AutoExposureSettings> {
         self.auto_exposure.then(|| {
             // `hdr_display = true` shifts AE's pivot from scene-white
-            // (legacy SDR + ACES) to perceptual middle-grey, so the average
+            // (legacy SDR + ACES) to perceptual middle-gray, so the average
             // pixel reads as a comfortable mid-tone on a panel that does no
             // implicit tonemap. Falls back gracefully: even if the platform
             // rejects the HDR request at swapchain time, SDR + ACES still
@@ -919,7 +919,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssao_deserialises_from_jsonl_args() {
+    fn ssao_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"ssao":true,"ssao_radius":0.6}"#).expect("parse");
         assert!(cfg.ssao);
@@ -957,7 +957,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssr_deserialises_from_jsonl_args() {
+    fn ssr_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"ssr":true,"ssr_intensity":0.5}"#).expect("parse");
         assert!(cfg.ssr);
@@ -994,7 +994,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn rt_reflections_deserialise_from_jsonl_args() {
+    fn rt_reflections_deserialize_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"ray_traced_reflections":true,"ssr_intensity":0.5}"#)
                 .expect("parse");
@@ -1073,7 +1073,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssgi_resolution_and_counts_deserialise_from_jsonl_args() {
+    fn ssgi_resolution_and_counts_deserialize_from_jsonl_args() {
         let cfg: PostProcessConfig = serde_json::from_str(
             r#"{"indirect_lighting":"ssgi","ssgi_resolution":"full","ssgi_rays":16,"ssgi_steps":8}"#,
         )
@@ -1111,7 +1111,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn reflection_blur_resolution_deserialises_from_jsonl_args() {
+    fn reflection_blur_resolution_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"ssr":true,"reflection_blur_resolution":"quarter"}"#)
                 .expect("parse");
@@ -1143,7 +1143,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssgi_deserialises_from_jsonl_args() {
+    fn ssgi_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"indirect_lighting":"ssgi","ssgi_intensity":0.8}"#)
                 .expect("parse");
@@ -1185,7 +1185,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn auto_exposure_deserialises_from_jsonl_args() {
+    fn auto_exposure_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"auto_exposure":true,"auto_exposure_speed":3.0}"#)
                 .expect("parse");
@@ -1197,7 +1197,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn aa_mode_deserialises_from_jsonl_args() {
+    fn aa_mode_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig = serde_json::from_str(r#"{"aa_mode":"taa"}"#).expect("parse");
         assert_eq!(cfg.aa_mode, AaMode::Taa);
         // Omitting the field falls back to the TAA default.
@@ -1254,7 +1254,7 @@ mod runtime_tests {
             ..Default::default()
         };
         assert!(!cfg.clone().occlusion_two_pass);
-        // Deserialises from jsonl args; omitting it leaves the feature on.
+        // Deserializes from jsonl args; omitting it leaves the feature on.
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"occlusion_two_pass":false}"#).expect("parse");
         assert!(!cfg.occlusion_two_pass);

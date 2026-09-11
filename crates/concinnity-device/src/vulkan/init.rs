@@ -40,7 +40,7 @@ impl VkContext {
 
     // Construct from the assembled backend inputs (see
     // `crate::gfx::backend_init::BackendInit` for per-field docs); the
-    // Vulkan-specific behaviour of each input is documented inline below.
+    // Vulkan-specific behavior of each input is documented inline below.
     //
     // `reuse` is `Some` only on a live editor `reload_world` (see
     // `apply_world_reload`): the shared hardware (window / instance / device /
@@ -482,15 +482,15 @@ impl VkContext {
                 // HDR-output resolve. The world's `hdr_display` toggle is the
                 // gate; even on a capable display, no HDR unless the asset opts
                 // in. The reverse (`hdr_display = true` on an SDR-only surface,
-                // or with the colour-space loader extension missing) falls back
+                // or with the color-space loader extension missing) falls back
                 // to SDR with a logged warning. Vulkan has no portable max-EDR
-                // query: when the surface advertises the scRGB-linear colour
-                // space we synthesise a placeholder `max_edr = 2.0` (the
+                // query: when the surface advertises the scRGB-linear color
+                // space we synthesize a placeholder `max_edr = 2.0` (the
                 // HDR400-class minimum) so the shared `HdrOutputMode::resolve`
                 // logic stays uniform across backends.
-                // Probe which HDR colour-space pairs the surface advertises. An
-                // advertised HDR colour space is Vulkan's "HDR available" signal (there
-                // is no portable max-EDR query), so we synthesise the placeholder
+                // Probe which HDR color-space pairs the surface advertises. An
+                // advertised HDR color space is Vulkan's "HDR available" signal (there
+                // is no portable max-EDR query), so we synthesize the placeholder
                 // `max_edr` from it. scRGB-linear drives the extended-linear path; an
                 // `HDR10_ST2084_EXT` pair (float or 10-bit packed) drives the PQ path.
                 // SAFETY: a property query on a live handle; it only reads.
@@ -516,9 +516,9 @@ impl VkContext {
                         vk::Format::A2B10G10R10_UNORM_PACK32,
                         vk::ColorSpaceKHR::HDR10_ST2084_EXT,
                     ));
-                // PQ needs the HDR10 colour space. When `hdr_pq` is requested but only
+                // PQ needs the HDR10 color space. When `hdr_pq` is requested but only
                 // scRGB is advertised, fall back to the extended-linear path so the
-                // shader encode and the swapchain colour space never diverge (sending
+                // shader encode and the swapchain color space never diverge (sending
                 // PQ-encoded values to an scRGB-linear swapchain would look wrong).
                 let pq_capable = hdr_pq && pq_advertises;
                 if hdr_display && hdr_pq && !pq_advertises {
@@ -540,7 +540,7 @@ impl VkContext {
                 );
                 if hdr_display && !hdr_mode.is_hdr() {
                     tracing::warn!(
-                        "HDR display requested but no surface format advertises an HDR colour space \
+                        "HDR display requested but no surface format advertises an HDR color space \
                  (scRGB linear or HDR10 PQ): falling back to SDR (BGRA8 sRGB) output"
                     );
                 } else if hdr_mode.pq_flag() > 0.5 {
@@ -625,7 +625,7 @@ impl VkContext {
         // `msaa_samples` off the shared hardware is the device's ceiling for the
         // HDR format; the resolved setting is what the world actually asks for.
         // A temporal technique resolves it to one sample, which drops the
-        // resolve attachment from every render pass and makes the colour image
+        // resolve attachment from every render pass and makes the color image
         // the scene spine. Applied after the reuse branch so a live editor
         // reload picks up a world whose AA mode differs from the outgoing one.
         let msaa_samples = super::device::resolve_sample_count(max_msaa_samples, hdr_samples);
@@ -701,7 +701,7 @@ impl VkContext {
 
         //  Initial reset of every timestamp query slot. Without this the first
         //  `vkGetQueryPoolResults` call on each slot (before that slot has
-        //  ever been written) hits an uninitialised query and the validation
+        //  ever been written) hits an uninitialized query and the validation
         //  layer emits a "query not reset" error. After the reset, the slot
         //  is in "unavailable" state, so `get_query_pool_results` returns
         //  NOT_READY → 0 cleanly until `record_frame` writes the first pair.
@@ -877,7 +877,7 @@ impl VkContext {
         let shadow_sampler = create_sampler_shadow(&device)?;
         let text_sampler = create_sampler_linear_clamp(&device)?;
         // Linear-clamp sampler the composite pass reads the HDR resolve with;
-        // clamp keeps the FXAA neighbour taps from wrapping at screen edges.
+        // clamp keeps the FXAA neighbor taps from wrapping at screen edges.
         let composite_sampler = create_sampler_linear_clamp(&device)?;
 
         //  Render passes
@@ -919,7 +919,7 @@ impl VkContext {
         )?;
 
         //  Transient image pool: the graph-owned transients (`ao_output`,
-        //  `bloom_top`, and the three G-buffer colour channels). Built before the
+        //  `bloom_top`, and the three G-buffer color channels). Built before the
         //  bloom chain so bloom mip 0 binds the pooled `bloom_top` image, before
         //  SSAO (below) so its blur framebuffers + the main pass binding 6 bind
         //  the pooled `ao_output`, and before the G-buffer pre-pass so its
@@ -1074,7 +1074,7 @@ impl VkContext {
         // we cache it here at init so subsequent frames don't have to look it
         // up. Matches the Metal/DirectX pattern.
         let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
-        // Sun direction + intensity-weighted colour for the volumetric-fog
+        // Sun direction + intensity-weighted color for the volumetric-fog
         // encoder, cached because the light UBO is uploaded rather than pushed
         // each frame. `update_directional_lights` re-derives both.
         let fog_sun_dir = shadow_light_dir;
@@ -1107,7 +1107,7 @@ impl VkContext {
         //  IBL resources (always created so descriptor bindings 4/5 are valid)
         let cube_sampler = create_sampler_cube_linear(&device)?;
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::bake::environment_map::deserialise(bytes)
+            let view = crate::bake::environment_map::deserialize(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
                 &GpuUploadContext {
@@ -1145,11 +1145,11 @@ impl VkContext {
             }
         };
 
-        // Colour-grading LUT: upload the declared `ColorLut` payload, or build a
+        // Color-grading LUT: upload the declared `ColorLut` payload, or build a
         // 2x2x2 identity LUT so the composite pass always binds a valid 3D
         // texture. With the identity LUT the grade is a no-op at any strength.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::bake::color_lut::deserialise(bytes)
+            let (size, data) = crate::bake::color_lut::deserialize(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
             upload_color_lut(
                 &GpuUploadContext {
@@ -1328,7 +1328,7 @@ impl VkContext {
         let shadow_global_set_layout =
             create_descriptor_set_layout(&device, &super::descriptor_layout::shadow_global_set())?;
         // Composite set (set 0 for composite pass): HDR resolve image at
-        // binding 0, bloom mip 0 at binding 1, the 3D colour LUT at binding 2,
+        // binding 0, bloom mip 0 at binding 1, the 3D color LUT at binding 2,
         // then the G-buffer channels the debug view modes visualize (3 =
         // normal+depth, 4 = roughness, 5 = SSAO occlusion).
         let composite_set_layout = create_descriptor_set_layout(
@@ -1446,8 +1446,8 @@ impl VkContext {
         // projections, and the per-slice uniform slots are their own. Built even
         // with no shadowed spot (the 1x1 fallback array + a one-element buffer)
         // so the main pass's bindings 12/13 are always valid.
-        let spot_shadow =
-            super::spot_shadow::build_spot_shadow(super::spot_shadow::SpotShadowBuild {
+        let spot_shadow = super::draw::spot_shadow::build_spot_shadow(
+            super::draw::spot_shadow::SpotShadowBuild {
                 alloc: &alloc,
                 instance: &instance,
                 device: &device,
@@ -1457,7 +1457,8 @@ impl VkContext {
                 set_layout: shadow_global_set_layout.handle(),
                 slice_size: spot_shadow_slice_size,
                 spot_shadows: &spot_shadows,
-            })?;
+            },
+        )?;
 
         // Text renders in the composite pass (post-tonemap, single-sample), so
         // its pipeline targets the composite render pass.
@@ -1606,7 +1607,7 @@ impl VkContext {
         //  Unified geometry G-buffer pre-pass. Built whenever any screen-space
         //  consumer of the merged buffer is on: SSR resolve / SSGI / RT (all
         //  fold into `ssr_opt`), SSAO, or the velocity channel a TAA / upscale
-        //  consumer needs (`taa_enabled`). One jittered traversal rasterises the
+        //  consumer needs (`taa_enabled`). One jittered traversal rasterizes the
         //  normal+depth / roughness / velocity MRT every reader then samples,
         //  replacing the separate SSR / SSAO / velocity pre-passes. The skinned
         //  variant is built lazily by `upload_skinned` once the joint-set layout
@@ -1764,7 +1765,7 @@ impl VkContext {
                 // per-frame {shadow + spot shadow + IBL irradiance + IBL
                 // prefilter + SSAO occlusion + the 2 area-light LTC tables} +
                 // per-frame probe cube array + text atlas + per-frame
-                // composite(6: HDR resolve + bloom mip 0 + 3D colour LUT + the 3
+                // composite(6: HDR resolve + bloom mip 0 + 3D color LUT + the 3
                 // view-mode G-buffer channels) + per-frame bindless texture pool.
                 .descriptor_count(
                     n_frames * 7
@@ -2253,7 +2254,7 @@ impl VkContext {
         // `!rt_active` once the build outcome is known.
         // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
         // arg, which implies `transparent`): see-through only looks right when the
-        // space behind the glass is modelled. A material that is `transparent` but
+        // space behind the glass is modeled. A material that is `transparent` but
         // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
         // reflections) = tinted reflective glass that hides the interior. This list
         // drives the transparent-pass producer, the opaque-pass skip and the
@@ -2967,7 +2968,7 @@ impl VkContext {
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
 
-            // Phase-1 (STORE MSAA colour) + phase-2 (LOAD colour + depth) main
+            // Phase-1 (STORE MSAA color) + phase-2 (LOAD color + depth) main
             // render passes, both compatible with the existing framebuffers.
             let rp1 = create_main_render_pass_two_pass(&device, HDR_FORMAT, msaa_samples, false)?;
             let rp2 = create_main_render_pass_two_pass(&device, HDR_FORMAT, msaa_samples, true)?;
@@ -3014,7 +3015,7 @@ impl VkContext {
         // Composite sets (one per frame-in-flight slot): binding 0 = the
         // scene image (SSR output when SSR is on, else this slot's HDR
         // resolve), binding 1 = that slot's bloom mip 0, binding 2 = the
-        // shared 3D colour LUT. TAA's branch below overrides binding 0 to
+        // shared 3D color LUT. TAA's branch below overrides binding 0 to
         // the TAA output when TAA is on.
         let composite_layouts: Vec<_> =
             (0..frames).map(|_| composite_set_layout.handle()).collect();
@@ -3554,7 +3555,7 @@ impl VkContext {
 
         //  Sync objects
         // `image_available` + `in_flight` are per-frame-in-flight. The
-        // render-finished semaphore is signalled by submit and waited on by
+        // render-finished semaphore is signaled by submit and waited on by
         // present, so it must be one-per-swapchain-image (indexed by the
         // acquired image index): a per-frame semaphore can still be queued
         // for presentation when its frame slot comes round again.
@@ -3926,7 +3927,7 @@ impl VkContext {
             window: Some(window),
             _entry: entry,
             // The swap-decision key for a future live reload of this context
-            // (see `hot_swap_config` / `reload_world`). Normalised `frames` (>=1)
+            // (see `hot_swap_config` / `reload_world`). Normalized `frames` (>=1)
             // matches how `BackendInit::swapchain_config` clamps it.
             swapchain_config: crate::gfx::backend_init::SwapchainConfig {
                 frames_in_flight: frames,

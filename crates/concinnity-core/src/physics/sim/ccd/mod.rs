@@ -9,7 +9,7 @@
 // need the whole pipeline to be re-entrant and would spend a second solve on
 // the rarest case in the world. Widening the speculative margin by velocity
 // would reach the same bodies through the narrow phase, but a manifold built
-// between two shapes a metre apart is a guess at which features will meet,
+// between two shapes a meter apart is a guess at which features will meet,
 // and it would put that guess into the same warm-start cache a resting stack
 // depends on.
 //
@@ -31,7 +31,7 @@
 // is built and far enough that it is built open.
 //
 // What it does not cover. The sweep is a translation, so a body thin enough
-// to pass through a surface by spinning rather than by travelling is not
+// to pass through a surface by spinning rather than by traveling is not
 // caught. A body already touching what it went through is left to the solver,
 // since it had a manifold and stopping it where it began would freeze
 // anything resting on a surface. A stopped body loses the rest of that step's
@@ -92,7 +92,7 @@ pub(crate) struct Ccd {
     /// Mover slot and region slot for every region a mover crossed clean
     /// through, sorted before it is reported.
     crossings: Vec<(u32, u32)>,
-    /// The furthest anything travelled this step, squared.
+    /// The furthest anything traveled this step, squared.
     max_motion_sq: f32,
     overflows: u32,
 }
@@ -134,7 +134,7 @@ impl Ccd {
 
     /// Offer one body's step to the gate. Called for everything the step
     /// moved, since the widest travel decides how far a candidate search has
-    /// to reach even when the body that travelled it is not a mover.
+    /// to reach even when the body that traveled it is not a mover.
     pub(crate) fn observe(&mut self, slot: u32, body: &Body, start: Vec3, ratio: f32) {
         let motion = body.position - start;
         self.max_motion_sq = self.max_motion_sq.max(motion.length_squared());
@@ -307,7 +307,7 @@ fn outcome_for(
     })
 }
 
-/// How far a body travelled this step: exactly, for one the gate already
+/// How far a body traveled this step: exactly, for one the gate already
 /// measured, and from the velocity it ended with for everything else. A body
 /// the gate turned down moved less than its own width, so the difference
 /// between the two is smaller than the contact it is being measured for.

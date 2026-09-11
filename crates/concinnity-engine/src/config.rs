@@ -103,7 +103,7 @@ pub(crate) struct GraphicsSettings {
     // `PostProcessConfig.vignette_strength`. Applied live.
     #[serde(default)]
     pub(crate) vignette: Option<f32>,
-    // Colour-LUT blend in [0, 1]. `None` uses the world's
+    // Color-LUT blend in [0, 1]. `None` uses the world's
     // `PostProcessConfig.lut_strength`. Applied live.
     #[serde(default)]
     pub lut_strength: Option<f32>,

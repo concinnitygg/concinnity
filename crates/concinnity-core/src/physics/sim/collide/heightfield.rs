@@ -171,7 +171,7 @@ impl Heightfield {
     }
 
     /// A number naming one triangle of the grid, so a contact on it can be
-    /// recognised again next step.
+    /// recognized again next step.
     pub(crate) fn triangle_key(&self, row: usize, col: usize, half: usize) -> u32 {
         ((row * (self.cols - 1) + col) * 2 + half) as u32
     }
@@ -500,7 +500,7 @@ mod tests {
     use crate::physics::sim::math::Quat;
     use alloc::vec;
 
-    /// A flat grid two cells square, centred on the origin, four units wide.
+    /// A flat grid two cells square, centered on the origin, four units wide.
     fn flat() -> Heightfield {
         Heightfield::new(3, 3, vec![0.0; 9], vec3(4.0, 1.0, 4.0), Vec3::ZERO).expect("a real grid")
     }
@@ -535,7 +535,7 @@ mod tests {
         );
     }
 
-    // Rows run along z and columns along x, and the grid is centred on its
+    // Rows run along z and columns along x, and the grid is centered on its
     // origin: everything downstream reads the surface through this.
     #[test]
     fn the_grid_spans_its_footprint_with_rows_along_z_and_columns_along_x() {

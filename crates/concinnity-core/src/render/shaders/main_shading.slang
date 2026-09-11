@@ -311,7 +311,7 @@ float ltc_evaluate(float3 N, float3 V, float3 P, float3x3 m_inv, float3 corners[
         sum += integrate_edge(clipped[e], clipped[(e + 1) % n]);
     }
 
-    // The edge sum is twice the irradiance; dividing by pi normalises the
+    // The edge sum is twice the irradiance; dividing by pi normalizes the
     // clamped cosine, so the covered fraction is sum / (2 * pi).
     float form_factor = sum / (2.0 * PI);
     return two_sided ? abs(form_factor) : max(-form_factor, 0.0);
@@ -402,7 +402,7 @@ float4 shade_surface(VertexOut in, GpuObjectData od)
     float3 cam_pos = float3(VIEW.cam_x, VIEW.cam_y, VIEW.cam_z);
     bool ibl_enabled = VIEW.prefilter_mip_count > 0.5;
 
-    // Skybox sentinel (blue channel 2.0): sky colour from the view direction.
+    // Skybox sentinel (blue channel 2.0): sky color from the view direction.
     if (in.color.b > 1.5)
     {
         float3 view_dir = normalize(in.world_pos - cam_pos);
@@ -439,7 +439,7 @@ float4 shade_surface(VertexOut in, GpuObjectData od)
         return float4(albedo, 1.0);
     }
 
-    // Per-material emissive texture carries the colour (the scalar factor is a
+    // Per-material emissive texture carries the color (the scalar factor is a
     // uniform strength when a map is bound). Slot 0 is the "no map" sentinel.
     if (od.emissive_map_index != 0u)
     {
@@ -558,8 +558,8 @@ float4 shade_surface(VertexOut in, GpuObjectData od)
             // sphere the clustered cull bins this light with. The physical
             // falloff is already in the form factor: the panel subtends a
             // smaller solid angle further away.
-            float centre_dist = length(center - in.world_pos);
-            float window = clamp(1.0 - centre_dist / range, 0.0, 1.0);
+            float center_dist = length(center - in.world_pos);
+            float window = clamp(1.0 - center_dist / range, 0.0, 1.0);
             window = window * window;
             if (window <= 0.0)
             {
@@ -585,7 +585,7 @@ float4 shade_surface(VertexOut in, GpuObjectData od)
             lut_uv = lut_uv * LTC_LUT_SCALE + LTC_LUT_BIAS;
             float4 t1 = ltc_matrix_sample(lut_uv);
             float2 t2 = ltc_magnitude_sample(lut_uv);
-            // The table stores the inverse normalised so its middle entry is
+            // The table stores the inverse normalized so its middle entry is
             // 1, packed as (m00, m20, m02, m22). Rows here follow the
             // mul(v, M) convention, matching the GLSL / MSL column form.
             float3x3 m_inv = float3x3(

@@ -17,7 +17,7 @@ pub struct BodyDynamics {
     pub restitution: f32,
     /// Multiplier applied to world gravity for this body.
     pub gravity_scale: f32,
-    /// Linear velocity damping, modelling air drag.
+    /// Linear velocity damping, modeling air drag.
     pub linear_damping: f32,
     /// Clip played at the contact point when this body collides hard enough
     /// to publish a contact event.

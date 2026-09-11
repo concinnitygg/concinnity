@@ -106,7 +106,7 @@ pub(super) struct EffectSettings {
 }
 
 // Non-settings build flags: TAA on/off, whether the unified G-buffer pre-pass
-// is built (which decides whether the pool places its colour targets), and the
+// is built (which decides whether the pool places its color targets), and the
 // shader hot-reload toggle.
 #[derive(Clone, Copy)]
 pub(super) struct EffectFlags {

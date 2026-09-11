@@ -15,7 +15,7 @@
 // The proxies still hold the bounds the step began with, since nothing has
 // refreshed them since the sweep. That is the frame this pass wants, but it
 // means a target that has moved is bounded where it was, so the swept box is
-// widened by the furthest anything travelled this step before it is used to
+// widened by the furthest anything traveled this step before it is used to
 // pick candidates.
 
 use crate::physics::{ColliderShape, LayerMask};
@@ -42,7 +42,7 @@ pub(crate) struct Probe<'a> {
     pub(crate) start: Vec3,
     pub(crate) motion: Vec3,
     pub(crate) mask: LayerMask,
-    /// The furthest any body travelled this step, added to the swept box so a
+    /// The furthest any body traveled this step, added to the swept box so a
     /// pair that meets only because both moved is still a candidate.
     pub(crate) expand: f32,
 }
@@ -64,7 +64,7 @@ pub(crate) struct Blocked {
 /// The first body the mover met, reporting every region it passed clean
 /// through to `on_region` along the way.
 ///
-/// `motion_of` says how far a candidate travelled during the step, so the
+/// `motion_of` says how far a candidate traveled during the step, so the
 /// sweep can be run in that candidate's frame.
 pub(crate) fn scan(
     scene: Scene<'_>,

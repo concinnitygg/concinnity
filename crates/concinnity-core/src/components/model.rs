@@ -49,24 +49,21 @@ mod tests {
 
     #[test]
     fn a_sub_mesh_may_declare_geometry_without_a_material() {
-        crate::test_support::install_resolvers();
-        let s: SubMeshRef = serde_json::from_str(r#"{"mesh":"body"}"#).unwrap();
+        let s: SubMeshRef = crate::test_support::from_json(r#"{"mesh":"body"}"#);
         assert_eq!(s.mesh, Some(MeshHandle(4)));
         // No material means the sub-mesh inherits whatever the prop supplies.
         assert_eq!(s.material, None);
-        let s: SubMeshRef = serde_json::from_str("{}").unwrap();
+        let s: SubMeshRef = crate::test_support::from_json("{}");
         assert_eq!(s.mesh, None);
         assert_eq!(s.material, None);
     }
 
     #[test]
     fn an_imported_model_keeps_its_sub_mesh_order_through_postcard() {
-        crate::test_support::install_resolvers();
-        let m: Model = serde_json::from_str(
+        let m: Model = crate::test_support::from_json(
             r#"{"meshes":[{"mesh":"body","material":"skin"},
                          {"mesh":"trim","material":"metal"}]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(m.meshes.len(), 2);
 
         let bytes = postcard::to_allocvec(&m).unwrap();

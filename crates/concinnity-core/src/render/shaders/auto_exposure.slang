@@ -34,7 +34,7 @@ struct AutoExposureParams
     // Width of the log2(luminance) range the histogram covers.
     float lum_log2_range;
     // Pre-computed HISTOGRAM_BINS / lum_log2_range, so the build kernel maps a
-    // centred log-luminance to a bin index without a per-pixel divide.
+    // centered log-luminance to a bin index without a per-pixel divide.
     float lum_to_bin_scale;
     float _pad;
 };

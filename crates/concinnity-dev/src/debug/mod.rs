@@ -72,7 +72,7 @@
 // `reload-shaders` flips the shared atomic flag the Metal backend polls at
 // frame start, so the next frame rebuilds every built-in renderer pipeline
 // from disk-resident `.metal` source. Returns `{"ok":false}` when the
-// backend is not yet initialised or did not opt into hot-reload (production
+// backend is not yet initialized or did not opt into hot-reload (production
 // `cn run` paths never expose the flag).
 //
 // `reload-assets` flips the analogous flag `GraphicsSystem::step` polls. It

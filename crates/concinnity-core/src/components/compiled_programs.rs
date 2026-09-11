@@ -5,7 +5,7 @@
 //! The cook runs slangc and stores what it emitted; the renderer assembles the
 //! source it expects, digests it, and takes a stored artifact only on a match.
 //! A hot-reload edit to an engine template misses every entry and recompiles,
-//! which is the behaviour that makes editing one possible at all.
+//! which is the behavior that makes editing one possible at all.
 
 use alloc::string::String;
 use alloc::vec::Vec;

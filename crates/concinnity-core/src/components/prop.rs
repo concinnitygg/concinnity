@@ -8,6 +8,45 @@ use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
 use alloc::string::{String, ToString};
 
+/// The collision volume a [PropCollider](#propcollider)'s `shape` names. The
+/// single accepted vocabulary: the build rejects an authored name this does not
+/// recognize, and the runtime resolves the same name through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropColliderShape {
+    /// Box sized by `half_extents`. Authored as `aabb` or `cuboid`.
+    Cuboid,
+    /// Sphere sized by `radius`. Authored as `ball` or `sphere`.
+    Ball,
+    /// Capsule sized by `radius` and `half_height`.
+    Capsule,
+}
+
+impl PropColliderShape {
+    /// Every authored name, canonical and alias, this accepts. The build lists
+    /// these when it rejects an unknown shape.
+    pub const NAMES: [&'static str; 5] = ["aabb", "cuboid", "ball", "sphere", "capsule"];
+
+    /// The shape an authored name selects, case-insensitively and accepting the
+    /// aliases. `None` for an unknown name.
+    pub fn from_str_norm(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "aabb" | "cuboid" => Some(Self::Cuboid),
+            "ball" | "sphere" => Some(Self::Ball),
+            "capsule" => Some(Self::Capsule),
+            _ => None,
+        }
+    }
+
+    /// The shape's canonical authored name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cuboid => "cuboid",
+            Self::Ball => "ball",
+            Self::Capsule => "capsule",
+        }
+    }
+}
+
 /// Collision volume attached to a [Prop](#prop).
 ///
 /// The shape dimensions are in the prop's local space and are scaled by the
@@ -16,7 +55,8 @@ use alloc::string::{String, ToString};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PropCollider {
-    /// Collision shape: "aabb" (alias "cuboid"), "ball", or "capsule".
+    /// Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or
+    /// `capsule`. See [PropColliderShape].
     pub shape: String,
     /// Box half-extents in local space [x, y, z]. Used by cuboid shapes.
     pub half_extents: [f32; 3],
@@ -92,7 +132,7 @@ pub struct Prop {
     /// absent the prop is non-solid.
     pub collider: Option<PropCollider>,
     /// When true, the player can interact with this prop: pressing the interact
-    /// key (E) while close and facing it triggers its rotation behaviour.
+    /// key (E) while close and facing it triggers its rotation behavior.
     pub interactable: bool,
     /// When true, the player can pick up and carry this prop with the interact
     /// key (E). A companion [PropBody](#propbody) must also be declared so the
@@ -118,7 +158,7 @@ pub struct Prop {
     /// once the camera is further than this from it. 0 (default) keeps the prop
     /// visible at any distance.
     pub cull_distance: f32,
-    /// Set at runtime while the prop is being carried. Not serialised.
+    /// Set at runtime while the prop is being carried. Not serialized.
     /// While true, PhysicsSystem drives the prop as a kinematic body that
     /// follows the camera instead of simulating it dynamically.
     #[serde(skip)]
@@ -151,6 +191,40 @@ impl Default for Prop {
 mod tests {
     use super::*;
 
+    // The alias list and the parser are one vocabulary: every listed name
+    // resolves, and every shape's canonical name is listed. A name added to one
+    // and not the other fails here.
+    #[test]
+    fn every_listed_collider_shape_name_resolves() {
+        for name in PropColliderShape::NAMES {
+            assert!(
+                PropColliderShape::from_str_norm(name).is_some(),
+                "{name} is listed but does not resolve"
+            );
+        }
+        for shape in [
+            PropColliderShape::Cuboid,
+            PropColliderShape::Ball,
+            PropColliderShape::Capsule,
+        ] {
+            assert!(
+                PropColliderShape::NAMES.contains(&shape.as_str()),
+                "{} is a shape whose own name is unlisted",
+                shape.as_str()
+            );
+            assert_eq!(
+                PropColliderShape::from_str_norm(shape.as_str()),
+                Some(shape)
+            );
+        }
+        assert_eq!(PropColliderShape::from_str_norm("wedge"), None);
+    }
+
+    #[test]
+    fn a_blank_collider_names_a_listed_shape() {
+        assert!(PropColliderShape::from_str_norm(&PropCollider::default().shape).is_some());
+    }
+
     #[test]
     fn a_blank_collider_is_a_unit_cuboid() {
         let c = PropCollider::default();
@@ -182,11 +256,9 @@ mod tests {
 
     #[test]
     fn every_reference_resolves_through_its_own_seam() {
-        crate::test_support::install_resolvers();
-        let p: Prop = serde_json::from_str(
+        let p: Prop = crate::test_support::from_json(
             r#"{"model":"crate_model","mesh":"crate_mesh","material":"wood","parent":"shelf","scene":"vault"}"#,
-        )
-        .unwrap();
+        );
         // A Model is still an interned name; the resource kinds are handles.
         assert_eq!(p.model, Some(AssetId(11)));
         assert_eq!(p.mesh, Some(MeshHandle(10)));
@@ -197,12 +269,11 @@ mod tests {
 
     #[test]
     fn a_pickup_with_a_ball_collider_round_trips_through_postcard() {
-        let p: Prop = serde_json::from_str(
+        let p: Prop = crate::test_support::from_json(
             r#"{"position":[1,2,3],"rotation_deg":[0,90,0],"scale":[2,2,2],
                 "collider":{"shape":"ball","radius":0.25},
                 "interactable":true,"pickup":true,"prefab":"lantern","cull_distance":60}"#,
-        )
-        .unwrap();
+        );
         let collider = p.collider.as_ref().expect("collider");
         assert_eq!(collider.shape, "ball");
         assert_eq!(collider.radius, 0.25);

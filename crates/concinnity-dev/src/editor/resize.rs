@@ -11,7 +11,7 @@ use super::registry::PanelKey;
 use crate::ecs::CursorShape;
 
 // The thickness of the grab band along each edge, in window pixels. The band
-// sits inside the panel footprint so it never overlaps a neighbour.
+// sits inside the panel footprint so it never overlaps a neighbor.
 pub(crate) const BORDER: f32 = 6.0;
 
 // Which of a panel's edges the pointer's grab band covers. A single edge is an

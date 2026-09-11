@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(label.align, TextAlign::Center);
         assert_eq!(
             label.x, 780.0,
-            "centred in the covered area, not the window"
+            "centered in the covered area, not the window"
         );
 
         hide(&mut world);

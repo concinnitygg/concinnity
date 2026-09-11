@@ -4,7 +4,7 @@
 //! LOD primitives the backends test against, the screen-overlay and chunk-grid
 //! coordinate spaces, the post-process / quality setting structs, and the
 //! render-prep kernels that feed them: skinning and pose blending, IK, LOD
-//! decimation, software rasterisation, payload decoding, line expansion.
+//! decimation, software rasterization, payload decoding, line expansion.
 //!
 //! No backend handles and no rendering logic: the render graph, draw lists, and
 //! per-backend executors stay in the client crate's own `gfx` module.

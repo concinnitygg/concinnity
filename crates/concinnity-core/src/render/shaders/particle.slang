@@ -1,14 +1,14 @@
 // GPU particle system: the render half, single source for every backend.
 //
 // The renderer keeps one persistent particle pool per emitter, simulated by
-// `particle_simulate.slang` each frame and rasterised by this vertex / fragment
+// `particle_simulate.slang` each frame and rasterized by this vertex / fragment
 // pair as camera-facing billboards. `particle_vertex` is invoked with 4
 // vertices per particle and the pool size as the instance count: each instance
 // reads its `Particle`, derives a camera-facing axis pair from the bound view,
 // and emits one corner of the quad. Dead particles emit a degenerate quad
 // behind the near plane so they cost nothing past the vertex stage.
 //
-// The composited colour is alpha-blended into the resolved HDR target by the
+// The composited color is alpha-blended into the resolved HDR target by the
 // pipeline's blend state (Src.A * Src + (1 - Src.A) * Dst), the same envelope
 // the projected-decal pass uses.
 //
@@ -88,7 +88,7 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
 
     // Dead slot -> a degenerate quad clipped behind the near plane. The
     // fragment also discards on `discard_flag`, so any pixel that still
-    // rasterises (the numerical edge case at exactly w = 0) draws nothing.
+    // rasterizes (the numerical edge case at exactly w = 0) draws nothing.
     if (pt.velocity_lifetime.w <= 0.0)
     {
         o.position = float4(0.0, 0.0, -2.0, 1.0);

@@ -71,7 +71,7 @@ pub fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> Mat4 {
 
 /// Unit-length `v`, with the length floored so a degenerate input yields a huge
 /// but finite vector rather than NaNs in a view basis. Distinct from
-/// [`crate::math::vec3::vec3_normalise`], which substitutes a fallback axis
+/// [`crate::math::vec3::vec3_normalize`], which substitutes a fallback axis
 /// instead: a basis wants the direction it was given, however short.
 pub fn normalize3(v: [f32; 3]) -> [f32; 3] {
     let len = sqrt(dot(v, v)).max(1e-6);

@@ -41,7 +41,7 @@ use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::RtParamsInputs;
 
 use super::context::{HDR_FORMAT, VkContext};
-use super::pipeline::spv_module;
+use super::pipeline::GraphicsStages;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
@@ -84,17 +84,9 @@ pub(in crate::vulkan) struct TransparentRtDynamic {
     pub skinned_indices: vk::Buffer,
 }
 
-// Which producer a record belongs to, and so which pipeline draws it. The
-// records themselves are identical in shape, so this is the only thing the
-// combined draw loop needs to tell them apart.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(in crate::vulkan) enum Producer {
-    Glass,
-    Water,
-    GlassMesh,
-}
+pub(in crate::vulkan) use crate::gfx::transparent::Producer;
 
-// Per-record GPU state: the static world-space quad (glass) or origin-centred
+// Per-record GPU state: the static world-space quad (glass) or origin-centered
 // grid (water) VB + IB, the per-record params UBO + its descriptor set, and the
 // visibility flag.
 pub(in crate::vulkan) struct TransparentRecord {
@@ -442,57 +434,7 @@ fn align_up(size: u64, align: u64) -> u64 {
     size.div_ceil(align) * align
 }
 
-// World-space distance from the camera to a record center. Larger = farther =
-// drawn first. Pure; unit tested.
-fn sort_distance(center: [f32; 3], cam: [f32; 3]) -> f32 {
-    let dx = center[0] - cam[0];
-    let dy = center[1] - cam[1];
-    let dz = center[2] - cam[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-// Every visible record of every producer, ordered farthest-camera-distance
-// first. Pure; unit tested. Invisible records are excluded, and the producers
-// interleave so a pane standing in a pool composites in the right order; the
-// visible set is sorted via the shared `gfx::transparent::back_to_front_order`.
-//
-// The mesh slice is already filtered to this frame's visible meshes (the encoder
-// builds it), so every entry it carries is live.
-fn ordered_visible(
-    glass: &[([f32; 3], bool)],
-    water: &[([f32; 3], bool)],
-    meshes: &[[f32; 3]],
-    cam: [f32; 3],
-) -> Vec<(Producer, usize)> {
-    let live_of = |records: &[([f32; 3], bool)], kind: Producer| -> Vec<(Producer, usize)> {
-        records
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, vis))| *vis)
-            .map(|(i, _)| (kind, i))
-            .collect()
-    };
-    let live: Vec<(Producer, usize)> = live_of(glass, Producer::Glass)
-        .into_iter()
-        .chain(live_of(water, Producer::Water))
-        .chain((0..meshes.len()).map(|i| (Producer::GlassMesh, i)))
-        .collect();
-    let dists: Vec<f32> = live
-        .iter()
-        .map(|&(kind, i)| {
-            let center = match kind {
-                Producer::Glass => glass[i].0,
-                Producer::Water => water[i].0,
-                Producer::GlassMesh => meshes[i],
-            };
-            sort_distance(center, cam)
-        })
-        .collect();
-    crate::gfx::transparent::back_to_front_order(&dists)
-        .into_iter()
-        .map(|oi| live[oi])
-        .collect()
-}
+use crate::gfx::transparent::ordered_visible;
 
 fn create_rt_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
@@ -1031,19 +973,8 @@ pub(in crate::vulkan) fn create_transparent_pipeline(
     frag_spv: &[u8],
     vertex_input: TransparentVertexInput,
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     let binding = vk::VertexInputBindingDescription::default()
         .binding(0)
@@ -1751,7 +1682,7 @@ impl TransparentResources {
 }
 
 // One framebuffer per frame slot, each binding that slot's scene image view as
-// the sole colour attachment.
+// the sole color attachment.
 fn create_framebuffers(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -1826,8 +1757,8 @@ impl VkContext {
     // into its block of the producer's ring. Only called while RT is live.
     //
     // Each mesh resolves its own LOD slice by camera distance exactly as the
-    // opaque passes do, so a mesh rerouted here rasterises the same triangles it
-    // would have rasterised opaque.
+    // opaque passes do, so a mesh rerouted here rasterizes the same triangles it
+    // would have rasterized opaque.
     fn collect_mesh_draws(
         &self,
         transparent: &TransparentResources,
@@ -1883,7 +1814,7 @@ impl VkContext {
     }
 
     // Assemble the per-frame transparent view from the frame's jittered VP (the
-    // matrix the main pass rasterised the depth buffer with, so a transparent
+    // matrix the main pass rasterized the depth buffer with, so a transparent
     // record's clip-space depth matches the stored main-depth) + camera position.
     // Mirrors `directx::graph_exec::build_transparent_view`.
     pub(in crate::vulkan) fn build_transparent_view(
@@ -1944,15 +1875,15 @@ impl VkContext {
             rt_live && self.cull.bindless_pipeline.is_some() && transparent.rt_textured_ready();
 
         // This frame's see-through mesh draws. Empty unless RT is live: the
-        // per-pixel trace is the feature, and with RT off those meshes rasterise
+        // per-pixel trace is the feature, and with RT off those meshes rasterize
         // opaque in the main pass instead.
         let mesh_draws = if rt_live {
             self.collect_mesh_draws(transparent, frame_idx, cam)
         } else {
             Vec::new()
         };
-        let mesh_centres: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
-        let order = transparent.draw_order(&mesh_centres, cam);
+        let mesh_centers: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
+        let order = transparent.draw_order(&mesh_centers, cam);
         if order.is_empty() {
             return Ok(());
         }
@@ -2029,7 +1960,7 @@ impl VkContext {
 
         // 1) Open the scene image + snapshot for the refraction snapshot copy.
         // The src scopes order the scene's last writer (SSR resolve / particles
-        // colour write) and the prior frame's snapshot read ahead of the
+        // color write) and the prior frame's snapshot read ahead of the
         // transfer.
         let scene_to_src = color_barrier(
             scene_image,
@@ -2087,7 +2018,7 @@ impl VkContext {
         }
 
         // 2) Close the snapshot for the fragment read and restore the scene
-        // image to SHADER_READ_ONLY, so the render pass's colour LOAD matches
+        // image to SHADER_READ_ONLY, so the render pass's color LOAD matches
         // its declared initial layout. Main depth is already sampled here: the
         // graph transitions it once for the whole decoration run.
         let snapshot_to_read = color_barrier(
@@ -2119,7 +2050,7 @@ impl VkContext {
             );
         }
 
-        // 3) The render pass: LOAD the scene colour, draw each visible record
+        // 3) The render pass: LOAD the scene color, draw each visible record
         // back-to-front, STORE. The negative-height viewport matches the main
         // pass so the manual depth test + refraction taps line up at pixel
         // coordinates.
@@ -2284,106 +2215,5 @@ impl VkContext {
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sort_distance_is_euclidean_and_monotone() {
-        let cam = [0.0, 0.0, 0.0];
-        let near = sort_distance([0.0, 0.0, 1.0], cam);
-        let far = sort_distance([0.0, 0.0, 5.0], cam);
-        assert!((near - 1.0).abs() < 1e-5);
-        assert!((far - 5.0).abs() < 1e-5);
-        assert!(far > near);
-    }
-
-    #[test]
-    fn ordered_visible_excludes_hidden_and_sorts_back_to_front() {
-        // Pane 1 is hidden; 0 (dist 5) and 2 (dist 3) are visible. Farthest
-        // first => [0, 2]; the hidden pane never appears.
-        let glass = [
-            ([0.0, 0.0, 5.0], true),
-            ([0.0, 0.0, 9.0], false),
-            ([0.0, 0.0, 3.0], true),
-        ];
-        let order = ordered_visible(&glass, &[], &[], [0.0, 0.0, 0.0]);
-        assert_eq!(order, vec![(Producer::Glass, 0), (Producer::Glass, 2)]);
-    }
-
-    #[test]
-    fn ordered_visible_interleaves_the_two_producers() {
-        // A pane standing in a pool has to composite in distance order, not in
-        // producer order: the far pane draws first, then the water, then the near
-        // pane.
-        let glass = [([0.0, 0.0, 9.0], true), ([0.0, 0.0, 1.0], true)];
-        let water = [([0.0, 0.0, 5.0], true), ([0.0, 0.0, 7.0], false)];
-        let order = ordered_visible(&glass, &water, &[], [0.0, 0.0, 0.0]);
-        assert_eq!(
-            order,
-            vec![
-                (Producer::Glass, 0),
-                (Producer::Water, 0),
-                (Producer::Glass, 1),
-            ]
-        );
-    }
-
-    #[test]
-    fn align_up_rounds_to_the_next_multiple() {
-        // The mesh params ring spaces one block per mesh by the device's
-        // `minUniformBufferOffsetAlignment`, so a 96-byte block has to round up to
-        // whatever the device asks for. An already-aligned size must not grow.
-        assert_eq!(align_up(96, 256), 256);
-        assert_eq!(align_up(96, 64), 128);
-        assert_eq!(align_up(128, 64), 128);
-        assert_eq!(align_up(0, 256), 0);
-        // A device reporting no alignment requirement leaves the size alone
-        // rather than dividing by zero.
-        assert_eq!(align_up(96, 0), 96);
-        assert_eq!(align_up(96, 1), 96);
-    }
-
-    #[test]
-    fn ordered_visible_interleaves_mesh_draws_with_the_static_producers() {
-        // A see-through mesh sorts against panes and water by the same camera
-        // distance, so it is not simply appended after them. Every mesh entry the
-        // encoder passes is already visible, which is why the slice carries
-        // centers alone.
-        let glass = [([0.0, 0.0, 9.0], true)];
-        let water = [([0.0, 0.0, 3.0], true)];
-        let meshes = [[0.0, 0.0, 6.0], [0.0, 0.0, 1.0]];
-        let order = ordered_visible(&glass, &water, &meshes, [0.0, 0.0, 0.0]);
-        assert_eq!(
-            order,
-            vec![
-                (Producer::Glass, 0),
-                (Producer::GlassMesh, 0),
-                (Producer::Water, 0),
-                (Producer::GlassMesh, 1),
-            ]
-        );
-    }
-
-    #[test]
-    fn ordered_visible_orders_meshes_alone_back_to_front() {
-        // A world whose only transparent content is see-through meshes: the pass
-        // still runs, and they still sort farthest first.
-        let meshes = [[0.0, 0.0, 2.0], [0.0, 0.0, 8.0]];
-        let order = ordered_visible(&[], &[], &meshes, [0.0, 0.0, 0.0]);
-        assert_eq!(
-            order,
-            vec![(Producer::GlassMesh, 1), (Producer::GlassMesh, 0)]
-        );
-    }
-
-    #[test]
-    fn ordered_visible_is_empty_with_no_visible_records() {
-        let glass = [([0.0, 0.0, 5.0], false)];
-        let water = [([0.0, 0.0, 3.0], false)];
-        assert!(ordered_visible(&glass, &water, &[], [0.0, 0.0, 0.0]).is_empty());
     }
 }

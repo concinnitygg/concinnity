@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn spot_direction_normalises() {
+    fn spot_direction_normalizes() {
         let d = spot([0.0, -4.0, 0.0], 10.0, 20.0).unit_direction();
         assert_eq!(d, [0.0, -1.0, 0.0]);
     }
@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn rect_normal_normalises_and_falls_back_to_down() {
+    fn rect_normal_normalizes_and_falls_back_to_down() {
         let lit = RectAreaLight {
             normal: [0.0, 0.0, 3.0],
             ..RectAreaLight::default()

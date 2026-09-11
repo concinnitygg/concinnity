@@ -24,7 +24,7 @@ use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
 };
-use crate::metal::slang_shaders::SlangLib;
+use crate::metal::slang_builtins::SlangLib;
 
 // All SSAO (GTAO) state grouped into one feature unit: the resolved settings,
 // the kernel intermediate target, the kernel + blur pipelines, and the 1×1 white

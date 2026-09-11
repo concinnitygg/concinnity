@@ -1,5 +1,5 @@
 // Final composite: bloom onto the exposed HDR scene, then either the SDR
-// chain (ACES tonemap, gamma 2.2, FXAA, colour-grading LUT) or the HDR EDR
+// chain (ACES tonemap, gamma 2.2, FXAA, color-grading LUT) or the HDR EDR
 // passthrough, plus the vignette, the scene-transition fade, and the G-buffer
 // channel views. Single source for every backend; pairs with
 // `fullscreen_vertex` in fullscreen.slang.
@@ -45,7 +45,7 @@ struct CompositeParams
 // Bloom mip 0 (half-res). Always bound - when bloom is disabled the sample is
 // skipped, so an unwritten target is never read.
 [[vk::binding(1, 0)]] Sampler2D<float4> bloom_tex;
-// 3D colour-grading LUT. Always bound - a 2x2x2 identity LUT stands in when the
+// 3D color-grading LUT. Always bound - a 2x2x2 identity LUT stands in when the
 // world declares no ColorLut, so the grade is a no-op at any lut_strength.
 [[vk::binding(2, 0)]] Sampler3D<float4> lut_tex;
 // G-buffer channel sources for the debug view modes.
@@ -76,7 +76,7 @@ void combined_dims_3d(Sampler3D<float4> s, out uint w, out uint h, out uint d)
     }
 }
 
-// Width of the colour-grading LUT along one axis.
+// Width of the color-grading LUT along one axis.
 float lut_axis_size(Sampler3D<float4> s)
 {
     uint w, h, d;
@@ -116,9 +116,9 @@ float fxaa_luma(float3 rgb)
     return dot(rgb, float3(0.299, 0.587, 0.114));
 }
 
-// Scene colour = exposed HDR resolve + bloom. Exposure scales the HDR tap
+// Scene color = exposed HDR resolve + bloom. Exposure scales the HDR tap
 // only - the bloom mip already carries the exposure applied in the prefilter.
-// The bloom sample is skipped when bloom is disabled so an uninitialised bloom
+// The bloom sample is skipped when bloom is disabled so an uninitialized bloom
 // target is never read.
 float3 scene_sample(float2 uv)
 {
@@ -151,8 +151,8 @@ float fade_scale()
     return 1.0 - saturate(post.fade);
 }
 
-// Sample the 3D colour-grading LUT with the tonemapped, display-referred sRGB
-// colour. The half-texel correction maps an input of 0 / 1 to the centers of
+// Sample the 3D color-grading LUT with the tonemapped, display-referred sRGB
+// color. The half-texel correction maps an input of 0 / 1 to the centers of
 // the first / last texels so trilinear filtering stays accurate edge to edge; a
 // 2x2x2 identity LUT then reproduces the input exactly.
 float3 apply_lut(float3 c)
@@ -162,7 +162,7 @@ float3 apply_lut(float3 c)
     return lut_tex.Sample(uvw).rgb;
 }
 
-// Blend the LUT-graded colour over the input by `lut_strength`. Grading the
+// Blend the LUT-graded color over the input by `lut_strength`. Grading the
 // display-referred LDR result keeps the LUT independent of exposure / tonemap.
 float3 grade(float3 c)
 {
@@ -207,11 +207,11 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 
     float2 inv_size = 1.0 / combined_size(hdr_tex);
     // The scene fade rides the vignette multiplier: both are plain scalars on
-    // the output colour, so the HDR path fades in linear light ahead of the
+    // the output color, so the HDR path fades in linear light ahead of the
     // optional PQ encode and the SDR path fades the display-referred result.
     float vig = vignette_factor(uv) * fade_scale();
 
-    // HDR EDR output: skip ACES + gamma + FXAA + LUT. Two flavours, picked by
+    // HDR EDR output: skip ACES + gamma + FXAA + LUT. Two flavors, picked by
     // `pq_output`:
     //
     //   - scRGB linear: the compositor wants linear extended-range values where
@@ -236,13 +236,13 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 
     // FXAA is gated by post.fxaa (off for the Off anti-aliasing mode). When
     // disabled, grade + vignette the tonemapped center directly and skip the
-    // neighbour samples the edge filter would otherwise take.
+    // neighbor samples the edge filter would otherwise take.
     if (post.fxaa < 0.5)
     {
         return float4(grade(c) * vig, 1.0);
     }
 
-    // FXAA 3.11-style edge detection on the encoded image. Each neighbour is
+    // FXAA 3.11-style edge detection on the encoded image. Each neighbor is
     // composited with bloom and remapped through the same tonemap + gamma so
     // luma compares stay consistent with the center sample.
     float3 n = tonemap(uv + float2(0.0, -inv_size.y));
@@ -277,7 +277,7 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     float3 b = tonemap(uv - step_dir * 0.5);
     float3 blended = (c + a + b) * (1.0 / 3.0);
 
-    // Grade the FXAA-resolved colour, then vignette last so it darkens the
+    // Grade the FXAA-resolved color, then vignette last so it darkens the
     // final composited result.
     return float4(grade(blended) * vig, 1.0);
 }

@@ -1583,7 +1583,7 @@ mod tests {
 
     #[test]
     fn backend_label_passes_through_an_unknown_key() {
-        // A platform key the label table does not recognise is echoed back
+        // A platform key the label table does not recognize is echoed back
         // verbatim rather than dropped, so an odd stamp still reads sensibly.
         assert_eq!(backend_label("wgpu"), "wgpu");
     }

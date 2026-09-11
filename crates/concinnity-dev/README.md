@@ -17,6 +17,3 @@ host with no argv at all.
 - Development only: this crate (and its dependency on `concinnity-cook`)
   never appears in a shipped game's graph. The `concinnity` facade gates it
   behind the `editor` feature.
-
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.

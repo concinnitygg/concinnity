@@ -71,14 +71,14 @@ pub struct RenderStats {
     /// this to render the on-screen EV chip; downstream consumers can map
     /// it to an exposure multiplier via `2^ev`.
     pub auto_exposure_ev: Option<f32>,
-    /// Active display's reported maximum extended-range colour-component
+    /// Active display's reported maximum extended-range color-component
     /// multiplier when the renderer is on the HDR path. `Some(2.0)` on a
     /// typical HDR400 panel, `Some(8.0+)` on HDR1000-class panels; `None`
     /// on SDR (because the world disabled HDR, the platform fell back, or
     /// the active backend has not wired the readout). The `StatHud` overlay
     /// reads this to render the on-screen `EDR` chip; the value is also
     /// the linear scaling factor between SDR reference white and the
-    /// panel's peak brightness, so a colour-grading consumer can interpret
+    /// panel's peak brightness, so a color-grading consumer can interpret
     /// it directly.
     pub max_edr: Option<f32>,
 }

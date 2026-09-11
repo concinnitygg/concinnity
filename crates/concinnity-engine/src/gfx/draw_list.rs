@@ -232,7 +232,7 @@ pub(crate) struct LoadedMesh {
 // `(asset_id, source, primitive_index, lod_levels, lod_distances)` tuple is
 // later cross-referenced against `build_draw_list`'s mesh_id → draw_indices
 // map to build the runtime
-// [`MeshSourceMap`](crate::gfx::graphics_system::hot_reload_sources::MeshSourceMap).
+// [`MeshSourceMap`](crate::gfx::system::hot_reload_sources::MeshSourceMap).
 pub(crate) struct MeshSourceMeta {
     pub source: String,
     pub primitive_index: u32,
@@ -247,7 +247,7 @@ pub(crate) struct MeshSourceMeta {
 // assigned handles, so `geometry[h]` is the source cook gave handle `h`.
 // Returns None if any payload is missing or malformed. Also returns a
 // handle-keyed source-meta map for file-backed Mesh declarations under
-// `cn debug` (from the dev `MeshSources` catalogue), the set of handles whose
+// `cn debug` (from the dev `MeshSources` catalog), the set of handles whose
 // props must always stay resident (skybox-class geometry that encloses the
 // camera), and the asset id -> handle map for the still-component producers.
 pub(crate) fn load_mesh_geometry(
@@ -261,7 +261,7 @@ pub(crate) fn load_mesh_geometry(
         .resource::<crate::resource::MeshTable>()
         .cloned()
         .unwrap_or_default();
-    // Dev-only source catalogue (present under `cn debug`) so the hot-reload
+    // Dev-only source catalog (present under `cn debug`) so the hot-reload
     // watcher can map a mesh handle back to the file that backs it. Mesh is a
     // resource now, so there is no drained component `source` to capture.
     let capture_sources = crate::app::dev_flags::enabled();
@@ -381,10 +381,10 @@ pub(crate) fn load_mesh_geometry(
                 return None;
             }
         };
-        // `deserialise_with_lods` parses the optional LOD trailer when the
+        // `deserialize_with_lods` parses the optional LOD trailer when the
         // build emitted one and falls back to an empty alternates vec for
         // legacy single-LOD payloads.
-        match crate::gfx::mesh_payload::deserialise_with_lods(&bytes) {
+        match crate::gfx::mesh_payload::deserialize_with_lods(&bytes) {
             Ok((verts, idxs, alternates)) => geometry.push(LoadedMesh {
                 vertices: verts,
                 indices: idxs,
@@ -459,7 +459,7 @@ pub(crate) fn load_mesh_geometry(
                         return None;
                     }
                 };
-                match crate::gfx::mesh_payload::deserialise_with_lods(&bytes) {
+                match crate::gfx::mesh_payload::deserialize_with_lods(&bytes) {
                     Ok((verts, idxs, alternates)) => {
                         // This source's handle is its push position: the blocks
                         // are loaded in cook's block order and each iterates in
@@ -488,7 +488,7 @@ pub(crate) fn load_mesh_geometry(
     // The world's own block: geometry baked at start, whose payload bytes are
     // already in memory rather than behind a locator, in install order.
     for (id, bytes) in baked_payloads.iter() {
-        match crate::gfx::mesh_payload::deserialise_with_lods(bytes) {
+        match crate::gfx::mesh_payload::deserialize_with_lods(bytes) {
             Ok((verts, idxs, alternates)) => {
                 component_mesh_handles.insert(id, geometry.len());
                 geometry.push(LoadedMesh {
@@ -558,7 +558,7 @@ pub(crate) fn load_room_geometry(
                 return None;
             }
         };
-        match crate::gfx::mesh_payload::deserialise_with_lods(&bytes) {
+        match crate::gfx::mesh_payload::deserialize_with_lods(&bytes) {
             Ok((verts, idxs, alternates)) => room_geometry.push((room, verts, idxs, alternates)),
             Err(e) => {
                 tracing::error!("GraphicsSystem: malformed Room payload: {}", e);
@@ -576,7 +576,7 @@ pub(crate) fn load_room_geometry(
 // cluster list (one entry per InstancedProp).
 // Returns None if any referenced asset is missing (error already logged).
 // The read-only scene lookup tables consumed by [`build_draw_list`]: the
-// renderable items and instanced props plus every catalogue needed to resolve
+// renderable items and instanced props plus every catalog needed to resolve
 // their geometry, textures, and materials.
 pub(crate) struct DrawListInputs<'a> {
     pub items: &'a [RenderableItem],
@@ -1082,7 +1082,7 @@ mod tests {
     }
 
     fn unit_quad_mesh() -> LoadedMesh {
-        // Axis-aligned unit cube centred at origin; bounds = [-0.5, 0.5]^3.
+        // Axis-aligned unit cube centered at origin; bounds = [-0.5, 0.5]^3.
         let mk = |x, y, z| Vertex {
             pos: [x, y, z],
             normal: [0.0, 1.0, 0.0],
@@ -1800,7 +1800,7 @@ mod tests {
                 [0.0, 0.0],
             )
         };
-        crate::gfx::mesh_payload::serialise(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], &[0u16, 1, 2])
+        crate::gfx::mesh_payload::serialize(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], &[0u16, 1, 2])
     }
 
     // load_mesh_geometry decodes a MeshTable entry's in-memory payload into the

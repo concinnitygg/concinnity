@@ -1,6 +1,6 @@
 // src/debug/hot_reload/state.rs
 //
-// `AssetHotReloadState` (the debug-owned reload catalogue + in-flight decode
+// `AssetHotReloadState` (the debug-owned reload catalog + in-flight decode
 // handles + live watcher) plus the off-thread decode result types, the ECS
 // side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 // calls. Built from `HotReloadSources` (captured in the lib at init).
@@ -8,8 +8,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::gfx::graphics_system::HotReloadApplyParts;
-use crate::gfx::graphics_system::hot_reload_sources::*;
+use crate::gfx::system::HotReloadApplyParts;
+use crate::gfx::system::hot_reload_sources::*;
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
 use super::passes::{
@@ -115,13 +115,13 @@ pub(crate) struct AssetHotReloadState {
     // `PENDING_WORLD` flag the Prop-diff path consumes.
     pub procedural_meshes: ProceduralMeshSourceMap,
     // The world default `Shader`'s files, which can be recompiled from disk.
-    // The asset watcher recognises `.slang` events against the parent
+    // The asset watcher recognizes `.slang` events against the parent
     // directories of these entries and sets
     // [`super::pending::set_pending_shader_stages`] (separate
     // from the texture / mesh / LUT batch path so a shader save does not
     // also kick a 43-texture re-decode).
     pub shader_stages: ShaderStageSourceMap,
-    // Path to the world.jsonl the renderer was initialised from, when
+    // Path to the world.jsonl the renderer was initialized from, when
     // known. Used both as a watch-dir source (its parent directory joins
     // the texture / model / HDRI / LUT dirs) and as the file the
     // `world.jsonl` reload pass re-reads from disk. `None` when init came
@@ -301,9 +301,9 @@ pub(crate) struct FrameHotReloadEffects {
 }
 
 // Run every asset / shader / world.jsonl reload pass for one frame and return
-// the ECS side-effects. `state` is the debug-owned reload catalogue +
+// the ECS side-effects. `state` is the debug-owned reload catalog +
 // in-flight handles; `apply` is the per-frame backend + Prop-tracking handle
-// from [`GraphicsSystem::hot_reload_apply_parts`](crate::gfx::graphics_system::GraphicsSystem).
+// from [`GraphicsSystem::hot_reload_apply_parts`](crate::gfx::system::GraphicsSystem).
 // This is the per-frame entry point the `DebugHook::tick` drive calls; it
 // holds the logic that previously sat at the top of `GraphicsSystem::run_step`,
 // minus the ECS mutation: the caller applies that from the returned

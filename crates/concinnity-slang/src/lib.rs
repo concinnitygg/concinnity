@@ -169,6 +169,29 @@ pub fn slangc_available() -> bool {
     slangc_path().is_some()
 }
 
+/// Whether the shader test suite should run on this host.
+///
+/// The same answer as [`slangc_available`], with one difference: a host built
+/// with the `strict-shader-tests` feature has declared that it carries the
+/// toolchain. A missing slangc there is the toolchain regressing, not a
+/// build-only host, so this panics rather than letting ~60 shader and
+/// CPU-to-GPU layout tests return green having checked nothing.
+///
+/// ```
+/// // True only where a qualifying slangc resolves; panics instead of
+/// // returning false when `strict-shader-tests` is on.
+/// let _ = concinnity_slang::shader_tests_enabled();
+/// ```
+pub fn shader_tests_enabled() -> bool {
+    let available = slangc_available();
+    assert!(
+        available || !cfg!(feature = "strict-shader-tests"),
+        "slangc is required on this host (strict-shader-tests is on) but none qualified: {}",
+        unavailable_reason().unwrap_or("no candidate was found")
+    );
+    available
+}
+
 /// Why no candidate qualified, or `None` when one did. It names the compiler it
 /// rejected and what to install, so a caller reporting the absence does not
 /// compose its own wording and cannot report an old slangc as a missing one.
@@ -615,7 +638,7 @@ mod tests {
     // silently otherwise so CI hosts without slangc still pass.
     #[test]
     fn compiles_a_trivial_kernel_when_slangc_is_installed() {
-        if slangc_path().is_none() {
+        if !shader_tests_enabled() {
             return;
         }
         let tree = concinnity_testing::TempTree::new();
@@ -638,7 +661,7 @@ mod tests {
     // scalar after it.
     #[test]
     fn reflection_reports_constant_buffer_offsets_per_target() {
-        if slangc_path().is_none() {
+        if !shader_tests_enabled() {
             return;
         }
         let tree = concinnity_testing::TempTree::new();
@@ -671,7 +694,7 @@ mod tests {
 
     #[test]
     fn a_compile_error_reports_the_diagnostic() {
-        if slangc_path().is_none() {
+        if !shader_tests_enabled() {
             return;
         }
         let tree = concinnity_testing::TempTree::new();

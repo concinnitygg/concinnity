@@ -1309,7 +1309,7 @@ fn layout_palette_scrollbar(
     );
 }
 
-// One labelled chip of the header or the toolbar: its two element ids, where it
+// One labeled chip of the header or the toolbar: its two element ids, where it
 // sits, what it says, its idle tint, and whether it has anything to act on.
 struct Chip {
     bg: AssetId,

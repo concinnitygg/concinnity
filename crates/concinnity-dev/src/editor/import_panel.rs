@@ -171,7 +171,7 @@ pub(crate) enum ImportAction {
     Consume,
 }
 
-// Where the panel sits until the user drags it: centred below the top bar,
+// Where the panel sits until the user drags it: centered below the top bar,
 // offset from the Story panel's anchor so the two do not stack exactly.
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [(vw - IMPORT_W) * 0.5, super::hud::body_top() + 40.0]

@@ -36,7 +36,7 @@ const XESS_QUALITY_SETTING_BALANCED: i32 = 102;
 const XESS_QUALITY_SETTING_QUALITY: i32 = 103;
 const XESS_QUALITY_SETTING_AA: i32 = 106;
 
-// xess_init_flags_t (bitmask). The engine feeds HDR linear colour, low-res
+// xess_init_flags_t (bitmask). The engine feeds HDR linear color, low-res
 // (render-resolution) UV motion vectors scaled to pixels via SetVelocityScale,
 // and depth in [0,1] with 0 = near (NOT inverted). So the only flag we set is
 // auto-exposure (the scene is un-exposed pre-upscale, matching the FSR path).

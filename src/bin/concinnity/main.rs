@@ -25,7 +25,7 @@ const STATE_DIR: &str = ".concinnity";
 fn main() -> std::io::Result<()> {
     let parsed = cli::Cli::parse();
 
-    // Must run before any thread spawns or the Metal framework initialises.
+    // Must run before any thread spawns or the Metal framework initializes.
     cli::reexec_with_metal_validation(&parsed);
 
     // Where this run reads and writes. Resolved before the crash hooks, so a

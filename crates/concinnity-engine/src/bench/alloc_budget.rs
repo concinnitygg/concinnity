@@ -22,8 +22,8 @@ use crate::components::{
 };
 use crate::ecs::SYSTEMS;
 use crate::ecs::World;
-use crate::gfx::graphics_system::GraphicsSystem;
 use crate::gfx::snapshot::RenderSnapshot;
+use crate::gfx::system::GraphicsSystem;
 
 const WARMUP_FRAMES: usize = 64;
 

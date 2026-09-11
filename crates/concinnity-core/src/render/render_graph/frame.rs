@@ -68,7 +68,7 @@ pub struct FrameGraphInputs {
     pub hdr_width: u32,
     /// HDR target height in pixels.
     pub hdr_height: u32,
-    /// MSAA sample count of the HDR colour + depth attachments, typically
+    /// MSAA sample count of the HDR color + depth attachments, typically
     /// 4. The resolve target is single-sample regardless.
     pub hdr_sample_count: u32,
     /// `true` when GPU-driven cull is going to run this frame, i.e. the
@@ -124,10 +124,10 @@ pub struct FrameGraphInputs {
     /// pipeline is built. The graph adds a `Decals` render pass at the
     /// head of the hdr_resolve post-Main RMW chain.
     pub decals_enabled: bool,
-    /// `true` when the SSR pre-pass should run; matches
-    /// `self.ssr_settings.is_some()`. The graph adds an `SsrPrepass`
-    /// render pass that writes the imported `ssr_gbuffer` texture;
-    /// SsaoBlur reads it when SSAO is also on (G-buffer sharing).
+    /// `true` when SSR needs the geometry pre-pass; matches
+    /// `self.ssr_settings.is_some()`. One of the three consumer gates that make
+    /// the graph emit `GBufferPrepass`; SSR then marches against its
+    /// normal+depth output, which SsaoBlur reads as well.
     pub ssr_prepass_enabled: bool,
     /// `true` when SSAO should run; matches
     /// `self.ssao_settings.is_some()`. The graph adds an `SsaoBlur`
@@ -149,7 +149,7 @@ pub struct FrameGraphInputs {
     /// `true` when at least one transparent / translucent draw is in the
     /// world (water, glass, ...). The graph adds a `Transparent` render
     /// pass after `SsrResolve` and before `TaaResolve` / `Upscale` that
-    /// reads the latest scene-pre-taa colour + main depth and
+    /// reads the latest scene-pre-taa color + main depth and
     /// alpha-blends translucent geometry back-to-front into the same
     /// target. The pass aggregates N draws, each owns its own
     /// pipeline + descriptor set, the executor receives the sorted list
@@ -157,7 +157,7 @@ pub struct FrameGraphInputs {
     pub transparent_enabled: bool,
     /// `true` when a system submitted world-space lines this frame AND the
     /// backend's line pipeline is live. The graph adds a `Lines` render pass at
-    /// the tail of the hdr_resolve RMW chain: it blend-writes the scene colour
+    /// the tail of the hdr_resolve RMW chain: it blend-writes the scene color
     /// and samples the resolved scene depth so a line behind geometry is
     /// occluded by it. A frame with no lines omits the node entirely.
     pub lines_enabled: bool,
@@ -205,13 +205,15 @@ pub struct FrameGraphInputs {
     /// graph. Like SSGI it reuses the SSR depth + normal + roughness pre-pass,
     /// so `ssr_prepass_enabled` is forced on whenever this is set.
     pub rt_reflections_enabled: bool,
-    /// `true` to collapse the SSR / SSAO / velocity geometry pre-passes into a
-    /// single `GBufferPrepass` node that writes view-space normal+depth,
-    /// roughness, and motion in one traversal: every consumer reads that one
-    /// output. When set, the builder emits `GBufferPrepass` (gated on any of
-    /// `ssr_prepass_enabled || ssao_enabled || velocity_enabled`) instead of the
-    /// separate `SsrPrepass` + `Velocity` nodes.
-    pub unified_gbuffer_prepass: bool,
+    /// `true` when the backend built the G-buffer targets. One
+    /// `GBufferPrepass` node writes view-space normal+depth, roughness, and
+    /// motion in one traversal and every screen-space consumer reads that one
+    /// output, so the builder emits it when this is set and any of
+    /// `ssr_prepass_enabled || ssao_enabled || velocity_enabled` is on. A
+    /// backend sets it from the same condition it builds those targets under,
+    /// which is why the two gates are separate: this one says the targets
+    /// exist, the consumers say whether anything reads them.
+    pub gbuffer_prepass_enabled: bool,
     /// `true` when an opaque full-screen menu backdrop covers the scene, so
     /// nothing the world passes produce is visible. The builder masks every
     /// gated world pass off and collapses the graph to `Main -> Composite`
@@ -276,7 +278,7 @@ impl FrameGraphInputs {
             two_pass_occlusion_enabled: false,
             ssgi_enabled: false,
             rt_reflections_enabled: false,
-            unified_gbuffer_prepass: false,
+            gbuffer_prepass_enabled: false,
             world_hidden: false,
             clustered_lighting_enabled: false,
             composite_reads_ao: false,
@@ -316,7 +318,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     }),
     ("ssgi", |i| i.ssgi_enabled = true),
     ("rt_reflections", |i| i.rt_reflections_enabled = true),
-    ("unified_gbuffer", |i| i.unified_gbuffer_prepass = true),
+    ("gbuffer_prepass", |i| i.gbuffer_prepass_enabled = true),
     ("world_hidden", |i| i.world_hidden = true),
     ("clustered_lighting", |i| {
         i.clustered_lighting_enabled = true
@@ -335,8 +337,8 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
 // Order (with all flags on):
 //
 // ```text
-// Cull → SsrPrepass → SsaoBlur → Shadow → ParticlesSim → Main → AutoExposure
-//   → Raymarch → Velocity → Decals → Fog → ParticlesDraw → SsrResolve
+// Cull → GBufferPrepass → SsaoBlur → Shadow → ParticlesSim → Main
+//   → AutoExposure → Raymarch → Decals → Fog → ParticlesDraw → SsrResolve
 //   → Transparent → TaaResolve → Bloom → HizFinal → Composite
 // ```
 //
@@ -366,7 +368,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
 
 // The four attachments the unified G-buffer pre-pass writes in one draw. They
 // are separate resources rather than one handle because their shapes differ
-// (three colour formats and a depth target) and so do their consumers, so one
+// (three color formats and a depth target) and so do their consumers, so one
 // handle would give each of them the union of four lifetimes.
 #[derive(Copy, Clone)]
 struct GBufferHandles {
@@ -394,7 +396,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             hdr_width: inputs.hdr_width,
             hdr_height: inputs.hdr_height,
             hdr_sample_count: inputs.hdr_sample_count,
-            unified_gbuffer_prepass: inputs.unified_gbuffer_prepass,
+            gbuffer_prepass_enabled: inputs.gbuffer_prepass_enabled,
             world_hidden: true,
             composite_reads_ao: inputs.composite_reads_ao,
             hiz_build_enabled: inputs.hiz_build_enabled,
@@ -411,9 +413,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // spine: also written by Decals / Fog / ParticlesDraw and read by
     // AutoExposure / SsrResolve, so its version chain is the longest.
     //
-    // `hdr_color` is the multisample colour attachment, and it exists only when
+    // `hdr_color` is the multisample color attachment, and it exists only when
     // the world is multisampled. Without MSAA there is no separate resolve step
-    // and the single colour target *is* the spine, which every backend already
+    // and the single color target *is* the spine, which every backend already
     // reflects (Vulkan leaves `color_images` empty; DirectX and Metal leave
     // their `resolve` field `None` and bind `color`). Declaring it
     // unconditionally would put two graph resources on one GPU object, and the
@@ -464,13 +466,11 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         (None, None)
     };
 
-    // Unified G-buffer pre-pass: one node writes the view-space normal+depth /
+    // Geometry pre-pass: one node writes the view-space normal+depth /
     // roughness / velocity / depth that SSR, SSAO, SSGI, RT, TAA, and the
-    // upscaler read, replacing the separate SsrPrepass + Velocity nodes. Runs
-    // when any of those consumers is on. Every backend takes this path when its
-    // G-buffer targets are built; the separate nodes below are the fallback for
-    // a build without them.
-    let gbuffer_v1 = if inputs.unified_gbuffer_prepass
+    // upscaler read. Runs when the backend built the targets and any of those
+    // consumers is on.
+    let gbuffer_v1 = if inputs.gbuffer_prepass_enabled
         && (inputs.ssr_prepass_enabled || inputs.ssao_enabled || inputs.velocity_enabled)
     {
         let normal_depth =
@@ -499,20 +499,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
-    // SSR pre-pass writes the SSR G-buffer; SSAO reads it when both are on (the
-    // shared-G-buffer fast path). Under the unified path the merged node above
-    // supplies the same normal+depth handle, so this separate node is skipped.
-    let ssr_gbuffer_v1 = if let Some(g) = gbuffer_v1 {
-        Some(g.normal_depth)
-    } else if inputs.ssr_prepass_enabled {
-        let ssr_gbuffer = b.create_texture("ssr_gbuffer", ssr_gbuffer_desc(inputs));
-        Some(
-            b.add_pass(PassId::SsrPrepass, PassKind::Render)
-                .write_texture(ssr_gbuffer),
-        )
-    } else {
-        None
-    };
+    // The normal+depth half of the pre-pass output: SSR marches against it and
+    // SSAO reads the same handle.
+    let ssr_gbuffer_v1 = gbuffer_v1.map(|g| g.normal_depth);
 
     // SSAO bundle writes ao_output. PassId::SsaoBlur is the single
     // graph node for the entire encode_ssao bundle; SsaoPrepass +
@@ -690,29 +679,16 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             .read_texture(hdr_resolve_head);
     }
 
-    // Velocity (render) writes the per-pixel motion-vector buffer TaaResolve /
-    // Upscale consume. The read edge from those passes pins it ahead of them in
-    // the toposort. Under the unified path the merged G-buffer node already
-    // carries velocity, so TAA / Upscale read that handle and this separate node
-    // is skipped.
-    let velocity_v1 = if let Some(g) = gbuffer_v1 {
-        Some(g.velocity)
-    } else if inputs.velocity_enabled {
-        let velocity = b.create_texture("velocity", velocity_desc(inputs));
-        Some(
-            b.add_pass(PassId::Velocity, PassKind::Render)
-                .write_texture(velocity),
-        )
-    } else {
-        None
-    };
+    // The motion half of the pre-pass output: TaaResolve / Upscale read it, and
+    // that read edge pins the pre-pass ahead of them in the toposort.
+    let velocity_v1 = gbuffer_v1.map(|g| g.velocity);
 
     // hdr_resolve post-Main RMW chain: Raymarch → Decals → Fog →
     // ParticlesDraw, each blend- or opaque-writing on top of the
     // previous version. The handle walks forward through `h` so each
     // write picks up the latest version, giving the compile pass clean
     // WAW edges to derive the chain order. Raymarch slots first so its
-    // depth+colour write is visible to every later post-decoration
+    // depth+color write is visible to every later post-decoration
     // pass; AutoExposure's WAR-read on hdr_resolve_head pins it before
     // Raymarch (so SDF brightness doesn't skew exposure for the same
     // frame), matching the doc's chosen one-frame-lag trade-off.
@@ -746,7 +722,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     }
     if inputs.decals_enabled {
         // Projected decals reconstruct each pixel's world position from the
-        // scene depth, so the pass samples depth while blend-writing colour.
+        // scene depth, so the pass samples depth while blend-writing color.
         let mut decals = b.add_pass(PassId::Decals, PassKind::Render);
         decals.read_texture(depth_cur);
         h = decals.write_texture(h);
@@ -809,7 +785,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // one of the two is ever inserted.
         // Both resolves trace against the pre-pass view normal + linear depth
         // and pick their blur radius from its roughness. Declaring those reads
-        // is what keeps the G-buffer's modelled lifetime as long as its real
+        // is what keeps the G-buffer's modeled lifetime as long as its real
         // one: roughness has no other consumer, so without this it would look
         // dead the moment the pre-pass finished.
         let mut current = if inputs.rt_reflections_enabled {
@@ -967,7 +943,7 @@ fn froxel_volume_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 /// preserving enough screen-space detail for shaft-of-light shadowing.
 /// Backends that implement the froxel path read these constants directly;
 /// the values also ride in `FogFroxelParams.froxel_dims` so shaders can map
-/// between absolute indices and normalised volume UVs without recompiling.
+/// between absolute indices and normalized volume UVs without recompiling.
 pub const FOG_FROXEL_X: u32 = 80;
 /// Fog froxels down the screen. See [`FOG_FROXEL_X`].
 pub const FOG_FROXEL_Y: u32 = 45;
@@ -1056,7 +1032,7 @@ fn particle_pool_desc() -> BufferDesc {
     // unordered-access state between the two nodes. `UnorderedBuffer` is for the
     // buffer both sides bind the same read-write way (`cull_status`), which
     // never transitions and orders through a UAV barrier instead; that would
-    // leave DirectX's vertex-stage SRV read unsynchronised. The executor owns
+    // leave DirectX's vertex-stage SRV read unsynchronized. The executor owns
     // the allocation (one buffer per live emitter, sized to its pool).
     BufferDesc {
         size_bytes: None,
@@ -1092,7 +1068,7 @@ fn hiz_pyramid_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 
 // The unified G-buffer pre-pass writes four separate targets in one draw. They
 // are four graph resources rather than one handle because their shapes differ
-// (three colour formats and a depth target) and so do their consumers, and a
+// (three color formats and a depth target) and so do their consumers, and a
 // resource the aliaser may place has to name the memory it actually needs.
 fn gbuffer_normal_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // RGBA16F view-space normal + linear depth, read by SSR / SSAO / SSGI / RT.
@@ -1106,7 +1082,7 @@ fn gbuffer_normal_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 fn gbuffer_roughness_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // R8 perceptual roughness, read by the reflection resolve to pick its
     // blur radius. Clears to 1.0 (fully rough), so a pixel the pre-pass never
-    // rasterises reflects nothing -- the one graph target whose cleared
+    // rasterizes reflects nothing -- the one graph target whose cleared
     // background carries meaning, and the reason `TextureDesc` models a clear
     // value at all.
     render_res_2d(
@@ -1119,21 +1095,11 @@ fn gbuffer_roughness_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 
 fn gbuffer_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // The pre-pass's own depth attachment. Single-sample regardless of the
-    // main pass's MSAA: the pre-pass rasterises once.
+    // main pass's MSAA: the pre-pass rasterizes once.
     render_res_2d(
         inputs,
         PixelFormat::Depth32Float,
         TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
-    )
-}
-
-fn ssr_gbuffer_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    // RGBA16F view-space normal + linear depth at HDR dims; shared with
-    // SSAO when both passes are on.
-    render_res_2d(
-        inputs,
-        PixelFormat::Rgba16Float,
-        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
     )
 }
 
@@ -1398,8 +1364,8 @@ mod tests {
     }
 
     #[test]
-    fn the_msaa_colour_attachment_is_declared_only_when_multisampled() {
-        // Without MSAA there is no resolve step and the single colour target is
+    fn the_msaa_color_attachment_is_declared_only_when_multisampled() {
+        // Without MSAA there is no resolve step and the single color target is
         // the spine, so declaring `hdr_color` too would put two graph resources
         // on one GPU object. Every backend already reflects this: Vulkan leaves
         // `color_images` empty, DirectX and Metal leave `resolve` None.
@@ -1587,56 +1553,8 @@ mod tests {
     #[test]
     fn ssr_prepass_and_ssao_share_gbuffer_pinning_order() {
         let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
         i.ssr_prepass_enabled = true;
-        i.ssao_enabled = true;
-        let g = build_frame_graph(&i).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert_eq!(
-            order,
-            vec![
-                PassId::SsrPrepass,
-                PassId::SsaoBlur,
-                PassId::Main,
-                PassId::Composite,
-            ]
-        );
-    }
-
-    #[test]
-    fn unified_gbuffer_prepass_replaces_ssr_and_velocity() {
-        // With the unified flag on, one GBufferPrepass node stands in for the
-        // separate SsrPrepass + Velocity nodes; SSAO reads its output and TAA
-        // reads its motion. Neither old node appears.
-        let mut i = all_off();
-        i.unified_gbuffer_prepass = true;
-        i.ssr_prepass_enabled = true;
-        i.ssao_enabled = true;
-        i.velocity_enabled = true;
-        i.taa_enabled = true;
-        let g = build_frame_graph(&i).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert!(order.contains(&PassId::GBufferPrepass));
-        assert!(!order.contains(&PassId::SsrPrepass));
-        assert!(!order.contains(&PassId::Velocity));
-        let gb = order
-            .iter()
-            .position(|p| *p == PassId::GBufferPrepass)
-            .unwrap();
-        let ssao = order.iter().position(|p| *p == PassId::SsaoBlur).unwrap();
-        let main = order.iter().position(|p| *p == PassId::Main).unwrap();
-        let taa = order.iter().position(|p| *p == PassId::TaaResolve).unwrap();
-        assert!(
-            gb < ssao && ssao < main,
-            "GBufferPrepass before SsaoBlur+Main"
-        );
-        assert!(gb < taa, "GBufferPrepass before TaaResolve");
-    }
-
-    #[test]
-    fn unified_gbuffer_prepass_runs_for_ssao_only() {
-        // SSAO alone (no SSR / velocity) still triggers the merged node.
-        let mut i = all_off();
-        i.unified_gbuffer_prepass = true;
         i.ssao_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
@@ -1652,17 +1570,61 @@ mod tests {
     }
 
     #[test]
-    fn unified_gbuffer_prepass_runs_for_velocity_only() {
-        // Velocity alone (TAA, no SSR/SSAO) still triggers the merged node, and
-        // the standalone Velocity node is not emitted.
+    fn one_prepass_node_serves_ssr_ssao_and_velocity() {
+        // SSR, SSAO and TAA all read the one GBufferPrepass output: SSAO its
+        // normal+depth, TAA its motion.
         let mut i = all_off();
-        i.unified_gbuffer_prepass = true;
+        i.gbuffer_prepass_enabled = true;
+        i.ssr_prepass_enabled = true;
+        i.ssao_enabled = true;
         i.velocity_enabled = true;
         i.taa_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
         assert!(order.contains(&PassId::GBufferPrepass));
-        assert!(!order.contains(&PassId::Velocity));
+        let gb = order
+            .iter()
+            .position(|p| *p == PassId::GBufferPrepass)
+            .unwrap();
+        let ssao = order.iter().position(|p| *p == PassId::SsaoBlur).unwrap();
+        let main = order.iter().position(|p| *p == PassId::Main).unwrap();
+        let taa = order.iter().position(|p| *p == PassId::TaaResolve).unwrap();
+        assert!(
+            gb < ssao && ssao < main,
+            "GBufferPrepass before SsaoBlur+Main"
+        );
+        assert!(gb < taa, "GBufferPrepass before TaaResolve");
+    }
+
+    #[test]
+    fn gbuffer_prepass_runs_for_ssao_only() {
+        // SSAO alone (no SSR / velocity) still triggers the merged node.
+        let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
+        i.ssao_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        assert_eq!(
+            order,
+            vec![
+                PassId::GBufferPrepass,
+                PassId::SsaoBlur,
+                PassId::Main,
+                PassId::Composite,
+            ]
+        );
+    }
+
+    #[test]
+    fn gbuffer_prepass_runs_for_velocity_only() {
+        // Velocity alone (TAA, no SSR/SSAO) still triggers the pre-pass.
+        let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
+        i.velocity_enabled = true;
+        i.taa_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        assert!(order.contains(&PassId::GBufferPrepass));
     }
 
     #[test]
@@ -1673,7 +1635,7 @@ mod tests {
         // Cull -> GBufferPrepass (-> Main).
         let mut i = all_off();
         i.bindless_cull_enabled = true;
-        i.unified_gbuffer_prepass = true;
+        i.gbuffer_prepass_enabled = true;
         i.ssao_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
@@ -1688,10 +1650,10 @@ mod tests {
     }
 
     #[test]
-    fn unified_gbuffer_prepass_omitted_when_no_consumers() {
+    fn gbuffer_prepass_omitted_when_no_consumers() {
         // The flag on but no consumer active: no pre-pass node at all.
         let mut i = all_off();
-        i.unified_gbuffer_prepass = true;
+        i.gbuffer_prepass_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
         assert_eq!(order, vec![PassId::Main, PassId::Composite]);
@@ -1763,12 +1725,13 @@ mod tests {
     }
 
     #[test]
-    fn upscale_replaces_taa_and_pins_after_velocity() {
+    fn upscale_replaces_taa_and_pins_after_the_prepass() {
         // Upscale takes TaaResolve's slot when temporal upscaling is on.
         // TaaResolve must not appear in the compiled graph (the scaler
-        // does temporal accumulation itself), and Velocity must precede
-        // Upscale via the explicit motion-vector read.
+        // does temporal accumulation itself), and the pre-pass that produces
+        // the motion vectors must precede Upscale via the explicit read.
         let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
         i.velocity_enabled = true;
         i.upscale_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
@@ -1776,7 +1739,10 @@ mod tests {
         assert!(order.contains(&PassId::Upscale));
         assert!(!order.contains(&PassId::TaaResolve));
         assert!(
-            order.iter().position(|p| *p == PassId::Velocity).unwrap()
+            order
+                .iter()
+                .position(|p| *p == PassId::GBufferPrepass)
+                .unwrap()
                 < order.iter().position(|p| *p == PassId::Upscale).unwrap()
         );
     }
@@ -1798,19 +1764,20 @@ mod tests {
 
     #[test]
     fn velocity_taa_pinned_via_explicit_read() {
-        // TaaResolve reads the velocity buffer explicitly so the
-        // toposort orders Velocity before TaaResolve via RAW (not
+        // TaaResolve reads the velocity buffer explicitly so the toposort
+        // orders the pre-pass that wrote it before TaaResolve via RAW (not
         // declaration order).
         let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
         i.velocity_enabled = true;
         i.taa_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        // Main runs first, then Velocity + TaaResolve in compile-pass
-        // order. TaaResolve reads scene_color v0 (imported v0 rule) +
-        // velocity v1.
         assert!(
-            order.iter().position(|p| *p == PassId::Velocity).unwrap()
+            order
+                .iter()
+                .position(|p| *p == PassId::GBufferPrepass)
+                .unwrap()
                 < order.iter().position(|p| *p == PassId::TaaResolve).unwrap()
         );
     }
@@ -2180,6 +2147,7 @@ mod tests {
         i.decals_enabled = true;
         i.ssr_prepass_enabled = true;
         i.ssao_enabled = true;
+        i.gbuffer_prepass_enabled = true;
         i.transparent_enabled = true;
         i.raymarch_enabled = true;
 
@@ -2192,18 +2160,18 @@ mod tests {
         fn idx(order: &[PassId], p: PassId) -> usize {
             order.iter().position(|x| *x == p).expect("pass present")
         }
-        // Cull / SsrPrepass / SsaoBlur / Shadow / SSAO all precede Main.
+        // Cull / GBufferPrepass / SsaoBlur / Shadow / SSAO all precede Main.
         assert!(idx(&order, PassId::Cull) < idx(&order, PassId::Main));
-        assert!(idx(&order, PassId::SsrPrepass) < idx(&order, PassId::Main));
+        assert!(idx(&order, PassId::GBufferPrepass) < idx(&order, PassId::Main));
         assert!(idx(&order, PassId::SsaoBlur) < idx(&order, PassId::Main));
         assert!(idx(&order, PassId::Shadow) < idx(&order, PassId::Main));
-        // SsrPrepass precedes SsaoBlur (G-buffer share).
-        assert!(idx(&order, PassId::SsrPrepass) < idx(&order, PassId::SsaoBlur));
+        // The pre-pass precedes SsaoBlur (SSAO reads its normal+depth).
+        assert!(idx(&order, PassId::GBufferPrepass) < idx(&order, PassId::SsaoBlur));
         // AutoExposure post-Main, pre-Raymarch (WAR-pinned on hdr_resolve_v1).
         assert!(idx(&order, PassId::Main) < idx(&order, PassId::AutoExposure));
         assert!(idx(&order, PassId::AutoExposure) < idx(&order, PassId::Raymarch));
         // Raymarch leads the hdr_resolve RMW chain so Decals / Fog /
-        // ParticlesDraw blend on top of the raymarched colour.
+        // ParticlesDraw blend on top of the raymarched color.
         assert!(idx(&order, PassId::Raymarch) < idx(&order, PassId::Decals));
         // hdr_resolve chain.
         assert!(idx(&order, PassId::Decals) < idx(&order, PassId::Fog));
@@ -2211,8 +2179,8 @@ mod tests {
         assert!(idx(&order, PassId::ParticlesDraw) < idx(&order, PassId::SsrResolve));
         // FogFroxel populates the volume Fog samples, so it must precede Fog.
         assert!(idx(&order, PassId::FogFroxel) < idx(&order, PassId::Fog));
-        // Velocity precedes TaaResolve.
-        assert!(idx(&order, PassId::Velocity) < idx(&order, PassId::TaaResolve));
+        // The pre-pass that writes the motion vectors precedes TaaResolve.
+        assert!(idx(&order, PassId::GBufferPrepass) < idx(&order, PassId::TaaResolve));
         // Post-TAA chain. Transparent slots between SsrResolve and TaaResolve.
         assert!(idx(&order, PassId::SsrResolve) < idx(&order, PassId::Transparent));
         assert!(idx(&order, PassId::Transparent) < idx(&order, PassId::TaaResolve));

@@ -39,7 +39,7 @@ use super::post::{
     build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline,
 };
 use super::resources::skinning::{build_skinned_shadow_pipeline, make_skinned_vertex_descriptor};
-use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
+use crate::metal::slang_builtins::{SSAO_BLUR, SSAO_KERNEL};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
 // `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
@@ -372,7 +372,7 @@ impl MtlContext {
             self.rt.pipeline.is_some(),
             build_rt_reflection_pipeline(
                 device,
-                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG,
+                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG,
                 hr
             )
         );
@@ -380,7 +380,7 @@ impl MtlContext {
             self.rt.pipeline_textured.is_some(),
             build_rt_reflection_pipeline(
                 device,
-                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG_TEXTURED,
+                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED,
                 hr
             )
         );

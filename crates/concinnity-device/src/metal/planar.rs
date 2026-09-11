@@ -50,7 +50,7 @@ pub(in crate::metal) const MAX_PLANAR_PLANES: usize =
     crate::gfx::planar_reflection::MAX_PLANAR_PLANES;
 
 // Per-frame planar reflection render targets for one plane, sized to the render
-// resolution. MSAA colour + depth (rendered into, then resolved) plus a
+// resolution. MSAA color + depth (rendered into, then resolved) plus a
 // single-sample resolve the reflective shader samples. The mirror pass reuses
 // the main pipelines, so it carries their sample count: at one sample there is
 // no `msaa_color` and the pass draws straight into `resolve`.
@@ -72,7 +72,7 @@ pub(in crate::metal) struct PlanarReflectionSet {
     pub(in crate::metal) planes: Vec<[f32; 4]>,
 }
 
-// Build the planar reflection targets at `width`x`height`. Colour + depth match
+// Build the planar reflection targets at `width`x`height`. Color + depth match
 // the main pipeline's attachment formats + sample count so `encode_main_into_face`
 // binds the standard pipelines; the resolve is shader-readable.
 pub(in crate::metal) fn create_planar_targets(
@@ -96,7 +96,7 @@ pub(in crate::metal) fn create_planar_targets(
         Some(
             device
                 .newTextureWithDescriptor(&desc)
-                .ok_or("planar: failed to create MSAA colour target")?,
+                .ok_or("planar: failed to create MSAA color target")?,
         )
     } else {
         None

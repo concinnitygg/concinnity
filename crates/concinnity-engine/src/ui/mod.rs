@@ -825,7 +825,7 @@ impl System for UiInputSystem {
                 false
             };
             // A focused slider track stays in the pass so it shows the focus
-            // highlight; its confirm dispatch is a recognised no-op and the
+            // highlight; its confirm dispatch is a recognized no-op and the
             // cursor cannot fire it while focus is set.
             let pad_focused = focus_index == Some(i);
             let inert = thumb_active
@@ -1890,7 +1890,7 @@ fn fire_action(
             // Slider drags, key rebinds, and dropdown opens are driven by their
             // own passes (the drag pass, the capture flow, the dropdown pass),
             // not the click-to-fire path, so they never reach here from a
-            // HitRegion click; recognise them so a stray binding does not log a
+            // HitRegion click; recognize them so a stray binding does not log a
             // false "malformed" warning.
             Some((key, "drag")) | Some((key, "rebind")) | Some((key, "open"))
                 if !key.is_empty() => {}
@@ -4307,7 +4307,7 @@ mod tests {
     }
 
     // While a pad rebind row is capturing, the East button is a bindable
-    // button, not a back pulse: it binds instead of cancelling.
+    // button, not a back pulse: it binds instead of canceling.
     #[test]
     fn pad_capture_binds_east_instead_of_backing_out() {
         let mut world = World::new();

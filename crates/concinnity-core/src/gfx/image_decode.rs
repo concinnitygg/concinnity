@@ -115,7 +115,7 @@ fn f16_to_f32(h: u16) -> f32 {
     sign * val
 }
 
-// sRGB OETF (linear -> display), clamped and quantised to 8-bit. NaN maps to 0.
+// sRGB OETF (linear -> display), clamped and quantized to 8-bit. NaN maps to 0.
 fn linear_to_srgb8(c: f32) -> u8 {
     if c.is_nan() {
         return 0;
@@ -129,7 +129,7 @@ fn linear_to_srgb8(c: f32) -> u8 {
     unorm_to_u8(s)
 }
 
-// Quantise a [0, 1] value to 8-bit with rounding. NaN maps to 0.
+// Quantize a [0, 1] value to 8-bit with rounding. NaN maps to 0.
 fn unorm_to_u8(c: f32) -> u8 {
     if c.is_nan() {
         return 0;
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn pq_float_passes_code_values_through() {
-        // PQ code values are already in [0, 1]; no sRGB OETF, just quantise.
+        // PQ code values are already in [0, 1]; no sRGB OETF, just quantize.
         let mut raw = Vec::new();
         for h in [0x3c00u16, 0x3800, 0x0000, 0x3c00] {
             raw.extend_from_slice(&h.to_le_bytes());

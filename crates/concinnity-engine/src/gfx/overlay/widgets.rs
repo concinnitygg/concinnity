@@ -6,7 +6,7 @@ use crate::components::{Sprite, TextInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::text;
 
-// Persistent buffers for the synthesised elements, kept on the overlay system
+// Persistent buffers for the synthesized elements, kept on the overlay system
 // so a steady-state frame reuses their capacity (including every label's
 // content String) instead of reallocating.
 #[derive(Debug, Default)]
@@ -215,7 +215,7 @@ fn fit_line(
     }
 }
 
-// Synthesise the transient Sprites + TextLabels that draw a TextInput field
+// Synthesize the transient Sprites + TextLabels that draw a TextInput field
 // into `out`, replacing its previous contents: a background box, the typed
 // content (or the dimmer placeholder while empty and unfocused), and a caret
 // bar while focused. Fed through the same shapers as the authored overlay
@@ -311,7 +311,7 @@ pub(super) fn build_text_input_overlay(
         screen: ti.screen,
     });
 
-    // Inline completion: the ghost suffix in the placeholder colour just past
+    // Inline completion: the ghost suffix in the placeholder color just past
     // the caret, only while the field holds focus and the content fits the box
     // (scrolled overflow leaves it no stable anchor). Clipped to the remaining
     // width, dropped entirely when no character fits.
@@ -575,7 +575,7 @@ mod tests {
         assert_ne!(sprites[2].tint, sprites[3].tint);
         // Every sprite carries the view's screen, so it maps like the menu it drops from.
         assert!(sprites.iter().all(|s| s.screen == view.screen && s.visible));
-        // One label per shown option, inset by the text pad and centred on a 16px line.
+        // One label per shown option, inset by the text pad and centered on a 16px line.
         assert_eq!(labels.len(), 3);
         assert_eq!(labels[0].content, "aa");
         assert_eq!((labels[0].x, labels[0].y), (410.0, 152.0));
@@ -624,7 +624,7 @@ mod tests {
     // Without a loaded font there is no line height to center on, so the text
     // falls back to the row's midpoint.
     #[test]
-    fn build_dropdown_overlay_without_a_loaded_font_centres_on_a_zero_line() {
+    fn build_dropdown_overlay_without_a_loaded_font_centers_on_a_zero_line() {
         let view = dropdown_view(&["aa"]);
         let (_, labels) = build_dropdown_overlay(&view, &no_fonts());
         assert_eq!(labels[0].y, 160.0);
@@ -648,7 +648,7 @@ mod tests {
     }
 
     // Content, or focus on an empty field, replaces the placeholder with the live
-    // text in the content colour.
+    // text in the content color.
     #[test]
     fn build_text_input_overlay_shows_content_over_the_placeholder() {
         let mut ti = text_input();
@@ -694,7 +694,7 @@ mod tests {
         );
     }
 
-    // The ghost suffix draws after the caret in the placeholder colour, and
+    // The ghost suffix draws after the caret in the placeholder color, and
     // only while the field holds focus.
     #[test]
     fn build_text_input_overlay_draws_the_ghost_after_the_caret() {
@@ -751,7 +751,7 @@ mod tests {
         let (sprites, labels) = build_text_input_overlay(&ti, &no_fonts(), true);
         assert_eq!(sprites.len(), 1);
         assert_eq!(labels[0].content, ti.content);
-        // line_h = height * 0.6 = 24, centred in the 40px box.
+        // line_h = height * 0.6 = 24, centered in the 40px box.
         assert_eq!((labels[0].x, labels[0].y), (8.0, 8.0));
     }
 }

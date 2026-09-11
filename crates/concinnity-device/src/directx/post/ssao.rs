@@ -14,11 +14,12 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use concinnity_core::render::post::device::PostBlend;
+
 use crate::gfx::render_types::SsaoParams;
 
-use crate::directx::com;
 use crate::directx::context::{DxContext, dump_on_err};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
@@ -177,72 +178,6 @@ fn create_ssao_blur_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSi
     serialize_desc_and_create(device, &desc, "ssao blur root sig")
 }
 
-// PSO for the fullscreen GTAO kernel and the depth-aware blur. Both write
-// `SSAO_OCCLUSION_FORMAT`, share the fullscreen-triangle VS, and disable
-// depth + blending.
-fn create_ssao_fullscreen_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-    label: &str,
-) -> Result<ID3D12PipelineState, String> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = SSAO_OCCLUSION_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create ssao {label} PSO: {e}"))
-}
-
 // Resources
 
 // SSAO resources held by `DxContext` when `PostProcessConfig.ssao` is on.
@@ -324,23 +259,27 @@ impl SsaoResources {
         let kernel_root_sig = dump_on_err(info_queue, create_ssao_kernel_root_signature(device))?;
         let kernel_pso = dump_on_err(
             info_queue,
-            create_ssao_fullscreen_pso(
+            create_blended_composite_pso(
                 device,
                 &kernel_root_sig,
                 &shaders.fullscreen_vs,
                 &shaders.kernel_ps,
-                "kernel",
+                SSAO_OCCLUSION_FORMAT,
+                PostBlend::Replace,
+                "ssao kernel",
             ),
         )?;
         let blur_root_sig = dump_on_err(info_queue, create_ssao_blur_root_signature(device))?;
         let blur_pso = dump_on_err(
             info_queue,
-            create_ssao_fullscreen_pso(
+            create_blended_composite_pso(
                 device,
                 &blur_root_sig,
                 &shaders.fullscreen_vs,
                 &shaders.blur_ps,
-                "blur",
+                SSAO_OCCLUSION_FORMAT,
+                PostBlend::Replace,
+                "ssao blur",
             ),
         )?;
 
@@ -418,22 +357,26 @@ pub(in crate::directx) fn rebuild_ssao_pipelines(
     let shaders = compile_ssao_shaders(hot_reload)?;
     let kernel_pso = dump_on_err(
         info_queue,
-        create_ssao_fullscreen_pso(
+        create_blended_composite_pso(
             device,
             &ssao.kernel_root_sig,
             &shaders.fullscreen_vs,
             &shaders.kernel_ps,
-            "kernel",
+            SSAO_OCCLUSION_FORMAT,
+            PostBlend::Replace,
+            "ssao kernel",
         ),
     )?;
     let blur_pso = dump_on_err(
         info_queue,
-        create_ssao_fullscreen_pso(
+        create_blended_composite_pso(
             device,
             &ssao.blur_root_sig,
             &shaders.fullscreen_vs,
             &shaders.blur_ps,
-            "blur",
+            SSAO_OCCLUSION_FORMAT,
+            PostBlend::Replace,
+            "ssao blur",
         ),
     )?;
     Ok(RebuiltSsaoPipelines {

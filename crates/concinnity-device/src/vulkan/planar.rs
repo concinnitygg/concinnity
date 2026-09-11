@@ -62,7 +62,7 @@ pub(in crate::vulkan) fn pane_plane(normal: [f32; 3], center: [f32; 3]) -> [f32;
 }
 
 // The set of distinct reflection planes for the world, each rendering its mirror
-// into the shared colour + depth then resolving into its own shader-readable
+// into the shared color + depth then resolving into its own shader-readable
 // target. A pane samples the target of the slot it was assigned at init (see
 // gfx::planar_reflection::assign_planar_slots). Recreated on resize alongside the
 // HDR targets; the planes + slot assignment are fixed at init.
@@ -76,14 +76,14 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // pipeline). Not owned, never destroyed here.
     main_render_pass: vk::RenderPass,
 
-    // Shared MSAA colour (Some only when MSAA) + shared depth, reused across
+    // Shared MSAA color (Some only when MSAA) + shared depth, reused across
     // planes (rendered one plane at a time on the frame's cmd buffer) and across
     // frames (the single graphics queue executes submissions in order). Recreated
     // on resize.
     color: Option<GpuImage>,
     depth: GpuImage,
     // Per-plane shader-readable target: the MSAA resolve when MSAA, else the
-    // single-sample colour attachment itself. The glass pass samples it. Recreated
+    // single-sample color attachment itself. The glass pass samples it. Recreated
     // on resize.
     targets: Vec<GpuImage>,
     framebuffers: Vec<OwnedFramebuffer>,
@@ -146,7 +146,7 @@ pub(in crate::vulkan) struct PlanarDevice<'a> {
     pub(in crate::vulkan) device: &'a VkDevice,
 }
 
-// Render dimensions for the shared colour + depth + per-plane targets: the MSAA
+// Render dimensions for the shared color + depth + per-plane targets: the MSAA
 // sample count, pixel dimensions, and how many per-plane targets to create.
 #[derive(Clone, Copy)]
 struct PlanarTargetDims {
@@ -156,7 +156,7 @@ struct PlanarTargetDims {
     plane_count: usize,
 }
 
-// Create the shared colour (MSAA only) + shared depth + per-plane targets at the
+// Create the shared color (MSAA only) + shared depth + per-plane targets at the
 // given render dimensions.
 fn create_targets(
     gpu: PlanarDevice<'_>,
@@ -236,7 +236,7 @@ fn create_targets(
 }
 
 // The attachments + geometry for the per-plane framebuffers: the compatible main
-// pass, the MSAA sample count, the shared colour (MSAA only) + shared depth reused
+// pass, the MSAA sample count, the shared color (MSAA only) + shared depth reused
 // across planes, the per-plane targets (one framebuffer each), and the pixel
 // dimensions.
 struct PlanarFramebufferInputs<'a> {
@@ -250,8 +250,8 @@ struct PlanarFramebufferInputs<'a> {
 }
 
 // One framebuffer per plane, render-pass-compatible with the bindless main pass:
-// MSAA -> [shared colour, shared depth, plane target (resolve)], single-sample ->
-// [plane target (colour), shared depth].
+// MSAA -> [shared color, shared depth, plane target (resolve)], single-sample ->
+// [plane target (color), shared depth].
 fn create_framebuffers(
     device: &VkDevice,
     inputs: PlanarFramebufferInputs<'_>,
@@ -271,7 +271,7 @@ fn create_framebuffers(
         let attachments: Vec<vk::ImageView> = if msaa {
             vec![
                 color
-                    .expect("a multisampled planar target has a colour image")
+                    .expect("a multisampled planar target has a color image")
                     .view,
                 depth.view,
                 target.view,
@@ -359,7 +359,7 @@ pub(in crate::vulkan) struct PlanarLightingBindings<'a> {
 }
 
 impl PlanarReflectionSet {
-    // Build the planar set: shared colour + depth + per-plane targets at render
+    // Build the planar set: shared color + depth + per-plane targets at render
     // dimensions, per-plane framebuffers, the per-(plane, frame) reflected-view
     // UBO ring, and the per-(plane, frame) global sets (each carrying its reflected
     // view + the shared lighting / env bindings + an EMPTY ProbeSet so the mirror
@@ -739,7 +739,7 @@ impl PlanarReflectionSet {
         unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
     }
 
-    // Recreate the shared colour + depth + per-plane targets + framebuffers at new
+    // Recreate the shared color + depth + per-plane targets + framebuffers at new
     // render dimensions. The view UBO ring + global sets + pool survive (the global
     // sets reference only the unchanged shared lighting / env bindings + the
     // per-(plane, frame) view UBOs). The targets move, so the caller must re-point
@@ -931,7 +931,7 @@ impl VkContext {
             // layout transition. `main_render_pass` declares both attachments
             // `initial_layout = UNDEFINED`, so every `vkCmdBeginRenderPass` here
             // write-after-writes the last render that touched them: the depth is
-            // shared by every plane, and each plane's colour target is the one its
+            // shared by every plane, and each plane's color target is the one its
             // own render wrote last frame. The render pass's external dependency
             // declares an empty src access mask -- an execution dependency with no
             // availability operation -- so nothing else covers it. Needed on the
@@ -977,7 +977,7 @@ impl VkContext {
 
         // Make every freshly rendered target visible to the glass fragment read.
         // The main render pass leaves them in SHADER_READ_ONLY (final layout) but
-        // adds no output-side dependency, so order the colour writes before the
+        // adds no output-side dependency, so order the color writes before the
         // sample explicitly. Layout is unchanged (SHADER_READ_ONLY -> same).
         // One barrier per plane, and the plane count is capped at
         // `MAX_PLANAR_PLANES` where the set is built, so this fits on the stack.
@@ -1023,7 +1023,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_plane_passes_through_centre_with_unit_normal() {
+    fn pane_plane_passes_through_center_with_unit_normal() {
         // A pane facing +z through (1, 2, 3): the plane constant places the center
         // on the surface (n . c + d == 0), and the normal is carried unchanged.
         let p = pane_plane([0.0, 0.0, 1.0], [1.0, 2.0, 3.0]);
@@ -1033,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_plane_offset_is_negative_normal_dot_centre() {
+    fn pane_plane_offset_is_negative_normal_dot_center() {
         // Tilted normal: d == -(n . c).
         let n = [0.6, 0.0, 0.8];
         let c = [2.0, 5.0, -1.0];

@@ -1,6 +1,6 @@
 //! Writing a system: code that runs every tick over a [`World`](crate::World).
 //!
-//! A world's own behaviour is data -- components describe what exists, and the
+//! A world's own behavior is data -- components describe what exists, and the
 //! engine's systems run over them. A system is the other half: Rust that runs
 //! on the same tick as the engine's own, over the same world, with the same
 //! borrow of it.

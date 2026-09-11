@@ -57,7 +57,7 @@ impl MtlContext {
         // draw. `Some` only when the skinned fold is active.
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
         // When `Some`, raymarched SDF casters draw into each cascade after the
-        // rasterised + skinned draws (and before the Main pass samples the
+        // rasterized + skinned draws (and before the Main pass samples the
         // shadow map). Built by the graph executor: same matrix / time /
         // camera the main raymarch pass will use later this frame, so the
         // shadow cast and the live surface agree. `None` when no volume opts
@@ -114,7 +114,7 @@ impl MtlContext {
 
             // Loop-local guard: each cascade's encoder ends when the guard drops
             // at the end of this iteration, before the next cascade opens one.
-            // The descriptor clears the slice, so a cascade with no rasterised
+            // The descriptor clears the slice, so a cascade with no rasterized
             // casters still leaves a cleared depth for the SDF pass below.
             let shadow_enc = ScopedEncoder::new(
                 cmd_buf
@@ -141,7 +141,7 @@ impl MtlContext {
         }
 
         // Raymarched SDF shadow casters: depth-only draws into the same
-        // per-cascade slices, run after the rasterised + skinned casters so
+        // per-cascade slices, run after the rasterized + skinned casters so
         // both layers compete via the slice's LESS depth test (nearest caster
         // wins per texel). No-op when no volume opts into `cast_shadows` or the
         // executor passed no view.

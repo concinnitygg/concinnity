@@ -53,7 +53,7 @@ fn dot4(a: Vec4, b: Vec4) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 }
 
-// Normalise a plane so its normal is unit length (scaling d to match). A zero
+// Normalize a plane so its normal is unit length (scaling d to match). A zero
 // normal is returned unchanged (degenerate, callers guard separately).
 pub(crate) fn normalize_plane(plane: Vec4) -> Vec4 {
     let len = sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);

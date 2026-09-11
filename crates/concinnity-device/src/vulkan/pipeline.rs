@@ -48,7 +48,7 @@ pub(super) fn compile_bindless_shaders(
 // `cmd_draw_indexed_indirect`, so the CPU never walks the static draw list.
 //
 // The frustum and distance maths mirror `gfx::frustum` exactly (the six
-// planes are extracted CPU-side already normalised) so the GPU path culls
+// planes are extracted CPU-side already normalized) so the GPU path culls
 // identically to the CPU BVH path it replaces. `GpuObjectData` / `GpuDrawArgs`
 // mirror `gfx::render_types` under std430; the command struct mirrors
 // `VkDrawIndexedIndirectCommand`. The object id rides `first_instance` (the
@@ -95,11 +95,10 @@ pub(super) fn create_cull_pipeline(
     spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(SHADER_ENTRY);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
@@ -158,6 +157,45 @@ pub(in crate::vulkan) fn spv_module<'d>(
     let module = unsafe { device.create_shader_module(&info, None) }
         .map_err(|e| format!("shader module: {e}"))?;
     Ok(SpvModule { device, module })
+}
+
+// The entry point every SPIR-V module the cook emits declares. slangc names the
+// entry after the stage function, and the emitter rewrites it to `main`, so one
+// name covers every stage on this backend.
+pub(in crate::vulkan) const SHADER_ENTRY: &std::ffi::CStr = c"main";
+
+// The vertex + fragment modules a graphics pipeline is built from, held together
+// so they outlive the create call and are destroyed once it returns.
+pub(in crate::vulkan) struct GraphicsStages<'d> {
+    vert: SpvModule<'d>,
+    frag: SpvModule<'d>,
+}
+
+impl<'d> GraphicsStages<'d> {
+    pub(in crate::vulkan) fn new(
+        device: &'d VkDevice,
+        vert_spv: &[u8],
+        frag_spv: &[u8],
+    ) -> Result<Self, String> {
+        Ok(Self {
+            vert: spv_module(device, vert_spv)?,
+            frag: spv_module(device, frag_spv)?,
+        })
+    }
+
+    // The stage array a `GraphicsPipelineCreateInfo` borrows.
+    pub(in crate::vulkan) fn infos(&self) -> [vk::PipelineShaderStageCreateInfo<'_>; 2] {
+        [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(self.vert.handle())
+                .name(SHADER_ENTRY),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(self.frag.handle())
+                .name(SHADER_ENTRY),
+        ]
+    }
 }
 
 // The world Shader's program for `entry`, as SPIR-V: the cook's artifact when
@@ -444,20 +482,8 @@ fn create_main_pipeline_filled(
         vert_spv,
         frag_spv,
     } = targets;
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     let (bindings, attrs) = main_vertex_input();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -535,12 +561,11 @@ pub(super) fn create_shadow_pipeline(
     vert_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
 
     let stages = [vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::VERTEX)
         .module(vert_mod.handle())
-        .name(&entry)];
+        .name(SHADER_ENTRY)];
 
     // `shadow.vert` only reads position (it writes depth-only NDC), so the
     // optimizer strips the other attributes from its interface. Bind just
@@ -621,12 +646,11 @@ pub(super) fn create_skinned_shadow_pipeline(
     vert_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
 
     let stages = [vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::VERTEX)
         .module(vert_mod.handle())
-        .name(&entry)];
+        .name(SHADER_ENTRY)];
 
     let (bindings, attrs) = skinned_shadow_vertex_input();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -699,20 +723,8 @@ pub(super) fn create_text_pipeline(
     frag_spv: &[u8],
     msaa: vk::SampleCountFlags,
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     let (bindings, attrs) = text_vertex_input();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -794,20 +806,8 @@ pub(super) fn create_composite_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     // No vertex input: the fullscreen triangle is generated from gl_VertexIndex.
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
@@ -928,7 +928,7 @@ mod tests {
     // valid SPIR-V from the embedded source.
     #[test]
     fn shadow_bindless_vs_compiles() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
@@ -941,7 +941,7 @@ mod tests {
     // shortest and the ceiling forms both have to survive).
     #[test]
     fn bindless_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         for probes in [1, 7, concinnity_core::render::uniforms::MAX_PROBES as u32] {
@@ -972,7 +972,7 @@ mod tests {
     // compile branch of `surface_source`, which is also what a stale cook does.
     #[test]
     fn a_world_shader_compiles_its_own_bindless_pair() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let programs = concinnity_core::components::ShaderPrograms {

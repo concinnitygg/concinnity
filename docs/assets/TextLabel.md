@@ -20,7 +20,7 @@ useful for HUD chips.
 - `content`: A string. Text to display. Can be updated each frame.
 - `x`: A float. Horizontal position in pixels from the left edge of the window. Defaults to `10.0`.
 - `y`: A float. Vertical position in pixels from the top edge of the window. Defaults to `10.0`.
-- `color`: An array of 3 floats. Linear-space RGB text colour. Defaults to `[1.0, 1.0, 1.0]`.
+- `color`: An array of 3 floats. Linear-space RGB text color. Defaults to `[1.0, 1.0, 1.0]`.
 - `scale`: A float. Uniform scale applied on top of the font's `size_px` (24 for the built-in face). 1.0 = native size. Ignored when `centered` is set, which sizes the text to the viewport instead. Defaults to `1.0`.
 - `centered`: A boolean. When true, fit the label to the viewport and center it there each frame, so `x`, `y`, `align` and `scale` are all ignored. Defaults to `false`.
 - `align`: A string (see [TextAlign](TextAlign.md)). Horizontal alignment relative to `x` (measured with the real font metrics). Ignored when `centered` is set.

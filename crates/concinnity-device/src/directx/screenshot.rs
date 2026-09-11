@@ -169,7 +169,7 @@ impl DxContext {
     }
 }
 
-// Bytes per texel for the swapchain colour formats this backend can present.
+// Bytes per texel for the swapchain color formats this backend can present.
 // The DX swapchain only ever resolves to `B8G8R8A8_UNORM` for SDR or
 // `R16G16B16A16_FLOAT` for the HDR (scRGB-linear / PQ-float) path; see
 // `init/window.rs`. Unknown formats default to 4, the common 32-bit-texel case.
@@ -184,7 +184,7 @@ fn swapchain_bytes_per_pixel(format: DXGI_FORMAT) -> u32 {
     }
 }
 
-// Classify the swapchain colour format (+ resolved HDR encoding) into the
+// Classify the swapchain color format (+ resolved HDR encoding) into the
 // backend-free `PixelLayout` the shared decoder understands. The DX SDR
 // swapchain is BGRA8 on Windows and the HDR EDR path is `R16G16B16A16_FLOAT`;
 // `encoding` (None on SDR) only matters for the float swapchain.

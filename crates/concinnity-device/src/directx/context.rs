@@ -641,7 +641,7 @@ impl DxUniforms {
 //   * `command_allocators` / `command_lists`: "start" outer cmd list. Holds the
 //     timestamp pre-init at the top of every frame (D3D12 debug layer flags an
 //     unwritten slot in the `ResolveQueryData` range, so every pass's pair is
-//     pre-initialised here). FRAMES-sized.
+//     pre-initialized here). FRAMES-sized.
 //
 //   * `pass_allocators` / `pass_cmd_lists`: per-pass pool. Sized
 //     `FRAMES * PASS_COUNT` so each pass owns its own allocator + cmd list per
@@ -665,14 +665,14 @@ pub(super) struct DxCommands {
 }
 
 // CPU/GPU frame synchronization, grouped off the flat `DxContext`. Mirrors
-// Vulkan's `VkFrameSync` (D3D12 uses one monotonic fence + per-slot signalled
+// Vulkan's `VkFrameSync` (D3D12 uses one monotonic fence + per-slot signaled
 // values instead of per-frame semaphores). The ring cursor (`current_frame`)
 // and the per-frame draw-call accumulator stay flat on `DxContext`. All COM /
 // plain fields auto-release on drop; only `fence_event` needs an explicit
 // `CloseHandle` (done in `DxContext::drop`).
 pub(super) struct DxFrameSync {
     pub fence: ID3D12Fence,
-    // Per-slot fence value last signalled for that slot's submission. Compared
+    // Per-slot fence value last signaled for that slot's submission. Compared
     // against `fence.GetCompletedValue()` to gate the slot's allocator reset.
     pub fence_values: Vec<u64>,
     // Global monotonic counter feeding every Signal. Must be unique per
@@ -821,7 +821,7 @@ pub(super) struct ViewState {
     // Backend-owned rather than a `PostProcessParams` field so a settings push
     // cannot reset an in-flight fade. Stays out of `view.clear_color`: folding it
     // there would tint only the pixels no geometry covers, and would mismatch the
-    // colour target's baked D3D12 optimized clear value every frame.
+    // color target's baked D3D12 optimized clear value every frame.
     pub scene_fade: f32,
     // The viewport view mode: the main passes read it for the wireframe pipeline
     // variant and the unlit shade flag, the composite for its channel
@@ -1034,12 +1034,12 @@ pub(crate) struct DxContext {
     pub(super) area_light: AreaLightState,
 
     // IBL resources. The fragment shader always samples these; when no
-    // EnvironmentMap was supplied, both are 1×1 grey fallback cubes and
+    // EnvironmentMap was supplied, both are 1×1 gray fallback cubes and
     // ViewUniforms::prefilter_mip_count is 0 (the shader takes the legacy
     // ambient/skybox path).
     pub(super) env_map: EnvironmentMapTextures,
 
-    // 3D colour-grading LUT sampled in the composite pass. Holds the declared
+    // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload baked into a Texture3D, or a 2×2×2 identity LUT when
     // the world declares none (the grade is then a no-op at any `lut_strength`).
     // Resolution-independent, so it is never rebuilt.
@@ -1126,14 +1126,14 @@ pub(crate) struct DxContext {
     // (SSGI reuses the depth + normal pre-pass G-buffer). The resolve half
     // (`ssr.resolve`) is `Some` only when SSR itself is authored on; with it
     // off the TAA / bloom / composite passes sample `hdr_srv_gpu` directly as
-    // the scene colour. When the resolve is on it writes into
+    // the scene color. When the resolve is on it writes into
     // `ssr.resolve.output`, whose SRV becomes the scene the post stack consumes
     // (see `scene_srv_for_post`).
     pub(super) ssr: Option<SsrResources>,
 
     // SSGI. `Some` only when `PostProcessConfig.indirect_lighting` is `ssgi`.
     // A hemisphere-gather + depth-aware-blur composite that bleeds nearby lit
-    // surfaces' colour onto one another, additively on top of the IBL ambient.
+    // surfaces' color onto one another, additively on top of the IBL ambient.
     // Reuses the SSR pre-pass G-buffer (so `ssr` is also `Some` whenever this
     // is); the render-graph `PassId::Ssgi` node is gated on `ssgi.is_some()`.
     pub(super) ssgi: Option<super::post::ssgi::SsgiResources>,
@@ -1247,10 +1247,10 @@ pub(crate) struct DxContext {
     // Auto-exposure (EV adaptation) state. See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
 
-    // Reported maximum extended-range colour-component multiplier captured
+    // Reported maximum extended-range color-component multiplier captured
     // from the resolved [`HdrOutputMode`] at init. `Some` only when the
     // renderer is on the HDR path (the swapchain was created in
-    // `RGBA16Float` + scRGB-linear colour space). Surfaced through
+    // `RGBA16Float` + scRGB-linear color space). Surfaced through
     // `RenderStats.max_edr` so the `StatHud` overlay can render an `EDR
     // ×X.X` chip. Mirrors `MtlContext.max_edr`.
     pub(super) max_edr: Option<f32>,
@@ -1390,7 +1390,7 @@ impl DxContext {
         // scene targets, the bloom mip chain, and the TAA / SSAO / SSR
         // resource sets at the new size. A no-op when the size hasn't
         // changed; skips the rebuild (and the frame) when the window is
-        // minimised so we never present 0×0. Failures are logged but not
+        // minimized so we never present 0×0. Failures are logged but not
         // fatal; the client keeps trying on subsequent frames.
         if let Err(e) = self.maybe_handle_resize() {
             tracing::error!("D3D12 resize failed: {e}");
@@ -1425,7 +1425,7 @@ impl DxContext {
         // Streamed texture swaps: re-point this frame's flat-pool SRV copy at
         // the swapped-in resources (legal now -- the fence wait above retired
         // every list that binds this copy), and release the old resources /
-        // upload transients whose covering fence has signalled.
+        // upload transients whose covering fence has signaled.
         self.apply_streamed_texture_rewrites(frame);
 
         // Tick the placement pool: the same fence wait retired every list that
@@ -1509,7 +1509,7 @@ impl DxContext {
         // persistently-mapped pointer reflects a fully committed pair (`FRAMES`
         // frames stale by construction: the same slot's writes from the
         // previous trip through the ring). Zero before the slot has been
-        // visited a second time (the readback buffer starts zero-initialised).
+        // visited a second time (the readback buffer starts zero-initialized).
         //
         // The frame's block in the readback buffer is laid out as
         // [whole_frame_start, whole_frame_end, then PASS_COUNT (start, end)
@@ -1646,7 +1646,7 @@ impl DxContext {
         unsafe { start_cmd.Reset(&self.commands.command_allocators[frame], None) }
             .map_err(|e| format!("start cmd reset: {e}"))?;
 
-        // Timestamp the start of this frame's GPU work + pre-initialise
+        // Timestamp the start of this frame's GPU work + pre-initialize
         // every per-pass slot in this frame's block. The end-of-frame
         // `ResolveQueryData` covers the whole block, and the D3D12 debug
         // layer flags any slot in the resolved range that never had
@@ -1911,7 +1911,7 @@ impl DxContext {
         // past it).
         self.swapchain.last_present_index = Some(back_idx);
 
-        // Advance fence. The signalled value must be globally unique across
+        // Advance fence. The signaled value must be globally unique across
         // slots so each slot's wait-before-reuse only observes completion of
         // its own prior submission.
         let next_val = self.frame_sync.next_fence_value.get();

@@ -19,7 +19,7 @@
 //     the cross-cutting slot layout.
 //   * Sampler creation.
 //   * Texture pool uploads, flat bindless pool SRV writes,
-//     text atlas uploads, shadow map array, IBL cubes, colour LUT,
+//     text atlas uploads, shadow map array, IBL cubes, color LUT,
 //     main-depth + HDR scene targets.
 //   * Geometry + per-frame view / light / shadow constant buffers.
 //   * Per-frame command infrastructure (allocator/list/fence), per-cluster
@@ -66,7 +66,7 @@ impl DxContext {
     // the retained device + window + swapchain for a live `cn editor` world
     // reload (see `reload_world`). Everything after the device/window
     // acquisition is identical -- the same pipelines, buffers, textures, and
-    // targets are built from `init` either way; the DirectX-specific behaviour
+    // targets are built from `init` either way; the DirectX-specific behavior
     // of each input is documented inline below.
     fn build(
         init: crate::gfx::backend_init::BackendInit<'_>,
@@ -285,9 +285,9 @@ impl DxContext {
         // are BUILT at init, just not whether the slots exist.
         //
         // The shared fullscreen post passes: one RTV after the bloom mip RTVs
-        // and one SRV after the colour LUT SRV per target they may hold, always
+        // and one SRV after the color LUT SRV per target they may hold, always
         // reserved and sub-allocated at runtime by `post/descriptors.rs`. They
-        // reserve no DSV: a post target is colour only.
+        // reserve no DSV: a post target is color only.
         let post_rtv_extra = POST_TARGET_SLOTS;
         // SSAO: 2 RTVs (ao_raw + ao) + 2 SRVs (ao_raw + ao); view normal + depth
         // come from the G-buffer pre-pass, so no DSV. A 1x1 white fallback always
@@ -782,11 +782,11 @@ impl DxContext {
         )?;
 
         // IBL cubemaps (irradiance + prefilter)
-        // When env_map_bytes is Some, deserialise the EnvironmentMap payload and
-        // upload both cubes. Otherwise bind a 1×1 grey fallback for each; the
+        // When env_map_bytes is Some, deserialize the EnvironmentMap payload and
+        // upload both cubes. Otherwise bind a 1×1 gray fallback for each; the
         // shader keys off prefilter_mip_count == 0 to skip IBL math.
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::bake::environment_map::deserialise(bytes)
+            let view = crate::bake::environment_map::deserialize(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {e}"))?;
             upload_environment_map(
                 &alloc,
@@ -850,7 +850,7 @@ impl DxContext {
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map probe set cbv: {e}"))?;
-            // Initialise to the empty set (count 0) until the first frame writes it.
+            // Initialize to the empty set (count 0) until the first frame writes it.
             let empty = concinnity_core::render::uniforms::ProbeSet::EMPTY;
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
             // the source is a separate allocation, so the ranges cannot overlap.
@@ -893,7 +893,7 @@ impl DxContext {
         // Cache the first directional light's direction for per-frame CSM updates.
         let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
 
-        // Cache the first directional light's colour * intensity for the
+        // Cache the first directional light's color * intensity for the
         // volumetric-fog encoder, since `LightUniforms` is uploaded rather than
         // pushed each frame. `update_directional_lights` re-derives both.
         let fog_sun_dir = shadow_light_dir;
@@ -1045,12 +1045,12 @@ impl DxContext {
         );
         let decal_depth_srv_gpu = slot_gpu(decal_depth_srv_slot);
 
-        // Colour-grading LUT
+        // Color-grading LUT
         // Upload the declared `ColorLut` payload, or build a 2×2×2 identity LUT
         // so the composite pass always binds a valid Texture3D. With the
         // identity LUT the grade is a no-op at any `lut_strength`.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::bake::color_lut::deserialise(bytes)
+            let (size, data) = crate::bake::color_lut::deserialize(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
             upload_color_lut(
                 &alloc,
@@ -1081,7 +1081,7 @@ impl DxContext {
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&index_buffer),
             SizeInBytes: idx_bytes_raw.len().max(4) as u32,
-            // Static IB is u32: the `indices: &[u32]` signature is honoured
+            // Static IB is u32: the `indices: &[u32]` signature is honored
             // end-to-end. A previous half-completed migration left this as
             // R16_UINT while the byte count was already widened: the GPU then
             // read each u32 index as a pair of u16s, indexing into garbage
@@ -1375,7 +1375,7 @@ impl DxContext {
         let bloom_srv_cpu_for = |i: usize| slot_cpu(bloom_srv_base_slot + i);
         let bloom_srv_gpu_for = |i: usize| slot_gpu(bloom_srv_base_slot + i);
 
-        // The shared post passes' descriptor block: SRVs after the colour LUT,
+        // The shared post passes' descriptor block: SRVs after the color LUT,
         // RTVs after the bloom mips.
         let post_descriptors = PostDescriptors::new(
             slot_cpu(post_srv_base_slot),
@@ -1611,11 +1611,11 @@ impl DxContext {
         // `gbuffer_srv_base_slot` block. The skinned PSO builds lazily in
         // `upload_skinned` once the joint-bound vertex layout exists.
         let gbuffer = if gbuffer_enabled {
-            // The three colour targets are pooled, so the pool (built in
+            // The three color targets are pooled, so the pool (built in
             // `build_effects`, before this) is what owns them.
             let pooled = transient_pool
                 .gbuffer_pooled()
-                .ok_or("transient pool missing the gbuffer colour targets")?;
+                .ok_or("transient pool missing the gbuffer color targets")?;
             Some(crate::directx::post::gbuffer::GbufferResources::new(
                 crate::directx::post::gbuffer::GbufferDeviceCtx { alloc: &alloc },
                 crate::directx::post::gbuffer::GbufferExtent {
@@ -1823,7 +1823,7 @@ impl DxContext {
         // new COM object lands in a binding that owns it.
         let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
             .map_err(|e| format!("create fence: {e}"))?;
-        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // SAFETY: an auto-reset, initially unsignaled event with no name and no security
         // attributes; the call borrows nothing.
         let fence_event = unsafe { CreateEventW(None, false, false, None) }
             .map_err(|e| format!("create fence event: {e}"))?;
@@ -1875,7 +1875,7 @@ impl DxContext {
         // and the render graph never adds `PassId::Raymarch`. The
         // shadow + IBL handles passed here mirror the matching slot-0/1/2
         // bindings the main pass uses, so raymarched surfaces sample the
-        // same CSM cascades + IBL cubes as rasterised geometry.
+        // same CSM cascades + IBL cubes as rasterized geometry.
         let raymarch = crate::directx::raymarch::RaymarchResources::try_new(
             crate::directx::raymarch::RaymarchDeviceContext {
                 alloc: &alloc,
@@ -2003,7 +2003,7 @@ impl DxContext {
 
         // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
         // arg, which implies `transparent`): see-through only looks right when the
-        // space behind the glass is modelled. A material that is `transparent` but
+        // space behind the glass is modeled. A material that is `transparent` but
         // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
         // reflections) = tinted reflective glass that hides the interior. This list
         // drives the transparent-pass producer, the opaque-pass skip and the
@@ -2479,7 +2479,7 @@ impl DxContext {
 impl DxContext {
     // Rebuild the world's GPU content in place for a live `cn editor` reload,
     // reusing the retained device + command queue + window + swapchain so the
-    // save applies without recreating the OS window or re-initialising the GPU.
+    // save applies without recreating the OS window or re-initializing the GPU.
     //
     // The GPU is idled, then a fresh context is `build`t on the reused hardware
     // (the D3D12 / DXGI objects are COM ref-counted, so cloning them keeps the

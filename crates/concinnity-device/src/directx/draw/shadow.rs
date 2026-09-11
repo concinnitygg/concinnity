@@ -57,7 +57,7 @@ impl DxContext {
         shadow_ubo_gva: u64,
         cam_pos: [f32; 3],
         // When `Some`, raymarched SDF casters draw into each cascade
-        // after the rasterised + skinned draws and before the
+        // after the rasterized + skinned draws and before the
         // depth-write → pixel-shader-resource transition. Constructed
         // by the graph executor: same matrix / time / camera the main
         // raymarch pass will use later this frame, so the shadow cast
@@ -112,7 +112,7 @@ impl DxContext {
             );
         }
 
-        // Clear every re-rendered cascade first: with nothing to rasterise the
+        // Clear every re-rendered cascade first: with nothing to rasterize the
         // pass is these clears, which is what the raymarched casters below and
         // the main pass's sampler both expect.
         for cascade_idx in 0..NUM_SHADOW_CASCADES {
@@ -139,7 +139,7 @@ impl DxContext {
         }
 
         // Raymarched SDF shadow casters: depth-only draws into the same
-        // per-cascade DSVs. Run after the rasterised + skinned draws so
+        // per-cascade DSVs. Run after the rasterized + skinned draws so
         // both layers compete via the cascade's LESS depth test: the
         // nearer caster wins per texel. No-op when no volume opts into
         // `cast_shadows` or when no `raymarch_view` was supplied by the
@@ -296,7 +296,7 @@ impl DxContext {
             cmd.SetGraphicsRootConstantBufferView(1, bind.ubo_gva);
 
             // See-through glass (Layer 2) casts no shadow: it is rerouted out of
-            // every opaque rasterisation while RT is live, and the GPU-driven
+            // every opaque rasterization while RT is live, and the GPU-driven
             // cascade takes the same decision through the cull kernel's ENABLED
             // bit. Hoisted out of the loop -- the gate is frame state.
             let skip_seethrough = self.mesh_glass_active();
@@ -409,7 +409,7 @@ impl DxContext {
                 }
                 // Skinned-mesh LOD: pick by camera distance (not light
                 // direction) so the shadow casts match the triangles main will
-                // rasterise. Per-cascade LOD would technically be cheaper for
+                // rasterize. Per-cascade LOD would technically be cheaper for
                 // distant cascades, but matching main keeps cascade seams free
                 // of silhouette swaps. Mirrors Metal.
                 let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);

@@ -17,7 +17,7 @@
 //
 // The render pass alpha-blends into `hdr_resolve` after the volumetric fog
 // pass and before SSR, so particles appear in screen-space reflections and
-// are temporally stabilised by TAA.
+// are temporally stabilized by TAA.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
@@ -394,7 +394,7 @@ pub(super) fn build_particle_pipelines(
     // Compute kernel, from `particle_simulate.slang`. The render pair below
     // splices the same `{PARTICLE_TYPES}` fragment, so both halves stride one
     // declaration of the pool record and the per-emitter uniform.
-    let sim_lib = super::slang_shaders::PARTICLE_SIMULATE.library(device, hot_reload)?;
+    let sim_lib = super::slang_builtins::PARTICLE_SIMULATE.library(device, hot_reload)?;
     let sim_fn = sim_lib
         .newFunctionWithName(&ns_str("particle_simulate"))
         .ok_or("particle_simulate not found")?;
@@ -406,14 +406,14 @@ pub(super) fn build_particle_pipelines(
     // particle pool storage buffer directly via `[[vertex_id]]` + `[[instance_id]]`.
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn = super::slang_shaders::entry_function(
+    let vert_fn = super::slang_builtins::entry_function(
         device,
-        &super::slang_shaders::PARTICLE_VERT,
+        &super::slang_builtins::PARTICLE_VERT,
         hot_reload,
     )?;
-    let frag_fn = super::slang_shaders::entry_function(
+    let frag_fn = super::slang_builtins::entry_function(
         device,
-        &super::slang_shaders::PARTICLE_FRAG,
+        &super::slang_builtins::PARTICLE_FRAG,
         hot_reload,
     )?;
     let desc = MTLRenderPipelineDescriptor::new();
@@ -454,7 +454,7 @@ pub(super) fn build_particle_pipelines(
     })
 }
 
-// Allocate the per-emitter GPU state for one record: a zero-initialised
+// Allocate the per-emitter GPU state for one record: a zero-initialized
 // particle pool plus an atomic counter buffer holding one `u32` slot per frame
 // in flight. Both buffers use shared storage so the CPU can reset the spawn
 // counter each frame without a staging copy.

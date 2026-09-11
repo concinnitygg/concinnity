@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(many.as_slice(), [0, 2, 4]);
     }
 
-    // Documented behaviour: shrinking keeps the block rather than reallocating.
+    // Documented behavior: shrinking keeps the block rather than reallocating.
     #[test]
     fn a_shrunk_value_keeps_its_heap_storage_until_cleared() {
         let mut many: InlineVec<u32> = (0..3).collect();
@@ -512,7 +512,7 @@ mod tests {
 
     // Every operation has to behave the same whether the vector is still
     // inline or has spilled to the heap: the representation is an allocation
-    // optimisation, not a difference in contents.
+    // optimization, not a difference in contents.
     #[test]
     fn a_spilled_vector_pushes_pops_and_retains_like_an_inline_one() {
         let mut v: InlineVec<u32> = InlineVec::default();

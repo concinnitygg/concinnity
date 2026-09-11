@@ -82,7 +82,7 @@ pub struct PrefabEntry {
     pub interactable: bool,
     /// `prop`: whether the expanded prop is a pickup.
     pub pickup: bool,
-    /// `point_light`: linear-space RGB colour.
+    /// `point_light`: linear-space RGB color.
     pub light_color: [f32; 3],
     /// `point_light`: intensity multiplier.
     pub light_intensity: f32,
@@ -122,7 +122,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_kind_deserialises_with_its_fields() {
+    fn each_kind_deserializes_with_its_fields() {
         let prop: PrefabEntry = serde_json::from_str(
             r#"{"name":"table","kind":"prop","model":"model_table","position":[1.0,0.0,2.0]}"#,
         )

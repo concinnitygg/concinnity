@@ -189,7 +189,7 @@ extern "C" fn ffx_message_sink(ty: u32, message: *const u16) {
         }
     }
     // SAFETY: the loop above walked `message` to its NUL terminator, so `len` u16s starting at
-    // `message` are all initialised and in bounds.
+    // `message` are all initialized and in bounds.
     let slice = unsafe { std::slice::from_raw_parts(message, len) };
     let text = String::from_utf16_lossy(slice);
     match ty {
@@ -429,7 +429,7 @@ impl FsrUpscaler {
                 p_next: &mut backend.header as *mut ffxApiHeader,
             },
             // HDR linear input; FFX runs its own auto-exposure heuristic from
-            // the colour buffer. Depth is the standard Vulkan [0, 1] range (not
+            // the color buffer. Depth is the standard Vulkan [0, 1] range (not
             // reverse-Z), so no depth-inverted / depth-infinite flags.
             flags: FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE,
             // `maxRenderSize` is the upper bound on the per-frame render size;

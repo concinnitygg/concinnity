@@ -1,7 +1,7 @@
 //! A step handed real threads must land where the same step on one thread
 //! lands, to the bit.
 //!
-//! That is the whole licence for the fan-out. The stages a step offers are
+//! That is the whole license for the fan-out. The stages a step offers are
 //! split so their results cannot depend on who did what -- islands share no
 //! body the solve moves, narrow-phase ranges write their own buffers and are
 //! appended in range order, and the sweep's pairs are sorted by slot whichever
@@ -9,7 +9,7 @@
 //! than a tolerance. A tolerance would pass on a solve that had quietly become
 //! order dependent, which is exactly the failure this file exists to catch.
 //!
-//! One thread per work unit rather than a pool: it maximises the interleaving
+//! One thread per work unit rather than a pool: it maximizes the interleaving
 //! and it is what makes this file worth running under a thread sanitizer.
 
 use crate::physics::{

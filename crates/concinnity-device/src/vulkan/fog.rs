@@ -15,12 +15,11 @@
 //
 // Runs between the projected-decal pass and the SSR resolve so the fog wraps
 // the decal-stamped scene and SSR reflects through it; TAA history then
-// reprojects the integrated fog colour and transmittance.
+// reprojects the integrated fog color and transmittance.
 //
 // Mirrors src/directx/fog.rs and src/metal/fog.rs.
 
 use concinnity_core::gfx::transform::mat4_inverse;
-use std::ffi::CString;
 
 use ash::vk;
 
@@ -34,7 +33,7 @@ use crate::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
-use super::pipeline::spv_module;
+use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
@@ -87,7 +86,7 @@ pub(in crate::vulkan) struct FogResources {
     pub(in crate::vulkan) volume: PooledImage,
 
     // One framebuffer per frame-in-flight slot, each binding its frame slot's
-    // `hdr_resolve_images[i].view` as the sole colour attachment.
+    // `hdr_resolve_images[i].view` as the sole color attachment.
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     // Depth sampler (the shared linear sampler; depth is read via texelFetch so
@@ -109,7 +108,7 @@ pub(in crate::vulkan) struct FogDeviceContext<'a> {
 }
 
 // The per-frame render targets + config the fog pipeline binds against: the
-// resolved HDR colour views (framebuffer attachments), the scene depth views,
+// resolved HDR color views (framebuffer attachments), the scene depth views,
 // the shared depth sampler, and the frame count / MSAA / format / extent.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FogFrameTargets<'a> {
@@ -253,7 +252,7 @@ impl FogResources {
         }
 
         // Per-frame framebuffers (one per frame slot binding that slot's
-        // hdr_resolve view as the colour attachment).
+        // hdr_resolve view as the color attachment).
         let mut framebuffers = Vec::with_capacity(frames);
         for &view in hdr_resolve_views.iter().take(frames) {
             let attachments = [view];
@@ -371,7 +370,7 @@ fn create_fog_render_pass(
     device: &VkDevice,
     format: vk::Format,
 ) -> Result<OwnedRenderPass, String> {
-    // One colour attachment: the resolved HDR scene. The main pass (and
+    // One color attachment: the resolved HDR scene. The main pass (and
     // any preceding decal pass) left it in SHADER_READ_ONLY_OPTIMAL; we
     // want it in COLOR_ATTACHMENT during the subpass and
     // SHADER_READ_ONLY_OPTIMAL again on exit so SSR / TAA / bloom /
@@ -803,11 +802,10 @@ fn create_compute_pipeline(
     spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
-    let entry = CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(SHADER_ENTRY);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
@@ -823,19 +821,8 @@ fn create_fog_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     // Fullscreen triangle is emitted by gl_VertexIndex; no vertex buffer.
     let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
@@ -850,7 +837,7 @@ fn create_fog_pipeline(
         .line_width(1.0);
     let multisample = vk::PipelineMultisampleStateCreateInfo::default()
         // The fog pass writes the SINGLE-SAMPLE resolved HDR target, not
-        // the MSAA colour, regardless of whether the main pass uses MSAA.
+        // the MSAA color, regardless of whether the main pass uses MSAA.
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(false)
@@ -1017,7 +1004,7 @@ impl VkContext {
     // `FogFroxel` compute pass populated this frame. Caller has already ended
     // the main HDR resolve and the projected-decal pass (if any), so
     // `depth_images[frame_idx]` holds the scene depth and
-    // `hdr_resolve_images[frame_idx]` holds the resolved scene + decal colour
+    // `hdr_resolve_images[frame_idx]` holds the resolved scene + decal color
     // in SHADER_READ_ONLY_OPTIMAL. Alpha-blends `(scattered, 1 - T)` over the
     // resolved HDR target. `FogParams` / `FogFroxelParams` were uploaded by
     // `encode_fog_froxel` for this frame's slot, so this pass only binds.
@@ -1102,7 +1089,7 @@ mod tests {
 
     #[test]
     fn fog_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         // Compile the rewritten froxel-sampling fragment shader (both MSAA

@@ -278,7 +278,7 @@ mod tests {
     }
 
     // The command queue is process-wide: `drain` takes everything on it, so the
-    // tests that drive it serialise on a shared lock rather than stealing each
+    // tests that drive it serialize on a shared lock rather than stealing each
     // other's commands. Any leftovers from a panicking earlier test are not ours.
     fn queue_guard() -> std::sync::MutexGuard<'static, ()> {
         let g = crate::app::anim_runtime::TEST_LOCK

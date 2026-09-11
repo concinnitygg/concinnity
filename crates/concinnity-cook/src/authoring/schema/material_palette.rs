@@ -58,7 +58,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entry_deserialises_with_material_defaults() {
+    fn entry_deserializes_with_material_defaults() {
         let e: PaletteEntry =
             serde_json::from_str(r#"{"alias":"floor","albedo":"tex_stone","roughness":0.9}"#)
                 .unwrap();

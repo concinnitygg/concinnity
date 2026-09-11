@@ -28,7 +28,7 @@ type Failure = (i64, String);
 /// How one `tools/call` is carried out, once the server has checked that the
 /// verb exists and its arguments are an object.
 pub(super) trait Executor {
-    /// The `tools/call` result for a catalogued verb, failures included: a
+    /// The `tools/call` result for a catalogd verb, failures included: a
     /// rejected command is an error result, never a protocol error.
     fn call(&self, name: &str, arguments: &Map<String, Value>) -> Value;
 }

@@ -154,7 +154,7 @@ pub(crate) fn hue_deg(ty: &str) -> f32 {
 }
 
 // A stable per-type accent: the hashed hue at fixed saturation / value, so
-// colours never need registering either.
+// colors never need registering either.
 pub(crate) fn tint(ty: &str) -> [f32; 4] {
     let [r, g, b] = hsv_to_rgb(hue_deg(ty), 0.55, 0.95);
     [r, g, b, 1.0]
@@ -275,7 +275,7 @@ pub(crate) struct Icon {
 }
 
 // The injected pools, all hidden: icon chips with their glyph labels and the
-// box-outline dot run. Per-frame placement recolours the mutable parts.
+// box-outline dot run. Per-frame placement recolors the mutable parts.
 pub(crate) fn sprites() -> Vec<Sprite> {
     let mut out: Vec<Sprite> = (0..MAX_BILLBOARDS)
         .map(|i| Sprite {
@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn position_reads_position_or_centre() {
+    fn position_reads_position_or_center() {
         let args = |json: serde_json::Value| json.as_object().unwrap().clone();
         assert_eq!(
             position_of(&args(serde_json::json!({"position": [1, 2, 3]}))),

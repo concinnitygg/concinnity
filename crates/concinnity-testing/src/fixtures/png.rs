@@ -22,7 +22,7 @@ pub fn gray(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
     encode(width, height, png::ColorType::Grayscale, pixels)
 }
 
-/// An 8-bit RGBA PNG of one colour.
+/// An 8-bit RGBA PNG of one color.
 ///
 /// # Panics
 ///
@@ -38,11 +38,11 @@ pub fn one_pixel() -> Vec<u8> {
     solid(1, 1, [10, 20, 30, 255])
 }
 
-/// Encode at an explicit colour type, for the decode paths that branch on one.
+/// Encode at an explicit color type, for the decode paths that branch on one.
 ///
 /// # Panics
 ///
-/// If `pixels` is not the length the dimensions and colour type call for.
+/// If `pixels` is not the length the dimensions and color type call for.
 pub fn encode(width: u32, height: u32, color: png::ColorType, pixels: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut encoder = png::Encoder::new(&mut out, width, height);
@@ -79,7 +79,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grayscale_fixture_keeps_its_colour_type() {
+    fn a_grayscale_fixture_keeps_its_color_type() {
         let (w, h, out) = decode(&gray(2, 2, &[0, 64, 128, 255]));
 
         assert_eq!((w, h), (2, 2));
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn a_solid_fixture_repeats_one_colour() {
+    fn a_solid_fixture_repeats_one_color() {
         let (w, h, out) = decode(&solid(2, 2, [9, 8, 7, 255]));
 
         assert_eq!((w, h), (2, 2));

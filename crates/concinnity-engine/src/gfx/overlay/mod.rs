@@ -78,7 +78,7 @@ pub(crate) struct OverlaySystem {
     layers: crate::gfx::overlay_maps::OverlayLayers,
     // Scratch for the LayoutContainer label reflow, reused across frames.
     hud_scratch: hud_layout::LabelLayoutScratch,
-    // Buffers the synthesised dropdown / text-input elements are built into,
+    // Buffers the synthesized dropdown / text-input elements are built into,
     // reused across frames.
     widget_scratch: widgets::WidgetScratch,
     // The draw list under construction plus the pooled geometry of recycled
@@ -153,7 +153,7 @@ impl System for OverlaySystem {
 }
 
 impl OverlaySystem {
-    // Build the frame's overlay draw calls. Sprites render as solid-coloured
+    // Build the frame's overlay draw calls. Sprites render as solid-colored
     // quads through the same UI pass as TextLabel (sentinel-UV path), so they
     // share the text pipeline and require no new render state. Backdrop / HUD
     // sprites are emitted first so labels composite on top; `follow_cursor`
@@ -282,7 +282,7 @@ impl OverlaySystem {
                 &no_clips,
                 &empty_layers,
             );
-            // The synthesised list carries no asset id, so nothing would lift it out
+            // The synthesized list carries no asset id, so nothing would lift it out
             // of layer 0 -- where the sort below buries it under the opaque rows it
             // drops from (functional, but invisible).
             for c in &mut self.buffer.calls[dd_start..] {
@@ -291,7 +291,7 @@ impl OverlaySystem {
         }
 
         // Text-input fields draw as a background box + their text + a caret,
-        // synthesised the same way as the dropdown overlay and fed through the
+        // synthesized the same way as the dropdown overlay and fed through the
         // shapers (clipped like the rest, so a field inside a scroll band
         // scissors correctly).
         // Caret blink: visible for the first half of each period so a focused
@@ -308,7 +308,7 @@ impl OverlaySystem {
                 caret_visible,
                 &mut self.widget_scratch,
             );
-            // The synthesised overlay carries no asset id, so its calls take the
+            // The synthesized overlay carries no asset id, so its calls take the
             // field's own layer (from the field's id) rather than looking up the
             // default id -- otherwise a focused panel's text fields would sink
             // below it.
@@ -482,7 +482,7 @@ mod tests {
     }
 
     // A screen-owned sprite spanning the whole reference canvas: the menu-dim
-    // shape `covers_canvas` recognises.
+    // shape `covers_canvas` recognizes.
     fn backdrop(id: AssetId) -> Sprite {
         Sprite {
             width: REF_W,
@@ -869,7 +869,7 @@ mod tests {
         assert!(list.iter().all(|c| c.layer == DROPDOWN_LAYER));
     }
 
-    // A closed dropdown synthesises nothing.
+    // A closed dropdown synthesizes nothing.
     #[test]
     fn closed_dropdown_builds_no_list() {
         let mut w = TestWorld::new();
@@ -877,7 +877,7 @@ mod tests {
         assert!(w.build(0.0).calls.is_empty());
     }
 
-    // A field's synthesised box / text / caret carry no asset id of their own, so
+    // A field's synthesized box / text / caret carry no asset id of their own, so
     // they take the field's layer rather than sinking to the default -- otherwise
     // a focused panel's fields would drop below it.
     #[test]

@@ -60,7 +60,7 @@ impl PhysicsJointKind {
 ///
 /// `axis` only applies to `revolute` and `prismatic`: it is the single free
 /// axis (rotation or translation) in each body's local frame. The vector is
-/// normalised on load; a zero axis falls back to `[0, 1, 0]`.
+/// normalized on load; a zero axis falls back to `[0, 1, 0]`.
 ///
 /// `limits_enabled` clamps the free axis: angle in degrees for revolute,
 /// distance in world units for prismatic. `motor_target_velocity` and
@@ -130,7 +130,7 @@ impl Default for PhysicsJoint {
 }
 
 impl PhysicsJoint {
-    /// Parse `kind`; falls back to `Fixed` for unrecognised values so a typo
+    /// Parse `kind`; falls back to `Fixed` for unrecognized values so a typo
     /// degrades safely. Cross-reference validation flags bad kinds explicitly.
     pub fn parsed_kind(&self) -> PhysicsJointKind {
         PhysicsJointKind::from_str_norm(&self.kind).unwrap_or(PhysicsJointKind::Fixed)
@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognised_kind_has_no_parse() {
+    fn an_unrecognized_kind_has_no_parse() {
         assert_eq!(PhysicsJointKind::from_str_norm("bendy"), None);
         assert_eq!(PhysicsJointKind::from_str_norm(""), None);
     }
@@ -195,18 +195,16 @@ mod tests {
     fn a_typo_in_kind_degrades_to_a_weld() {
         // Cross-reference validation reports the bad kind; the accessor must not
         // panic in the meantime.
-        let j: PhysicsJoint = serde_json::from_str(r#"{"kind":"hindge"}"#).unwrap();
+        let j: PhysicsJoint = crate::test_support::from_json(r#"{"kind":"hindge"}"#);
         assert_eq!(j.parsed_kind(), PhysicsJointKind::Fixed);
     }
 
     #[test]
     fn an_authored_hinge_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let j: PhysicsJoint = serde_json::from_str(
+        let j: PhysicsJoint = crate::test_support::from_json(
             r#"{"kind":"hinge","body_a":"door","body_b":"frame","axis":[0,1,0],
                 "limits_enabled":true,"limits":[-90,0],"motor_max_force":12.5}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(j.parsed_kind(), PhysicsJointKind::Revolute);
         assert_eq!(j.body_a, Some(crate::ecs::asset_id::AssetId(4)));
         assert_eq!(j.body_b, Some(crate::ecs::asset_id::AssetId(5)));

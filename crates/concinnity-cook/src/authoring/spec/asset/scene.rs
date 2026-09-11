@@ -63,7 +63,7 @@ pub(crate) fn camera(
 }
 
 /// A self-contained room (floor, ceiling, four walls) of full extents
-/// `size` = [width, depth, height], centred on the origin. Standalone geometry:
+/// `size` = [width, depth, height], centered on the origin. Standalone geometry:
 /// no mesh source or texture reference needed.
 pub(crate) fn room(name: impl Into<String>, size: [f32; 3]) -> AssetSpec {
     AssetSpec::new(name, "Room").set("size", size)

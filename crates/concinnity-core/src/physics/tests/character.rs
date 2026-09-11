@@ -3,7 +3,7 @@
 //! The unit tests inside the crate check the arithmetic a move is built out
 //! of. These check the move itself, against scenes built to provoke the cases
 //! a controller is actually judged by: a wall it must not pass, a slope it may
-//! climb and one it may not, a kerb it steps onto, a lip it stays attached
+//! climb and one it may not, a curb it steps onto, a lip it stays attached
 //! over, and a wedge it must give up on rather than circle inside forever.
 //!
 //! Every mover here is driven the way the engine drives one: the caller keeps
@@ -499,7 +499,7 @@ fn a_wedge_ends_the_move_instead_of_circling_inside_it() {
 }
 
 // A move built from a NaN -- a behavior variable that divided by zero, a
-// controller reading an uninitialised axis -- has no direction to resolve.
+// controller reading an uninitialized axis -- has no direction to resolve.
 // The capsule stays where it is and reports itself airborne rather than
 // translating by a NaN, which would put the body somewhere no query can find
 // it again.
@@ -524,7 +524,7 @@ fn a_non_finite_move_translates_nowhere() {
 // non-finite cannot be resolved against anything, so the move is refused
 // rather than searching from an unusable position.
 #[test]
-fn a_capsule_at_a_non_finite_centre_does_not_move() {
+fn a_capsule_at_a_non_finite_center_does_not_move() {
     let mut mover = on_floor();
     mover.center = [f32::NAN, 0.0, 0.0];
     let moved = mover.drive([PACE, 0.0, 0.0]);

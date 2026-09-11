@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn alignment_is_honoured_within_a_block() {
+    fn alignment_is_honored_within_a_block() {
         let mut pool = BlockAllocator::new(BLOCK);
         place(&mut pool, 8, 1);
         let aligned = place(&mut pool, 64, 256);

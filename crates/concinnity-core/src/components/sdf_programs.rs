@@ -11,7 +11,7 @@
 //! only usable while the template it was built against still matches. The
 //! renderer assembles the source it expects, digests it, and takes the stored
 //! artifact only on a match; a hot-reload edit to the engine template misses
-//! every entry and recompiles, which is the behaviour that makes editing one
+//! every entry and recompiles, which is the behavior that makes editing one
 //! possible at all.
 
 use alloc::string::String;

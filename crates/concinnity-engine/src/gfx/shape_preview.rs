@@ -1,5 +1,5 @@
 //! Live CharacterShape re-resolution. GraphicsSystem resolves every shape once
-//! at init (`graphics_system/character_shape.rs`); an editor dragging a slider
+//! at init (`gfx/system/character_shape.rs`); an editor dragging a slider
 //! needs the same resolution against the running world's SkeletonPose each
 //! frame, without rebuilding the world. This is that narrow seam: what a mesh
 //! exposes to a shape (its morph-target and joint names) and a re-seed of its
@@ -8,7 +8,7 @@
 use crate::components::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{SkinnedMeshHandle, World};
-use crate::gfx::graphics_system::character_shape;
+use crate::gfx::system::character_shape;
 
 /// Each skinned mesh's morph-target names, indexed by handle. Published by
 /// GraphicsSystem while it loads the SkinnedMesh resource table.

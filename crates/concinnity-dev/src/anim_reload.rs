@@ -3,7 +3,7 @@
 // Animation clip hot-reload: re-import each captured file-backed Animation from
 // its source .glb and push the rebuilt clip into the live AnimationSystem. The
 // GLB decode lives here (editor side) because the runtime crate links no image
-// decoders; the runtime crate exposes only the catalogue (`reload_entries`) and
+// decoders; the runtime crate exposes only the catalog (`reload_entries`) and
 // the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
 // build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
@@ -33,7 +33,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
     let mut reloaded = 0usize;
     let mut failed = 0usize;
 
-    // Snapshot the catalogue so the &mut setter can run while we iterate.
+    // Snapshot the catalog so the &mut setter can run while we iterate.
     let entries = anim.reload_entries().to_vec();
     for entry in &entries {
         let imported = if entry.source.to_lowercase().ends_with(".fbx") {
@@ -267,7 +267,7 @@ mod tests {
             // The re-import parses the source, selects "wave", and swaps the
             // rebuilt clip into the captured slot.
             reload_clips(anim);
-            // The catalogue itself is untouched by a reload.
+            // The catalog itself is untouched by a reload.
             assert_eq!(anim.reload_entries().len(), 1);
         });
     }
@@ -285,7 +285,7 @@ mod tests {
         with_anim(&mut world, |anim| {
             assert_eq!(anim.reload_entries().len(), 1);
             // The parse failure is reported per clip; nothing panics and the
-            // catalogue survives for the next attempt.
+            // catalog survives for the next attempt.
             reload_clips(anim);
             assert_eq!(anim.reload_entries().len(), 1);
         });
@@ -314,7 +314,7 @@ mod tests {
         reload_clips_if_pending(&mut empty);
         assert!(
             dev_flags::take_pending_animations(),
-            "empty catalogue must not consume the pending flag"
+            "empty catalog must not consume the pending flag"
         );
 
         // Entries present but no pending flag: nothing to do.

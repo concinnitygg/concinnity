@@ -43,7 +43,7 @@ impl Default for LayoutRow {
 /// Positions a set of [TextLabel](#textlabel)s as a stack of rows, so a HUD does
 /// not have to hand-place every chip. Each row lays its labels out left to
 /// right; rows stack top to bottom. The container owns the labels' on-screen
-/// position: the labels keep their own styling (font, colour, background,
+/// position: the labels keep their own styling (font, color, background,
 /// padding) but their `x`/`y` are overwritten each frame.
 ///
 /// Sizing is content-driven: a label is measured at its current text, so the
@@ -342,13 +342,11 @@ mod tests {
 
     #[test]
     fn rows_parse_from_authored_args_and_round_trip_through_postcard() {
-        crate::test_support::install_resolvers();
-        let c: LayoutContainer = serde_json::from_str(
+        let c: LayoutContainer = crate::test_support::from_json(
             r#"{"x":10,"y":10,"col_gap":6,"row_gap":6,
                 "rows":[{"cols":["fps_chip","ev_chip"],"justify":"space-between"},
                         {"cols":["passes_chip"]}]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(c.rows.len(), 2);
         assert_eq!(c.rows[0].justify, Justify::SpaceBetween);
         assert_eq!(c.rows[1].justify, Justify::Left);

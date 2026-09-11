@@ -17,7 +17,7 @@ use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use crate::memory::tag::{MemTag, Realm};
 
 // One tag's counters in one realm. A budget of zero is "no budget set": a
-// subsystem budgeted at zero bytes is not a case worth modelling.
+// subsystem budgeted at zero bytes is not a case worth modeling.
 struct Cell {
     bytes: AtomicU64,
     peak: AtomicU64,

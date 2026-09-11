@@ -32,7 +32,7 @@ pub(super) struct GraphQueues {
     // The next frame's other queues wait on these at frame start; a terminal
     // whose buffer never reached the queue is never recorded, so a wait can
     // never name a value nothing will signal.
-    signalled: [Option<u64>; PassQueue::COUNT],
+    signaled: [Option<u64>; PassQueue::COUNT],
 }
 
 impl GraphQueues {
@@ -48,7 +48,7 @@ impl GraphQueues {
             async_queue,
             events,
             next_base: 0,
-            signalled: [None; PassQueue::COUNT],
+            signaled: [None; PassQueue::COUNT],
         })
     }
 
@@ -78,7 +78,7 @@ impl GraphQueues {
         n_passes: usize,
     ) -> (FrameEvents, [Option<u64>; PassQueue::COUNT]) {
         let events = FrameEvents::new(self.next_base, n_passes);
-        (events, self.signalled)
+        (events, self.signaled)
     }
 
     // Record the terminals of every queue whose carrying command buffer has been
@@ -92,7 +92,7 @@ impl GraphQueues {
                 continue;
             }
             if let Some(value) = plan.terminal(queue) {
-                self.signalled[queue.index()] = Some(value);
+                self.signaled[queue.index()] = Some(value);
             }
         }
         self.next_base = plan.next_base();
@@ -100,6 +100,6 @@ impl GraphQueues {
 
     // Record a terminal whose command buffer has now been committed.
     pub(super) fn record_terminal(&mut self, queue: PassQueue, value: u64) {
-        self.signalled[queue.index()] = Some(value);
+        self.signaled[queue.index()] = Some(value);
     }
 }

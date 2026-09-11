@@ -21,9 +21,9 @@
 pub struct PointLight {
     /// World-space position of the light source.
     pub position: [f32; 3],
-    /// Linear-space RGB colour of the light.
+    /// Linear-space RGB color of the light.
     pub color: [f32; 3],
-    /// Intensity multiplier applied to the colour.
+    /// Intensity multiplier applied to the color.
     pub intensity: f32,
     /// Maximum reach in world units; attenuation is zero at this distance.
     pub range: f32,

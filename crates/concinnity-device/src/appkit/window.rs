@@ -50,7 +50,7 @@ pub(crate) struct AppKitWindow {
     // and has to reinstate the authored chrome, not a standard title bar.
     title_bar: bool,
     window_closed: bool,
-    // Whether the frame loop should pump NSEvents and honour cursor capture.
+    // Whether the frame loop should pump NSEvents and honor cursor capture.
     // True for windowed mode and for the blocking-in-view play path; false
     // for the preview (which lets the host own input dispatch).
     pump_events: bool,
@@ -187,7 +187,7 @@ impl AppKitWindow {
         self.cursor_captured = prev.cursor_captured;
     }
 
-    // Whether the frame loop should pump NSEvents and honour cursor capture.
+    // Whether the frame loop should pump NSEvents and honor cursor capture.
     #[cfg(backend_metal)] // the Vulkan adapter always pumps
     pub(crate) fn pump_events(&self) -> bool {
         self.pump_events

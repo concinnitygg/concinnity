@@ -139,15 +139,13 @@ mod tests {
 
     #[test]
     fn an_authored_panel_parses_its_rows_groups_and_scrollbar() {
-        crate::test_support::install_resolvers();
-        let p: ScrollPanel = serde_json::from_str(
+        let p: ScrollPanel = crate::test_support::from_json(
             r#"{"screen":"settings","x":20,"y":40,"width":600,"height":400,
                 "rows":[{"elements":["row_a","row_b"],"base_y":10,"height":48,"group":0}],
                 "groups":[{"collapsed":true,"header":"adv_header","title":"Advanced"}],
                 "thumb":"bar","track":"bar_bg","track_x":600,"track_y":40,
                 "track_w":8,"track_h":400}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(p.screen, Some(AssetId(8)));
         assert_eq!(p.rows[0].elements, [AssetId(5), AssetId(5)]);
         assert_eq!(p.rows[0].group, 0);

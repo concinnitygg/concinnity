@@ -283,7 +283,7 @@ pub(crate) fn reduce_to_quad(
         }
     }
 
-    // The remaining two maximise the signed area on either side of the line
+    // The remaining two maximize the signed area on either side of the line
     // through the first two, which is what spreads the quad.
     let axis = points[furthest] - points[deepest];
     let mut left = usize::MAX;
@@ -535,7 +535,7 @@ mod tests {
         let mut keep = [0usize; 4];
         assert_eq!(reduce_to_quad(&points, &seps, Vec3::Y, &mut keep), 4);
         assert!(keep.contains(&5), "{keep:?}");
-        // The kept points must not all be neighbours on the ring.
+        // The kept points must not all be neighbors on the ring.
         let spread = keep
             .iter()
             .map(|&i| (points[i] - points[keep[0]]).length())
@@ -547,7 +547,7 @@ mod tests {
         );
     }
 
-    // Collinear patches have no area to maximise, so the fill must still
+    // Collinear patches have no area to maximize, so the fill must still
     // deliver four distinct points.
     #[test]
     fn reduction_fills_four_points_even_from_a_collinear_patch() {

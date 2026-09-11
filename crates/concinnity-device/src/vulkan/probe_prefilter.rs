@@ -35,7 +35,7 @@ use super::owned::{
 };
 use super::resources::alloc_descriptor_sets;
 
-// Colour format of both cubes.
+// Color format of both cubes.
 pub(super) const PROBE_CUBE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 // Threadgroup tile, matching the kernels' `[numthreads(8, 8, 1)]`. The third
@@ -730,11 +730,10 @@ fn create_compute_pipeline(
     label: &str,
 ) -> Result<OwnedPipeline, String> {
     let module = super::pipeline::spv_module(device, spv)?;
-    let entry = std::ffi::CString::new("main").expect("static entry name has no interior nul");
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(super::pipeline::SHADER_ENTRY);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);

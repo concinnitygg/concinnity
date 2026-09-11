@@ -43,7 +43,7 @@ pub fn version_line() -> String {
 
 // A build off a checkout names its commit, so the date beside it is that
 // commit's. Otherwise the only date there is the day of the build, and it is
-// labelled rather than left to read as a commit date.
+// labeled rather than left to read as a commit date.
 fn details(version: &str, commit: &str, date: &str) -> String {
     match (commit.is_empty(), date.is_empty()) {
         (false, false) => format!("{version} ({commit} {date})"),

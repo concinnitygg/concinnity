@@ -141,7 +141,7 @@ fn find_native_mode(
         }
     }
     // With a known wanted rate but no exact rate match, the resolution's
-    // nearest-available (highest) rate still honours the resolution choice.
+    // nearest-available (highest) rate still honors the resolution choice.
     best.map(|(_, mode)| mode)
 }
 

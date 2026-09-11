@@ -25,7 +25,7 @@
 // Heaps are `Tracked`. Metal tracks hazards at heap granularity: a GPU write to
 // any resource on a tracked heap delays reads and writes of every other
 // resource on it. That is why only CPU-written, GPU-read-only resources are
-// placed here -- with no GPU writes there is never a modification to serialise
+// placed here -- with no GPU writes there is never a modification to serialize
 // against, so the coarse granularity costs nothing while keeping the automatic
 // tracking the rest of the backend assumes. Render targets, cull scratch and
 // acceleration structures are GPU-written and stay on their own allocations;
@@ -335,7 +335,7 @@ impl DeviceAllocator {
         options: MTLResourceOptions,
     ) -> Result<PooledBuffer, String> {
         if pool_key(options)?.storage != MTLStorageMode::Shared {
-            return Err("allocator: initialised buffers need shared storage".to_string());
+            return Err("allocator: initialized buffers need shared storage".to_string());
         }
         let buffer = self.alloc_buffer(src.len(), options)?;
         super::context::write_buffer_region(&buffer, 0, src)?;

@@ -39,7 +39,7 @@ pub struct MainMenu {
     /// shows first and the toggle key opens the menu.
     pub initial: bool,
     /// InputKey that toggles the menu while the cursor is free. Empty binds no key.
-    /// Only `"Escape"` is currently recognised by the runtime.
+    /// Only `"Escape"` is currently recognized by the runtime.
     pub toggle_key: String,
     /// RGBA fill drawn across the whole window behind the items. Defaults to
     /// opaque black: a fully opaque alpha (1.0) hides the scene completely, which

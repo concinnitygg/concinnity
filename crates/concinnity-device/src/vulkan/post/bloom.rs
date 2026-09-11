@@ -11,7 +11,7 @@ use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::*;
-use super::super::pipeline::spv_module;
+use super::super::pipeline::GraphicsStages;
 use super::super::resources::alloc_descriptor_sets;
 use super::super::texture::*;
 use crate::vulkan::slang_builtins::SlangCompile;
@@ -46,7 +46,7 @@ pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> Result<Bloom
 //  Pipeline builder
 
 // Build a bloom-chain pipeline: a vertex-buffer-less fullscreen triangle into
-// a single-sample HDR mip, no depth. With `additive` set the colour blend is
+// a single-sample HDR mip, no depth. With `additive` set the color blend is
 // `dst + src`, used by the upsample pass to accumulate onto the downsampled
 // mip already in the target.
 pub(in crate::vulkan) fn create_bloom_pipeline(
@@ -57,20 +57,8 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
     frag_spv: &[u8],
     additive: bool,
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
@@ -164,7 +152,7 @@ pub(in crate::vulkan) struct BloomDeviceContext<'a> {
 
 // Create the bloom mip chain for an HDR target of `width`x`height`. `mips[i]`
 // has resolution `(width >> (i+1), height >> (i+1))`, floored at one texel;
-// `mips[0]` is half-res. Each mip is a single-sample colour image usable as
+// `mips[0]` is half-res. Each mip is a single-sample color image usable as
 // both a render target and a sampled texture, and is pre-transitioned to
 // `SHADER_READ_ONLY_OPTIMAL` so the composite pass can bind it even when
 // bloom is disabled and the bloom passes never run.

@@ -22,14 +22,14 @@ fn first_weight() -> [f32; 4] {
     [1.0, 0.0, 0.0, 0.0]
 }
 
-/// One vertex of a skinned mesh. Beyond position / colour / uv it carries up
+/// One vertex of a skinned mesh. Beyond position / color / uv it carries up
 /// to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is
-/// its blend weight. Weights are normalised at build time.
+/// its blend weight. Weights are normalized at build time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkinnedVertexData {
     /// Vertex position `[x, y, z]` in model space.
     pub pos: [f32; 3],
-    /// Vertex colour `[r, g, b]` in [0, 1]. Defaults to white.
+    /// Vertex color `[r, g, b]` in [0, 1]. Defaults to white.
     #[serde(default = "white")]
     pub color: [f32; 3],
     /// Texture coordinates in [0, 1] space. Defaults to [0, 0].
@@ -50,7 +50,7 @@ pub struct SkinnedVertexData {
 pub struct MorphDelta {
     /// Position offset `[x, y, z]` in model space.
     pub position: [f32; 3],
-    /// Normal offset; the deformed normal is re-normalised after adding it.
+    /// Normal offset; the deformed normal is re-normalized after adding it.
     pub normal: [f32; 3],
 }
 
@@ -182,7 +182,7 @@ pub struct SkinnedMesh {
     /// [Animation](#animation) clips (those with `root_motion` set): the
     /// capsule slides along obstacles and settles under gravity, and the
     /// rendered mesh follows it. The capsule stands on the mesh origin (its
-    /// feet), centred `half_height + radius` above it.
+    /// feet), centered `half_height + radius` above it.
     pub capsule: Option<CharacterCapsule>,
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
@@ -219,7 +219,7 @@ mod tests {
         // Importers emit position-only vertices for unweighted geometry; the
         // defaults have to make that render white and rigid rather than black
         // and collapsed to the origin.
-        let v: SkinnedVertexData = serde_json::from_str(r#"{"pos":[1,2,3]}"#).unwrap();
+        let v: SkinnedVertexData = crate::test_support::from_json(r#"{"pos":[1,2,3]}"#);
         assert_eq!(v.pos, [1.0, 2.0, 3.0]);
         assert_eq!(v.color, [1.0, 1.0, 1.0]);
         assert_eq!(v.uv, [0.0, 0.0]);
@@ -229,11 +229,10 @@ mod tests {
 
     #[test]
     fn a_weighted_vertex_keeps_its_authored_joints_and_weights() {
-        let v: SkinnedVertexData = serde_json::from_str(
+        let v: SkinnedVertexData = crate::test_support::from_json(
             r#"{"pos":[0,0,0],"color":[0.5,0.5,0.5],"uv":[0.25,0.75],
                 "joints":[3,4,0,0],"weights":[0.6,0.4,0,0]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(v.color, [0.5, 0.5, 0.5]);
         assert_eq!(v.uv, [0.25, 0.75]);
         assert_eq!(v.joints, [3, 4, 0, 0]);
@@ -277,14 +276,12 @@ mod tests {
 
     #[test]
     fn an_imported_mesh_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let m: SkinnedMesh = serde_json::from_str(
+        let m: SkinnedMesh = crate::test_support::from_json(
             r#"{"source":"hero.glb","skin_index":1,"material":"skin_mat","vertices":[{"pos":[0,0,0]}],"indices":[0],
                 "morph_target_names":["smile"],"morph_deltas":[{"position":[0,0.1,0]}],
                 "position":[1,0,2],"scale":[1,1,1],"lod_levels":2,"lod_distances":[10],
                 "max_instances":4,"capsule":{"half_height":0.9,"radius":0.35}}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(m.material, Some(MaterialHandle(8)));
         assert_eq!(m.morph_target_names, ["smile"]);
 
@@ -427,7 +424,7 @@ mod runtime_tests {
     #[test]
     fn skinned_vertex_defaults_fill_color_uv_and_weights() {
         // A vertex authored with only a position picks up the serde defaults:
-        // white colour, zero uv, and full weight on joint 0.
+        // white color, zero uv, and full weight on joint 0.
         let v: SkinnedVertexData =
             serde_json::from_value(serde_json::json!({"pos": [0.0, 0.0, 0.0]})).unwrap();
         assert_eq!(v.color, [1.0, 1.0, 1.0]);

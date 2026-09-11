@@ -8,7 +8,7 @@
 // is explicit that "you can signal an event only with a new value that's
 // greater than its current value" and that "multiple producing workloads can't
 // combine their signals with one event ... Instead, signal when each producing
-// workload finishes by updating its own separate event". Two queues signalling
+// workload finishes by updating its own separate event". Two queues signaling
 // one event race on that monotonicity, so each queue signals only its own
 // event and a consumer waits on the producing queue's event.
 //
@@ -61,7 +61,7 @@ pub(super) struct PassSync {
     // `(the queue whose event carries the value, the value)`. Never names the
     // waiting pass's own queue: same-queue ordering is submission order.
     pub(super) waits: Vec<(PassQueue, u64)>,
-    // Values signalled on the pass's own queue's event, ascending.
+    // Values signaled on the pass's own queue's event, ascending.
     pub(super) signals: Vec<u64>,
 }
 
@@ -80,7 +80,7 @@ impl FramePlan {
 
     // The value that queue's last pass this frame signals, or `None` when the
     // frame put no pass on it. A queue with no pass signals nothing, so the
-    // next frame must keep waiting on whatever terminal was last signalled
+    // next frame must keep waiting on whatever terminal was last signaled
     // rather than on one this frame never reached.
     pub(super) fn terminal(&self, queue: PassQueue) -> Option<u64> {
         self.terminals[queue.index()]
@@ -92,7 +92,7 @@ impl FramePlan {
 }
 
 // Lay the frame's event operations over `graph`. `previous[q]` is the last
-// terminal value queue `q` actually signalled, which is what this frame's other
+// terminal value queue `q` actually signaled, which is what this frame's other
 // queues wait for at frame start.
 //
 // The frame-start wait is the cross-frame half of the schedule that in-graph
@@ -193,7 +193,7 @@ mod tests {
         graph.passes[idx].queue
     }
 
-    // Every value signalled on `queue` this frame, in the order the executor
+    // Every value signaled on `queue` this frame, in the order the executor
     // commits that queue's command buffers (ascending compiled index).
     fn signals_on(graph: &CompiledGraph, plan: &FramePlan, queue: PassQueue) -> Vec<u64> {
         (0..graph.passes.len())
@@ -268,13 +268,13 @@ mod tests {
         let plan = plan_frame(&graph, FrameEvents::new(0, graph.passes.len()), [None; 2]);
         for i in 0..graph.passes.len() {
             for &(queue, value) in &plan.pass(i).waits {
-                let signalled_before: Vec<u64> = (0..i)
+                let signaled_before: Vec<u64> = (0..i)
                     .filter(|&j| queue_of(&graph, j) == queue)
                     .flat_map(|j| plan.pass(j).signals.iter().copied())
                     .collect();
                 assert!(
-                    signalled_before.contains(&value),
-                    "pass {i} waits for {value} on {}, signalled only later",
+                    signaled_before.contains(&value),
+                    "pass {i} waits for {value} on {}, signaled only later",
                     queue.name()
                 );
             }

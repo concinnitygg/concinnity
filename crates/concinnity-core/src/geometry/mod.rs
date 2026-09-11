@@ -30,7 +30,7 @@ pub use room::build_room_geometry;
 pub use skybox::build_skybox;
 pub use terrain::build_terrain;
 
-use crate::math::vec3::{vec3_add, vec3_normalise};
+use crate::math::vec3::{vec3_add, vec3_normalize};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -120,7 +120,7 @@ pub fn build_chunk_mesh(
 /// far-away chunk in for a fraction of the triangles: the surface height
 /// sampled on a coarse `step`-block grid becomes a low-poly top surface (one
 /// quad per coarse cell), wrapped by a perimeter skirt that drops to the chunk
-/// floor to hide the gap against a nearer full-detail neighbour or the world
+/// floor to hide the gap against a nearer full-detail neighbor or the world
 /// edge. Side and subsurface geometry are dropped: invisible at impostor
 /// distance.
 ///
@@ -129,7 +129,7 @@ pub fn build_chunk_mesh(
 /// `gx`'s local block column is `min(gx * step, dx)` (the last corner lands on
 /// the chunk's far edge so adjacent impostors share it exactly). The caller
 /// samples those heights from [`ChunkGenerator::surface_height_world`] at the
-/// matching world columns, which keeps neighbouring impostors watertight.
+/// matching world columns, which keeps neighboring impostors watertight.
 /// `top_uv` / `side_uv` are the surface block's atlas rects.
 pub fn build_chunk_impostor_mesh(
     dim: [u32; 3],
@@ -331,7 +331,7 @@ pub fn compute_tangents(vertices: &[Vert], indices: &[u16]) -> Vec<[f32; 3]> {
                 raw[1] - dot * normal[1],
                 raw[2] - dot * normal[2],
             ];
-            vec3_normalise(t)
+            vec3_normalize(t)
         })
         .collect()
 }
@@ -350,7 +350,7 @@ fn arbitrary_tangent(normal: [f32; 3]) -> [f32; 3] {
         up[2] * normal[0] - up[0] * normal[2],
         up[0] * normal[1] - up[1] * normal[0],
     ];
-    vec3_normalise(t)
+    vec3_normalize(t)
 }
 
 #[cfg(test)]

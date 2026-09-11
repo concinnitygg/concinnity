@@ -27,7 +27,7 @@ pub(super) enum FieldType {
     // serializes to a string) with no per-value documentation. Holds the
     // serialized variant strings in order, rendered inline.
     Enum(Vec<String>),
-    // A free-form JSON object: `serde_json::Value`, a map, or an unrecognised
+    // A free-form JSON object: `serde_json::Value`, a map, or an unrecognized
     // type with no documented shape.
     Object,
     // A documented value-type struct that has its own page, by name (also its
@@ -90,7 +90,7 @@ fn one_of(values: &[String]) -> String {
     }
 }
 
-// The pluralised noun phrase for an array element, e.g. `floats`, `strings`,
+// The pluralized noun phrase for an array element, e.g. `floats`, `strings`,
 // `[WaterWave](WaterWave.md) objects`.
 fn elem_plural(t: &FieldType) -> String {
     match t {
@@ -109,7 +109,7 @@ fn elem_plural(t: &FieldType) -> String {
     }
 }
 
-// The capitalised, sentence-leading phrase for a field type, e.g. `A string`,
+// The capitalized, sentence-leading phrase for a field type, e.g. `A string`,
 // `An array of 4 floats`, `A [PropCollider](PropCollider.md) object`.
 pub(super) fn type_phrase(t: &FieldType) -> String {
     match t {
@@ -217,7 +217,7 @@ pub(super) fn render_values(values: &[EnumValue]) -> String {
 
 // Rewrite a doc body's cross-references to documented types into the relative
 // `](Name.md)` form, so they cross-link when browsed as plain markdown. Two
-// source forms are recognised, resolving through `name_for_slug`:
+// source forms are recognized, resolving through `name_for_slug`:
 //   - a hand-written `[Text](#slug)` anchor (the single-page workaround), and
 //   - an idiomatic rustdoc shortcut link `[Type]` (no target), where `Type` is
 //     a documented name.

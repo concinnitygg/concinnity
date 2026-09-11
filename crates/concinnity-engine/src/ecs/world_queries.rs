@@ -9,7 +9,7 @@ use crate::app::budget::{MemoryBudget, ThreadBudget};
 use crate::app::mem_drift::MemoryDrift;
 use crate::ecs::{ActiveRenderBackend, World};
 use crate::gfx::backend::{GpuProfile, RenderBackend};
-use crate::gfx::streaming_system::{StreamingPressure, StreamingState, StreamingStats};
+use crate::gfx::streaming::system::{StreamingPressure, StreamingState, StreamingStats};
 use concinnity_host::store::paths::StateTree;
 
 /// Whether the world needs a renderer. True when it declares a
@@ -22,7 +22,7 @@ pub fn renders(world: &World) -> bool {
         .next()
         .is_some()
         || world.systems().iter().any(|s| {
-            s.downcast_ref::<crate::gfx::graphics_system::GraphicsSystem>()
+            s.downcast_ref::<crate::gfx::system::GraphicsSystem>()
                 .is_some()
         })
 }
@@ -80,7 +80,7 @@ pub fn memory_budget(world: &World) -> Option<MemoryBudget> {
 /// Take the live render backend out of the world's parked slot, leaving the
 /// world backend-less. The `cn editor` live SAVE swap transplants it into the
 /// rebuilt world (via a `PendingBackend` resource) so the edit applies without
-/// recreating the OS window / re-initialising the GPU device. `None` when the
+/// recreating the OS window / re-initializing the GPU device. `None` when the
 /// world never built a backend (or it was already yielded).
 pub fn take_render_backend(world: &mut World) -> Option<Box<dyn RenderBackend>> {
     world

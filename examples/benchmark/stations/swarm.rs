@@ -26,8 +26,8 @@ const DRIFT_BASE_HEIGHT: f32 = 2.2;
 const TOKEN_RADIUS: f32 = 0.30;
 
 // How far a token looks for company, how close counts as touching, how many
-// neighbours count as a crowd, and how fast a rule moves it.
-const NEIGHBOUR_RADIUS: f32 = 4.5;
+// neighbors count as a crowd, and how fast a rule moves it.
+const NEIGHBOR_RADIUS: f32 = 4.5;
 const TOUCHING_RADIUS: f32 = 1.1;
 const CROWDED: i32 = 6;
 const DRIFT_SPEED: f32 = 2.4;
@@ -129,7 +129,7 @@ struct Rule {
 
 // Back off when the crowd is thick.
 const SEPARATE: Rule = Rule {
-    radius: NEIGHBOUR_RADIUS,
+    radius: NEIGHBOR_RADIUS,
     threshold: CROWDED,
     above: true,
     closes: false,
@@ -138,7 +138,7 @@ const SEPARATE: Rule = Rule {
 
 // Close up when it is not.
 const GATHER: Rule = Rule {
-    radius: NEIGHBOUR_RADIUS,
+    radius: NEIGHBOR_RADIUS,
     threshold: CROWDED,
     above: false,
     closes: true,
@@ -290,8 +290,8 @@ mod tests {
     // takes the same branch and the drift runs off in one direction.
     #[test]
     fn a_token_can_be_both_crowded_and_alone() {
-        let in_range = (NEIGHBOUR_RADIUS / DRIFT_SPACING).floor() as i32;
-        assert!(in_range > 0, "no neighbour is ever in range");
+        let in_range = (NEIGHBOR_RADIUS / DRIFT_SPACING).floor() as i32;
+        assert!(in_range > 0, "no neighbor is ever in range");
         assert!(CROWDED > 0, "every token starts crowded");
     }
 

@@ -29,7 +29,7 @@ pub struct Blend1D {
     pub thresholds: Vec<f32>,
     /// One member per threshold, in the same order.
     pub plays: Vec<ClipPlay>,
-    /// Whether members play phase-synchronised.
+    /// Whether members play phase-synchronized.
     pub sync: bool,
 }
 
@@ -47,7 +47,7 @@ pub struct Blend2D {
     pub y_values: Vec<f32>,
     /// Members in row-major grid order.
     pub plays: Vec<ClipPlay>,
-    /// Whether members play phase-synchronised.
+    /// Whether members play phase-synchronized.
     pub sync: bool,
 }
 

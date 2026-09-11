@@ -17,9 +17,10 @@
 // frames that follow is safe only while no slot has two members live at once in
 // any of them. That is not free: a resource whose lifetime a pass *extends*
 // looks more disjoint in a graph missing that pass, and there is no single
-// maximal graph to plan against -- `unified_gbuffer_prepass`,
-// `rt_reflections_enabled` and `upscale_enabled` substitute passes rather than
-// adding them, so no one graph contains every lifetime. Three things cover it,
+// maximal graph to plan against -- `rt_reflections_enabled` and
+// `upscale_enabled` substitute passes rather than adding them, and
+// `gbuffer_prepass_enabled` follows what the backend actually built, so no one
+// graph contains every lifetime. Three things cover it,
 // and each catches what the others cannot:
 //
 //   1. The pool plans against its build configuration, and treats every input
@@ -72,7 +73,7 @@ pub struct TransientTexture {
 
 /// One slot: the members that share a backing allocation, in the order they
 /// reuse it (lifetime-start). A single-member slot is a plain pooled target; a
-/// multi-member slot is a realised alias, and the order is what each backend's
+/// multi-member slot is a realized alias, and the order is what each backend's
 /// aliasing barriers are wired from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransientSlot {
@@ -100,7 +101,7 @@ impl TransientSlot {
 /// second half has expired now that the G-buffer channels are pooled: there is
 /// plenty else to alias, and turning it on costs this plan nothing.
 ///
-/// The first half turned out to be a trap. Modelling `ao_output` as short-lived
+/// The first half turned out to be a trap. Modeling `ao_output` as short-lived
 /// is only safe while nothing else is pooled around the reflection resolve --
 /// the moment a one-pass post-stack target joins the pool, the greedy pairs it
 /// with `ao_output` and the sweep reports the overlap the occlusion view really
@@ -178,7 +179,7 @@ pub(crate) fn plan_transient_slots(
 /// differed per backend would make their footprints incomparable and would leave
 /// the soundness sweep below checking a grouping no backend builds.
 ///
-/// `gbuffer_depth` is deliberately absent while its three colour siblings are
+/// `gbuffer_depth` is deliberately absent while its three color siblings are
 /// here. D3D12 creates a shader-readable depth target with a typeless resource
 /// format (`R32_TYPELESS`) and views it as `D32_FLOAT` / `R32_FLOAT`, while
 /// `PixelFormat::Depth32Float` names one format for all three roles, so the pool
@@ -209,7 +210,7 @@ pub struct PoolGates {
     /// init / resize cannot gate on it. Vulkan rebuilds on the flag and passes
     /// the real value.
     pub bloom: bool,
-    /// The unified G-buffer pre-pass is built, so its colour channels exist.
+    /// The unified G-buffer pre-pass is built, so its color channels exist.
     pub gbuffer: bool,
 }
 
@@ -235,13 +236,12 @@ pub fn plan_pool_slots(
     build.hdr_height = render_extent.1;
     build.ssao_enabled = gates.ssao;
     build.bloom_enabled = gates.bloom;
-    // The unified pre-pass SUBSTITUTES for the separate SsrPrepass / Velocity
-    // nodes rather than adding to them, so `planning_inputs` cannot force it on
-    // the way it does the purely additive passes: it has to follow the build.
-    // `velocity_enabled` is what makes the node appear once the flag is set,
-    // and this gate must match the one that builds the pre-pass itself, or a
-    // consumer reads a label the pool never created.
-    build.unified_gbuffer_prepass = gates.gbuffer;
+    // The pre-pass exists only where the backend built its targets, so
+    // `planning_inputs` cannot force it on the way it does the passes that are
+    // purely a matter of world content: it has to follow the build. This gate
+    // must match the one that builds the pre-pass itself, or a consumer reads a
+    // label the pool never created.
+    build.gbuffer_prepass_enabled = gates.gbuffer;
     build.velocity_enabled = gates.gbuffer;
     plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1)
         .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
@@ -368,10 +368,9 @@ mod tests {
     // The flags a build configuration carries, i.e. the ones a pool is rebuilt
     // on. Everything else `planning_inputs` forces live.
     //
-    // The G-buffer gate is one of them because `unified_gbuffer_prepass`
-    // *substitutes* for the separate SsrPrepass / Velocity nodes rather than
-    // adding to them, so `planning_inputs` cannot force it on the way it forces
-    // the purely additive passes.
+    // The G-buffer gate is one of them because the pre-pass exists only where
+    // the backend built its targets, so `planning_inputs` cannot force it on the
+    // way it forces the passes that are purely a matter of world content.
     fn build_inputs(ssao: bool, bloom: bool) -> FrameGraphInputs {
         build_inputs_with(ssao, bloom, true)
     }
@@ -380,7 +379,7 @@ mod tests {
         let mut i = FrameGraphInputs::all_off();
         i.ssao_enabled = ssao;
         i.bloom_enabled = bloom;
-        i.unified_gbuffer_prepass = gbuffer;
+        i.gbuffer_prepass_enabled = gbuffer;
         i.velocity_enabled = gbuffer;
         i.hdr_width = 1920;
         i.hdr_height = 1080;
@@ -483,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gbuffer_gate_places_its_colour_targets() {
+    fn the_gbuffer_gate_places_its_color_targets() {
         // The gate is a build flag rather than something `planning_inputs`
         // forces, so a pool built without it must place none of them -- which is
         // what makes it safe for a backend to pool them only when the pre-pass
@@ -602,7 +601,7 @@ mod tests {
         //
         // What aliases is worth reading: `bloom_top` (Bloom -> Composite, late)
         // pairs with whichever early resource is largest. The three G-buffer
-        // colour targets do NOT alias each other -- every one is written by the
+        // color targets do NOT alias each other -- every one is written by the
         // pre-pass and read by a late consumer, so their lifetimes span most of
         // the frame. That is why pooling this group reclaims far less than the
         // HDR / post groups will.
@@ -695,8 +694,8 @@ mod tests {
         // that at face value says it could share memory with `hdr_depth` and
         // reclaim ~8 MiB at 1080p. It cannot. Its only consumer is the temporal
         // upscaler, and `planning_inputs` cannot force `upscale_enabled` on
-        // because Upscale *substitutes* for TaaResolve rather than adding to it
-        // -- the same mutually-exclusive shape as `unified_gbuffer_prepass`. So
+        // because Upscale *substitutes* for TaaResolve rather than adding to it.
+        // So
         // the planning graph models the TAA branch, in which nothing reads the
         // pre-pass depth at all.
         //
@@ -731,7 +730,7 @@ mod tests {
         let (hdr_first, hdr_last) = life(&real, "hdr_depth");
         assert!(
             up_first <= hdr_last && hdr_first <= up_last,
-            "the two depth targets overlap once the upscale branch is modelled: \
+            "the two depth targets overlap once the upscale branch is modeled: \
              gbuffer_depth [{up_first},{up_last}] vs hdr_depth [{hdr_first},{hdr_last}]"
         );
     }

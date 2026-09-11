@@ -1,7 +1,7 @@
 // src/directx/post/gbuffer.rs
 //
 // Unified geometry G-buffer pre-pass for the D3D12 backend. One jittered
-// traversal of the GPU cull's records rasterises into a single MRT:
+// traversal of the GPU cull's records rasterizes into a single MRT:
 //
 //   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
 //   target 1  R8       perceptual roughness
@@ -9,8 +9,8 @@
 //
 // plus a private single-sample depth buffer. Every screen-space consumer (SSR
 // resolve, SSAO kernel/blur, SSGI gather/composite, TAA resolve, FSR upscaler)
-// reads this one output instead of re-rasterising, replacing the separate
-// SsrPrepass + SSAO pre-pass + Velocity passes. Rasterisation uses the jittered
+// reads this one output instead of re-rasterizing, replacing the separate
+// SSR, SSAO and velocity pre-passes. Rasterization uses the jittered
 // VP (matching the main pass coverage); the motion vector derives from the
 // un-jittered current / previous VPs in-shader so projection jitter never
 // contaminates motion. Mirrors src/metal/post/gbuffer.rs.
@@ -62,7 +62,7 @@ pub(in crate::directx) use concinnity_core::render::uniforms::GBufferView;
 // Root signatures
 
 // PSO for the G-buffer pre-pass. Writes the three MRT targets over a private
-// single-sample depth buffer. Mirrors the main pass's no-cull rasteriser + LESS
+// single-sample depth buffer. Mirrors the main pass's no-cull rasterizer + LESS
 // depth test so the G-buffer matches the main pass's visible surfaces.
 fn create_gbuffer_pso(
     device: &ID3D12Device,
@@ -138,7 +138,7 @@ fn create_gbuffer_pso(
 }
 
 // Vertex input layout for the GPU-driven (bindless) G-buffer pre-pass: the
-// current-frame attributes the VS reads (position / normal / colour for the
+// current-frame attributes the VS reads (position / normal / color for the
 // skybox sentinel) on slot 0, plus the previous-frame position on slot 1. Both
 // slots carry the 56-byte `Vertex`; the static prefix binds the static VB to
 // both slots (prev_pos == cur_pos), the skinned tail binds the current deformed
@@ -419,7 +419,7 @@ pub(in crate::directx) struct GbufferDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
 }
 
-// The three colour targets the transient pool owns, handed to the G-buffer at
+// The three color targets the transient pool owns, handed to the G-buffer at
 // build / resize. The feature no longer creates them: they are graph resources
 // the pool places, so it only writes their views. `depth` is absent because it
 // stays feature-owned (see `transient_pool::pooled`).
@@ -437,7 +437,7 @@ pub(in crate::directx) struct GbufferExtent {
     pub height: u32,
 }
 
-// The RTV + SRV descriptor slots the three pooled colour targets are viewed
+// The RTV + SRV descriptor slots the three pooled color targets are viewed
 // through. Built from `GbufferSlots` at construction and from the stored
 // handles at resize, so one routine writes the views in both paths.
 struct GbufferViewSlots {
@@ -484,7 +484,7 @@ impl GbufferResources {
         let GbufferDeviceCtx { alloc } = ctx;
         let device = alloc.device();
         let GbufferExtent { width, height } = extent;
-        // The three colour targets come from the transient pool; this only
+        // The three color targets come from the transient pool; this only
         // writes their views into the pre-reserved descriptor slots.
         let (normal_depth, roughness, velocity) = write_pooled_views(
             device,
@@ -556,7 +556,7 @@ impl GbufferResources {
         Ok(())
     }
 
-    // Re-point the three pooled colour views after a pool rebuild that did not
+    // Re-point the three pooled color views after a pool rebuild that did not
     // change the resolution -- a quality toggle that adds or removes another
     // pooled resource relocates these too, because the pool repacks every slot.
     pub(in crate::directx) fn repoint_pooled(
@@ -585,9 +585,9 @@ impl GbufferResources {
 }
 
 // Camera + view-projection inputs for the G-buffer pre-pass. The two VPs drive
-// rasterisation (jittered) and motion vectors (un-jittered current vs previous).
+// rasterization (jittered) and motion vectors (un-jittered current vs previous).
 pub(in crate::directx) struct GbufferPrepassView {
-    // Jittered view-projection (rasterisation target).
+    // Jittered view-projection (rasterization target).
     pub jittered_vp: [[f32; 4]; 4],
     // Un-jittered current view-projection (motion vectors).
     pub cur_vp: [[f32; 4]; 4],
@@ -642,7 +642,7 @@ impl DxContext {
         let w = self.extent.render_width;
         let h = self.extent.render_height;
 
-        // The three colour targets are one graph resource (`gbuffer`), so the
+        // The three color targets are one graph resource (`gbuffer`), so the
         // executor has already put them in RENDER_TARGET for this pass's write
         // and the consumers' barrier takes them back out. `gb.depth` is not part
         // of it and stays in DEPTH_WRITE throughout.
@@ -821,7 +821,7 @@ impl DxContext {
         // The material-referenced shader buckets write their own regions of the
         // command buffer. The pre-pass shades nothing, so every bucket runs under
         // this single pipeline; a bucket whose Shader is not resident is skipped,
-        // matching what the colour pass will draw.
+        // matching what the color pass will draw.
         self.inc_draw_calls(self.execute_bucket_regions_shared_pso(
             cmd,
             cmd_sig,

@@ -494,7 +494,7 @@ fn count_within_counts_a_querys_entities_around_the_running_one() {
 
     tick(&mut sys, &mut world, 0.016);
     // The body runs per prop and adds: the two near each other see one
-    // neighbour each, the far one sees none, and no entity counts itself.
+    // neighbor each, the far one sees none, and no entity counts itself.
     assert_eq!(var(&sys, "near"), 2);
 }
 
@@ -1880,7 +1880,7 @@ fn the_trace_path_table_is_republished_after_an_edit() {
 }
 
 // A delayed run is a run of the body it was scheduled against, so the edit that
-// replaced that body takes its pending run with it, while a neighbour's run
+// replaced that body takes its pending run with it, while a neighbor's run
 // follows its program to wherever the new list holds it.
 #[test]
 fn a_pending_run_follows_its_program_or_goes_with_it() {

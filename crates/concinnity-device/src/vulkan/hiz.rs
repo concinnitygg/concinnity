@@ -8,13 +8,19 @@
 // view-projection, picks the Hi-Z mip whose texels are ~the size of the
 // projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
 // its nearest projected NDC depth is strictly behind. Mirrors the DirectX
-// implementation in `directx/hiz.rs` and the Metal one in `metal/hiz.rs`; every
-// backend's kernels ship from the single-source
+// implementation in `directx/hiz.rs`; Metal keeps the older per-mip chain (see
+// `metal/hiz.rs`). Every backend's kernels ship from the single-source
 // `src/shaders/hiz_build.slang` (one variant compile per kernel):
 //
-//   * `hiz_init_msaa` / `hiz_init_single`: reduce the main depth into mip 0,
-//     taking the MAX over every sample so the result is conservative.
-//   * `hiz_downsample`: MAX-reduce 2x2 source texels into the next mip.
+//   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
+//   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
+//                       every sample so the result is conservative.
+//   * `hiz_spd_tail`  : continue from mip 6 into mips 7..12.
+//
+// Each workgroup reduces a 64x64 tile through seven levels, so the whole
+// pyramid is two dispatches with one barrier between them rather than one
+// dispatch and one barrier per mip. `core::render::hiz_spd::Plan` decides the
+// dispatch geometry; DirectX builds its pyramid from the same plan.
 //
 // The build is a graph node: `HizFinal` (terminal, reducing the frame's last
 // depth version for the next frame's cull) and, under two-pass occlusion,
@@ -41,14 +47,14 @@ use crate::vulkan::owned::{
 };
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
-use super::pipeline::spv_module;
+use super::pipeline::{SHADER_ENTRY, spv_module};
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
 
 // Upper bound on the Hi-Z mip count, used to size the dedicated descriptor pool
-// for the per-downsample-step sets. `hiz_mip_count` caps at 32 - leading_zeros,
+// for the tail's sets. `hiz_mip_count` caps at 32 - leading_zeros,
 // so 16 covers any render target up to 32768 px on its longer edge.
 const MAX_HIZ_MIPS: usize = 16;
 
@@ -76,14 +82,14 @@ pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
 // uniform buffers. `Some` on the context exactly when the GPU-cull pipeline is
 // active (same gating as `cull_pipeline`).
 pub(super) struct HiZResources {
-    // Build pipelines + their layouts (the init and downsample kernels bind
+    // Build pipelines + their layouts (the phase-1 SPD and tail kernels bind
     // different set layouts, so each needs its own pipeline layout).
-    init_pipeline: OwnedPipeline,
-    downsample_pipeline: OwnedPipeline,
-    init_pipeline_layout: OwnedPipelineLayout,
-    downsample_pipeline_layout: OwnedPipelineLayout,
-    init_set_layout: OwnedSetLayout,
-    downsample_set_layout: OwnedSetLayout,
+    spd_pipeline: OwnedPipeline,
+    spd_tail_pipeline: OwnedPipeline,
+    spd_pipeline_layout: OwnedPipelineLayout,
+    spd_tail_pipeline_layout: OwnedPipelineLayout,
+    spd_set_layout: OwnedSetLayout,
+    spd_tail_set_layout: OwnedSetLayout,
 
     // Cull-read set layout (set 1 of the cull pipeline): sampler2D Hi-Z +
     // CullHizParams UBO. Held here because `init.rs` threads it into the cull
@@ -101,18 +107,18 @@ pub(super) struct HiZResources {
     pub(super) pyramid: PooledImage,
     // All-mips sampled view bound in the cull-read set.
     sampled_view: vk::ImageView,
-    // One single-level storage view per mip, bound as the init dst (mip 0) and
-    // the downsample src/dst. Length = `mip_count`.
+    // One single-level storage view per mip, bound as the mips phase 1 writes
+    // and the level the tail reduces from. Length = `mip_count`.
     mip_views: Vec<vk::ImageView>,
     // Nearest sampler the cull kernel reads the Hi-Z with (texelFetch ignores
     // filtering, but a sampler is still required for the combined-image-sampler
     // binding).
     sampler: OwnedSampler,
 
-    // Build sets: one init set per frame (depth differs per frame slot), one
-    // downsample set per mip step (frame-independent, Hi-Z mips only).
-    init_sets: Vec<vk::DescriptorSet>,
-    downsample_sets: Vec<vk::DescriptorSet>,
+    // Build sets: one phase-1 set per frame (depth differs per frame slot) and
+    // one tail set (frame-independent, Hi-Z mips only).
+    spd_sets: Vec<vk::DescriptorSet>,
+    spd_tail_sets: Vec<vk::DescriptorSet>,
     // Cull-read sets, one per frame (the UBO differs per frame slot).
     pub(super) read_sets: Vec<vk::DescriptorSet>,
     // Per-frame CullHizParams uniform buffers (host-mapped), bound in
@@ -133,7 +139,7 @@ pub(super) struct HiZResources {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) mip_count: u32,
-    // MSAA sample count of the main depth the init kernel reduces (1 when the
+    // MSAA sample count of the main depth the phase-1 kernel reduces (1 when the
     // world is single-sampled).
     sample_count: u32,
 }
@@ -189,12 +195,12 @@ fn create_hiz_view(
     unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("hiz view: {e}"))
 }
 
-// Build the init/downsample pipelines for the given MSAA mode. Returns the two
-// pipelines; the layouts are created by the caller and outlive a hot-reload.
+// Build the phase-1 SPD and tail pipelines for the given MSAA mode. Returns the
+// two pipelines; the layouts are created by the caller and outlive a hot-reload.
 fn build_hiz_pipelines(
     device: &VkDevice,
-    init_layout: vk::PipelineLayout,
-    downsample_layout: vk::PipelineLayout,
+    spd_layout: vk::PipelineLayout,
+    spd_tail_layout: vk::PipelineLayout,
     sample_count: u32,
     hot_reload: bool,
 ) -> Result<(OwnedPipeline, OwnedPipeline), String> {
@@ -209,8 +215,8 @@ fn build_hiz_pipelines(
         super::slang_builtins::HIZ_SPD_SINGLE.compile(&ctx)?
     };
     let tail_spv = super::slang_builtins::HIZ_SPD_TAIL.compile(&ctx)?;
-    let phase1 = create_compute_pipeline(device, init_layout, &phase1_spv)?;
-    let tail = create_compute_pipeline(device, downsample_layout, &tail_spv)?;
+    let phase1 = create_compute_pipeline(device, spd_layout, &phase1_spv)?;
+    let tail = create_compute_pipeline(device, spd_tail_layout, &tail_spv)?;
     Ok((phase1, tail))
 }
 
@@ -220,11 +226,10 @@ fn create_compute_pipeline(
     spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module.handle())
-        .name(&entry);
+        .name(SHADER_ENTRY);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
@@ -245,7 +250,7 @@ pub(super) struct HiZDeviceCtx<'a> {
 }
 
 // The render (depth) target the Hi-Z pyramid mirrors: its dimensions plus the
-// per-frame main-depth views the init kernel reduces into mip 0.
+// per-frame main-depth views the phase-1 kernel reduces.
 #[derive(Clone, Copy)]
 pub(super) struct HiZTarget<'a> {
     pub(super) width: u32,
@@ -266,7 +271,7 @@ impl HiZResources {
 
     // Build every Hi-Z resource sized to the render (depth) resolution. Called
     // from the init path when the GPU-cull pipeline is active. `target.depth_views`
-    // are the per-frame main-depth views the init kernel reduces.
+    // are the per-frame main-depth views the phase-1 kernel reduces.
     pub(super) fn new(
         ctx: HiZDeviceCtx,
         target: HiZTarget,
@@ -284,7 +289,7 @@ impl HiZResources {
         // Set layouts.
         // Phase 1: binding 0 depth (sampled image, read by coordinate -- no
         // sampler), binding 1 the mips it writes.
-        let init_set_layout = create_set_layout_counted(
+        let spd_set_layout = create_set_layout_counted(
             device,
             &[
                 (0, vk::DescriptorType::SAMPLED_IMAGE, 1),
@@ -293,7 +298,7 @@ impl HiZResources {
         )?;
         // Tail: binding 0 the mips it writes, whose first element is also the
         // level it reduces.
-        let downsample_set_layout = create_set_layout_counted(
+        let spd_tail_set_layout = create_set_layout_counted(
             device,
             &[(0, vk::DescriptorType::STORAGE_IMAGE, hiz_spd::LEVELS)],
         )?;
@@ -311,15 +316,15 @@ impl HiZResources {
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
             .size(std::mem::size_of::<HizSpdParams>() as u32);
-        let init_pipeline_layout =
-            create_pipeline_layout(device, init_set_layout.handle(), push_range)?;
-        let downsample_pipeline_layout =
-            create_pipeline_layout(device, downsample_set_layout.handle(), push_range)?;
+        let spd_pipeline_layout =
+            create_pipeline_layout(device, spd_set_layout.handle(), push_range)?;
+        let spd_tail_pipeline_layout =
+            create_pipeline_layout(device, spd_tail_set_layout.handle(), push_range)?;
 
-        let (init_pipeline, downsample_pipeline) = build_hiz_pipelines(
+        let (spd_pipeline, spd_tail_pipeline) = build_hiz_pipelines(
             device,
-            init_pipeline_layout.handle(),
-            downsample_pipeline_layout.handle(),
+            spd_pipeline_layout.handle(),
+            spd_tail_pipeline_layout.handle(),
             sample_count,
             hot_reload,
         )?;
@@ -348,20 +353,20 @@ impl HiZResources {
         let cull_ubos2 = alloc_ubo_ring(if two_pass { frames } else { 0 })?;
 
         let mut res = Self {
-            init_pipeline,
-            downsample_pipeline,
-            init_pipeline_layout,
-            downsample_pipeline_layout,
-            init_set_layout,
-            downsample_set_layout,
+            spd_pipeline,
+            spd_tail_pipeline,
+            spd_pipeline_layout,
+            spd_tail_pipeline_layout,
+            spd_set_layout,
+            spd_tail_set_layout,
             read_set_layout,
             descriptor_pool,
             pyramid: PooledImage::null(),
             sampled_view: vk::ImageView::null(),
             mip_views: Vec::new(),
             sampler: create_sampler(device)?,
-            init_sets: Vec::new(),
-            downsample_sets: Vec::new(),
+            spd_sets: Vec::new(),
+            spd_tail_sets: Vec::new(),
             read_sets: Vec::new(),
             cull_ubos,
             read_sets2: Vec::new(),
@@ -398,7 +403,7 @@ impl HiZResources {
         let requested = hiz_mip_count(width, height).min(MAX_HIZ_MIPS as u32).max(1);
         // The depth the two SPD dispatches actually reach, which is what the
         // image carries and what the cull is told: a mip the plan skipped is
-        // never written, and sampling one would feed the cull uninitialised
+        // never written, and sampling one would feed the cull uninitialized
         // memory.
         let mip_count = Plan::new(width, height, requested, 1).mip_count();
         let pyramid = create_hiz_image(alloc, width, height, mip_count)?;
@@ -433,7 +438,7 @@ impl HiZResources {
             mip_views.push(view);
         }
 
-        // Reset the pool and reallocate every set (init / downsample / read).
+        // Reset the pool and reallocate every set (phase 1 / tail / read).
         // SAFETY: `descriptor_pool` was created from this device and every set allocated from it is
         // dropped here; the caller has already idled the device, so none is still in use.
         unsafe {
@@ -445,12 +450,11 @@ impl HiZResources {
                 .map_err(|e| format!("reset hiz pool: {e}"))?;
         }
         let frames = self.cull_ubos.len();
-        let init_layouts: Vec<_> = (0..frames).map(|_| self.init_set_layout.handle()).collect();
-        let init_sets =
-            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &init_layouts)?;
-        let downsample_layouts = [self.downsample_set_layout.handle()];
-        let downsample_sets =
-            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &downsample_layouts)?;
+        let spd_layouts: Vec<_> = (0..frames).map(|_| self.spd_set_layout.handle()).collect();
+        let spd_sets = alloc_descriptor_sets(device, self.descriptor_pool.handle(), &spd_layouts)?;
+        let spd_tail_layouts = [self.spd_tail_set_layout.handle()];
+        let spd_tail_sets =
+            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &spd_tail_layouts)?;
         let read_layouts: Vec<_> = (0..frames).map(|_| self.read_set_layout.handle()).collect();
         let read_sets =
             alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts)?;
@@ -472,14 +476,14 @@ impl HiZResources {
         };
         // Phase-1 sets: binding 0 = that frame's main depth, binding 1 = mips 0..6.
         let phase1_mips = bound(0);
-        for (i, &set) in init_sets.iter().enumerate() {
+        for (i, &set) in spd_sets.iter().enumerate() {
             let depth = depth_views[i.min(depth_views.len().saturating_sub(1))];
             write_sampled_image(device, set, 0, depth);
             write_storage_image_array(device, set, 1, &phase1_mips);
         }
         // Tail set: mips 6..12, the first of which is the level it reduces.
         let tail_mips = bound(hiz_spd::LEVELS - 1);
-        for &set in &downsample_sets {
+        for &set in &spd_tail_sets {
             write_storage_image_array(device, set, 0, &tail_mips);
         }
         // Read sets: binding 0 = all-mips Hi-Z sampler, binding 1 = cull UBO.
@@ -510,8 +514,8 @@ impl HiZResources {
         self.pyramid = pyramid;
         self.sampled_view = sampled_view;
         self.mip_views = mip_views;
-        self.init_sets = init_sets;
-        self.downsample_sets = downsample_sets;
+        self.spd_sets = spd_sets;
+        self.spd_tail_sets = spd_tail_sets;
         self.read_sets = read_sets;
         self.read_sets2 = read_sets2;
         self.width = width;
@@ -531,9 +535,9 @@ impl HiZResources {
 
     // Swap freshly-rebuilt pipelines into the live resource. Used by the shader
     // hot-reload pass; the image, views, sets, and layouts are kept.
-    pub(super) fn swap_pipelines(&mut self, init: OwnedPipeline, downsample: OwnedPipeline) {
-        self.init_pipeline = init;
-        self.downsample_pipeline = downsample;
+    pub(super) fn swap_pipelines(&mut self, spd: OwnedPipeline, tail: OwnedPipeline) {
+        self.spd_pipeline = spd;
+        self.spd_tail_pipeline = tail;
     }
 
     // Recompile the build pipelines from disk-resident source (hot-reload).
@@ -545,8 +549,8 @@ impl HiZResources {
     ) -> Result<(OwnedPipeline, OwnedPipeline), String> {
         build_hiz_pipelines(
             device,
-            self.init_pipeline_layout.handle(),
-            self.downsample_pipeline_layout.handle(),
+            self.spd_pipeline_layout.handle(),
+            self.spd_tail_pipeline_layout.handle(),
             self.sample_count,
             hot_reload,
         )
@@ -588,26 +592,26 @@ impl crate::vulkan::context::VkContext {
         );
 
         // Phase 1: main depth into mips 0..6.
-        let init_set = hiz.init_sets[frame_idx.min(hiz.init_sets.len().saturating_sub(1))];
+        let spd_set = hiz.spd_sets[frame_idx.min(hiz.spd_sets.len().saturating_sub(1))];
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                hiz.init_pipeline.handle(),
+                hiz.spd_pipeline.handle(),
             );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                hiz.init_pipeline_layout.handle(),
+                hiz.spd_pipeline_layout.handle(),
                 0,
-                std::slice::from_ref(&init_set),
+                std::slice::from_ref(&spd_set),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                hiz.init_pipeline_layout.handle(),
+                hiz.spd_pipeline_layout.handle(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 as_bytes(&plan.phase1.params),
@@ -615,7 +619,7 @@ impl crate::vulkan::context::VkContext {
             device.cmd_dispatch(cmd, plan.phase1.groups.0, plan.phase1.groups.1, 1);
         }
 
-        let (Some(tail), Some(&tail_set)) = (plan.tail, hiz.downsample_sets.first()) else {
+        let (Some(tail), Some(&tail_set)) = (plan.tail, hiz.spd_tail_sets.first()) else {
             return;
         };
         // The tail reduces the mip 6 phase 1 just wrote, so the pyramid needs
@@ -639,19 +643,19 @@ impl crate::vulkan::context::VkContext {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                hiz.downsample_pipeline.handle(),
+                hiz.spd_tail_pipeline.handle(),
             );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                hiz.downsample_pipeline_layout.handle(),
+                hiz.spd_tail_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&tail_set),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                hiz.downsample_pipeline_layout.handle(),
+                hiz.spd_tail_pipeline_layout.handle(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 as_bytes(&tail.params),
@@ -725,7 +729,7 @@ fn create_pool(
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(read_rings * f),
-        // init depth (frames): read by coordinate, no sampler.
+        // Phase-1 depth (frames): read by coordinate, no sampler.
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(f),
@@ -785,7 +789,7 @@ fn write_sampler(
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
-// Sampled-image write with no sampler: the init kernel reads the depth by
+// Sampled-image write with no sampler: the phase-1 kernel reads the depth by
 // texel coordinate, so only the image view is bound.
 fn write_sampled_image(
     device: &VkDevice,

@@ -50,7 +50,7 @@ pub(crate) fn primitive_vertex_count(
 
 // Import every animation in a `.glb` whose channels target joints of the
 // `skin_index`-th skinned node. Channels whose target node is not a skin
-// joint, or whose interpolation method we cannot honour, are dropped
+// joint, or whose interpolation method we cannot honor, are dropped
 // silently; per-clip warnings would spam build output for files that mix
 // joint and non-joint animations (e.g. character + camera).
 pub(crate) fn import_glb_animations(

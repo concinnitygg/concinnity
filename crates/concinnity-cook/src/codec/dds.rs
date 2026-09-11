@@ -329,9 +329,9 @@ mod tests {
     }
 
     #[test]
-    fn decodes_dxt5_colour_and_alpha() {
+    fn decodes_dxt5_color_and_alpha() {
         // Alpha endpoints 200/10 with all indices 0, then an opaque white
-        // BC1 colour block.
+        // BC1 color block.
         let mut block = [0u8; 16];
         block[0] = 200;
         block[1] = 10;
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn decodes_ati2_into_a_reconstructed_normal() {
-        // Red and green both mid-grey: the flat normal, whose Z reconstructs
+        // Red and green both mid-gray: the flat normal, whose Z reconstructs
         // to near-max blue.
         let mut block = [0u8; 16];
         block[0] = 128;

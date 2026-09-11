@@ -122,7 +122,7 @@ pub(super) fn resource_binding_tier(device: &ID3D12Device) -> D3D12_RESOURCE_BIN
 // only on binding tier 3. Below it every root signature holding that range is
 // rejected at creation, so the renderer dies on its first pipeline with a bare
 // `E_INVALIDARG` naming nothing. Hardware has reported tier 3 since 2016; the
-// adapters that do not are virtualised or software ones.
+// adapters that do not are virtualized or software ones.
 pub(super) fn binding_tier_refusal(
     tier: D3D12_RESOURCE_BINDING_TIER,
     adapter: &str,

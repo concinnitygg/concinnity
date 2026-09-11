@@ -1,5 +1,5 @@
 //! Baking: the pure computation that turns an asset's args into the payload
-//! the runtime plays -- payload formats, their `deserialise` family, and the
+//! the runtime plays -- payload formats, their `deserialize` family, and the
 //! bake kernels that need no source file (IBL convolution, the built-in font's
 //! SDF atlas, mesh payload packing). Everything here is no_std: schedulers and
 //! caches are the caller's concern. The asset COMPILE pipeline (importers,

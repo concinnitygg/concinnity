@@ -341,7 +341,7 @@ pub(super) struct GlassState {
     // arrays); this list only marks which to reroute. A non-empty list (plus a
     // built mesh pipeline) is what enables the Layer 2 path -- see
     // `seethrough_meshes_enabled`. See-through is opt-in per `Material` because
-    // it only looks right when the space behind the glass is modelled; without
+    // it only looks right when the space behind the glass is modeled; without
     // it, Layer 1's tinted reflective glass hides the interior.
     pub seethrough_mesh_indices: Vec<usize>,
     // One GPU record per `GlassPanel` asset: the static world-space quad VB+IB
@@ -349,7 +349,7 @@ pub(super) struct GlassState {
     pub panels: Vec<super::glass::GlassPanelRecord>,
 }
 
-// Raymarched SDF volumes and the unit-cube proxy geometry the pass rasterises.
+// Raymarched SDF volumes and the unit-cube proxy geometry the pass rasterizes.
 pub(super) struct RaymarchState {
     // One GPU record per `SdfVolume` asset: the per-volume render pipeline
     // (compiled lazily at init from the user's fragment shader source + the
@@ -479,7 +479,7 @@ pub(super) struct Diagnostics {
 
 // HDR output negotiation for the swapchain.
 pub(super) struct HdrState {
-    // Maximum extended-range colour-component multiplier reported by the active
+    // Maximum extended-range color-component multiplier reported by the active
     // panel when the renderer is on the HDR path. `Some(2.0)` on HDR400,
     // `Some(8.0+)` on HDR1000-class panels; `None` on SDR (whether the world
     // disabled HDR or the platform fell back). Surfaced via `RenderStats.max_edr`
@@ -515,7 +515,7 @@ pub(crate) struct MtlContext {
     pub(super) graph_queues: Option<super::graph_queues::GraphQueues>,
     // Pixel format the MTKView's CAMetalLayer is currently presenting at:
     // `BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR. The post + text
-    // pipelines bake this format into their colour attachment descriptors,
+    // pipelines bake this format into their color attachment descriptors,
     // so it has to be stable between `MtlContext::new` and any subsequent
     // hot-reload rebuild. `swap_pixel_format == RGBA16Float` is the runtime
     // equivalent of `HdrOutputMode::is_hdr()`, and the per-frame
@@ -523,7 +523,7 @@ pub(crate) struct MtlContext {
     // shader.
     pub(super) swap_pixel_format: MTLPixelFormat,
     pub(super) hdr: HdrState,
-    // Colour texture of the most recently presented drawable, retained so the
+    // Color texture of the most recently presented drawable, retained so the
     // `cn debug` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
     // `hot_reload` (the path that runs the WS server able to request a
@@ -634,7 +634,7 @@ pub(crate) struct MtlContext {
     pub(super) ltc_matrix_texture: PooledTexture,
     pub(super) ltc_magnitude_texture: PooledTexture,
     // IBL cubemaps + mip count. Always Some: the runtime synthesizes a 1x1
-    // grey fallback for both cubes when no EnvironmentMap was supplied, so
+    // gray fallback for both cubes when no EnvironmentMap was supplied, so
     // the fragment shader's texture(3) / texture(4) bindings are always
     // valid. `prefilter_mip_count == 0` is the "IBL disabled" signal the
     // shader uses to fall back to the legacy ambient/skybox path.
@@ -679,7 +679,7 @@ pub(crate) struct MtlContext {
     // the bloom prefilter and composite fragment shaders. `bloom_intensity`
     // of 0 skips the bloom passes entirely.
     pub(super) post_process: crate::gfx::render_types::PostProcessParams,
-    // 3D colour-grading LUT sampled in the composite pass. Holds the declared
+    // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares
     // none, so the composite pass binds a valid 3D texture either way.
     pub(super) color_lut: PooledTexture,

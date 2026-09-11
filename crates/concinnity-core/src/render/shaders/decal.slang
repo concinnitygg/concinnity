@@ -2,15 +2,15 @@
 //
 // Runs after the main HDR pass. The vertex stage draws a unit cube (positions
 // in [-0.5, 0.5]^3 in local space) under the decal's model matrix and the
-// camera VP, jittered when TAA is on so the rasterised pixel grid matches the
+// camera VP, jittered when TAA is on so the rasterized pixel grid matches the
 // main pass exactly. The fragment stage reconstructs the world-space sample
-// point of each rasterised pixel from the main pass's depth attachment,
+// point of each rasterized pixel from the main pass's depth attachment,
 // transforms it back into decal-local space, and discards where the point
 // falls outside the unit box. Pixels near the top / bottom face along local +Y
 // fade out so the stamp shows no hard edge where it meets a tilted or curved
 // surface.
 //
-// The composited colour is alpha-blended into the resolved HDR target by the
+// The composited color is alpha-blended into the resolved HDR target by the
 // pipeline's blend state (Src.A * Src + (1 - Src.A) * Dst). The pass binds no
 // depth attachment: the unit-box test is the depth test.
 //
@@ -68,7 +68,7 @@ struct DecalVertexIn
     [[vk::location(0)]] float3 pos : POSITION;
 };
 
-// The cube is only a rasterisation proxy, so the fragment derives everything it
+// The cube is only a rasterization proxy, so the fragment derives everything it
 // needs from the pixel position and carries no varying.
 struct DecalVertexOut
 {
@@ -96,7 +96,7 @@ float decal_scene_depth(int2 pixel)
 [shader("fragment")]
 float4 decal_fragment(DecalVertexOut i) : SV_Target
 {
-    // The single-sample depth resolve shares the rasterised pixel grid with the
+    // The single-sample depth resolve shares the rasterized pixel grid with the
     // composite target, so integer texel coordinates address it directly.
     int2 pixel = int2(i.position.xy);
     if (pixel.x < 0 || pixel.y < 0 || pixel.x >= int(view.viewport.x)
@@ -114,7 +114,7 @@ float4 decal_fragment(DecalVertexOut i) : SV_Target
     }
 
     // Reconstruct world space at this pixel through the inverse VP. Every
-    // backend rasterises this pass with the framebuffer's Y running downwards
+    // backend rasterizes this pass with the framebuffer's Y running downwards
     // (Vulkan through the same negative-height viewport as the main pass), so
     // the NDC flip is shared rather than target-specific.
     float2 ndc_xy = (i.position.xy / view.viewport) * 2.0 - 1.0;

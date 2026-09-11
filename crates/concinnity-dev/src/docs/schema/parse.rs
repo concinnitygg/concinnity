@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognised_ident_stays_unresolved() {
+    fn an_unrecognized_ident_stays_unresolved() {
         assert_eq!(
             ty_of("PropCollider"),
             DocFieldType::Name("PropCollider".to_string())

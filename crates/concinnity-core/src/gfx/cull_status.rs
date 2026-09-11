@@ -6,7 +6,7 @@
 //! move when an object is rejected on the GPU, and the Hi-Z pyramid leaves no
 //! trace in the presented pixels of an object it correctly occluded. Reading
 //! the buffer back and tallying it here is what gives a Hi-Z change a
-//! behavioural oracle.
+//! behavioral oracle.
 //!
 //! Values mirror the `STATUS_*` constants in `cull.slang`; a test below reads
 //! that shader source and asserts the two agree.

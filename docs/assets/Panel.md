@@ -25,6 +25,6 @@ assets.
 - `corner_radius`: A float. Corner rounding radius of the background box, in panel pixels. 0 keeps sharp corners. Defaults to `8.0`.
 - `title`: A string. Heading text drawn at the top-left. Empty draws no heading.
 - `title_font`: A string. [Font](Font.md) for the title. Empty uses the built-in font.
-- `title_color`: An array of 3 floats. Linear-space RGB colour of the title text. Defaults to `[0.95, 0.95, 0.97]`.
+- `title_color`: An array of 3 floats. Linear-space RGB color of the title text. Defaults to `[0.95, 0.95, 0.97]`.
 - `title_scale`: A float. Scale applied to the title text. Defaults to `1.0`.
 - `padding`: A float. Inset of the title from the panel's top-left corner, in pixels. Defaults to `16.0`.

@@ -14,7 +14,7 @@
 //! shipped path compiler-free.
 //!
 //! Each backend maps a [`PostProgram`] to its own program table entry
-//! (`{vulkan,directx}/slang_builtins.rs`, `metal/slang_shaders.rs`); the counts
+//! (`{vulkan,directx}/slang_builtins.rs`, `metal/slang_builtins.rs`); the counts
 //! below are what all three build their layouts from, so a host cannot invent a
 //! binding model the others do not share.
 
@@ -41,6 +41,14 @@ pub struct PostProgramBindings {
 }
 
 impl PostProgram {
+    /// The pass name a backend reports when this program's pipeline fails to
+    /// build.
+    pub const fn label(self) -> &'static str {
+        match self {
+            PostProgram::TaaResolve => "taa resolve",
+        }
+    }
+
     /// The resource counts this program declares.
     pub const fn bindings(self) -> PostProgramBindings {
         match self {

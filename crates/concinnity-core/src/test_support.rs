@@ -220,6 +220,17 @@ pub(crate) fn install_resolvers() {
     crate::ecs::resolver::set_shader_handle_resolver(len_handle_resolver);
 }
 
+/// Deserialize `json` with the test resolvers installed.
+///
+/// Every component test that parses a name-string field goes through here
+/// rather than opening with [`install_resolvers`] and then deserializing, so
+/// the setup cannot be forgotten: without it a name field deserializes to an
+/// error that reads like a data bug.
+pub(crate) fn from_json<T: serde::de::DeserializeOwned>(json: &str) -> T {
+    install_resolvers();
+    serde_json::from_str(json).expect("the test JSON deserializes")
+}
+
 // Reports `None` from `deserialize_any`, the way an option-aware self-describing
 // format does. serde_json only ever reports a `null` unit, so the optional
 // reference helpers' `visit_none` arm needs this stand-in.

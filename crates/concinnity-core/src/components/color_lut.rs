@@ -1,15 +1,15 @@
-// 3D colour-grading lookup-table schema.
+// 3D color-grading lookup-table schema.
 
 use crate::ecs::PayloadLocator;
 use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
-/// A 3D colour-grading lookup table applied as a final post-process step. The
-/// build bakes the source into a colour cube; the graded result is blended over
+/// A 3D color-grading lookup table applied as a final post-process step. The
+/// build bakes the source into a color cube; the graded result is blended over
 /// the image by [PostProcessConfig](#postprocessconfig)'s `lut_strength`.
 ///
 /// A world declares at most one `ColorLut`; the first wins. When none is
-/// present, colour grading is skipped regardless of `lut_strength`.
+/// present, color grading is skipped regardless of `lut_strength`.
 ///
 /// Two source formats are accepted, picked by file extension:
 ///   - `.cube`  Adobe Cube LUT (plain-text interchange format).

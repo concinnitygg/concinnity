@@ -1,6 +1,6 @@
 //! src/geometry/glass_quad.rs: flat rectangular quad for a GlassPanel.
 //!
-//! Builds a single 4-vertex / 6-index quad centred at `center`, facing
+//! Builds a single 4-vertex / 6-index quad centered at `center`, facing
 //! `normal`, sized by `half_size` (half-width along the panel tangent,
 //! half-height along its bitangent). The tangent frame is derived from the
 //! normal so the panel can face any direction. Per-vertex normals are the
@@ -25,7 +25,7 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 /// Build the quad geometry for one glass panel. Returns 4 vertices (in the
 /// shared `(pos, normal, color, uv)` layout the mesh builders use) and 6
 /// indices (two triangles). `color` is a white placeholder; the glass
-/// fragment shader ignores per-vertex colour.
+/// fragment shader ignores per-vertex color.
 /// Orthonormal (width, height) axes spanning the plane of `n`, which must be
 /// unit length. Shared with the rectangular area light so a panel and a light
 /// with the same normal agree on which way is "across".

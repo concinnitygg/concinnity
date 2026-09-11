@@ -9,7 +9,7 @@
 //   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
 //   xess  Intel XeSS (cross-vendor DP4a + Arc XMX)
 // `build_upscaler` resolves the requested `UpscalerBackend` against runtime
-// availability and constructs the first that initialises, falling back to
+// availability and constructs the first that initializes, falling back to
 // native-resolution rendering when none is available. The shared per-frame
 // `encode_upscale` (in fsr.rs) drives whichever backend is active through the
 // trait; only the inner vendor evaluate differs.
@@ -70,7 +70,7 @@ pub(in crate::directx) trait UpscaleBackend: Send {
 // to NON_PIXEL_SHADER_RESOURCE by `encode_upscale`).
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct UpscaleInputs<'a> {
-    // Scene colour at render resolution.
+    // Scene color at render resolution.
     pub color: &'a ID3D12Resource,
     // Scene depth at render resolution.
     pub depth: &'a ID3D12Resource,
@@ -79,7 +79,7 @@ pub(in crate::directx) struct UpscaleInputs<'a> {
 }
 
 // Per-frame temporal + camera parameters shared with the jittered projection so
-// the rasterised scene and the reconstruction agree.
+// the rasterized scene and the reconstruction agree.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct UpscaleCamera {
     // Sub-pixel jitter for this frame (render-pixel units).
@@ -183,7 +183,7 @@ fn write_output_srv(device: &ID3D12Device, res: &ID3D12Resource, cpu: D3D12_CPU_
 // Sub-pixel jitter shared by the DLSS + XeSS backends (FSR queries its own
 // FFX-prescribed sequence instead). A 16-phase Halton-2/3 sequence in
 // [-0.5, 0.5] render-pixel units; the same value jitters the camera projection
-// (see `draw_frame`) so the rasterised scene and the upscale agree.
+// (see `draw_frame`) so the rasterized scene and the upscale agree.
 pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
     crate::gfx::jitter::offset(frame_index)
 }

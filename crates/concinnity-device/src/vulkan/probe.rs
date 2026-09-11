@@ -278,7 +278,7 @@ impl VkContext {
         let prefiltering_free = self.probe.prefiltering.is_none();
 
         // Rendering slot: submit one face per frame; once all six retired on the GPU
-        // (the last face's fence signalled) AND the prefiltering slot is free, hand
+        // (the last face's fence signaled) AND the prefiltering slot is free, hand
         // the capture over, or start the next placement.
         let rendering_occupied = self.probe.rendering.is_some();
         let more_faces = self
@@ -574,7 +574,7 @@ impl VkContext {
             .map_err(|e| format!("probe face begin: {e}"))?;
         // Order the previous face's cube copy + indirect-draw read (a prior
         // frame's submit) before this face's cull (rewrites the shared indirect
-        // buffer) and resolve (rewrites the shared colour). Intra-queue, so the
+        // buffer) and resolve (rewrites the shared color). Intra-queue, so the
         // queue's submission order preserves it across the separate submits.
         //
         // The attachment writes are here for a second reason: all six faces share
@@ -620,7 +620,7 @@ impl VkContext {
         let frustum = Frustum::from_view_projection(vp);
         self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
         self.encode_main_into_face(cmd, framebuffer, extent, global_set, bindless_set, indirect);
-        // The face colour rests in SHADER_READ_ONLY_OPTIMAL after the render pass;
+        // The face color rests in SHADER_READ_ONLY_OPTIMAL after the render pass;
         // flip it to TRANSFER_SRC for the copy into the capture cube. This exact
         // transition is the one the shared layout-transition table omits.
         let to_src = vk::ImageMemoryBarrier::default()
@@ -655,7 +655,7 @@ impl VkContext {
                 base_array_layer: 0,
                 layer_count: 6,
             });
-        // This face's colour into the cube's matching layer, at mip 0. Face order
+        // This face's color into the cube's matching layer, at mip 0. Face order
         // is the hardware cube order (`gfx::cubemap`), so layer `face` is the face
         // a sampler finds looking that way.
         let copy = vk::ImageCopy::default()
@@ -725,7 +725,7 @@ impl VkContext {
         Ok(())
     }
 
-    // The capture finished on the GPU (the last face's fence signalled): free the
+    // The capture finished on the GPU (the last face's fence signaled): free the
     // capture's draw resources (so the next probe can start rendering), take
     // ownership of the two cubes, and submit the cheap half of the convolution --
     // the firefly-clamped mirror mip plus the capture's source pyramid. The bake
@@ -746,7 +746,7 @@ impl VkContext {
             face_fences,
             ..
         } = rendering;
-        // The capture's draw resources free here (the last face's fence signalled,
+        // The capture's draw resources free here (the last face's fence signaled,
         // so the GPU is done with all of them); the two cubes carry on.
         free_face_recordings(
             &device,
@@ -852,7 +852,7 @@ impl VkContext {
         fence: vk::Fence,
     ) -> Result<(), String> {
         // SAFETY: `cmd` is in the recording state and every handle these calls name belongs to this
-        // device; the fence is unsignalled and not already in use.
+        // device; the fence is unsignaled and not already in use.
         unsafe {
             self.device
                 .end_command_buffer(cmd)
@@ -1148,7 +1148,7 @@ impl RenderingBake {
     // Free every owned GPU resource: the per-face command buffers (back to the
     // one-shot pool), the per-face fences, the bake target / cull / sets, and both
     // cubes. The caller has ensured the GPU retired them (the last face's fence is
-    // signalled, or the device is idle).
+    // signaled, or the device is idle).
     pub(super) fn destroy(self, device: &VkDevice, command_pool: vk::CommandPool) {
         free_face_recordings(device, command_pool, &self.face_cmds, &self.face_fences);
         self.bake.destroy(device);
@@ -1187,7 +1187,7 @@ impl PrefilteringBake {
 }
 
 // Return a bake step's command buffers to the one-shot pool and destroy its
-// fences. The caller has proved the GPU retired them (a signalled fence, or an
+// fences. The caller has proved the GPU retired them (a signaled fence, or an
 // idle device).
 fn free_face_recordings(
     device: &VkDevice,
@@ -1207,7 +1207,7 @@ fn free_face_recordings(
     }
 }
 
-// The GPU resources for ONE reflection-probe capture: the 512x512 colour/depth
+// The GPU resources for ONE reflection-probe capture: the 512x512 color/depth
 // (/resolve) target + framebuffer, a bake-owned cull ring + its descriptor sets,
 // and six per-face global sets carrying the face view + snapshot lighting. One
 // per in-flight probe (held in `RenderingBake`); `destroy` frees it when the
@@ -1240,7 +1240,7 @@ struct BakeResources {
 
 impl BakeResources {
     // The image the capture-cube copy reads: the single-sample resolve when MSAA is on,
-    // else the (single-sample) colour attachment. Both rest in SHADER_READ_ONLY
+    // else the (single-sample) color attachment. Both rest in SHADER_READ_ONLY
     // after the render pass.
     fn copy_source(&self) -> vk::Image {
         match &self.resolve {
@@ -1256,7 +1256,7 @@ impl BakeResources {
         let msaa = ctx.msaa_samples != vk::SampleCountFlags::TYPE_1;
         let size = PROBE_FACE_SIZE;
 
-        // Colour + depth (+ single-sample resolve when MSAA), then a framebuffer
+        // Color + depth (+ single-sample resolve when MSAA), then a framebuffer
         // compatible with `main_render_pass`.
         let color_pooled = create_image(
             alloc,
@@ -1436,7 +1436,7 @@ impl BakeResources {
                 &ctx.cull
                     .cull_set_layout
                     .as_ref()
-                    .expect("cull descriptor set layout exists once culling is initialised")
+                    .expect("cull descriptor set layout exists once culling is initialized")
                     .handle(),
             ),
         )?[0];
@@ -1454,7 +1454,7 @@ impl BakeResources {
             ctx.cull
                 .bindless_set_layout
                 .as_ref()
-                .expect("bindless descriptor set layout exists once culling is initialised")
+                .expect("bindless descriptor set layout exists once culling is initialized")
                 .handle();
             PROBE_FACE_COUNT
         ];
@@ -1686,7 +1686,7 @@ fn make_ubo_bytes(
 
 fn light_bytes(u: &crate::gfx::render_types::LightUniforms) -> &[u8] {
     // SAFETY: `LightUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them, so
-    // it has no padding and every byte is initialised; the slice borrows it and does not outlive
+    // it has no padding and every byte is initialized; the slice borrows it and does not outlive
     // it.
     unsafe {
         std::slice::from_raw_parts(
@@ -1698,7 +1698,7 @@ fn light_bytes(u: &crate::gfx::render_types::LightUniforms) -> &[u8] {
 
 fn shadow_bytes(u: &crate::gfx::render_types::ShadowUniforms) -> &[u8] {
     // SAFETY: `ShadowUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them,
-    // so it has no padding and every byte is initialised; the slice borrows it and does not outlive
+    // so it has no padding and every byte is initialized; the slice borrows it and does not outlive
     // it.
     unsafe {
         std::slice::from_raw_parts(
@@ -1714,7 +1714,7 @@ fn probeset_bytes(p: &ProbeSet) -> &[u8] {
 
 fn hiz_params_bytes(p: &CullHizParams) -> &[u8] {
     // SAFETY: `CullHizParams` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them, so
-    // it has no padding and every byte is initialised; the slice borrows it and does not outlive
+    // it has no padding and every byte is initialized; the slice borrows it and does not outlive
     // it.
     unsafe {
         std::slice::from_raw_parts(

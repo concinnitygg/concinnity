@@ -25,7 +25,7 @@ never clash with hand-authored assets.
 
 ## Parameters
 
-- `setting`: A string. Engine setting this row controls (e.g. `"exposure"`). Must be a setting the runtime recognises as a slider; an unknown key renders but does nothing on drag.
+- `setting`: A string. Engine setting this row controls (e.g. `"exposure"`). Must be a setting the runtime recognizes as a slider; an unknown key renders but does nothing on drag.
 - `label`: A string. Display name shown at the left of the row.
 - `x`: A float. Left edge of the row in window pixels. Defaults to `0.0`.
 - `y`: A float. Top edge of the row in window pixels. Defaults to `0.0`.

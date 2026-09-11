@@ -5,7 +5,7 @@
 // and apply changes through the backend. Each returns a small tally the drive
 // logs.
 
-use crate::gfx::graphics_system::hot_reload_sources::*;
+use crate::gfx::system::hot_reload_sources::*;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
 // so a single info! line per asset class keeps the log readable.
@@ -115,7 +115,7 @@ pub(crate) struct ProceduralMeshReloadResult {
 
 // Re-read `world.jsonl` and, for every captured `ProceduralMesh`, diff its
 // current generator args against the init-time snapshot. When the args
-// differ, re-run `compile_mesh_payload` + `deserialise_with_lods` to get
+// differ, re-run `compile_mesh_payload` + `deserialize_with_lods` to get
 // fresh vertices / indices / LOD alternates, then dispatch to
 // `update_mesh_geometry` (same vertex/index/LOD counts) or batch into a
 // single `rebuild_static_geometry` (size changed); mirrors the file-backed
@@ -242,11 +242,11 @@ pub(super) fn reload_procedural_meshes(
             }
         };
         let (vertices, indices, lod_alternates) =
-            match crate::gfx::mesh_payload::deserialise_with_lods(&payload) {
+            match crate::gfx::mesh_payload::deserialize_with_lods(&payload) {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!(
-                        "ProceduralMesh hot-reload: deserialise failed for '{}': {} \
+                        "ProceduralMesh hot-reload: deserialize failed for '{}': {} \
                          (kept old geometry)",
                         entry.name,
                         e

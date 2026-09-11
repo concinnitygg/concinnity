@@ -51,7 +51,7 @@ const STAR_TINT: [f32; 2] = [0.25, 0.30];
 // finite water surface, whose far edge sits below eye level, cannot meet.
 const ZENITH: [f32; 3] = [0.0016, 0.0021, 0.0038];
 const GROUND: [f32; 3] = [0.0004, 0.0005, 0.0008];
-// Height over which the background darkens to the ground colour.
+// Height over which the background darkens to the ground color.
 const GROUND_DEPTH: f32 = 0.25;
 
 /// Synthetic equirectangular HDR for the `generator: "stars"` source.
@@ -65,19 +65,19 @@ pub fn generate_stars_equirect() -> HdrImage {
     }
 }
 
-// The starless sky, one colour per row.
+// The starless sky, one color per row.
 fn background() -> Vec<[f32; 3]> {
     let mut pixels = Vec::with_capacity((WIDTH * HEIGHT) as usize);
     for row in 0..HEIGHT {
         let up = cos(row_theta(row));
         let s = (-up / GROUND_DEPTH).clamp(0.0, 1.0);
-        let colour = [
+        let color = [
             lerp(ZENITH[0], GROUND[0], s),
             lerp(ZENITH[1], GROUND[1], s),
             lerp(ZENITH[2], GROUND[2], s),
         ];
         for _ in 0..WIDTH {
-            pixels.push(colour);
+            pixels.push(color);
         }
     }
     pixels
@@ -97,14 +97,14 @@ fn scatter_stars(pixels: &mut [[f32; 3]]) {
                 continue;
             }
             let dir = direction(u, sin_theta, cos_theta);
-            splat(pixels, dir, star_colour(seed), u, v, sin_theta);
+            splat(pixels, dir, star_color(seed), u, v, sin_theta);
         }
     }
 }
 
 // The star's peak radiance per channel: a magnitude-like brightness curve,
 // tinted warm or cold by a little.
-fn star_colour(seed: u32) -> [f32; 3] {
+fn star_color(seed: u32) -> [f32; 3] {
     let peak = STAR_FAINTEST * powf(STAR_RANGE, powi(unit(seed, 4), 4));
     let tint = powi(unit(seed, 5) * 2.0 - 1.0, 3);
     [
@@ -116,19 +116,19 @@ fn star_colour(seed: u32) -> [f32; 3] {
 
 // Draw one star's gaussian core. The box it covers is wider in texels the
 // closer it sits to a pole, since a row of texels there spans less sky.
-fn splat(pixels: &mut [[f32; 3]], dir: [f32; 3], colour: [f32; 3], u: f32, v: f32, sin_theta: f32) {
+fn splat(pixels: &mut [[f32; 3]], dir: [f32; 3], color: [f32; 3], u: f32, v: f32, sin_theta: f32) {
     let half_y = (STAR_REACH / PI * HEIGHT as f32) as i32 + 1;
     let spread = STAR_REACH / (2.0 * PI * sin_theta.max(1e-4)) * WIDTH as f32;
     let half_x = spread.min(WIDTH as f32 * 0.5) as i32 + 1;
-    let centre_x = floor(u * WIDTH as f32 - 0.5) as i32;
-    let centre_y = floor(v * HEIGHT as f32 - 0.5) as i32;
+    let center_x = floor(u * WIDTH as f32 - 0.5) as i32;
+    let center_y = floor(v * HEIGHT as f32 - 0.5) as i32;
     let inv_sigma2 = 1.0 / (2.0 * STAR_SIGMA * STAR_SIGMA);
-    for row in (centre_y - half_y)..=(centre_y + half_y) {
+    for row in (center_y - half_y)..=(center_y + half_y) {
         if row < 0 || row >= HEIGHT as i32 {
             continue;
         }
         let (st, ct) = sin_cos(row_theta(row as u32));
-        for col in (centre_x - half_x)..=(centre_x + half_x) {
+        for col in (center_x - half_x)..=(center_x + half_x) {
             let d = direction((col as f32 + 0.5) / WIDTH as f32, st, ct);
             let dot = d[0] * dir[0] + d[1] * dir[1] + d[2] * dir[2];
             let falloff = exp(-2.0 * (1.0 - dot).max(0.0) * inv_sigma2);
@@ -137,7 +137,7 @@ fn splat(pixels: &mut [[f32; 3]], dir: [f32; 3], colour: [f32; 3], u: f32, v: f3
             }
             let texel = &mut pixels[(row as u32 * WIDTH + wrap_col(col)) as usize];
             for k in 0..3 {
-                texel[k] += colour[k] * falloff;
+                texel[k] += color[k] * falloff;
             }
         }
     }
@@ -182,7 +182,7 @@ fn mix(mut x: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::deserialise;
+    use super::super::deserialize;
     use super::super::schedule::Serial;
     use super::super::source::bake_payload;
     use super::*;
@@ -200,7 +200,7 @@ mod tests {
         let hdr = generate_stars_equirect();
         assert_eq!((hdr.width, hdr.height), (WIDTH, HEIGHT));
         let payload = bake_payload(&hdr, 16, 8, 32, 12.0, &Serial);
-        let view = deserialise(&payload).expect("deserialise");
+        let view = deserialize(&payload).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
         // Prefilter mips for face_size 16: 16, 8, 4 -> 3 levels.

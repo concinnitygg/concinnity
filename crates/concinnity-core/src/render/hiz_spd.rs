@@ -83,7 +83,7 @@ impl Plan {
 
     /// Pyramid depth this plan actually writes. The image and the cull's mip
     /// count must both use it: a mip the plan skipped is never written, and
-    /// sampling one would feed the cull uninitialised memory.
+    /// sampling one would feed the cull uninitialized memory.
     pub fn mip_count(&self) -> u32 {
         match self.tail {
             Some(t) => t.base_mip + t.params.level_count,

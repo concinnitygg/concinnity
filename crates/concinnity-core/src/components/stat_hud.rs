@@ -77,12 +77,10 @@ mod tests {
 
     #[test]
     fn each_chip_binds_its_own_label_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let h: StatHud = serde_json::from_str(
+        let h: StatHud = crate::test_support::from_json(
             r#"{"fps_label":"fps_chip","gpu_wait_label":"vram","vram_label":"vram",
                 "ram_label":"","ev_label":3,"edr_label":"edr_chip"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(h.fps_label, Some(AssetId(8)));
         assert_eq!(h.gpu_wait_label, Some(AssetId(4)));
         assert_eq!(h.vram_label, Some(AssetId(4)));

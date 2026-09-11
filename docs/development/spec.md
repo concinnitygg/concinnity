@@ -32,7 +32,7 @@ implemented on some rendering backends and not others, that is stated inline.
 15. [Diagnostics](#15-diagnostics)
 16. [Settings and persistence](#16-settings-and-persistence)
 17. [Distribution](#17-distribution)
-18. [Appendix A: render pass catalogue](#appendix-a-render-pass-catalogue)
+18. [Appendix A: render pass catalog](#appendix-a-render-pass-catalog)
 19. [Appendix B: glossary](#appendix-b-glossary)
 
 ---
@@ -43,7 +43,7 @@ These constraints explain most of the structure that follows.
 
 **Asset-driven, not script-driven.** A world is a set of declarative assets.
 There is no embedded scripting language and no user-supplied bytecode. Runtime
-behaviour emerges from asset composition: a `Behavior` asset is a compiled tree
+behavior emerges from asset composition: a `Behavior` asset is a compiled tree
 of typed nodes over typed state, not a program the engine interprets from
 source. The practical consequence is that the entire runtime surface is knowable
 at cook time, which is what makes validation, gating, and ahead-of-time
@@ -51,7 +51,7 @@ compilation possible.
 
 **Cook once, play many.** Everything expensive happens in the cook: source
 imports, mesh compilation, texture encoding, shader compilation, IBL
-convolution, font rasterisation. The runtime loads compiled payloads and
+convolution, font rasterization. The runtime loads compiled payloads and
 uploads them. No asset compiler ships in the player.
 
 **Closed-world storage.** The set of component types is fixed at compile time.
@@ -167,7 +167,7 @@ regenerates the blob.
 
 **Resource asset** — a compiled artifact addressed by a dense per-kind handle
 rather than by entity: meshes, textures, materials, fonts, audio clips, cubemaps,
-environment maps, colour LUTs, skinned meshes. These live in the blob's resource
+environment maps, color LUTs, skinned meshes. These live in the blob's resource
 stream and are installed at load into per-kind tables the systems index by
 handle.
 
@@ -376,7 +376,7 @@ than failing at the first.
 ### 5.2 Back half
 
 **Asset resolution.** Each expanded asset becomes a `BlobAssetDef`: the
-serialised runtime component, its discriminant, its interned name, and a payload
+serialized runtime component, its discriminant, its interned name, and a payload
 locator if it has one. The asset-to-component translation happens here, so the
 runtime never performs it.
 
@@ -389,8 +389,8 @@ now:
 | Skinned mesh              | Skin weights, bind pose, morph targets, LOD alternates.                                                              |
 | Texture                   | Decode (PNG, TGA, DDS, KTX2, HDR), mip generation, block compression, tagged payload emit.                           |
 | Cubemap / environment map | Equirect to cube projection, irradiance and prefilter convolution.                                                   |
-| Colour LUT                | `.cube` parse into a 3D lookup payload.                                                                              |
-| Font                      | Glyph atlas rasterisation with real metrics.                                                                         |
+| Color LUT                | `.cube` parse into a 3D lookup payload.                                                                              |
+| Font                      | Glyph atlas rasterization with real metrics.                                                                         |
 | Audio clip                | Decode and re-encode into the runtime clip payload.                                                                  |
 | Shader                    | Slang compilation of the world's hooks into the engine's main-pass programs (see below).                             |
 | Voxel chunk / SDF volume  | Palette resolution, volume bake.                                                                                     |
@@ -414,7 +414,7 @@ payload's final `(blob_index, offset, len)` is written back into its def or
 resource record. Per-scene payloads are packed into dedicated blobs after the
 global set.
 
-**Cook cache.** Compiled payloads are memoised so an unchanged source is not
+**Cook cache.** Compiled payloads are memoized so an unchanged source is not
 recompiled. Identity is stat-based, with a settle window that prevents a
 same-tick equal-length rewrite from being served stale. A cook reports how many
 payloads were reused versus compiled.
@@ -484,7 +484,7 @@ encoder returns.
 │  8..16   meta_len       u64 LE, byte length of the meta block  │
 ├────────────────────────────────────────────────────────────────┤
 │ METADATA BLOCK (meta_len bytes)                                │
-│  postcard-serialised BlobMeta                                  │
+│  postcard-serialized BlobMeta                                  │
 ├────────────────────────────────────────────────────────────────┤
 │ PAYLOAD SECTION (to end of file)                               │
 │  raw compiled payload bytes, addressed by PayloadLocator       │
@@ -533,7 +533,7 @@ struct BlobMeta {
 }
 ```
 
-Serialisation is postcard: compact, positional, and non-self-describing. That is
+Serialization is postcard: compact, positional, and non-self-describing. That is
 correct here precisely because the blob is regenerated by every cook. (Settings,
 which persist across cooks, use a self-describing format instead — see
 [16](#16-settings-and-persistence).)
@@ -545,17 +545,17 @@ struct BlobAssetDef {
     name:          Option<AssetId>,  // None for unnamed runtime-only assets
     kind:          AssetKind,        // Component
     discriminant:  u8,               // registry position; selects the component type
-    args_bytes:    Vec<u8>,          // serialised runtime component
+    args_bytes:    Vec<u8>,          // serialized runtime component
     payload:       Option<PayloadLocator>,
 }
 ```
 
-Every record is _baked_: `args_bytes` is the serialised runtime component, not
+Every record is _baked_: `args_bytes` is the serialized runtime component, not
 the authored args. The asset-to-component translation already ran in the cook.
 The name is injected into the component at load time.
 
 The blob carries only components. Systems are internal client code, constructed
-at runtime from world content, and are never serialised.
+at runtime from world content, and are never serialized.
 
 #### Resource stream
 
@@ -897,7 +897,7 @@ pool before the first system uses it. The default is `cores - 1`, floored at one
 
 **Memory budget.** A soft ceiling on host memory the runtime aims to stay under.
 Automatically it is the lesser of a hard ceiling (16 GiB) and 70% of total
-physical RAM. An `AppConfig` override is honoured but still capped at 85% of
+physical RAM. An `AppConfig` override is honored but still capped at 85% of
 total RAM. When the platform RAM query fails, the hard ceiling stands, or the
 bare override if one was given.
 
@@ -940,7 +940,7 @@ payload reads — belongs in `System::init`.
 The four phases are `Early`, `Logic`, `PreRender`, and `Late`, and a table's
 entries are in phase order. They exist for the systems the table does not list:
 `World::add_system` registers a system written outside the engine, naming a phase
-rather than a neighbouring entry. The merge is one rule — phases run in order,
+rather than a neighboring entry. The merge is one rule — phases run in order,
 and within a phase every table entry runs before every registered system — so a
 registration never reorders the engine's own tick and the table's entries stay
 internal. A registered name that repeats a table entry's is refused at start,
@@ -968,7 +968,7 @@ sequence:
    programs. Deferred (non-start-scene) programs record where to re-read their
    container instead of decoding.
 5. **Decode media.** The texture pool, the material table, glyph atlases,
-   the environment map, and the colour LUT. Deferred texture slots enter the
+   the environment map, and the color LUT. Deferred texture slots enter the
    pool as 1x1 placeholders.
 6. **Build the draw list.** For each placement, look up its geometry, append it
    to the shared vertex/index buffers, and record a draw object with its slice
@@ -1086,7 +1086,7 @@ Published each frame as a `SimTiming` resource:
 | `tick_dt` | Seconds each step advances (1/60).                                                                                                   |
 | `alpha`   | Accumulator remainder as a fraction of `tick_dt`. Blends previous and current simulated state when writing render-facing transforms. |
 
-Two behaviours are deliberate:
+Two behaviors are deliberate:
 
 **Hitch clamping.** At most 5 ticks run in one frame. Accumulated time past that
 is dropped, so a long hitch degrades to slow motion instead of a tick spiral
@@ -1135,7 +1135,7 @@ is byte-identical to plain table iteration.
 comes from systems fanning their own data-parallel work across the shared job
 pool, gated by the `ScheduleMode` resource:
 
-| Mode                 | Behaviour                                                                                  |
+| Mode                 | Behavior                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------ |
 | `Parallel` (default) | Systems may fan safe internal work across the job pool.                                    |
 | `Serial`             | Every system's work stays on the stepping thread. The determinism oracle and escape hatch. |
@@ -1154,7 +1154,7 @@ the same tick. The important ones:
 | Resource             | Published by                             | Read by                                         |
 | -------------------- | ---------------------------------------- | ----------------------------------------------- |
 | `MenuActive`         | Overlay (first in the schedule)          | Simulation, input, and the draw, the same tick. |
-| `SimTiming`          | The app clock, before the step           | Physics, behaviour, animation.                  |
+| `SimTiming`          | The app clock, before the step           | Physics, behavior, animation.                  |
 | `FrameRateCap`       | Graphics                                 | The app-level frame pacer.                      |
 | `CameraRelativeView` | Streaming                                | Graphics, for the draw.                         |
 | `InputMailbox`       | Graphics (or the render half's feedback) | Input, later the same tick.                     |
@@ -1198,7 +1198,7 @@ Key ordering constraints and why they exist:
 
 - **Overlay first.** It publishes the menu state that gates simulation, input,
   and the draw this same tick.
-- **Behaviour before spawn / settings / story / audio.** The requests its firing
+- **Behavior before spawn / settings / story / audio.** The requests its firing
   rules emit drain the same tick.
 - **Spawn / settings / streaming before graphics.** A despawn is applied before
   the transform push, a setting change lands for this frame's submit, and a
@@ -1365,7 +1365,7 @@ unambiguous DAG rather than an ambiguous alias.
   ignores these (Apple GPUs handle most hazards implicitly); the Vulkan and
   DirectX executors emit pipeline / resource barriers from them. What a state
   means natively follows the usage the resource declares, so no executor restates
-  whether a target is colour or depth. What it sits in _between_ frames does not
+  whether a target is color or depth. What it sits in _between_ frames does not
   follow from usage and is declared per resource and per backend: the staggered
   shadow cascades rest sampled because a skipped slice keeps the depth it was
   last rendered with, while main depth is fully rewritten and rests discarded. A
@@ -1387,7 +1387,7 @@ independent barrier timelines.
 **Aliasing.** The planner packs each transient's `[first, last]` lifetime with an
 interval-graph greedy: one slot per group of resources that are never live
 together, sized to the largest member. Resources sharing a slot must agree on
-depth-vs-colour and on sample count, which are what change the kind of
+depth-vs-color and on sample count, which are what change the kind of
 allocation a backend must make.
 
 The soundness problem is that pools are built at init and resize while graphs
@@ -1478,7 +1478,7 @@ flowchart TD
     LINES --> HIZF --> COMP
 ```
 
-The full catalogue with per-pass semantics is [Appendix A](#appendix-a-render-pass-catalogue).
+The full catalog with per-pass semantics is [Appendix A](#appendix-a-render-pass-catalog).
 
 Notable structural decisions:
 
@@ -1513,7 +1513,7 @@ the reflection resolves read roughness; only the temporal passes read motion; an
 only the upscaler reads the depth. One handle would give each of them the union
 of four lifetimes, which is harmless while nothing owns their memory and wrong
 the moment something does. The depth attachment also settles the question on its
-own — it is a different resource class from its three colour siblings, so no
+own — it is a different resource class from its three color siblings, so no
 single handle could have described it.
 
 **Reflections are exclusive.** Ray-traced reflections and screen-space
@@ -1551,7 +1551,7 @@ places each alias slot on its own hazard-_tracked_ heap, which delays reads and
 writes of every resource on that heap until in-flight modifications of any of
 them complete — exactly the ordering aliased members need, and the reason the
 heap is per slot rather than shared. But it means a planner that ever put two
-concurrently-live resources in one slot would make Metal _serialise_ where the
+concurrently-live resources in one slot would make Metal _serialize_ where the
 explicit backends race. Metal will look correct while Vulkan and DirectX corrupt,
 so Vulkan synchronization validation is the oracle for aliasing, not a Metal
 pixel comparison.
@@ -2034,7 +2034,7 @@ per-user directory while the data stays put. A world that declares
 
 ---
 
-## Appendix A: render pass catalogue
+## Appendix A: render pass catalog
 
 Pass identity is a stable integer that doubles as the per-pass GPU timing slot,
 so the list is append-only.
@@ -2047,7 +2047,7 @@ so the list is append-only.
 | 3   | `ssao_prepass`         | render  | Ambient-occlusion input. Timing slot only; encoded inside the SSAO bundle.                                                                               |
 | 4   | `ssao_kernel`          | render  | Occlusion sampling. Timing slot only.                                                                                                                    |
 | 5   | `ssao_blur`            | render  | Occlusion blur. The single graph node for the whole SSAO bundle.                                                                                         |
-| 6   | `main`                 | render  | Forward geometry pass; writes HDR colour, depth, and resolve.                                                                                            |
+| 6   | `main`                 | render  | Forward geometry pass; writes HDR color, depth, and resolve.                                                                                            |
 | 7   | `auto_exposure`        | compute | Histogram and readback over the un-decorated scene. Pinned before the first post-main writer.                                                            |
 | 8   | `decals`               | render  | Projected decals; head of the HDR resolve decoration chain.                                                                                              |
 | 9   | `fog`                  | render  | Fullscreen volumetric fog application.                                                                                                                   |
@@ -2055,13 +2055,13 @@ so the list is append-only.
 | 11  | `particles_draw`       | render  | Blend-writes particles into the HDR resolve.                                                                                                             |
 | 12  | `ssr_resolve`          | render  | Screen-space reflection march and composite into the pre-TAA scene.                                                                                      |
 | 13  | `velocity`             | render  | Per-pixel motion vectors for TAA. Skipped when the unified pre-pass runs.                                                                                |
-| 14  | `taa_resolve`          | render  | Temporal accumulation into the scene colour.                                                                                                             |
+| 14  | `taa_resolve`          | render  | Temporal accumulation into the scene color.                                                                                                             |
 | 15  | `bloom`                | render  | Threshold, downsample, upsample into the bloom chain.                                                                                                    |
 | 16  | `composite`            | render  | Tonemap, grade, overlay, and present.                                                                                                                    |
 | 17  | `fog_froxel`           | compute | Froxel-volume scattering and transmittance, sampled by the fog pass instead of an inline ray-march.                                                      |
 | 18  | `upscale`              | render  | Temporal upscaling from a fractional render resolution. Replaces TAA.                                                                                    |
 | 19  | `transparent`          | render  | Back-to-front translucent geometry, after reflections and before temporal resolve.                                                                       |
-| 20  | `raymarch`             | render  | Sphere-traced SDF volumes; writes colour and depth so raymarched surfaces composite with rasterised geometry.                                            |
+| 20  | `raymarch`             | render  | Sphere-traced SDF volumes; writes color and depth so raymarched surfaces composite with rasterized geometry.                                            |
 | 21  | `hiz_build`            | compute | Mid-frame Hi-Z pyramid rebuild from phase-1 depth.                                                                                                       |
 | 22  | `cull2`                | compute | Phase-2 cull: re-tests phase-1-occluded objects against the rebuilt pyramid.                                                                             |
 | 23  | `main2`                | render  | Phase-2 draw of the disoccluded survivors, depth-composited with phase 1.                                                                                |
@@ -2081,7 +2081,7 @@ so the list is append-only.
 **Asset** — a named, typed declaration in `world.jsonl`. The public authoring
 unit.
 
-**Baked record** — a blob def whose bytes are the serialised runtime component,
+**Baked record** — a blob def whose bytes are the serialized runtime component,
 not the authored args. Every record in a blob is baked.
 
 **Blob** — a `.cnb` container image holding compiled world data. Blob 0 is the

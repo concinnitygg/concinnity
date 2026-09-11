@@ -140,7 +140,7 @@ mod tests {
     // Each must agree with the std implementation it stands in for: the compute
     // crate above this one is std-linked and calls std's version on the same
     // values, so a divergence would be a seam between the two halves of a split
-    // that is supposed to be behaviour-preserving.
+    // that is supposed to be behavior-preserving.
     #[track_caller]
     fn approx(got: f32, want: f32) {
         assert!((got - want).abs() < 1e-6, "got {got}, want {want}");

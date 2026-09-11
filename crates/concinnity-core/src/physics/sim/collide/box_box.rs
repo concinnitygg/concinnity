@@ -17,7 +17,7 @@ use super::support::{
 };
 
 /// How much better an edge axis must measure before it displaces a face axis.
-/// One millimetre: below the penetration a resting contact settles at, so a
+/// One millimeter: below the penetration a resting contact settles at, so a
 /// resting patch is never traded for a point contact.
 const FACE_PREFERENCE: f32 = 1.0e-3;
 

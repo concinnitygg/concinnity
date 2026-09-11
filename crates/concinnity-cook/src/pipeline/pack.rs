@@ -154,7 +154,7 @@ pub(in crate::pipeline) struct CompiledOutput {
 // static mesh (VoxelChunk voxel data, a malformed payload); absence means the
 // runtime decodes that payload eagerly.
 fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
-    let (verts, idxs, _) = concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes).ok()?;
+    let (verts, idxs, _) = concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes).ok()?;
     let first = verts.first()?;
     let mut min = first.pos;
     let mut max = first.pos;
@@ -878,7 +878,7 @@ mod tests {
     }
 
     // The compile pass selects its work by discriminant. A def carrying one the
-    // component registry does not know is skipped, so an unrecognised record
+    // component registry does not know is skipped, so an unrecognized record
     // cannot abort a build.
     #[test]
     fn compile_and_pack_payloads_skips_a_def_with_an_unknown_discriminant() {

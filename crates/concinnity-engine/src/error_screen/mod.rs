@@ -29,7 +29,7 @@ const IDENTITY_VIEW: [[f32; 4]; 4] = [
 
 /// Show `message` in a window with a Quit button, returning once the user
 /// dismisses it. `false` means no window could be stood up (no embedded font,
-/// or the backend failed to initialise), in which case nothing was displayed
+/// or the backend failed to initialize), in which case nothing was displayed
 /// and the caller should fall back to reporting the error on the console.
 ///
 /// Blocks the calling thread until dismissed, and must run on the main thread:

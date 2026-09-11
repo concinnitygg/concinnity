@@ -153,7 +153,7 @@ mod tests {
         }
     }
 
-    // The pre-pass rasterises the same visible set the main pass does, sky
+    // The pre-pass rasterizes the same visible set the main pass does, sky
     // shell included, and the shell's corners fall outside the far plane, so
     // an unpinned sky vert clips and the G-buffer loses coverage the main pass
     // has. The bindless vertex entry is the only one that carries skybox
@@ -273,7 +273,7 @@ mod tests {
 
     // The sky shell's half-extent tracks the camera far plane, so its corners
     // always fall outside it: every vertex path must pin sky verts to the far
-    // plane or those corners clip and the clear colour shows through. One
+    // plane or those corners clip and the clear color shows through. One
     // `project_vertex` serves the GPU-driven and the per-draw entries alike, so
     // one check covers both.
     #[test]

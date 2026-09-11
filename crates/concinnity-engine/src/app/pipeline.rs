@@ -18,10 +18,10 @@ use crate::app::state::App;
 use crate::ecs::{PipelinedFrames, StepResult};
 use crate::gfx::backend::RenderBackend;
 use crate::gfx::feedback::FrameFeedback;
-use crate::gfx::graphics_system::frame_policy::FramePolicy;
-use crate::gfx::graphics_system::submit::submit;
 use crate::gfx::input::InputPacket;
 use crate::gfx::snapshot::RenderSnapshot;
+use crate::gfx::system::frame_policy::FramePolicy;
+use crate::gfx::system::submit::submit;
 use crate::shutdown::ShutdownToken;
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -51,7 +51,7 @@ pub(crate) fn run_pipelined(mut app: App, screenshot: Option<&str>) {
         .name("sim".to_string())
         .spawn(move || {
             loop {
-                if sim_shutdown.is_cancelled() {
+                if sim_shutdown.is_canceled() {
                     return;
                 }
                 match app.world_step() {
@@ -106,7 +106,7 @@ fn render_half(
     let mut policy = FramePolicy::default();
     let mut submitted = 0u64;
     loop {
-        if shutdown.is_cancelled() {
+        if shutdown.is_canceled() {
             return RenderHalfOutcome::stopped(submitted);
         }
         let mut snapshot = match wait_for_snapshot(&snapshot_rx) {

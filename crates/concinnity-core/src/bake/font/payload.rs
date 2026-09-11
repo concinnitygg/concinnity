@@ -1,10 +1,10 @@
 // Blob payload encoding for a compiled font atlas. The read half is
-// `decode::deserialise`; the two must agree field for field.
+// `decode::deserialize`; the two must agree field for field.
 
 use crate::gfx::font::GlyphMetrics;
 use alloc::vec::Vec;
 
-pub(crate) fn serialise(
+pub(crate) fn serialize(
     atlas_w: u32,
     atlas_h: u32,
     supersample: u32,
@@ -16,7 +16,7 @@ pub(crate) fn serialise(
     out.extend_from_slice(&atlas_w.to_le_bytes());
     out.extend_from_slice(&atlas_h.to_le_bytes());
     out.extend_from_slice(&supersample.to_le_bytes());
-    // Rasterisation size (px). Intrinsic to the atlas -- the runtime reads it for
+    // Rasterization size (px). Intrinsic to the atlas -- the runtime reads it for
     // line-height / cap-height now that Font carries no drained `size_px` field.
     out.extend_from_slice(&size_px.to_le_bytes());
     out.extend_from_slice(rgba);
@@ -37,11 +37,11 @@ pub(crate) fn serialise(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bake::font::deserialise;
+    use crate::bake::font::deserialize;
     use alloc::vec;
 
     #[test]
-    fn round_trip_serialise() {
+    fn round_trip_serialize() {
         let metrics = vec![
             GlyphMetrics {
                 char_code: b'A' as u32,
@@ -65,8 +65,8 @@ mod tests {
             },
         ];
         let rgba = vec![128u8; 64 * 64 * 4]; // 64x64 atlas
-        let payload = serialise(64, 64, 2, 20, &rgba, &metrics);
-        let (w, h, supersample, size_px, out_rgba, out_metrics) = deserialise(&payload).unwrap();
+        let payload = serialize(64, 64, 2, 20, &rgba, &metrics);
+        let (w, h, supersample, size_px, out_rgba, out_metrics) = deserialize(&payload).unwrap();
         assert_eq!(w, 64);
         assert_eq!(h, 64);
         assert_eq!(supersample, 2);

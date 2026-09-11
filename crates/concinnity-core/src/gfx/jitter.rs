@@ -3,7 +3,7 @@
 //! Successive frames offset the projection by a low-discrepancy sample so the
 //! TAA pass and any upscaler see slightly different sample positions and can
 //! accumulate detail. Pure integer math, shared by every backend so the
-//! rasterised scene and the upscale agree on the same offset.
+//! rasterized scene and the upscale agree on the same offset.
 
 /// Van der Corput radical inverse of `index` in `base`, in `[0, 1)`.
 ///

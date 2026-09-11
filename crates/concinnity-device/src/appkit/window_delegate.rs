@@ -49,7 +49,7 @@ define_class!(
             self.ivars().is_fullscreen.store(false, Ordering::Relaxed);
         }
         // Re-affirm at the end of each transition in case a will-callback was
-        // never delivered (e.g. a transition the system cancelled and reversed).
+        // never delivered (e.g. a transition the system canceled and reversed).
         #[unsafe(method(windowDidEnterFullScreen:))]
         fn window_did_enter_full_screen(&self, _notification: &NSNotification) {
             self.ivars().is_fullscreen.store(true, Ordering::Relaxed);

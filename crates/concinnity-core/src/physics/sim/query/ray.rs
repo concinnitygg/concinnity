@@ -137,7 +137,7 @@ impl BoundsProbe {
     }
 }
 
-/// A ray starting outside a sphere centred on the origin.
+/// A ray starting outside a sphere centered on the origin.
 fn sphere(ray: Ray, radius: f32) -> Option<RayImpact> {
     let b = ray.origin.dot(ray.direction);
     if b >= 0.0 {
@@ -160,7 +160,7 @@ fn sphere(ray: Ray, radius: f32) -> Option<RayImpact> {
     })
 }
 
-/// A ray starting outside a box centred on the origin.
+/// A ray starting outside a box centered on the origin.
 fn cuboid(ray: Ray, half: Vec3) -> Option<RayImpact> {
     let mut near = 0.0f32;
     let mut far = f32::INFINITY;
@@ -203,7 +203,7 @@ fn cuboid(ray: Ray, half: Vec3) -> Option<RayImpact> {
     })
 }
 
-/// A ray starting outside a Y-axis capsule centred on the origin.
+/// A ray starting outside a Y-axis capsule centered on the origin.
 ///
 /// The capsule is the union of a finite cylinder and the two cap balls, so the
 /// first way in is the nearest of the three, and the piece that wins carries

@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 
 use concinnity_engine::shutdown::ShutdownToken;
 
-use crate::gfx::streaming_system::StreamingStats;
+use crate::gfx::streaming::system::StreamingStats;
 
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
 // to rebuild, so they refresh on an interval while `frame` advances every tick.
@@ -88,7 +88,7 @@ pub(crate) struct BudgetSnapshot {
 }
 
 // A read-only snapshot of the streaming RAM back-off valve (see
-// `concinnity_engine::gfx::streaming_system::StreamingPressure`), served
+// `concinnity_engine::gfx::streaming::system::StreamingPressure`), served
 // alongside the `streaming` query so the valve is headless-verifiable.
 #[derive(Clone, Copy, Default, serde::Serialize)]
 pub(crate) struct PressureSnapshot {

@@ -16,7 +16,7 @@
 - [CharacterModel](CharacterModel.md) - A character body that conforms to a [CharacterSchema](CharacterSchema.md).
 - [CharacterSchema](CharacterSchema.md) - The contract between a character body and everything that uses it.
 - [CharacterShape](CharacterShape.md) - Shape sliders and joint proportions applied to one [SkinnedMesh](SkinnedMesh.md).
-- [ColorLut](ColorLut.md) - A 3D colour-grading lookup table applied as a final post-process step. The build bakes the source into a colour cube; the graded result is blended over the image by [PostProcessConfig](PostProcessConfig.md)'s `lut_strength`.
+- [ColorLut](ColorLut.md) - A 3D color-grading lookup table applied as a final post-process step. The build bakes the source into a color cube; the graded result is blended over the image by [PostProcessConfig](PostProcessConfig.md)'s `lut_strength`.
 - [CubemapTexture](CubemapTexture.md) - A six-face HDR cubemap baked from an equirectangular Radiance HDR source.
 - [DebugHud](DebugHud.md) - Requests the developer debug HUD: a set of [TextLabel](TextLabel.md) chips with diagnostic readouts, anchored to the top-right of the window and toggled with F1 (hidden by default).
 - [Decal](Decal.md) - A projected texture stamped onto whatever scene geometry sits inside the decal's oriented box.
@@ -24,15 +24,15 @@
 - [EngineDefaults](EngineDefaults.md) - Opts a world out of individual engine-injected defaults.
 - [EnvironmentMap](EnvironmentMap.md) - A baked lighting environment built from an equirectangular source (or a built-in generator). It provides the scene's ambient image-based lighting (soft diffuse fill plus glossy reflections that follow surface roughness) and the on-screen sky.
 - [File](File.md) - References a source file by path.
-- [Font](Font.md) - Rasterises a TrueType font into a glyph atlas at build time.
+- [Font](Font.md) - Rasterizes a TrueType font into a glyph atlas at build time.
 - [FpsCounter](FpsCounter.md) - Requests a frames-per-second counter; optionally writes it to a [TextLabel](TextLabel.md).
 - [FrameReport](FrameReport.md) - Times every frame of a run and prints what they cost when it ends.
-- [GlassPanel](GlassPanel.md) - A flat translucent panel of coloured glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
-- [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear colour. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
+- [GlassPanel](GlassPanel.md) - A flat translucent panel of colored glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
+- [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear color. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
 - [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action string.
-- [LayoutContainer](LayoutContainer.md) - Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, colour, background, padding) but their `x`/`y` are overwritten each frame.
+- [LayoutContainer](LayoutContainer.md) - Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, color, background, padding) but their `x`/`y` are overwritten each frame.
 - [LightRig](LightRig.md) - A named grouping of lights.
 - [LoadingOverlay](LoadingOverlay.md) - Requests the scene-loading overlay: a full-window backdrop with a progress bar, shown while a scene jump waits for its streamed content and faded out once the destination scene is fully resident.
 - [MainMenu](MainMenu.md) - A ready-made menu declared in a single line.
@@ -131,7 +131,7 @@
 - [ShadowUpdate](ShadowUpdate.md) - How often each cascaded-shadow-map slice is re-rendered. The shadow pass re-rasterizes all scene geometry into every cascade, so it is one of the heavier passes; updating distant cascades less often cuts that cost.
 - [ShapePreset](ShapePreset.md) - A named slider vector the panel offers as a button.
 - [ShapeSlider](ShapeSlider.md) - One named shape value in `[-1, 1]`.
-- [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / colour / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalised at build time.
+- [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / color / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalized at build time.
 - [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
@@ -154,5 +154,5 @@
 - [UpscalerBackend](UpscalerBackend.md) - Upscaler backend selector for `PostProcessConfig.temporal_upscaling`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific backend and fall back when it is unavailable. DirectX and Vulkan both resolve all three, each from the vendor SDK staged beside the binary; Metal uses MetalFX and treats any value as its native path.
 - [VariableDecl](VariableDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.
-- [WaterWave](WaterWave.md) - One wave in a water surface's motion. A surface sums up to four of these to displace its flat grid. Each wave travels horizontally along `direction`, rising and falling with `amplitude` peak height, `wavelength` distance between crests, and `speed` metres per second. `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier water).
+- [WaterWave](WaterWave.md) - One wave in a water surface's motion. A surface sums up to four of these to displace its flat grid. Each wave travels horizontally along `direction`, rising and falling with `amplitude` peak height, `wavelength` distance between crests, and `speed` meters per second. `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier water).
 - [WindowMode](WindowMode.md) - How the application window is presented.

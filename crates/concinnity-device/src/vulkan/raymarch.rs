@@ -2,20 +2,20 @@
 //
 // Raymarched SDF volume pass for the Vulkan backend. Runs at `PassId::Raymarch`
 // between `AutoExposure` and `Decals` on the hdr_resolve RMW chain. Each
-// `SdfVolume` rasterises the back faces of its world-space bounding box and runs
+// `SdfVolume` rasterizes the back faces of its world-space bounding box and runs
 // a user-authored GLSL fragment shader that sphere-traces the SDF inside the
 // box. GLSL/Vulkan port of `src/directx/raymarch.rs`: same shader interface,
 // same depth-compositing rules.
 //
 // MSAA depth write-back. MSAA is on by default, so the pass renders the proxy
-// into the multisampled HDR colour + the writable scene depth (the shader
+// into the multisampled HDR color + the writable scene depth (the shader
 // writes hit depth via `gl_FragDepth` redeclared `depth_less`), then the render
-// pass resolves the combined colour into `hdr_resolve` so the single-sample
+// pass resolves the combined color into `hdr_resolve` so the single-sample
 // post stack picks up the raymarched pixels and the raymarched-surface depth.
 // This reuses the two-pass-occlusion main render passes (`load = false` STOREs
-// the MSAA colour at the main pass so this pass can `load = true` it back), and
+// the MSAA color at the main pass so this pass can `load = true` it back), and
 // the existing main framebuffers, which are render-pass-compatible. The main
-// pass selects the STORE-colour variant whenever raymarch is active (see
+// pass selects the STORE-color variant whenever raymarch is active (see
 // `vulkan/main.rs`). When single-sampled the main pass already leaves the scene
 // in `hdr_resolve`, so the pass loads it directly and re-stores it (no resolve).
 //
@@ -24,7 +24,6 @@
 // logged warning and the rest of the world renders unchanged.
 
 use concinnity_core::gfx::transform::mat4_inverse;
-use std::ffi::CString;
 
 use ash::vk;
 
@@ -44,7 +43,7 @@ use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
 
 use super::context::{HDR_FORMAT, VkContext};
-use super::pipeline::spv_module;
+use super::pipeline::GraphicsStages;
 use super::render_pass::create_main_render_pass_two_pass;
 use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
@@ -186,10 +185,10 @@ struct RaymarchVolumeRecord {
 // the pass is omitted from the frame graph.
 pub(in crate::vulkan) struct RaymarchResources {
     // The raymarch render pass. MSAA: the two-pass `load = true` main pass
-    // (loads the stored MSAA colour + scene depth, draws, resolves into
+    // (loads the stored MSAA color + scene depth, draws, resolves into
     // hdr_resolve). Single-sample: a dedicated load+store pass on hdr_resolve.
     render_pass: OwnedRenderPass,
-    // STORE-colour main render pass the main pass switches to while raymarch is
+    // STORE-color main render pass the main pass switches to while raymarch is
     // active (MSAA only) so the MSAA samples survive for `render_pass` to load.
     // `None` when single-sampled (the main pass already keeps the resolve).
     pub(in crate::vulkan) main_store_color_pass: Option<OwnedRenderPass>,
@@ -204,7 +203,7 @@ pub(in crate::vulkan) struct RaymarchResources {
     view_sets: Vec<vk::DescriptorSet>,
 
     // Shared unit-cube proxy geometry (positions at +/-1; the vertex shader
-    // scales by `vol_extent` + offsets by `vol_centre`).
+    // scales by `vol_extent` + offsets by `vol_center`).
     cube_vb: PooledBuffer,
     cube_ib: PooledBuffer,
 
@@ -646,7 +645,7 @@ fn write_volume_set(device: &VkDevice, set: vk::DescriptorSet, volume_ubo: vk::B
 }
 
 // Build a per-volume raymarch graphics pipeline. Front-face culled (back faces
-// of the proxy cube rasterise regardless of camera position), depth-tested
+// of the proxy cube rasterize regardless of camera position), depth-tested
 // LESS_OR_EQUAL with depth write (the fragment writes `gl_FragDepth`), opaque
 // (no blend). Negative-height viewport is applied dynamically at encode time.
 fn create_pipeline(
@@ -657,19 +656,8 @@ fn create_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     // Cube proxy VB: the 56-byte engine `Vertex`, position (location 0) only.
     let binding = vk::VertexInputBindingDescription::default()
@@ -692,7 +680,7 @@ fn create_pipeline(
         .scissor_count(1);
     // Front-face cull. The main pass renders with a negative-height (Y-flipped)
     // viewport; under that flip the proxy's near faces wind CCW, so culling them
-    // as the front face leaves the back faces to rasterise (matches the DirectX
+    // as the front face leaves the back faces to rasterize (matches the DirectX
     // CULL_FRONT path).
     let raster = vk::PipelineRasterizationStateCreateInfo::default()
         .polygon_mode(vk::PolygonMode::FILL)
@@ -735,7 +723,7 @@ fn create_pipeline(
 }
 
 // Build the volumetric variant of the per-volume pipeline. Same cube proxy +
-// front cull as the opaque pass, but the colour output alpha-blends over the
+// front cull as the opaque pass, but the color output alpha-blends over the
 // existing scene (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) and the depth state keeps the
 // LESS_OR_EQUAL early-z test without writing: the medium is translucent and
 // never updates the depth buffer downstream passes read. Mirrors the DirectX
@@ -748,19 +736,8 @@ fn create_volumetric_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     let binding = vk::VertexInputBindingDescription::default()
         .binding(0)
@@ -793,7 +770,7 @@ fn create_volumetric_pipeline(
         .depth_test_enable(true)
         .depth_write_enable(false)
         .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
-    // Alpha-blend the in-scattered luminance over the rasterised scene.
+    // Alpha-blend the in-scattered luminance over the rasterized scene.
     let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
         .blend_enable(true)
         .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
@@ -828,8 +805,8 @@ fn create_volumetric_pipeline(
 }
 
 // Build a per-volume depth-only shadow-caster pipeline. Same cube proxy + front
-// cull as the main pass, but no colour attachment (single-sample shadow map),
-// depth-test LESS (matching the rasterised CSM casters) with depth write, and
+// cull as the main pass, but no color attachment (single-sample shadow map),
+// depth-test LESS (matching the rasterized CSM casters) with depth write, and
 // the fragment writes hit depth via `gl_FragDepth`. Targets `shadow_render_pass`.
 fn create_shadow_pipeline(
     device: &VkDevice,
@@ -838,19 +815,8 @@ fn create_shadow_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert = spv_module(device, vert_spv)?;
-    let frag = spv_module(device, frag_spv)?;
-    let entry = CString::new("main").unwrap();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
 
     let binding = vk::VertexInputBindingDescription::default()
         .binding(0)
@@ -884,7 +850,7 @@ fn create_shadow_pipeline(
         .depth_test_enable(true)
         .depth_write_enable(true)
         .depth_compare_op(vk::CompareOp::LESS);
-    // No colour attachment in the shadow render pass.
+    // No color attachment in the shadow render pass.
     let blend_state = vk::PipelineColorBlendStateCreateInfo::default().logic_op_enable(false);
     let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
     let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
@@ -993,7 +959,7 @@ pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
 
 impl RaymarchResources {
     // Build every raymarch resource + the per-volume records. `sdf_volumes` is
-    // the drained-and-payload-paired list from `graphics_system::init`; each
+    // the drained-and-payload-paired list from `gfx::system::init`; each
     // volume's `fragment_shader` path is checked here: `.glsl` payloads compile,
     // anything else (Metal-first `.metal` / DirectX `.hlsl`) is skipped with a
     // logged warning. Returns `Ok(None)` when no volume survived the filter so
@@ -1353,7 +1319,7 @@ impl RaymarchResources {
 
 impl VkContext {
     // Assemble the per-frame raymarch view from the frame's jittered VP (the
-    // matrix the main pass rasterised the depth buffer with) + camera position.
+    // matrix the main pass rasterized the depth buffer with) + camera position.
     pub(in crate::vulkan) fn build_raymarch_view(
         &self,
         vp: [[f32; 4]; 4],
@@ -1404,8 +1370,8 @@ impl VkContext {
 
     // Draw the visible SDF shadow casters into one CSM cascade. Called from the
     // Shadow pass inside each cascade's depth-only render pass, after the
-    // rasterised casters: the cascade's LESS depth test keeps the nearer of the
-    // rasterised vs raymarched occluder per texel. The viewport / scissor set by
+    // rasterized casters: the cascade's LESS depth test keeps the nearer of the
+    // rasterized vs raymarched occluder per texel. The viewport / scissor set by
     // the shadow pass persist (dynamic state), so this only rebinds the cube
     // geometry, the shadow pipeline, the shadow view + per-volume sets, and the
     // cascade push constant. A no-op when no volume casts shadows.
@@ -1478,8 +1444,8 @@ impl VkContext {
     // Encode the raymarched SDF volume pass. Runs after `AutoExposure` (which
     // sampled the pre-raymarch hdr_resolve) and before `Decals`. Snapshots the
     // resolved scene into `snapshot` for refractive taps, draws each visible
-    // volume's proxy back faces into the MSAA colour + scene depth, and the
-    // render pass resolves the combined colour into hdr_resolve (single-sample:
+    // volume's proxy back faces into the MSAA color + scene depth, and the
+    // render pass resolves the combined color into hdr_resolve (single-sample:
     // renders into hdr_resolve directly). Leaves hdr_resolve SHADER_READ_ONLY
     // and depth DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the downstream stack.
     pub(in crate::vulkan) fn encode_raymarch(
@@ -1544,9 +1510,9 @@ impl VkContext {
         }
 
         // 2) Close the snapshot for the fragment read, order the main pass's
-        // colour + depth writes (and the copy read of hdr_resolve) ahead of the
+        // color + depth writes (and the copy read of hdr_resolve) ahead of the
         // render pass's attachment load + resolve, and (single-sample only)
-        // restore hdr_resolve to SHADER_READ_ONLY so the render pass's colour
+        // restore hdr_resolve to SHADER_READ_ONLY so the render pass's color
         // load matches its declared initial layout.
         let snapshot_to_read = barrier(
             snapshot,
@@ -1568,7 +1534,7 @@ impl VkContext {
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
         // Single-sample also restores hdr_resolve to SHADER_READ_ONLY for the
-        // render pass's colour load; MSAA leaves it as the resolve target, so
+        // render pass's color load; MSAA leaves it as the resolve target, so
         // only the snapshot barrier applies, and a skipped copy needs neither.
         // Build both on the stack and slice, avoiding a per-frame allocation.
         let hdr_to_read = barrier(
@@ -1603,13 +1569,13 @@ impl VkContext {
             );
         }
 
-        // 3) The render pass: LOAD the scene colour + depth, draw each visible
+        // 3) The render pass: LOAD the scene color + depth, draw each visible
         // volume, then resolve (MSAA) / store (single-sample) into hdr_resolve.
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(rm.render_pass.handle())
             .framebuffer(self.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
-        // Negative-height viewport: matches the main pass so the proxy rasterises
+        // Negative-height viewport: matches the main pass so the proxy rasterizes
         // into identical pixels and the reprojected hit depth shares its space.
         let vp = vk::Viewport {
             x: 0.0,

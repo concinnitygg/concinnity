@@ -21,7 +21,7 @@ pub(super) struct SkinnedPart {
 
 // SkinnedMesh + Animation entries for one import. Empty when the file holds no
 // skinned mesh, so a static scene expands exactly as it did before rigs were
-// recognised; clips are likewise skipped when there is nothing to drive.
+// recognized; clips are likewise skipped when there is nothing to drive.
 pub(super) fn rig_entries(
     prefix: &str,
     source: &str,

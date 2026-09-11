@@ -117,7 +117,7 @@ fn cube_world() -> Result<World, String> {
     // sun alone carries the cube, and bloom catches only the edge frame, the
     // sun's disc and the brightest stars. Auto-exposure stays off (its
     // default) for the same reason -- an average-brightness meter would lift
-    // this frame to grey. Which effects run is not decided here; the quality
+    // this frame to gray. Which effects run is not decided here; the quality
     // preset picks those from the GPU.
     world.add_component(PostProcessConfig {
         ambient_intensity: 0.2,
@@ -232,8 +232,8 @@ fn cube_world() -> Result<World, String> {
         ],
         deep_color: [0.006, 0.010, 0.018],
         shallow_color: [0.02, 0.05, 0.07],
-        depth_falloff_metres: 1.5,
-        foam_width_metres: 0.0,
+        depth_falloff_meters: 1.5,
+        foam_width_meters: 0.0,
         foam_intensity: 0.0,
         fresnel_power: 0.5,
         roughness: 0.10,
@@ -502,7 +502,7 @@ mod tests {
     // at, sits a little above the frame's center, so most of the frame is
     // water with a band of stars over it.
     #[test]
-    fn the_horizon_sits_just_above_the_centre_of_the_frame() {
+    fn the_horizon_sits_just_above_the_center_of_the_frame() {
         let far_edge = [0.0, 0.0, -WATER_HALF_EXTENT];
         let horizon = screen_height_fraction(CAMERA_POSITION, CAMERA_PITCH, far_edge);
         assert!((0.1..0.3).contains(&horizon), "{horizon}");

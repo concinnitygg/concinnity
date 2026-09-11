@@ -1,5 +1,5 @@
 // Temporal anti-aliasing resolve: blend the current HDR frame with the
-// reprojected, neighbourhood-clipped history buffer. Single source for every
+// reprojected, neighborhood-clipped history buffer. Single source for every
 // backend; pairs with `fullscreen_vertex` in fullscreen.slang.
 //
 // Resources are declared top-level rather than in a ParameterBlock: this pass
@@ -26,14 +26,14 @@ ConstantBuffer<TaaParams> params;
 // roughly a 10-frame exponential moving average once converged.
 static const float TAA_BLEND = 0.9;
 
-// Standard deviations of the neighbourhood the history is allowed to span.
+// Standard deviations of the neighborhood the history is allowed to span.
 // 1.0 is the Playdead/Karis default; lower tightens (less ghosting, more
 // flicker), higher loosens.
 static const float TAA_VARIANCE_GAMMA = 1.0;
 
-// Finite ceiling every sampled colour is clamped to. Largest finite half - the
+// Finite ceiling every sampled color is clamped to. Largest finite half - the
 // scene/history targets are RGBA16Float, so an HDR specular that overflowed the
-// target reads back as +Inf, and an uninitialised history texel on the first
+// target reads back as +Inf, and an uninitialized history texel on the first
 // frame can read back as Inf or NaN. Either one would turn the variance
 // statistics into NaN (Inf-Inf) and, once a NaN lands in the history, it feeds
 // back every frame as a black screen.
@@ -50,7 +50,7 @@ float3 taa_sanitize(float3 c)
     return clamp(c, float3(0.0), float3(TAA_HDR_CLAMP));
 }
 
-// RGB <-> YCoCg. The neighbourhood clip box is built in YCoCg because its luma
+// RGB <-> YCoCg. The neighborhood clip box is built in YCoCg because its luma
 // axis aligns with perceived error: the box is tighter and better-oriented than
 // an RGB AABB, so a reprojected history ghosts less. The transform is linear,
 // so it is safe on the linear-light HDR values here.
@@ -68,9 +68,9 @@ float3 ycocg_to_rgb(float3 c)
     return float3(t + c.y, c.x + c.z, t - c.y);
 }
 
-// Clip the history sample to the neighbourhood box along the line toward the
+// Clip the history sample to the neighborhood box along the line toward the
 // box center (Karis 2014). Unlike a per-component clamp this preserves the
-// colour's direction, so a clipped history shifts hue far less.
+// color's direction, so a clipped history shifts hue far less.
 float3 clip_to_aabb(float3 bmin, float3 bmax, float3 hist)
 {
     float3 center = 0.5 * (bmax + bmin);
@@ -87,10 +87,10 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     float2 texel = 1.0 / combined_size(scene_tex);
     float3 cur = taa_sanitize(scene_tex.Sample(uv).rgb);
 
-    // 3x3 neighbourhood statistics in YCoCg. The reprojected history is clipped
+    // 3x3 neighborhood statistics in YCoCg. The reprojected history is clipped
     // to mean +/- gamma*stddev - a variance box, tighter and better-oriented
     // than a min/max AABB, so disocclusions and sub-pixel misses ghost less.
-    // Every sample is sanitised first so a non-finite HDR texel cannot make the
+    // Every sample is sanitized first so a non-finite HDR texel cannot make the
     // moments (and therefore the box) NaN.
     float3 m1 = float3(0.0);
     float3 m2 = float3(0.0);
@@ -116,7 +116,7 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     float2 prev_uv = uv + motion;
     bool on_screen = all(prev_uv >= float2(0.0)) && all(prev_uv <= float2(1.0));
 
-    // Sanitise the history too: on the first frame it is an uninitialised
+    // Sanitize the history too: on the first frame it is an uninitialized
     // target, and a NaN read here would survive clip_to_aabb (a NaN fails the
     // ma > 1 test, so the unclipped NaN is returned) and poison every later
     // frame through the feedback.

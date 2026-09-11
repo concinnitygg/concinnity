@@ -11,7 +11,7 @@
 //
 // What it costs is the outer boundary of a mesh. A shape meeting a triangle
 // from beyond the last edge is answered as though the triangle's plane
-// continued, because there is no neighbour to own that region. Inside the
+// continued, because there is no neighbor to own that region. Inside the
 // grid, where every edge is shared, there is nothing to lose.
 
 use crate::math::sqrt;
@@ -445,10 +445,10 @@ mod tests {
         );
     }
 
-    // A shape beyond the triangle's own extent belongs to a neighbour, so this
+    // A shape beyond the triangle's own extent belongs to a neighbor, so this
     // triangle must not claim it.
     #[test]
-    fn a_shape_beyond_the_triangles_extent_is_left_to_its_neighbour() {
+    fn a_shape_beyond_the_triangles_extent_is_left_to_its_neighbor() {
         let ball = ColliderShape::Ball { radius: 0.05 };
         let mut out = empty();
         // Well outside the hypotenuse from (0,0,1) to (1,0,0).

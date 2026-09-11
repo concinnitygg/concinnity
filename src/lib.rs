@@ -1,6 +1,6 @@
 //! Concinnity is a graphics application framework. A [`World`] holds the
 //! components describing what exists -- a camera, lights, geometry, text -- and
-//! an [`App`] runs that world on the engine's loop. Behaviour is declared as data
+//! an [`App`] runs that world on the engine's loop. Behavior is declared as data
 //! rather than assembled from calls, so an application's job is to hand over a
 //! world and let the runtime drive it.
 //!

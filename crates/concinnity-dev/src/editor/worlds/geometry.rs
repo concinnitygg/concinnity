@@ -160,7 +160,7 @@ impl Layout {
     }
 
     // Where the panel sits until the user drags it. The sidebar docks to the
-    // window's left edge; the switcher hangs below the top bar, centred.
+    // window's left edge; the switcher hangs below the top bar, centered.
     pub(crate) fn default_origin(&self) -> [f32; 2] {
         match self.m.docked {
             true => [0.0, 0.0],
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(l.size(), [start.width, VP[1]]);
         assert!(l.size()[0] < VP[0] * 0.3, "the render owns the rest");
 
-        // The switcher keeps its anchor below the top bar, centred.
+        // The switcher keeps its anchor below the top bar, centered.
         let s = layout(Mode::Session);
         let o = s.default_origin();
         assert!(o[1] >= hud::body_top());

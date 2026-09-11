@@ -19,7 +19,7 @@ const SELECTED_WIDTH_PX: f32 = 2.0;
 const TOGGLED_WIDTH_PX: f32 = 1.5;
 const TOGGLED_ALPHA: f32 = 0.55;
 
-// Outline colours reuse the billboard icon's hashed hue, re-saturated for the
+// Outline colors reuse the billboard icon's hashed hue, re-saturated for the
 // HDR scene target (overlay-tuned tints wash out to pastel after tonemapping,
 // the same reason the origin axes carry more saturation than the gizmo).
 const OUTLINE_SAT: f32 = 0.8;
@@ -94,7 +94,7 @@ pub(crate) fn stroke(ty: &str, selected: bool) -> Stroke {
 }
 
 // A secondary stroke for a shape's inner detail (the spot cone's inner-angle
-// circle): the same colour at half strength.
+// circle): the same color at half strength.
 pub(crate) fn inner_stroke(s: Stroke) -> Stroke {
     Stroke {
         color: [s.color[0], s.color[1], s.color[2], s.color[3] * 0.5],

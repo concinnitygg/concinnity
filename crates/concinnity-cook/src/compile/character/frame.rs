@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(dominant_joint(&v), 0);
         v.weights = [0.2, 0.5, 0.3, 0.0];
         assert_eq!(dominant_joint(&v), 1);
-        // Unnormalised weights are normalised; no weights give nothing.
+        // Unnormalized weights are normalized; no weights give nothing.
         v.weights = [0.4, 1.0, 0.6, 0.0];
         assert!((region_weight(&v, &members) - 0.8).abs() < 1e-6);
         v.weights = [0.0; 4];

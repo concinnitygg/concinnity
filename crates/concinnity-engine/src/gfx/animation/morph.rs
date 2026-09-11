@@ -6,7 +6,7 @@ use crate::gfx::pose_scratch::PoseScratch;
 
 use super::flat::{ClipEntry, FlatState};
 
-// Sample every clip with a morph track at `t`, normalised by the live weights
+// Sample every clip with a morph track at `t`, normalized by the live weights
 // of the clips that contributed (clips without a track do not dilute the
 // result), and write `base + blend` into `out`. Leaves `out` untouched when
 // no clip carries a morph track, so a pose with only a base layer keeps it.

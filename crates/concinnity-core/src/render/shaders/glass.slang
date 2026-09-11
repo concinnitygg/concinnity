@@ -67,7 +67,7 @@ struct TransparentView
     // identity when the sky does not turn.
     float4 sky_rot[3];
     // Direction toward the scene's sun (the first directional light) and that
-    // light's colour times its intensity; both zero when the world declares no
+    // light's color times its intensity; both zero when the world declares no
     // directional light, which the water glint reads as no sun.
     float4 sun_dir;
     float4 sun_color;
@@ -80,12 +80,12 @@ struct TransparentView
 
 // Per-pane tunables. Layout matches `GlassParams` / the GlassParamsBlock UBO
 // (64 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
-// cannot desynchronise them from the CPU struct.
+// cannot desynchronize them from the CPU struct.
 struct GlassParams
 {
     float4 center; // world-space pane center
     float4 normal; // unit pane normal (facing direction)
-    float4 tint;   // colour multiplied into the refracted scene
+    float4 tint;   // color multiplied into the refracted scene
     float opacity;
     float refraction_strength;
     float fresnel_power;
@@ -359,9 +359,9 @@ float4 glass_resolve(GlassSurface s, float3 view_dir, float3 reflection)
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float rim = pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
     float refl_weight = saturate(0.04 + 0.96 * rim);
-    float3 colour = lerp(s.refracted, reflection, refl_weight);
+    float3 color = lerp(s.refracted, reflection, refl_weight);
     float alpha = saturate(lerp(params.opacity, 1.0, rim));
-    return float4(colour, alpha);
+    return float4(color, alpha);
 }
 
 // The reflection a ray that hit nothing (or a pane with no trace at all) falls
@@ -414,7 +414,7 @@ float4 glass_fragment(GlassVertexOut i) : SV_Target
     GlassSurface s = glass_surface(i.position, view_dir);
 
     // Manual depth occlusion: discard where the stored scene depth at this pixel
-    // is nearer than the pane. Every backend rasterises this depth under the
+    // is nearer than the pane. Every backend rasterizes this depth under the
     // same viewport convention the main pass used, so the fragment position
     // lines up with the stored texel.
     int2 pixel = min(int2(i.position.xy), int2(max(view.viewport, float2(1.0))) - int2(1, 1));

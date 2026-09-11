@@ -17,6 +17,11 @@ include = [
     "/build.rs",
 ]
 
+[features]
+# Turns a missing slangc from a silent test skip into a panic. For a host that
+# carries the toolchain: the gauntlet's all-features tier enables it.
+strict-shader-tests = []
+
 [lints]
 workspace = true
 

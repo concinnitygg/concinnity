@@ -94,11 +94,9 @@ mod tests {
 
     #[test]
     fn each_surface_takes_its_own_texture_and_falls_back_to_the_shared_one() {
-        crate::test_support::install_resolvers();
-        let r: RoomArgs = serde_json::from_str(
+        let r: RoomArgs = crate::test_support::from_json(
             r#"{"texture":"tex_base","wall_texture":"tex_brick","floor_texture":"tex_stone"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(r.texture, Some(TextureHandle(8)));
         assert_eq!(r.wall_texture, Some(TextureHandle(9)));
         assert_eq!(r.floor_texture, Some(TextureHandle(9)));
@@ -108,9 +106,9 @@ mod tests {
 
     #[test]
     fn an_authored_room_round_trips_through_postcard() {
-        let r: RoomArgs =
-            serde_json::from_str(r#"{"size":[20,4,30],"lod_levels":2,"lod_distances":[25]}"#)
-                .unwrap();
+        let r: RoomArgs = crate::test_support::from_json(
+            r#"{"size":[20,4,30],"lod_levels":2,"lod_distances":[25]}"#,
+        );
         assert_eq!(r.size, Some([20.0, 4.0, 30.0]));
 
         let bytes = postcard::to_allocvec(&r).unwrap();

@@ -4,7 +4,7 @@
 // class, into the concrete Vulkan (layout, access, stage) triple the executor
 // feeds into an image memory barrier. The graph tracks only Undefined / Read /
 // Write; the resource class (assigned by the executor's resolver) disambiguates
-// what a `Write` means: a colour target writes COLOR_ATTACHMENT, a depth target
+// what a `Write` means: a color target writes COLOR_ATTACHMENT, a depth target
 // writes DEPTH_STENCIL_ATTACHMENT. Both are sampled (SHADER_READ_ONLY) when
 // read.
 //
@@ -45,7 +45,7 @@ use crate::gfx::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 pub(super) enum VkResting {
     // Nothing survives the frame boundary: the first use may name UNDEFINED,
     // which is legal from any layout and discards the contents. Main depth and
-    // the pooled colour transients rest this way.
+    // the pooled color transients rest this way.
     Discarded,
     // Sampled (SHADER_READ_ONLY) in the fragment stage, where the previous
     // frame's last consumer left it. The staggered `shadow_map` / `spot_shadow_map`
@@ -89,7 +89,7 @@ impl VkResting {
 }
 
 // Map a `Read`'s consuming-stage union to the pipeline stages the transition
-// must synchronise against. FRAGMENT -> FRAGMENT_SHADER, COMPUTE ->
+// must synchronize against. FRAGMENT -> FRAGMENT_SHADER, COMPUTE ->
 // COMPUTE_SHADER, VERTEX -> VERTEX_SHADER, and a union of them to their union.
 // An empty union (no Read side, or a resource no consumer reads) falls back to
 // FRAGMENT_SHADER, the historical resting stage; the deriver never emits a
@@ -137,7 +137,7 @@ pub(super) fn vk_state(
             vk::PipelineStageFlags::COMPUTE_SHADER,
         ),
         // Buffers carry no layout, so their triple keeps `UNDEFINED` throughout and
-        // only the access + stage matter; `vk_transition` recognises the class and
+        // only the access + stage matter; `vk_transition` recognizes the class and
         // emits a buffer barrier rather than skipping on the equal layouts.
         // Indirect draw arguments are consumed by the draw-indirect stage, which is
         // neither shader stage `read_stage_mask` models.
@@ -165,7 +165,7 @@ pub(super) fn vk_state(
             vk::PipelineStageFlags::COMPUTE_SHADER,
         ),
         // Every image class reads as a sampled image; the stage follows the
-        // consuming run's union so a compute consumer synchronises in
+        // consuming run's union so a compute consumer synchronizes in
         // COMPUTE_SHADER.
         (_, ResourceState::Read) => (
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn class_state_mapping_is_pinned() {
-        // Colour target: ao_output. Write is the colour attachment; read is
+        // Color target: ao_output. Write is the color attachment; read is
         // sampled.
         let (layout, access, stage) =
             vk_state(GraphResourceClass::ColorTarget, ResourceState::Write, FRAG);
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn transition_threads_compute_read_stage() {
-        // A compute consumer of a colour resource: the consumer Write -> Read keeps
+        // A compute consumer of a color resource: the consumer Write -> Read keeps
         // the SHADER_READ_ONLY layout but its dst_stage is COMPUTE_SHADER; a mixed
         // run waits in both stages.
         let (.., src_stage, dst_stage) = vk_transition(

@@ -108,7 +108,7 @@ fn the_two_tables_gate_the_same_systems_in_for_the_same_world() {
     use crate::ecs::World;
 
     // One world per gating component, so a gate that fires on the wrong half
-    // of an `or` is caught rather than hidden by a neighbour.
+    // of an `or` is caught rather than hidden by a neighbor.
     let worlds: [fn(&mut World); 4] = [
         |w| w.add_component(Behavior::default()),
         |w| w.add_component(PhysicsConfig::default()),

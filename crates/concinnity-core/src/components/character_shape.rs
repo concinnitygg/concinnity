@@ -237,12 +237,10 @@ mod tests {
 
     #[test]
     fn a_shape_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let s: CharacterShape = serde_json::from_str(
+        let s: CharacterShape = crate::test_support::from_json(
             r#"{"target":"hero","sliders":[{"name":"jaw","value":-0.5}],
                 "proportions":[{"joint":"thigh.L","scale":1.05,"length":0.1}]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(s.target, Some(SkinnedMeshHandle(4)));
         let bytes = postcard::to_allocvec(&s).unwrap();
         let back: CharacterShape = postcard::from_bytes(&bytes).unwrap();

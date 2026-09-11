@@ -18,15 +18,16 @@
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
+use concinnity_core::render::post::device::PostBlend;
+
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
@@ -185,70 +186,6 @@ fn create_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature
     serialize_desc_and_create(device, &desc, "rt reflections root sig")
 }
 
-// PSO for one RT-reflection fullscreen variant. Writes `HDR_FORMAT`; no depth,
-// no blend, no vertex input.
-fn create_rt_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = HDR_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create rt reflections PSO: {e}"))
-}
-
 // Resources
 
 // Hardware-ray-traced-reflection resources held by `DxContext` when the world's
@@ -349,11 +286,27 @@ impl RtReflectionsResources {
         let root_sig = dump_on_err(info_queue, create_rt_root_signature(device))?;
         let flat_pso = dump_on_err(
             info_queue,
-            create_rt_pso(device, &root_sig, &shaders.vs, &shaders.flat_ps),
+            create_blended_composite_pso(
+                device,
+                &root_sig,
+                &shaders.vs,
+                &shaders.flat_ps,
+                HDR_FORMAT,
+                PostBlend::Replace,
+                "rt reflections flat",
+            ),
         )?;
         let textured_pso = dump_on_err(
             info_queue,
-            create_rt_pso(device, &root_sig, &shaders.vs, &shaders.textured_ps),
+            create_blended_composite_pso(
+                device,
+                &root_sig,
+                &shaders.vs,
+                &shaders.textured_ps,
+                HDR_FORMAT,
+                PostBlend::Replace,
+                "rt reflections textured",
+            ),
         )?;
 
         Ok(Self {
@@ -409,11 +362,27 @@ pub(in crate::directx) fn rebuild_rt_reflections_pipelines(
     let shaders = compile_rt_shaders(hot_reload)?;
     let flat_pso = dump_on_err(
         info_queue,
-        create_rt_pso(device, &rt.root_sig, &shaders.vs, &shaders.flat_ps),
+        create_blended_composite_pso(
+            device,
+            &rt.root_sig,
+            &shaders.vs,
+            &shaders.flat_ps,
+            HDR_FORMAT,
+            PostBlend::Replace,
+            "rt reflections flat",
+        ),
     )?;
     let textured_pso = dump_on_err(
         info_queue,
-        create_rt_pso(device, &rt.root_sig, &shaders.vs, &shaders.textured_ps),
+        create_blended_composite_pso(
+            device,
+            &rt.root_sig,
+            &shaders.vs,
+            &shaders.textured_ps,
+            HDR_FORMAT,
+            PostBlend::Replace,
+            "rt reflections textured",
+        ),
     )?;
     Ok(RebuiltRtPipelines {
         flat_pso,
@@ -435,7 +404,7 @@ pub(in crate::directx) fn swap_rt_reflections_pipelines(
 impl DxContext {
     // Encode the RT-reflection resolve: a fullscreen triangle that traces each
     // glossy pixel's reflection ray against the scene TLAS and composites the
-    // reflected colour into `rt_reflections.output`. The output then becomes the
+    // reflected color into `rt_reflections.output`. The output then becomes the
     // "scene" the TAA / bloom / composite passes consume via `scene_srv_for_post`.
     // No-op when any required resource is missing (the graph only schedules this
     // pass when RT is live, so the guards are defensive).

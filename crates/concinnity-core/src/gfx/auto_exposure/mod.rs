@@ -18,12 +18,12 @@ const MAX_SPEED: f32 = 20.0;
 // `inf` / `0`. Matches the `EXPOSURE_EV_LIMIT` in [`PostProcessConfig`].
 const EV_LIMIT: f32 = 16.0;
 
-/// `log2(0.18)`: perceptual middle-grey in linear light. AE shifts the
+/// `log2(0.18)`: perceptual middle-gray in linear light. AE shifts the
 /// scene's geometric-mean luminance to this value on the HDR output path so
 /// the average pixel reads as a comfortable mid-tone instead of "scene
 /// white = SDR reference white = bright" (which only worked on the SDR path
 /// because the ACES tonemap implicitly compressed scene-white back down).
-pub const HDR_MIDDLE_GREY_LOG2: f32 = -2.473;
+pub const HDR_MIDDLE_GRAY_LOG2: f32 = -2.473;
 
 /// Clamped auto-exposure tunables resolved from the authored asset fields. Held
 /// by the backend; the per-frame EMA in `AutoExposureState::update` reads them
@@ -40,7 +40,7 @@ pub struct AutoExposureSettings {
     /// Log2 of the linear value AE aims the scene's geometric-mean luminance
     /// at. `0.0` = scene-white (legacy SDR + ACES default, ACES then squishes
     /// scene-white back down to a comfortable display mid-tone).
-    /// `HDR_MIDDLE_GREY_LOG2` ≈ -2.47 = perceptual middle-grey, the correct
+    /// `HDR_MIDDLE_GRAY_LOG2` ≈ -2.47 = perceptual middle-gray, the correct
     /// target on the HDR path where there is no ACES compression. Resolved
     /// from `PostProcessConfig.hdr_display` at asset time.
     pub target_log_lum: f32,
@@ -49,8 +49,8 @@ pub struct AutoExposureSettings {
 impl AutoExposureSettings {
     /// Clamp the authored fields into a safe range. `min_ev` is forced to stay
     /// at-or-below `max_ev` so the adapted EV's clamp interval is non-empty.
-    /// `hdr_aware` shifts AE's middle-grey pivot down so the average pixel
-    /// reads at perceptual middle-grey on the HDR output path; SDR worlds
+    /// `hdr_aware` shifts AE's middle-gray pivot down so the average pixel
+    /// reads at perceptual middle-gray on the HDR output path; SDR worlds
     /// keep the legacy scene-white pivot to preserve existing exposure
     /// authoring.
     pub fn resolve(min_ev: f32, max_ev: f32, speed: f32, hdr_aware: bool) -> Self {
@@ -61,7 +61,7 @@ impl AutoExposureSettings {
             min_ev: lo,
             max_ev: hi,
             speed: speed.clamp(MIN_SPEED, MAX_SPEED),
-            target_log_lum: if hdr_aware { HDR_MIDDLE_GREY_LOG2 } else { 0.0 },
+            target_log_lum: if hdr_aware { HDR_MIDDLE_GRAY_LOG2 } else { 0.0 },
         }
     }
 }

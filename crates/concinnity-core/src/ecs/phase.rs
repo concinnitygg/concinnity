@@ -13,7 +13,7 @@
 /// Where in a tick a system runs.
 ///
 /// A system registered with [`World::add_system`](crate::ecs::World::add_system)
-/// names a phase rather than a neighbouring system, and runs after every engine
+/// names a phase rather than a neighboring system, and runs after every engine
 /// system in that phase.
 ///
 /// The engine submits its frame partway through the tick, so the phases are not
@@ -22,7 +22,7 @@
 /// | Phase | Runs after | Runs before |
 /// | --- | --- | --- |
 /// | [`Early`](Phase::Early) | the previous tick, in full | this tick's world logic |
-/// | [`Logic`](Phase::Logic) | the world's behaviour bodies | the requests they emit drain |
+/// | [`Logic`](Phase::Logic) | the world's behavior bodies | the requests they emit drain |
 /// | [`PreRender`](Phase::PreRender) | spawns, settings and streaming | this frame is submitted |
 /// | [`Late`](Phase::Late) | the frame, this tick's input, physics, cameras, animation | the next tick |
 ///

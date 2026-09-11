@@ -13,7 +13,7 @@ use crate::gfx::render_types::{TextDrawCall, TextVertex};
 #[cfg(test)]
 use alloc::vec::Vec;
 
-// Arrow silhouette in a normalised space: tip (the hotspot) at the origin,
+// Arrow silhouette in a normalized space: tip (the hotspot) at the origin,
 // pointing down-right, height 1.0 and width ~0.62. Vertices run clockwise
 // around the boundary in screen space (y grows downward):
 //   V0 tip, V1 left-edge foot, V2 inner notch, V3 tail tip,
@@ -32,7 +32,7 @@ const ARROW: [(f32, f32); 7] = [
 // the small tail quad. Indices reference ARROW.
 const ARROW_TRIS: [[u16; 3]; 5] = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]];
 
-// A double-headed resize arrow centred on the hotspot, pointing east/west; the
+// A double-headed resize arrow centered on the hotspot, pointing east/west; the
 // other resize axes are this same silhouette rotated (see `cursor_geometry`). A
 // shaft rectangle capped by a triangular head at each end. y grows downward.
 //   V0 left tip, V1/V2 left head top/bottom, V3..V6 shaft corners,
@@ -77,7 +77,7 @@ const CURSOR_LAYER: i32 = i32::MAX;
 
 // Build the cursor draw calls (one mesh per visible `follow_cursor` sprite) at
 // the pointer, drawing `shape`'s silhouette (the arrow, or a resize double-arrow
-// over a `cn editor` panel edge). Each sprite's tint is the fill colour and its
+// over a `cn editor` panel edge). Each sprite's tint is the fill color and its
 // `height` the cursor height; `width` is ignored so the silhouette keeps its
 // aspect ratio. The height is authored in the reference canvas, so it is scaled
 // by the overlay factor for `viewport` to stay proportional with the menu it
@@ -368,7 +368,7 @@ mod tests {
         assert!((max_y - 44.0).abs() < 1e-3, "max_y={max_y}");
     }
 
-    // A resize shape draws the double-arrow silhouette centred on the pointer
+    // A resize shape draws the double-arrow silhouette centered on the pointer
     // (both tips equidistant), unlike the arrow whose hotspot is its tip.
     #[test]
     fn resize_shape_draws_a_centered_double_arrow() {
@@ -395,7 +395,7 @@ mod tests {
         assert!((left[1] - 100.0).abs() < 1e-4 && (right[1] - 100.0).abs() < 1e-4);
         assert!(
             ((100.0 - left[0]) - (right[0] - 100.0)).abs() < 1e-4,
-            "the pointer is centred between the tips"
+            "the pointer is centered between the tips"
         );
     }
 

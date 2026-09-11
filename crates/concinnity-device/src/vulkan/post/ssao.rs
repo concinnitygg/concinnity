@@ -160,7 +160,7 @@ impl SsaoResources {
     }
 }
 
-// Kernel render pass: one R8_UNORM colour attachment, no depth. The
+// Kernel render pass: one R8_UNORM color attachment, no depth. The
 // fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
 // Ends shader-readable so the blur can sample the raw occlusion it writes.
 fn create_fullscreen_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
@@ -198,7 +198,7 @@ fn create_fullscreen_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, S
         .map_err(|e| format!("SSAO fullscreen render pass: {e}"))
 }
 
-// Blur render pass: same R8_UNORM colour attachment as the kernel pass, but
+// Blur render pass: same R8_UNORM color attachment as the kernel pass, but
 // it performs no layout transition. `ao` (the graph's `ao_output`) enters and
 // leaves in COLOR_ATTACHMENT_OPTIMAL; the executor emits ao_output's
 // graph-derived barriers around the SsaoBlur and Main passes. The
@@ -240,7 +240,7 @@ fn create_blur_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String>
         .map_err(|e| format!("SSAO blur render pass: {e}"))
 }
 
-// Allocate an R8_UNORM target usable as both colour attachment and sampled
+// Allocate an R8_UNORM target usable as both color attachment and sampled
 // texture. No pre-transition: the render pass declares an `UNDEFINED`
 // initial layout.
 fn create_ao_target(
@@ -280,20 +280,8 @@ fn create_fullscreen_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> Result<OwnedPipeline, String> {
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);

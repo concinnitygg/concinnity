@@ -58,6 +58,23 @@ pub enum CueKind {
     Sound,
 }
 
+impl CueKind {
+    /// Every kind, in the order an editor picker steps through them.
+    pub const ALL: [CueKind; 2] = [CueKind::Sound, CueKind::Music];
+
+    /// Every kind's authored name, in [`CueKind::ALL`] order. The editor's
+    /// picker list.
+    pub const NAMES: [&'static str; 2] = ["sound", "music"];
+
+    /// The kind's authored name: what serde writes for it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            CueKind::Sound => "sound",
+            CueKind::Music => "music",
+        }
+    }
+}
+
 impl Default for AudioCue {
     fn default() -> Self {
         Self {
@@ -76,6 +93,20 @@ impl Default for AudioCue {
 mod tests {
     use super::*;
 
+    // NAMES is what the editor's picker offers, so it has to be what serde
+    // accepts. A variant added without extending both lists fails here.
+    #[test]
+    fn every_cue_kind_name_is_what_serde_writes() {
+        assert_eq!(CueKind::ALL.len(), CueKind::NAMES.len());
+        for (kind, name) in CueKind::ALL.iter().zip(CueKind::NAMES) {
+            assert_eq!(kind.as_str(), name);
+            assert_eq!(
+                serde_json::to_string(kind).expect("serializes"),
+                alloc::format!("\"{name}\"")
+            );
+        }
+    }
+
     #[test]
     fn a_blank_cue_is_a_one_shot_sound_at_unit_gain() {
         let c = AudioCue::default();
@@ -90,10 +121,9 @@ mod tests {
 
     #[test]
     fn a_music_cue_parses_its_clip_and_screen_by_name() {
-        crate::test_support::install_resolvers();
-        let c: AudioCue =
-            serde_json::from_str(r#"{"clip":"theme","screen":"menu","kind":"music","volume":0.4}"#)
-                .unwrap();
+        let c: AudioCue = crate::test_support::from_json(
+            r#"{"clip":"theme","screen":"menu","kind":"music","volume":0.4}"#,
+        );
         assert_eq!(c.clip, Some(AudioClipHandle(5)));
         assert_eq!(c.screen, Some(AssetId(4)));
         assert_eq!(c.kind, CueKind::Music);
@@ -113,10 +143,9 @@ mod tests {
 
     #[test]
     fn a_voice_cue_parses_its_bus_and_priority() {
-        crate::test_support::install_resolvers();
-        let c: AudioCue =
-            serde_json::from_str(r#"{"clip":"line","screen":"menu","bus":"voice","priority":5}"#)
-                .unwrap();
+        let c: AudioCue = crate::test_support::from_json(
+            r#"{"clip":"line","screen":"menu","bus":"voice","priority":5}"#,
+        );
         assert_eq!(c.bus, Some(AudioBus::Voice));
         assert_eq!(c.priority, 5);
 

@@ -35,7 +35,7 @@ use super::context::DxContext;
 use super::pipeline::serialize_desc_and_create;
 use super::slang_builtins::SlangCompile;
 
-/// Colour format of both cubes.
+/// Color format of both cubes.
 pub(in crate::directx) const PROBE_CUBE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 /// Upper bound on a probe cube's mip count, sizing the descriptor block the SRV
@@ -118,7 +118,7 @@ impl ProbePrefilterPipelines {
 
 /// The two cube resources one bake convolves between. Their descriptors live in
 /// the SRV heap's reserved probe-prefilter block, which [`PrefilterGpu::new`]
-/// rewrites for each bake. One block for every bake is what serialises them on
+/// rewrites for each bake. One block for every bake is what serializes them on
 /// this backend: `bake_pending_probes` starts a capture only once the prefiltering
 /// slot is empty, and the install that empties it is gated on the fence covering
 /// the prior bake's last dispatch, so nothing in flight still binds the block when
@@ -463,7 +463,7 @@ fn create_pso(
 
 // A cube resource: six array slices, `mips` levels, UAV + SRV capable. Committed
 // rather than pooled: the suballocator refuses GPU-written descs, because a placed
-// resource needs re-initialising every time it claims memory and the pool does not
+// resource needs re-initializing every time it claims memory and the pool does not
 // do that.
 fn create_cube(
     device: &ID3D12Device,

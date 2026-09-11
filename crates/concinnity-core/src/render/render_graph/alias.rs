@@ -8,7 +8,7 @@
 //
 // The planner is backend-agnostic and pure. It only decides *which resources
 // share a slot* and *how big each slot must be*; the per-backend executor
-// realises the plan (allocates a pool, creates the aliased resources, binds
+// realizes the plan (allocates a pool, creates the aliased resources, binds
 // them, and inserts aliasing barriers at the slot's reuse boundaries). This
 // mirrors how the graph plans barriers (`barriers_before`) while each backend
 // emits them.
@@ -34,7 +34,7 @@
 // is "does every reader and writer of A complete before every reader and writer
 // of B starts?", answered over the dependency DAG plus each queue's own serial
 // order -- so two graphics passes with no data dependency are still ordered
-// (their queue runs them in order) while a graphics pass and an unsynchronised
+// (their queue runs them in order) while a graphics pass and an unsynchronized
 // async pass are not.
 
 use super::compile::CompiledGraph;
@@ -48,7 +48,7 @@ use alloc::vec::Vec;
 // but these two change what kind of allocation the backend must make.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct SlotClass {
-    // Depth targets and colour targets take different heap flags / memory
+    // Depth targets and color targets take different heap flags / memory
     // types on every backend.
     depth: bool,
     // A multisample target's layout is not the single-sample one, so a 4x
@@ -358,13 +358,13 @@ mod tests {
     }
 
     #[test]
-    fn depth_and_colour_do_not_share() {
-        // Two disjoint transients, one depth one colour. Even though their
+    fn depth_and_color_do_not_share() {
+        // Two disjoint transients, one depth one color. Even though their
         // lifetimes don't overlap, the planner keeps them in separate pools
         // (different backend memory class).
         let mut g = GraphBuilder::new();
         let depth = g.create_texture("depth", tex(PixelFormat::Depth32Float));
-        let colour = g.create_texture("colour", tex(PixelFormat::Rgba16Float));
+        let color = g.create_texture("color", tex(PixelFormat::Rgba16Float));
         let d1 = g
             .add_pass(PassId::Shadow, PassKind::Render)
             .write_texture(depth);
@@ -372,20 +372,20 @@ mod tests {
             .read_texture(d1);
         let c1 = g
             .add_pass(PassId::Fog, PassKind::Render)
-            .write_texture(colour);
+            .write_texture(color);
         g.add_pass(PassId::Composite, PassKind::Render)
             .read_texture(c1)
             .presents();
         let g = g.compile().expect("compiles");
 
         let plan = plan_aliasing(&g, 100, 100);
-        assert_eq!(plan.slots.len(), 2, "depth + colour never share a slot");
+        assert_eq!(plan.slots.len(), 2, "depth + color never share a slot");
         assert_eq!(plan.saved_bytes(), 0);
     }
 
     #[test]
     fn differing_sample_counts_do_not_share() {
-        // The MSAA attachment and the resolved target are both colour, and here
+        // The MSAA attachment and the resolved target are both color, and here
         // their lifetimes are disjoint -- but a 4x attachment's layout is not
         // the single-sample one, so they must not land on the same bytes.
         let mut g = GraphBuilder::new();

@@ -173,12 +173,12 @@ struct SegmentOnFace {
 
 /// A close pair of points on the box's surface and on the capsule's axis.
 ///
-/// One projection each way, not an exact minimisation: this only has to name a
+/// One projection each way, not an exact minimization: this only has to name a
 /// direction good enough to be tested as a separating axis, and the face and
 /// edge axes already cover everything but the corner regions.
 fn nearest_points(half: Vec3, box_pose: Pose, segment: (Vec3, Vec3)) -> (Vec3, Vec3) {
-    let (toward_centre, _) = closest_point_on_segment(box_pose.position, segment.0, segment.1);
-    let clamped = box_pose.to_local(toward_centre).clamp(-half, half);
+    let (toward_center, _) = closest_point_on_segment(box_pose.position, segment.0, segment.1);
+    let clamped = box_pose.to_local(toward_center).clamp(-half, half);
     let on_box = box_pose.to_world(clamped);
     let (on_axis, _) = closest_point_on_segment(on_box, segment.0, segment.1);
     (on_box, on_axis)

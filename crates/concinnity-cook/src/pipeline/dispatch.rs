@@ -343,7 +343,7 @@ mod tests {
         assert!(!bytes.is_empty());
     }
 
-    // The SkinnedMesh resource compiler deserialises args + an optional
+    // The SkinnedMesh resource compiler deserializes args + an optional
     // skeleton, then bakes geometry: one vertex is enough for a payload, no
     // vertices and a malformed skeleton are the two error arms. Its baked
     // data form carries the interned name id and drops the geometry.
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn compile_by_type_sdf_volume_compiles_the_declared_field() {
         use concinnity_core::components::sdf_programs::SdfPrograms;
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");

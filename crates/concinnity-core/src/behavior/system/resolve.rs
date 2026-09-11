@@ -289,7 +289,7 @@ mod tests {
     }
 
     // An edited body's instances describe a program that no longer exists, so
-    // that one starts fresh while its neighbour carries.
+    // that one starts fresh while its neighbor carries.
     #[test]
     fn an_edited_behavior_starts_fresh() {
         let prev = resolve(&[], &[setter(1, "a", 1), setter(2, "b", 1)]);

@@ -125,7 +125,7 @@ pub(crate) enum StoryAction {
     Consume,
 }
 
-// Where the panel sits until the user drags it: centred below the top bar
+// Where the panel sits until the user drags it: centered below the top bar
 // (clear of the left default stack and the right Assets anchor).
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [(vw - STORY_W) * 0.5, super::hud::body_top() + 8.0]

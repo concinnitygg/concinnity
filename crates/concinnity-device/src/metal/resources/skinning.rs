@@ -103,7 +103,7 @@ pub(crate) struct MorphBinding {
 }
 
 // Skinned vertex layout: the 56-byte static attributes (pos / normal /
-// tangent / colour / uv) plus `ushort4` joint indices (offset 56) and
+// tangent / color / uv) plus `ushort4` joint indices (offset 56) and
 // `float4` weights (offset 64). 80-byte stride; matches `SkinnedVertex` in
 // [`crate::gfx::mesh_payload`]. Shared between init (one-shot in
 // [`MtlContext::upload_skinned`]) and the hot-reload pipeline rebuild path
@@ -173,9 +173,9 @@ pub(crate) fn build_skinned_shadow_pipeline(
     vdesc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_fn = crate::metal::slang_shaders::entry_function(
+    let shadow_fn = crate::metal::slang_builtins::entry_function(
         device,
-        &crate::metal::slang_shaders::SHADOW_VERT_SKINNED,
+        &crate::metal::slang_builtins::SHADOW_VERT_SKINNED,
         hot_reload,
     )?;
     let sdesc = MTLRenderPipelineDescriptor::new();
@@ -442,7 +442,7 @@ impl MtlContext {
         // Check the vertex region fits inside the live buffer. The shared
         // buffer was sized once at upload_skinned to hold every skinned
         // mesh's vertices; vertex_base + vertices.len() must stay within
-        // that region. Overflow would corrupt a neighbouring slot.
+        // that region. Overflow would corrupt a neighboring slot.
         let v_byte_off = (vertex_base as usize) * std::mem::size_of::<SkinnedVertex>();
         let v_byte_len = std::mem::size_of_val(vertices);
         if v_byte_off + v_byte_len > v_buf.length() {
@@ -654,7 +654,7 @@ impl MtlContext {
     // Update a skinned slot's joint count and resize its per-slot joint
     // matrix buffers. Driven by asset hot-reload (`cn debug` only) when a
     // re-imported `.glb`'s skeleton has a different joint count than the
-    // slot was initialised with. The shared skinned pipelines stay
+    // slot was initialized with. The shared skinned pipelines stay
     // untouched -- the shaders read `joints` through a pointer and use
     // vertex-encoded joint indices, so a new joint count only requires the
     // CPU-side per-slot Vec to be resized (and `SkinnedDrawObject.joint_count`

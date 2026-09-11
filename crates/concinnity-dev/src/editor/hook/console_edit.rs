@@ -161,7 +161,7 @@ impl EditorHook {
             .push(console::Severity::Command, &format!("> {line}"));
         self.console_pinned = true;
         match console::parse_command(line) {
-            // The echo above is the whole behaviour of a bare line.
+            // The echo above is the whole behavior of a bare line.
             Ok(console::Command::Echo(_)) => {}
             Ok(console::Command::Add { target, name }) => {
                 self.console_add(&target, name.as_deref());

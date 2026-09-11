@@ -43,7 +43,7 @@ const MESSAGE_MAX_LINES: u32 = 6;
 // comfortable target rather than the exact glyph bounds.
 const QUIT_HIT_PAD: f32 = 24.0;
 
-// Linear-space RGB, like every other `TextLabel` colour.
+// Linear-space RGB, like every other `TextLabel` color.
 const HEADER_TEXT: &str = "Error";
 const HEADER_COLOR: [f32; 3] = [0.85, 0.09, 0.07];
 const TEXT_COLOR: [f32; 3] = [0.95, 0.78, 0.12];
@@ -105,7 +105,7 @@ pub(super) fn build(
         ..TextLabel::default()
     }];
 
-    // One label per authored line, each centred on its own. A single label
+    // One label per authored line, each centered on its own. A single label
     // holding the newlines would center the block and left-align the lines
     // inside it, which reads as ragged for a two-line error.
     let mut y = win_h * MESSAGE_Y;
@@ -262,7 +262,7 @@ mod tests {
         );
     }
 
-    // Each authored line gets its own centred label. A single label holding the
+    // Each authored line gets its own centered label. A single label holding the
     // newlines would center the block and left-align its lines, which leaves a
     // short path hanging off the left of the sentence above it.
     #[test]

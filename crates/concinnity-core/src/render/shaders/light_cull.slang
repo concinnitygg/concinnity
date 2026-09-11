@@ -62,7 +62,7 @@ StructuredBuffer<GpuLight> lights;
 RWStructuredBuffer<uint> cluster_list;
 
 // Direction of the camera ray through a screen-NDC point. Unprojects the far
-// plane (z = 1) to world space, then normalises from the camera: for a
+// plane (z = 1) to world space, then normalizes from the camera: for a
 // perspective projection every ray through a screen point passes through the
 // eye, so the far-plane unprojection gives the direction.
 float3 cluster_corner_ray(float2 ndc)

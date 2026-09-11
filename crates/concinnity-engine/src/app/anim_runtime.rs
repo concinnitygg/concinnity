@@ -89,7 +89,7 @@ pub enum AnimCommand {
 
 static QUEUE: Mutex<Vec<AnimCommand>> = Mutex::new(Vec::new());
 
-// Serialises the tests that drive the queue. It is process-wide and `drain`
+// Serializes the tests that drive the queue. It is process-wide and `drain`
 // takes all of it, so two tests enqueuing at once would steal each other's
 // commands; every such test holds this for its enqueue + drain.
 #[cfg(test)]

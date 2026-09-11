@@ -1,5 +1,5 @@
 //! Font asset compilation: resolves a `Font`'s arguments to TTF bytes (a file on
-//! disk, or the bundled default face) and hands them to the shared rasteriser in
+//! disk, or the bundled default face) and hands them to the shared rasterizer in
 //! `concinnity_core::bake::font`, which packs the glyphs into an SDF atlas payload.
 
 use serde::Deserialize;
@@ -28,7 +28,7 @@ pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::bake::font::deserialise;
+    use concinnity_core::bake::font::deserialize;
 
     // An empty or absent `path` compiles the bundled face. 48px because before
     // the atlas layout sizes were widened to u32, the high-res glyph stride
@@ -41,7 +41,7 @@ mod tests {
             serde_json::json!({ "path": "", "size_px": 48 }),
         ] {
             let payload = compile_font_payload(&args).expect("compile bundled font at 48px");
-            let (w, h, _supersample, _size_px, rgba, metrics) = deserialise(&payload).unwrap();
+            let (w, h, _supersample, _size_px, rgba, metrics) = deserialize(&payload).unwrap();
             assert!(w > 0 && h > 0, "atlas has non-zero dimensions");
             assert!(!rgba.is_empty());
             assert!(!metrics.is_empty());
@@ -56,9 +56,9 @@ mod tests {
 
         let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
         let payload = compile_font_payload(&args).expect("compile font read from disk");
-        let (w, h, _supersample, size_px, rgba, metrics) = deserialise(&payload).unwrap();
+        let (w, h, _supersample, size_px, rgba, metrics) = deserialize(&payload).unwrap();
         assert_eq!(size_px, 12);
-        // Every printable ASCII glyph (32..=126) is rasterised.
+        // Every printable ASCII glyph (32..=126) is rasterized.
         assert_eq!(metrics.len(), 95);
         assert_eq!(metrics[0].char_code, ' ' as u32);
         assert_eq!(metrics[94].char_code, '~' as u32);
@@ -67,7 +67,7 @@ mod tests {
         let a = metrics
             .iter()
             .find(|m| m.char_code == 'A' as u32)
-            .expect("'A' is rasterised");
+            .expect("'A' is rasterized");
         assert!(a.atlas_w > 0 && a.atlas_h > 0);
         assert!(a.advance_px > 0.0);
     }

@@ -358,7 +358,7 @@ mod tests {
         }
         assert!(t.baseline.is_none(), "a climbing session has not settled");
 
-        // Levelling off is recognised over a run of flat samples. The first
+        // Levelling off is recognized over a run of flat samples. The first
         // sample here still carries the last climb, so it takes one more than
         // the streak, and the baseline is the sample that completes it.
         for _ in 0..=SETTLE_STREAK {
@@ -408,7 +408,7 @@ mod tests {
     }
 
     // Without a budget there is no scale to call a movement significant against,
-    // so the numbers are still reported and the verdict withholds judgement.
+    // so the numbers are still reported and the verdict withholds judgment.
     #[test]
     fn a_zero_budget_reports_movement_without_a_verdict() {
         let start = Instant::now();

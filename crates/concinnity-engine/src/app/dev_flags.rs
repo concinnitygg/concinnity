@@ -58,7 +58,7 @@
 //! A static is the pragmatic shape here: the flags are process-wide because the
 //! rendering backend is too (a single context per process owns the GPU), and
 //! plumbing them through the public `App` / `run_interpreted` signatures would
-//! touch far more code for the same observable behaviour.
+//! touch far more code for the same observable behavior.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

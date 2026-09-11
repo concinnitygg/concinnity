@@ -54,7 +54,7 @@ pub(crate) fn centered_label(
     )
 }
 
-// A solid-coloured rectangle Sprite: settings row cards, slider tracks/handles,
+// A solid-colored rectangle Sprite: settings row cards, slider tracks/handles,
 // scrollbar chrome, menu backdrops.
 pub(crate) fn sprite(
     name: &str,

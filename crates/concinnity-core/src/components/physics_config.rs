@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn authored_spawn_headroom_round_trips_through_postcard() {
-        let p: PhysicsConfig = serde_json::from_str(r#"{"spawn_headroom":64}"#).unwrap();
+        let p: PhysicsConfig = crate::test_support::from_json(r#"{"spawn_headroom":64}"#);
         assert_eq!(p.spawn_headroom, 64);
 
         // The runtime reads the headroom off the baked component, so it has to
@@ -134,11 +134,10 @@ mod tests {
 
     #[test]
     fn layers_and_no_collide_parse_and_round_trip_through_postcard() {
-        let p: PhysicsConfig = serde_json::from_str(
+        let p: PhysicsConfig = crate::test_support::from_json(
             r#"{"layers":["debris"],"no_collide":[["debris","character"]],
                 "contact_min_impulse":2.5}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(p.layers, vec!["debris".to_string()]);
         assert_eq!(
             p.no_collide,
@@ -154,13 +153,11 @@ mod tests {
 
     #[test]
     fn a_named_terrain_mesh_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let p: PhysicsConfig = serde_json::from_str(
+        let p: PhysicsConfig = crate::test_support::from_json(
             r#"{"floor_y":-1.5,"terrain_half_width":128,"terrain_half_depth":128,
                 "terrain_subdivisions":64,"terrain_amplitude":12,"terrain_offset_y":2,
                 "terrain_mesh":"ground"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(p.terrain_mesh, Some(AssetId(6)));
 
         let bytes = postcard::to_allocvec(&p).unwrap();

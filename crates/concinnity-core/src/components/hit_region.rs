@@ -8,7 +8,7 @@ use alloc::string::String;
 /// A responsive invisible rectangular region in screen space.
 ///
 /// When clicked, fires an `action`. When hovered, it optionally restyles a
-/// referenced [TextLabel](#textlabel) (colour and/or scale).
+/// referenced [TextLabel](#textlabel) (color and/or scale).
 ///
 /// The cursor must be free (not captured for camera control) for events to fire.
 ///
@@ -38,11 +38,11 @@ pub struct HitRegion {
     /// A [TextLabel](#textlabel) to style on hover. `None` = no label effect.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub label: Option<AssetId>,
-    /// RGB colour applied to the label while hovered. `None` = no change.
+    /// RGB color applied to the label while hovered. `None` = no change.
     pub hover_color: Option<[f32; 3]>,
     /// Scale applied to the label while hovered. None = no change.
     pub hover_scale: Option<f32>,
-    /// Action to fire on click. Recognised forms:
+    /// Action to fire on click. Recognized forms:
     /// `"scene:<name>"`, `"quit"`, `"screen:show:<name>"`, `"screen:hide"`,
     /// `"screen:toggle:<name>"`.
     pub action: String,
@@ -122,13 +122,11 @@ mod tests {
 
     #[test]
     fn an_authored_region_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let h: HitRegion = serde_json::from_str(
+        let h: HitRegion = crate::test_support::from_json(
             r#"{"x":10,"y":20,"width":200,"height":48,"label":"play_label","action":"start",
                 "hover_color":[1,0.85,0.3],"hover_scale":1.1,"drag_handle":"grip",
                 "screen":"menu","disabled":true,"follow_label":true,"fit":"cover"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(h.label, Some(AssetId(10)));
         assert_eq!(h.drag_handle, Some(AssetId(4)));
         assert_eq!(h.screen, Some(AssetId(4)));

@@ -32,10 +32,10 @@ pub(crate) struct WindowSetup {
     // NSWindowDelegate tracking the fullscreen transition; None in embedded
     // mode. The caller stores it so the window's weak delegate stays attached.
     pub window_delegate: Option<Retained<crate::appkit::window_delegate::WindowDelegate>>,
-    // Resolved swapchain colour-output mode. `Sdr` when the world did not
+    // Resolved swapchain color-output mode. `Sdr` when the world did not
     // request HDR or the active display lacks EDR headroom; `Hdr` when the
     // CAMetalLayer was configured with `RGBA16Float` + extended-linear
-    // Display P3 colour space + `wantsExtendedDynamicRangeContent = true`.
+    // Display P3 color space + `wantsExtendedDynamicRangeContent = true`.
     pub hdr_mode: HdrOutputMode,
 }
 
@@ -53,7 +53,7 @@ pub(crate) struct WindowConfig<'a> {
 }
 
 // The world's HDR-output request, resolved against the active display's EDR
-// headroom to pick the swapchain colour-output mode.
+// headroom to pick the swapchain color-output mode.
 #[derive(Clone, Copy)]
 pub(crate) struct HdrRequest {
     pub display_requested: bool,
@@ -135,7 +135,7 @@ pub(crate) fn setup_window_and_view(
         });
     }
 
-    // Resolve the swapchain colour-output mode. EDR support is per-display,
+    // Resolve the swapchain color-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded
     // mode (preview) we fall back to the main screen since the parent NSView
@@ -159,7 +159,7 @@ pub(crate) fn setup_window_and_view(
     }
 
     let embedded_ptr = take_embedded_view();
-    // Windowed mode always pumps events (CLI behaviour). Embedded mode is
+    // Windowed mode always pumps events (CLI behavior). Embedded mode is
     // quiet by default; the play-in-view path opts in via set_embedded_pump_events.
     let pump_events = embedded_ptr.is_null() || take_embedded_pump_events();
     let (window, mtk_view, fullscreen, window_delegate) = if embedded_ptr.is_null() {
@@ -211,7 +211,7 @@ pub(crate) fn setup_window_and_view(
     // A geometry-less world (e.g. text-only) renders no 3D content into the
     // off-screen HDR / bloom / effect targets, so they are allocated at 1x1
     // rather than full resolution -- this avoids paying for a full MSAA HDR
-    // colour + depth + bloom chain (tens of MB) for a trivial 2D world.
+    // color + depth + bloom chain (tens of MB) for a trivial 2D world.
     let initial_w = if geometry_less {
         1
     } else if initial_drawable_size.width > 0.0 {
@@ -239,7 +239,7 @@ pub(crate) fn setup_window_and_view(
     })
 }
 
-// Largest extended-range colour-component multiplier the system thinks any
+// Largest extended-range color-component multiplier the system thinks any
 // attached screen can drive. SDR panels report `1.0`; HDR panels report
 // `2.0`+. With no screens at all (a head-less unit test or detached embedded
 // preview) the function returns `1.0` so the resolver stays on the SDR
@@ -271,9 +271,9 @@ pub(crate) fn measure_max_edr(mtm: objc2::MainThreadMarker) -> f32 {
 // into an off-screen RGBA16Float MSAA target with its own depth. The drawable
 // therefore has no depth attachment and no MSAA.
 //
-// In HDR mode the swapchain colour attachment is widened from BGRA8Unorm to
+// In HDR mode the swapchain color attachment is widened from BGRA8Unorm to
 // RGBA16Float and the underlying CAMetalLayer is reconfigured for extended
-// dynamic-range output: extended-linear Display P3 colour space, EDR content
+// dynamic-range output: extended-linear Display P3 color space, EDR content
 // enabled. The post-process fragment then writes linear extended-range values
 // straight through (no tonemap / gamma).
 fn configure_mtk_view(mtk_view: &MTKView, hdr_mode: HdrOutputMode, capture_enabled: bool) {
@@ -325,7 +325,7 @@ pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
 // Apply EDR layer flags to the MTKView's backing CAMetalLayer. MTKView's
 // `layer` property is documented to be a CAMetalLayer, but `NSView::layer()`
 // returns the parent CALayer type: we cast through the runtime-safe `cast`
-// path and only flip the EDR + colour-space switches once we have it. A nil
+// path and only flip the EDR + color-space switches once we have it. A nil
 // layer is reported and treated as a no-op (the renderer then falls back to
 // the standard sRGB SDR path silently; we already log warn-level above when
 // EDR is requested but not achievable).
@@ -349,7 +349,7 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: crate::gfx::hdr_output::Hdr
             return;
         }
     };
-    // Pick the swapchain colour space by encoding:
+    // Pick the swapchain color space by encoding:
     //   - ExtendedLinear → kCGColorSpaceExtendedLinearDisplayP3. The shader
     //     writes linear values where `1.0` is SDR reference white; the
     //     compositor handles the panel-side encode.
@@ -358,13 +358,13 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: crate::gfx::hdr_output::Hdr
     //     primaries as the linear path so the gamut situation is unchanged.
     let (name, label): (_, &str) = match encoding {
         crate::gfx::hdr_output::HdrEncoding::ExtendedLinear => (
-            // SAFETY: the CoreGraphics colour-space name is a framework-owned static that outlives
+            // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceExtendedLinearDisplayP3 },
             "kCGColorSpaceExtendedLinearDisplayP3",
         ),
         crate::gfx::hdr_output::HdrEncoding::Pq => (
-            // SAFETY: the CoreGraphics colour-space name is a framework-owned static that outlives
+            // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceDisplayP3_PQ },
             "kCGColorSpaceDisplayP3_PQ",
@@ -374,7 +374,7 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: crate::gfx::hdr_output::Hdr
     match colorspace.as_deref() {
         Some(cs) => metal_layer.setColorspace(Some(cs)),
         None => tracing::warn!(
-            "{} unavailable: leaving CAMetalLayer at default colour space (HDR output may \
+            "{} unavailable: leaving CAMetalLayer at default color space (HDR output may \
              look desaturated)",
             label
         ),

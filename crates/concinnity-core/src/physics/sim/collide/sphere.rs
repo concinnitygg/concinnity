@@ -67,7 +67,7 @@ pub(crate) fn sphere_box(
         return spheres(sphere, surface, Vec3::Y, margin, out);
     }
 
-    // Centre inside the box: leave by the nearest face.
+    // Center inside the box: leave by the nearest face.
     let mut axis = 0usize;
     let mut depth = f32::INFINITY;
     for candidate in 0..3 {
@@ -147,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_spheres_report_the_overlap_along_the_centre_line() {
+    fn overlapping_spheres_report_the_overlap_along_the_center_line() {
         let mut m = manifold();
         assert!(spheres(
             ball(Vec3::ZERO, 1.0),

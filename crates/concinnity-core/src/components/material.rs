@@ -26,7 +26,7 @@ pub struct Material {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// The [Texture](#texture) asset used as the base colour (albedo) map.
+    /// The [Texture](#texture) asset used as the base color (albedo) map.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub albedo: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as a tangent-space normal map.
@@ -51,13 +51,13 @@ pub struct Material {
     /// Controls the width of the specular highlight.
     pub roughness: f32,
     /// Metallic factor in [0, 1]. 0 = dielectric (plastic/stone), 1 = metal.
-    /// Metallic surfaces tint their reflections with the albedo colour and show
+    /// Metallic surfaces tint their reflections with the albedo color and show
     /// almost no diffuse; dielectrics keep a neutral, dim reflection.
     pub metallic: f32,
     /// Linear-space RGB multiplier applied to the albedo sample. Useful for
-    /// tinting a shared texture without a separate asset (e.g. coloured brick).
+    /// tinting a shared texture without a separate asset (e.g. colored brick).
     pub tint: [f32; 3],
-    /// Additive emission colour in linear space. Non-zero values make the
+    /// Additive emission color in linear space. Non-zero values make the
     /// surface appear to glow independently of the scene lighting.
     pub emissive_factor: [f32; 3],
     /// Alpha-cutout threshold in [0, 1]. When non-zero, a texel whose `albedo`
@@ -73,7 +73,7 @@ pub struct Material {
     pub opacity: f32,
     /// When true, the surface is a translucent dielectric (glass): it renders
     /// in the engine's transparent pass instead of the opaque pass, refracting
-    /// and reflecting the scene rather than writing solid colour + depth. The
+    /// and reflecting the scene rather than writing solid color + depth. The
     /// importer sets this for materials it detects as glass; authored materials
     /// can opt in directly. Defaults to false (opaque).
     pub transparent: bool,
@@ -82,7 +82,7 @@ pub struct Material {
     /// ray-tracing-capable GPU). When false (the default), a `transparent`
     /// surface still renders as low-roughness reflective glass that hides
     /// whatever is behind it. See-through only looks right when the space behind
-    /// the glass is actually modelled, so it is opt-in per material. Setting it
+    /// the glass is actually modeled, so it is opt-in per material. Setting it
     /// implies `transparent`.
     pub see_through: bool,
     /// The [Shader](#shader) asset that shades surfaces using this material.
@@ -140,12 +140,10 @@ mod tests {
 
     #[test]
     fn every_texture_slot_resolves_through_its_own_reference() {
-        crate::test_support::install_resolvers();
-        let m: Material = serde_json::from_str(
+        let m: Material = crate::test_support::from_json(
             r#"{"albedo":"tex_a","normal_map":"tex_nm","emissive_map":"tex_em",
                 "orm_map":"tex_orm","shader":"water_shader"}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(m.albedo, Some(TextureHandle(5)));
         assert_eq!(m.normal_map, Some(TextureHandle(6)));
         assert_eq!(m.emissive_map, Some(TextureHandle(6)));
@@ -155,11 +153,10 @@ mod tests {
 
     #[test]
     fn a_glass_material_round_trips_through_postcard() {
-        let m: Material = serde_json::from_str(
+        let m: Material = crate::test_support::from_json(
             r#"{"roughness":0.05,"metallic":1,"tint":[0.8,0.9,1],"emissive_factor":[2,2,2],
                 "alpha_cutoff":0.5,"opacity":0.3,"transparent":true,"see_through":true}"#,
-        )
-        .unwrap();
+        );
         let bytes = postcard::to_allocvec(&m).unwrap();
         let back: Material = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.roughness, 0.05);

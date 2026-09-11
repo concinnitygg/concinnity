@@ -68,10 +68,10 @@ pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8
 
     let hdr = crate::codec::hdr::load_file(source)?;
     let faces = equirect_to_cube(&hdr, face_size);
-    Ok(serialise_faces(face_size, &faces))
+    Ok(serialize_faces(face_size, &faces))
 }
 
-fn serialise_faces(face_size: u32, faces: &[Vec<f32>; 6]) -> Vec<u8> {
+fn serialize_faces(face_size: u32, faces: &[Vec<f32>; 6]) -> Vec<u8> {
     let face_floats = (face_size as usize) * (face_size as usize) * 4;
     let mut buf = Vec::with_capacity(CUBE_PAYLOAD_HEADER_BYTES + 6 * face_floats * 4);
     buf.extend_from_slice(&CUBE_PAYLOAD_MAGIC.to_le_bytes());
@@ -90,10 +90,10 @@ fn serialise_faces(face_size: u32, faces: &[Vec<f32>; 6]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::hdr::{HdrImage, deserialise};
+    use crate::codec::hdr::{HdrImage, deserialize};
 
     #[test]
-    fn payload_round_trip_via_deserialise() {
+    fn payload_round_trip_via_deserialize() {
         let pixel = [0.7f32, 0.3, 0.2];
         let hdr = HdrImage {
             width: 16,
@@ -101,8 +101,8 @@ mod tests {
             pixels: vec![pixel; 16 * 8],
         };
         let faces = equirect_to_cube(&hdr, 8);
-        let blob = serialise_faces(8, &faces);
-        let (face_size, face_bytes) = deserialise(&blob).expect("deserialise");
+        let blob = serialize_faces(8, &faces);
+        let (face_size, face_bytes) = deserialize(&blob).expect("deserialize");
         assert_eq!(face_size, 8);
         assert_eq!(face_bytes.len(), 6 * 8 * 8 * 4 * 4);
         // First face, first pixel:
@@ -174,10 +174,10 @@ mod tests {
         let args = serde_json::json!({ "source": src, "face_size": 8 });
         let payload = compile_cubemap_payload(&args).expect("compile");
 
-        let (face_size, face_bytes) = deserialise(&payload).expect("deserialise");
+        let (face_size, face_bytes) = deserialize(&payload).expect("deserialize");
         assert_eq!(face_size, 8);
         assert_eq!(face_bytes.len(), 6 * 8 * 8 * 4 * 4);
-        // A solid equirect resamples to the same colour on every face.
+        // A solid equirect resamples to the same color on every face.
         for (i, texel) in face_bytes.chunks_exact(4).enumerate() {
             let v = f32::from_le_bytes(texel.try_into().unwrap());
             let want = if i % 4 == 3 { 1.0 } else { rgb[i % 4] };

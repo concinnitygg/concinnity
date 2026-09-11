@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn a_capsule_is_measured_from_its_segment_not_its_centre() {
+    fn a_capsule_is_measured_from_its_segment_not_its_center() {
         // Upright capsule: the cap reaches 0.75 above center.
         let s = separation(&at(&CAPSULE, vec3(0.0, 4.0, 0.0)), &at(&CUBE, Vec3::ZERO));
         assert!((s.gap - (4.0 - 0.75 - 0.5)).abs() < 1.0e-4, "{s:?}");

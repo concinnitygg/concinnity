@@ -24,7 +24,7 @@ use crate::metal::context::MtlContext;
 use crate::metal::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::slang_shaders;
+use crate::metal::slang_builtins;
 use concinnity_core::render::uniforms::GBufferView;
 use objc2_foundation::ns_string;
 
@@ -49,7 +49,7 @@ pub(crate) struct GBufferState {
 
 // The pre-pass's feature-owned target: its depth attachment, and only that.
 //
-// The three colour channels (`gbuffer_normal_depth` / `_roughness` /
+// The three color channels (`gbuffer_normal_depth` / `_roughness` /
 // `_velocity`) are pool-owned and read back by label through
 // `MtlContext::gbuffer_*`, so nothing here holds them -- a pool rebuild repacks
 // every slot, and a cached handle would point into memory that now belongs to
@@ -69,7 +69,7 @@ pub(crate) struct GBufferTargets {
 }
 
 // Create or recreate the pre-pass depth attachment at `width`x`height`. The
-// colour channels come from the transient pool, which the caller must have
+// color channels come from the transient pool, which the caller must have
 // built (or rebuilt) at the same extent first.
 pub(crate) fn create_gbuffer_targets(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -95,7 +95,7 @@ pub(crate) fn create_gbuffer_targets(
 
 // Two-stream vertex descriptor for the GPU-driven bindless G-buffer pipeline.
 // Stream 0 (buffer 1) is the standard 56-byte `Vertex` (pos / normal / tangent /
-// colour / uv) the cull-baked indirect commands draw; stream 1 (buffer 2) is the
+// color / uv) the cull-baked indirect commands draw; stream 1 (buffer 2) is the
 // PREVIOUS vertex position (attribute 5), read from a second buffer the encoder
 // binds (the same static VB for the prefix -> zero per-vertex motion, the
 // previous-frame deformed buffer for the skinned tail -> per-vertex skin motion).
@@ -103,7 +103,7 @@ pub(crate) fn create_gbuffer_targets(
 // `Vertex` so the cull-baked `base_vertex` indexes it identically to stream 0.
 pub(crate) fn gbuffer_bindless_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     // Stream 0 (buffer 1): the attributes the bindless VS reads (pos, normal,
-    // colour for the skybox sentinel). Tangent/uv are unused by the G-buffer.
+    // color for the skybox sentinel). Tangent/uv are unused by the G-buffer.
     // Stream 1 (buffer 2): previous vertex position only.
     vertex_descriptor(
         &[
@@ -158,14 +158,14 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_fn = slang_shaders::entry_function(
+    let vert_fn = slang_builtins::entry_function(
         device,
-        &slang_shaders::GBUFFER_PREPASS_VERT_BINDLESS,
+        &slang_builtins::GBUFFER_PREPASS_VERT_BINDLESS,
         hot_reload,
     )?;
-    let frag_fn = slang_shaders::entry_function(
+    let frag_fn = slang_builtins::entry_function(
         device,
-        &slang_shaders::GBUFFER_PREPASS_FRAG_BINDLESS,
+        &slang_builtins::GBUFFER_PREPASS_FRAG_BINDLESS,
         hot_reload,
     )?;
 
@@ -239,7 +239,7 @@ impl MtlContext {
         let Some(targets) = &self.gbuffer.targets else {
             return Ok(0);
         };
-        // The colour channels are pool-owned; the pool is built under the same
+        // The color channels are pool-owned; the pool is built under the same
         // gate as `targets`, so all three are present whenever it is. A missing
         // one means the pool and the feature disagree about that gate, which
         // would otherwise show up as a pre-pass rendering into nothing.
@@ -251,7 +251,7 @@ impl MtlContext {
             (Some(n), Some(r), Some(v)) => (n, r, v),
             _ => {
                 return Err(
-                    "G-buffer pre-pass: the transient pool is missing a colour channel; \
+                    "G-buffer pre-pass: the transient pool is missing a color channel; \
                      its build gate disagrees with the pre-pass's"
                         .to_string(),
                 );
@@ -402,7 +402,7 @@ impl MtlContext {
             // PSO; together the buckets cover the whole record range exactly
             // once. A bucket the main pass skips (Shader not resident) is
             // skipped here too, so depth and velocity never carry geometry the
-            // colour pass leaves out.
+            // color pass leaves out.
             for (b, icb) in self.cull.icbs.iter().enumerate() {
                 if !self.world_shader_resident(b) {
                     continue;

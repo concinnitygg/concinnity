@@ -1333,7 +1333,7 @@ fn add_form_writes_edited_arg_values() {
 }
 
 #[test]
-fn add_form_writes_an_edited_colour_vector() {
+fn add_form_writes_an_edited_color_vector() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     // VolumetricFog (a newly offered type) has a `color` RGB vector field.
@@ -1344,7 +1344,7 @@ fn add_form_writes_an_edited_colour_vector() {
         .enumerate()
         .find(|(_, f)| matches!(f.kind, form::FieldKind::Vec { color: true, .. }))
         .map(|(j, f)| (j, f.key.clone()))
-        .expect("a colour vector field");
+        .expect("a color vector field");
     set_field(&mut world, form_panel::form_input(j), "0.1, 0.2, 0.3");
     set_field(&mut world, form_panel::NAME_INPUT, "fog");
     h.apply_form(FormAction::Confirm, &mut world);
@@ -1354,7 +1354,7 @@ fn add_form_writes_an_edited_colour_vector() {
     assert_eq!(
         h.entries[0]["args"][&key],
         serde_json::json!([0.1, 0.2, 0.3]),
-        "the edited colour persisted as a numeric array"
+        "the edited color persisted as a numeric array"
     );
 }
 
@@ -6416,7 +6416,7 @@ fn behavior_escape_clears_one_waiting_state_at_a_time() {
     press_remove(&mut h, &mut world);
     assert!(h.behavior_remove_armed);
     h.behavior_keys(&mut world, &behavior_escape_input());
-    assert!(!h.behavior_remove_armed, "the armed removal was cancelled");
+    assert!(!h.behavior_remove_armed, "the armed removal was canceled");
     assert_eq!(h.behavior_entries().len(), 1);
 
     select_behavior(&mut h, &mut world, "name");

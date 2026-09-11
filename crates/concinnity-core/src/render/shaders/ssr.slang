@@ -228,7 +228,7 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
         }
     }
 
-    // The reflected colour: the screen-space hit (a single sharp tap - the
+    // The reflected color: the screen-space hit (a single sharp tap - the
     // reflection composite blurs it by roughness), or the environment cube when
     // the ray missed. A hit near the screen border or at the end of its march
     // fades toward the environment rather than snapping flat to the base

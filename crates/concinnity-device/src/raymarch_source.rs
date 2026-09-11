@@ -29,7 +29,7 @@ pub(crate) fn decode(payload: &[u8], label: &str) -> Result<SdfPrograms, String>
 /// Whether a volume's authored field reads the scene behind its surface.
 ///
 /// Every backend carries this on its per-volume record and gates the frame's
-/// scene-colour copy on some visible volume answering `true`. The copy is a
+/// scene-color copy on some visible volume answering `true`. The copy is a
 /// full read plus a full write of the HDR target, so a world whose volumes are
 /// all opaque skips an encoder and its barriers outright.
 pub(crate) fn taps_scene(programs: &SdfPrograms) -> bool {
@@ -253,7 +253,7 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
     // proves: each variant reaches only the entries its family declares.
     #[test]
     fn every_raymarch_entry_compiles_on_every_backend() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let work = concinnity_host::scratch::Scratch::dir("raymarch-compile-guard")

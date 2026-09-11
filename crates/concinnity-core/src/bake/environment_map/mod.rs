@@ -101,7 +101,7 @@ pub const fn max_mip_count(face_size: u32) -> u32 {
 // Payload codec
 
 /// Pack the baked irradiance and prefilter cubes into a blob payload.
-pub fn serialise_payload(
+pub fn serialize_payload(
     irradiance_face: u32,
     prefilter_face: u32,
     prefilter_mips: u32,
@@ -132,7 +132,7 @@ pub fn serialise_payload(
     buf
 }
 
-/// Metadata read from a serialised EnvironmentMap payload. The byte ranges
+/// Metadata read from a serialized EnvironmentMap payload. The byte ranges
 /// point into the payload buffer so the runtime can upload them directly.
 #[derive(Debug)]
 pub struct EnvMapView<'a> {
@@ -146,7 +146,7 @@ pub struct EnvMapView<'a> {
     pub prefilter_mip_bytes: Vec<&'a [u8]>,
 }
 
-// Deserialise a packed EnvironmentMap payload back into byte-range views into
+// Deserialize a packed EnvironmentMap payload back into byte-range views into
 // the buffer. The runtime upload path uses this to feed the per-face slices
 // to the GPU without copying. Called by every backend at init time, and by
 // the Metal hot-reload path via `update_environment_map`.
@@ -156,7 +156,7 @@ fn cube_face_bytes(label: &str, edge: u32) -> Result<usize, String> {
 }
 
 /// Read a packed payload back as byte-range views into `bytes`.
-pub fn deserialise(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
+pub fn deserialize(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
     let mut r = ByteReader::open_payload(
         bytes,
         ENVMAP_PAYLOAD_MAGIC,
@@ -216,8 +216,8 @@ mod tests {
         let source = solid_cube(8, [0.6, 0.4, 0.2]);
         let irr = compute_irradiance(&source, 8, 4, 32, 8);
         let prefilter = compute_prefilter(&source, 8, 2, 16, 0.0, false);
-        let blob = serialise_payload(4, 8, 2, &irr, &prefilter);
-        let view = deserialise(&blob).expect("deserialise");
+        let blob = serialize_payload(4, 8, 2, &irr, &prefilter);
+        let view = deserialize(&blob).expect("deserialize");
         assert_eq!(view.irradiance_face, 4);
         assert_eq!(view.prefilter_face, 8);
         assert_eq!(view.prefilter_mip_bytes.len(), 2);
@@ -249,7 +249,7 @@ mod tests {
     fn rejects_a_payload_shorter_than_the_header() {
         let full = header_only(4, 8, 2);
         for len in 0..ENVMAP_PAYLOAD_HEADER_BYTES {
-            assert!(deserialise(&full[..len]).is_err(), "len {} decoded", len);
+            assert!(deserialize(&full[..len]).is_err(), "len {} decoded", len);
         }
     }
 
@@ -257,14 +257,14 @@ mod tests {
     fn rejects_a_bad_magic() {
         let mut bytes = header_only(4, 8, 2);
         bytes[..4].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
-        assert!(deserialise(&bytes).is_err());
+        assert!(deserialize(&bytes).is_err());
     }
 
     #[test]
     fn rejects_a_payload_truncated_in_the_irradiance_section() {
         let mut bytes = header_only(4, 8, 2);
         bytes.extend(core::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4 - 8));
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("unexpected end"), "{}", err);
     }
 
@@ -274,7 +274,7 @@ mod tests {
         bytes.extend(core::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4));
         bytes.extend(core::iter::repeat_n(0u8, 6 * 8 * 8 * 4 * 4));
         // Second mip (4x4 faces) is missing entirely.
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("unexpected end"), "{}", err);
     }
 
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn rejects_an_irradiance_face_that_overflows_its_footprint() {
         let bytes = header_only(u32::MAX, 8, 2);
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("overflow"), "{}", err);
     }
 
@@ -292,13 +292,13 @@ mod tests {
     fn rejects_a_prefilter_face_that_overflows_its_footprint() {
         let mut bytes = header_only(4, u32::MAX, 2);
         bytes.extend(core::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4));
-        let err = deserialise(&bytes).unwrap_err();
+        let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("overflow"), "{}", err);
     }
 
     #[test]
     fn rejects_out_of_range_mip_counts() {
-        assert!(deserialise(&header_only(4, 8, 0)).is_err());
-        assert!(deserialise(&header_only(4, 8, 13)).is_err());
+        assert!(deserialize(&header_only(4, 8, 0)).is_err());
+        assert!(deserialize(&header_only(4, 8, 13)).is_err());
     }
 }

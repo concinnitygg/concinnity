@@ -125,7 +125,7 @@ struct DxAliasBarrier<'a> {
     // Topological position of the pass that first-writes it, i.e. where the
     // aliasing barrier and the re-initializing discard belong.
     pass: usize,
-    // Its `ResourceId`, so the prologue can recognise the pass's own transition
+    // Its `ResourceId`, so the prologue can recognize the pass's own transition
     // for it and open that from the discard state instead of from rest.
     resource_index: usize,
     resource: &'a ID3D12Resource,
@@ -267,7 +267,7 @@ fn graph_takes_over(
 // rejects a placed render target's use until a Clear/Discard/Copy initializes it,
 // so each reclaimed resource is opened for a `DiscardResource` first. It is left
 // in `DISCARD_STATE` afterwards rather than put back at rest: the pass's own
-// first-write transition is what takes it on from there, which for a colour
+// first-write transition is what takes it on from there, which for a color
 // target is the very state it wants and collapses to nothing.
 //
 // One function because the two recording paths are otherwise asymmetric --
@@ -522,7 +522,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // into and the Composite encoder samples.
     pub scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
     // Off-screen scene render resolution. Every scene pass (Shadow, Main,
-    // SSAO, SSR, Velocity, Fog, Raymarch, Decals, Particles) rasterises at
+    // SSAO, SSR, Velocity, Fog, Raymarch, Decals, Particles) rasterizes at
     // this size, and the sub-pixel jitter is converted to NDC against it.
     // Equals `output_*` when temporal upscaling is off.
     pub width: u32,
@@ -648,7 +648,7 @@ impl DxContext {
         // queues at once and that every wait names an already-recorded producer,
         // which is what this asserts.
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_serial_order_honours_schedule(graph, "directx");
+        crate::gfx::render_graph::assert_serial_order_honors_schedule(graph, "directx");
         let registry_ref = &registry;
         // Likewise resolve the per-pass aliasing barriers (which pooled transients
         // reclaim a shared heap region) once, shared read-only into the workers.
@@ -890,7 +890,7 @@ impl DxContext {
     // The resting state comes from the registry when the graph drives the
     // resource, so the discard opens it from where it really sits rather than
     // from an assumed sampled state; a pooled member the graph does not drive
-    // falls back to sampled, which is where the pool creates a colour target.
+    // falls back to sampled, which is where the pool creates a color target.
     fn build_alias_barriers<'a>(
         &'a self,
         graph: &CompiledGraph,
@@ -1031,7 +1031,7 @@ impl DxContext {
             // that keeps resting per-resource rather than per-class -- shadow_map
             // is the same class and rests sampled.
             "hdr_depth" => Some((&self.depth.resource, D3D12_RESOURCE_STATE_DEPTH_WRITE)),
-            // The multisample colour attachment, which exists only when the
+            // The multisample color attachment, which exists only when the
             // world is multisampled -- and so does the graph resource. It rests
             // in RENDER_TARGET and no pass ever samples it, so every derived
             // transition collapses to a no-op and the entry drives nothing. It
@@ -1063,7 +1063,7 @@ impl DxContext {
                 .map(|rc| (&rc.output, SAMPLED)),
             // The post-TAA scene. Two mutually exclusive writers back it, and
             // only one is driven: the TAA resolve writes this frame's ping-pong
-            // history slot, which rests sampled like any other colour target,
+            // history slot, which rests sampled like any other color target,
             // while the temporal upscaler writes a compute output whose
             // between-frames state depends on whether a previous frame
             // dispatched (`output_is_psr`). The graph's resting model has no way
@@ -1074,7 +1074,7 @@ impl DxContext {
                 .as_ref()
                 .filter(|_| self.upscale.backend.is_none())
                 .map(|taa| (&taa.output().resource, SAMPLED)),
-            // The unified G-buffer pre-pass's colour targets, one entry each.
+            // The unified G-buffer pre-pass's color targets, one entry each.
             // One draw writes all three, but their consumers differ -- the
             // reflection resolve reads normal+depth and roughness, the temporal
             // passes read velocity -- so they are separate graph resources with
@@ -1083,7 +1083,7 @@ impl DxContext {
             "gbuffer_roughness" => self.gbuffer.as_ref().map(|gb| (&gb.roughness, SAMPLED)),
             "gbuffer_velocity" => self.gbuffer.as_ref().map(|gb| (&gb.velocity, SAMPLED)),
             // `gbuffer_depth` is deliberately unregistered: it is a depth
-            // target rather than a colour one, and the only pass that moves it
+            // target rather than a color one, and the only pass that moves it
             // is the upscaler, which borrows it inside its own dispatch.
             // The Hi-Z pyramid rests where the cull kernel samples it, which is a
             // compute stage, so it is the non-pixel shader-resource state rather
@@ -1095,8 +1095,8 @@ impl DxContext {
 
     // Build the per-frame `RaymarchView` cbuffer payload from the
     // graph executor's frame params. The matrix inputs match what the
-    // Main pass rasterises with (the un-jittered VP), so raymarched
-    // surfaces share their NDC depth space with rasterised geometry.
+    // Main pass rasterizes with (the un-jittered VP), so raymarched
+    // surfaces share their NDC depth space with rasterized geometry.
     fn build_raymarch_view(&self, params: &GraphFrameParams<'_>) -> super::raymarch::RaymarchView {
         let inv_vp = mat4_inverse(params.cur_vp);
         super::raymarch::RaymarchView {
@@ -1111,7 +1111,7 @@ impl DxContext {
     }
 
     // Build the per-frame `TransparentView` cbuffer payload for the transparent pass.
-    // Uses the jittered VP (`vp_mat`) the Main pass rasterised with, so the
+    // Uses the jittered VP (`vp_mat`) the Main pass rasterized with, so the
     // glass quad's clip-space depth matches the stored main-depth the fragment
     // shader tests against. Mirrors `encode_decals`' use of `vp_mat`.
     fn build_transparent_view(
@@ -1181,15 +1181,6 @@ impl DxContext {
                 // `cluster_light_list` pins it before Main, which reads the
                 // same buffer.
                 self.encode_light_cull(cmd, params.frame_idx)?;
-            }
-            PassId::SsrPrepass => {
-                // Merged into GBufferPrepass on DX: the builder emits the
-                // unified node (unified_gbuffer_prepass = true) and never this.
-                return Err(format!(
-                    "graph executor (directx): pass {} is merged into GBufferPrepass \
-                     and should not appear in the frame graph",
-                    pass_id.name()
-                ));
             }
             PassId::Shadow => {
                 // Build the raymarch view only when at least one volume
@@ -1277,15 +1268,6 @@ impl DxContext {
                     params.aspect,
                     params.cam_pos,
                 );
-            }
-            PassId::Velocity => {
-                // Merged into GBufferPrepass on DX: the builder emits the
-                // unified node (unified_gbuffer_prepass = true) and never this.
-                return Err(format!(
-                    "graph executor (directx): pass {} is merged into GBufferPrepass \
-                     and should not appear in the frame graph",
-                    pass_id.name()
-                ));
             }
             PassId::TaaResolve => {
                 self.encode_taa(cmd);
@@ -1406,7 +1388,7 @@ impl DxContext {
                 // Unified geometry pre-pass: one jittered traversal writes
                 // normal+depth, roughness, and motion for every screen-space
                 // consumer (SSR / SSAO / SSGI / TAA / FSR). `params.vp_mat` is
-                // the jittered VP (rasterisation, matching the main pass);
+                // the jittered VP (rasterization, matching the main pass);
                 // `params.cur_vp` is the un-jittered VP the shader uses with the
                 // previous VP for the motion vector. The velocity channel
                 // carries real motion only when a consumer reads it (TAA or

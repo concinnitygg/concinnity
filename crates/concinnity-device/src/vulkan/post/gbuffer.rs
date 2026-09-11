@@ -1,7 +1,7 @@
 // src/vulkan/post/gbuffer.rs
 //
 // Unified geometry G-buffer pre-pass for the Vulkan backend. One jittered
-// traversal of the visible set (static + instanced + skinned) rasterises into a
+// traversal of the visible set (static + instanced + skinned) rasterizes into a
 // single MRT:
 //
 //   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
@@ -10,8 +10,8 @@
 //
 // plus a private single-sample depth buffer. Every screen-space consumer (SSR
 // resolve, SSAO, SSGI, TAA, FSR) reads this one output instead of
-// re-rasterising, replacing the separate SSR pre-pass + SSAO pre-pass +
-// velocity pre-pass. Rasterisation uses the jittered VP (matching the main pass
+// re-rasterizing, replacing the separate SSR pre-pass + SSAO pre-pass +
+// velocity pre-pass. Rasterization uses the jittered VP (matching the main pass
 // coverage); the motion vector derives from the un-jittered current / previous
 // VPs in-shader so projection jitter never contaminates motion. Fuses the
 // former SSR depth+normal pre-pass and TAA velocity pre-pass into one node;
@@ -63,7 +63,7 @@ pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize = 256;
 // lives in `core::render` (imported above).
 
 // Pre-pass render pass: an RGBA16F normal+depth target, an R8 roughness target,
-// and an RG16F velocity target, plus a private depth buffer. All colour
+// and an RG16F velocity target, plus a private depth buffer. All color
 // attachments clear and end shader-readable so the consumers can sample them
 // without an extra barrier. The depth is STORE'd because the temporal upscaler
 // (FSR) consumes this render-resolution single-sample depth alongside the
@@ -166,7 +166,7 @@ struct PrepassPipelineShaders<'a> {
     attrs: &'a [vk::VertexInputAttributeDescription],
 }
 
-// Build a pre-pass pipeline. Three MRT colour targets (normal+depth, roughness,
+// Build a pre-pass pipeline. Three MRT color targets (normal+depth, roughness,
 // velocity) over a private depth buffer; same no-cull / LESS depth as the main
 // pass.
 fn create_prepass_pipeline(
@@ -184,20 +184,8 @@ fn create_prepass_pipeline(
         bindings,
         attrs,
     } = shaders;
-    let vert_mod = spv_module(device, vert_spv)?;
-    let frag_mod = spv_module(device, frag_spv)?;
-    let entry = std::ffi::CString::new("main").unwrap();
-
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod.handle())
-            .name(&entry),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod.handle())
-            .name(&entry),
-    ];
+    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
+    let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
         .vertex_binding_descriptions(bindings)
         .vertex_attribute_descriptions(attrs);
@@ -254,7 +242,7 @@ fn create_prepass_pipeline(
 }
 
 // Vertex input for the GPU-driven (bindless) G-buffer pre-pass: the current
-// attributes the VS reads (position 0, normal 1, skybox-sentinel colour 3) on
+// attributes the VS reads (position 0, normal 1, skybox-sentinel color 3) on
 // binding 0, plus the previous-frame position (location 5) on binding 1. Both
 // bindings carry the 56-byte `Vertex`; the static prefix binds the static VB to
 // both (prev_pos == cur_pos), the skinned tail binds the current deformed buffer
@@ -630,7 +618,7 @@ fn build_model_history(
     })
 }
 
-// One pooled colour channel for one frame in flight. The transient pool owns
+// One pooled color channel for one frame in flight. The transient pool owns
 // the image, its memory and its view; this is a borrowed record so the G-buffer
 // can build framebuffers over them and hand views to readers. Field names match
 // `GpuImage` so a consumer reading `.image` / `.view` does not care which it
@@ -641,7 +629,7 @@ pub(in crate::vulkan) struct PooledTarget {
     pub view: vk::ImageView,
 }
 
-// The pooled colour channels for every frame in flight, as the transient pool
+// The pooled color channels for every frame in flight, as the transient pool
 // hands them over. Each `Vec` has one entry per frame; the caller builds this
 // from `pairs_for_frames` right after the pool is built or rebuilt, and passing
 // a stale one is what a use-after-free would look like.
@@ -654,7 +642,7 @@ pub(in crate::vulkan) struct GbufferPooled {
 
 // Unified G-buffer pre-pass resources held by `VkContext` when any screen-space
 // consumer is enabled. Every `vk::*` handle here is owned by this struct and
-// freed on `destroy`, EXCEPT the three pooled colour channels (see
+// freed on `destroy`, EXCEPT the three pooled color channels (see
 // `PooledTarget`). Holds per-frame MRT targets / framebuffers because the
 // velocity target is read per frame in flight by the temporal resolve.
 pub(in crate::vulkan) struct GbufferResources {
@@ -668,7 +656,7 @@ pub(in crate::vulkan) struct GbufferResources {
     // Per-frame MRT targets + private depth + framebuffers (rebuilt on resize).
     // One slot per frame in flight: TAA reads `velocity_images[frame_idx]`.
     //
-    // The three colour channels are `PooledTarget`: the transient pool owns
+    // The three color channels are `PooledTarget`: the transient pool owns
     // their images, memory and views, so this struct only records the handles it
     // needs to build framebuffers and hand views to readers. The private depth
     // stays feature-owned (`GpuImage`, retired through the allocator on drop).
@@ -702,7 +690,7 @@ pub(in crate::vulkan) struct GbufferExtent {
 }
 
 impl GbufferResources {
-    // Build every G-buffer pre-pass resource. The pipeline that rasterises into
+    // Build every G-buffer pre-pass resource. The pipeline that rasterizes into
     // them is built separately by [`build_gbuffer_bindless`].
     pub(in crate::vulkan) fn new(
         ctx: GbufferDeviceCtx,
@@ -764,7 +752,7 @@ impl GbufferResources {
         let w = width.max(1);
         let h = height.max(1);
         for f in 0..frames {
-            // The three colour channels come from the transient pool, which
+            // The three color channels come from the transient pool, which
             // holds one image per (label, frame) exactly as this loop expects.
             let normal_depth = *pooled
                 .normal_depth
@@ -857,7 +845,7 @@ impl GbufferResources {
 
     fn destroy_targets(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
-        // The three colour channels are pool-owned: dropping these records frees
+        // The three color channels are pool-owned: dropping these records frees
         // nothing, which is the point. The private depth images retire through
         // the allocator as they drop.
         self.normal_depth_images.clear();
@@ -890,8 +878,8 @@ impl GbufferResources {
     }
 }
 
-// Camera / view state the G-buffer pre-pass rasterises with. `jittered_vp` is
-// the jittered VP that rasterises (matching the main pass); `cur_vp` is the
+// Camera / view state the G-buffer pre-pass rasterizes with. `jittered_vp` is
+// the jittered VP that rasterizes (matching the main pass); `cur_vp` is the
 // un-jittered current VP the shader pairs with the previous VP for the motion
 // vector.
 pub(in crate::vulkan) struct GbufferPrepassView {
@@ -1197,7 +1185,7 @@ impl VkContext {
         // The material-referenced shader buckets write their own regions of the
         // command buffer. The pre-pass shades nothing, so every bucket runs under
         // this single pipeline; a bucket whose Shader is not resident is skipped,
-        // matching what the colour pass will draw.
+        // matching what the color pass will draw.
         if prefix > 0 {
             self.inc_draw_calls(self.draw_bucket_regions_shared_pipeline(cmd, indirect, prefix));
         }
@@ -1270,7 +1258,7 @@ mod tests {
     // prev_clip the fragment consumes for the motion vector.
     #[test]
     fn gbuffer_shaders_compile() {
-        if !concinnity_slang::slangc_available() {
+        if !concinnity_slang::shader_tests_enabled() {
             return;
         }
         let ctx = super::super::super::builtins::Ctx::plain(false);

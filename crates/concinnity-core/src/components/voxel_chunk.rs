@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 /// The palette must contain at least one entry whose [BlockType](#blocktype) has
 /// `solid: false` (typically named `air`); cells whose palette entry is
 /// non-solid emit no faces. Faces are only emitted between a solid block and
-/// either an empty neighbour or the outside of the chunk.
+/// either an empty neighbor or the outside of the chunk.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct VoxelChunk {
@@ -61,7 +61,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_blank_chunk_is_empty_with_metre_sized_blocks() {
+    fn a_blank_chunk_is_empty_with_meter_sized_blocks() {
         let c = VoxelChunk::default();
         assert_eq!(c.dim, [0, 0, 0]);
         assert_eq!(c.block_size, 1.0);
@@ -74,12 +74,10 @@ mod tests {
 
     #[test]
     fn an_authored_chunk_parses_and_round_trips_through_postcard() {
-        crate::test_support::install_resolvers();
-        let c: VoxelChunk = serde_json::from_str(
+        let c: VoxelChunk = crate::test_support::from_json(
             r#"{"palette":["air","stone"],"dim":[2,1,2],"block_size":0.5,
                 "blocks":[0,1,1,0],"lod_levels":2,"lod_distances":[16]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(c.palette, [AssetId(3), AssetId(5)]);
         // The block list indexes the palette, one entry per cell in `dim`.
         assert_eq!(c.blocks.len() as u32, c.dim[0] * c.dim[1] * c.dim[2]);

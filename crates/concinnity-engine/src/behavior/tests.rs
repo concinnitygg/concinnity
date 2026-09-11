@@ -64,7 +64,7 @@ fn a_prop_scoped_behavior_fires_once_started() {
 }
 
 // A `set_transform` on a prop the simulation owns is a teleport, not a write
-// physics overwrites the same tick: the driver adopts the pose the behaviour
+// physics overwrites the same tick: the driver adopts the pose the behavior
 // left and simulates on from there.
 #[test]
 fn a_behavior_moves_a_prop_the_simulation_owns() {
@@ -114,7 +114,7 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
         .expect("the prop kept its transform");
     assert!(
         (y - 9.0).abs() < 0.05,
-        "the body was moved to where the behaviour put it (y = {y})",
+        "the body was moved to where the behavior put it (y = {y})",
     );
 }
 

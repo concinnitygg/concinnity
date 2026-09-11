@@ -94,7 +94,7 @@ pub(crate) const START_Z: f32 = 0.0;
 
 /// Where station `index` stands.
 ///
-/// Each one sits its own radius plus its neighbour's behind the last, which is
+/// Each one sits its own radius plus its neighbor's behind the last, which is
 /// the spacing that makes their half circles meet.
 pub(crate) fn center(index: usize) -> [f32; 3] {
     let mut z = START_Z;
@@ -129,7 +129,7 @@ pub(crate) fn declare_all(world: &mut WorldBuilder) {
 }
 
 /// Index `i` of `count` laid out about zero at `spacing`. An even count
-/// straddles zero and an odd one is centred on it.
+/// straddles zero and an odd one is centered on it.
 pub(crate) fn spread(i: usize, count: usize, spacing: f32) -> f32 {
     (i as f32 - (count as f32 - 1.0) * 0.5) * spacing
 }
@@ -139,7 +139,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_run_is_laid_out_about_its_own_centre() {
+    fn a_run_is_laid_out_about_its_own_center() {
         assert_eq!(spread(0, 1, 2.0), 0.0);
         assert_eq!(spread(0, 2, 2.0), -1.0);
         assert_eq!(spread(1, 2, 2.0), 1.0);
@@ -161,7 +161,7 @@ mod tests {
     }
 
     // Consecutive half circles have to meet, or the camera jumps between them.
-    // They do when a station stands its own radius plus its neighbour's behind
+    // They do when a station stands its own radius plus its neighbor's behind
     // the last: the far end of one arc is the near end of the next.
     #[test]
     fn each_half_circle_ends_where_the_next_one_begins() {

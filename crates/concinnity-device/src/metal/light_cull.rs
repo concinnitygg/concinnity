@@ -85,7 +85,7 @@ pub(super) fn build_light_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    let library = super::slang_shaders::LIGHT_CULL.library(device, hot_reload)?;
+    let library = super::slang_builtins::LIGHT_CULL.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&ns_str("light_cull_kernel"))
         .ok_or("light_cull_kernel not found")?;

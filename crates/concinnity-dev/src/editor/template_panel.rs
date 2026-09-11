@@ -9,7 +9,7 @@
 // template's assets into the world (the hook owns that, idempotently).
 //
 // The asset list is the shared grouped list (`asset_list.rs`): assets grouped
-// under a type sub-header, names indented and alphabetised -- identical to the
+// under a type sub-header, names indented and alphabetized -- identical to the
 // Assets browse panel's list. Like the rest of the editor HUD the panel is plain
 // `Sprite` / `TextLabel` components at reserved ids driven each frame by the hook;
 // it is read-only (no per-row interaction), so it needs no typed fields.
@@ -111,7 +111,7 @@ pub(crate) fn max_size(n_rows: usize) -> [f32; 2] {
     [f32::INFINITY, panel_height(n_rows.clamp(1, POOL_MAX))]
 }
 
-// Where the panel sits until the user drags it: centred, just below the top bar.
+// Where the panel sits until the user drags it: centered, just below the top bar.
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [(vw - TPL_W) * 0.5, super::hud::body_top() + 30.0]
 }

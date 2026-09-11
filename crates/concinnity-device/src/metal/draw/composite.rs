@@ -1,7 +1,7 @@
 // src/metal/draw/composite.rs
 //
 // Composite (post-process) pass + text overlay. The post-process pipeline
-// reads `scene_color`, the bloom mip-0 target, and the 3D colour-grading LUT,
+// reads `scene_color`, the bloom mip-0 target, and the 3D color-grading LUT,
 // then writes ACES tonemap + gamma + FXAA into the drawable. Text is drawn
 // after in the same render pass so it sits on top of the tonemapped image in
 // display-referred LDR space; its geometry comes from sub-ranges of this
@@ -73,7 +73,7 @@ impl MtlContext {
         // Bloom mip 0 at texture(1). Always bound so the binding resolves;
         // the shader skips the sample when bloom_intensity == 0.
         post_encoder.set_fragment_texture(self.bloom_targets.mips[0].as_ref(), 1);
-        // 3D colour-grading LUT at texture(2). Always bound -- an identity
+        // 3D color-grading LUT at texture(2). Always bound -- an identity
         // LUT stands in when the world declares no ColorLut.
         post_encoder.set_fragment_texture(self.color_lut.as_ref(), 2);
         // The channel sources at texture(3..5), bound only while a channel
@@ -106,7 +106,7 @@ impl MtlContext {
         };
         post_encoder.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared
-        // fullscreen_vertex synthesises position + UV from SV_VertexID).
+        // fullscreen_vertex synthesizes position + UV from SV_VertexID).
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.
         unsafe {
@@ -133,7 +133,7 @@ impl MtlContext {
             // shader's divide by win_width/height); the scissor is in framebuffer
             // pixels. Recover the drawable's pixel size from the composite color
             // attachment so a per-call clip rect scales from points to pixels.
-            // SAFETY: attachment 0 is the only colour attachment this pass declares, and the
+            // SAFETY: attachment 0 is the only color attachment this pass declares, and the
             // accessors only read it.
             let (fb_w, fb_h) = unsafe {
                 match composite_pass_desc

@@ -49,7 +49,7 @@ pub struct ChunkGenerator {
 }
 
 // Feature size (in blocks) and weight of each value-noise octave. Larger
-// features give broad hills; smaller ones add detail. Weights are normalised
+// features give broad hills; smaller ones add detail. Weights are normalized
 // at evaluation time so the combined noise stays in [0, 1).
 const OCTAVES: [(i32, f32); 3] = [(64, 1.0), (32, 0.5), (16, 0.25)];
 
@@ -136,7 +136,7 @@ impl ChunkGenerator {
     // never overflows the chunk.
     fn surface_height(&self, wx: i32, wz: i32, dy: i32) -> i32 {
         let n = self.combined_noise(wx, wz); // [0, 1)
-        // Centre the terrain around 45% of the chunk height with a +/-30% swing.
+        // Center the terrain around 45% of the chunk height with a +/-30% swing.
         let base = dy as f32 * 0.45;
         let amplitude = dy as f32 * 0.30;
         let h = base + (n - 0.5) * 2.0 * amplitude;
@@ -192,7 +192,7 @@ fn smoothstep(t: f32) -> f32 {
 
 // Hash an integer lattice point to a pseudo-random `f32` in `[0, 1)`.
 //
-// Integer-only mixing (a variant of the SplitMix64 finaliser) so the result
+// Integer-only mixing (a variant of the SplitMix64 finalizer) so the result
 // is deterministic and reproducible across platforms.
 fn hash01(seed: u64, x: i32, z: i32) -> f32 {
     let mut h = seed;

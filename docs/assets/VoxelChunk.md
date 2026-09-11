@@ -12,7 +12,7 @@ dropped, so a fully filled chunk contributes zero triangles to its interior.
 The palette must contain at least one entry whose [BlockType](BlockType.md) has
 `solid: false` (typically named `air`); cells whose palette entry is
 non-solid emit no faces. Faces are only emitted between a solid block and
-either an empty neighbour or the outside of the chunk.
+either an empty neighbor or the outside of the chunk.
 
 ## Parameters
 

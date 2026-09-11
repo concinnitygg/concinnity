@@ -64,7 +64,7 @@ pub(crate) const DROP_THUMB: AssetId = AssetId(EDIT + 13);
 // The per-slot control pool (`form::FIELD_POOL` of each). `form_row_label(r)` is
 // the caption of visible slot `r`; `form_input(r)` its text control;
 // `form_toggle_bg(r)` its checkbox / cycle-button / array-add background;
-// `form_swatch(r)` its colour swatch / array-remove button;
+// `form_swatch(r)` its color swatch / array-remove button;
 // `form_enum_label(r)` its enum-value / array-count caption.
 pub(crate) fn form_row_label(r: usize) -> AssetId {
     AssetId(EDIT + 0x20 + r as u32)
@@ -395,7 +395,7 @@ fn vec_len(kind: FieldKind) -> usize {
     }
 }
 
-// Whether the non-colour vector at logical field `j` is currently disclosed: its
+// Whether the non-color vector at logical field `j` is currently disclosed: its
 // element leaves (`key.0` ..) follow it directly in the field list, so the next
 // field carrying that prefix means it is expanded.
 fn vec_expanded(fields: &[FormField], j: usize) -> bool {
@@ -421,8 +421,8 @@ fn field_caption(fields: &[FormField], field: &FormField) -> String {
     })
 }
 
-// The axis label for `key` when it is an element leaf of a non-colour vector
-// (`parent.<idx>` with `parent` a non-colour vector field), else `None`.
+// The axis label for `key` when it is an element leaf of a non-color vector
+// (`parent.<idx>` with `parent` a non-color vector field), else `None`.
 fn element_axis_label(fields: &[FormField], key: &str) -> Option<String> {
     let (parent, last) = key.rsplit_once('.')?;
     let idx: usize = last.parse().ok()?;
@@ -457,7 +457,7 @@ pub(crate) enum FormAction {
     // Append / drop the last element of array arg field `i`.
     AddArrayElement(usize),
     RemoveArrayElement(usize),
-    // Expand / collapse the disclosure of non-colour vector arg field `i` (its
+    // Expand / collapse the disclosure of non-color vector arg field `i` (its
     // per-element leaves).
     ToggleVecExpand(usize),
     // Open (or close) the override menu of the marked field `i`.
@@ -822,10 +822,10 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
             }
             kind => {
                 let control = form_control_rect(o, w, r);
-                // A colour vector reserves a right-hand strip for a live preview
+                // A color vector reserves a right-hand strip for a live preview
                 // swatch and narrows its field to clear it. The swatch must sit
                 // OUTSIDE the field rect: a `TextInput`'s opaque background box
-                // is synthesised after every authored sprite (the swatch
+                // is synthesized after every authored sprite (the swatch
                 // included), so a swatch drawn under the field would be painted
                 // over.
                 let swatch = matches!(kind, FieldKind::Vec { color: true, .. }).then(|| {
@@ -1103,7 +1103,7 @@ fn layout_field_dropdown(
     }
 }
 
-// Parse a colour field's live text ("r, g, b" / "r, g, b, a") into an opaque RGB
+// Parse a color field's live text ("r, g, b" / "r, g, b, a") into an opaque RGB
 // tint for its preview swatch, clamped to the displayable 0..=1 range. Falls
 // back to a neutral dark swatch until three components parse.
 fn swatch_rgb(text: &str) -> [f32; 4] {
@@ -1517,12 +1517,12 @@ mod tests {
         assert!(!sprite_visible(&world, FORM_THUMB));
     }
 
-    // A colour-vector arg field renders its text control plus a live preview
+    // A color-vector arg field renders its text control plus a live preview
     // swatch tinted from the field's current text; the swatch sits outside the
-    // field rect (a TextInput's opaque background box is synthesised after every
+    // field rect (a TextInput's opaque background box is synthesized after every
     // authored sprite, so a swatch under the field would be painted over).
     #[test]
-    fn colour_vector_field_shows_a_live_swatch() {
+    fn color_vector_field_shows_a_live_swatch() {
         let mut world = injected_world();
         for t in world.query_mut::<TextInput>() {
             if t.asset_id == form_input(0) {
@@ -1547,7 +1547,7 @@ mod tests {
             size(fields.len()),
         );
         let sw = sprite(&world, form_swatch(0));
-        assert!(sw.visible, "the colour field draws a swatch");
+        assert!(sw.visible, "the color field draws a swatch");
         assert_eq!(sw.tint, [1.0, 0.0, 0.0, 1.0], "swatch tint is the RGB text");
         let ti = input(&world, form_input(0));
         assert!(ti.visible, "the editable text field still shows");
@@ -1557,7 +1557,7 @@ mod tests {
         );
     }
 
-    // A plain (non-colour) vector renders as a collapsed disclosure button, not an
+    // A plain (non-color) vector renders as a collapsed disclosure button, not an
     // editable text field or a swatch; clicking it toggles its per-element leaves.
     #[test]
     fn plain_vector_field_is_a_disclosure() {
@@ -1576,7 +1576,7 @@ mod tests {
         }];
         let v = view(&fields);
         apply(&mut world, Some(&v), o, size(v.form_fields.len()));
-        assert!(!sprite_visible(&world, form_swatch(0)), "no colour swatch");
+        assert!(!sprite_visible(&world, form_swatch(0)), "no color swatch");
         assert!(
             !input(&world, form_input(0)).visible,
             "a collapsed vector has no editable comma field"
@@ -1597,10 +1597,10 @@ mod tests {
         );
     }
 
-    // An expanded vector shows its element leaves labelled by axis (x / y / z), each
+    // An expanded vector shows its element leaves labeled by axis (x / y / z), each
     // an editable field, and the header caret flips to `v`.
     #[test]
-    fn expanded_vector_shows_axis_labelled_element_fields() {
+    fn expanded_vector_shows_axis_labeled_element_fields() {
         let o = test_origin();
         let mut world = injected_world();
         let elem = |axis: &str| FormField {
@@ -1631,7 +1631,7 @@ mod tests {
         apply(&mut world, Some(&v), o, size(v.form_fields.len()));
         // The header caret is now `v` (its element leaves follow it).
         assert_eq!(label(&world, form_enum_label(0)).content, "[3] v");
-        // Slots 1..=3 are the axis-labelled element fields.
+        // Slots 1..=3 are the axis-labeled element fields.
         assert_eq!(label(&world, form_row_label(1)).content, "x");
         assert_eq!(label(&world, form_row_label(2)).content, "y");
         assert_eq!(label(&world, form_row_label(3)).content, "z");

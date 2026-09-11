@@ -209,7 +209,7 @@ mod tests {
     }
 
     // A write addressed to an instance or a slot that does not exist is
-    // dropped rather than landing on a neighbour.
+    // dropped rather than landing on a neighbor.
     #[test]
     fn a_write_to_an_absent_instance_or_slot_lands_nowhere() {
         let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(3));

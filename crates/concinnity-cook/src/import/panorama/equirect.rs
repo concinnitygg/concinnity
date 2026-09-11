@@ -63,7 +63,7 @@ pub(crate) fn load_equirect(
 
 // Width of one decoded sample. A 4K panorama is eight million pixels, so the
 // decode reads straight from the container's bytes into the final linear-light
-// pixels: an intermediate normalised buffer would be another 130 MB live at
+// pixels: an intermediate normalized buffer would be another 130 MB live at
 // once, on top of the 100 MB the result already costs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SampleDepth {
@@ -79,7 +79,7 @@ impl SampleDepth {
         }
     }
 
-    // Normalise one channel of a pixel to 0..1.
+    // Normalize one channel of a pixel to 0..1.
     fn read(self, pixel: &[u8], channel: usize) -> f32 {
         match self {
             Self::Eight => pixel[channel] as f32 / u8::MAX as f32,
@@ -120,7 +120,7 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Ok((info.width as u32, info.height as u32))
 }
 
-// Decode a PNG of any colour type or bit depth. Palette and sub-byte depths
+// Decode a PNG of any color type or bit depth. Palette and sub-byte depths
 // are expanded; 16-bit stays 16-bit so a smooth sky keeps its precision.
 fn decode_png(bytes: Vec<u8>) -> Result<HdrImage, String> {
     use png::{BitDepth, ColorType};
@@ -147,7 +147,7 @@ fn decode_png(bytes: Vec<u8>) -> Result<HdrImage, String> {
         ColorType::GrayscaleAlpha => 2,
         other => {
             return Err(format!(
-                "unsupported PNG colour type {:?}; convert the panorama to RGB or RGBA",
+                "unsupported PNG color type {:?}; convert the panorama to RGB or RGBA",
                 other
             ));
         }
@@ -191,10 +191,10 @@ fn decode_jpeg(bytes: Vec<u8>) -> Result<HdrImage, String> {
     })
 }
 
-// Pack interleaved samples into linear-light RGB triples: grey broadcasts,
+// Pack interleaved samples into linear-light RGB triples: gray broadcasts,
 // alpha drops (a panorama is opaque by construction), and the sRGB transfer
 // curve inverts so the values become scene radiance. The renderer's output
-// pass re-encodes after tonemapping, so linearising here is what makes the
+// pass re-encodes after tonemapping, so linearizing here is what makes the
 // displayed sky match the source image.
 fn gather_linear_rgb(raw: &[u8], channels: usize, depth: SampleDepth) -> Vec<[f32; 3]> {
     raw.chunks_exact(channels * depth.bytes())
@@ -242,8 +242,8 @@ mod tests {
 
     #[test]
     fn an_eight_bit_panorama_decodes_to_linear_light() {
-        // 128/255 is mid-grey on the sRGB curve, which is far darker than 0.5
-        // once linearised. Getting this wrong washes the sky out.
+        // 128/255 is mid-gray on the sRGB curve, which is far darker than 0.5
+        // once linearized. Getting this wrong washes the sky out.
         let doc = doc_with(panorama_png(4, 2, 128));
         let image = load_equirect(&doc, "test.glb", 0).expect("decode");
         assert_eq!((image.width, image.height), (4, 2));
@@ -253,7 +253,7 @@ mod tests {
             assert!((px[0] - expected).abs() < 1e-5, "got {:?}", px);
             assert_eq!(px[0], px[2]);
         }
-        assert!(expected < 0.25, "sRGB mid-grey linearises well below 0.5");
+        assert!(expected < 0.25, "sRGB mid-gray linearizes well below 0.5");
     }
 
     #[test]
@@ -306,20 +306,20 @@ mod tests {
     }
 
     #[test]
-    fn gather_linear_rgb_broadcasts_grey_and_drops_alpha() {
-        let grey = srgb_to_linear(128.0 / 255.0);
+    fn gather_linear_rgb_broadcasts_gray_and_drops_alpha() {
+        let gray = srgb_to_linear(128.0 / 255.0);
         assert_eq!(
             gather_linear_rgb(&[128, 40], 2, SampleDepth::Eight),
-            vec![[grey, grey, grey]],
-            "grey broadcasts and alpha drops"
+            vec![[gray, gray, gray]],
+            "gray broadcasts and alpha drops"
         );
         assert_eq!(
             gather_linear_rgb(&[128], 1, SampleDepth::Eight),
-            vec![[grey, grey, grey]]
+            vec![[gray, gray, gray]]
         );
         assert_eq!(
             gather_linear_rgb(&[0, 128, 255, 40], 4, SampleDepth::Eight),
-            vec![[0.0, grey, 1.0]]
+            vec![[0.0, gray, 1.0]]
         );
     }
 
