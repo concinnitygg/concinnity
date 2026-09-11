@@ -7,6 +7,8 @@
 // marked field. The single-field revert / apply pair is covered beside the form
 // drive in `hook/tests.rs`.
 
+use concinnity_core::components::TextInput;
+
 use super::*;
 use crate::test_support::isolate_state_dir;
 
@@ -21,7 +23,7 @@ fn world_with_fields() -> World {
         .into_iter()
         .chain(form_panel::all_field_ids())
     {
-        world.add_component(crate::components::TextInput {
+        world.add_component(TextInput {
             asset_id: id,
             ..Default::default()
         });

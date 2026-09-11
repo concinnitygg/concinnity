@@ -4,10 +4,9 @@
 //! dispatcher the verb catalog describes, so `{"cmd": ...}` is an internal seam
 //! between the tool surface and the dispatcher rather than a wire format.
 
+use serde_json::{Map, Value};
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
-
-use serde_json::{Map, Value};
 
 use super::server::{Executor, Server};
 use super::{http, tools};

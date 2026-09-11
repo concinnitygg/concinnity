@@ -7,15 +7,18 @@
 // (runtime spawn commands, camera motion) around it. Each session constructs
 // exactly one driver, so a reload is never applied twice.
 
+use concinnity_core::components::SkeletonPose;
+use concinnity_core::components::StoryReload;
+use concinnity_core::ecs::World;
+use concinnity_core::gfx::skeleton;
+use concinnity_engine::gfx::animation::AnimationSystem;
+use concinnity_engine::gfx::system;
+use concinnity_engine::gfx::system::GraphicsSystem;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::debug_hook::DebugHook;
-use crate::ecs::World;
-use crate::gfx::animation::AnimationSystem;
-use crate::gfx::system::GraphicsSystem;
-
 use super::state::{AssetHotReloadState, FrameHotReloadEffects, run_frame};
+use crate::debug_hook::DebugHook;
 
 pub(crate) struct HotReloadDriver {
     // Reload catalog + filesystem watcher + in-flight decode handles. Armed
@@ -55,10 +58,7 @@ impl HotReloadDriver {
     // Rebuild the reload state from a freshly captured source catalog.
     // Dropping the previous state stops its watcher and abandons any
     // in-flight decode aimed at the replaced world's slots.
-    pub(crate) fn arm(
-        &mut self,
-        sources: crate::gfx::system::hot_reload_sources::HotReloadSources,
-    ) {
+    pub(crate) fn arm(&mut self, sources: system::hot_reload_sources::HotReloadSources) {
         self.state = Some(AssetHotReloadState::from_sources(sources));
     }
 
@@ -104,14 +104,13 @@ pub(crate) fn apply_effects(world: &mut World, effects: FrameHotReloadEffects) {
     // components so `AnimationSystem` produces right-sized output going
     // forward.
     if !effects.skeleton_updates.is_empty() {
-        let index_to_new: std::collections::HashMap<usize, crate::gfx::skeleton::Skeleton> =
-            effects
-                .skeleton_updates
-                .into_iter()
-                .map(|u| (u.skinned_index, u.new_skeleton))
-                .collect();
+        let index_to_new: std::collections::HashMap<usize, skeleton::Skeleton> = effects
+            .skeleton_updates
+            .into_iter()
+            .map(|u| (u.skinned_index, u.new_skeleton))
+            .collect();
         let mut applied = 0usize;
-        for pose in world.query_mut::<crate::components::SkeletonPose>() {
+        for pose in world.query_mut::<SkeletonPose>() {
             if let Some(new_skel) = index_to_new.get(&pose.skinned_index) {
                 pose.skeleton = new_skel.clone();
                 pose.joint_matrices = pose.skeleton.bind_skinning_matrices();
@@ -130,7 +129,7 @@ pub(crate) fn apply_effects(world: &mut World, effects: FrameHotReloadEffects) {
     // world step, so the swap lands the same frame.
     for story in effects.story_updates {
         world
-            .events_mut::<crate::components::StoryReload>()
-            .send(crate::components::StoryReload { story });
+            .events_mut::<StoryReload>()
+            .send(StoryReload { story });
     }
 }

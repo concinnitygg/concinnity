@@ -5,8 +5,9 @@
 // hit and the target is a 3D scene (.glb), `add_to_path` scaffolds a fresh
 // world at that location.
 
-use crate::add_to_path;
 use concinnity_cook::authoring::world::{WORLD_JSONL, find_world_jsonl};
+
+use crate::add_to_path;
 
 /// Create an asset from `target` and apply it to the discovered world.
 ///

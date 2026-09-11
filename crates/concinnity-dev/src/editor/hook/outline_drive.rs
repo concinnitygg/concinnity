@@ -8,20 +8,22 @@
 // the outline), so form edits and drags update immediately. The lines ride
 // the renderer's line pass, which handles depth: occluded runs draw faint.
 
-use super::*;
-use crate::components::{
+use concinnity_core::components::{
     Collider, PointLight, RectAreaLight, RectAreaLightGeometry, ReflectionProbe,
     SPOT_MAX_ANGLE_DEG, SpotLight, SpotLightGeometry, Transform, TriggerVolume,
 };
+use concinnity_core::ecs::Entity;
 use concinnity_core::gfx::lines::Line;
 use outlines::shapes::{self, Stroke};
+
+use super::*;
 
 // What one entity's shape generator reads: its live entity, its authored
 // entry and type, the frame's viewport, and the stroke its row draws with.
 // Passed by reference so a shape takes only what it uses.
 struct ShapeCtx<'a> {
     world: &'a World,
-    entity: crate::ecs::Entity,
+    entity: Entity,
     ty: &'a str,
     entry: &'a serde_json::Value,
     vp: [f32; 2],
@@ -237,7 +239,7 @@ fn push_camera(ctx: &ShapeCtx, out: &mut Vec<Line>) {
 
 // The entity's collider wireframe (the Colliders category), through its live
 // Transform so scale and a gizmo drag both apply.
-fn push_collider_outline(world: &World, entity: crate::ecs::Entity, out: &mut Vec<Line>) {
+fn push_collider_outline(world: &World, entity: Entity, out: &mut Vec<Line>) {
     let (Some(collider), Some(transform)) = (
         world.get::<Collider>(entity),
         world.get::<Transform>(entity),
@@ -260,7 +262,7 @@ fn push_collider_outline(world: &World, entity: crate::ecs::Entity, out: &mut Ve
 
 // The entity's position, preferring the seeded / gizmo-dragged Transform over
 // the component's authored field.
-fn anchored_position(world: &World, entity: crate::ecs::Entity, authored: [f32; 3]) -> [f32; 3] {
+fn anchored_position(world: &World, entity: Entity, authored: [f32; 3]) -> [f32; 3] {
     world
         .get::<Transform>(entity)
         .map(|t| t.position)
@@ -270,7 +272,7 @@ fn anchored_position(world: &World, entity: crate::ecs::Entity, authored: [f32; 
 // The entity's full pose, preferring the live Transform.
 fn anchored_transform(
     world: &World,
-    entity: crate::ecs::Entity,
+    entity: Entity,
     position: [f32; 3],
     rotation_deg: [f32; 3],
 ) -> Transform {
@@ -287,6 +289,10 @@ fn anchored_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::Camera3D;
+    use concinnity_core::components::PropCollider;
+    use concinnity_core::ecs::ComponentSlot;
+    use concinnity_host::thread::asset_id;
 
     const VP: [f32; 2] = [1280.0, 720.0];
 
@@ -300,9 +306,9 @@ mod tests {
 
     // A world holding one named entity carrying `component`, resolvable
     // through the same EntityByName path the gizmo and billboards use.
-    fn world_with<C: crate::ecs::ComponentSlot>(name: &str, component: C) -> World {
-        crate::ecs::asset_id::reset_interner();
-        let id = crate::ecs::asset_id::intern(name);
+    fn world_with<C: ComponentSlot>(name: &str, component: C) -> World {
+        asset_id::reset_interner();
+        let id = asset_id::intern(name);
         let mut world = World::new();
         let entity = world.push(component);
         let mut by_name = std::collections::BTreeMap::new();
@@ -400,7 +406,7 @@ mod tests {
             "zone",
             TriggerVolume {
                 position: [0.0; 3],
-                collider: crate::components::PropCollider {
+                collider: PropCollider {
                     shape: "ball".to_string(),
                     radius: 2.0,
                     ..Default::default()
@@ -441,7 +447,7 @@ mod tests {
     fn colliders_show_only_through_their_toggle() {
         let mut world = world_with(
             "crate",
-            Collider(crate::components::PropCollider {
+            Collider(PropCollider {
                 shape: "cuboid".to_string(),
                 half_extents: [1.0, 1.0, 1.0],
                 ..Default::default()
@@ -540,7 +546,7 @@ mod tests {
         // `working_args` keeps merging the defaults the frustum relies on).
         let world = world_with(
             "shot",
-            crate::components::Camera3D {
+            Camera3D {
                 position: [0.0; 3],
                 view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
                 fov_y_degrees: 75.0,

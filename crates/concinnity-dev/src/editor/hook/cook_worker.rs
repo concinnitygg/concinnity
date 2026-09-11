@@ -5,6 +5,8 @@
 // by the pipeline's compile progress, on the engine's bounded job pool, under
 // the one-cook-at-a-time guard.
 
+use concinnity_host::thread::jobs::pool;
+
 use super::*;
 
 impl EditorHook {
@@ -33,7 +35,7 @@ impl EditorHook {
                     op.set(0, 0);
                 }
             };
-            let outcome = crate::jobs::pool().install(|| {
+            let outcome = pool().install(|| {
                 crate::authoring::build_world_str_to_disk_with_progress(&content, Some(&report))
             });
             op.finish();

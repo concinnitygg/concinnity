@@ -3,8 +3,9 @@
 // `cn test` accepts an optional --file path. When the path is missing or
 // doesn't exist on disk, fall back to discovery via find_world_jsonl.
 
-use crate::check_at_path;
 use concinnity_cook::authoring::world::find_world_jsonl;
+
+use crate::check_at_path;
 
 /// Validate a world and report its errors without building blobs.
 ///

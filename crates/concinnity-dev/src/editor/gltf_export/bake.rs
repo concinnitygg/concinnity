@@ -6,12 +6,13 @@
 // re-skinned onto it. Mirrors the cook's bake pass (character/bake.rs) on the
 // export form so a baked file needs no shape work in the target tool.
 
-use super::ExportMesh;
-use crate::components::{CharacterShape, SkeletonJoint};
 use concinnity_core::components::build_skeleton_from_joint_defs;
+use concinnity_core::components::{CharacterShape, SkeletonJoint};
 use concinnity_core::gfx::proportions::ProportionLayer;
 use concinnity_core::gfx::transform::{Mat4, decompose, euler_yxz_from_quat};
 use concinnity_core::math::vec3;
+
+use super::ExportMesh;
 
 fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
     let mut out = [m[3][0], m[3][1], m[3][2]];
@@ -130,7 +131,7 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
 mod tests {
     use super::super::test_fixtures::quad_mesh;
     use super::*;
-    use crate::components::{JointProportion, ShapeSlider};
+    use concinnity_core::components::{JointProportion, ShapeSlider};
 
     #[test]
     fn sliders_fold_into_positions_and_targets_are_dropped() {

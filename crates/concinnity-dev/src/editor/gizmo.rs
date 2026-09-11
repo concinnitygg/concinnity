@@ -7,11 +7,12 @@
 // the axis-drag math. The hook (`hook/gizmo_drag.rs`) owns the drag state and
 // the write-back.
 
-use super::registry::ID_BASE;
-use crate::components::Sprite;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
+use concinnity_core::components::Sprite;
+use concinnity_core::ecs::World;
 use concinnity_core::gfx::pick::PickRay;
+use concinnity_host::thread::asset_id::AssetId;
+
+use super::registry::ID_BASE;
 
 // Reserved id family: the next free block after the highlight's 0xC00.
 const GIZMO_BASE: u32 = ID_BASE + 0xD00;

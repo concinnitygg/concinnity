@@ -4,9 +4,10 @@
 // and drives the system loop with the per-frame debug hook. The production
 // `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
 
-use crate::app::state::App;
+use concinnity_cook::authoring::world::find_world_jsonl;
+use concinnity_engine::app::state::App;
+
 use crate::debug_hook::DebugHook;
-use crate::world::find_world_jsonl;
 
 /// The `cn debug` server path: start the localhost debug server on `port`,
 /// then run interpreted with it as the per-frame hook. This is the entry point
@@ -75,7 +76,7 @@ pub(crate) fn start_app(
     mut app: App,
     mut debug: Option<Box<dyn DebugHook>>,
 ) -> std::io::Result<()> {
-    use crate::app::runloop;
+    use concinnity_engine::app::runloop;
 
     let shutdown = app.shutdown_token();
     runloop::install_ctrlc_handler(&app);

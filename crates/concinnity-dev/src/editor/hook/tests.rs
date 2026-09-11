@@ -2,8 +2,28 @@
 //
 // Unit + tick-level tests for the editor hook.
 
+use concinnity_cook::authoring::world::parse_world_jsonl;
+use concinnity_core::components::Behavior;
+use concinnity_core::components::BehaviorLiteral;
+use concinnity_core::components::Camera3D;
+use concinnity_core::components::InputKey;
+use concinnity_core::components::PointLight;
+use concinnity_core::components::Sprite;
+use concinnity_core::components::TextInput;
+use concinnity_core::components::TextLabel;
+use concinnity_core::components::Transform;
+use concinnity_core::components::TriggerVolume;
+use concinnity_core::components::Variables;
+use concinnity_core::ecs::ComponentAsset;
+use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::HiddenAssets;
+use concinnity_core::ecs::PickEntry;
+use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::TraceRequest;
+use concinnity_core::ecs::WorldLines;
+use concinnity_host::thread::asset_id;
+
 use super::*;
-use crate::components::{Sprite, TextInput, TextLabel};
 use crate::editor::behavior::graph::CardKind;
 use crate::editor::behavior::path;
 use crate::editor::character_shape;
@@ -47,7 +67,7 @@ fn world_with_fields() -> World {
     world
 }
 
-fn set_field(world: &mut World, id: crate::ecs::asset_id::AssetId, text: &str) {
+fn set_field(world: &mut World, id: asset_id::AssetId, text: &str) {
     for t in world.query_mut::<TextInput>() {
         if t.asset_id == id {
             t.content = text.to_string();
@@ -298,7 +318,7 @@ fn a_live_edit_reaches_a_really_cooked_world() {
     h.world_shadows = Some(shadows);
     assert_eq!(
         world
-            .query::<crate::components::TextLabel>()
+            .query::<TextLabel>()
             .next()
             .expect("the label is in the world")
             .content,
@@ -312,11 +332,7 @@ fn a_live_edit_reaches_a_really_cooked_world() {
         "a TextLabel field is written into the running world"
     );
     assert_eq!(
-        world
-            .query::<crate::components::TextLabel>()
-            .next()
-            .unwrap()
-            .content,
+        world.query::<TextLabel>().next().unwrap().content,
         "after",
         "and the running component carries the edit"
     );
@@ -1142,13 +1158,13 @@ fn templates_panel_press_drags_and_focuses() {
 // Templates panel (the same click path a real session drives).
 #[test]
 fn tick_view_button_opens_view_then_a_row_opens_templates() {
-    let vis = |w: &World, id: crate::ecs::asset_id::AssetId| {
+    let vis = |w: &World, id: asset_id::AssetId| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == id)
             .map(|s| s.visible)
             .unwrap_or(false)
     };
-    let rect = |w: &World, id: crate::ecs::asset_id::AssetId| {
+    let rect = |w: &World, id: asset_id::AssetId| {
         let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
         [s.x, s.y, s.width, s.height]
     };
@@ -1208,13 +1224,13 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
 // the detail. Drives the whole flow through `tick` end to end.
 #[test]
 fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
-    let vis = |w: &World, id: crate::ecs::asset_id::AssetId| {
+    let vis = |w: &World, id: asset_id::AssetId| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == id)
             .map(|s| s.visible)
             .unwrap_or(false)
     };
-    let rect = |w: &World, id: crate::ecs::asset_id::AssetId| {
+    let rect = |w: &World, id: asset_id::AssetId| {
         let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
         [s.x, s.y, s.width, s.height]
     };
@@ -1251,7 +1267,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
     assert_eq!(h.open_template, Some(0), "the detail panel opened on pick");
     assert!(vis(&world, template_panel::PANEL_BG), "detail panel shown");
     let title = world
-        .query::<crate::components::TextLabel>()
+        .query::<TextLabel>()
         .find(|l| l.asset_id == template_panel::TITLE_LABEL)
         .unwrap();
     assert!(
@@ -1903,13 +1919,13 @@ fn edit_form_seeds_and_updates_existing_args() {
 // action logic the other tests cover).
 #[test]
 fn tick_lays_out_the_open_panel_in_every_state() {
-    let sprite_visible = |w: &World, id: crate::ecs::asset_id::AssetId| {
+    let sprite_visible = |w: &World, id: asset_id::AssetId| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == id)
             .unwrap()
             .visible
     };
-    let label = |w: &World, id: crate::ecs::asset_id::AssetId| {
+    let label = |w: &World, id: asset_id::AssetId| {
         w.query::<TextLabel>()
             .find(|l| l.asset_id == id)
             .unwrap()
@@ -2015,7 +2031,7 @@ fn write_jsonl_persists_entries_atomically() {
     h.write_jsonl().unwrap();
 
     let content = std::fs::read_to_string(&path).unwrap();
-    let parsed = crate::world::parse_world_jsonl(&content).unwrap();
+    let parsed = parse_world_jsonl(&content).unwrap();
     assert_eq!(parsed.len(), 2, "both entries written, one line each");
     assert_eq!(parsed[1]["name"], "lamp");
     assert!(!std::path::Path::new(&format!("{path_str}.tmp")).exists());
@@ -2037,7 +2053,7 @@ fn write_jsonl_creates_the_worlds_directory() {
     h.write_jsonl().expect("the write creates its directory");
 
     let content = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(crate::world::parse_world_jsonl(&content).unwrap().len(), 1);
+    assert_eq!(parse_world_jsonl(&content).unwrap().len(), 1);
 }
 
 #[test]
@@ -2368,7 +2384,7 @@ fn story_session(lines: &[&str]) -> (EditorHook, World) {
     (h, world)
 }
 
-fn story_key_input(key: crate::components::InputKey) -> FrameInput {
+fn story_key_input(key: InputKey) -> FrameInput {
     FrameInput {
         captured_key: Some(key),
         viewport: [1280.0, 720.0],
@@ -2388,20 +2404,14 @@ fn line_caret(world: &mut World, caret: usize) {
 fn story_enter_splits_and_backspace_joins() {
     let (mut h, mut world) = story_session(&["hello world"]);
     line_caret(&mut world, 5);
-    h.story_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.story_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(h.story_lines, ["hello", " world"]);
     assert_eq!(h.story_line, 1);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
     assert_eq!(input.content, " world");
     assert_eq!(input.caret, 0, "the caret starts the new line");
 
-    h.story_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Backspace),
-    );
+    h.story_keys(&mut world, &story_key_input(InputKey::Backspace));
     assert_eq!(h.story_lines, ["hello world"]);
     assert_eq!(h.story_line, 0);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
@@ -2412,10 +2422,7 @@ fn story_enter_splits_and_backspace_joins() {
         "the view yields focus that frame"
     );
     // The next key frame clears the blur.
-    h.story_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Left),
-    );
+    h.story_keys(&mut world, &story_key_input(InputKey::Left));
     assert!(!h.story_blur);
 }
 
@@ -2424,24 +2431,15 @@ fn story_enter_splits_and_backspace_joins() {
 fn story_up_down_commit_and_navigate() {
     let (mut h, mut world) = story_session(&["one", "two", "three"]);
     widget::seed_field(&mut world, story_panel::LINE_INPUT, "ONE edited");
-    h.story_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Down),
-    );
+    h.story_keys(&mut world, &story_key_input(InputKey::Down));
     assert_eq!(h.story_lines[0], "ONE edited", "moving commits the edit");
     assert_eq!(h.story_line, 1);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
     assert_eq!(input.content, "two");
-    h.story_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Up),
-    );
+    h.story_keys(&mut world, &story_key_input(InputKey::Up));
     assert_eq!(h.story_line, 0);
     // Up at the first line stays put.
-    h.story_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Up),
-    );
+    h.story_keys(&mut world, &story_key_input(InputKey::Up));
     assert_eq!(h.story_line, 0);
 }
 
@@ -2680,10 +2678,7 @@ fn import_enter_key_adds() {
     let glb = dir.join("prop.glb");
     std::fs::write(&glb, b"glb").unwrap();
     type_path(&mut world, &glb.to_string_lossy());
-    h.import_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.import_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(h.entries.len(), 1);
 }
 
@@ -3264,7 +3259,7 @@ fn undo_drops_entry_indexed_ui_state() {
 // field owns the keyboard or the world holds the cursor (play mode).
 #[test]
 fn ctrl_z_y_step_history_unless_typing_or_playing() {
-    use crate::components::InputKey;
+    use concinnity_core::components::InputKey;
     let step = |h: &mut EditorHook, key: InputKey| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
@@ -3321,7 +3316,7 @@ fn save_writes_the_world_file_and_no_build_output() {
 
     let written = std::fs::read_to_string(&world_path).expect("the world file was created");
     assert_eq!(
-        crate::world::parse_world_jsonl(&written).unwrap(),
+        parse_world_jsonl(&written).unwrap(),
         h.entries,
         "the working entries are what landed on disk"
     );
@@ -3375,12 +3370,9 @@ fn dirty_tracks_the_saved_list_across_history_jumps() {
 // Viewport picking test rig: a camera at `cam_pos` facing -Z (yaw 0, pitch 0),
 // the injected typed fields (the pick flows open the edit form), and a
 // PickIndex resource carrying the given (id, bb_min, bb_max) entries.
-fn pick_world(
-    cam_pos: [f32; 3],
-    picks: Vec<(crate::ecs::asset_id::AssetId, [f32; 3], [f32; 3])>,
-) -> World {
+fn pick_world(cam_pos: [f32; 3], picks: Vec<(asset_id::AssetId, [f32; 3], [f32; 3])>) -> World {
     let mut world = world_with_fields();
-    world.add_component(crate::components::Camera3D {
+    world.add_component(Camera3D {
         position: cam_pos,
         view_matrix: concinnity_core::gfx::camera::view_matrix(cam_pos, 0.0, 0.0),
         fov_y_degrees: 90.0,
@@ -3397,10 +3389,10 @@ fn pick_world(
         world.add_component(s);
     }
     world.add_component(super::super::marquee::rect_sprite());
-    world.insert_resource(crate::ecs::PickIndex {
+    world.insert_resource(PickIndex {
         entries: picks
             .into_iter()
-            .map(|(asset_id, bb_min, bb_max)| crate::ecs::PickEntry {
+            .map(|(asset_id, bb_min, bb_max)| PickEntry {
                 asset_id,
                 bb_min,
                 bb_max,
@@ -3464,9 +3456,9 @@ fn drag_to(world: &mut World, h: &mut EditorHook, pos: [f32; 2]) {
 // spawns UI.
 #[test]
 fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
-    crate::ecs::asset_id::reset_interner();
-    let near = crate::ecs::asset_id::intern("box_near");
-    let far = crate::ecs::asset_id::intern("box_far");
+    asset_id::reset_interner();
+    let near = asset_id::intern("box_near");
+    let far = asset_id::intern("box_far");
     let mut world = pick_world(
         [0.0; 3],
         vec![
@@ -3504,9 +3496,9 @@ fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
 // covers (the first pick opens the edit form, which claims center presses).
 #[test]
 fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
-    crate::ecs::asset_id::reset_interner();
-    let near = crate::ecs::asset_id::intern("box_near");
-    let far = crate::ecs::asset_id::intern("box_far");
+    asset_id::reset_interner();
+    let near = asset_id::intern("box_near");
+    let far = asset_id::intern("box_far");
     // The ray through pixel [200, 600] (fov 90, 1280x720) passes ~[-6.1, -3.3]
     // at depth 5 and ~[-12.2, -6.7] at depth 10; both boxes straddle it.
     let mut world = pick_world(
@@ -3564,8 +3556,8 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
 fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
-    crate::ecs::asset_id::reset_interner();
-    let generated = crate::ecs::asset_id::intern("some_generated_asset");
+    asset_id::reset_interner();
+    let generated = asset_id::intern("some_generated_asset");
     let mut world = pick_world(
         [0.0; 3],
         vec![(generated, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])],
@@ -3582,8 +3574,8 @@ fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
 // Undo/redo invalidates the pick state along with the other entry-indexed UI.
 #[test]
 fn history_jumps_clear_the_pick_selection() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("box_near");
+    asset_id::reset_interner();
+    let id = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
@@ -3603,8 +3595,8 @@ fn history_jumps_clear_the_pick_selection() {
 // outside edit mode.
 #[test]
 fn selection_ring_tracks_the_picked_asset() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("box_near");
+    asset_id::reset_interner();
+    let id = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
@@ -3647,8 +3639,8 @@ fn selection_ring_tracks_the_picked_asset() {
 // undo restores the original position.
 #[test]
 fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("box_near");
+    asset_id::reset_interner();
+    let id = asset_id::intern("box_near");
     // Down-left of the camera axis so the pick, the handles, and the drag all
     // land in screen regions no default panel covers.
     let start = [-6.11f32, -3.3, -5.0];
@@ -3660,7 +3652,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
             [start[0] + 1.0, start[1] + 1.0, start[2] + 1.0],
         )],
     );
-    let entity = world.push(crate::components::Transform {
+    let entity = world.push(Transform {
         position: start,
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
@@ -3701,7 +3693,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
     );
     h.tick(&mut world);
     let live = world
-        .get::<crate::components::Transform>(entity)
+        .get::<Transform>(entity)
         .expect("entity alive")
         .position;
     assert!(live[0] > start[0] + 0.3, "moved right: {}", live[0]);
@@ -3737,9 +3729,9 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
 // Shared rig for the rotate / scale drag tests: a prop down-left of the
 // camera axis (panel-free screen region), its live Transform entity, and the
 // EntityByName map the gizmo resolves through.
-fn gizmo_rig(start: [f32; 3]) -> (World, crate::ecs::Entity, EditorHook) {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("box_near");
+fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
+    asset_id::reset_interner();
+    let id = asset_id::intern("box_near");
     let mut world = pick_world(
         [0.0; 3],
         vec![(
@@ -3748,7 +3740,7 @@ fn gizmo_rig(start: [f32; 3]) -> (World, crate::ecs::Entity, EditorHook) {
             [start[0] + 1.0, start[1] + 1.0, start[2] + 1.0],
         )],
     );
-    let entity = world.push(crate::components::Transform {
+    let entity = world.push(Transform {
         position: start,
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
@@ -3795,7 +3787,7 @@ fn gizmo_rotate_drag_turns_the_prop() {
         drag_input([layout.origin[0], layout.origin[1] + 70.0], true),
     );
     h.tick(&mut world);
-    let live = world.get::<crate::components::Transform>(entity).unwrap();
+    let live = world.get::<Transform>(entity).unwrap();
     assert!(
         (live.rotation_deg[0] - 90.0).abs() < 1.0,
         "quarter turn about X: {}",
@@ -3835,7 +3827,7 @@ fn gizmo_scale_drag_stretches_one_axis() {
         drag_input([layout.tips[0][0] + 35.0, layout.tips[0][1]], true),
     );
     h.tick(&mut world);
-    let live = world.get::<crate::components::Transform>(entity).unwrap();
+    let live = world.get::<Transform>(entity).unwrap();
     assert!(
         live.scale[0] > 1.3 && live.scale[0] < 1.7,
         "X stretched ~1.5x: {}",
@@ -3881,11 +3873,7 @@ fn gizmo_translate_drag_snaps_to_the_grid_and_ctrl_suspends_it() {
     let target = [layout.tips[0][0] + 50.0, layout.tips[0][1]];
     set_input(&mut world, drag_input(target, true));
     h.tick(&mut world);
-    let delta = world
-        .get::<crate::components::Transform>(entity)
-        .unwrap()
-        .position[0]
-        - start[0];
+    let delta = world.get::<Transform>(entity).unwrap().position[0] - start[0];
     assert!(delta > 0.2, "moved right: {delta}");
     assert!(off_grid(delta, 0.25) < 1e-4, "on the grid: {delta}");
 
@@ -3893,11 +3881,7 @@ fn gizmo_translate_drag_snaps_to_the_grid_and_ctrl_suspends_it() {
     ctrl.ctrl = true;
     set_input(&mut world, ctrl);
     h.tick(&mut world);
-    let free = world
-        .get::<crate::components::Transform>(entity)
-        .unwrap()
-        .position[0]
-        - start[0];
+    let free = world.get::<Transform>(entity).unwrap().position[0] - start[0];
     assert!(free > 0.2, "still follows the cursor: {free}");
     assert!(
         off_grid(free, 0.25) > 1e-3,
@@ -3937,7 +3921,7 @@ fn gizmo_rotate_drag_snaps_the_applied_angle() {
     let m = [layout.origin[0] + 35.0, layout.origin[1] + 60.6];
     set_input(&mut world, drag_input(m, true));
     h.tick(&mut world);
-    let live = world.get::<crate::components::Transform>(entity).unwrap();
+    let live = world.get::<Transform>(entity).unwrap();
     assert!(
         (live.rotation_deg[0] - 45.0).abs() < 1e-3,
         "snapped to 45: {}",
@@ -4014,7 +3998,7 @@ fn duplicate_selection_clones_entries_and_selects_the_copies() {
 fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
     let mut world = world_with_input(FrameInput {
         ctrl: true,
-        captured_key: Some(crate::components::InputKey::D),
+        captured_key: Some(InputKey::D),
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
@@ -4045,10 +4029,10 @@ fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
 // commits the batch as one undo step.
 #[test]
 fn drop_to_floor_lands_the_selection_on_the_surface_below() {
-    crate::ecs::asset_id::reset_interner();
-    let a = crate::ecs::asset_id::intern("box_a");
-    let _g = crate::ecs::asset_id::intern("ground");
-    let lamp_id = crate::ecs::asset_id::intern("lamp");
+    asset_id::reset_interner();
+    let a = asset_id::intern("box_a");
+    let _g = asset_id::intern("ground");
+    let lamp_id = asset_id::intern("lamp");
     let mut world = pick_world(
         [0.0; 3],
         vec![
@@ -4056,14 +4040,14 @@ fn drop_to_floor_lands_the_selection_on_the_surface_below() {
             (_g, [-10.0, -1.0, -10.0], [10.0, 0.0, 10.0]),
         ],
     );
-    let box_e = world.push(crate::components::Transform {
+    let box_e = world.push(Transform {
         position: [0.0, 5.0, -5.0],
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
     });
     // The lamp has no pick-index bounds and sits clear of the ground box, so
     // it exercises both the position-as-foot path and the y=0 fallback.
-    let lamp_e = world.push(crate::components::Transform {
+    let lamp_e = world.push(Transform {
         position: [100.0, 3.0, 0.0],
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
@@ -4098,7 +4082,7 @@ fn drop_to_floor_lands_the_selection_on_the_surface_below() {
         serde_json::json!([100.0, 0.0, 0.0]),
         "nothing below the lamp: its origin lands on the y=0 fallback"
     );
-    let live = world.get::<crate::components::Transform>(box_e).unwrap();
+    let live = world.get::<Transform>(box_e).unwrap();
     assert_eq!(
         live.position,
         [0.0, 1.0, -5.0],
@@ -4188,8 +4172,8 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
 // below the cursor), release commits ONE undoable entry and selects it.
 #[test]
 fn drag_out_places_a_prop_where_the_ghost_lands() {
-    crate::ecs::asset_id::reset_interner();
-    let ground = crate::ecs::asset_id::intern("ground");
+    asset_id::reset_interner();
+    let ground = asset_id::intern("ground");
     let mut world = pick_world(
         [0.0; 3],
         vec![(ground, [-20.0, -1.0, -20.0], [20.0, 0.0, 20.0])],
@@ -4259,7 +4243,7 @@ fn align_rotation_maps_up_onto_every_face_normal() {
         (2, -1.0),
     ] {
         let rotation_deg = super::content_drag::align_rotation(axis, sign);
-        let m = crate::components::Transform {
+        let m = Transform {
             position: [0.0; 3],
             rotation_deg,
             scale: [1.0; 3],
@@ -4282,8 +4266,8 @@ fn align_rotation_maps_up_onto_every_face_normal() {
 // prop to that face: a straight-on hit of the +Z face carries +Y onto +Z.
 #[test]
 fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
-    crate::ecs::asset_id::reset_interner();
-    let wall = crate::ecs::asset_id::intern("wall");
+    asset_id::reset_interner();
+    let wall = asset_id::intern("wall");
     let mut world = pick_world([0.0; 3], vec![(wall, [-2.0, -2.0, -6.0], [2.0, 2.0, -4.0])]);
     let mut h = hook(vec![
         serde_json::json!({
@@ -4343,7 +4327,7 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
 // A press that never travels past the slop is just the selecting click.
 #[test]
 fn a_still_cell_press_places_nothing() {
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
         "name": "demo_ball", "type": "ProceduralMesh", "args": { "generator": "box" }
@@ -4366,8 +4350,8 @@ fn a_still_cell_press_places_nothing() {
 // Dragging a Material onto a Prop assigns it instead of placing anything.
 #[test]
 fn material_drag_assigns_to_the_prop_under_the_cursor() {
-    crate::ecs::asset_id::reset_interner();
-    let crate_id = crate::ecs::asset_id::intern("crate_prop");
+    asset_id::reset_interner();
+    let crate_id = asset_id::intern("crate_prop");
     let mut world = pick_world(
         [0.0; 3],
         vec![(crate_id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])],
@@ -4434,8 +4418,8 @@ fn click_menu_row(
 // shared path (one undo step) and selects it.
 #[test]
 fn right_click_creates_a_positioned_type_at_the_surface_point() {
-    crate::ecs::asset_id::reset_interner();
-    let ground = crate::ecs::asset_id::intern("ground");
+    asset_id::reset_interner();
+    let ground = asset_id::intern("ground");
     let mut world = pick_world(
         [0.0; 3],
         vec![(ground, [-20.0, -1.0, -20.0], [20.0, 0.0, 20.0])],
@@ -4477,7 +4461,7 @@ fn right_click_creates_a_positioned_type_at_the_surface_point() {
 // Prop instancing it at the captured point.
 #[test]
 fn prefab_rows_create_a_prop_instance() {
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
         "name": "door_set", "type": "Prefab", "args": {}
@@ -4511,7 +4495,7 @@ fn prefab_rows_create_a_prop_instance() {
 // bar / a floating panel never open it.
 #[test]
 fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(Vec::new());
 
@@ -4539,14 +4523,10 @@ fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
 
 // Two props with live Transforms at `s1` / `s2` (AABB half-extent `half`),
 // wired like `gizmo_rig`, for the multi-select flows.
-fn two_prop_rig(
-    s1: [f32; 3],
-    s2: [f32; 3],
-    half: f32,
-) -> (World, crate::ecs::Entity, crate::ecs::Entity, EditorHook) {
-    crate::ecs::asset_id::reset_interner();
-    let a = crate::ecs::asset_id::intern("box_a");
-    let b = crate::ecs::asset_id::intern("box_b");
+fn two_prop_rig(s1: [f32; 3], s2: [f32; 3], half: f32) -> (World, Entity, Entity, EditorHook) {
+    asset_id::reset_interner();
+    let a = asset_id::intern("box_a");
+    let b = asset_id::intern("box_b");
     let bb = |s: [f32; 3]| {
         (
             [s[0] - half, s[1] - half, s[2] - half],
@@ -4556,7 +4536,7 @@ fn two_prop_rig(
     let (min1, max1) = bb(s1);
     let (min2, max2) = bb(s2);
     let mut world = pick_world([0.0; 3], vec![(a, min1, max1), (b, min2, max2)]);
-    let transform = |p: [f32; 3]| crate::components::Transform {
+    let transform = |p: [f32; 3]| Transform {
         position: p,
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
@@ -4726,14 +4706,8 @@ fn multi_translate_moves_all_members_as_one_undo_step() {
         &mut h,
         [layout.tips[0][0] + 50.0, layout.tips[0][1]],
     );
-    let p1 = world
-        .get::<crate::components::Transform>(e1)
-        .unwrap()
-        .position;
-    let p2 = world
-        .get::<crate::components::Transform>(e2)
-        .unwrap()
-        .position;
+    let p1 = world.get::<Transform>(e1).unwrap().position;
+    let p2 = world.get::<Transform>(e2).unwrap().position;
     let (d1, d2) = (p1[0] - SIDE_A[0], p2[0] - SIDE_B[0]);
     assert!(d1 > 0.3, "box_a moved right: {d1}");
     assert!((d1 - d2).abs() < 1e-3, "one shared delta: {d1} vs {d2}");
@@ -4791,8 +4765,8 @@ fn multi_rotate_orbits_members_about_the_centroid() {
         [layout.origin[0], layout.origin[1] + 70.0],
     );
 
-    let t1 = *world.get::<crate::components::Transform>(e1).unwrap();
-    let t2 = *world.get::<crate::components::Transform>(e2).unwrap();
+    let t1 = *world.get::<Transform>(e1).unwrap();
+    let t2 = *world.get::<Transform>(e2).unwrap();
     assert!(
         (t1.rotation_deg[0] - 90.0).abs() < 1.0 && (t2.rotation_deg[0] - 90.0).abs() < 1.0,
         "both spin: {} / {}",
@@ -4838,7 +4812,7 @@ fn multi_rotate_orbits_members_about_the_centroid() {
 #[test]
 fn gizmo_mode_keys_switch_unless_typing() {
     let mut h = hook(Vec::new());
-    let key = |h: &mut EditorHook, k: crate::components::InputKey| {
+    let key = |h: &mut EditorHook, k: InputKey| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
             captured_key: Some(k),
@@ -4846,11 +4820,11 @@ fn gizmo_mode_keys_switch_unless_typing() {
         });
         h.tick(&mut world);
     };
-    key(&mut h, crate::components::InputKey::R);
+    key(&mut h, InputKey::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Rotate);
-    key(&mut h, crate::components::InputKey::S);
+    key(&mut h, InputKey::S);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Scale);
-    key(&mut h, crate::components::InputKey::T);
+    key(&mut h, InputKey::T);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
 
     // Shift+F toggles the fly camera through the same guard; plain F frames
@@ -4858,13 +4832,13 @@ fn gizmo_mode_keys_switch_unless_typing() {
     let shift_f = |h: &mut EditorHook| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
-            captured_key: Some(crate::components::InputKey::F),
+            captured_key: Some(InputKey::F),
             shift: true,
             ..Default::default()
         });
         h.tick(&mut world);
     };
-    key(&mut h, crate::components::InputKey::F);
+    key(&mut h, InputKey::F);
     assert!(!h.fly, "plain F frames instead of flying");
     shift_f(&mut h);
     assert!(h.fly, "Shift+F starts the fly camera");
@@ -4873,7 +4847,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
 
     // A focused text field keeps the keys for typing.
     h.story_focus = true;
-    key(&mut h, crate::components::InputKey::R);
+    key(&mut h, InputKey::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
     shift_f(&mut h);
     assert!(!h.fly, "typing keeps F");
@@ -4916,8 +4890,8 @@ fn tree_row_click_selects_and_opens_the_form() {
 // hidden set publishing as ids each tick) and never touch the entries.
 #[test]
 fn hide_and_lock_are_session_state_not_edits() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("box");
+    asset_id::reset_interner();
+    let id = asset_id::intern("box");
     let mut world = world_with_input(FrameInput::default());
     let mut h = hook(vec![entry("box", "Sprite")]);
     h.panel_open = true;
@@ -4932,7 +4906,7 @@ fn hide_and_lock_are_session_state_not_edits() {
 
     h.tick(&mut world);
     let hidden = world
-        .resource::<crate::ecs::HiddenAssets>()
+        .resource::<HiddenAssets>()
         .expect("the hook publishes the hidden set every tick");
     assert!(hidden.0.contains(&id), "names resolve to this world's ids");
 
@@ -4945,8 +4919,8 @@ fn hide_and_lock_are_session_state_not_edits() {
 // empty space (arming the marquee) instead of selecting it.
 #[test]
 fn locked_assets_are_skipped_by_viewport_picking() {
-    crate::ecs::asset_id::reset_interner();
-    let near = crate::ecs::asset_id::intern("box_near");
+    asset_id::reset_interner();
+    let near = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(near, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     h.locked_assets.insert("box_near".to_string());
@@ -4991,17 +4965,17 @@ fn viewport_pick_reveals_the_tree_row() {
 // pools.
 fn billboard_world(
     light_pos: [f32; 3],
-    picks: Vec<(crate::ecs::asset_id::AssetId, [f32; 3], [f32; 3])>,
+    picks: Vec<(asset_id::AssetId, [f32; 3], [f32; 3])>,
 ) -> World {
     let mut world = pick_world([0.0; 3], picks);
     for s in billboards::sprites() {
         world.add_component(s);
     }
-    let entity = world.push(crate::components::PointLight {
+    let entity = world.push(PointLight {
         position: light_pos,
         ..Default::default()
     });
-    let id = crate::ecs::asset_id::intern("lamp");
+    let id = asset_id::intern("lamp");
     let mut by_name = std::collections::BTreeMap::new();
     by_name.insert(id, entity);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
@@ -5016,7 +4990,7 @@ fn lamp_entry(pos: [f32; 3]) -> serde_json::Value {
 // flow, and the tick seeds the Transform the gizmo needs onto its entity.
 #[test]
 fn billboard_click_selects_the_light_and_seeds_its_transform() {
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
 
@@ -5035,7 +5009,7 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
         .next()
         .copied()
         .unwrap();
-    let t = world.get::<crate::components::Transform>(entity).unwrap();
+    let t = world.get::<Transform>(entity).unwrap();
     assert_eq!(t.position, [0.0, 0.0, -5.0]);
     assert!(
         h.gizmo_layout(&world, [1280.0, 720.0]).is_some(),
@@ -5047,8 +5021,8 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
 // it loses to the icon.
 #[test]
 fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
-    crate::ecs::asset_id::reset_interner();
-    let wall = crate::ecs::asset_id::intern("wall");
+    asset_id::reset_interner();
+    let wall = asset_id::intern("wall");
     // Wall at depth 2..3, light at depth 5: the wall is nearer.
     let mut world = billboard_world(
         [0.0, 0.0, -5.0],
@@ -5059,8 +5033,8 @@ fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
     assert_eq!(h.selection.active(), Some("wall"), "the nearer mesh wins");
 
     // Wall at depth 9..10, light at depth 5: the icon is nearer.
-    crate::ecs::asset_id::reset_interner();
-    let wall = crate::ecs::asset_id::intern("wall");
+    asset_id::reset_interner();
+    let wall = asset_id::intern("wall");
     let mut world = billboard_world(
         [0.0, 0.0, -5.0],
         vec![(wall, [-1.0, -1.0, -10.0], [1.0, 1.0, -9.0])],
@@ -5074,7 +5048,7 @@ fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
 // but pass the press through, both matching the mesh pick's rules.
 #[test]
 fn hidden_and_locked_billboards_follow_the_pick_rules() {
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
     h.locked_assets.insert("lamp".to_string());
@@ -5082,7 +5056,7 @@ fn hidden_and_locked_billboards_follow_the_pick_rules() {
     assert_eq!(h.selection.active(), None, "a locked icon is pick-through");
     assert!(h.marquee.is_some(), "the click fell through to empty space");
 
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
     h.hidden_assets.insert("lamp".to_string());
@@ -5097,16 +5071,16 @@ fn hidden_and_locked_billboards_follow_the_pick_rules() {
 // leaves only the axes.
 #[test]
 fn selected_trigger_volume_publishes_its_line_outline() {
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], Vec::new());
     for s in billboards::sprites() {
         world.add_component(s);
     }
-    let entity = world.push(crate::components::TriggerVolume {
+    let entity = world.push(TriggerVolume {
         position: [0.0, 0.0, -6.0],
         ..Default::default()
     });
-    let id = crate::ecs::asset_id::intern("zone");
+    let id = asset_id::intern("zone");
     let mut by_name = std::collections::BTreeMap::new();
     by_name.insert(id, entity);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
@@ -5119,7 +5093,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     // outline comes up in the published line buffer.
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("zone"));
-    let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
+    let published = world.resource::<WorldLines>().unwrap().0.len();
     assert_eq!(
         published,
         6 + super::super::outlines::shapes::BOX_EDGES,
@@ -5141,7 +5115,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     release_at(&mut world, &mut h, [640.0, 360.0]);
     h.selection.clear();
     h.tick(&mut world);
-    let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
+    let published = world.resource::<WorldLines>().unwrap().0.len();
     assert_eq!(published, 6, "no outline without a selected volume");
 
     // Clearing the Lines show flag publishes nothing at all, selection and
@@ -5149,7 +5123,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     h.selection.replace("zone".to_string());
     h.show_flags = h.show_flags.toggled(view_menu::ShowFlags::LINES);
     h.tick(&mut world);
-    let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
+    let published = world.resource::<WorldLines>().unwrap().0.len();
     assert_eq!(published, 0, "the Lines flag gates axes and outlines alike");
 }
 
@@ -5201,7 +5175,7 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     let input = FrameInput {
-        captured_key: Some(crate::components::InputKey::Backtick),
+        captured_key: Some(InputKey::Backtick),
         ..Default::default()
     };
 
@@ -5247,7 +5221,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
     assert_eq!(h.console_ghost(&world), "be_red");
     h.console_focus = true;
     let tab = FrameInput {
-        captured_key: Some(crate::components::InputKey::Tab),
+        captured_key: Some(InputKey::Tab),
         ..Default::default()
     };
     h.console_keys(&mut world, &tab);
@@ -5267,7 +5241,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = world_with_input(FrameInput {
-        captured_key: Some(crate::components::InputKey::Backtick),
+        captured_key: Some(InputKey::Backtick),
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
@@ -5504,17 +5478,11 @@ fn behavior_value_field_commits_on_enter_and_reports_a_bad_value() {
     assert!(h.behavior_focus, "a typed row is ready to type into");
 
     widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "2.5");
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(open_args(&h)["delay"], serde_json::json!(2.5));
 
     widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "soon");
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(
         open_args(&h)["delay"],
         serde_json::json!(2.5),
@@ -5653,10 +5621,7 @@ fn behavior_rename_commits_on_enter() {
     );
 
     type_name(&mut world, "  welcome  ");
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "welcome", "trimmed on the way in");
     assert!(!h.behavior_name_focus, "committing gives up the keyboard");
     assert!(h.dirty && h.rebuild_preview, "renaming is a world edit");
@@ -5674,10 +5639,7 @@ fn behavior_rename_keeps_the_name_unique() {
     ]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "chase");
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "chase_1");
     assert_eq!(
         widget::field_text(&world, behavior_panel::NAME_INPUT),
@@ -5687,10 +5649,7 @@ fn behavior_rename_keeps_the_name_unique() {
 
     // Committing a name unchanged is not a collision with itself.
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "chase_1");
 }
 
@@ -5699,10 +5658,7 @@ fn behavior_rename_refuses_a_blank_name() {
     let (mut h, mut world) = behavior_session(vec![behavior("greet", serde_json::json!({}))]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "   ");
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
 
     assert_eq!(h.behavior_data().name, "greet", "nothing was written");
     assert!(!h.dirty, "and no edit was recorded");
@@ -5727,10 +5683,7 @@ fn behavior_rename_reruns_the_checker_under_the_new_name() {
     )]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "still_broken");
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
 
     let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected the error to survive the rename");
@@ -5752,10 +5705,7 @@ fn behavior_name_reverts_when_it_loses_focus() {
         widget::field_text(&world, behavior_panel::NAME_INPUT),
         "greet"
     );
-    h.behavior_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "greet");
     assert!(!h.dirty);
 }
@@ -6191,7 +6141,7 @@ fn behavior_escape_input() -> FrameInput {
     }
 }
 
-fn press_behavior_key(h: &mut EditorHook, world: &mut World, key: crate::components::InputKey) {
+fn press_behavior_key(h: &mut EditorHook, world: &mut World, key: InputKey) {
     h.behavior_keys(world, &story_key_input(key));
 }
 
@@ -6220,17 +6170,17 @@ fn behavior_arrows_step_the_outline_one_row_at_a_time() {
     )]);
     assert_eq!(h.behavior_row, None);
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+    press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_eq!(h.behavior_row, Some(0));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+    press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_eq!(h.behavior_row, Some(1));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Up);
+    press_behavior_key(&mut h, &mut world, InputKey::Up);
     assert_eq!(h.behavior_row, Some(0));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Up);
+    press_behavior_key(&mut h, &mut world, InputKey::Up);
     assert_eq!(h.behavior_row, Some(0), "the top of the list does not wrap");
 
     // Left and Right have nothing to follow in a list.
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Right);
+    press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(h.behavior_row, Some(0));
 }
 
@@ -6243,7 +6193,7 @@ fn behavior_arrows_scroll_the_outline_to_keep_the_selection_showing() {
         serde_json::json!({"on": "start", "do": body}),
     )]);
     for _ in 0..25 {
-        press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+        press_behavior_key(&mut h, &mut world, InputKey::Down);
     }
     let row = h.behavior_row.expect("a row is selected");
     assert_eq!(row, 24);
@@ -6270,18 +6220,18 @@ fn behavior_arrows_follow_the_chart_chain_and_cross_its_branches() {
     assert_eq!(h.behavior_mode, ViewMode::Chart);
 
     // With nothing selected the chart starts at its first card, the trigger.
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Right);
+    press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_card_title(&h).as_deref(), Some("on tick"));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Right);
+    press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_card_title(&h).as_deref(), Some("if"));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Right);
+    press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_card_title(&h).as_deref(), Some("show"));
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+    press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_eq!(selected_card_title(&h).as_deref(), Some("hide"));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Up);
+    press_behavior_key(&mut h, &mut world, InputKey::Up);
     assert_eq!(selected_card_title(&h).as_deref(), Some("show"));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Left);
+    press_behavior_key(&mut h, &mut world, InputKey::Left);
     assert_eq!(selected_card_title(&h).as_deref(), Some("if"));
 }
 
@@ -6310,15 +6260,15 @@ fn behavior_arrows_step_the_overview_and_enter_opens_a_behavior() {
         "the map opens on the behavior that was showing"
     );
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Right);
+    press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("score"));
     // A variable card stands for no behavior, so Enter leaves the map alone.
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert_eq!(h.behavior_mode, ViewMode::Overview);
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Right);
+    press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("react"));
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert_eq!(h.behavior_index, 1);
     assert_eq!(h.behavior_data().name, "react");
     assert_eq!(h.behavior_mode, ViewMode::Chart);
@@ -6335,14 +6285,14 @@ fn behavior_enter_opens_the_palette_and_its_arrows_pick_from_it() {
     select_behavior(&mut h, &mut world, "do");
     assert!(!h.behavior_focus, "a list row takes no typed value");
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(h.behavior_picking, "Enter opened the palette");
     assert_eq!(h.behavior_pick, 0);
 
     let second = h.behavior_data().picks[1].verb;
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+    press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_eq!(h.behavior_pick, 1);
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
 
     assert!(!h.behavior_picking, "picking closed the palette");
     let body = open_args(&h)["do"].clone();
@@ -6362,7 +6312,7 @@ fn behavior_enter_on_a_row_with_no_options_opens_nothing() {
     )]);
     select_behavior(&mut h, &mut world, "name");
     assert!(h.behavior_data().picks.is_empty());
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(!h.behavior_picking);
 }
 
@@ -6375,7 +6325,7 @@ fn behavior_palette_highlight_scrolls_itself_into_the_window() {
         serde_json::json!({"on": "tick", "do": []}),
     )]);
     select_behavior(&mut h, &mut world, "do");
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     let total = h.behavior_data().picks.len();
     assert!(
         total > behavior_panel::PICK_POOL,
@@ -6383,7 +6333,7 @@ fn behavior_palette_highlight_scrolls_itself_into_the_window() {
     );
 
     for _ in 0..behavior_panel::PICK_POOL {
-        press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+        press_behavior_key(&mut h, &mut world, InputKey::Down);
     }
     assert_eq!(h.behavior_pick, behavior_panel::PICK_POOL);
     assert!(h.behavior_pick_scroll > 0, "the window followed it down");
@@ -6392,7 +6342,7 @@ fn behavior_palette_highlight_scrolls_itself_into_the_window() {
 
     // And back up again, dragging the window with it.
     for _ in 0..behavior_panel::PICK_POOL {
-        press_behavior_key(&mut h, &mut world, crate::components::InputKey::Up);
+        press_behavior_key(&mut h, &mut world, InputKey::Up);
     }
     assert_eq!(h.behavior_pick, 0);
     assert_eq!(h.behavior_pick_scroll, 0);
@@ -6407,7 +6357,7 @@ fn behavior_escape_clears_one_waiting_state_at_a_time() {
         serde_json::json!({"on": "tick", "do": [{"let": {"name": "t", "value": {"int": 1}}}]}),
     )]);
     select_behavior(&mut h, &mut world, "do");
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(h.behavior_picking);
     h.behavior_keys(&mut world, &behavior_escape_input());
     assert!(!h.behavior_picking, "the palette closed without picking");
@@ -6457,14 +6407,11 @@ fn behavior_horizontal_keys_stay_with_the_caret_while_a_value_is_focused() {
     assert!(h.behavior_focus);
     let row = h.behavior_row;
 
-    for key in [
-        crate::components::InputKey::Left,
-        crate::components::InputKey::Right,
-    ] {
+    for key in [InputKey::Left, InputKey::Right] {
         press_behavior_key(&mut h, &mut world, key);
         assert_eq!(h.behavior_row, row, "{key:?} moved the selection");
     }
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+    press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_ne!(h.behavior_row, row, "Down still steps the outline");
 }
 
@@ -6477,11 +6424,11 @@ fn behavior_name_field_holds_the_arrows_until_it_is_given_up() {
         serde_json::json!({"on": "tick", "do": [{"save": {}}]}),
     )]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+    press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_eq!(h.behavior_row, None, "the arrows did not reach the outline");
 
     h.behavior_keys(&mut world, &behavior_escape_input());
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+    press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_eq!(h.behavior_row, Some(0));
 }
 
@@ -6498,7 +6445,7 @@ fn behavior_tab_cycles_through_the_three_views() {
     assert_eq!(h.behavior_mode, ViewMode::Outline);
 
     for want in [ViewMode::Chart, ViewMode::Overview, ViewMode::Outline] {
-        press_behavior_key(&mut h, &mut world, crate::components::InputKey::Tab);
+        press_behavior_key(&mut h, &mut world, InputKey::Tab);
         assert_eq!(h.behavior_mode, want);
         assert_eq!(
             h.behavior_row, selected,
@@ -6517,12 +6464,12 @@ fn behavior_tab_leaves_the_view_alone_while_the_name_field_is_focused() {
     )]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "half typed");
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Tab);
+    press_behavior_key(&mut h, &mut world, InputKey::Tab);
     assert_eq!(h.behavior_mode, ViewMode::Outline);
     assert!(h.behavior_name_focus, "the field kept the keyboard");
 
     h.behavior_keys(&mut world, &behavior_escape_input());
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Tab);
+    press_behavior_key(&mut h, &mut world, InputKey::Tab);
     assert_eq!(h.behavior_mode, ViewMode::Chart);
 }
 
@@ -6535,10 +6482,10 @@ fn behavior_tab_does_nothing_while_the_palette_is_open() {
         serde_json::json!({"on": "tick", "do": []}),
     )]);
     select_behavior(&mut h, &mut world, "do");
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(h.behavior_picking);
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Tab);
+    press_behavior_key(&mut h, &mut world, InputKey::Tab);
     assert_eq!(h.behavior_mode, ViewMode::Outline);
     assert!(h.behavior_picking, "the palette is still up");
     assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
@@ -6710,7 +6657,7 @@ fn behavior_palette_filter_narrows_and_enter_takes_the_best_match() {
     assert!(data.matches.len() < unfiltered, "the query narrowed it");
     assert_eq!(data.picks[data.matches[0]].verb, "for_each");
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(
         open_args(&h)["do"][0].get("for_each").is_some(),
         "the best match is what landed: {:?}",
@@ -6732,7 +6679,7 @@ fn behavior_palette_filter_clears_when_the_palette_closes() {
     assert!(h.behavior_data().matches.len() < unfiltered);
 
     // Picking closes it, and the filter goes with it.
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(h.behavior_filter.is_empty());
     assert_eq!(
         widget::field_text(&world, behavior_panel::FILTER_INPUT),
@@ -6760,7 +6707,7 @@ fn behavior_palette_filter_resets_the_highlight_it_may_have_excluded() {
     )]);
     open_palette(&mut h, &mut world, "do");
     for _ in 0..4 {
-        press_behavior_key(&mut h, &mut world, crate::components::InputKey::Down);
+        press_behavior_key(&mut h, &mut world, InputKey::Down);
     }
     assert_eq!(h.behavior_pick, 4);
 
@@ -6770,7 +6717,7 @@ fn behavior_palette_filter_resets_the_highlight_it_may_have_excluded() {
     assert_eq!(h.behavior_pick_scroll, 0);
     assert!(h.behavior_data().matches.len() <= 4);
 
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(
         open_args(&h)["do"][0].get("spawn").is_some(),
         "Enter still picked: {:?}",
@@ -6792,7 +6739,7 @@ fn behavior_palette_survives_a_query_nothing_answers() {
     assert!(h.behavior_picking, "the palette is still up");
 
     // Enter has nothing to insert, and nothing is written.
-    press_behavior_key(&mut h, &mut world, crate::components::InputKey::Enter);
+    press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert!(h.behavior_picking);
     assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
 
@@ -6840,7 +6787,7 @@ fn behavior_palette_filter_field_draws_above_the_backing_it_sits_in() {
     );
 }
 
-fn ctrl_key_input(key: crate::components::InputKey) -> FrameInput {
+fn ctrl_key_input(key: InputKey) -> FrameInput {
     FrameInput {
         captured_key: Some(key),
         ctrl: true,
@@ -6899,14 +6846,14 @@ fn behavior_ctrl_c_holds_a_node_and_ctrl_v_places_it() {
         serde_json::json!({"on": "start", "do": [{"save": {}}, {"hide": {"target": "self"}}]}),
     )]);
     select_behavior(&mut h, &mut world, "hide");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::C));
     assert!(h.behavior_clip.is_some(), "the node is held");
     assert_eq!(body_verbs(&h), ["save", "hide"], "copying wrote nothing");
 
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::V));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide"]);
     // Still held, so a second paste lands beside the first copy.
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::V));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide", "hide"]);
 }
 
@@ -6919,14 +6866,14 @@ fn behavior_duplicate_leaves_what_is_held_alone() {
         serde_json::json!({"on": "start", "do": [{"save": {}}, {"hide": {"target": "self"}}]}),
     )]);
     select_behavior(&mut h, &mut world, "save");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::C));
 
     select_behavior(&mut h, &mut world, "hide");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::D));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide"]);
 
     // What was held is still the `save`, and pastes as one.
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::V));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide", "save"]);
 }
 
@@ -6942,7 +6889,7 @@ fn behavior_clipboard_carries_a_node_to_another_behavior() {
         behavior("greet", serde_json::json!({"on": "tick", "do": []})),
     ]);
     select_behavior(&mut h, &mut world, "hide");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::C));
 
     h.apply_behavior_action(BehaviorAction::Step(1), &mut world, [0.0, 0.0]);
     assert_eq!(h.behavior_data().name, "greet");
@@ -6950,7 +6897,7 @@ fn behavior_clipboard_carries_a_node_to_another_behavior() {
 
     // The empty body's own row is the list, so a paste there appends.
     select_behavior(&mut h, &mut world, "do");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::V));
     assert_eq!(body_verbs(&h), ["hide"]);
 }
 
@@ -6963,10 +6910,10 @@ fn behavior_paste_is_refused_by_a_list_of_another_kind() {
         serde_json::json!({"on": "start", "scope": ["Prop"], "do": [{"save": {}}]}),
     )]);
     select_behavior(&mut h, &mut world, "save");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::C));
 
     select_behavior(&mut h, &mut world, "scope");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::V));
     assert_eq!(open_args(&h)["scope"], serde_json::json!(["Prop"]));
     assert_eq!(body_verbs(&h), ["save"], "and the body is untouched too");
 }
@@ -6979,9 +6926,9 @@ fn behavior_copy_of_a_non_member_holds_nothing() {
         serde_json::json!({"on": "start", "do": [{"save": {}}]}),
     )]);
     select_behavior(&mut h, &mut world, "on");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::C));
     assert!(h.behavior_clip.is_none());
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::D));
     assert_eq!(
         body_verbs(&h),
         ["save"],
@@ -6999,11 +6946,11 @@ fn behavior_clipboard_keys_stand_down_while_a_field_is_focused() {
     )]);
     select_behavior(&mut h, &mut world, "name");
     assert!(h.behavior_focus, "a text row takes the value field");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::D));
     assert_eq!(body_verbs(&h), ["let"], "nothing was duplicated");
 
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::components::InputKey::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(InputKey::D));
     assert_eq!(body_verbs(&h), ["let"]);
 }
 
@@ -7189,10 +7136,7 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
     select_var(&mut h, &mut world, "spawn");
     h.apply_variables_action(VariablesAction::FocusValue, &mut world);
     widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "1, 2, 3");
-    h.variables_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
         serde_json::json!([1.0, 2.0, 3.0]),
@@ -7202,10 +7146,7 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
     // field goes back to what the table holds.
     h.apply_variables_action(VariablesAction::FocusValue, &mut world);
     widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "nonsense");
-    h.variables_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
         serde_json::json!([1.0, 2.0, 3.0]),
@@ -7228,10 +7169,7 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
     select_var(&mut h, &mut world, "score");
     h.apply_variables_action(VariablesAction::FocusName, &mut world);
     widget::seed_field(&mut world, variables_panel::NAME_INPUT, "points");
-    h.variables_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
         serde_json::json!("points")
@@ -7244,10 +7182,7 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
 
     h.apply_variables_action(VariablesAction::FocusName, &mut world);
     widget::seed_field(&mut world, variables_panel::NAME_INPUT, "   ");
-    h.variables_keys(
-        &mut world,
-        &story_key_input(crate::components::InputKey::Enter),
-    );
+    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
         serde_json::json!("points")
@@ -7390,13 +7325,13 @@ fn transport_keys_play_pause_stop_and_step() {
         captured_key: Some(k),
         ..Default::default()
     };
-    h.sim_keys(&key(crate::components::InputKey::P, false));
+    h.sim_keys(&key(InputKey::P, false));
     assert!(h.sim.playing(), "Ctrl+P plays");
-    h.sim_keys(&key(crate::components::InputKey::P, false));
+    h.sim_keys(&key(InputKey::P, false));
     assert_eq!(h.sim.state, sim::SimState::Paused, "Ctrl+P again pauses");
-    h.sim_keys(&key(crate::components::InputKey::Period, false));
+    h.sim_keys(&key(InputKey::Period, false));
     assert!(h.sim.take_run_frame(), "Ctrl+Period queues one step");
-    h.sim_keys(&key(crate::components::InputKey::P, true));
+    h.sim_keys(&key(InputKey::P, true));
     assert_eq!(h.sim.state, sim::SimState::Stopped, "Ctrl+Shift+P stops");
     assert!(
         h.rebuild_preview,
@@ -7405,7 +7340,7 @@ fn transport_keys_play_pause_stop_and_step() {
 
     // A focused text field owns the keyboard.
     h.story_focus = true;
-    h.sim_keys(&key(crate::components::InputKey::P, false));
+    h.sim_keys(&key(InputKey::P, false));
     assert_eq!(h.sim.state, sim::SimState::Stopped);
 }
 
@@ -7454,9 +7389,9 @@ fn an_edit_applied_live_leaves_the_simulation_running() {
     )]);
     h.world_shadows = Some(Default::default());
     let mut world = World::new();
-    let e = world.push(crate::components::Sprite::default());
+    let e = world.push(Sprite::default());
     let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(crate::ecs::asset_id::intern("badge"), e);
+    by_name.insert(asset_id::intern("badge"), e);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
 
     h.entries[0]["args"]["width"] = serde_json::json!(16.0);
@@ -7467,14 +7402,7 @@ fn an_edit_applied_live_leaves_the_simulation_running() {
     );
     assert!(!h.rebuild_preview, "and the preview is current again");
     assert_eq!(h.sim.state, sim::SimState::Playing);
-    assert_eq!(
-        world
-            .query::<crate::components::Sprite>()
-            .next()
-            .unwrap()
-            .width,
-        16.0
-    );
+    assert_eq!(world.query::<Sprite>().next().unwrap().width, 16.0);
 }
 
 // The Behavior and Variables panels commit as each change is made. Both types
@@ -7483,12 +7411,12 @@ fn an_edit_applied_live_leaves_the_simulation_running() {
 
 // A world holding one component of each edited type, indexed by the names the
 // entries use.
-fn named_world(assets: Vec<(&str, crate::ecs::ComponentAsset)>) -> World {
+fn named_world(assets: Vec<(&str, ComponentAsset)>) -> World {
     let mut world = World::new();
     let mut by_name = std::collections::BTreeMap::new();
     for (name, asset) in assets {
         let entity = world.add(asset);
-        by_name.insert(crate::ecs::asset_id::intern(name), entity);
+        by_name.insert(asset_id::intern(name), entity);
     }
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
     world
@@ -7512,7 +7440,7 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
     h.world_shadows = Some(Default::default());
     let mut world = named_world(vec![(
         "counter",
-        crate::ecs::ComponentAsset::Behavior(crate::components::Behavior::default()),
+        ComponentAsset::Behavior(Behavior::default()),
     )]);
 
     h.entries[0]["args"] = behavior_args(serde_json::json!([set_node("n"), set_node("m")]));
@@ -7524,12 +7452,7 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
     assert!(!h.rebuild_preview);
     assert_eq!(h.sim.state, sim::SimState::Playing);
     assert_eq!(
-        world
-            .query::<crate::components::Behavior>()
-            .next()
-            .unwrap()
-            .body
-            .len(),
+        world.query::<Behavior>().next().unwrap().body.len(),
         2,
         "the column holds the edited body"
     );
@@ -7552,7 +7475,7 @@ fn a_behavior_edit_that_moves_a_reference_rebuilds() {
     h.world_shadows = Some(Default::default());
     let mut world = named_world(vec![(
         "spawner",
-        crate::ecs::ComponentAsset::Behavior(crate::components::Behavior::default()),
+        ComponentAsset::Behavior(Behavior::default()),
     )]);
 
     h.entries[0]["args"] = spawning("barrel");
@@ -7570,7 +7493,7 @@ fn a_variables_edit_is_written_into_the_running_world() {
     h.world_shadows = Some(Default::default());
     let mut world = named_world(vec![(
         "world_vars",
-        crate::ecs::ComponentAsset::Variables(crate::components::Variables::default()),
+        ComponentAsset::Variables(Variables::default()),
     )]);
 
     h.entries[0]["args"] = table(7);
@@ -7581,15 +7504,9 @@ fn a_variables_edit_is_written_into_the_running_world() {
     );
     assert!(!h.rebuild_preview);
     assert_eq!(h.sim.state, sim::SimState::Playing);
-    let declared = world
-        .query::<crate::components::Variables>()
-        .next()
-        .unwrap();
+    let declared = world.query::<Variables>().next().unwrap();
     assert_eq!(declared.vars.len(), 1);
-    assert_eq!(
-        declared.vars[0].value,
-        crate::components::BehaviorLiteral::Int(7)
-    );
+    assert_eq!(declared.vars[0].value, BehaviorLiteral::Int(7));
 }
 
 // Stop restores the authored state, which means undoing whatever the run did:
@@ -7635,23 +7552,23 @@ fn the_trace_request_follows_the_live_debug_panels() {
     let mut world = World::new();
     h.drive_trace(&mut world);
     assert!(
-        world.resource::<crate::ecs::TraceRequest>().is_none(),
+        world.resource::<TraceRequest>().is_none(),
         "no panel open, no request"
     );
     h.behavior_open = true;
     h.drive_trace(&mut world);
-    assert!(world.resource::<crate::ecs::TraceRequest>().is_some());
+    assert!(world.resource::<TraceRequest>().is_some());
     h.behavior_open = false;
     h.drive_trace(&mut world);
     assert!(
-        world.resource::<crate::ecs::TraceRequest>().is_none(),
+        world.resource::<TraceRequest>().is_none(),
         "closing the panels withdraws it"
     );
 }
 
 // A world carrying one published trace tick for behavior `b`'s first node.
-fn traced_world(id: crate::ecs::asset_id::AssetId, hit: bool) -> World {
-    use crate::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
+fn traced_world(id: asset_id::AssetId, hit: bool) -> World {
+    use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
     let mut world = World::new();
     let event = TraceEvent {
         behavior: id,
@@ -7673,8 +7590,8 @@ fn traced_world(id: crate::ecs::asset_id::AssetId, hit: bool) -> World {
 
 #[test]
 fn trace_events_become_pulses_and_live_values() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("b");
+    asset_id::reset_interner();
+    let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
         serde_json::json!({
@@ -7718,8 +7635,8 @@ fn trace_events_become_pulses_and_live_values() {
 
 #[test]
 fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("b");
+    asset_id::reset_interner();
+    let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
         serde_json::json!({
@@ -7739,8 +7656,8 @@ fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
 
 #[test]
 fn stopping_clears_the_live_state() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("b");
+    asset_id::reset_interner();
+    let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
         serde_json::json!({
@@ -8246,8 +8163,8 @@ fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
 // commits the SkinnedMesh entry's position as one undo step.
 #[test]
 fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("body");
+    asset_id::reset_interner();
+    let id = asset_id::intern("body");
     let start = [-6.11f32, -3.3, -5.0];
     let mut world = pick_world(
         [0.0; 3],
@@ -8257,7 +8174,7 @@ fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
             [start[0] + 1.0, start[1] + 1.0, start[2] + 1.0],
         )],
     );
-    let entity = world.push(crate::components::Transform {
+    let entity = world.push(Transform {
         position: start,
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
@@ -8286,10 +8203,7 @@ fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
         &mut h,
         [layout.tips[0][0] + 50.0, layout.tips[0][1]],
     );
-    let live = world
-        .get::<crate::components::Transform>(entity)
-        .unwrap()
-        .position;
+    let live = world.get::<Transform>(entity).unwrap().position;
     assert!(
         live[0] > start[0] + 0.3,
         "the live transform follows: {live:?}"

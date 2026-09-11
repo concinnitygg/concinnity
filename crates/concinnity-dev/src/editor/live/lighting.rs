@@ -12,10 +12,13 @@
 // resource from, and fog on a world that started without it, are declined here
 // so the caller rebuilds rather than showing a change that does not stick.
 
-use crate::ecs::World;
-use crate::gfx::lighting_preview;
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_core::components::DirectionalLight;
 use concinnity_core::ecs::ComponentAsset;
+use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::World;
+use concinnity_engine::gfx::lighting_preview;
+use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
 use super::{Apply, RenderConfig, component};
@@ -33,7 +36,7 @@ pub(super) fn plan(
     if !is_expressible(ct, keys) || !lighting_preview::is_available(world) {
         return None;
     }
-    let id = crate::ecs::asset_id::intern(name);
+    let id = asset_id::intern(name);
     match component::bake(ct, id, args).ok()? {
         ComponentAsset::DirectionalLight(light) => {
             let entity = world
@@ -94,16 +97,9 @@ pub(super) fn commit(world: &mut World, config: RenderConfig) {
 /// Replace one directional light and re-push the whole set. The renderer packs
 /// the lights in column order, which is the order this reads them back in, so
 /// the edited light lands in the slot it already occupied.
-pub(super) fn commit_sun(
-    world: &mut World,
-    entity: crate::ecs::Entity,
-    light: crate::components::DirectionalLight,
-) {
+pub(super) fn commit_sun(world: &mut World, entity: Entity, light: DirectionalLight) {
     world.replace_component(entity, ComponentAsset::DirectionalLight(light));
-    let lights: Vec<crate::components::DirectionalLight> = world
-        .query::<crate::components::DirectionalLight>()
-        .cloned()
-        .collect();
+    let lights: Vec<DirectionalLight> = world.query::<DirectionalLight>().cloned().collect();
     lighting_preview::apply_directional_lights(world, &lights);
 }
 
@@ -218,7 +214,7 @@ mod tests {
     // commit lands even where there is no renderer to push to.
     #[test]
     fn committing_a_sun_writes_the_component() {
-        use crate::components::DirectionalLight;
+        use concinnity_core::components::DirectionalLight;
         let mut world = World::new();
         let entity = world.push(DirectionalLight::default());
         let edited = DirectionalLight {

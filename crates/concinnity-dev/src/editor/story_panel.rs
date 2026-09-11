@@ -9,12 +9,13 @@
 // runtime asset), every other visible line a clipped `TextLabel`. A world
 // with no `StoryImport` shows a single "+ Create story" row instead.
 
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::registry::{self, PanelKey};
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
-use crate::components::TextAlign;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Story);
 pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
@@ -399,7 +400,7 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextInput, TextLabel};
+    use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())

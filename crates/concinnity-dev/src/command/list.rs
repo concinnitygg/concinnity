@@ -216,7 +216,7 @@ fn list_systems(content: &str, json_path: &str) -> std::io::Result<()> {
 // Run the table's own completion pass, the way `World::start` does before it
 // gates: a HUD or overlay the engine injects brings its own system with it, so
 // a manifest taken before the pass would be missing them.
-fn complete(world: &mut concinnity_engine::ecs::World) -> std::io::Result<()> {
+fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
     let Some(complete) = concinnity_engine::ecs::SYSTEMS.complete_world else {
         return Ok(());
     };
@@ -229,10 +229,10 @@ fn complete(world: &mut concinnity_engine::ecs::World) -> std::io::Result<()> {
 // capturing stdout. The phase and reason columns come from the static schedule
 // table (`ecs::SYSTEMS`), keyed by the manifest's system name; the phase is what
 // a system written outside the engine anchors to.
-fn manifest_lines(world: &concinnity_engine::ecs::World) -> Vec<String> {
+fn manifest_lines(world: &concinnity_core::ecs::World) -> Vec<String> {
     let manifest = world.system_manifest(concinnity_engine::ecs::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
-    let phase_width = concinnity_engine::ecs::Phase::ALL
+    let phase_width = concinnity_core::ecs::Phase::ALL
         .iter()
         .map(|p| p.as_str().len())
         .max()

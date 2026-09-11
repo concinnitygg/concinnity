@@ -7,7 +7,7 @@
 // nothing in the library references them: the reload passes that read them
 // (`super::passes`) are driven entirely from `DebugHook::tick`.
 //
-// The sibling "Animation source changed" flag stays in `crate::app::dev_flags`
+// The sibling "Animation source changed" flag stays in `concinnity_engine::app::dev_flags`
 // instead, because `AnimationSystem` (library) names it directly.
 
 use std::sync::atomic::{AtomicBool, Ordering};

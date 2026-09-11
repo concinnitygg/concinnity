@@ -44,13 +44,13 @@ use objc2_metal::{
     MTLDevice as _, MTLHazardTrackingMode, MTLHeap, MTLHeapDescriptor, MTLHeapType, MTLPixelFormat,
     MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
 };
+
+use crate::metal::descriptors::TextureDesc;
 // `ClearValue` is deliberately absent: Metal takes a clear value on the render
 // pass descriptor rather than baking it into the texture, so the graph's clear
 // is consumed where the pass is encoded, not here. DirectX translates it at
 // creation, which is why its pool reads the field and this one does not.
 use crate::metal::context::MtlContext;
-
-use crate::metal::descriptors::TextureDesc;
 
 struct PooledTexture {
     label: &'static str,

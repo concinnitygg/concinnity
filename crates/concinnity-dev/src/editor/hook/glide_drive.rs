@@ -5,9 +5,12 @@
 // the view; the pose math lives in `editor/framing.rs`, this drive resolves
 // the selection's world bounds and steps the interpolation.
 
-use super::*;
-use crate::components::{Camera3D, Transform};
+use concinnity_core::components::{Camera3D, Transform};
+use concinnity_core::ecs::PickIndex;
+use concinnity_host::thread::asset_id;
 use framing::CameraPose;
+
+use super::*;
 
 const GLIDE_SECS: f32 = 0.25;
 
@@ -25,9 +28,9 @@ impl EditorHook {
     // seeded Transform position padded to a small box. `None` when nothing
     // resolves.
     pub(super) fn selection_bounds(&self, world: &World) -> Option<([f32; 3], [f32; 3])> {
-        let index = world.resource::<crate::ecs::PickIndex>();
+        let index = world.resource::<PickIndex>();
         let boxes = self.selection.iter().filter_map(|name| {
-            let id = crate::ecs::asset_id::lookup(name)?;
+            let id = asset_id::lookup(name)?;
             if let Some(e) = index.and_then(|i| i.entries.iter().find(|e| e.asset_id == id)) {
                 return Some((e.bb_min, e.bb_max));
             }

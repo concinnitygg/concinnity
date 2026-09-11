@@ -19,17 +19,17 @@ mod lighting;
 mod placement;
 mod shape;
 
-use crate::components::{
+use concinnity_cook::authoring::registry::{RegisteredType, ScopeResolution};
+use concinnity_core::components::{
     CharacterCapsule, CharacterShape, DirectionalLight, GraphicsConfig, PostProcessConfig,
     Transform, VolumetricFog,
 };
-use crate::ecs::{Entity, World};
-use concinnity_cook::authoring::registry::{RegisteredType, ScopeResolution};
 use concinnity_core::ecs::ComponentAsset;
+use concinnity_core::ecs::{Entity, World};
+use concinnity_engine::gfx::shape_preview;
+pub(crate) use diff::{args_changes, same_assets};
 use serde_json::Value;
 use std::collections::BTreeMap;
-
-pub(crate) use diff::{args_changes, same_assets};
 
 /// The pre-merge args of each generated asset a world line patches, keyed by
 /// asset name, as of the build that produced the running world. An authored
@@ -104,7 +104,7 @@ pub(crate) fn commit(world: &mut World, plan: Vec<Apply>) {
                 }
             }
             Apply::Shape { shape, capsule } => {
-                crate::gfx::shape_preview::apply(world, &shape, capsule.as_ref());
+                shape_preview::apply(world, &shape, capsule.as_ref());
             }
             Apply::Sun { entity, light } => lighting::commit_sun(world, entity, light),
             Apply::RenderConfig(config) => lighting::commit(world, config),
@@ -135,7 +135,8 @@ fn plan_one(world: &World, entries: &[Value], change: &diff::ArgsChange) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::Sprite;
+    use concinnity_core::components::Sprite;
+    use concinnity_host::thread::asset_id;
     use serde_json::json;
 
     fn change(name: &str, ty: &str, args: Value, keys: &[&str]) -> diff::ArgsChange {
@@ -152,7 +153,7 @@ mod tests {
         let mut world = World::new();
         let entity = world.push(Sprite::default());
         let mut by_name = BTreeMap::new();
-        by_name.insert(crate::ecs::asset_id::intern(name), entity);
+        by_name.insert(asset_id::intern(name), entity);
         world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
         world
     }
@@ -224,7 +225,7 @@ mod tests {
         let mut world = World::new();
         let e = world.push(Transform::default());
         let mut by_name = BTreeMap::new();
-        by_name.insert(crate::ecs::asset_id::intern("hero"), e);
+        by_name.insert(asset_id::intern("hero"), e);
         world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
         let changes = [change(
             "hero",

@@ -8,15 +8,16 @@
 // through `form::assemble` + `form::validate` and `mark_changed` once; the
 // per-frame drag preview lives in `shape_drag.rs`.
 
-use super::*;
 use concinnity_cook::authoring::registry::build_only::CharacterSchema;
 use concinnity_cook::authoring::registry::build_only::ShapePreset;
+use concinnity_cook::compile::character::builtin_schema;
+use concinnity_core::components::CharacterCapsule;
+use concinnity_engine::gfx::shape_preview::{self, ShapeTarget};
+use concinnity_host::thread::asset_id;
 
-use crate::components::CharacterCapsule;
+use super::*;
 use crate::editor::character_shape::{self, Row, Rows, ShapeValues};
 use crate::editor::character_shape_panel::{self, ShapeAction, ShapeView};
-use crate::gfx::shape_preview::{self, ShapeTarget};
-use concinnity_cook::compile::character::builtin_schema;
 
 // What the panel edits: the selected skinned mesh and the shape entry
 // targeting it, if the world has one.
@@ -72,7 +73,7 @@ impl EditorHook {
     // morph names when the preview world has it, else whatever the entry
     // authors inline.
     pub(super) fn shape_target(&self, world: &World, mesh: &str) -> ShapeTarget {
-        if let Some(t) = crate::ecs::asset_id::lookup(mesh)
+        if let Some(t) = asset_id::lookup(mesh)
             .and_then(|id| shape_preview::mesh_handle(world, id))
             .and_then(|h| shape_preview::target(world, h))
         {

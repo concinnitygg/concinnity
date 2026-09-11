@@ -6,11 +6,17 @@
 // takes the preview's camera, what it refuses to take, when it hands the pose
 // back, and that a shot never reaches the authored world.
 
-use super::worlds_tests::{entry, open_project, world_with_name_field, write_world};
-use super::*;
-use crate::components::{Camera3D, CameraController, FollowController};
+use concinnity_core::components::Sprite;
+use concinnity_core::components::TextLabel;
+use concinnity_core::components::{Camera3D, CameraController, FollowController};
+use concinnity_core::ecs::PickEntry;
+use concinnity_core::ecs::PickIndex;
+use concinnity_host::thread::asset_id;
 use framing::CameraPose;
 use worlds::cinematic;
+
+use super::worlds_tests::{entry, open_project, world_with_name_field, write_world};
+use super::*;
 
 const VP: [f32; 2] = [1280.0, 720.0];
 const AUTHORED: CameraPose = CameraPose {
@@ -54,30 +60,30 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
 // the shots frame). `bounds` false leaves the index empty, which is the seeded
 // empty scene.
 fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
-    crate::ecs::asset_id::reset_interner();
+    asset_id::reset_interner();
     let mut world = world_with_name_field();
     world.add_component(camera(controller));
     for id in std::iter::once(cinematic::FADE).chain(worlds::loading::all_sprite_ids()) {
-        world.add_component(crate::components::Sprite {
+        world.add_component(Sprite {
             asset_id: id,
             ..Default::default()
         });
     }
     for id in worlds::loading::all_label_ids() {
-        world.add_component(crate::components::TextLabel {
+        world.add_component(TextLabel {
             asset_id: id,
             ..Default::default()
         });
     }
     let entries = match bounds {
-        true => vec![crate::ecs::PickEntry {
-            asset_id: crate::ecs::asset_id::intern("box"),
+        true => vec![PickEntry {
+            asset_id: asset_id::intern("box"),
             bb_min: [-3.0, 0.0, -3.0],
             bb_max: [3.0, 2.0, 3.0],
         }],
         false => Vec::new(),
     };
-    world.insert_resource(crate::ecs::PickIndex { entries });
+    world.insert_resource(PickIndex { entries });
     world
 }
 
@@ -85,9 +91,9 @@ fn pose(world: &World) -> CameraPose {
     camera_pose::read(world).expect("the preview has a camera")
 }
 
-fn fade(world: &World) -> crate::components::Sprite {
+fn fade(world: &World) -> Sprite {
     world
-        .query::<crate::components::Sprite>()
+        .query::<Sprite>()
         .find(|s| s.asset_id == cinematic::FADE)
         .cloned()
         .expect("the fade sprite is injected")
@@ -243,7 +249,7 @@ fn losing_the_bounds_mid_cycle_hands_the_camera_back() {
     }
     assert_ne!(pose(&world), AUTHORED);
 
-    world.insert_resource(crate::ecs::PickIndex::default());
+    world.insert_resource(PickIndex::default());
     frame(&mut h, &mut world, 0.1);
     assert!(h.cinematic.is_none() && h.cinematic_restore.is_none());
     assert_eq!(pose(&world), AUTHORED, "the world's own camera is back");
@@ -283,7 +289,7 @@ fn a_pending_rebuild_holds_the_cycle_at_black() {
     assert_eq!(pose(&world), AUTHORED, "the outgoing world is left alone");
     assert!(h.cinematic_restore.is_none());
     let cover = world
-        .query::<crate::components::Sprite>()
+        .query::<Sprite>()
         .find(|s| s.asset_id == worlds::loading::COVER)
         .cloned()
         .expect("the cover is injected");

@@ -8,12 +8,13 @@
 // toasts have no title bar, drag, focus rank, or View toggle, and they draw
 // above all of that chrome.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::notify::{Level, Stack};
 use super::registry::ID_BASE;
 use super::widget::{self, point_in};
 use super::{hud, theme};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id family: the block above the palette's (0x8000), leaving 0x9000
 // free for the next panel.

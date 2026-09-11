@@ -1,10 +1,9 @@
 // src/command/new.rs
 
-use std::path::{Path, PathBuf};
-
 use concinnity_cook::authoring::world::WORLD_JSONL;
 use concinnity_cook::build_from_path;
 use concinnity_host::store::paths::StateTree;
+use std::path::{Path, PathBuf};
 
 // Default starter world file. Everything else a running world needs (window,
 // renderer, debug HUD) is injected at build time and recorded in

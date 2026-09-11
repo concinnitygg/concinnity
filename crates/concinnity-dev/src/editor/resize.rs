@@ -7,8 +7,9 @@
 // dimensions grow. The hook owns the drag state and the per-panel size override;
 // this module is stateless geometry so it stays unit-testable.
 
+use concinnity_core::ecs::CursorShape;
+
 use super::registry::PanelKey;
-use crate::ecs::CursorShape;
 
 // The thickness of the grab band along each edge, in window pixels. The band
 // sits inside the panel footprint so it never overlaps a neighbor.

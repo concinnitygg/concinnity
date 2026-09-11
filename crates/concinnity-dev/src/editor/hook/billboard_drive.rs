@@ -9,9 +9,13 @@
 // Selecting an icon goes through the same name-keyed selection the mesh pick
 // uses, so the form, tree, and gizmo all follow for free.
 
-use super::*;
-use crate::components::{Camera3D, Transform};
+use concinnity_core::components::{Camera3D, Transform};
+use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::PickIndex;
 use concinnity_core::gfx::pick::ray_aabb;
+use concinnity_host::thread::asset_id;
+
+use super::*;
 
 // One drawable / pickable billboard this frame: the authored entry it stands
 // for, its projected center, and its straight-line camera distance (the
@@ -25,8 +29,8 @@ pub(super) struct BillboardSpot {
 // name -> interned id -> live entity, the same resolve the gizmo uses. The
 // index is built at load, so entries despawned by the start-time drains
 // (Window, GraphicsConfig, Scene, ...) are filtered by liveness.
-pub(super) fn entity_by_name(world: &World, name: &str) -> Option<crate::ecs::Entity> {
-    let id = crate::ecs::asset_id::lookup(name)?;
+pub(super) fn entity_by_name(world: &World, name: &str) -> Option<Entity> {
+    let id = asset_id::lookup(name)?;
     world
         .resource::<concinnity_core::ecs::EntityByName>()?
         .get(id)
@@ -195,7 +199,7 @@ impl EditorHook {
     // the mesh pick's pass-through.
     fn nearest_mesh_t(&self, world: &World, vp: [f32; 2], mouse: [f32; 2]) -> Option<f32> {
         let ray = pick::camera_ray(world, vp, mouse)?;
-        let index = world.resource::<crate::ecs::PickIndex>()?;
+        let index = world.resource::<PickIndex>()?;
         index
             .entries
             .iter()

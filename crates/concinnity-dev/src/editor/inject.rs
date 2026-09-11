@@ -11,16 +11,19 @@
 // shipped runtime. (The two `TextInput` fields do bring in the engine's general
 // text-input system, which is real runtime code, not editor-only.)
 
+use concinnity_cook::authoring::spec::{AssetSpec, asset};
+use concinnity_core::components::{
+    DebugHud, EngineDefaults, Sprite, TextInput, TextLabel, Window, WindowMode,
+};
+use concinnity_core::ecs::FontHandle;
+use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::TransientSaves;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::hud;
 use super::registry::{self, PanelKey};
 use super::theme;
-use crate::components::{
-    DebugHud, EngineDefaults, Sprite, TextInput, TextLabel, Window, WindowMode,
-};
-use crate::ecs::FontHandle;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
-use concinnity_cook::authoring::spec::{AssetSpec, asset};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
 // the true window corner from the first frame's viewport (`hud::layout`).
@@ -54,7 +57,7 @@ pub(crate) fn editor_hud(world: &mut World) {
     // start only when this resource is already present, then refreshes it each
     // frame with world-space AABBs. Runs on every injection, so a live-preview
     // rebuild keeps the index alive.
-    world.insert_resource(crate::ecs::PickIndex::default());
+    world.insert_resource(PickIndex::default());
     // Baked asset thumbnails join the sprite atlas pool at graphics init; the
     // Content panel's cell sprites sample them by reserved handle. Captured on
     // every injection so a rebuild picks up freshly baked images.
@@ -62,7 +65,7 @@ pub(crate) fn editor_hud(world: &mut World) {
     // An editor session never touches the user's real save files: the systems
     // that persist play state sample this at init and sandbox their saves, so
     // every preview run starts fresh (see the protocol type).
-    world.insert_resource(crate::ecs::TransientSaves(true));
+    world.insert_resource(TransientSaves(true));
     // The editor HUD replaces the engine's debug HUD (both would answer F1):
     // drop one the world declares and turn the injected one off, so
     // `World::start` neither completes the world with one nor constructs its
@@ -320,6 +323,7 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
 mod tests {
     use super::super::{form_panel, panel, preview, template, template_panel, view};
     use super::*;
+    use concinnity_core::resource::FontTable;
 
     // The editor draws its own chrome, so injection turns the world's title bar
     // off in place -- keeping the rest of the authored window untouched. Where
@@ -491,9 +495,7 @@ mod tests {
         editor_hud(&mut world);
 
         // One face appended, and it is the one the panels use.
-        let fonts = world
-            .resource::<crate::resource::FontTable>()
-            .expect("the face was baked");
+        let fonts = world.resource::<FontTable>().expect("the face was baked");
         assert_eq!(fonts.len(), 1);
         let baked = FontHandle(0);
         let save = world
@@ -539,7 +541,7 @@ mod tests {
     // not shift any field. Pins the spec builders against drift.
     #[test]
     fn constructors_materialize_expected_components() {
-        use crate::components::TextAlign;
+        use concinnity_core::components::TextAlign;
 
         let s = button_sprite(
             AssetId(1),

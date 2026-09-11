@@ -32,10 +32,11 @@
 // sums every resident item. The per-frame system timings are the one thing
 // accumulated every tick, because a rate needs the whole window.
 
-use crate::app::mem_drift::MemoryDrift;
-use crate::app::syscpu::CpuSampler;
-use crate::ecs::World;
+use concinnity_core::ecs::World;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
+use concinnity_engine::app::mem_drift::MemoryDrift;
+use concinnity_engine::app::syscpu::CpuSampler;
+use concinnity_engine::app::sysmem;
 use std::time::{Duration, Instant};
 
 // Matches the StatHud's chip cadence: often enough to feel live, rare enough
@@ -352,7 +353,7 @@ impl HealthState {
         let render = &world.profile().render;
         self.snapshot = HealthSnapshot {
             heap: concinnity_core::memory::stats(),
-            rss: crate::app::sysmem::process_resident_bytes(),
+            rss: sysmem::process_resident_bytes(),
             total_ram: concinnity_engine::ecs::memory_budget(world).and_then(|b| b.total_ram_bytes),
             pool_bytes: pool_bytes(world),
             // A backend that cannot report its allocation reports zero; that is
@@ -389,6 +390,7 @@ fn pool_bytes(world: &World) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_engine::app::mem_drift;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -625,7 +627,7 @@ mod tests {
                 heap_growth_bytes: 2 * 1024 * 1024,
                 outside_heap_growth_bytes: 412 * 1024 * 1024,
                 window_secs: 2 * 3600,
-                verdict: crate::app::mem_drift::DriftVerdict::OutsideHeap,
+                verdict: mem_drift::DriftVerdict::OutsideHeap,
             }),
             ..Default::default()
         };
@@ -644,7 +646,7 @@ mod tests {
                 heap_growth_bytes: -(3 * 1024 * 1024 * 1024),
                 outside_heap_growth_bytes: 0,
                 window_secs: 45 * 60,
-                verdict: crate::app::mem_drift::DriftVerdict::Settled,
+                verdict: mem_drift::DriftVerdict::Settled,
             }),
             ..Default::default()
         };

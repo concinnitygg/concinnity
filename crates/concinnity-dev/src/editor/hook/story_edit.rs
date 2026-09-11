@@ -11,8 +11,9 @@
 // (join) from the frame's captured key, delivered only while the panel is the
 // frontmost open panel.
 
+use concinnity_core::components::InputKey;
+
 use super::*;
-use crate::components::InputKey;
 
 impl EditorHook {
     // The `entries` index of the first StoryImport (the panel's subject).

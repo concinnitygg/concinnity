@@ -12,9 +12,8 @@
 //! startup from whatever directory it decided the project lives in. Nothing
 //! here resolves a root: `open` is given one.
 
-use std::sync::{Mutex, OnceLock};
-
 use concinnity_host::store::paths::StateTree;
+use std::sync::{Mutex, OnceLock};
 
 fn opened() -> &'static Mutex<Option<StateTree>> {
     static OPENED: OnceLock<Mutex<Option<StateTree>>> = OnceLock::new();

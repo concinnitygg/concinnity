@@ -8,10 +8,10 @@
 // the project root is where worlds lived before that, and is still listed so a
 // legacy project stays openable from the panel.
 
+use concinnity_cook::authoring::world::WORLD_JSONL;
+use concinnity_cook::authoring::world::parse_world_jsonl;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-
-use crate::world::WORLD_JSONL;
 
 // The extension every world file carries.
 const WORLD_EXT: &str = "jsonl";
@@ -89,7 +89,7 @@ pub(crate) fn newest(worlds_dir: Option<&Path>, content_root: Option<&Path>) -> 
 // SAVE writes it back.
 pub(crate) fn read_entries(path: &Path) -> Result<Vec<serde_json::Value>, String> {
     match std::fs::read_to_string(path) {
-        Ok(content) => crate::world::parse_world_jsonl(&content).map_err(|e| format!("{e}")),
+        Ok(content) => parse_world_jsonl(&content).map_err(|e| format!("{e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(format!("Open failed: {e}")),
     }

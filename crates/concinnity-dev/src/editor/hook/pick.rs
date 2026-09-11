@@ -10,8 +10,12 @@
 // click on the same spot cycles through overlapping hits near-to-far, which is
 // the only way to reach an occluded object without gizmos.
 
-use super::*;
+use concinnity_core::components::Camera3D;
+use concinnity_core::ecs::PickIndex;
 use concinnity_core::gfx::pick::{PickRay, ray_aabb, screen_ray};
+use concinnity_host::thread::asset_id;
+
+use super::*;
 
 // A repeat click within this many pixels of the last one cycles the hit list
 // instead of restarting it.
@@ -27,7 +31,7 @@ pub(super) struct PickLast {
 
 // The interned name behind a pick hit, if the id still resolves.
 pub(super) fn resolve_name(id: AssetId) -> Option<String> {
-    crate::ecs::asset_id::name_of(id)
+    asset_id::name_of(id)
 }
 
 impl EditorHook {
@@ -150,10 +154,10 @@ impl EditorHook {
 
     // A selection member's projected screen rect, if it resolves this frame.
     pub(super) fn member_rect(world: &World, vp: [f32; 2], name: &str) -> Option<[f32; 4]> {
-        let id = crate::ecs::asset_id::lookup(name)?;
-        let index = world.resource::<crate::ecs::PickIndex>()?;
+        let id = asset_id::lookup(name)?;
+        let index = world.resource::<PickIndex>()?;
         let entry = index.entries.iter().find(|e| e.asset_id == id)?;
-        let cam = world.query::<crate::components::Camera3D>().next()?;
+        let cam = world.query::<Camera3D>().next()?;
         highlight::screen_rect(
             &cam.view_matrix,
             cam.fov_y_degrees.to_radians(),
@@ -167,7 +171,7 @@ impl EditorHook {
 // The mouse ray from the world's live camera, or `None` in a camera-less
 // world (nothing 3D to pick). Shared with the gizmo drag drive.
 pub(super) fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> Option<PickRay> {
-    let cam = world.query::<crate::components::Camera3D>().next()?;
+    let cam = world.query::<Camera3D>().next()?;
     screen_ray(
         &cam.view_matrix,
         cam.position,
@@ -185,7 +189,7 @@ fn ray_hits(
     ray: &PickRay,
     locked: &std::collections::BTreeSet<String>,
 ) -> Vec<AssetId> {
-    let Some(index) = world.resource::<crate::ecs::PickIndex>() else {
+    let Some(index) = world.resource::<PickIndex>() else {
         return Vec::new();
     };
     let mut hits: Vec<(f32, AssetId)> = index

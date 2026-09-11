@@ -8,11 +8,12 @@
 // Pure geometry, item derivation, and draw here; the open / click / commit
 // flow lives in `hook/create_menu_drive.rs`.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::registry::ID_BASE;
 use super::widget::{self, point_in};
 use super::{billboards, panel, theme};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id family: the next free block after the Content panel's (0x5000).
 const BASE: u32 = ID_BASE + 0x6000;

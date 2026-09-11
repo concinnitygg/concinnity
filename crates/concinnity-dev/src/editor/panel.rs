@@ -28,14 +28,12 @@
 // tree and the search field narrows the picker's option list, which floats over
 // the body; picking a type opens the add form.
 
+use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
-
-use concinnity_cook::authoring::registry::RegisteredType;
-
-use crate::components::TextAlign;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 use super::asset_tree::{Badge, TreeRow};
 use super::hud;
@@ -1183,7 +1181,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextInput, TextLabel};
+    use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     // An upper bound on the body font's per-character advance (it measures
     // ~8.2px), for the geometry guards that keep a clipped caption clear of the

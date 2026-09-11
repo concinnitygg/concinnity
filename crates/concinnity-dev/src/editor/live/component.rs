@@ -14,13 +14,14 @@
 // runs neither, so an edit that moves one declines and only the values between
 // them apply live.
 
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 use concinnity_cook::authoring::refs::referenced_names;
 use concinnity_cook::authoring::registry::{self, RegisteredType};
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_core::blob::BlobAssetDef;
 use concinnity_core::ecs::ComponentAsset;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id;
+use concinnity_host::thread::asset_id::AssetId;
 use serde_json::{Map, Value};
 
 use super::Apply;
@@ -37,7 +38,7 @@ pub(super) fn plan(
     if !ct.live() || changes_references(ct, name, before, args) {
         return None;
     }
-    let id = crate::ecs::asset_id::lookup(name)?;
+    let id = asset_id::lookup(name)?;
     let entity = world
         .resource::<concinnity_core::ecs::EntityByName>()?
         .get(id)?;
@@ -105,7 +106,7 @@ mod tests {
     // overwrite has somewhere to land.
     fn world_with(ct: RegisteredType, name: &str) -> World {
         let mut world = World::new();
-        let id = crate::ecs::asset_id::intern(name);
+        let id = asset_id::intern(name);
         let entity = world.add(bake(ct, id, &Map::new()).expect("default args bake"));
         let mut by_name = std::collections::BTreeMap::new();
         by_name.insert(id, entity);
@@ -117,7 +118,7 @@ mod tests {
     // asset's own identity.
     #[test]
     fn a_live_type_bakes_its_component() {
-        let id = crate::ecs::asset_id::intern("hud_dot");
+        let id = asset_id::intern("hud_dot");
         let asset = bake(
             RegisteredType::Sprite,
             id,
@@ -135,7 +136,7 @@ mod tests {
     // the same `bake` translation the cook uses.
     #[test]
     fn a_divergent_type_bakes_through_its_translation() {
-        let id = crate::ecs::asset_id::intern("cam");
+        let id = asset_id::intern("cam");
         let asset = bake(
             RegisteredType::Camera3D,
             id,

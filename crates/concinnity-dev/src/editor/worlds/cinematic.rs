@@ -12,11 +12,12 @@
 // the live preview's `Camera3D` each frame and the world's own pose is put
 // back the moment the screen hands the session a world.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::super::framing::{CameraPose, bounding_sphere, fit_distance};
 use super::super::registry::ID_BASE;
 use super::super::widget;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id family: the next free block after the Worlds panel's (0xC000).
 pub(crate) const FADE: AssetId = AssetId(ID_BASE + 0xD000);

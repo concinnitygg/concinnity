@@ -9,8 +9,10 @@
 // cursor. Escape cancels; a release back over the panel is just the click
 // that already selected the cell.
 
+use concinnity_core::components::{Camera3D, Transform};
+use concinnity_core::ecs::PickIndex;
+
 use super::*;
-use crate::components::{Camera3D, Transform};
 
 // Movement below this is a click, not a drag (the marquee's convention).
 const DRAG_START_PX: f32 = 4.0;
@@ -179,7 +181,7 @@ impl EditorHook {
     ) -> Option<DropPose> {
         let ray = pick::camera_ray(world, vp, mouse)?;
         let hit = world
-            .resource::<crate::ecs::PickIndex>()
+            .resource::<PickIndex>()
             .into_iter()
             .flat_map(|index| index.entries.iter())
             .filter_map(|e| concinnity_core::gfx::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
@@ -261,7 +263,7 @@ impl EditorHook {
         world: &World,
         ray: &concinnity_core::gfx::pick::PickRay,
     ) -> Vec<String> {
-        let Some(index) = world.resource::<crate::ecs::PickIndex>() else {
+        let Some(index) = world.resource::<PickIndex>() else {
             return Vec::new();
         };
         let mut hits: Vec<(f32, String)> = index

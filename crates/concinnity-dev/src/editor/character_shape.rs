@@ -9,8 +9,7 @@
 
 use concinnity_cook::authoring::registry::build_only::CharacterSchema;
 use concinnity_cook::authoring::registry::build_only::ShapePreset;
-
-use crate::components::{JointProportion, ShapeSlider};
+use concinnity_core::components::{JointProportion, ShapeSlider};
 use rand::{RngExt, SeedableRng};
 
 // The trailing section for keys and groups the schema does not place.

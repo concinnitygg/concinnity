@@ -9,10 +9,11 @@
 // panel means a `PanelKey` variant, a `Panel` impl, and its `PANELS` entry --
 // none of the shared machinery is touched.
 
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::hook::{EditorHook, panels};
-use crate::components::FrameInput;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Base of the editor HUD's reserved asset-id space. Interned world ids are dense
 // from 0 and never approach this range, and these ids are never serialized to a

@@ -9,8 +9,9 @@
 // the Display menu's state. The palette closes on commit, on Escape, and on a
 // click outside it.
 
+use concinnity_core::components::InputKey;
+
 use super::*;
-use crate::components::InputKey;
 use crate::editor::behavior::navigate;
 use crate::editor::palette::{PaletteAction, providers};
 

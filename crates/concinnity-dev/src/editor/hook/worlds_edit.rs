@@ -10,8 +10,9 @@
 // store's entry for it. Both switches run behind the confirmation dialog
 // whenever the open world has unsaved edits.
 
-use super::*;
 use std::path::Path;
+
+use super::*;
 
 impl EditorHook {
     // Re-read the project's worlds. The listing changes only when the panel

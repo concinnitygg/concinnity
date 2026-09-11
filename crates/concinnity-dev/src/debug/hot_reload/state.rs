@@ -5,11 +5,14 @@
 // side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 // calls. Built from `HotReloadSources` (captured in the lib at init).
 
+use concinnity_core::components::SkeletonJoint;
+use concinnity_core::components::Story;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::skeleton;
+use concinnity_engine::gfx::system::HotReloadApplyParts;
+use concinnity_engine::gfx::system::hot_reload_sources::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-
-use crate::gfx::system::HotReloadApplyParts;
-use crate::gfx::system::hot_reload_sources::*;
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
 use super::passes::{
@@ -45,16 +48,16 @@ pub(crate) struct DecodedColorLut {
 }
 
 // One decoded static `Mesh`, ready for the render thread to dispatch into
-// either an in-place [`crate::gfx::backend::RenderBackend::update_mesh_geometry`]
+// either an in-place [`concinnity_core::render::backend::RenderBackend::update_mesh_geometry`]
 // per draw slot or a queued
-// [`crate::gfx::backend::RenderBackend::rebuild_static_geometry`] when any
+// [`concinnity_core::render::backend::RenderBackend::rebuild_static_geometry`] when any
 // LOD slice's size changed. `entry_idx` indexes into
 // `state.meshes.entries` so the applier can look up `draw_indices` for
 // fan-out to every `Prop` that shares the mesh.
 #[derive(Debug)]
 pub(crate) struct DecodedMesh {
     pub entry_idx: usize,
-    pub vertices: Vec<crate::gfx::mesh_payload::Vertex>,
+    pub vertices: Vec<mesh_payload::Vertex>,
     pub indices: Vec<u16>,
     pub lod_alternates: Vec<(f32, Vec<u16>)>,
 }
@@ -67,9 +70,9 @@ pub(crate) struct DecodedMesh {
 #[derive(Debug)]
 pub(crate) struct DecodedSkinnedMesh {
     pub entry_idx: usize,
-    pub vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
+    pub vertices: Vec<mesh_payload::SkinnedVertex>,
     pub indices: Vec<u16>,
-    pub skeleton: Vec<crate::components::SkeletonJoint>,
+    pub skeleton: Vec<SkeletonJoint>,
 }
 
 // Output of one off-thread decode pass: every captured source the worker
@@ -182,7 +185,7 @@ pub(crate) struct PendingSkeletonUpdate {
     // `SkeletonPose` (which carries the same `skinned_index`).
     pub skinned_index: usize,
     // Fresh skeleton built from the re-imported `.glb`'s joint defs.
-    pub new_skeleton: crate::gfx::skeleton::Skeleton,
+    pub new_skeleton: skeleton::Skeleton,
 }
 
 impl std::fmt::Debug for AssetHotReloadState {
@@ -297,13 +300,13 @@ pub(crate) struct FrameHotReloadEffects {
     pub skeleton_updates: Vec<PendingSkeletonUpdate>,
     // Freshly re-compiled story graphs from a `.md` save, to be sent as
     // `StoryReload` events so the running story system swaps them in.
-    pub story_updates: Vec<crate::components::Story>,
+    pub story_updates: Vec<Story>,
 }
 
 // Run every asset / shader / world.jsonl reload pass for one frame and return
 // the ECS side-effects. `state` is the debug-owned reload catalog +
 // in-flight handles; `apply` is the per-frame backend + Prop-tracking handle
-// from [`GraphicsSystem::hot_reload_apply_parts`](crate::gfx::system::GraphicsSystem).
+// from [`GraphicsSystem::hot_reload_apply_parts`](concinnity_engine::gfx::system::GraphicsSystem).
 // This is the per-frame entry point the `DebugHook::tick` drive calls; it
 // holds the logic that previously sat at the top of `GraphicsSystem::run_step`,
 // minus the ECS mutation: the caller applies that from the returned

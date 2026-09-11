@@ -6,11 +6,12 @@
 // is visible the overlay hides the OS cursor for it (its `want_ui_cursor` path),
 // so the pointer stays managed in-engine and looks identical on every backend.
 
+use concinnity_core::components::Sprite;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::registry::ID_BASE;
 use super::widget;
-use crate::components::Sprite;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id: the free slot between the marquee rect (0xE00) and the
 // billboards (0x1000).

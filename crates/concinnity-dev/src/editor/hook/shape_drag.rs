@@ -6,11 +6,13 @@
 // frame (no rebuild); releasing commits the working values to the entry as
 // ONE edit, so undo reverts the whole drag; Escape restores the start state.
 
+use concinnity_core::components::{CharacterCapsule, CharacterShape};
+use concinnity_engine::gfx::shape_preview;
+use concinnity_host::thread::asset_id;
+
 use super::*;
-use crate::components::{CharacterCapsule, CharacterShape};
 use crate::editor::character_shape::{ShapeValues, SliderRow};
 use crate::editor::widget_slider;
-use crate::gfx::shape_preview;
 
 pub(super) struct ShapeDrag {
     pub(super) slider: usize,
@@ -102,7 +104,7 @@ impl ShapeDrag {
     }
 
     fn apply_values(&self, world: &mut World, values: &ShapeValues) {
-        let Some(id) = crate::ecs::asset_id::lookup(&self.mesh) else {
+        let Some(id) = asset_id::lookup(&self.mesh) else {
             return;
         };
         let Some(handle) = shape_preview::mesh_handle(world, id) else {

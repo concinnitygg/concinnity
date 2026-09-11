@@ -9,19 +9,21 @@
 // `super::super::dispatch::handle_request`; spawn / crossfade command handlers
 // live in `super::super::commands`.
 
-use crate::debug_hook::DebugHook;
-use crate::ecs::World;
-use crate::gfx::animation::AnimationSystem;
-use crate::gfx::system::GraphicsSystem;
+use concinnity_core::components::Camera3D;
+use concinnity_core::ecs::World;
+use concinnity_engine::ecs::ActiveRenderBackend;
+use concinnity_engine::gfx::animation::AnimationSystem;
+use concinnity_engine::gfx::system::GraphicsSystem;
+use concinnity_engine::shutdown::ShutdownToken;
+use concinnity_host::thread::asset_id;
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use concinnity_engine::shutdown::ShutdownToken;
-
 use crate::debug::state::{AssetEntry, CameraSnapshot, DebugState};
 use crate::debug::{hot_reload, runtime_spawn};
+use crate::debug_hook::DebugHook;
 use crate::mcp::AppServer;
 
 // Bound each connection's reads so a client that opens a socket and stalls
@@ -161,11 +163,7 @@ impl DebugServer {
                     // Accept the motion only when a camera exists, so the client
                     // gets a clean error in a camera-less world. The reply fires
                     // on acceptance, not completion.
-                    if world
-                        .query::<crate::components::Camera3D>()
-                        .next()
-                        .is_some()
-                    {
+                    if world.query::<Camera3D>().next().is_some() {
                         self.camera_motion = Some(runtime_spawn::CameraMotion::from_args(&args));
                         let _ = reply.send(Ok(()));
                     } else {
@@ -232,7 +230,7 @@ impl DebugHook for DebugServer {
         ) {
             state.budget = Some(crate::debug::state::BudgetSnapshot {
                 total_cores: threads.total_cores,
-                job_threads: concinnity_engine::jobs::pool().thread_count(),
+                job_threads: concinnity_host::thread::jobs::pool().thread_count(),
                 total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),
                 budget_mib: memory.budget_mib(),
                 overridden: memory.overridden,
@@ -246,7 +244,7 @@ impl DebugHook for DebugServer {
         // the world's parked slot between ticks.
         if state.shader_reload.is_none()
             && let Some(flag) = world
-                .resource::<crate::ecs::ActiveRenderBackend>()
+                .resource::<ActiveRenderBackend>()
                 .and_then(|slot| slot.0.as_ref())
                 .and_then(|backend| backend.shader_reload_flag())
         {
@@ -278,17 +276,14 @@ impl DebugHook for DebugServer {
 
         // Active-camera pose for `camera-get`. One component read, so refresh
         // every tick like the streaming / profiler snapshots above.
-        state.camera = world
-            .query::<crate::components::Camera3D>()
-            .next()
-            .map(|c| CameraSnapshot {
-                position: c.position,
-                yaw: c.yaw,
-                pitch: c.pitch,
-                fov_y_degrees: c.fov_y_degrees,
-                near: c.near,
-                far: c.far,
-            });
+        state.camera = world.query::<Camera3D>().next().map(|c| CameraSnapshot {
+            position: c.position,
+            yaw: c.yaw,
+            pitch: c.pitch,
+            fov_y_degrees: c.fov_y_degrees,
+            near: c.near,
+            far: c.far,
+        });
 
         if self.frame % SNAPSHOT_INTERVAL == 1 {
             state.system_count = world.system_count();
@@ -309,7 +304,7 @@ impl DebugHook for DebugServer {
             // The AssetId -> name table is the build interner snapshot; it is
             // stable once the world is built, so capture it just once.
             if state.names.is_empty() {
-                state.names = std::sync::Arc::new(crate::ecs::asset_id::name_table());
+                state.names = std::sync::Arc::new(asset_id::name_table());
             }
         }
     }

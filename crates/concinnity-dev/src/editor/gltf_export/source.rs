@@ -7,12 +7,13 @@
 // disarmed so the morph targets survive into the payload; the export-time bake
 // then folds the same shape into the vertices on request.
 
-use super::ExportMesh;
-use crate::components::CharacterShape;
-use crate::gfx::mesh_payload::{SkinnedPayload, deserialize_skinned_with_lods};
-use crate::world::WorldJsonlAsset;
+use concinnity_cook::authoring::world::WorldJsonlAsset;
+use concinnity_core::components::CharacterShape;
 use concinnity_core::ecs::ResourceKind;
 use concinnity_core::geometry::payload_joints_to_defs;
+use concinnity_core::gfx::mesh_payload::{SkinnedPayload, deserialize_skinned_with_lods};
+
+use super::ExportMesh;
 
 // Compile `content` (a world.jsonl string) and export the named skinned mesh
 // as GLB bytes. With `bake`, the current CharacterShape targeting the mesh is

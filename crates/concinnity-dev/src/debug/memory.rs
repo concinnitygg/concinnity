@@ -8,8 +8,8 @@
 // passed in rather than read from the globals here, so the reply shape is
 // testable without a live process.
 
+use concinnity_core::ecs::ScratchStats;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, Realm, SizeClass};
-use concinnity_engine::ecs::ScratchStats;
 
 pub(super) fn report(
     frame: u64,

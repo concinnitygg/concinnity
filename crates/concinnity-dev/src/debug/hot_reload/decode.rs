@@ -5,7 +5,11 @@
 // completed work on a later frame and push it through the backend `update_*`
 // calls. Keeps the (seconds-long) decode off the render thread.
 
-use crate::gfx::system::hot_reload_sources::*;
+use concinnity_core::components::build_skeleton_from_joint_defs;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::backend;
+use concinnity_engine::gfx::system::hot_reload_sources::*;
+use concinnity_host::thread::jobs::pool;
 
 use super::state::*;
 
@@ -67,8 +71,7 @@ fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
             // dispatches to the bounded `available_parallelism() - 1` pool
             // (mirroring the envmap worker). decode_asset_batch itself uses
             // par_iter to fan textures across cores.
-            let batch = crate::jobs::pool()
-                .install(|| decode_asset_batch(textures, color_lut, meshes, skinned));
+            let batch = pool().install(|| decode_asset_batch(textures, color_lut, meshes, skinned));
             // Receiver dropped means the asset state went away before the
             // decode finished; the send fails silently and the worker exits.
             let _ = tx.send(batch);
@@ -120,7 +123,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
     match std::thread::Builder::new()
         .name("cn-envmap-reload".into())
         .spawn(move || {
-            let result = crate::jobs::pool().install(|| {
+            let result = pool().install(|| {
                 concinnity_cook::compile::environment_map::decode_source(
                     &env_map_copy.resolved_path,
                     env_map_copy.prefilter_face_size,
@@ -352,7 +355,7 @@ pub(super) fn decode_asset_batch(
 
 // Refresh `SkinnedMeshSourceEntry`s' captured `vertex_base` / `vertex_count`
 // / `index_count` from the post-rebuild layouts returned by
-// [`crate::gfx::backend::RenderBackend::rebuild_skinned_geometry`]. Entries
+// [`concinnity_core::render::backend::RenderBackend::rebuild_skinned_geometry`]. Entries
 // whose `skinned_index` is not in `layouts` are left untouched (the backend
 // did not include them in the rebuild), but a typical Metal rebuild
 // returns one layout per slot since the whole shared buffer is re-laid out,
@@ -360,12 +363,10 @@ pub(super) fn decode_asset_batch(
 // (testable) mutation is independent of the backend call.
 pub(super) fn apply_skinned_layouts_to_entries(
     entries: &mut [SkinnedMeshSourceEntry],
-    layouts: &[crate::gfx::backend::SkinnedSlotLayout],
+    layouts: &[backend::SkinnedSlotLayout],
 ) {
-    let layout_by_skinned: std::collections::HashMap<
-        usize,
-        &crate::gfx::backend::SkinnedSlotLayout,
-    > = layouts.iter().map(|l| (l.skinned_index, l)).collect();
+    let layout_by_skinned: std::collections::HashMap<usize, &backend::SkinnedSlotLayout> =
+        layouts.iter().map(|l| (l.skinned_index, l)).collect();
     for entry in entries.iter_mut() {
         if let Some(layout) = layout_by_skinned.get(&entry.skinned_index) {
             entry.vertex_base = layout.vertex_base;
@@ -400,7 +401,7 @@ pub(super) fn apply_skinned_layouts_to_entries(
 // when still waiting or nothing scheduled.
 pub(crate) fn poll_pending_assets(
     state: &mut AssetHotReloadState,
-    backend: &mut dyn crate::gfx::backend::RenderBackend,
+    backend: &mut dyn backend::RenderBackend,
 ) -> bool {
     let mut slot = match state.asset_batch_inflight.lock() {
         Ok(g) => g,
@@ -467,7 +468,7 @@ pub(crate) fn poll_pending_assets(
 
     // Static meshes: same in-place vs rebuild dispatch the inline path
     // used to do, just driven by the worker's pre-decoded results.
-    let mut rebuild_changes: Vec<crate::gfx::backend::DrawGeometryUpdate> = Vec::new();
+    let mut rebuild_changes: Vec<backend::DrawGeometryUpdate> = Vec::new();
     let mut rebuild_entry_count = 0usize;
     for dm in &batch.meshes {
         let entry = match state.meshes.entries.get(dm.entry_idx) {
@@ -502,7 +503,7 @@ pub(crate) fn poll_pending_assets(
         if size_changed {
             rebuild_entry_count += 1;
             for &draw_idx in &entry.draw_indices {
-                rebuild_changes.push(crate::gfx::backend::DrawGeometryUpdate {
+                rebuild_changes.push(backend::DrawGeometryUpdate {
                     draw_idx,
                     vertices: dm.vertices.clone(),
                     indices: dm.indices.clone(),
@@ -565,8 +566,7 @@ pub(crate) fn poll_pending_assets(
     // both counts the same, while a re-export with a different skeleton may
     // also rewrite the mesh's vertex count, so the two checks are
     // independent and either path may fire.
-    let mut skinned_rebuild_changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate> =
-        Vec::new();
+    let mut skinned_rebuild_changes: Vec<backend::SkinnedDrawGeometryUpdate> = Vec::new();
     let mut skinned_rebuild_entries: Vec<usize> = Vec::new();
     // Per-slot new joint count, parallel to the corresponding decoded
     // entry; applied after the rebuild dispatch (success path only).
@@ -584,7 +584,7 @@ pub(crate) fn poll_pending_assets(
                 continue;
             }
         };
-        let new_joint_count = ds.skeleton.len().min(crate::gfx::render_types::MAX_JOINTS);
+        let new_joint_count = ds.skeleton.len().min(render_types::MAX_JOINTS);
         let joint_count_changed = new_joint_count != entry.joint_count;
         let size_changed =
             ds.vertices.len() != entry.vertex_count || ds.indices.len() != entry.index_count;
@@ -592,7 +592,7 @@ pub(crate) fn poll_pending_assets(
             joint_count_changes.push((ds.entry_idx, new_joint_count));
             state.pending_skeleton_updates.push(PendingSkeletonUpdate {
                 skinned_index: entry.skinned_index,
-                new_skeleton: crate::components::build_skeleton_from_joint_defs(&ds.skeleton),
+                new_skeleton: build_skeleton_from_joint_defs(&ds.skeleton),
             });
             tracing::info!(
                 "asset hot-reload: SkinnedMesh '{}' joint count changed ({} → {}), \
@@ -604,7 +604,7 @@ pub(crate) fn poll_pending_assets(
         }
         if size_changed {
             skinned_rebuild_entries.push(ds.entry_idx);
-            skinned_rebuild_changes.push(crate::gfx::backend::SkinnedDrawGeometryUpdate {
+            skinned_rebuild_changes.push(backend::SkinnedDrawGeometryUpdate {
                 skinned_index: entry.skinned_index,
                 vertices: ds.vertices.clone(),
                 indices: ds.indices.clone(),
@@ -728,7 +728,7 @@ pub(crate) fn poll_pending_assets(
 // scheduled.
 pub(crate) fn poll_pending_envmap(
     state: &AssetHotReloadState,
-    backend: &mut dyn crate::gfx::backend::RenderBackend,
+    backend: &mut dyn backend::RenderBackend,
 ) -> bool {
     let mut slot = match state.env_map_inflight.lock() {
         Ok(g) => g,

@@ -9,9 +9,11 @@
 // this editor's name table empty), and everything reports through the shared
 // log sink.
 
-use super::*;
-use crate::components::InputKey;
+use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_core::components::InputKey;
 use std::sync::atomic::Ordering;
+
+use super::*;
 
 impl EditorHook {
     // Open / close the console (the View row, the title X, and backtick all
@@ -288,7 +290,7 @@ impl EditorHook {
             self.console_sink.warn("cook already running");
             return;
         }
-        let content = match crate::world::write_world_jsonl(&self.entries) {
+        let content = match write_world_jsonl(&self.entries) {
             Ok(c) => c,
             Err(e) => {
                 self.console_build_running.store(false, Ordering::SeqCst);

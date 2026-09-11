@@ -21,13 +21,13 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+
+use super::context::VkContext;
+use super::hiz::CullHizParams;
 // `CullParams` (the GPU-cull push constant) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so `crate::vulkan::cull::CullParams`
 // is unchanged. Size pinned by `pipeline::CULL_PUSH_CONSTANT_BYTES`.
 pub(in crate::vulkan) use crate::vulkan::uniforms::CullParams;
-
-use super::context::VkContext;
-use super::hiz::CullHizParams;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =

@@ -8,6 +8,7 @@
 // the connection loop in `super::wire::server` feeds; the spawn / crossfade
 // command handlers live in `super::commands`.
 
+use concinnity_engine::app::dev_flags;
 use std::sync::{Arc, Mutex};
 
 use super::commands::{
@@ -242,7 +243,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                     // listen on their own sibling flags. Fire all four here
                     // so a single WS command reloads every hot-reloadable
                     // surface in one shot.
-                    crate::app::dev_flags::set_pending_animations();
+                    dev_flags::set_pending_animations();
                     hot_reload::set_pending_world();
                     hot_reload::set_pending_shader_stages();
                     serde_json::json!({ "ok": true, "reload_queued": true })
@@ -375,8 +376,8 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
 mod tests {
     use super::*;
     use crate::debug::state::{AssetEntry, CameraSnapshot};
-    use crate::gfx::profile::RenderStats;
-    use crate::gfx::streaming::system::StreamingStats;
+    use concinnity_core::gfx::profile::RenderStats;
+    use concinnity_engine::gfx::streaming::system::StreamingStats;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     // Run one request against a hand-built snapshot and parse the reply.
@@ -666,7 +667,7 @@ mod tests {
         hot_reload::take_pending_world();
         hot_reload::take_pending_shader_stages();
         hot_reload::take_pending_stories();
-        crate::app::dev_flags::take_pending_animations();
+        dev_flags::take_pending_animations();
 
         let flag = Arc::new(AtomicBool::new(false));
         let st = DebugState {
@@ -681,7 +682,7 @@ mod tests {
         // drain them so they do not leak.
         assert!(hot_reload::take_pending_world());
         assert!(hot_reload::take_pending_shader_stages());
-        assert!(crate::app::dev_flags::take_pending_animations());
+        assert!(dev_flags::take_pending_animations());
         // Stories reload only on their own `.md` watch, so reload-assets leaves
         // that flag clear.
         assert!(!hot_reload::take_pending_stories());

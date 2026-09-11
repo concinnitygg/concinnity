@@ -8,11 +8,12 @@
 // panels (the ids are absent from the HudLayers map, so they sit at layer 0
 // below every focused panel).
 
+use concinnity_core::components::Sprite;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::registry::ID_BASE;
 use super::theme;
-use crate::components::Sprite;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id family: the next free block after the Health panel's 0xB00.
 const OUTLINE_BASE: u32 = ID_BASE + 0xC00;

@@ -6,8 +6,8 @@
 // main thread; the only implementation is `crate::debug::DebugServer`. The
 // trait stays `pub(crate)` so it is not part of any public surface.
 
-use crate::app::state::App;
-use crate::ecs::World;
+use concinnity_core::ecs::World;
+use concinnity_engine::app::state::App;
 use concinnity_engine::shutdown::ShutdownToken;
 
 pub(crate) trait DebugHook: Send {

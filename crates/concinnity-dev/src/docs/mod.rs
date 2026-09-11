@@ -19,7 +19,6 @@ mod schema;
 
 use page::{AUTOGEN_MARKER, IndexEntry, render_index, render_page};
 use reference::AssetDoc;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;

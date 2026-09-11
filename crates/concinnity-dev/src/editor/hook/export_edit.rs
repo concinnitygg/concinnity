@@ -5,9 +5,12 @@
 // named skinned mesh as `<name>.glb` beside the project's world file, and
 // reports through the log sink and a toast.
 
+use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_host::thread::jobs::pool;
+use std::sync::atomic::Ordering;
+
 use super::*;
 use crate::editor::gltf_export;
-use std::sync::atomic::Ordering;
 
 impl EditorHook {
     // /export: resolve the mesh (an explicit name, or the selection through
@@ -28,7 +31,7 @@ impl EditorHook {
             self.console_sink.warn("cook already running");
             return;
         }
-        let content = match crate::world::write_world_jsonl(&self.entries) {
+        let content = match write_world_jsonl(&self.entries) {
             Ok(c) => c,
             Err(e) => {
                 self.console_build_running.store(false, Ordering::SeqCst);
@@ -49,7 +52,7 @@ impl EditorHook {
         std::thread::spawn(move || {
             // The bounded pool keeps the compile off rayon's global pool,
             // like the cook worker.
-            let outcome = crate::jobs::pool()
+            let outcome = pool()
                 .install(|| gltf_export::export_world_mesh(&content, &mesh, bake))
                 .and_then(|bytes| {
                     std::fs::write(&out, &bytes)

@@ -3,8 +3,9 @@
 // Tests for the confirmation dialog: the open / press / close flow, the
 // screen-modal press and wheel lockout, and its place in the draw layers.
 
+use concinnity_core::components::{Sprite, TextLabel};
+
 use super::*;
-use crate::components::{Sprite, TextLabel};
 
 const VP: [f32; 2] = [1280.0, 720.0];
 

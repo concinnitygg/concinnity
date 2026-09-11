@@ -18,9 +18,9 @@
 // below the field (its own row pool here, so it can coexist with the Assets
 // panel's combo).
 
-use crate::components::TextAlign;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
 use super::overrides::FieldOrigin;
@@ -1210,7 +1210,7 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextInput, TextLabel};
+    use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)

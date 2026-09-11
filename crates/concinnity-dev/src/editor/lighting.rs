@@ -9,8 +9,9 @@
 // edit form uses, so the panel can never write an invalid entry. Pure and
 // world-free; the hook owns the entries and the panel module owns the layout.
 
-use super::form::{self, FormField};
 use serde_json::{Map, Value};
+
+use super::form::{self, FormField};
 
 // One themed section: a heading, the asset type whose first world entry it
 // edits, vector paths to disclose into per-element leaves, and the curated

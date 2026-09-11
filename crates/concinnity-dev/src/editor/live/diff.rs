@@ -13,9 +13,10 @@
 // amounts to keeps those out of the change set, and lets a key going away
 // register as the move back to the value it uncovers.
 
+use serde_json::{Map, Value};
+
 use super::ShadowBaselines;
 use crate::editor::form;
-use serde_json::{Map, Value};
 
 /// One entry whose args changed in place.
 pub(crate) struct ArgsChange {

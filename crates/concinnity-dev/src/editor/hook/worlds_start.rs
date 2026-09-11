@@ -7,8 +7,9 @@
 // the screen. Opening then commits what is already showing, so the world the
 // user picked is not compiled twice.
 
-use super::*;
 use std::path::Path;
+
+use super::*;
 
 impl EditorHook {
     // Everything a frame's input drives while the start screen is up. The panel

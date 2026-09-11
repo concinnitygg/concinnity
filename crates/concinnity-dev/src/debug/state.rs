@@ -5,12 +5,11 @@
 // reads it to answer client queries. Kept as plain data (no sockets, no engine
 // driving) so the dispatcher stays unit-testable against a hand-built snapshot.
 
+use concinnity_core::gfx::profile;
+use concinnity_engine::gfx::streaming::system::StreamingStats;
+use concinnity_engine::shutdown::ShutdownToken;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-
-use concinnity_engine::shutdown::ShutdownToken;
-
-use crate::gfx::streaming::system::StreamingStats;
 
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
 // to rebuild, so they refresh on an interval while `frame` advances every tick.
@@ -34,7 +33,7 @@ pub(crate) struct DebugState {
     pub(super) streaming: StreamingStats,
     // Frame scratch reserve, peak and lifetime overflow count, refreshed every
     // tick so `memory` can answer whether the reserve is sized right.
-    pub(super) scratch: concinnity_engine::ecs::ScratchStats,
+    pub(super) scratch: concinnity_core::ecs::ScratchStats,
     // Per-system CPU step times (micros) from the last completed frame,
     // refreshed every tick for the `profile` command.
     pub(super) profile_systems: Vec<(String, u32)>,
@@ -46,7 +45,7 @@ pub(crate) struct DebugState {
     // under the same conditions `profile_allocs` is empty.
     pub(super) profile_frame_allocs: Option<u32>,
     // Render-backend stats from the most recent frame, for `profile`.
-    pub(super) profile_render: crate::gfx::profile::RenderStats,
+    pub(super) profile_render: profile::RenderStats,
     // App shutdown token, set once via `DebugHook::attach_shutdown`. The
     // `shutdown` command cancels it to exit the engine cleanly.
     pub(super) shutdown_token: Option<ShutdownToken>,

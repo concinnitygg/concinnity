@@ -47,8 +47,9 @@
 // value field is the selection's and follows it from view to view, so it holds
 // only Left and Right, which are the caret's (`input::text_system`).
 
+use concinnity_core::components::InputKey;
+
 use super::*;
-use crate::components::InputKey;
 use crate::editor::behavior::graph::Card;
 use crate::editor::behavior::navigate::{self, Dir};
 use crate::editor::behavior_chart::CARD_POOL;

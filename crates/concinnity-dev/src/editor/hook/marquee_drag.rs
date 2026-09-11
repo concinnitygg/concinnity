@@ -9,6 +9,9 @@
 // empty-space click, which clears. Escape cancels. The fly camera and play
 // mode capture the cursor, so `left_click` never arms a marquee there.
 
+use concinnity_core::components::Camera3D;
+use concinnity_core::ecs::PickIndex;
+
 use super::*;
 
 pub(super) struct MarqueeDrag {
@@ -95,10 +98,10 @@ fn marquee_hits(
     rect: [f32; 4],
     locked: &std::collections::BTreeSet<String>,
 ) -> Vec<String> {
-    let Some(index) = world.resource::<crate::ecs::PickIndex>() else {
+    let Some(index) = world.resource::<PickIndex>() else {
         return Vec::new();
     };
-    let Some(cam) = world.query::<crate::components::Camera3D>().next() else {
+    let Some(cam) = world.query::<Camera3D>().next() else {
         return Vec::new();
     };
     let fov = cam.fov_y_degrees.to_radians();

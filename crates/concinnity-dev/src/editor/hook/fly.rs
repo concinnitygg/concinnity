@@ -8,8 +8,9 @@
 // Escape exits back to the free-cursor edit mode. The camera keeps its flown
 // pose, so entering play mode afterwards continues from there.
 
+use concinnity_core::components::Camera3D;
+
 use super::*;
-use crate::components::Camera3D;
 
 const MOUSE_SENS: f32 = 0.003;
 const FLY_SPEED: f32 = 6.0;

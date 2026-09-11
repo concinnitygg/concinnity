@@ -4,11 +4,13 @@
 // numbered slot, 1..9 glides back to it. Slots persist per world in the
 // project's editor session store (`editor/session_store.rs`).
 
+use concinnity_core::components::InputKey;
+
 use super::*;
 
 // The bookmark slot a digit key addresses, if any.
-pub(super) fn slot_for(key: crate::components::InputKey) -> Option<usize> {
-    use crate::components::InputKey;
+pub(super) fn slot_for(key: InputKey) -> Option<usize> {
+    use concinnity_core::components::InputKey;
     Some(match key {
         InputKey::Num1 => 0,
         InputKey::Num2 => 1,

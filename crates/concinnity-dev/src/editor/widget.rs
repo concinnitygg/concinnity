@@ -7,10 +7,11 @@
 // reserved id and mutate it; these keep that lookup -- and the identical
 // place-a-sprite / point-in-rect logic -- in one place instead of two copies.
 
+use concinnity_core::components::{Sprite, TextAlign, TextInput, TextLabel};
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::theme;
-use crate::components::{Sprite, TextAlign, TextInput, TextLabel};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Shared chrome for the floating editor panels (Assets, Preview): each has a
 // draggable title bar of this height across its top. The bar shares the panel's

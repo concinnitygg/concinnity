@@ -9,8 +9,9 @@
 
 pub(crate) mod shapes;
 
-use super::billboards;
 use shapes::Stroke;
+
+use super::billboards;
 
 // Selected entities always outline at full strength; category-toggled
 // unselected ones draw thinner and dimmer so an authoring pass reads as a

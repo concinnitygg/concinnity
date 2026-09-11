@@ -36,7 +36,7 @@
 // `anim-crossfade` re-weights the clip bucket for one SkinnedMesh (looked
 // up by asset name) and ramps the live blend toward the new weights over
 // `duration_secs`. The weight vector must match the target's clip count.
-// The handler queues the command on [`crate::app::anim_runtime`] and
+// The handler queues the command on [`concinnity_engine::app::anim_runtime`] and
 // blocks on a one-shot reply channel that `AnimationSystem::step` fulfils
 // on the next frame. `duration_secs == 0` snaps immediately.
 //

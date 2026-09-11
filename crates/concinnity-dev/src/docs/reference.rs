@@ -29,14 +29,14 @@
 // rewritten to the same relative form. A docs viewer rewrites the `.md` suffix
 // to its own routes at render time.
 
+use std::collections::{BTreeSet, HashMap};
+use std::io;
+use std::path::Path;
+
 use super::render::{
     EnumValue, FieldEntry, FieldType, render_parameters, render_values, rewrite_doc_links, slug,
 };
 use super::schema::{self, DocField, DocFieldType, DocShape, DocType, DocValue};
-
-use std::collections::{BTreeSet, HashMap};
-use std::io;
-use std::path::Path;
 
 /// One documented type: an authorable asset, or a reference type (a nested
 /// value type or documented enum) an asset embeds.

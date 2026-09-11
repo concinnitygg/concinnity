@@ -6,8 +6,9 @@
 // state on Stop, and onto the transport's keyboard shortcuts. The tick runs
 // before the world step, so a publish here gates that same frame's systems.
 
+use concinnity_core::components::InputKey;
+
 use super::*;
-use crate::components::InputKey;
 
 impl EditorHook {
     // Transport shortcuts: Ctrl+P plays / pauses, Ctrl+Shift+P stops,

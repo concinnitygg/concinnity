@@ -9,8 +9,10 @@
 // the transport on the node that fired. Closing both panels withdraws the
 // request, so the running world records nothing.
 
+use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest};
+use concinnity_host::thread::asset_id;
+
 use super::*;
-use crate::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest};
 use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::{self, NodePulse};
 use crate::editor::behavior::trace;
@@ -168,7 +170,7 @@ impl EditorHook {
     fn land_on_hit(
         &mut self,
         hit: TraceEvent,
-        open_id: Option<crate::ecs::asset_id::AssetId>,
+        open_id: Option<asset_id::AssetId>,
         open_paths: &[Path],
         world: &mut World,
     ) {

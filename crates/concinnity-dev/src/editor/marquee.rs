@@ -4,11 +4,12 @@
 // injected sprite drawn while a drag is in flight. The hook
 // (`hook/marquee_drag.rs`) owns the drag state and the release-time selection.
 
+use concinnity_core::components::Sprite;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::registry::ID_BASE;
 use super::theme;
-use crate::components::Sprite;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id: the next free block after the gizmo's 0xD00.
 pub(crate) const RECT: AssetId = AssetId(ID_BASE + 0xE00);

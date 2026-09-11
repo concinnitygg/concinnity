@@ -4,6 +4,8 @@
 // wheel region, title-bar dragging, and click hit-testing across the top bar and
 // the registered panels (front-to-back).
 
+use concinnity_core::components::InputKey;
+
 use super::*;
 
 impl EditorHook {
@@ -127,14 +129,14 @@ impl EditorHook {
             && self.gizmo_drag.is_none()
         {
             match input.captured_key {
-                Some(crate::components::InputKey::T) => {
+                Some(InputKey::T) => {
                     self.gizmo_mode = gizmo::GizmoMode::Translate;
                 }
-                Some(crate::components::InputKey::R) => self.gizmo_mode = gizmo::GizmoMode::Rotate,
-                Some(crate::components::InputKey::S) => self.gizmo_mode = gizmo::GizmoMode::Scale,
+                Some(InputKey::R) => self.gizmo_mode = gizmo::GizmoMode::Rotate,
+                Some(InputKey::S) => self.gizmo_mode = gizmo::GizmoMode::Scale,
                 // F frames the selection; Shift+F keeps the old fly
                 // toggle one modifier away.
-                Some(crate::components::InputKey::F) => {
+                Some(InputKey::F) => {
                     if input.shift {
                         self.toggle_fly();
                     } else {
@@ -142,7 +144,7 @@ impl EditorHook {
                     }
                 }
                 // H hides the selection; Shift+H isolates it.
-                Some(crate::components::InputKey::H) => {
+                Some(InputKey::H) => {
                     if input.shift {
                         self.toggle_isolate();
                     } else {
@@ -180,18 +182,16 @@ impl EditorHook {
             && self.shape_drag.is_none()
         {
             match input.captured_key {
-                Some(crate::components::InputKey::Z) => self.undo(world),
-                Some(crate::components::InputKey::Y) => self.redo(world),
-                Some(crate::components::InputKey::D)
-                    if self.frontmost_open_panel() != Some(PanelKey::Behavior) =>
-                {
+                Some(InputKey::Z) => self.undo(world),
+                Some(InputKey::Y) => self.redo(world),
+                Some(InputKey::D) if self.frontmost_open_panel() != Some(PanelKey::Behavior) => {
                     self.duplicate_selection();
                 }
-                Some(crate::components::InputKey::Down) => {
+                Some(InputKey::Down) => {
                     self.drop_selection_to_floor(world);
                 }
                 // Ctrl+H makes everything visible again.
-                Some(crate::components::InputKey::H) => self.unhide_all(),
+                Some(InputKey::H) => self.unhide_all(),
                 // Ctrl+1..9 save the camera pose to a bookmark.
                 Some(key) => {
                     if let Some(slot) = bookmarks::slot_for(key) {

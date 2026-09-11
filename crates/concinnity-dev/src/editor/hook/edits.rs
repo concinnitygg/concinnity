@@ -3,6 +3,8 @@
 // EditorHook: unique-name generation and edit persistence (SAVE, the atomic
 // world.jsonl write, and the in-memory live-preview world rebuild).
 
+use concinnity_cook::authoring::world::write_world_jsonl;
+
 use super::*;
 
 impl EditorHook {
@@ -182,7 +184,7 @@ impl EditorHook {
             self.prompt_world_name(None);
             return;
         }
-        let content = match crate::world::write_world_jsonl(&self.entries) {
+        let content = match write_world_jsonl(&self.entries) {
             Ok(c) => c,
             Err(e) => {
                 self.save_failed(e);
@@ -212,8 +214,8 @@ impl EditorHook {
     // baselines the expansion merged authored patches over come back with it, so a
     // later edit can re-derive one asset's effective args without cooking again.
     pub(super) fn build_preview_world(&self) -> std::io::Result<(World, live::ShadowBaselines)> {
-        let jsonl = crate::world::write_world_jsonl(&self.entries)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let jsonl =
+            write_world_jsonl(&self.entries).map_err(|e| std::io::Error::other(e.to_string()))?;
         let (world, shadowed) = build_renderable(&jsonl)?;
         let baselines = shadowed
             .into_iter()
@@ -247,8 +249,8 @@ impl EditorHook {
     // serialization; this remains the test seam for the write itself.
     #[cfg(test)]
     pub(super) fn write_jsonl(&self) -> std::io::Result<()> {
-        let out = crate::world::write_world_jsonl(&self.entries)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let out =
+            write_world_jsonl(&self.entries).map_err(|e| std::io::Error::other(e.to_string()))?;
         self.write_jsonl_content(&out)
     }
 

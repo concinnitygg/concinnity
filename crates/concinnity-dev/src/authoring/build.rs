@@ -1,9 +1,20 @@
 // src/build.rs: shared in-memory build orchestration
 
 pub(crate) use concinnity_cook::build_compiled;
-
-use crate::ecs::{ComponentAsset, World};
 use concinnity_cook::build_only::LoadedWorld;
+use concinnity_core::ecs::{ComponentAsset, World};
+use concinnity_engine::ecs::BlobMeshBounds;
+use concinnity_engine::ecs::BlobSceneGroups;
+use concinnity_engine::resource::ColorLutSources;
+use concinnity_engine::resource::EnvironmentMapSourceInfo;
+use concinnity_engine::resource::EnvironmentMapSources;
+use concinnity_engine::resource::MaterialNames;
+use concinnity_engine::resource::MeshSource;
+use concinnity_engine::resource::MeshSources;
+use concinnity_engine::resource::TextureSource;
+use concinnity_engine::resource::TextureSources;
+use concinnity_engine::resource::install_resource_tables;
+use concinnity_host::store::blob::BlobData;
 
 // Load, validate, and (when server credentials are present) fetch the missing
 // source files for a world. The returned LoadedWorld has passed the full
@@ -44,7 +55,7 @@ fn scan_color_lut_source(
 // mirror the EnvironmentMap schema defaults in `concinnity-core/src/components/environment_map.rs`.
 fn scan_environment_map_source(
     assets: &[concinnity_cook::authoring::world::WorldJsonlAsset],
-) -> Option<crate::resource::EnvironmentMapSourceInfo> {
+) -> Option<EnvironmentMapSourceInfo> {
     let a = assets.iter().find(|a| type_is(a, "environmentmap"))?;
     let generator = a
         .args
@@ -62,7 +73,7 @@ fn scan_environment_map_source(
             .map(|v| v as u32)
             .unwrap_or(default)
     };
-    Some(crate::resource::EnvironmentMapSourceInfo {
+    Some(EnvironmentMapSourceInfo {
         source: source.to_string(),
         prefilter_face_size: u32_arg("prefilter_face_size", 512),
         irradiance_face_size: u32_arg("irradiance_face_size", 8),
@@ -96,13 +107,12 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     )?;
 
     // The material name catalog, read before the result is taken apart below.
-    let material_names = crate::resource::MaterialNames(
+    let material_names = MaterialNames(
         result.resource_names(concinnity_cook::resource_handles::ResourceKind::Material),
     );
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
-    let mut world =
-        concinnity_engine::blob::world_from(crate::blob::BlobData::new(payload_sections));
+    let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));
     // Index every named component's entity as it is minted, matching the
     // shipped runtime's `load_blob`, so name references resolve for any type.
     let mut by_name = std::collections::BTreeMap::new();
@@ -125,25 +135,23 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // Load the compiled resource stream into its per-kind tables, exactly as the
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
     // audio clips and textures by handle too.
-    crate::resource::install_resource_tables(&mut world, &mut result.resources);
-    world.insert_resource(crate::ecs::BlobSceneGroups(result.scene_groups));
-    world.insert_resource(crate::ecs::BlobMeshBounds(result.mesh_bounds));
+    install_resource_tables(&mut world, &mut result.resources);
+    world.insert_resource(BlobSceneGroups(result.scene_groups));
+    world.insert_resource(BlobMeshBounds(result.mesh_bounds));
     if let Some(budget) = result.physics_budget {
         world.insert_resource(concinnity_core::ecs::WorldPhysicsBudget(budget));
     }
     // Dev-only source catalogs for the hot-reload watcher (see the scan above).
-    world.insert_resource(crate::resource::ColorLutSources(color_lut_source));
-    world.insert_resource(crate::resource::EnvironmentMapSources(
-        environment_map_source,
-    ));
+    world.insert_resource(ColorLutSources(color_lut_source));
+    world.insert_resource(EnvironmentMapSources(environment_map_source));
     // Dev-only: the texture source catalog, so the renderer's hot-reload
     // capture and the runtime spawn-by-name path can map a texture handle back to
     // its file / name. Not present in the shipped `load_blob` path.
-    world.insert_resource(crate::resource::TextureSources(
+    world.insert_resource(TextureSources(
         result
             .texture_sources
             .iter()
-            .map(|t| crate::resource::TextureSource {
+            .map(|t| TextureSource {
                 name_id: t.name_id,
                 source: t.source.clone(),
                 image_index: t.image_index,
@@ -155,11 +163,11 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     world.insert_resource(material_names);
     // Dev-only: the mesh source catalog, so the renderer's hot-reload capture
     // can map a mesh handle back to the `.glb`/`.fbx` that backs it.
-    world.insert_resource(crate::resource::MeshSources(
+    world.insert_resource(MeshSources(
         result
             .mesh_sources
             .iter()
-            .map(|m| crate::resource::MeshSource {
+            .map(|m| MeshSource {
                 source: m.source.clone(),
                 primitive_index: m.primitive_index,
                 lod_levels: m.lod_levels,
@@ -251,6 +259,7 @@ pub(crate) fn build_world_str_to_disk_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_host::thread::asset_id;
 
     #[test]
     fn prepare_accepts_a_valid_world() {
@@ -380,15 +389,11 @@ mod tests {
         let world = world_from_loaded(loaded).unwrap();
         assert!(
             world
-                .resource::<crate::resource::ColorLutSources>()
+                .resource::<ColorLutSources>()
                 .is_some_and(|s| s.0.is_none()),
             "a world with no LUT publishes an empty catalog, not none at all"
         );
-        assert!(
-            world
-                .resource::<crate::resource::EnvironmentMapSources>()
-                .is_some()
-        );
+        assert!(world.resource::<EnvironmentMapSources>().is_some());
     }
 
     #[test]
@@ -446,14 +451,11 @@ mod tests {
         ))
         .expect("a material-only world compiles");
         let names = world
-            .resource::<crate::resource::MaterialNames>()
+            .resource::<MaterialNames>()
             .expect("the catalog is installed");
         assert_eq!(
             names.0,
-            vec![
-                crate::ecs::asset_id::intern("steel").0,
-                crate::ecs::asset_id::intern("glass").0,
-            ],
+            vec![asset_id::intern("steel").0, asset_id::intern("glass").0,],
             "declaration order is handle order"
         );
     }

@@ -16,10 +16,9 @@
 // caught the way the build would catch it. Cross-asset names (a spawn template,
 // a clip) resolve against the whole world, so those stay a build-time check.
 
-use std::sync::OnceLock;
-
 use concinnity_cook::authoring::registry::RegisteredType;
 use serde_json::Value;
+use std::sync::OnceLock;
 
 use super::*;
 use crate::editor::behavior::clip;

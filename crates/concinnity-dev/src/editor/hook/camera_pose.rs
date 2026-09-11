@@ -6,9 +6,10 @@
 // goes through this one seam -- and writes the view matrix with the pose, as
 // the engine's own controller does, so the frame draws from what was written.
 
-use super::*;
-use crate::components::Camera3D;
+use concinnity_core::components::Camera3D;
 use framing::CameraPose;
+
+use super::*;
 
 pub(super) fn read(world: &World) -> Option<CameraPose> {
     let cam = world.query::<Camera3D>().next()?;

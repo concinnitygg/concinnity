@@ -11,9 +11,10 @@
 // changed asset reference is on every other type: resolving one is the cook's
 // job, not this path's.
 
-use crate::ecs::{Entity, World};
-use crate::gfx::draw_preview::{self, DrawMaterial};
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_core::ecs::{Entity, World};
+use concinnity_engine::gfx::draw_preview::{self, DrawMaterial};
+use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
 use super::Apply;
@@ -44,7 +45,7 @@ pub(super) fn plan(
     if !draw_preview::is_available(world) {
         return None;
     }
-    let id = crate::ecs::asset_id::lookup(name)?;
+    let id = asset_id::lookup(name)?;
     let entity = world
         .resource::<concinnity_core::ecs::EntityByName>()?
         .get(id)?;
@@ -79,7 +80,7 @@ pub(super) fn commit(world: &mut World, change: DrawChange) {
 // the swap would move the draw to another pass or pipeline.
 fn swap(world: &World, entity: Entity, args: &Map<String, Value>) -> Option<DrawMaterial> {
     let name = args.get("material")?.as_str()?;
-    let next = draw_preview::material(world, crate::ecs::asset_id::lookup(name)?)?;
+    let next = draw_preview::material(world, asset_id::lookup(name)?)?;
     let current = draw_preview::drawn_material(world, entity)?;
     current.swappable_with(&next).then_some(next)
 }

@@ -5,6 +5,8 @@
 // an isolate that keeps only the selection visible; Ctrl+H clears both. The
 // composition rule lives in `editor/visibility.rs`.
 
+use concinnity_host::thread::asset_id;
+
 use super::*;
 
 impl EditorHook {
@@ -62,9 +64,6 @@ impl EditorHook {
         let hidden = visibility::effective_hidden(&self.hidden_assets, self.isolate.as_ref(), all);
         // Resolve the hidden names rather than scanning every interned one:
         // the hidden set is a handful, the interner is the whole world.
-        hidden
-            .iter()
-            .filter_map(|n| crate::ecs::asset_id::lookup(n))
-            .collect()
+        hidden.iter().filter_map(|n| asset_id::lookup(n)).collect()
     }
 }

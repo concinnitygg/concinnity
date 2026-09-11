@@ -14,10 +14,10 @@
 // Escape gives it up. There is no navigation to add, because the panel is one
 // list and the arrows are already what the text fields use.
 
+use concinnity_core::components::InputKey;
 use serde_json::Value;
 
 use super::*;
-use crate::components::InputKey;
 use crate::editor::behavior::edit;
 use crate::editor::behavior::palette;
 use crate::editor::behavior::relations;

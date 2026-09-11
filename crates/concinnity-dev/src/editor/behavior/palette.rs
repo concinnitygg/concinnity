@@ -502,6 +502,9 @@ fn literal_body(from: &Value, verb: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::BehaviorExpr;
+    use concinnity_core::components::BehaviorNode;
+    use concinnity_core::components::BehaviorSource;
 
     // Every offered verb produces JSON the schema parses back into the type it
     // names, so nothing the palette inserts can be a shape the runtime rejects.
@@ -510,7 +513,7 @@ mod tests {
         for entry in NODES {
             let v = node_default(entry.verb);
             assert_eq!(verb_of(&v), entry.verb);
-            serde_json::from_value::<crate::components::BehaviorNode>(v)
+            serde_json::from_value::<BehaviorNode>(v)
                 .unwrap_or_else(|e| panic!("node `{}` does not parse: {e}", entry.verb));
         }
     }
@@ -554,7 +557,7 @@ mod tests {
         for entry in EXPRS {
             let v = expr_default(entry.verb);
             assert_eq!(verb_of(&v), entry.verb);
-            serde_json::from_value::<crate::components::BehaviorExpr>(v)
+            serde_json::from_value::<BehaviorExpr>(v)
                 .unwrap_or_else(|e| panic!("expression `{}` does not parse: {e}", entry.verb));
         }
     }
@@ -563,7 +566,7 @@ mod tests {
     fn every_source_default_parses_as_a_source() {
         for entry in SOURCES {
             let v = source_default(entry.verb);
-            serde_json::from_value::<crate::components::BehaviorSource>(v)
+            serde_json::from_value::<BehaviorSource>(v)
                 .unwrap_or_else(|e| panic!("source `{}` does not parse: {e}", entry.verb));
         }
     }

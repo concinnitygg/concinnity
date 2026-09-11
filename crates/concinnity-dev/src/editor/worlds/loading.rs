@@ -11,11 +11,12 @@
 // over it. There is no progress bar, because there is no progress to report --
 // the compile is one call, and a bar frozen mid-sweep reads as a hang.
 
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::super::registry::ID_BASE;
 use super::super::{theme, widget};
-use crate::components::TextAlign;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id family: the next free block after the shot fade's (0xD000).
 const BASE: u32 = ID_BASE + 0xE000;
@@ -65,7 +66,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextLabel};
+    use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         let mut world = World::new();

@@ -5,7 +5,14 @@
 // and apply changes through the backend. Each returns a small tally the drive
 // logs.
 
-use crate::gfx::system::hot_reload_sources::*;
+use concinnity_core::components::ProceduralMesh;
+use concinnity_core::components::Story;
+use concinnity_core::components::VolumetricFog;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::render::backend;
+use concinnity_core::render::volumetric_fog;
+use concinnity_engine::gfx::system::hot_reload_sources::*;
+use concinnity_host::thread::asset_id;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
 // so a single info! line per asset class keeps the log readable.
@@ -19,8 +26,8 @@ pub(crate) struct FogReloadResult {
 // Re-read `world.jsonl` and push the first declared `VolumetricFog` through
 // [`RenderBackend::update_fog_settings`]. Disabled / missing assets push
 // `None`. Each authored asset runs through the same clamp chain as init:
-// [`crate::components::VolumetricFog::from_args`] (asset-side floors) then
-// [`crate::gfx::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
+// [`concinnity_core::components::VolumetricFog::from_args`] (asset-side floors) then
+// [`concinnity_core::render::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
 // so a reload cannot land out-of-range values.
 //
 // `last_pushed` is the dedupe state owned by the caller; the function
@@ -30,8 +37,8 @@ pub(crate) struct FogReloadResult {
 // backends that have not yet implemented runtime fog mutation.
 pub(super) fn reload_volumetric_fog(
     path: &str,
-    last_pushed: &mut Option<crate::gfx::volumetric_fog::FogSettings>,
-    backend: &mut dyn crate::gfx::backend::RenderBackend,
+    last_pushed: &mut Option<volumetric_fog::FogSettings>,
+    backend: &mut dyn backend::RenderBackend,
 ) -> FogReloadResult {
     let mut result = FogReloadResult::default();
 
@@ -64,7 +71,7 @@ pub(super) fn reload_volumetric_fog(
     // First declared VolumetricFog wins; mirrors the init drain in
     // `run_init`. A missing entry or one with `enabled = false` resolves to
     // `None`, which disables the pass.
-    let mut resolved: Option<crate::gfx::volumetric_fog::FogSettings> = None;
+    let mut resolved: Option<volumetric_fog::FogSettings> = None;
     for entry in &entries {
         let asset_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if asset_type != "VolumetricFog" {
@@ -74,7 +81,7 @@ pub(super) fn reload_volumetric_fog(
             .get("args")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        let parsed: crate::components::VolumetricFog = match serde_json::from_value(args) {
+        let parsed: VolumetricFog = match serde_json::from_value(args) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -86,7 +93,7 @@ pub(super) fn reload_volumetric_fog(
         };
         // Apply the build-side validator, exactly as a rebuild would at bake.
         let clamped = concinnity_cook::authoring::validate::volumetric_fog(parsed);
-        resolved = crate::gfx::volumetric_fog::resolve_asset(&clamped);
+        resolved = volumetric_fog::resolve_asset(&clamped);
         break;
     }
 
@@ -128,7 +135,7 @@ pub(crate) struct ProceduralMeshReloadResult {
 pub(super) fn reload_procedural_meshes(
     path: &str,
     procedural_meshes: &mut ProceduralMeshSourceMap,
-    backend: &mut dyn crate::gfx::backend::RenderBackend,
+    backend: &mut dyn backend::RenderBackend,
 ) -> ProceduralMeshReloadResult {
     let mut result = ProceduralMeshReloadResult::default();
     if procedural_meshes.is_empty() {
@@ -170,7 +177,7 @@ pub(super) fn reload_procedural_meshes(
     // the regen compile consumes.
     let mut new_args_by_name: std::collections::HashMap<
         String,
-        (crate::components::ProceduralMesh, serde_json::Value),
+        (ProceduralMesh, serde_json::Value),
     > = std::collections::HashMap::new();
     for entry in &entries {
         let asset_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -184,31 +191,30 @@ pub(super) fn reload_procedural_meshes(
             .get("args")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        let parsed: crate::components::ProceduralMesh =
-            match serde_json::from_value(raw_args.clone()) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(
-                        "ProceduralMesh hot-reload: failed to parse '{}' args: {} \
+        let parsed: ProceduralMesh = match serde_json::from_value(raw_args.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "ProceduralMesh hot-reload: failed to parse '{}' args: {} \
                          (kept old geometry)",
-                        name,
-                        e
-                    );
-                    continue;
-                }
-            };
+                    name,
+                    e
+                );
+                continue;
+            }
+        };
         new_args_by_name.insert(name.to_string(), (parsed, raw_args));
     }
 
     // Collect rebuild changes batched into a single rebuild call (mirrors the
     // file-backed Mesh path). Each entry either commits in place, queues a
     // rebuild change, or is unchanged.
-    let mut rebuild_changes: Vec<crate::gfx::backend::DrawGeometryUpdate> = Vec::new();
+    let mut rebuild_changes: Vec<backend::DrawGeometryUpdate> = Vec::new();
     let mut rebuild_entry_indices: Vec<usize> = Vec::new();
     // Args to write back into the source map after a successful update,
     // staged here so a failed regen / rebuild doesn't clobber the captured
     // value (the diff next reload would then miss the still-pending edit).
-    let mut staged_args: Vec<(usize, crate::components::ProceduralMesh)> = Vec::new();
+    let mut staged_args: Vec<(usize, ProceduralMesh)> = Vec::new();
 
     for (entry_idx, entry) in procedural_meshes.entries.iter().enumerate() {
         let Some((new_args, raw_args)) = new_args_by_name.get(&entry.name) else {
@@ -242,7 +248,7 @@ pub(super) fn reload_procedural_meshes(
             }
         };
         let (vertices, indices, lod_alternates) =
-            match crate::gfx::mesh_payload::deserialize_with_lods(&payload) {
+            match mesh_payload::deserialize_with_lods(&payload) {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!(
@@ -281,7 +287,7 @@ pub(super) fn reload_procedural_meshes(
 
         if size_changed {
             for &draw_idx in &entry.draw_indices {
-                rebuild_changes.push(crate::gfx::backend::DrawGeometryUpdate {
+                rebuild_changes.push(backend::DrawGeometryUpdate {
                     draw_idx,
                     vertices: vertices.clone(),
                     indices: indices.clone(),
@@ -366,12 +372,12 @@ pub(super) fn reload_procedural_meshes(
 pub(super) fn reload_stories(
     path: &str,
     snapshots: &mut std::collections::HashMap<String, serde_json::Value>,
-) -> Vec<crate::components::Story> {
+) -> Vec<Story> {
     // Each expanded Story deserializes its scaffold name-references, so the
     // name resolver must be installed. In a running editor the initial build
     // already set it up; installing it here too is a cheap no-op and keeps a
     // standalone reload correct.
-    crate::ecs::asset_id::ensure_name_resolver();
+    asset_id::ensure_name_resolver();
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
@@ -412,7 +418,7 @@ pub(super) fn reload_stories(
         if snapshots.get(name) == Some(&args) {
             continue;
         }
-        match serde_json::from_value::<crate::components::Story>(args.clone()) {
+        match serde_json::from_value::<Story>(args.clone()) {
             Ok(story) => {
                 snapshots.insert(name.to_string(), args);
                 out.push(story);
@@ -461,7 +467,7 @@ pub(crate) struct ShaderStageReloadResult {
 // recompiles exactly the path `cn build` took. Any failure logs and aborts the
 // pass without touching the backend, so a typo never desyncs a live pipeline.
 // When the compile succeeds the programs go through
-// [`crate::gfx::backend::RenderBackend::update_world_shader_pipelines`], which
+// [`concinnity_core::render::backend::RenderBackend::update_world_shader_pipelines`], which
 // runs the rebuild-then-swap dance on every backend.
 //
 // Does not detect "unchanged source": every fire recompiles the whole Shader.
@@ -469,9 +475,9 @@ pub(crate) struct ShaderStageReloadResult {
 // tracking would not be worth the state.
 pub(super) fn reload_shader_stages(
     shader_stages: &ShaderStageSourceMap,
-    backend: &mut dyn crate::gfx::backend::RenderBackend,
+    backend: &mut dyn backend::RenderBackend,
 ) -> ShaderStageReloadResult {
-    use crate::components::ShaderStage;
+    use concinnity_core::components::ShaderStage;
     use concinnity_core::render::slang_programs::surface::Sources;
 
     let mut result = ShaderStageReloadResult::default();

@@ -3,13 +3,30 @@
 // Unit tests for the hot-reload machinery (moved here from the single-file
 // module). Pull each submodule's items in explicitly.
 
+use concinnity_core::components::ProceduralMesh;
+use concinnity_core::components::SkeletonJoint;
+use concinnity_core::components::Story;
+use concinnity_core::components::StoryReload;
+use concinnity_core::ecs::EventCursor;
+use concinnity_core::ecs::World;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::skeleton;
+use concinnity_core::render::backend;
+use concinnity_core::render::draw_slot;
+use concinnity_core::render::error;
+use concinnity_core::render::input;
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::volumetric_fog;
+use concinnity_engine::gfx::system;
+use concinnity_engine::gfx::system::hot_reload_sources::*;
+use notify::{Event, EventKind};
+use std::path::PathBuf;
+
 use super::decode::*;
 use super::passes::*;
 use super::state::*;
 use super::watcher::*;
-use crate::gfx::system::hot_reload_sources::*;
-use notify::{Event, EventKind};
-use std::path::PathBuf;
 
 #[test]
 fn empty_map_round_trips() {
@@ -370,13 +387,13 @@ fn apply_skinned_layouts_refreshes_every_matching_entry() {
         },
     ];
     let layouts = vec![
-        crate::gfx::backend::SkinnedSlotLayout {
+        backend::SkinnedSlotLayout {
             skinned_index: 0,
             vertex_base: 0,
             vertex_count: 15,
             index_count: 45,
         },
-        crate::gfx::backend::SkinnedSlotLayout {
+        backend::SkinnedSlotLayout {
             skinned_index: 1,
             vertex_base: 15,
             vertex_count: 20,
@@ -405,11 +422,11 @@ fn drain_pending_skeleton_updates_clears_the_queue() {
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default());
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
         skinned_index: 0,
-        new_skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
+        new_skeleton: skeleton::Skeleton::new(Vec::new()),
     });
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
         skinned_index: 3,
-        new_skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
+        new_skeleton: skeleton::Skeleton::new(Vec::new()),
     });
     let drained = state.drain_pending_skeleton_updates();
     assert_eq!(drained.len(), 2);
@@ -440,13 +457,11 @@ fn procedural_mesh_args_normalize_via_round_trip() {
 
     // Init-side: parse + re-serialize (mirroring what `serde_json::to_value`
     // on the deserialized component yields).
-    let init_component: crate::components::ProceduralMesh =
-        serde_json::from_value(user_args.clone()).unwrap();
+    let init_component: ProceduralMesh = serde_json::from_value(user_args.clone()).unwrap();
     let init_norm = serde_json::to_value(&init_component).unwrap();
 
     // Reload-side: parse user args → component → re-serialize.
-    let reload_component: crate::components::ProceduralMesh =
-        serde_json::from_value(user_args.clone()).unwrap();
+    let reload_component: ProceduralMesh = serde_json::from_value(user_args.clone()).unwrap();
     let reload_norm = serde_json::to_value(&reload_component).unwrap();
 
     assert_eq!(init_norm, reload_norm);
@@ -456,12 +471,12 @@ fn procedural_mesh_args_normalize_via_round_trip() {
 fn procedural_mesh_args_diff_detects_real_changes() {
     // A meaningful arg change must produce a distinct normalized value so
     // the diff fires.
-    let v1: crate::components::ProceduralMesh = serde_json::from_value(serde_json::json!({
+    let v1: ProceduralMesh = serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [0.5, 0.5, 0.5],
     }))
     .unwrap();
-    let v2: crate::components::ProceduralMesh = serde_json::from_value(serde_json::json!({
+    let v2: ProceduralMesh = serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [1.0, 1.0, 1.0],
     }))
@@ -513,7 +528,7 @@ fn shader_stage_source_map_round_trips_empty() {
 
 #[test]
 fn shader_stage_source_map_collects_unique_parent_dirs() {
-    use crate::components::ShaderStage;
+    use concinnity_core::components::ShaderStage;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         stage: ShaderStage::Vertex,
@@ -534,7 +549,7 @@ fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
     // A bare filename has no parent directory; the watcher would try to
     // subscribe to "" which notify rejects. The debug-WS `reload-assets`
     // command still works for these.
-    use crate::components::ShaderStage;
+    use concinnity_core::components::ShaderStage;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         stage: ShaderStage::Vertex,
@@ -636,7 +651,7 @@ fn state_with_only_shader_stages_still_spawns_a_watcher() {
     // World loaded only via shader-stage edits (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still want the watcher
     // alive so `.slang` saves trigger the recompile pass.
-    use crate::components::ShaderStage;
+    use concinnity_core::components::ShaderStage;
     let mut stages = ShaderStageSourceMap::new();
     stages.entries.push(ShaderStageSourceEntry {
         stage: ShaderStage::Vertex,
@@ -668,23 +683,20 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
     // default backend trait impl errors on
     // `update_world_shader_pipelines`; an empty map must not hit it.
     struct DummyBackend;
-    impl crate::gfx::scene_flow::SceneControl for DummyBackend {
+    impl scene_flow::SceneControl for DummyBackend {
         fn update_visibility(&mut self, _: usize, _: bool) {}
         fn set_fade(&mut self, _: f32) {}
     }
-    impl crate::gfx::backend::RenderBackend for DummyBackend {
+    impl backend::RenderBackend for DummyBackend {
         fn window_closed(&mut self) -> bool {
             false
         }
         fn capture_cursor(&mut self) {}
-        fn take_input(&mut self) -> crate::gfx::input::RenderInput {
-            crate::gfx::input::RenderInput::default()
+        fn take_input(&mut self) -> input::RenderInput {
+            input::RenderInput::default()
         }
         fn wait_idle(&self) {}
-        fn draw_frame(
-            &mut self,
-            _: crate::gfx::backend::FrameParams<'_>,
-        ) -> crate::gfx::error::RenderResult<()> {
+        fn draw_frame(&mut self, _: backend::FrameParams<'_>) -> error::RenderResult<()> {
             Ok(())
         }
         fn update_view(&mut self, _: [[f32; 4]; 4]) {}
@@ -692,10 +704,10 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn retire_draw_object(&mut self, _: usize) {}
         fn upload_skinned(
             &mut self,
-            _: &[crate::gfx::mesh_payload::SkinnedVertex],
+            _: &[mesh_payload::SkinnedVertex],
             _: &[u32],
-            _: Vec<crate::gfx::render_types::SkinnedDrawObject>,
-        ) -> crate::gfx::error::RenderResult<()> {
+            _: Vec<render_types::SkinnedDrawObject>,
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
@@ -706,7 +718,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             &mut self,
             _: usize,
             _: &concinnity_core::bake::texture::TextureImage,
-        ) -> crate::gfx::error::RenderResult<()> {
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn evict_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
@@ -715,24 +727,20 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn upload_mesh(
             &mut self,
             _: usize,
-            _: &[crate::gfx::mesh_payload::Vertex],
+            _: &[mesh_payload::Vertex],
             _: &[u16],
             _: u64,
-        ) -> crate::gfx::error::RenderResult<()> {
+        ) -> error::RenderResult<()> {
             Ok(())
         }
-        fn setup_chunk_streaming(
-            &mut self,
-            _: usize,
-            _: usize,
-        ) -> crate::gfx::error::RenderResult<()> {
+        fn setup_chunk_streaming(&mut self, _: usize, _: usize) -> error::RenderResult<()> {
             Ok(())
         }
         fn add_chunk_mesh(
             &mut self,
-            _: crate::gfx::backend::ChunkMesh<'_>,
-            _: crate::gfx::draw_slot::SlotAlloc,
-        ) -> crate::gfx::error::RenderResult<()> {
+            _: backend::ChunkMesh<'_>,
+            _: draw_slot::SlotAlloc,
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
@@ -767,7 +775,7 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
         index_count: 36,
         joint_count: 2,
     }];
-    let layouts = vec![crate::gfx::backend::SkinnedSlotLayout {
+    let layouts = vec![backend::SkinnedSlotLayout {
         skinned_index: 0,
         vertex_base: 0,
         vertex_count: 99,
@@ -814,24 +822,21 @@ struct RecordingBackend {
     fail_env_updates: bool,
 }
 
-impl crate::gfx::scene_flow::SceneControl for RecordingBackend {
+impl scene_flow::SceneControl for RecordingBackend {
     fn update_visibility(&mut self, _: usize, _: bool) {}
     fn set_fade(&mut self, _: f32) {}
 }
 
-impl crate::gfx::backend::RenderBackend for RecordingBackend {
+impl backend::RenderBackend for RecordingBackend {
     fn window_closed(&mut self) -> bool {
         false
     }
     fn capture_cursor(&mut self) {}
-    fn take_input(&mut self) -> crate::gfx::input::RenderInput {
-        crate::gfx::input::RenderInput::default()
+    fn take_input(&mut self) -> input::RenderInput {
+        input::RenderInput::default()
     }
     fn wait_idle(&self) {}
-    fn draw_frame(
-        &mut self,
-        _: crate::gfx::backend::FrameParams<'_>,
-    ) -> crate::gfx::error::RenderResult<()> {
+    fn draw_frame(&mut self, _: backend::FrameParams<'_>) -> error::RenderResult<()> {
         Ok(())
     }
     fn update_view(&mut self, _: [[f32; 4]; 4]) {}
@@ -839,10 +844,10 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn retire_draw_object(&mut self, _: usize) {}
     fn upload_skinned(
         &mut self,
-        _: &[crate::gfx::mesh_payload::SkinnedVertex],
+        _: &[mesh_payload::SkinnedVertex],
         _: &[u32],
-        _: Vec<crate::gfx::render_types::SkinnedDrawObject>,
-    ) -> crate::gfx::error::RenderResult<()> {
+        _: Vec<render_types::SkinnedDrawObject>,
+    ) -> error::RenderResult<()> {
         Ok(())
     }
     fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
@@ -853,7 +858,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         &mut self,
         slot: usize,
         image: &concinnity_core::bake::texture::TextureImage,
-    ) -> crate::gfx::error::RenderResult<()> {
+    ) -> error::RenderResult<()> {
         self.texture_updates
             .push((slot, image.width(), image.height()));
         if self.fail_texture_updates {
@@ -867,20 +872,20 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn upload_mesh(
         &mut self,
         _: usize,
-        _: &[crate::gfx::mesh_payload::Vertex],
+        _: &[mesh_payload::Vertex],
         _: &[u16],
         _: u64,
-    ) -> crate::gfx::error::RenderResult<()> {
+    ) -> error::RenderResult<()> {
         Ok(())
     }
-    fn setup_chunk_streaming(&mut self, _: usize, _: usize) -> crate::gfx::error::RenderResult<()> {
+    fn setup_chunk_streaming(&mut self, _: usize, _: usize) -> error::RenderResult<()> {
         Ok(())
     }
     fn add_chunk_mesh(
         &mut self,
-        _: crate::gfx::backend::ChunkMesh<'_>,
-        _: crate::gfx::draw_slot::SlotAlloc,
-    ) -> crate::gfx::error::RenderResult<()> {
+        _: backend::ChunkMesh<'_>,
+        _: draw_slot::SlotAlloc,
+    ) -> error::RenderResult<()> {
         Ok(())
     }
     fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
@@ -906,7 +911,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn update_mesh_geometry(
         &mut self,
         draw_idx: usize,
-        _: &[crate::gfx::mesh_payload::Vertex],
+        _: &[mesh_payload::Vertex],
         _: &[u16],
         _: &[(f32, Vec<u16>)],
     ) -> Result<(), String> {
@@ -918,8 +923,8 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     }
     fn rebuild_static_geometry(
         &mut self,
-        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
-    ) -> crate::gfx::error::RenderResult<()> {
+        changes: Vec<backend::DrawGeometryUpdate>,
+    ) -> error::RenderResult<()> {
         self.static_rebuild_change_counts.push(changes.len());
         if self.fail_static_rebuild {
             return Err("static rebuild rejected".into());
@@ -930,7 +935,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         &mut self,
         skinned_index: usize,
         _: u32,
-        _: &[crate::gfx::mesh_payload::SkinnedVertex],
+        _: &[mesh_payload::SkinnedVertex],
         _: &[u16],
     ) -> Result<(), String> {
         self.skinned_updates.push(skinned_index);
@@ -941,8 +946,8 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     }
     fn rebuild_skinned_geometry(
         &mut self,
-        changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>,
-    ) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String> {
+        changes: Vec<backend::SkinnedDrawGeometryUpdate>,
+    ) -> Result<Vec<backend::SkinnedSlotLayout>, String> {
         self.skinned_rebuild_change_counts.push(changes.len());
         if self.fail_skinned_rebuild {
             return Err("skinned rebuild rejected".to_string());
@@ -951,7 +956,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
             .skinned_layouts
             .iter()
             .map(|&(skinned_index, vertex_base, vertex_count, index_count)| {
-                crate::gfx::backend::SkinnedSlotLayout {
+                backend::SkinnedSlotLayout {
                     skinned_index,
                     vertex_base,
                     vertex_count,
@@ -971,14 +976,14 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         }
         Ok(())
     }
-    fn update_environment_map(&mut self, _: &[u8]) -> crate::gfx::error::RenderResult<()> {
+    fn update_environment_map(&mut self, _: &[u8]) -> error::RenderResult<()> {
         self.env_updates += 1;
         if self.fail_env_updates {
             return Err("environment map update rejected".into());
         }
         Ok(())
     }
-    fn update_fog_settings(&mut self, _: Option<crate::gfx::volumetric_fog::FogSettings>) {
+    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
         self.fog_updates += 1;
     }
 }
@@ -995,8 +1000,8 @@ fn write_tiny_cube(path: &std::path::Path) {
     std::fs::write(path, text).unwrap();
 }
 
-fn zero_vertex() -> crate::gfx::mesh_payload::Vertex {
-    crate::gfx::mesh_payload::Vertex {
+fn zero_vertex() -> mesh_payload::Vertex {
+    mesh_payload::Vertex {
         pos: [0.0; 3],
         normal: [0.0; 3],
         tangent: [0.0; 3],
@@ -1005,8 +1010,8 @@ fn zero_vertex() -> crate::gfx::mesh_payload::Vertex {
     }
 }
 
-fn zero_skinned_vertex() -> crate::gfx::mesh_payload::SkinnedVertex {
-    crate::gfx::mesh_payload::SkinnedVertex {
+fn zero_skinned_vertex() -> mesh_payload::SkinnedVertex {
+    mesh_payload::SkinnedVertex {
         pos: [0.0; 3],
         normal: [0.0; 3],
         tangent: [0.0; 3],
@@ -1017,8 +1022,8 @@ fn zero_skinned_vertex() -> crate::gfx::mesh_payload::SkinnedVertex {
     }
 }
 
-fn joint_def(name: &str) -> crate::components::SkeletonJoint {
-    crate::components::SkeletonJoint {
+fn joint_def(name: &str) -> SkeletonJoint {
+    SkeletonJoint {
         name: name.to_string(),
         parent: -1,
         translation: [0.0; 3],
@@ -1810,7 +1815,7 @@ fn reload_volumetric_fog_bad_args_keep_the_previous_state() {
 
 // reload_procedural_meshes
 
-fn normalized_box_args(half: f32) -> crate::components::ProceduralMesh {
+fn normalized_box_args(half: f32) -> ProceduralMesh {
     serde_json::from_value(serde_json::json!({
         "generator": "box",
         "half_extents": [half, half, half],
@@ -1818,10 +1823,7 @@ fn normalized_box_args(half: f32) -> crate::components::ProceduralMesh {
     .unwrap()
 }
 
-fn one_proc_mesh_map(
-    name: &str,
-    args: crate::components::ProceduralMesh,
-) -> ProceduralMeshSourceMap {
+fn one_proc_mesh_map(name: &str, args: ProceduralMesh) -> ProceduralMeshSourceMap {
     let mut map = ProceduralMeshSourceMap::new();
     map.entries.push(ProceduralMeshSourceEntry {
         name: name.to_string(),
@@ -1989,7 +1991,7 @@ fn reload_stories_ignores_worlds_without_stories() {
 
 #[test]
 fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
-    use crate::components::ShaderStage;
+    use concinnity_core::components::ShaderStage;
     let dir = tempfile::tempdir().unwrap();
     let mut map = ShaderStageSourceMap::new();
     map.entries.push(ShaderStageSourceEntry {
@@ -2259,13 +2261,13 @@ fn drive_run_frame(
 ) -> (
     FrameHotReloadEffects,
     RecordingBackend,
-    Option<crate::gfx::volumetric_fog::FogSettings>,
+    Option<volumetric_fog::FogSettings>,
 ) {
     let mut backend = RecordingBackend::default();
-    let world_reload: Option<crate::gfx::system::WorldReloadState> = None;
-    let mut last_fog: Option<crate::gfx::volumetric_fog::FogSettings> = None;
+    let world_reload: Option<system::WorldReloadState> = None;
+    let mut last_fog: Option<volumetric_fog::FogSettings> = None;
     let effects = {
-        let mut apply = crate::gfx::system::HotReloadApplyParts {
+        let mut apply = system::HotReloadApplyParts {
             backend: &mut backend,
             world_reload: &world_reload,
             last_fog_settings: &mut last_fog,
@@ -2381,7 +2383,7 @@ use super::driver::{HotReloadDriver, apply_effects};
 #[test]
 fn driver_on_a_world_without_graphics_stays_unarmed() {
     let mut driver = HotReloadDriver::new();
-    let mut world = crate::ecs::World::new();
+    let mut world = World::new();
     driver.drive(&mut world);
     assert!(driver.pending().is_none());
 }
@@ -2404,17 +2406,17 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
     // must not panic or drop the armed state.
     let mut driver = HotReloadDriver::new();
     driver.arm(HotReloadSources::default());
-    let mut world = crate::ecs::World::new();
+    let mut world = World::new();
     driver.drive(&mut world);
     assert!(driver.pending().is_some());
 }
 
 #[test]
 fn apply_effects_splices_the_matching_skeleton_pose_only() {
-    use crate::components::SkeletonPose;
-    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
+    use concinnity_core::components::SkeletonPose;
+    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
 
-    let mut world = crate::ecs::World::new();
+    let mut world = World::new();
     world.add_component(SkeletonPose::new(
         Default::default(),
         0,
@@ -2458,8 +2460,8 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
 
 #[test]
 fn apply_effects_sends_a_story_reload_event() {
-    let mut world = crate::ecs::World::new();
-    let story = crate::components::Story {
+    let mut world = World::new();
+    let story = Story {
         asset_id: Default::default(),
         title: "Tale".to_string(),
         nodes: Vec::new(),
@@ -2475,9 +2477,9 @@ fn apply_effects_sends_a_story_reload_event() {
         },
     );
 
-    let mut cursor = crate::ecs::EventCursor::default();
+    let mut cursor = EventCursor::default();
     let events = world
-        .events::<crate::components::StoryReload>()
+        .events::<StoryReload>()
         .expect("a StoryReload event queue exists after apply");
     let received: Vec<_> = events.read(&mut cursor).collect();
     assert_eq!(received.len(), 1);

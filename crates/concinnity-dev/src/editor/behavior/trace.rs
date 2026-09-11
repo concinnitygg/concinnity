@@ -5,9 +5,11 @@
 // hook's `trace_drive` owns the per-frame exchange; nothing here touches the
 // world.
 
+use concinnity_core::ecs::{TraceStep, TraceVal};
+use concinnity_host::thread::asset_id;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::path::{Path, Step};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{TraceStep, TraceVal};
 
 // A traced node's path in the editor's own path type, so it resolves to rows
 // and cards through the same helpers checker faults use.
@@ -46,7 +48,7 @@ pub(crate) fn text(val: TraceVal) -> (&'static str, String) {
 // is). Resolved fresh each use: ids drift across preview rebuilds, so a stored
 // one could silently retarget.
 pub(crate) fn id_of(name: &str) -> Option<AssetId> {
-    crate::ecs::asset_id::lookup(name)
+    asset_id::lookup(name)
 }
 
 #[cfg(test)]

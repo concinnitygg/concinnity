@@ -5,11 +5,11 @@
 // engine's importer and Blender both read), a skin, and the bufferView /
 // accessor tables packed by `buffer.rs`.
 
+use concinnity_core::components::SkeletonJoint;
+use concinnity_core::gfx::transform::{decompose, trs_matrix};
 use serde_json::{Value, json};
 
 use super::buffer::BinBuffer;
-use crate::components::SkeletonJoint;
-use concinnity_core::gfx::transform::{decompose, trs_matrix};
 
 // Accessor indices for one mesh, as returned by the `BinBuffer` pushes.
 // Optional attributes are omitted from the JSON when `None`.

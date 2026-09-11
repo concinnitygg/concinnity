@@ -6,9 +6,10 @@
 // geometry, so there is nothing to place or hide here: an empty list is the
 // off state, and the renderer drops the pass with it.
 
-use super::*;
-use crate::components::Camera3D;
+use concinnity_core::components::Camera3D;
 use concinnity_core::gfx::lines::Line;
+
+use super::*;
 
 impl EditorHook {
     // Append this frame's axis lines to the shared line buffer. Nothing while

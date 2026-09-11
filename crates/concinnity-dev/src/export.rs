@@ -13,15 +13,14 @@
 // single compiled binary, a bundle targets exactly the platform this `cn` was
 // built for (host-only for now; see the --platform check).
 
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_cook::build_from_path;
 use concinnity_cook::build_only::prepare_world;
 use concinnity_cook::paths::StateTree;
 use concinnity_host::scratch;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use crate::command::resolve_world_path;
 

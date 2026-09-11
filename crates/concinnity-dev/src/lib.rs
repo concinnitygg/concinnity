@@ -10,12 +10,6 @@
 //! into is here, which is what lets the same entry points serve an out-of-tree
 //! host that has no argv at all.
 
-// Bridge: re-export the runtime/core modules the authoring, editor, and debug
-// code names under crate::* so their `crate::<module>` import paths resolve.
-// world.jsonl I/O lives in the compiler (concinnity-cook), not core.
-pub(crate) use concinnity_cook::authoring::world;
-pub(crate) use concinnity_engine::{app, blob, components, ecs, gfx, jobs, resource};
-
 /// The shader platform `cn` cooks worlds for: the backend the runtime linked
 /// into this same binary consumes, so a world built here plays here.
 pub fn cook_platform() -> concinnity_core::platform::Platform {
@@ -51,6 +45,10 @@ pub mod project;
 #[cfg(test)]
 mod test_support;
 
+// The compiler entry points an out-of-tree host reaches through this crate
+// rather than depending on concinnity-cook itself.
+pub use concinnity_cook::authoring::world::{parse_world_jsonl, write_world_jsonl};
+pub use concinnity_cook::{build_pipeline_from_str, validate_asset, validate_world_jsonl};
 // Dev-session entry points, consumed by the `concinnity` binary: the debug
 // server + interpreted run (`cn debug`), the in-engine editor (`cn editor`),
 // and the MCP stdio bridge that forwards an agent's tool calls to a running
@@ -58,12 +56,9 @@ mod test_support;
 pub use editor::run_editor;
 pub use mcp::run as run_mcp;
 pub use run::run_debug;
-
 // The authoring API
 pub use authoring::{
     add_to_path, arg_value_to_json, build_world_from_path, build_world_from_str,
     build_world_to_disk, check_at_path, check_from_str, rm_at_path, spec_args, spec_to_value,
     world_from_loaded, world_template_entries,
 };
-pub use concinnity_cook::authoring::world::{parse_world_jsonl, write_world_jsonl};
-pub use concinnity_cook::{build_pipeline_from_str, validate_asset, validate_world_jsonl};

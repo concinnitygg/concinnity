@@ -9,10 +9,9 @@
 
 pub(crate) mod prefab_map;
 
-use std::collections::{BTreeMap, HashSet};
-
 use concinnity_cook::build_only::LoadedWorld;
 use serde_json::Value;
+use std::collections::{BTreeMap, HashSet};
 
 // How one form field relates to the asset's template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

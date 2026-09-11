@@ -10,10 +10,11 @@
 // here once. (The Assets and Template detail panels use the richer grouped list
 // in `asset_list.rs` instead.)
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Row geometry, in window pixels.
 pub(crate) const ROW_H: f32 = 28.0;
@@ -260,7 +261,7 @@ pub(crate) fn all_label_ids(base: u32, rows: usize, values: bool) -> Vec<AssetId
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextLabel};
+    use concinnity_core::components::{Sprite, TextLabel};
 
     // A scratch family well clear of every real allocation in `registry.rs`.
     const BASE: u32 = 0x3000_0000 + 0x1F00;

@@ -15,9 +15,9 @@
 //     requested entries are written; injected companions and engine defaults
 //     stay build-time only (see world-lock.json).
 
-use crate::world::{WORLD_JSONL, patch_world_jsonl_to};
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::{WORLD_JSONL, patch_world_jsonl_to};
 use concinnity_cook::build_from_path;
 
 /// Add an asset to `world_path` and rebuild. See module docs.

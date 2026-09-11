@@ -9,11 +9,12 @@
 // hook routes every press and wheel to it before anything else, and its draw
 // layer sits above all other chrome.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::registry::ID_BASE;
 use super::widget::{self, point_in};
 use super::{hud, theme};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 // Reserved id family: the next free block after the toast stack's (0xA000).
 const BASE: u32 = ID_BASE + 0xB000;
@@ -212,7 +213,8 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextAlign, TextLabel};
+    use concinnity_core::components::TextInput;
+    use concinnity_core::components::{Sprite, TextAlign, TextLabel};
 
     const VP: [f32; 2] = [1280.0, 720.0];
 
@@ -231,7 +233,7 @@ mod tests {
             });
         }
         for id in all_field_ids() {
-            world.add_component(crate::components::TextInput {
+            world.add_component(TextInput {
                 asset_id: id,
                 ..Default::default()
             });
@@ -433,11 +435,7 @@ mod tests {
         hide(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(
-            world
-                .query::<crate::components::TextInput>()
-                .all(|t| !t.visible && !t.focused)
-        );
+        assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
     }
 
     // A prompt carries a focused name field between its message and its
@@ -454,7 +452,7 @@ mod tests {
             [0.0, 0.0],
         );
         let field = world
-            .query::<crate::components::TextInput>()
+            .query::<TextInput>()
             .find(|t| t.asset_id == NAME_INPUT)
             .cloned()
             .unwrap();
@@ -467,11 +465,7 @@ mod tests {
         assert!(size(true)[1] > size(false)[1], "the prompt is taller");
 
         apply(&mut world, VP, "Delete?", &[plain("No")], false, [0.0, 0.0]);
-        assert!(
-            world
-                .query::<crate::components::TextInput>()
-                .all(|t| !t.visible && !t.focused)
-        );
+        assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
     }
 
     #[test]

@@ -12,12 +12,13 @@
 // bar, close button, and row draw come from the shared `list_panel`; this
 // module only names the ids, width, and its row actions.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::list_panel::{self, Row};
 use super::registry::{self, PanelKey};
 use super::snap::SnapSettings;
 use super::widget::{self, point_in};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Preview);
 // Named ids the cross-module tests reference (injection ordering / visibility);
@@ -152,7 +153,7 @@ mod tests {
     use super::super::widget;
     use super::list_panel::title_label;
     use super::*;
-    use crate::components::{Sprite, TextLabel};
+    use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])

@@ -8,8 +8,10 @@
 // same field from a native picker, so both routes end at the same Add. Listed
 // imports open in the standard edit form for full arg editing.
 
-use super::*;
+use concinnity_core::components::InputKey;
 use std::path::Path;
+
+use super::*;
 
 impl EditorHook {
     // The world's file-backed entries, in entry order.
@@ -172,7 +174,7 @@ impl EditorHook {
 
     // Enter in the focused path field adds, like clicking the Add button.
     pub(super) fn import_keys(&mut self, world: &mut World, input: &FrameInput) {
-        if self.import_focus && input.captured_key == Some(crate::components::InputKey::Enter) {
+        if self.import_focus && input.captured_key == Some(InputKey::Enter) {
             self.add_import(world);
         }
     }

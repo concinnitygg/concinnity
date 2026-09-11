@@ -21,8 +21,7 @@ pub use build::build;
 pub use check::check;
 pub use explain::explain;
 pub use list::list;
+pub(crate) use list::{provenance, resolve_world_path};
 pub use new::{init, new};
 pub use rm::rm;
 pub use version::{VERSION, version, version_details, version_line};
-
-pub(crate) use list::{provenance, resolve_world_path};

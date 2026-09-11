@@ -8,6 +8,10 @@
 // outside the footprint, and scrolling that stays in bounds at either end --
 // are asserted here once for every registered panel rather than per panel.
 
+use concinnity_core::components::Sprite;
+use concinnity_core::components::TextInput;
+use concinnity_core::components::TextLabel;
+
 use super::*;
 use crate::editor::inject;
 use crate::editor::registry::Panel;
@@ -58,7 +62,7 @@ fn show_every_element(p: &dyn Panel, world: &mut World) {
 fn visible_sprites(p: &dyn Panel, world: &World) -> Vec<AssetId> {
     let ids = p.sprite_ids();
     world
-        .query::<crate::components::Sprite>()
+        .query::<Sprite>()
         .filter(|s| s.visible && ids.contains(&s.asset_id))
         .map(|s| s.asset_id)
         .collect()
@@ -77,21 +81,21 @@ fn hide_blanks_every_declared_element() {
 
         for id in p.sprite_ids() {
             let s = world
-                .query::<crate::components::Sprite>()
+                .query::<Sprite>()
                 .find(|s| s.asset_id == id)
                 .unwrap_or_else(|| panic!("{key:?} declares sprite {id:?} but injection has none"));
             assert!(!s.visible, "{key:?} left sprite {id:?} visible after hide");
         }
         for id in p.label_ids() {
             let l = world
-                .query::<crate::components::TextLabel>()
+                .query::<TextLabel>()
                 .find(|l| l.asset_id == id)
                 .unwrap_or_else(|| panic!("{key:?} declares label {id:?} but injection has none"));
             assert!(!l.visible, "{key:?} left label {id:?} visible after hide");
         }
         for (id, _) in p.field_ids() {
             let t = world
-                .query::<crate::components::TextInput>()
+                .query::<TextInput>()
                 .find(|t| t.asset_id == id)
                 .unwrap_or_else(|| panic!("{key:?} declares field {id:?} but injection has none"));
             assert!(!t.visible, "{key:?} left field {id:?} visible after hide");

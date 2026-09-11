@@ -6,7 +6,7 @@
 // per frame from a `DebugHook::tick` (see `driver::HotReloadDriver`). The
 // passive source catalogs these consume are captured at
 // `GraphicsSystem::init` and live in the library
-// (`crate::gfx::system::hot_reload_sources`); the per-frame backend
+// (`concinnity_engine::gfx::system::hot_reload_sources`); the per-frame backend
 // + Prop-tracking handle comes from `GraphicsSystem::hot_reload_apply_parts`.
 //
 // Split by responsibility:
@@ -29,7 +29,6 @@ mod tests;
 
 pub(crate) use driver::HotReloadDriver;
 pub(crate) use pending::{set_pending_shader_stages, set_pending_stories, set_pending_world};
-
 // The `reload-assets` dispatch test drains the sibling reload flags the handler
 // raises so they don't leak into other tests; only that test needs them.
 #[cfg(test)]

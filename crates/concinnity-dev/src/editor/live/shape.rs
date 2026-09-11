@@ -12,9 +12,10 @@
 // keeps the dimensions it was created with until the world is rebuilt, which
 // SAVE does.
 
-use crate::components::{CharacterCapsule, CharacterShape};
-use crate::ecs::{SkinnedMeshHandle, World};
-use crate::gfx::shape_preview;
+use concinnity_core::components::{CharacterCapsule, CharacterShape};
+use concinnity_core::ecs::{SkinnedMeshHandle, World};
+use concinnity_engine::gfx::shape_preview;
+use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
 use super::Apply;
@@ -37,7 +38,7 @@ pub(super) fn plan(
         return None;
     }
     let mesh = args.get("target")?.as_str()?;
-    let target = shape_preview::mesh_handle(world, crate::ecs::asset_id::lookup(mesh)?)?;
+    let target = shape_preview::mesh_handle(world, asset_id::lookup(mesh)?)?;
     let shape = shape_of(args, target)?;
     Some(Apply::Shape {
         shape,

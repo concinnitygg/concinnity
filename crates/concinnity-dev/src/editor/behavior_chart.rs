@@ -10,14 +10,15 @@
 // the authored ScrollPanels), so a card panned past the canvas edge is drawn as
 // the part still inside it and drops its text once too little is left to read.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::behavior::graph::{Card, CardKind, Chart};
 use super::behavior::pulse;
 use super::behavior_panel::{CHAR_W, LIST_THUMB, LIST_TRACK};
 use super::registry::{self, PanelKey};
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Behavior);
 pub(crate) const HINT_LABEL: AssetId = AssetId(BASE + 0x1F0);
@@ -481,8 +482,8 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextLabel};
     use crate::editor::behavior::graph;
+    use concinnity_core::components::{Sprite, TextLabel};
     use serde_json::json;
 
     fn injected_world() -> World {

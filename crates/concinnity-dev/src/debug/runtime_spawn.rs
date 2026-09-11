@@ -14,14 +14,28 @@
 // synchronously: the wait is bounded by one frame (~16 ms at 60 Hz). `cn run`
 // has no debug hook and never reaches any of this.
 
+use concinnity_core::components::DespawnRequest;
+use concinnity_core::components::InputKey;
+use concinnity_core::components::ReparentRequest;
+use concinnity_core::components::SettingCommand;
+use concinnity_core::components::SettingOp;
+use concinnity_core::components::SpawnRequest;
+use concinnity_core::components::StoryCommand;
+use concinnity_core::components::Transform;
+use concinnity_core::ecs::World;
+use concinnity_core::gfx::camera;
+use concinnity_core::render::backend;
+use concinnity_core::render::decal;
+use concinnity_core::render::particles;
+use concinnity_engine::gfx::camera_controller;
+use concinnity_engine::gfx::system::WorldReloadState;
+use concinnity_host::thread::asset_id;
 use std::sync::Mutex;
-
-use crate::gfx::system::WorldReloadState;
 
 // A runtime decal-spawn request. `texture` is the world.jsonl name of the
 // Texture asset to project; `None` (or an unresolvable name) falls back to
 // the renderer's white slot 0 so the tint still stamps. Geometry is the
-// same TRS triple the [`crate::components::Decal`] component carries.
+// same TRS triple the [`concinnity_core::components::Decal`] component carries.
 #[derive(Debug, Clone)]
 pub(crate) struct DecalSpawnArgs {
     pub texture: Option<String>,
@@ -44,8 +58,8 @@ impl Default for DecalSpawnArgs {
 }
 
 // A runtime emitter-spawn request. Same field shape as the
-// [`crate::components::ParticleEmitter`] asset; the engine clamps + normalizes
-// via [`crate::gfx::particles::build_particle_records`].
+// [`concinnity_core::components::ParticleEmitter`] asset; the engine clamps + normalizes
+// via [`concinnity_core::render::particles::build_particle_records`].
 #[derive(Debug, Clone)]
 pub(crate) struct EmitterSpawnArgs {
     pub texture: Option<String>,
@@ -280,7 +294,7 @@ pub(crate) enum RuntimeCommand {
     // the `systems_mut` borrow ends, via `dispatch_quality_set`.
     QualitySet {
         setting: String,
-        op: crate::components::SettingOp,
+        op: SettingOp,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     // Bind a movement action (`key_forward` / ... ) to a key, live, by pushing
@@ -289,7 +303,7 @@ pub(crate) enum RuntimeCommand {
     // `dispatch_rebind` once the `systems_mut` borrow ends.
     Rebind {
         setting: String,
-        key: crate::components::InputKey,
+        key: InputKey,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     // Despawn an authored placement (and its descendants) by name. ECS-side: it
@@ -330,7 +344,7 @@ pub(crate) enum RuntimeCommand {
     // key press fires, so a headless harness can start, advance, and choose
     // through a story and screenshot each page. ECS-side like `Despawn`.
     Story {
-        command: crate::components::StoryCommand,
+        command: StoryCommand,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
 }
@@ -370,20 +384,17 @@ pub(crate) fn drain() -> Vec<RuntimeCommand> {
 pub(crate) fn dispatch_runtime_spawn(
     cmd: RuntimeCommand,
     world_reload: Option<&WorldReloadState>,
-    backend: &mut dyn crate::gfx::backend::RenderBackend,
+    backend: &mut dyn backend::RenderBackend,
 ) {
     match cmd {
         RuntimeCommand::DecalAdd { args, reply } => {
             let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
                 .and_then(|slot| {
-                    let model = crate::gfx::decal::decal_model_matrix(
-                        args.position,
-                        args.rotation_deg,
-                        args.size,
-                    );
-                    let inv_model = crate::gfx::decal::invert_decal_model(model)
+                    let model =
+                        decal::decal_model_matrix(args.position, args.rotation_deg, args.size);
+                    let inv_model = decal::invert_decal_model(model)
                         .ok_or_else(|| "decal-add: degenerate size".to_string())?;
-                    Ok(crate::gfx::decal::DecalRecord {
+                    Ok(decal::DecalRecord {
                         model,
                         inv_model,
                         texture_slot: slot,
@@ -421,8 +432,8 @@ pub(crate) fn dispatch_runtime_spawn(
                     let speed_max = args.speed_max.max(speed_min);
                     let max_particles = args
                         .max_particles
-                        .clamp(1, crate::gfx::particles::MAX_PARTICLES_PER_EMITTER);
-                    crate::gfx::particles::ParticleEmitterRecord {
+                        .clamp(1, particles::MAX_PARTICLES_PER_EMITTER);
+                    particles::ParticleEmitterRecord {
                         texture_slot: slot,
                         position: args.position,
                         direction: dir,
@@ -498,7 +509,7 @@ pub(crate) fn dispatch_runtime_spawn(
 // here (instead of `dispatch_runtime_spawn`) by the per-frame debug drive
 // because it needs the `World`, not the backend. Non-`CameraSet` variants are
 // ignored: the caller only routes `CameraSet` here.
-pub(crate) fn dispatch_camera_set(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+pub(crate) fn dispatch_camera_set(cmd: RuntimeCommand, world: &mut World) {
     let RuntimeCommand::CameraSet { args, reply } = cmd else {
         return;
     };
@@ -511,18 +522,16 @@ pub(crate) fn dispatch_camera_set(cmd: RuntimeCommand, world: &mut crate::ecs::W
 // (`apply_quality_settings`), so this exercises the real toggle path rather
 // than a duplicate. Routed here (like `CameraSet`) because it mutates the ECS,
 // not the backend. `cn debug` only.
-pub(crate) fn dispatch_quality_set(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+pub(crate) fn dispatch_quality_set(cmd: RuntimeCommand, world: &mut World) {
     let RuntimeCommand::QualitySet { setting, op, reply } = cmd else {
         return;
     };
-    world
-        .events_mut::<crate::components::SettingCommand>()
-        .send(crate::components::SettingCommand {
-            setting,
-            op,
-            value_label: None,
-            persist: true,
-        });
+    world.events_mut::<SettingCommand>().send(SettingCommand {
+        setting,
+        op,
+        value_label: None,
+        persist: true,
+    });
     let _ = reply.send(Ok(()));
 }
 
@@ -531,7 +540,7 @@ pub(crate) fn dispatch_quality_set(cmd: RuntimeCommand, world: &mut crate::ecs::
 // reads it on its next step and applies the rebind live (swap + `set_keymap` +
 // persist + label refresh via its registry, which is why `value_label` is left
 // `None` here). Routed here (like `QualitySet`) because it mutates the ECS.
-pub(crate) fn dispatch_rebind(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+pub(crate) fn dispatch_rebind(cmd: RuntimeCommand, world: &mut World) {
     let RuntimeCommand::Rebind {
         setting,
         key,
@@ -540,14 +549,12 @@ pub(crate) fn dispatch_rebind(cmd: RuntimeCommand, world: &mut crate::ecs::World
     else {
         return;
     };
-    world
-        .events_mut::<crate::components::SettingCommand>()
-        .send(crate::components::SettingCommand {
-            setting,
-            op: crate::components::SettingOp::Rebind(key),
-            value_label: None,
-            persist: true,
-        });
+    world.events_mut::<SettingCommand>().send(SettingCommand {
+        setting,
+        op: SettingOp::Rebind(key),
+        value_label: None,
+        persist: true,
+    });
     let _ = reply.send(Ok(()));
 }
 
@@ -558,17 +565,17 @@ pub(crate) fn dispatch_rebind(cmd: RuntimeCommand, world: &mut crate::ecs::World
 // `CameraSet` / `QualitySet`) because it mutates the ECS, not the backend. The
 // reply fires once the event is queued; an unknown name is a clean error. The
 // the despawn is applied by the GraphicsSystem on its next step.
-pub(crate) fn dispatch_despawn(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+pub(crate) fn dispatch_despawn(cmd: RuntimeCommand, world: &mut World) {
     let RuntimeCommand::Despawn { name, reply } = cmd else {
         return;
     };
-    let Some(id) = crate::ecs::asset_id::lookup(&name) else {
+    let Some(id) = asset_id::lookup(&name) else {
         let _ = reply.send(Err(format!("despawn: name '{name}' not found")));
         return;
     };
     world
-        .events_mut::<crate::components::DespawnRequest>()
-        .send(crate::components::DespawnRequest { target: id.into() });
+        .events_mut::<DespawnRequest>()
+        .send(DespawnRequest { target: id.into() });
     let _ = reply.send(Ok(()));
 }
 
@@ -578,7 +585,7 @@ pub(crate) fn dispatch_despawn(cmd: RuntimeCommand, world: &mut crate::ecs::Worl
 // child's Parent edge. Routed here (like `Despawn`) because it mutates the ECS,
 // not the backend. The reply fires once the event is queued; an unknown name is
 // a clean error.
-pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut World) {
     let RuntimeCommand::Reparent {
         child,
         parent,
@@ -587,7 +594,7 @@ pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut crate::ecs::Wor
     else {
         return;
     };
-    let resolve = crate::ecs::asset_id::lookup;
+    let resolve = asset_id::lookup;
     let Some(child_id) = resolve(&child) else {
         let _ = reply.send(Err(format!("reparent: child '{child}' not found")));
         return;
@@ -602,12 +609,10 @@ pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut crate::ecs::Wor
         },
         None => None,
     };
-    world
-        .events_mut::<crate::components::ReparentRequest>()
-        .send(crate::components::ReparentRequest {
-            child: child_id.into(),
-            parent: parent_id.map(Into::into),
-        });
+    world.events_mut::<ReparentRequest>().send(ReparentRequest {
+        child: child_id.into(),
+        parent: parent_id.map(Into::into),
+    });
     let _ = reply.send(Ok(()));
 }
 
@@ -617,7 +622,7 @@ pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut crate::ecs::Wor
 // draw slots into recycled slots, and builds the new entity. Routed here (like
 // `Despawn`) because it mutates the ECS, not the backend. The reply fires once
 // the event is queued; an unknown template is a clean error.
-pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut World) {
     let RuntimeCommand::Spawn {
         template,
         name,
@@ -630,26 +635,24 @@ pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut crate::ecs::World)
     else {
         return;
     };
-    let Some(template_id) = crate::ecs::asset_id::lookup(&template) else {
+    let Some(template_id) = asset_id::lookup(&template) else {
         let _ = reply.send(Err(format!("spawn: template '{template}' not found")));
         return;
     };
     // A zero scale (the array default when the request omits it) would make the
     // instance invisible; treat it as unit scale.
     let scale = if scale == [0.0; 3] { [1.0; 3] } else { scale };
-    let name_id = crate::ecs::asset_id::intern(&name);
-    world
-        .events_mut::<crate::components::SpawnRequest>()
-        .send(crate::components::SpawnRequest {
-            template: template_id,
-            name: Some(name_id),
-            transform: crate::components::Transform {
-                position,
-                rotation_deg,
-                scale,
-            },
-            lifetime_secs: lifetime,
-        });
+    let name_id = asset_id::intern(&name);
+    world.events_mut::<SpawnRequest>().send(SpawnRequest {
+        template: template_id,
+        name: Some(name_id),
+        transform: Transform {
+            position,
+            rotation_deg,
+            scale,
+        },
+        lifetime_secs: lifetime,
+    });
     let _ = reply.send(Ok(()));
 }
 
@@ -658,13 +661,11 @@ pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut crate::ecs::World)
 // system reads it on its next step and moves through its graph. Routed here
 // (like `Despawn`) because it mutates the ECS, not the backend. The reply
 // fires once the event is queued; a world without a story simply ignores it.
-pub(crate) fn dispatch_story(cmd: RuntimeCommand, world: &mut crate::ecs::World) {
+pub(crate) fn dispatch_story(cmd: RuntimeCommand, world: &mut World) {
     let RuntimeCommand::Story { command, reply } = cmd else {
         return;
     };
-    world
-        .events_mut::<crate::components::StoryCommand>()
-        .send(command);
+    world.events_mut::<StoryCommand>().send(command);
     let _ = reply.send(Ok(()));
 }
 
@@ -675,11 +676,8 @@ pub(crate) fn dispatch_story(cmd: RuntimeCommand, world: &mut crate::ecs::World)
 // debug tick runs before the world step, so the controller sees the new pose
 // the same frame, and with velocity zeroed (and no input in an unfocused
 // window) it leaves it untouched.
-pub(crate) fn apply_camera_set(
-    args: &CameraSetArgs,
-    world: &mut crate::ecs::World,
-) -> Result<(), String> {
-    use crate::components::Camera3D;
+pub(crate) fn apply_camera_set(args: &CameraSetArgs, world: &mut World) -> Result<(), String> {
+    use concinnity_core::components::Camera3D;
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return Err("camera-set: no Camera3D in world".to_string());
     };
@@ -689,10 +687,10 @@ pub(crate) fn apply_camera_set(
     if let Some(fov) = args.fov_y_degrees {
         camera.fov_y_degrees = fov;
     }
-    camera.view_matrix = crate::gfx::camera::view_matrix(camera.position, camera.yaw, camera.pitch);
+    camera.view_matrix = camera::view_matrix(camera.position, camera.yaw, camera.pitch);
 
     for system in world.systems_mut() {
-        if let Some(c) = system.downcast_mut::<crate::gfx::camera_controller::Camera3DSystem>() {
+        if let Some(c) = system.downcast_mut::<camera_controller::Camera3DSystem>() {
             c.reset_velocity();
         }
     }
@@ -704,8 +702,8 @@ pub(crate) fn apply_camera_set(
 // controller velocity (same reason as `apply_camera_set`: keep free-fly from
 // fighting the externally driven pose). Returns `false` when the world has no
 // `Camera3D`, so the caller drops the motion instead of spinning forever.
-pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut crate::ecs::World) -> bool {
-    use crate::components::Camera3D;
+pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut World) -> bool {
+    use concinnity_core::components::Camera3D;
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return false;
     };
@@ -713,10 +711,10 @@ pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut crate::e
     camera.position = pos;
     camera.yaw = yaw;
     camera.pitch = pitch;
-    camera.view_matrix = crate::gfx::camera::view_matrix(pos, yaw, pitch);
+    camera.view_matrix = camera::view_matrix(pos, yaw, pitch);
 
     for system in world.systems_mut() {
-        if let Some(c) = system.downcast_mut::<crate::gfx::camera_controller::Camera3DSystem>() {
+        if let Some(c) = system.downcast_mut::<camera_controller::Camera3DSystem>() {
             c.reset_velocity();
         }
     }
@@ -738,7 +736,7 @@ fn resolve_texture_slot(
     let Some(name) = texture else {
         return Ok(0);
     };
-    let id = crate::ecs::asset_id::lookup(name)
+    let id = asset_id::lookup(name)
         .ok_or_else(|| format!("texture '{}' not found in interner", name))?;
     let reload = world_reload.ok_or_else(|| {
         "texture-name resolution requires cn debug (world_reload missing)".to_string()
@@ -754,6 +752,14 @@ fn resolve_texture_slot(
 mod tests {
     use super::*;
     use crate::test_support;
+    use concinnity_core::components::Camera3D;
+    use concinnity_core::ecs::EventCursor;
+    use concinnity_core::gfx::mesh_payload;
+    use concinnity_core::gfx::render_types;
+    use concinnity_core::render::draw_slot;
+    use concinnity_core::render::error;
+    use concinnity_core::render::input;
+    use concinnity_core::render::scene_flow;
 
     #[test]
     fn enqueue_drain_round_trip() {
@@ -870,8 +876,8 @@ mod tests {
     // succeed (the velocity reset runs over the constructed system).
     #[test]
     fn apply_camera_set_writes_active_camera() {
-        use crate::components::{Camera3D, CameraController};
-        use crate::ecs::World;
+        use concinnity_core::components::{Camera3D, CameraController};
+        use concinnity_core::ecs::World;
 
         let mut world = World::new();
         world.add_component(Camera3D {
@@ -909,8 +915,8 @@ mod tests {
     // `fov_y_degrees: None` leaves the existing field untouched.
     #[test]
     fn apply_camera_set_keeps_fov_when_none() {
-        use crate::components::{Camera3D, CameraController};
-        use crate::ecs::World;
+        use concinnity_core::components::{Camera3D, CameraController};
+        use concinnity_core::ecs::World;
 
         let mut world = World::new();
         world.add_component(Camera3D {
@@ -942,7 +948,7 @@ mod tests {
     // No Camera3D in the world is a clean error, not a panic.
     #[test]
     fn apply_camera_set_errors_without_camera() {
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         let args = CameraSetArgs::default();
         assert!(apply_camera_set(&args, &mut world).is_err());
     }
@@ -1084,8 +1090,8 @@ mod tests {
     // matrix; a sequence of steps accumulates displacement (sustained motion).
     #[test]
     fn apply_camera_move_step_advances_active_camera() {
-        use crate::components::{Camera3D, CameraController};
-        use crate::ecs::World;
+        use concinnity_core::components::{Camera3D, CameraController};
+        use concinnity_core::ecs::World;
 
         let mut world = World::new();
         world.add_component(Camera3D {
@@ -1124,7 +1130,7 @@ mod tests {
     // the motion.
     #[test]
     fn apply_camera_move_step_false_without_camera() {
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         let motion = CameraMotion {
             forward: 1.0,
             right: 0.0,
@@ -1142,24 +1148,21 @@ mod tests {
     // failure arms the dispatch reply surfaces to a WS client.
     struct StubBackend;
 
-    impl crate::gfx::scene_flow::SceneControl for StubBackend {
+    impl scene_flow::SceneControl for StubBackend {
         fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
         fn set_fade(&mut self, _fade: f32) {}
     }
 
-    impl crate::gfx::backend::RenderBackend for StubBackend {
+    impl backend::RenderBackend for StubBackend {
         fn window_closed(&mut self) -> bool {
             false
         }
         fn capture_cursor(&mut self) {}
-        fn take_input(&mut self) -> crate::gfx::input::RenderInput {
-            crate::gfx::input::RenderInput::default()
+        fn take_input(&mut self) -> input::RenderInput {
+            input::RenderInput::default()
         }
         fn wait_idle(&self) {}
-        fn draw_frame(
-            &mut self,
-            _params: crate::gfx::backend::FrameParams<'_>,
-        ) -> crate::gfx::error::RenderResult<()> {
+        fn draw_frame(&mut self, _params: backend::FrameParams<'_>) -> error::RenderResult<()> {
             Ok(())
         }
         fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
@@ -1167,10 +1170,10 @@ mod tests {
         fn retire_draw_object(&mut self, _draw_idx: usize) {}
         fn upload_skinned(
             &mut self,
-            _vertices: &[crate::gfx::mesh_payload::SkinnedVertex],
+            _vertices: &[mesh_payload::SkinnedVertex],
             _indices: &[u32],
-            _draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject>,
-        ) -> crate::gfx::error::RenderResult<()> {
+            _draw_objects: Vec<render_types::SkinnedDrawObject>,
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
@@ -1181,7 +1184,7 @@ mod tests {
             &mut self,
             _slot: usize,
             _image: &concinnity_core::bake::texture::TextureImage,
-        ) -> crate::gfx::error::RenderResult<()> {
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
@@ -1190,24 +1193,24 @@ mod tests {
         fn upload_mesh(
             &mut self,
             _draw_idx: usize,
-            _verts: &[crate::gfx::mesh_payload::Vertex],
+            _verts: &[mesh_payload::Vertex],
             _idxs: &[u16],
             _frame: u64,
-        ) -> crate::gfx::error::RenderResult<()> {
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn setup_chunk_streaming(
             &mut self,
             _chunk_vtx_bytes: usize,
             _chunk_idx_bytes: usize,
-        ) -> crate::gfx::error::RenderResult<()> {
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn add_chunk_mesh(
             &mut self,
-            _: crate::gfx::backend::ChunkMesh<'_>,
-            _: crate::gfx::draw_slot::SlotAlloc,
-        ) -> crate::gfx::error::RenderResult<()> {
+            _: backend::ChunkMesh<'_>,
+            _: draw_slot::SlotAlloc,
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn remove_chunk_mesh(
@@ -1265,7 +1268,7 @@ mod tests {
                 "quality-set",
                 dispatch_spawn_unit(|reply| RuntimeCommand::QualitySet {
                     setting: "ssao".to_string(),
-                    op: crate::components::SettingOp::Next,
+                    op: SettingOp::Next,
                     reply,
                 }),
             ),
@@ -1273,7 +1276,7 @@ mod tests {
                 "rebind",
                 dispatch_spawn_unit(|reply| RuntimeCommand::Rebind {
                     setting: "key_forward".to_string(),
-                    key: crate::components::InputKey::Space,
+                    key: InputKey::Space,
                     reply,
                 }),
             ),
@@ -1307,7 +1310,7 @@ mod tests {
             (
                 "story",
                 dispatch_spawn_unit(|reply| RuntimeCommand::Story {
-                    command: crate::components::StoryCommand::Advance,
+                    command: StoryCommand::Advance,
                     reply,
                 }),
             ),
@@ -1457,7 +1460,7 @@ mod tests {
     #[test]
     fn resolve_texture_slot_covers_every_case() {
         let _guard = test_support::lock();
-        crate::ecs::asset_id::reset_interner();
+        asset_id::reset_interner();
 
         // None -> the renderer's white fallback slot, no interner or reload.
         assert_eq!(resolve_texture_slot(None, None).unwrap(), 0);
@@ -1467,7 +1470,7 @@ mod tests {
         assert!(err.contains("not found in interner"), "got: {err}");
 
         // Interned name but no world_reload (not `cn debug`): unavailable.
-        crate::ecs::asset_id::intern_all(&["grid"]);
+        asset_id::intern_all(&["grid"]);
         let err = resolve_texture_slot(Some("grid"), None).unwrap_err();
         assert!(err.contains("world_reload missing"), "got: {err}");
 
@@ -1480,7 +1483,7 @@ mod tests {
 
         // Interned name present in the pool map -> its resolved slot.
         let mut map = std::collections::HashMap::new();
-        map.insert(crate::ecs::asset_id::AssetId(0), 5usize);
+        map.insert(asset_id::AssetId(0), 5usize);
         let reload = WorldReloadState {
             texture_name_to_slot: map,
         };
@@ -1499,7 +1502,7 @@ mod tests {
         fn dropped(rx: std::sync::mpsc::Receiver<Result<(), String>>) -> bool {
             rx.recv().is_err()
         }
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_camera_set(RuntimeCommand::CameraStop { reply: tx }, &mut world);
@@ -1530,8 +1533,8 @@ mod tests {
         assert!(dropped(rx));
     }
 
-    fn controlled_camera() -> crate::components::Camera3D {
-        use crate::components::{Camera3D, CameraController};
+    fn controlled_camera() -> Camera3D {
+        use concinnity_core::components::{Camera3D, CameraController};
         Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
@@ -1550,8 +1553,8 @@ mod tests {
     // The CameraSet wrapper applies the pose against the live ECS and replies Ok.
     #[test]
     fn dispatch_camera_set_applies_pose_and_replies_ok() {
-        use crate::components::Camera3D;
-        use crate::ecs::World;
+        use concinnity_core::components::Camera3D;
+        use concinnity_core::ecs::World;
 
         let mut world = World::new();
         world.add_component(controlled_camera());
@@ -1578,12 +1581,12 @@ mod tests {
 
     #[test]
     fn dispatch_quality_set_sends_setting_command() {
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_quality_set(
             RuntimeCommand::QualitySet {
                 setting: "ssao".to_string(),
-                op: crate::components::SettingOp::Next,
+                op: SettingOp::Next,
                 reply: tx,
             },
             &mut world,
@@ -1591,25 +1594,25 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
 
         let events = world
-            .events::<crate::components::SettingCommand>()
+            .events::<SettingCommand>()
             .expect("setting command queued");
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].setting, "ssao");
-        assert_eq!(seen[0].op, crate::components::SettingOp::Next);
+        assert_eq!(seen[0].op, SettingOp::Next);
         assert!(seen[0].persist);
         assert!(seen[0].value_label.is_none());
     }
 
     #[test]
     fn dispatch_rebind_sends_rebind_setting_command() {
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_rebind(
             RuntimeCommand::Rebind {
                 setting: "key_forward".to_string(),
-                key: crate::components::InputKey::Space,
+                key: InputKey::Space,
                 reply: tx,
             },
             &mut world,
@@ -1617,25 +1620,22 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
 
         let events = world
-            .events::<crate::components::SettingCommand>()
+            .events::<SettingCommand>()
             .expect("setting command queued");
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].setting, "key_forward");
-        assert_eq!(
-            seen[0].op,
-            crate::components::SettingOp::Rebind(crate::components::InputKey::Space)
-        );
+        assert_eq!(seen[0].op, SettingOp::Rebind(InputKey::Space));
     }
 
     #[test]
     fn dispatch_story_forwards_the_command() {
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_story(
             RuntimeCommand::Story {
-                command: crate::components::StoryCommand::Choose(2),
+                command: StoryCommand::Choose(2),
                 reply: tx,
             },
             &mut world,
@@ -1643,20 +1643,20 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
 
         let events = world
-            .events::<crate::components::StoryCommand>()
+            .events::<StoryCommand>()
             .expect("story command queued");
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
-        assert_eq!(*seen[0], crate::components::StoryCommand::Choose(2));
+        assert_eq!(*seen[0], StoryCommand::Choose(2));
     }
 
     #[test]
     fn dispatch_despawn_resolves_name_and_reports_unknown() {
         let _guard = test_support::lock();
-        crate::ecs::asset_id::reset_interner();
-        crate::ecs::asset_id::intern_all(&["crate_a", "crate_b"]);
-        let mut world = crate::ecs::World::new();
+        asset_id::reset_interner();
+        asset_id::intern_all(&["crate_a", "crate_b"]);
+        let mut world = World::new();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_despawn(
@@ -1668,15 +1668,12 @@ mod tests {
         );
         assert!(rx.recv().unwrap().is_ok());
         let events = world
-            .events::<crate::components::DespawnRequest>()
+            .events::<DespawnRequest>()
             .expect("despawn request queued");
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
-        assert_eq!(
-            seen[0].target.name().unwrap(),
-            crate::ecs::asset_id::AssetId(1)
-        );
+        assert_eq!(seen[0].target.name().unwrap(), asset_id::AssetId(1));
 
         // An unknown name is a clean error.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -1694,10 +1691,10 @@ mod tests {
     #[test]
     fn dispatch_reparent_resolves_names_and_reports_errors() {
         let _guard = test_support::lock();
-        crate::ecs::asset_id::reset_interner();
-        crate::ecs::asset_id::intern_all(&["box_a", "frame"]);
-        let mut world = crate::ecs::World::new();
-        let mut cursor = crate::ecs::EventCursor::default();
+        asset_id::reset_interner();
+        asset_id::intern_all(&["box_a", "frame"]);
+        let mut world = World::new();
+        let mut cursor = EventCursor::default();
 
         // Both names known -> queued with both ids.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -1712,17 +1709,14 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
         {
             let events = world
-                .events::<crate::components::ReparentRequest>()
+                .events::<ReparentRequest>()
                 .expect("reparent request queued");
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
-            assert_eq!(
-                seen[0].child.name().unwrap(),
-                crate::ecs::asset_id::AssetId(0)
-            );
+            assert_eq!(seen[0].child.name().unwrap(), asset_id::AssetId(0));
             assert_eq!(
                 seen[0].parent.and_then(|p| p.name()),
-                Some(crate::ecs::asset_id::AssetId(1))
+                Some(asset_id::AssetId(1))
             );
         }
 
@@ -1738,9 +1732,7 @@ mod tests {
         );
         assert!(rx.recv().unwrap().is_ok());
         {
-            let events = world
-                .events::<crate::components::ReparentRequest>()
-                .unwrap();
+            let events = world.events::<ReparentRequest>().unwrap();
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert!(seen[0].parent.is_none());
@@ -1776,10 +1768,10 @@ mod tests {
     #[test]
     fn dispatch_spawn_resolves_template_interns_name_and_defaults_scale() {
         let _guard = test_support::lock();
-        crate::ecs::asset_id::reset_interner();
-        crate::ecs::asset_id::intern_all(&["template_a"]);
-        let mut world = crate::ecs::World::new();
-        let mut cursor = crate::ecs::EventCursor::default();
+        asset_id::reset_interner();
+        asset_id::intern_all(&["template_a"]);
+        let mut world = World::new();
+        let mut cursor = EventCursor::default();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_spawn(
@@ -1797,13 +1789,13 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
         {
             let events = world
-                .events::<crate::components::SpawnRequest>()
+                .events::<SpawnRequest>()
                 .expect("spawn request queued");
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
-            assert_eq!(seen[0].template, crate::ecs::asset_id::AssetId(0));
+            assert_eq!(seen[0].template, asset_id::AssetId(0));
             // The new instance name was interned to the next id.
-            assert_eq!(seen[0].name, Some(crate::ecs::asset_id::AssetId(1)));
+            assert_eq!(seen[0].name, Some(asset_id::AssetId(1)));
             assert_eq!(seen[0].transform.position, [1.0, 2.0, 3.0]);
             assert_eq!(seen[0].transform.scale, [2.0, 2.0, 2.0]);
             assert_eq!(seen[0].lifetime_secs, Some(5.0));
@@ -1826,7 +1818,7 @@ mod tests {
         );
         assert!(rx.recv().unwrap().is_ok());
         {
-            let events = world.events::<crate::components::SpawnRequest>().unwrap();
+            let events = world.events::<SpawnRequest>().unwrap();
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert_eq!(seen[0].transform.scale, [1.0, 1.0, 1.0]);

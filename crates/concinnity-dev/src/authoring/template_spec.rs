@@ -6,10 +6,9 @@
 // (`crate::spec_to_value`, ...) stays stable, and adds the
 // world-template convenience the authoring layer uses.
 
+pub use concinnity_cook::authoring::spec::{arg_value_to_json, spec_args, spec_to_value};
 use concinnity_cook::authoring::template::WorldTemplate;
 use serde_json::Value;
-
-pub use concinnity_cook::authoring::spec::{arg_value_to_json, spec_args, spec_to_value};
 
 /// A world template's assets as world-line entries, in application order.
 pub fn world_template_entries(t: &WorldTemplate) -> Vec<Value> {

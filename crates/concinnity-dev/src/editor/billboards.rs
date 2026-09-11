@@ -15,14 +15,15 @@
 // scene depth buffer on the CPU or a shader change, neither of which an icon
 // earns yet.
 
+use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_core::components::Sprite;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::outlines::shapes::{BOX_EDGES, EDGES};
 use super::registry::ID_BASE;
 use super::theme;
 use super::widget;
-use crate::components::Sprite;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
-use concinnity_cook::authoring::registry::RegisteredType;
 
 // Reserved id family: the next free block after the panel families below 0x1000.
 // Icons at +0x00, their glyph labels at +0x40, and the drag ghost's dotted box
@@ -387,6 +388,7 @@ fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::Transform;
     use concinnity_core::gfx::camera::view_matrix;
 
     const VP: [f32; 2] = [1280.0, 720.0];
@@ -492,7 +494,7 @@ mod tests {
     #[test]
     fn box_outline_covers_every_edge_and_rejects_behind() {
         let view = view_matrix([0.0; 3], 0.0, 0.0);
-        let model = crate::components::Transform {
+        let model = Transform {
             position: [0.0, 0.0, -10.0],
             ..Default::default()
         }
@@ -504,7 +506,7 @@ mod tests {
             assert!((c[0] - 640.0).abs() < 100.0, "{c:?}");
             assert!((c[1] - 360.0).abs() < 100.0, "{c:?}");
         }
-        let behind = crate::components::Transform {
+        let behind = Transform {
             position: [0.0, 0.0, 10.0],
             ..Default::default()
         }

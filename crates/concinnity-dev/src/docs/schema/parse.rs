@@ -1,12 +1,13 @@
 // Source walking and item collection: every named-field struct and every
 // string-valued enum declared at the top level of a `.rs` file under the roots.
 
-use super::attrs::{apply_case, collapse_doc, extract_doc, has_serde_skip, serde_kv};
-use super::defaults::{self, UNKNOWN};
-use super::model::{DocField, DocFieldType, DocShape, DocType, DocValue};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use super::attrs::{apply_case, collapse_doc, extract_doc, has_serde_skip, serde_kv};
+use super::defaults::{self, UNKNOWN};
+use super::model::{DocField, DocFieldType, DocShape, DocType, DocValue};
 
 pub(super) fn types(roots: &[PathBuf], exclude: &[PathBuf]) -> io::Result<Vec<DocType>> {
     let mut out = Vec::new();

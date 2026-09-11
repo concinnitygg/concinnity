@@ -80,12 +80,16 @@ mod widget_slider;
 mod world_files;
 mod worlds;
 
-use crate::app::state::App;
-use crate::debug_hook::DebugHook;
-use crate::ecs::World;
-use crate::world::WORLD_JSONL;
+use concinnity_cook::authoring::world::WORLD_JSONL;
+use concinnity_cook::authoring::world::parse_world_jsonl;
+use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_core::ecs::World;
+use concinnity_engine::app::state;
+use concinnity_engine::app::state::App;
 use concinnity_engine::shutdown::ShutdownToken;
 use hook::EditorHook;
+
+use crate::debug_hook::DebugHook;
 
 // A minimal renderable world: a lone GraphicsConfig, which the cook pipeline
 // expands into a Window plus default shaders. Booted in memory when there is
@@ -128,7 +132,7 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
         (Vec::new(), start_screen_pick())
     } else if std::path::Path::new(&world_path).exists() {
         let content = std::fs::read_to_string(&world_path)?;
-        let entries = crate::world::parse_world_jsonl(&content)
+        let entries = parse_world_jsonl(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         (entries, None)
     } else {
@@ -207,8 +211,7 @@ pub(crate) fn unsaved_world_path() -> String {
 // there are refreshed only by an explicit build, so they may lag the world file
 // the editor is opening.
 fn boot_world(app: &mut App, entries: &[serde_json::Value]) -> std::io::Result<()> {
-    let jsonl = crate::world::write_world_jsonl(entries)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let jsonl = write_world_jsonl(entries).map_err(|e| std::io::Error::other(e.to_string()))?;
     let (world, _) = build_renderable(&jsonl)?;
     app.load_world(world);
     Ok(())
@@ -259,7 +262,7 @@ impl DebugHook for MultiHook {
         }
     }
 
-    fn apply_world_swap(&mut self, app: &mut crate::app::state::App) {
+    fn apply_world_swap(&mut self, app: &mut state::App) {
         for hook in &mut self.hooks {
             hook.apply_world_swap(app);
         }
@@ -275,6 +278,7 @@ impl DebugHook for MultiHook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::TextLabel;
 
     // An empty (or whitespace-only) world seeds to just the render marker, so an
     // empty session still opens a window.
@@ -290,7 +294,7 @@ mod tests {
     fn seeded_content_appends_marker_to_authored_content() {
         let base = "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}";
         let seeded = seeded_content(base);
-        let parsed = crate::world::parse_world_jsonl(&seeded).unwrap();
+        let parsed = parse_world_jsonl(&seeded).unwrap();
         assert_eq!(parsed.len(), 2, "authored entry plus the seed marker");
         assert_eq!(parsed[0]["name"], "phys");
         assert_eq!(parsed[1]["type"], "GraphicsConfig");
@@ -299,7 +303,7 @@ mod tests {
     // The seed marker is itself a well-formed, renderable asset line.
     #[test]
     fn seed_marker_is_a_graphics_config() {
-        let parsed = crate::world::parse_world_jsonl(SEED_GRAPHICS_CONFIG).unwrap();
+        let parsed = parse_world_jsonl(SEED_GRAPHICS_CONFIG).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0]["type"], "GraphicsConfig");
     }
@@ -335,7 +339,7 @@ mod tests {
     // The content of the booted world's only TextLabel.
     fn booted_label(app: &App) -> String {
         app.world()
-            .query::<crate::components::TextLabel>()
+            .query::<TextLabel>()
             .next()
             .expect("the authored label is in the booted world")
             .content
@@ -377,7 +381,7 @@ mod tests {
         std::fs::create_dir_all(world_path.parent().unwrap()).unwrap();
         std::fs::write(
             &world_path,
-            crate::world::write_world_jsonl(&renderable_entries("stale")).unwrap(),
+            write_world_jsonl(&renderable_entries("stale")).unwrap(),
         )
         .unwrap();
         crate::build_world_to_disk(world_path.to_str().unwrap()).expect("the build writes blobs");

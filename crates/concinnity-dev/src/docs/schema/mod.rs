@@ -16,7 +16,6 @@ mod model;
 mod parse;
 
 pub(crate) use model::{DocField, DocFieldType, DocShape, DocType, DocValue};
-
 use std::io;
 use std::path::PathBuf;
 

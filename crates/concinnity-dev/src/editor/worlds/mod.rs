@@ -18,12 +18,13 @@ mod draw;
 mod geometry;
 pub(crate) mod loading;
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
 pub(crate) use draw::apply;
 pub(crate) use geometry::{Layout, Mode, hit_test};
 
 use super::registry::{self, PanelKey};
 use super::widget;
-use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Worlds);
 pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
@@ -144,7 +145,7 @@ pub(crate) enum WorldsAction {
 }
 
 // Hide every panel element.
-pub(crate) fn hide_all(world: &mut crate::ecs::World) {
+pub(crate) fn hide_all(world: &mut World) {
     widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
 }
 

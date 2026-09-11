@@ -9,6 +9,8 @@
 // a development flag excludes the engine's own readers of that same flag
 // rather than racing them under a second, private lock.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id;
 pub(crate) fn lock() -> concinnity_testing::ExclusiveAccess {
     prepare();
     concinnity_testing::exclusive()
@@ -50,12 +52,12 @@ pub(crate) fn isolate_state_dir() {
 // sprite id, one blank `TextLabel` per label id, and one blank `TextInput` per
 // field id. Panels that declare no text fields pass an empty `fields` slice.
 pub(crate) fn injected_world(
-    sprites: &[crate::ecs::asset_id::AssetId],
-    labels: &[crate::ecs::asset_id::AssetId],
-    fields: &[crate::ecs::asset_id::AssetId],
-) -> crate::ecs::World {
-    use crate::components::{Sprite, TextInput, TextLabel};
-    let mut world = crate::ecs::World::new();
+    sprites: &[asset_id::AssetId],
+    labels: &[asset_id::AssetId],
+    fields: &[asset_id::AssetId],
+) -> World {
+    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    let mut world = World::new();
     for &id in sprites {
         world.add_component(Sprite {
             asset_id: id,

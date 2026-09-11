@@ -8,8 +8,13 @@
 // drives own -- when a drag or glide starts, what it writes to the live camera,
 // and what hands control back.
 
+use concinnity_core::components::Transform;
+use concinnity_core::components::{Camera3D, InputKey};
+use concinnity_core::ecs::PickEntry;
+use concinnity_core::ecs::PickIndex;
+use concinnity_host::thread::asset_id;
+
 use super::*;
-use crate::components::{Camera3D, InputKey};
 use crate::test_support::isolate_state_dir;
 
 const VP: [f32; 2] = [1280.0, 720.0];
@@ -21,8 +26,8 @@ fn hook() -> EditorHook {
 // A world with a camera at `pos` facing -Z, and a PickIndex holding one unit
 // box at the origin under the interned name "box".
 fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("box");
+    asset_id::reset_interner();
+    let id = asset_id::intern("box");
     let mut world = World::new();
     world.add_component(Camera3D {
         position: pos,
@@ -37,8 +42,8 @@ fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
         interact_requested: false,
         controller: None,
     });
-    world.insert_resource(crate::ecs::PickIndex {
-        entries: vec![crate::ecs::PickEntry {
+    world.insert_resource(PickIndex {
+        entries: vec![PickEntry {
             asset_id: id,
             bb_min: [-1.0, -1.0, -1.0],
             bb_max: [1.0, 1.0, 1.0],
@@ -339,10 +344,10 @@ fn a_recall_cancels_an_in_flight_tumble() {
 // to frame a light or a camera.
 #[test]
 fn selection_bounds_fall_back_to_a_billboards_transform() {
-    crate::ecs::asset_id::reset_interner();
-    let id = crate::ecs::asset_id::intern("lamp");
+    asset_id::reset_interner();
+    let id = asset_id::intern("lamp");
     let mut world = World::new();
-    let entity = world.push(crate::components::Transform {
+    let entity = world.push(Transform {
         position: [4.0, 5.0, 6.0],
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
@@ -350,7 +355,7 @@ fn selection_bounds_fall_back_to_a_billboards_transform() {
     let mut by_name = std::collections::BTreeMap::new();
     by_name.insert(id, entity);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    world.insert_resource(crate::ecs::PickIndex::default());
+    world.insert_resource(PickIndex::default());
 
     let mut h = hook();
     h.selection.set(vec!["lamp".to_string()]);

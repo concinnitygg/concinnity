@@ -7,10 +7,9 @@
 // the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
 // build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
+use concinnity_core::gfx::skeleton::{AnimationClip, JointTrack, Keyframe};
+use concinnity_engine::gfx::animation::AnimationSystem;
 use std::collections::HashMap;
-
-use crate::gfx::animation::AnimationSystem;
-use crate::gfx::skeleton::{AnimationClip, JointTrack, Keyframe};
 
 // Re-import every file-backed clip when an asset-source change is pending.
 // Driven by the debug server's per-frame tick. No-op when no file-backed clips
@@ -136,8 +135,12 @@ fn imported_to_clip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::intern;
     use crate::test_support;
+    use concinnity_core::components::Animation;
+    use concinnity_core::ecs::SkinnedMeshHandle;
+    use concinnity_core::ecs::World;
+    use concinnity_engine::gfx::animation;
+    use concinnity_host::thread::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a
     // two-joint skeleton and one animation named "wave" (two translation keys
@@ -220,10 +223,10 @@ mod tests {
     }
 
     // A file-backed Animation targeting a SkinnedMesh named "reload_hero".
-    fn file_backed_animation(source: &str, animation_name: &str) -> crate::components::Animation {
-        crate::components::Animation {
+    fn file_backed_animation(source: &str, animation_name: &str) -> Animation {
+        Animation {
             asset_id: intern("reload_clip"),
-            target: Some(crate::ecs::SkinnedMeshHandle(intern("reload_hero").0)),
+            target: Some(SkinnedMeshHandle(intern("reload_hero").0)),
             source: source.to_string(),
             animation_name: animation_name.to_string(),
             ..Default::default()
@@ -233,9 +236,9 @@ mod tests {
     // Build a world whose AnimationSystem captured one reload entry. Capture
     // only happens under the process-wide dev flag, so callers must hold the
     // shared test lock; the flag is restored before returning.
-    fn world_with_reload_entry(source: &str, animation_name: &str) -> crate::ecs::World {
+    fn world_with_reload_entry(source: &str, animation_name: &str) -> World {
         concinnity_engine::app::dev_flags::set_enabled(true);
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         world.add_component(file_backed_animation(source, animation_name));
         let started = world.start(concinnity_engine::ecs::SYSTEMS);
         concinnity_engine::app::dev_flags::set_enabled(false);
@@ -243,9 +246,9 @@ mod tests {
         world
     }
 
-    fn with_anim<R>(world: &mut crate::ecs::World, f: impl FnOnce(&mut AnimationSystem) -> R) -> R {
+    fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut AnimationSystem) -> R) -> R {
         for system in world.systems_mut() {
-            if let Some(anim) = system.downcast_mut::<crate::gfx::animation::AnimationSystem>() {
+            if let Some(anim) = system.downcast_mut::<animation::AnimationSystem>() {
                 return f(anim);
             }
         }

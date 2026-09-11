@@ -6,8 +6,11 @@
 // screen's own behavior is next door in `worlds_start_tests.rs`, which shares
 // these fixtures.
 
+use concinnity_cook::authoring::world::parse_world_jsonl;
+use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_core::components::TextInput;
+
 use super::*;
-use crate::components::TextInput;
 
 const VP: [f32; 2] = [1280.0, 720.0];
 
@@ -35,7 +38,7 @@ pub(super) fn write_world(
 ) -> std::path::PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let path = dir.join(format!("{name}.jsonl"));
-    std::fs::write(&path, crate::world::write_world_jsonl(entries).unwrap()).unwrap();
+    std::fs::write(&path, write_world_jsonl(entries).unwrap()).unwrap();
     let file = std::fs::File::options().write(true).open(&path).unwrap();
     file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(at_secs))
         .unwrap();
@@ -405,7 +408,7 @@ fn a_dirty_switch_saves_before_switching() {
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
     press_modal(&mut h, &mut world, "Save");
 
-    let written = crate::world::parse_world_jsonl(&std::fs::read_to_string(&arena).unwrap())
+    let written = parse_world_jsonl(&std::fs::read_to_string(&arena).unwrap())
         .expect("the edits were written before the switch");
     assert_eq!(written.len(), 2);
     assert_eq!(h.world_path, lobby.to_string_lossy());
@@ -433,7 +436,7 @@ fn a_dirty_switch_can_discard_the_edits() {
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
     press_modal(&mut h, &mut world, "Discard");
 
-    let untouched = crate::world::parse_world_jsonl(&std::fs::read_to_string(&arena).unwrap())
+    let untouched = parse_world_jsonl(&std::fs::read_to_string(&arena).unwrap())
         .expect("the world left behind still parses");
     assert_eq!(untouched.len(), 1, "the edits were dropped, not written");
     assert_eq!(h.world_path, lobby.to_string_lossy());

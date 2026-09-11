@@ -7,8 +7,9 @@
 // capture nor the gameplay input gate -- the cursor stays visible and the
 // world's camera controller stays frozen.
 
+use concinnity_core::components::Camera3D;
+
 use super::*;
-use crate::components::Camera3D;
 
 pub(super) struct OrbitDrag {
     pivot: [f32; 3],

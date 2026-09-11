@@ -4,7 +4,7 @@
 // `emitter-add`, `anim-crossfade`, …) plus their request-body structs and the
 // shared `error_reply` helper. Each parses its JSON body, enqueues onto the
 // matching process-wide queue (`super::runtime_spawn` /
-// `crate::app::anim_runtime`), and blocks on a one-shot reply channel the
+// `concinnity_engine::app::anim_runtime`), and blocks on a one-shot reply channel the
 // per-frame debug drive fulfils. The query commands + dispatch live in
 // `super::dispatch::handle_request`.
 
@@ -13,6 +13,11 @@
 // replies inside ~16 ms; 1 s gives plenty of headroom even on a slow boot
 // frame (4K HDR bake) without leaving a WS client hanging forever if the
 // engine has stalled.
+use concinnity_core::components::InputKey;
+use concinnity_core::components::SettingOp;
+use concinnity_core::components::StoryCommand;
+use concinnity_engine::app::anim_runtime;
+use concinnity_host::thread::asset_id;
 const SPAWN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 // Run one runtime command end to end: open a one-shot reply channel, hand its
@@ -241,13 +246,13 @@ pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
             req.target
         ));
     };
-    let target = crate::ecs::asset_id::AssetId(asset_idx as u32);
+    let target = asset_id::AssetId(asset_idx as u32);
     run_with_reply(
         "anim-crossfade",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::Crossfade {
-                req: crate::app::anim_runtime::CrossfadeRequest {
+            anim_runtime::enqueue(anim_runtime::AnimCommand::Crossfade {
+                req: anim_runtime::CrossfadeRequest {
                     target,
                     weights: req.weights,
                     duration_secs: req.duration_secs,
@@ -262,18 +267,14 @@ pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
 // Resolve a `target` asset name against the interner names table (indexed by
 // `AssetId`; a small linear scan is fine for a debug command that fires at
 // most a few times per second).
-fn resolve_target(
-    cmd: &str,
-    target: &str,
-    names: &[String],
-) -> Result<crate::ecs::asset_id::AssetId, String> {
+fn resolve_target(cmd: &str, target: &str, names: &[String]) -> Result<asset_id::AssetId, String> {
     if target.is_empty() {
         return Err(format!("{cmd}: missing 'target'"));
     }
     names
         .iter()
         .position(|n| n == target)
-        .map(|idx| crate::ecs::asset_id::AssetId(idx as u32))
+        .map(|idx| asset_id::AssetId(idx as u32))
         .ok_or_else(|| format!("{cmd}: unknown asset name '{target}'"))
 }
 
@@ -303,8 +304,8 @@ pub(super) fn handle_anim_param(text: &str, names: &[String]) -> String {
         "anim-param",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::SetParam {
-                req: crate::app::anim_runtime::SetParamRequest {
+            anim_runtime::enqueue(anim_runtime::AnimCommand::SetParam {
+                req: anim_runtime::SetParamRequest {
                     target,
                     name: req.name,
                     value: req.value,
@@ -335,10 +336,7 @@ pub(super) fn handle_anim_state(text: &str, names: &[String]) -> String {
         "anim-state",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            crate::app::anim_runtime::enqueue(crate::app::anim_runtime::AnimCommand::QueryState {
-                target,
-                reply,
-            });
+            anim_runtime::enqueue(anim_runtime::AnimCommand::QueryState { target, reply });
         },
         |report| {
             let params: serde_json::Map<String, serde_json::Value> = report
@@ -520,8 +518,8 @@ pub(super) fn handle_quality_set(text: &str) -> String {
         return error_reply("quality-set: missing 'setting'");
     }
     let op = match req.op.as_str() {
-        "next" | "" => crate::components::SettingOp::Next,
-        "prev" => crate::components::SettingOp::Prev,
+        "next" | "" => SettingOp::Next,
+        "prev" => SettingOp::Prev,
         other => {
             return error_reply(&format!(
                 "quality-set: unknown op '{other}' (use next | prev)"
@@ -569,16 +567,15 @@ pub(super) fn handle_rebind(text: &str) -> String {
     }
     // The canonical `InputKey` serializes to its variant name, so a JSON string
     // deserializes straight to it (W, Space, Shift, Num1, Up, ...).
-    let key: crate::components::InputKey =
-        match serde_json::from_value(serde_json::Value::String(req.key.clone())) {
-            Ok(k) => k,
-            Err(_) => {
-                return error_reply(&format!(
-                    "rebind: unknown key '{}' (use a InputKey variant like W / Space / Shift)",
-                    req.key
-                ));
-            }
-        };
+    let key: InputKey = match serde_json::from_value(serde_json::Value::String(req.key.clone())) {
+        Ok(k) => k,
+        Err(_) => {
+            return error_reply(&format!(
+                "rebind: unknown key '{}' (use a InputKey variant like W / Space / Shift)",
+                req.key
+            ));
+        }
+    };
     run_with_reply(
         "rebind",
         SPAWN_REPLY_TIMEOUT,
@@ -651,19 +648,19 @@ pub(super) fn handle_story(text: &str) -> String {
         Err(reply) => return reply,
     };
     let command = match req.action.as_str() {
-        "start" => crate::components::StoryCommand::Start,
-        "continue" => crate::components::StoryCommand::Continue,
-        "advance" => crate::components::StoryCommand::Advance,
-        "choose" => crate::components::StoryCommand::Choose(req.option),
-        "auto" => crate::components::StoryCommand::ToggleAuto,
-        "skip" => crate::components::StoryCommand::ToggleSkip,
-        "log" => crate::components::StoryCommand::ToggleLog,
-        "save" => crate::components::StoryCommand::OpenSave,
-        "load" => crate::components::StoryCommand::OpenLoad,
-        "slot" => crate::components::StoryCommand::Slot(req.option),
-        "pause" => crate::components::StoryCommand::TogglePause,
-        "settings" => crate::components::StoryCommand::OpenSettings,
-        "settings_back" => crate::components::StoryCommand::CloseSettings,
+        "start" => StoryCommand::Start,
+        "continue" => StoryCommand::Continue,
+        "advance" => StoryCommand::Advance,
+        "choose" => StoryCommand::Choose(req.option),
+        "auto" => StoryCommand::ToggleAuto,
+        "skip" => StoryCommand::ToggleSkip,
+        "log" => StoryCommand::ToggleLog,
+        "save" => StoryCommand::OpenSave,
+        "load" => StoryCommand::OpenLoad,
+        "slot" => StoryCommand::Slot(req.option),
+        "pause" => StoryCommand::TogglePause,
+        "settings" => StoryCommand::OpenSettings,
+        "settings_back" => StoryCommand::CloseSettings,
         other => return error_reply(&format!("story: unknown action '{other}'")),
     };
     run_with_reply(
@@ -879,6 +876,10 @@ pub(super) fn error_reply(msg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::Animation;
+    use concinnity_core::components::AnimationGraph;
+    use concinnity_core::ecs::World;
+    use concinnity_engine::gfx::animation;
 
     #[test]
     fn camera_set_request_parses_full_payload() {
@@ -1112,7 +1113,7 @@ mod tests {
     fn resolve_target_maps_a_name_to_its_table_index() {
         let names = vec!["a".to_string(), "b".to_string()];
         let id = resolve_target("cmd", "b", &names).expect("known name resolves");
-        assert_eq!(id, crate::ecs::asset_id::AssetId(1));
+        assert_eq!(id, asset_id::AssetId(1));
     }
 
     // The reply shape a Hi-Z A/B reads: every outcome counted, plus the two
@@ -1647,7 +1648,7 @@ mod tests {
             |cmd| match cmd {
                 RuntimeCommand::QualitySet { setting, op, reply } => {
                     assert_eq!(setting, "taa");
-                    assert_eq!(op, crate::components::SettingOp::Prev);
+                    assert_eq!(op, SettingOp::Prev);
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1661,7 +1662,7 @@ mod tests {
             || handle_quality_set(r#"{"setting":"ssao"}"#),
             |cmd| match cmd {
                 RuntimeCommand::QualitySet { op, reply, .. } => {
-                    assert_eq!(op, crate::components::SettingOp::Next);
+                    assert_eq!(op, SettingOp::Next);
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1683,7 +1684,7 @@ mod tests {
                     reply,
                 } => {
                     assert_eq!(setting, "key_forward");
-                    assert_eq!(key, crate::components::InputKey::Space);
+                    assert_eq!(key, InputKey::Space);
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1712,7 +1713,7 @@ mod tests {
 
     #[test]
     fn story_maps_every_action_to_its_command() {
-        use crate::components::StoryCommand;
+        use concinnity_core::components::StoryCommand;
         let _guard = test_support::lock();
         let cases = [
             ("start", StoryCommand::Start),
@@ -1746,7 +1747,7 @@ mod tests {
 
     #[test]
     fn story_choose_and_slot_carry_the_option_index() {
-        use crate::components::StoryCommand;
+        use concinnity_core::components::StoryCommand;
         let _guard = test_support::lock();
         for (action, expected) in [
             ("choose", StoryCommand::Choose(2)),
@@ -1846,21 +1847,21 @@ mod tests {
     // can drain. Drive a real system built from a small world while the
     // handler blocks, exactly as the per-frame debug drive would.
 
-    fn anim_clip(name: &str, duration: f32) -> crate::components::Animation {
-        crate::ecs::asset_id::ensure_name_resolver();
-        let mut a: crate::components::Animation = serde_json::from_value(serde_json::json!({
+    fn anim_clip(name: &str, duration: f32) -> Animation {
+        asset_id::ensure_name_resolver();
+        let mut a: Animation = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": duration,
             "looping": true,
         }))
         .unwrap();
-        a.asset_id = crate::ecs::asset_id::intern(name);
+        a.asset_id = asset_id::intern(name);
         a
     }
 
-    fn hero_graph() -> crate::components::AnimationGraph {
-        crate::ecs::asset_id::ensure_name_resolver();
-        let mut g: crate::components::AnimationGraph = serde_json::from_value(serde_json::json!({
+    fn hero_graph() -> AnimationGraph {
+        asset_id::ensure_name_resolver();
+        let mut g: AnimationGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",
@@ -1876,12 +1877,12 @@ mod tests {
             ]
         }))
         .unwrap();
-        g.asset_id = crate::ecs::asset_id::intern("hero_graph");
+        g.asset_id = asset_id::intern("hero_graph");
         g
     }
 
-    fn graph_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new();
+    fn graph_world() -> World {
+        let mut world = World::new();
         world.add_component(anim_clip("idle_clip", 1.0));
         world.add_component(anim_clip("run_clip", 0.8));
         world.add_component(hero_graph());
@@ -1889,20 +1890,17 @@ mod tests {
         world
     }
 
-    fn flat_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new();
+    fn flat_world() -> World {
+        let mut world = World::new();
         world.add_component(anim_clip("wave_clip", 1.0));
         world.add_component(anim_clip("bow_clip", 0.5));
         world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
         world
     }
 
-    fn with_anim<R>(
-        world: &mut crate::ecs::World,
-        f: impl FnOnce(&mut crate::gfx::animation::AnimationSystem) -> R,
-    ) -> R {
+    fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut animation::AnimationSystem) -> R) -> R {
         for system in world.systems_mut() {
-            if let Some(anim) = system.downcast_mut::<crate::gfx::animation::AnimationSystem>() {
+            if let Some(anim) = system.downcast_mut::<animation::AnimationSystem>() {
                 return f(anim);
             }
         }
@@ -1913,7 +1911,7 @@ mod tests {
     // can trip the handler's engine timeout, which is a scheduler artifact,
     // not the semantics under test.
     fn drive_anim_handler(
-        world: &mut crate::ecs::World,
+        world: &mut World,
         handler: impl Fn() -> String + Send + Sync + 'static,
     ) -> String {
         let handler = std::sync::Arc::new(handler);
@@ -1944,7 +1942,7 @@ mod tests {
     fn anim_param_queues_a_graph_parameter_write() {
         let _guard = test_support::lock();
         let mut world = graph_world();
-        let names = crate::ecs::asset_id::name_table();
+        let names = asset_id::name_table();
         let reply = drive_anim_handler(&mut world, move || {
             handle_anim_param(r#"{"target":"hero","name":"speed","value":1.0}"#, &names)
         });
@@ -1955,7 +1953,7 @@ mod tests {
     fn anim_param_surfaces_an_unknown_parameter() {
         let _guard = test_support::lock();
         let mut world = graph_world();
-        let names = crate::ecs::asset_id::name_table();
+        let names = asset_id::name_table();
         let reply = drive_anim_handler(&mut world, move || {
             handle_anim_param(r#"{"target":"hero","name":"altitude","value":1.0}"#, &names)
         });
@@ -1966,7 +1964,7 @@ mod tests {
     fn anim_state_reports_the_live_graph_state() {
         let _guard = test_support::lock();
         let mut world = graph_world();
-        let names = crate::ecs::asset_id::name_table();
+        let names = asset_id::name_table();
         let reply = drive_anim_handler(&mut world, move || {
             handle_anim_state(r#"{"target":"hero"}"#, &names)
         });
@@ -1979,7 +1977,7 @@ mod tests {
     fn anim_crossfade_queues_on_a_flat_target() {
         let _guard = test_support::lock();
         let mut world = flat_world();
-        let names = crate::ecs::asset_id::name_table();
+        let names = asset_id::name_table();
         let reply = drive_anim_handler(&mut world, move || {
             handle_anim_crossfade(
                 r#"{"target":"hero","weights":[0.0,1.0],"duration_secs":0.5}"#,
@@ -1993,7 +1991,7 @@ mod tests {
     fn anim_crossfade_is_rejected_on_a_graph_target() {
         let _guard = test_support::lock();
         let mut world = graph_world();
-        let names = crate::ecs::asset_id::name_table();
+        let names = asset_id::name_table();
         let reply = drive_anim_handler(&mut world, move || {
             handle_anim_crossfade(r#"{"target":"hero","weights":[1.0,0.0]}"#, &names)
         });

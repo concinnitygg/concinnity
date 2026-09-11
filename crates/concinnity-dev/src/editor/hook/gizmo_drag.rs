@@ -12,9 +12,13 @@
 // authored entries as ONE undo step (`mark_changed` snapshots the pre-drag
 // entry list once); Escape cancels and restores the start state.
 
-use super::*;
-use crate::components::{Camera3D, GlobalTransform, Transform};
+use concinnity_core::components::Parent;
+use concinnity_core::components::{Camera3D, GlobalTransform, Transform};
+use concinnity_core::ecs::Entity;
+use concinnity_host::thread::asset_id;
 use gizmo::GizmoMode;
+
+use super::*;
 
 // Committed values are rounded so world.jsonl stays readable: positions and
 // scales to 3 decimals, angles to 1.
@@ -40,7 +44,7 @@ const SCALE_FACTOR_RANGE: (f32, f32) = (0.01, 100.0);
 // parent would skew it), and entities without a Transform are skipped.
 pub(super) struct GizmoTarget {
     pub(super) idx: usize,
-    pub(super) entity: crate::ecs::Entity,
+    pub(super) entity: Entity,
     // Whether the entry takes a written-back `position`: rotate and scale
     // move members about the pivot, and a type without the arg must only
     // spin / stretch in place.
@@ -92,11 +96,11 @@ impl EditorHook {
             return None;
         }
         let has_position = merged.get("position").is_some_and(|p| p.is_array());
-        let id = crate::ecs::asset_id::lookup(name)?;
+        let id = asset_id::lookup(name)?;
         let entity = world
             .resource::<concinnity_core::ecs::EntityByName>()?
             .get(id)?;
-        if world.get::<crate::components::Parent>(entity).is_some() {
+        if world.get::<Parent>(entity).is_some() {
             return None;
         }
         world.get::<Transform>(entity)?;
@@ -117,7 +121,7 @@ impl EditorHook {
 
     // The entity's world origin: the propagated transform when the renderer
     // has produced one, else the raw component (a headless test world).
-    fn gizmo_origin(world: &World, entity: crate::ecs::Entity) -> Option<[f32; 3]> {
+    fn gizmo_origin(world: &World, entity: Entity) -> Option<[f32; 3]> {
         world
             .get::<GlobalTransform>(entity)
             .map(|g| [g.0[3][0], g.0[3][1], g.0[3][2]])

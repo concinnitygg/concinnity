@@ -1,7 +1,7 @@
 // src/authoring/rm.rs
 // Remove an asset from a world JSONL by its unique `name` field and rebuild.
 
-use crate::world::{WORLD_JSONL, known_names, patch_world_jsonl};
+use concinnity_cook::authoring::world::{WORLD_JSONL, known_names, patch_world_jsonl};
 use concinnity_cook::build_from_path;
 
 /// Remove the asset named `name` from `world_path` and rebuild.

@@ -7,13 +7,15 @@
 // chip cycles the kind filter. Pure geometry + draw here; the item assembly
 // and click handling live in `hook/content_edit.rs`.
 
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::billboards;
 use super::registry::{self, PanelKey};
 use super::theme;
 use super::thumbs::{self, Thumb};
 use super::widget::{self, point_in};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Content);
 
@@ -247,7 +249,7 @@ fn place_cell(world: &mut World, slot: usize, cell: &CellView, o: [f32; 2], mous
                 l.color = [tint[0], tint[1], tint[2]];
                 l.x = area[0] + area[2] * 0.5;
                 l.y = area[1] + (area[3] - widget::LINE_H) * 0.5;
-                l.align = crate::components::TextAlign::Center;
+                l.align = TextAlign::Center;
                 l.visible = true;
             }
         }

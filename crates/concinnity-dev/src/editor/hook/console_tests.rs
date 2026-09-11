@@ -6,10 +6,12 @@
 // parsers themselves are tested in `editor/console.rs`, and the /add, /del,
 // /snap, /dup, /floor dispatches beside the rest of the drive in `tests.rs`.
 
-use super::*;
-use crate::components::InputKey;
-use crate::test_support::isolate_state_dir;
+use concinnity_core::components::InputKey;
+use concinnity_core::components::TextInput;
 use std::sync::atomic::Ordering;
+
+use super::*;
+use crate::test_support::isolate_state_dir;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
@@ -19,7 +21,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 fn console_world() -> World {
     let mut world = World::new();
     for id in console_panel::all_field_ids() {
-        world.add_component(crate::components::TextInput {
+        world.add_component(TextInput {
             asset_id: id,
             ..Default::default()
         });

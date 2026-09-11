@@ -5,11 +5,12 @@
 // drawn at that presentation's text scale, so switching from the start screen
 // to the switcher resizes the panel's text with it.
 
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::geometry::{Metrics, Mode};
 use super::*;
-use crate::components::TextAlign;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
@@ -323,8 +324,8 @@ fn scale_label(world: &mut World, id: AssetId, scale: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextLabel};
     use crate::editor::worlds::Layout;
+    use concinnity_core::components::{Sprite, TextLabel};
 
     const VP: [f32; 2] = [1280.0, 720.0];
     // A macOS title bar's worth of chrome floating over the top of the frame.

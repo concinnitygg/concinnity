@@ -10,11 +10,12 @@
 // `list_panel`; the rows are label-only (no checkbox) and read from the templates
 // crate.
 
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::list_panel::{self, Row};
 use super::registry::{self, PanelKey};
 use super::widget::{self, point_in};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 const BASE: u32 = registry::base(PanelKey::Templates);
 // Named ids the cross-module tests reference; the shipping paths derive every id
@@ -102,7 +103,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 mod tests {
     use super::list_panel::{row_label, title_label};
     use super::*;
-    use crate::components::{Sprite, TextLabel};
+    use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])

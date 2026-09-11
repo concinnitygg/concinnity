@@ -8,11 +8,13 @@
 // the world ground plane y=0 when nothing is below. The whole batch commits as
 // ONE undo step.
 
-use super::*;
-use crate::components::Transform;
-use crate::ecs::PickIndex;
+use concinnity_core::components::Transform;
+use concinnity_core::ecs::PickIndex;
 use concinnity_core::gfx::pick::{PickRay, ray_aabb};
+use concinnity_host::thread::asset_id;
 use gizmo::GizmoMode;
+
+use super::*;
 
 // A member already resting within this distance of the floor is left alone
 // (and a no-op drop records no undo step).
@@ -24,10 +26,8 @@ impl EditorHook {
     // `position` arg, a live unparented Transform.
     pub(super) fn drop_selection_to_floor(&mut self, world: &mut World) -> usize {
         let names: Vec<String> = self.selection.iter().map(String::from).collect();
-        let selected_ids: std::collections::BTreeSet<AssetId> = names
-            .iter()
-            .filter_map(|n| crate::ecs::asset_id::lookup(n))
-            .collect();
+        let selected_ids: std::collections::BTreeSet<AssetId> =
+            names.iter().filter_map(|n| asset_id::lookup(n)).collect();
         let mut changed = Vec::new();
         for name in &names {
             let Some(target) = self.member_target(world, GizmoMode::Translate, name) else {
@@ -36,7 +36,7 @@ impl EditorHook {
             let Some(position) = world.get::<Transform>(target.entity).map(|t| t.position) else {
                 continue;
             };
-            let id = crate::ecs::asset_id::lookup(name);
+            let id = asset_id::lookup(name);
             let bounds = id.and_then(|id| {
                 world
                     .resource::<PickIndex>()?

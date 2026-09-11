@@ -7,8 +7,9 @@
 // gizmo writes while a drag is in flight. Propagation, the pick index, the
 // selection rings, and the renderer all follow it.
 
-use crate::components::Transform;
-use crate::ecs::World;
+use concinnity_core::components::Transform;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
 use super::Apply;
@@ -28,7 +29,7 @@ pub(super) fn plan(
     if !keys.iter().all(|k| KEYS.contains(&k.as_str())) {
         return None;
     }
-    let id = crate::ecs::asset_id::lookup(name)?;
+    let id = asset_id::lookup(name)?;
     let entity = world
         .resource::<concinnity_core::ecs::EntityByName>()?
         .get(id)?;
@@ -67,7 +68,7 @@ mod tests {
         let mut world = World::new();
         let entity = world.push(transform);
         let mut by_name = std::collections::BTreeMap::new();
-        by_name.insert(crate::ecs::asset_id::intern(name), entity);
+        by_name.insert(asset_id::intern(name), entity);
         world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
         world
     }

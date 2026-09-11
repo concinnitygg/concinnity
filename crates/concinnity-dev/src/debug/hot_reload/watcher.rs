@@ -4,14 +4,14 @@
 // source path and flips the shared atomic on a relevant change. Mirrors the
 // per-backend shader watcher.
 
+use concinnity_engine::app::dev_flags;
+use concinnity_engine::gfx::system::hot_reload_sources::*;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-use crate::gfx::system::hot_reload_sources::*;
 
 // Spawn the watcher. Mirrors the shader-watcher pattern in
 // `concinnity_device::metal::hot_reload`: 150 ms debounce, only
@@ -192,10 +192,10 @@ fn signal(kind: ReloadKind, flag: &AtomicBool) {
         ReloadKind::Assets => {
             flag.store(true, Ordering::SeqCst);
             // AnimationSystem subscribes via a sibling static flag in
-            // crate::app::dev_flags; the asset map lives on GraphicsSystem so
+            // concinnity_engine::app::dev_flags; the asset map lives on GraphicsSystem so
             // a separate signal is the simplest way to notify the animation
             // graph of the same `.glb` save without plumbing a shared Arc.
-            crate::app::dev_flags::set_pending_animations();
+            dev_flags::set_pending_animations();
         }
     }
 }

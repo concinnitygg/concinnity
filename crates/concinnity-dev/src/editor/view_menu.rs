@@ -6,14 +6,14 @@
 // and draw, on the same non-panel overlay pattern as `create_menu.rs`; the
 // hook (`hook/view_menu_drive.rs`) owns the open state and routing.
 
+use concinnity_core::ecs::World;
+pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::outlines::{Category, CategorySet};
 use super::registry::ID_BASE;
 use super::theme;
 use super::widget::{self, point_in};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
-
-pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 
 // Reserved id family: the next free block after the create menu's (0x6000).
 const BASE: u32 = ID_BASE + 0x7000;
@@ -194,7 +194,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextLabel};
+    use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])

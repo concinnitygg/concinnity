@@ -17,13 +17,14 @@
 // same frame GraphicsSystem draws it. The whole HUD toggles with F1 (see
 // `hook.rs`).
 
+use concinnity_core::components::{FrameInput, TextAlign};
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::registry::ID_BASE;
 use super::sim::SimState;
 use super::theme;
 use super::widget::{self, place_rounded, place_sprite, point_in};
-use crate::components::{FrameInput, TextAlign};
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 pub(crate) const SAVE_BUTTON: AssetId = AssetId(ID_BASE);
 pub(crate) const SAVE_LABEL: AssetId = AssetId(ID_BASE + 1);
 pub(crate) const VIEW_BUTTON: AssetId = AssetId(ID_BASE + 2);
@@ -459,7 +460,7 @@ fn place_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextLabel};
+    use concinnity_core::components::{Sprite, TextLabel};
 
     fn state(dirty: bool, view: bool, visible: bool) -> HudState {
         HudState {

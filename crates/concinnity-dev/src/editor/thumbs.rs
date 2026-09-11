@@ -16,8 +16,8 @@
 // file that replaced it) costs that asset its preview and leaves the panel to
 // its typed icon.
 
-use crate::ecs::{OverlayImage, OverlayImages, TextureHandle};
 use concinnity_cook::cache::thumbnails::Thumbnails;
+use concinnity_core::ecs::{OverlayImage, OverlayImages, TextureHandle};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 

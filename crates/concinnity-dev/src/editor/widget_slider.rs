@@ -6,11 +6,12 @@
 // panel; the hook owns the drag (press on the track, follow the cursor,
 // release). The settings-menu `Slider` asset is a different thing.
 
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
 use super::theme;
 use super::widget::{self, place_rounded};
-use crate::components::TextAlign;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
 
 const TRACK_H: f32 = 4.0;
 const HANDLE_W: f32 = 10.0;

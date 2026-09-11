@@ -4,10 +4,9 @@
 //! One request per connection, and every connect and read bounded, so a gone or
 //! wedged app surfaces a clear error instead of hanging the caller.
 
+use serde_json::Value;
 use std::io::ErrorKind;
 use std::time::Duration;
-
-use serde_json::Value;
 
 // Bound the connect so a missing app fails fast instead of hanging.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

@@ -14,9 +14,9 @@
 // `Sprite` / `TextLabel` components at reserved ids driven each frame by the hook;
 // it is read-only (no per-row interaction), so it needs no typed fields.
 
-use crate::components::TextAlign;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
+use concinnity_core::components::TextAlign;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
 
 use super::asset_list::{self, ListRow, MAX_ROWS, ROW_H};
 use super::registry::{self, PanelKey};
@@ -299,7 +299,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Sprite, TextLabel};
+    use concinnity_core::components::{Sprite, TextLabel};
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)
