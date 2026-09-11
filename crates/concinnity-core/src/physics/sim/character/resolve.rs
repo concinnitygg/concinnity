@@ -78,7 +78,7 @@ struct Mover<'a> {
     config: CharacterConfig,
     shape: ColliderShape,
     radius: f32,
-    /// Distance from the capsule's centre to its lowest point.
+    /// Distance from the capsule's center to its lowest point.
     foot: f32,
     exclude: Option<BodyHandle>,
     mask: LayerMask,
@@ -207,7 +207,7 @@ impl Mover<'_> {
         // than onto a lip, and a landing too steep to stand on is not a step
         // either.
         let landing = lifted + advance;
-        let stepped = self.set_down(landing, lift + CONTACT_OFFSET)?.at;
+        let stepped = self.rest_below(landing, lift + CONTACT_OFFSET)?.at;
         if stepped.y - position.y <= STEP_PROGRESS {
             return None;
         }
@@ -236,12 +236,12 @@ impl Mover<'_> {
     /// The ground under the mover, out to the furthest it stays attached: what
     /// it steps onto is what it stays attached to stepping off.
     fn ground_below(&self, from: Vec3) -> Option<Ground> {
-        self.set_down(from, self.config.step_height.max(GROUND_PROBE))
+        self.rest_below(from, self.config.step_height.max(GROUND_PROBE))
     }
 
     /// Where the mover comes to rest set down from `from`, and `None` when
     /// there is no ground within `reach` under it.
-    fn set_down(&self, from: Vec3, reach: f32) -> Option<Ground> {
+    fn rest_below(&self, from: Vec3, reach: f32) -> Option<Ground> {
         let hit = self.cast(from, vec3(0.0, -reach, 0.0))?;
         let standing = self.config.is_walkable(Vec3::from_array(hit.normal))
             || self.ground_under_foot(from, reach);

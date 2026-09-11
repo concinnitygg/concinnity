@@ -1,23 +1,21 @@
-// src/app/mem_drift.rs
-//
-// Long-session memory drift: whether the process's growth came from the Rust
-// heap or from somewhere the Rust heap cannot see.
-//
-// Resident set size alone cannot tell a leak from a fragmenting allocator, and
-// the tracked heap alone cannot either, yet the two failures have opposite
-// remedies. Read together across a session they separate: a heap that grows
-// while the rest holds steady is ours to fix, and a resident set that grows
-// while the heap holds steady is not.
-//
-// The instantaneous pair says nothing worth reading. A healthy process holds
-// most of its resident set outside the Rust heap -- the binary image, thread
-// stacks, driver allocations, mapped asset blobs -- so the ratio between them
-// has no value to threshold against. Only its movement over a long session
-// does, which is why this tracks growth from a baseline rather than a ratio.
-//
-// What the growth outside the heap does not do is name its own cause. It is
-// fragmentation, driver growth and newly mapped assets together; separating
-// those further is the ledger's job, not this module's.
+//! Long-session memory drift: whether the process's growth came from the Rust
+//! heap or from somewhere the Rust heap cannot see.
+//!
+//! Resident set size alone cannot tell a leak from a fragmenting allocator, and
+//! the tracked heap alone cannot either, yet the two failures have opposite
+//! remedies. Read together across a session they separate: a heap that grows
+//! while the rest holds steady is ours to fix, and a resident set that grows
+//! while the heap holds steady is not.
+//!
+//! The instantaneous pair says nothing worth reading. A healthy process holds
+//! most of its resident set outside the Rust heap -- the binary image, thread
+//! stacks, driver allocations, mapped asset blobs -- so the ratio between them
+//! has no value to threshold against. Only its movement over a long session
+//! does, which is why this tracks growth from a baseline rather than a ratio.
+//!
+//! What the growth outside the heap does not do is name its own cause. It is
+//! fragmentation, driver growth and newly mapped assets together; separating
+//! those further is the ledger's job, not this module's.
 
 use std::time::Instant;
 

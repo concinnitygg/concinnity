@@ -19,13 +19,13 @@ include = [
 [dependencies]
 concinnity-core = { workspace = true }
 
-rayon = "1"
-tracing = "0.1.44"
+rayon = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1" }
-tempfile = "3.25.0"
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

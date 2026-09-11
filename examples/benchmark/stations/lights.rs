@@ -35,7 +35,7 @@ const LIGHT_INTENSITY: f32 = 14.0;
 const PANELS: usize = 4;
 
 /// Declare the chamber, the light field, and the probe over both.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "lights_floor_mesh",
         ProceduralMesh {
@@ -48,7 +48,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         .add(
             "lights_floor",
             Prop {
-                position: [centre[0], 0.2, centre[2]],
+                position: [center[0], 0.2, center[2]],
                 ..Default::default()
             },
         )
@@ -68,9 +68,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
             "lights_wall",
             Prop {
                 position: [
-                    centre[0] + FLOOR_HALF_EXTENT * 0.6,
+                    center[0] + FLOOR_HALF_EXTENT * 0.6,
                     WALL_HEIGHT * 0.5,
-                    centre[2],
+                    center[2],
                 ],
                 rotation_deg: [0.0, 90.0, 0.0],
                 ..Default::default()
@@ -97,9 +97,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                     format!("lights_pillar_{index}"),
                     Prop {
                         position: [
-                            centre[0] + spread(x, PILLARS[0], PILLAR_SPACING),
+                            center[0] + spread(x, PILLARS[0], PILLAR_SPACING),
                             PILLAR_HEIGHT * 0.5,
-                            centre[2] + spread(z, PILLARS[1], PILLAR_SPACING),
+                            center[2] + spread(z, PILLARS[1], PILLAR_SPACING),
                         ],
                         ..Default::default()
                     },
@@ -117,9 +117,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                     format!("lights_point_{index}"),
                     PointLight {
                         position: [
-                            centre[0] + spread(x, LIGHTS[0], LIGHT_SPACING[0]),
+                            center[0] + spread(x, LIGHTS[0], LIGHT_SPACING[0]),
                             LIGHT_BASE_HEIGHT + y as f32 * LIGHT_SPACING[1],
-                            centre[2] + spread(z, LIGHTS[2], LIGHT_SPACING[2]),
+                            center[2] + spread(z, LIGHTS[2], LIGHT_SPACING[2]),
                         ],
                         color: bulb_colour(index),
                         intensity: LIGHT_INTENSITY,
@@ -143,9 +143,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
     for index in 0..PANELS {
         let along = spread(index, PANELS, FLOOR_HALF_EXTENT * 0.55);
         let at = [
-            centre[0] + FLOOR_HALF_EXTENT * 0.55,
+            center[0] + FLOOR_HALF_EXTENT * 0.55,
             WALL_HEIGHT * 0.45,
-            centre[2] + along,
+            center[2] + along,
         ];
         world
             .add(
@@ -161,7 +161,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         world.add(
             format!("lights_panel_{index}"),
             RectAreaLight {
-                centre: at,
+                center: at,
                 normal: [-1.0, 0.0, 0.0],
                 half_size: [2.4, 0.9],
                 color: [1.0, 0.86, 0.70],
@@ -175,7 +175,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
     world.add(
         "lights_probe",
         ReflectionProbe {
-            position: [centre[0], WALL_HEIGHT * 0.35, centre[2]],
+            position: [center[0], WALL_HEIGHT * 0.35, center[2]],
             half_extents: [FLOOR_HALF_EXTENT, WALL_HEIGHT * 0.5, FLOOR_HALF_EXTENT],
         },
     );

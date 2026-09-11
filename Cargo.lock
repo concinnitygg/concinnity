@@ -81,15 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "android_system_properties"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "819e7219dbd41043ac279b19830f2efc897156490d7fd6ea916720117ee66311"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -184,28 +175,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
 dependencies = [
  "libloading 0.8.9",
-]
-
-[[package]]
-name = "async-stream"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
-dependencies = [
- "async-stream-impl",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -448,19 +417,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chrono"
-version = "0.4.44"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
-dependencies = [
- "iana-time-zone",
- "js-sys",
- "num-traits",
- "wasm-bindgen",
- "windows-link",
-]
-
-[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -569,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "clap",
  "concinnity-cook",
@@ -584,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -607,14 +563,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror 2.0.18",
  "time",
  "tracing",
 ]
 
 [[package]]
 name = "concinnity-core"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -632,11 +587,8 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
- "async-stream",
- "bitflags 2.11.1",
- "chrono",
  "ciborium",
  "concinnity-cook",
  "concinnity-core",
@@ -644,24 +596,18 @@ dependencies = [
  "concinnity-host",
  "concinnity-testing",
  "concinnity-toolchain",
- "ctrlc",
  "directories",
  "gltf",
- "hex",
  "ignore",
- "libloading 0.9.0",
  "notify",
  "png",
  "rand 0.10.2",
  "rayon",
  "rfd",
  "serde",
- "serde_bytes",
  "serde_json",
- "slotmap",
  "syn 3.0.4",
  "tempfile",
- "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "ureq",
@@ -670,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "ash",
  "block2",
@@ -695,7 +641,6 @@ dependencies = [
  "objc2-metal-kit",
  "objc2-quartz-core",
  "png",
- "postcard",
  "rayon",
  "serde_json",
  "sha2",
@@ -705,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -734,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-ffi"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "cbindgen",
  "concinnity-core",
@@ -749,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "concinnity-core",
  "rayon",
@@ -761,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "concinnity-testing",
 ]
@@ -777,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.19.45"
+version = "0.19.46"
 dependencies = [
  "concinnity-core",
  "concinnity-slang",
@@ -1474,30 +1419,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
 dependencies = [
  "typenum",
-]
-
-[[package]]
-name = "iana-time-zone"
-version = "0.1.65"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
-dependencies = [
- "android_system_properties",
- "core-foundation-sys",
- "iana-time-zone-haiku",
- "js-sys",
- "log",
- "wasm-bindgen",
- "windows-core",
-]
-
-[[package]]
-name = "iana-time-zone-haiku"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -3227,15 +3148,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "slotmap"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
-dependencies = [
- "version_check",
-]
 
 [[package]]
 name = "smallvec"

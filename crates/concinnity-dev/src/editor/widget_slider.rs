@@ -41,7 +41,7 @@ pub(crate) fn track_rect(rect: [f32; 4]) -> [f32; 4] {
     [x, rect[1] + (rect[3] - TRACK_H) * 0.5, w, TRACK_H]
 }
 
-// Map `value` in `range` to the handle's centre x on the track.
+// Map `value` in `range` to the handle's center x on the track.
 pub(crate) fn handle_x(rect: [f32; 4], value: f32, range: (f32, f32)) -> f32 {
     let t = track_rect(rect);
     let span = (range.1 - range.0).max(1e-6);
@@ -79,7 +79,7 @@ pub(crate) fn place(
     let t = track_rect(rect);
     place_rounded(world, ids.track, t, TRACK_TINT, TRACK_H * 0.5, true);
     // The fill runs from the neutral point (0, or the range start when 0 is
-    // outside it) to the handle, so a bipolar slider fills out from centre.
+    // outside it) to the handle, so a bipolar slider fills out from center.
     let zero = handle_x(rect, 0.0_f32.clamp(range.0, range.1), range);
     let hx = handle_x(rect, value, range);
     let (fx, fw) = if hx >= zero {

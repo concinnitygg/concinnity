@@ -667,7 +667,7 @@ mod tests {
     // CPU<->GPU layout to assert.
     #[test]
     fn reflection_composite_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         let shaders = super::compile_reflection_composite_shaders(false)

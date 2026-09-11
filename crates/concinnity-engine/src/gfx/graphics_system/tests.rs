@@ -661,7 +661,10 @@ fn ui_only_world_trims_scene_features() {
     assert!(!init.scene_required, "no 3D content: scene chain trimmed");
     assert_eq!(init.shadows.map_size, 0, "shadows trimmed with the scene");
     assert!(!init.taa_enabled);
-    assert!(!init.ssao_on, "screen-space effects trimmed with the scene");
+    assert!(
+        !init.ssao_enabled,
+        "screen-space effects trimmed with the scene"
+    );
     // No camera: the cursor is never captured.
     assert!(!s.saw(&Call::CaptureCursor));
 }
@@ -2097,7 +2100,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
             "the persisted TAA mode reaches the backend"
         );
         assert!(
-            init.ssao_on,
+            init.ssao_enabled,
             "the persisted SSAO toggle reaches the backend"
         );
     }
@@ -2174,7 +2177,7 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
         let s = lock(&state);
         let init = s.init.as_ref().unwrap();
         assert!(
-            !init.ssao_on,
+            !init.ssao_enabled,
             "the ceiling trims SSAO before the backend sizes it"
         );
         assert!(!init.taa_enabled, "TAA clamps down to a cheaper AA mode");
@@ -3598,8 +3601,6 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
         PLAIN,
         SkinnedMesh {
             asset_id: PLAIN,
-            // No material: the texture reference resolves to the pool slot.
-            texture: Some(TextureHandle(0)),
             ..Default::default()
         },
         3,

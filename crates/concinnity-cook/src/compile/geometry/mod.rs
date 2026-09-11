@@ -120,8 +120,8 @@ pub(crate) fn compile_heightfield_payload(
 // Shared payload tail for every generator, parsed from `args` and delegated
 // to the core bake: `lod_levels` is the total count including LOD0 and
 // `lod_distances` gives explicit switch thresholds (empty derives a default
-// doubling cascade). `lod_levels = 1` (the default) emits the legacy
-// single-LOD payload byte-for-byte.
+// doubling cascade). `lod_levels = 1` (the default) emits the single-LOD
+// payload byte-for-byte.
 fn finish_mesh_payload(
     vertices: Vec<Vert>,
     indices: Vec<u16>,
@@ -469,13 +469,8 @@ pub(crate) fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
 
 // Builds geometry from inline vertex/index data in the blob JSON.
 //
-// Vertices may be specified in one of two forms:
-//
-//   Named fields (preferred):
-//     {"pos": [x, y, z], "color": [r, g, b], "uv": [u, v]}
-//
-//   Flat array (legacy, still accepted):
-//     [x, y, z, r, g, b, u, v]   (8 values) or [x, y, z, r, g, b] (6 values, uv defaults to 0)
+// A vertex is an object: {"pos": [x, y, z], "color": [r, g, b], "uv": [u, v]},
+// where `uv` may be omitted and defaults to [0, 0].
 //
 // Normals are computed automatically from the triangle data.
 fn build_inline(args: &serde_json::Value) -> Result<(Vec<Vert>, Vec<u16>), String> {
@@ -523,28 +518,9 @@ fn parse_vertex(v: &serde_json::Value, idx: usize) -> Result<RawVert, String> {
             [0.0, 0.0]
         };
         Ok((pos, color, uv))
-    } else if let Some(arr) = v.as_array() {
-        if arr.len() < 6 {
-            return Err(format!(
-                "vertex[{idx}] flat array must have 6 or 8 elements, got {}",
-                arr.len()
-            ));
-        }
-        let f = |i: usize| -> Result<f32, String> {
-            arr[i]
-                .as_f64()
-                .map(|x| x as f32)
-                .ok_or_else(|| format!("vertex[{idx}][{i}] must be a number"))
-        };
-        let uv = if arr.len() >= 8 {
-            [f(6)?, f(7)?]
-        } else {
-            [0.0, 0.0]
-        };
-        Ok(([f(0)?, f(1)?, f(2)?], [f(3)?, f(4)?, f(5)?], uv))
     } else {
         Err(format!(
-            "vertex[{idx}] must be an object or a 6- or 8-element array"
+            "vertex[{idx}] must be an object with `pos`, `color` and an optional `uv`"
         ))
     }
 }
@@ -756,24 +732,6 @@ mod tests {
     }
 
     #[test]
-    fn inline_mesh_accepts_flat_vertex_arrays() {
-        let args = serde_json::json!({
-            "vertices": [
-                [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.25, 0.5],
-                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-            ],
-            "indices": [0, 1, 2],
-        });
-        let (verts, indices) = deserialise(&compile_mesh_payload(&args).unwrap()).unwrap();
-        assert_eq!(indices, vec![0, 1, 2]);
-        assert_eq!(verts[0].uv, [0.25, 0.5]);
-        // 6-element vertices default their uv to zero.
-        assert_eq!(verts[1].uv, [0.0, 0.0]);
-        assert_eq!(verts[2].color, [0.0, 0.0, 1.0]);
-    }
-
-    #[test]
     fn inline_mesh_rejects_malformed_args() {
         // Missing vertices / indices.
         assert!(compile_mesh_payload(&serde_json::json!({"indices": [0]})).is_err());
@@ -785,29 +743,22 @@ mod tests {
                 .unwrap_err()
                 .contains("vertex[0]")
         );
-        // Flat arrays must carry at least 6 numbers.
-        let short = serde_json::json!({"vertices": [[0.0, 0.0, 0.0]], "indices": []});
-        assert!(compile_mesh_payload(&short).unwrap_err().contains("6 or 8"));
-        // Every slot of a flat vertex array must be a number.
-        for slot in 0..8 {
-            let mut flat = vec![serde_json::json!(0.0); 8];
-            flat[slot] = serde_json::json!("x");
-            let args = serde_json::json!({"vertices": [flat], "indices": []});
-            let err = compile_mesh_payload(&args).unwrap_err();
-            assert!(
-                err.contains(&format!("vertex[0][{slot}] must be a number")),
-                "slot {slot} gave: {err}"
-            );
-        }
+        // An array is no longer a vertex form.
+        let arr = serde_json::json!({"vertices": [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], "indices": []});
+        assert!(
+            compile_mesh_payload(&arr)
+                .unwrap_err()
+                .contains("must be an object")
+        );
         // Indices must be integers and in range.
-        let bad_index = serde_json::json!({"vertices": [[0, 0, 0, 1, 1, 1]], "indices": ["x"]});
+        let bad_index = serde_json::json!({"vertices": [{"pos": [0, 0, 0], "color": [1, 1, 1]}], "indices": ["x"]});
         assert!(
             compile_mesh_payload(&bad_index)
                 .unwrap_err()
                 .contains("index[0]")
         );
         let oob = serde_json::json!({
-            "vertices": [[0, 0, 0, 1, 1, 1], [1, 0, 0, 1, 1, 1], [0, 1, 0, 1, 1, 1]],
+            "vertices": [{"pos": [0, 0, 0], "color": [1, 1, 1]}, {"pos": [1, 0, 0], "color": [1, 1, 1]}, {"pos": [0, 1, 0], "color": [1, 1, 1]}],
             "indices": [0, 1, 9],
         });
         assert!(
@@ -857,7 +808,7 @@ mod tests {
         // Vertices with no triangles decimate to nothing, so no alternate is
         // emitted even though three levels were requested.
         let args = serde_json::json!({
-            "vertices": [[0, 0, 0, 1, 1, 1], [1, 0, 0, 1, 1, 1], [0, 1, 0, 1, 1, 1]],
+            "vertices": [{"pos": [0, 0, 0], "color": [1, 1, 1]}, {"pos": [1, 0, 0], "color": [1, 1, 1]}, {"pos": [0, 1, 0], "color": [1, 1, 1]}],
             "indices": [],
             "lod_levels": 3,
         });
@@ -943,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn single_lod_payload_matches_the_legacy_format() {
+    fn single_lod_payload_keeps_the_one_level_format() {
         let args = serde_json::json!({"generator": "box"});
         let one = compile_mesh_payload(&args).unwrap();
         let (_, _, alternates) = deserialise_with_lods(&one).unwrap();

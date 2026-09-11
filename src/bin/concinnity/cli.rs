@@ -242,21 +242,11 @@ pub(crate) struct DebugArgs {
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
-    /// Base HTTP URL of the infra server used to fetch missing asset files
-    // Defaults to the value in the client config (~/.config/concinnity/config.json).
-    #[arg(long)]
-    pub server: Option<String>,
+    /// Port for the localhost runtime debug server
+    #[arg(long, default_value_t = 8777)]
+    pub(crate) debug_port: u16,
 
-    // Account ID for asset fetching authentication
-    // Defaults to the value in the client config.
-    #[arg(long)]
-    pub(crate) user: Option<String>,
-
-    // Port for the localhost runtime debug server (default 8777)
-    #[arg(long)]
-    pub(crate) debug_port: Option<u16>,
-
-    // Enable graphics API validation, overriding the build profile
+    /// Enable graphics API validation, overriding the build profile
     // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
     pub(crate) validation: Option<bool>,
@@ -267,9 +257,9 @@ pub(crate) struct DebugArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct McpArgs {
-    /// Debug server port
+    /// Port the runtime debug server is listening on
     #[arg(long, default_value_t = 8777)]
-    pub(crate) port: u16,
+    pub(crate) debug_port: u16,
 }
 
 #[derive(Debug, clap::Args)]
@@ -278,13 +268,13 @@ pub(crate) struct EditorArgs {
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
-    // Start the localhost debug server on this port alongside the editor
+    /// Start the localhost debug server on this port alongside the editor
     // Absent leaves the editor without a command channel; present makes an
     // editor session inspectable and drivable by any MCP client.
     #[arg(long)]
     pub(crate) debug_port: Option<u16>,
 
-    // Enable graphics API validation, overriding the build profile
+    /// Enable graphics API validation, overriding the build profile
     // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
     pub(crate) validation: Option<bool>,
@@ -295,7 +285,7 @@ pub(crate) struct EditorArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct RunArgs {
-    // Enable graphics API validation, overriding the build profile
+    /// Enable graphics API validation, overriding the build profile
     // The DirectX / Vulkan debug layers, or on macOS the Metal API-validation
     // layer (the process re-execs once with `MTL_DEBUG_LAYER` set, since Metal
     // cannot toggle it from inside a running process). Omitting the flag defers
@@ -306,13 +296,13 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) validation: Option<bool>,
 
-    // Step simulation and rendering serially on one thread instead of
-    // pipelining them (A/B comparison, escape hatch)
+    /// Step simulation and rendering serially on one thread instead of pipelining them
+    // A/B comparison, escape hatch.
     #[arg(long)]
     pub(crate) serial: bool,
 
-    // Keep every system's internal work on the sim thread instead of the
-    // job pool (determinism oracle, escape hatch)
+    /// Keep every system's internal work on the sim thread instead of the job pool
+    // Determinism oracle, escape hatch.
     #[arg(long)]
     pub(crate) serial_schedule: bool,
 
@@ -320,7 +310,7 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub screenshot: Option<String>,
 
-    // Stop after this many frames (overrides GraphicsConfig.max_frames)
+    /// Stop after this many frames (overrides GraphicsConfig.max_frames)
     #[arg(long)]
     pub(crate) frames: Option<u64>,
 
@@ -338,7 +328,7 @@ pub(crate) struct AddArgs {
     #[arg(short, long)]
     pub name: Option<String>,
 
-    // Named scaffold preset used when bootstrapping a new world
+    /// Named scaffold preset used when bootstrapping a new world
     // Currently only "minimal-3d-world" (a camera, sun, room, and sky on top of
     // the base scaffold). Ignored when scaffolding doesn't fire.
     #[arg(short = 't', long)]
@@ -417,7 +407,7 @@ pub(crate) struct ExportArgs {
     #[arg(short = 'n', long)]
     pub name: Option<String>,
 
-    // Override the application version
+    /// Override the application version
     #[arg(long)]
     pub(crate) version: Option<String>,
 
@@ -429,11 +419,11 @@ pub(crate) struct ExportArgs {
     #[arg(long, default_value = "dist")]
     pub out: String,
 
-    // Output format: zip (default) or dir
+    /// Output format: zip (default) or dir
     #[arg(long, default_value = "zip")]
     pub(crate) format: String,
 
-    // Also produce a .dmg wrapping the .app (macOS-only)
+    /// Also produce a .dmg wrapping the .app (macOS-only)
     #[arg(long)]
     pub(crate) dmg: bool,
 }
@@ -597,7 +587,7 @@ mod tests {
             panic!("expected debug");
         };
         assert_eq!(a.file.as_deref(), Some("world.jsonl"));
-        assert!(a.debug_port.is_none());
+        assert_eq!(a.debug_port, 8777, "the same default cn mcp dials");
     }
 
     #[test]
@@ -617,12 +607,12 @@ mod tests {
         let Commands::Mcp(a) = cli.resolved_command() else {
             panic!("expected mcp");
         };
-        assert_eq!(a.port, 8777);
-        let cli = Cli::try_parse_from(["concinnity", "mcp", "--port", "9001"]).unwrap();
+        assert_eq!(a.debug_port, 8777);
+        let cli = Cli::try_parse_from(["concinnity", "mcp", "--debug-port", "9001"]).unwrap();
         let Commands::Mcp(a) = cli.resolved_command() else {
             panic!("expected mcp");
         };
-        assert_eq!(a.port, 9001);
+        assert_eq!(a.debug_port, 9001);
     }
 
     #[test]
@@ -869,7 +859,7 @@ mod tests {
         let Commands::Debug(a) = cli.resolved_command() else {
             panic!("expected debug");
         };
-        assert_eq!(a.debug_port, Some(9100));
+        assert_eq!(a.debug_port, 9100);
         assert_eq!(a.validation, Some(true));
     }
 

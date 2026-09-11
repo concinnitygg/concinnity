@@ -70,7 +70,7 @@ use concinnity_core::render::uniforms::RaymarchShadowCascade;
 
 pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
-        centre: v.centre,
+        center: v.center,
         _pad0: 0.0,
         extent: v.extent,
         _pad1: 0.0,

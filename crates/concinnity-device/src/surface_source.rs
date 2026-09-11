@@ -199,7 +199,7 @@ mod tests {
     // would have grouped, so the result loads the way the stored one would.
     #[test]
     fn a_stale_artifact_compiles_its_whole_group() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         let mut programs = stored(Platform::Metal, &["fragment_main_bindless"], b"stale");

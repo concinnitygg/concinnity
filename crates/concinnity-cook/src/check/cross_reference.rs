@@ -469,23 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn prop_missing_texture_fails() {
-        let assets = vec![
-            asset(
-                "my_mesh",
-                "ProceduralMesh",
-                serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
-            ),
-            asset(
-                "my_prop",
-                "Prop",
-                serde_json::json!({"mesh":"my_mesh","texture":"no_tex"}),
-            ),
-        ];
-        assert!(err_text(&assets).contains("no_tex"));
-    }
-
-    #[test]
     fn prop_missing_material_fails() {
         let assets = vec![
             asset(
@@ -1311,7 +1294,7 @@ mod tests {
         let assets = vec![asset(
             "broken",
             "Prop",
-            serde_json::json!({"mesh":"no_mesh","material":"no_mat","texture":"no_tex"}),
+            serde_json::json!({"mesh":"no_mesh","material":"no_mat","scene":"no_scene"}),
         )];
         let errs = validate_cross_references(&assets).unwrap_err();
         assert_eq!(errs.len(), 3);

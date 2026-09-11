@@ -69,7 +69,7 @@ float3 ycocg_to_rgb(float3 c)
 }
 
 // Clip the history sample to the neighbourhood box along the line toward the
-// box centre (Karis 2014). Unlike a per-component clamp this preserves the
+// box center (Karis 2014). Unlike a per-component clamp this preserves the
 // colour's direction, so a clipped history shifts hue far less.
 float3 clip_to_aabb(float3 bmin, float3 bmax, float3 hist)
 {

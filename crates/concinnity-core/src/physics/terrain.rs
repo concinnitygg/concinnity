@@ -161,10 +161,10 @@ mod tests {
     use crate::ecs::{
         Arena, ComponentStorage, FrameContext, NoPayloads, PayloadLocator, PayloadStore, Resources,
     };
+    use crate::error::CnError;
     use crate::gfx::mesh_payload::serialise_heightfield_trailer;
     use crate::gfx::profile::FrameProfile;
     use crate::physics::{SimConfig, Simulation};
-    use crate::result::CnResult;
     use alloc::boxed::Box;
     use alloc::vec;
 
@@ -215,7 +215,7 @@ mod tests {
     struct OnePayload(Vec<u8>);
 
     impl PayloadStore for OnePayload {
-        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnResult> {
+        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnError> {
             Ok(&self.0)
         }
 

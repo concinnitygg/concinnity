@@ -1,16 +1,13 @@
-//! The engine's flat result code, shared by every crate that reports a
+//! The engine's flat error code, shared by every crate that reports a
 //! recoverable failure across an API or FFI seam.
 
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
-/// The engine's flat result code, returned across the API and FFI seams.
-pub enum CnResult {
-    #[error("Success")]
-    /// The call succeeded.
-    Success = 0,
-
+/// The engine's flat error code, carried as the `Err` half across the API and
+/// FFI seams.
+pub enum CnError {
     #[error("Invalid asset type")]
     /// The asset type name is not in the registry.
     AssetInvalidType,
@@ -33,18 +30,18 @@ pub enum CnResult {
 }
 
 // Baking a component into its blob record serializes it with postcard.
-impl From<postcard::Error> for CnResult {
+impl From<postcard::Error> for CnError {
     fn from(_: postcard::Error) -> Self {
-        CnResult::InvalidArgument
+        CnError::InvalidArgument
     }
 }
 
 // Reading one back reads a length-delimited frame; a failure means the record
 // and the component schema disagree (a stale blob survives the version check
 // instead of reaching here).
-impl From<crate::blob::FrameError> for CnResult {
+impl From<crate::blob::FrameError> for CnError {
     fn from(_: crate::blob::FrameError) -> Self {
-        CnResult::InvalidArgument
+        CnError::InvalidArgument
     }
 }
 
@@ -55,13 +52,12 @@ mod tests {
 
     #[test]
     fn display_messages_are_stable() {
-        assert_eq!(CnResult::Success.to_string(), "Success");
-        assert_eq!(CnResult::AssetInvalidType.to_string(), "Invalid asset type");
-        assert_eq!(CnResult::InvalidState.to_string(), "Invalid state");
-        assert_eq!(CnResult::InvalidArgument.to_string(), "Invalid argument");
-        assert_eq!(CnResult::FileIo.to_string(), "File I/O error");
+        assert_eq!(CnError::AssetInvalidType.to_string(), "Invalid asset type");
+        assert_eq!(CnError::InvalidState.to_string(), "Invalid state");
+        assert_eq!(CnError::InvalidArgument.to_string(), "Invalid argument");
+        assert_eq!(CnError::FileIo.to_string(), "File I/O error");
         assert_eq!(
-            CnResult::NoStateRoot.to_string(),
+            CnError::NoStateRoot.to_string(),
             "No state directory installed"
         );
     }
@@ -69,9 +65,9 @@ mod tests {
     #[test]
     fn frame_errors_map_to_invalid_argument() {
         let bad = crate::blob::decode_exact::<String>(&[0xff]).unwrap_err();
-        assert_eq!(CnResult::from(bad), CnResult::InvalidArgument);
+        assert_eq!(CnError::from(bad), CnError::InvalidArgument);
 
         let trailing = crate::blob::decode_exact::<u8>(&[1, 2]).unwrap_err();
-        assert_eq!(CnResult::from(trailing), CnResult::InvalidArgument);
+        assert_eq!(CnError::from(trailing), CnError::InvalidArgument);
     }
 }

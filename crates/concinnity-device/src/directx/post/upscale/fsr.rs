@@ -1,4 +1,4 @@
-// src/directx/post/upscale.rs
+// src/directx/post/upscale/fsr.rs
 //
 // AMD FidelityFX FSR3 temporal upscaling for the D3D12 backend. Mirrors
 // `metal/post/upscale.rs` (which wraps `MTLFXTemporalScaler`). The engine

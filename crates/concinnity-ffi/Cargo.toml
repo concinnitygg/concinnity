@@ -35,11 +35,11 @@ concinnity-core = { workspace = true }
 concinnity-engine = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-device = { workspace = true, optional = true }
-tracing = "0.1.44"
+tracing = { workspace = true }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
-tempfile = "3.25.0"
+tempfile = { workspace = true }
 
 [build-dependencies]
 cbindgen = "0.29"

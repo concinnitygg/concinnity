@@ -1,4 +1,4 @@
-// asset_impls/sdf_volume.rs
+// src/asset_impls/sdf_volume.rs
 
 use crate::asset::BuildCtx;
 use crate::authoring::source_args::sdf_volume_source_path;

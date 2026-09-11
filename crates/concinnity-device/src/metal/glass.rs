@@ -42,8 +42,8 @@ pub(in crate::metal) struct GlassPanelRecord {
     pub(in crate::metal) index_count: u32,
     pub(in crate::metal) params: GlassParams,
     pub(in crate::metal) visible: bool,
-    // World-space centre, used for the back-to-front camera-distance sort.
-    pub(in crate::metal) centre: [f32; 3],
+    // World-space center, used for the back-to-front camera-distance sort.
+    pub(in crate::metal) center: [f32; 3],
     // Planar reflection slot this pane samples (index into the
     // `PlanarReflectionSet`). `None` when the world has no planar set or this
     // pane's plane overflowed the budget; the shader then keeps the probe/sky
@@ -54,7 +54,7 @@ pub(in crate::metal) struct GlassPanelRecord {
 fn glass_params_from(panel: &GlassPanel) -> GlassParams {
     let n = panel.normal; // already unit-length from GlassPanel::from_args
     GlassParams {
-        centre: [panel.centre[0], panel.centre[1], panel.centre[2], 0.0],
+        center: [panel.center[0], panel.center[1], panel.center[2], 0.0],
         normal: [n[0], n[1], n[2], 0.0],
         tint: [panel.tint[0], panel.tint[1], panel.tint[2], 0.0],
         opacity: panel.opacity,
@@ -72,7 +72,7 @@ pub(in crate::metal) fn build_glass_panel_record(
     device: &ProtocolObject<dyn MTLDevice>,
     panel: &GlassPanel,
 ) -> Result<GlassPanelRecord, String> {
-    let (verts, idxs) = build_glass_quad(panel.centre, panel.normal, panel.half_size);
+    let (verts, idxs) = build_glass_quad(panel.center, panel.normal, panel.half_size);
 
     // Flatten into the standard Vertex layout. Tangent is a placeholder (the
     // glass shader rebuilds its frame from the panel normal) and per-vertex
@@ -115,7 +115,7 @@ pub(in crate::metal) fn build_glass_panel_record(
         index_count: idxs.len() as u32,
         params: glass_params_from(panel),
         visible: panel.visible,
-        centre: panel.centre,
+        center: panel.center,
         // Patched after `assign_planar_slots` runs over all reflectors in init.
         planar_slot: None,
     })
@@ -341,7 +341,7 @@ impl MtlContext {
                     targets.resolve.clone(),
                 ));
             }
-            let c = panel.centre;
+            let c = panel.center;
             let sort_distance =
                 ((c[0] - cam[0]).powi(2) + (c[1] - cam[1]).powi(2) + (c[2] - cam[2]).powi(2))
                     .sqrt();
@@ -433,14 +433,14 @@ impl MtlContext {
             if !obj.visible || !obj.resident {
                 continue;
             }
-            let centre = [
+            let center = [
                 0.5 * (obj.bb_min[0] + obj.bb_max[0]),
                 0.5 * (obj.bb_min[1] + obj.bb_max[1]),
                 0.5 * (obj.bb_min[2] + obj.bb_max[2]),
             ];
-            let d = ((centre[0] - cam[0]).powi(2)
-                + (centre[1] - cam[1]).powi(2)
-                + (centre[2] - cam[2]).powi(2))
+            let d = ((center[0] - cam[0]).powi(2)
+                + (center[1] - cam[1]).powi(2)
+                + (center[2] - cam[2]).powi(2))
             .sqrt();
             let (index_offset, index_count) = obj.active_lod(d);
             let t = obj.material.tint;

@@ -22,10 +22,6 @@ use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::*;
 
-// Re-export the camera-distance helper under the legacy local name so the
-// existing draw_args builder reads naturally; the actual implementation
-// lives on the backend-agnostic `gfx::lod` module.
-use crate::gfx::lod::camera_distance as lod_camera_distance;
 use objc2_foundation::{NSString, ns_string};
 
 // All GPU-driven cull state grouped into one feature unit: the phase-1 +
@@ -449,7 +445,7 @@ impl MtlContext {
             // Pick this frame's active LOD by camera distance: the bindless
             // main pass then renders the chosen slice with no shader-side
             // change. Objects with no alternates fall straight through to LOD0.
-            let d = lod_camera_distance(obj, cam_pos);
+            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);

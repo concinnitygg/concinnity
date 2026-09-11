@@ -1,8 +1,8 @@
-// Preset file loading utilities shared by the expansion modules. A preset is a
-// named JSON snippet under the build's asset search root, in a `<subdir>/`
-// (palettes, prefabs, light_rigs, shots) that an authored asset references by
-// name; the cook pipeline inlines it at build time. Build-only, so it lives
-// here rather than in the runtime foundation.
+//! Preset file loading utilities shared by the expansion modules. A preset is a
+//! named JSON snippet under the build's asset search root, in a `<subdir>/`
+//! (palettes, prefabs, light_rigs, shots) that an authored asset references by
+//! name; the cook pipeline inlines it at build time. Build-only, so it lives
+//! here rather than in the runtime foundation.
 
 use std::path::Path;
 
@@ -38,10 +38,20 @@ pub fn load_preset_obj(name: &str, subdir: &str, assets_dir: Option<&Path>) -> s
 // malformed preset falls back to the type defaults rather than failing the
 // build. Split out so both outcomes are testable against a temp file.
 fn read_preset_json(path: &str) -> serde_json::Value {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return serde_json::Value::Null;
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) => {
+            tracing::warn!("preset {path} could not be read, using type defaults: {err}");
+            return serde_json::Value::Null;
+        }
     };
-    serde_json::from_str::<serde_json::Value>(&content).unwrap_or(serde_json::Value::Null)
+    match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("preset {path} could not be parsed, using type defaults: {err}");
+            serde_json::Value::Null
+        }
+    }
 }
 
 #[cfg(test)]

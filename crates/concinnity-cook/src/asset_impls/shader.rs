@@ -1,4 +1,4 @@
-// asset_impls/shader.rs
+// src/asset_impls/shader.rs
 
 use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};
@@ -98,7 +98,7 @@ impl crate::asset::BuildAsset for Shader {
             ctx.name,
             &sources,
             ctx.platform,
-            crate::slangc_gate::slangc_available(),
+            concinnity_slang::slangc_available(),
         )?;
         programs.encode().map_err(|e| {
             std::io::Error::other(format!("Asset '{}': shader payload encode: {e}", ctx.name))

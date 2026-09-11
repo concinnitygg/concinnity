@@ -185,21 +185,7 @@ fn write_output_srv(device: &ID3D12Device, res: &ID3D12Resource, cpu: D3D12_CPU_
 // [-0.5, 0.5] render-pixel units; the same value jitters the camera projection
 // (see `draw_frame`) so the rasterised scene and the upscale agree.
 pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
-    let idx = (frame_index % 16) + 1;
-    [radical_inverse(idx, 2) - 0.5, radical_inverse(idx, 3) - 0.5]
-}
-
-// Van der Corput radical inverse of `i` in the given base, in [0, 1).
-fn radical_inverse(mut i: u32, base: u32) -> f32 {
-    let inv_base = 1.0 / base as f32;
-    let mut f = 1.0_f32;
-    let mut r = 0.0_f32;
-    while i > 0 {
-        f *= inv_base;
-        r += f * (i % base) as f32;
-        i /= base;
-    }
-    r
+    crate::gfx::jitter::offset(frame_index)
 }
 
 // Backend selection

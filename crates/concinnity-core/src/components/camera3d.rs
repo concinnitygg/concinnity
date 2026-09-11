@@ -94,9 +94,9 @@ pub struct CameraController {
     pub mouse_sensitivity: f32,
     /// Margin kept between the camera and the bounds box (world units).
     pub player_radius: f32,
-    /// AABB minimum corner the camera centre must stay inside [x, y, z].
+    /// AABB minimum corner the camera center must stay inside [x, y, z].
     pub bounds_min: [f32; 3],
-    /// AABB maximum corner the camera centre must stay inside [x, y, z].
+    /// AABB maximum corner the camera center must stay inside [x, y, z].
     pub bounds_max: [f32; 3],
     /// Third-person follow settings; see [FollowController](#followcontroller).
     /// When set, the camera orbits the followed character and WASD steers the
@@ -336,7 +336,7 @@ impl Camera3D {
 impl Component for Camera3D {
     const NAME: &'static str = "Camera3D";
 
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::CnError> {
         Ok(crate::blob::decode_exact(bytes)?)
     }
 }

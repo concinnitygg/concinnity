@@ -712,7 +712,7 @@ impl PostProcessResolve for PostProcessConfig {
 impl Component for PostProcessConfig {
     const NAME: &'static str = "PostProcessConfig";
 
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::CnError> {
         Ok(crate::blob::decode_exact(bytes)?)
     }
 }

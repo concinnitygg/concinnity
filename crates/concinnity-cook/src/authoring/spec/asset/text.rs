@@ -30,7 +30,7 @@ pub fn text_label(
 /// A settings/menu TextLabel: `content` in `font` at `pos` ([x, y], window
 /// pixels), coloured `color` (RGB) and scaled by `scale`. `centered` is pinned
 /// false so the engine's default-font pass never recenters a menu label onto the
-/// viewport centre (the menu lays labels out itself); chain
+/// viewport center (the menu lays labels out itself); chain
 /// `.set("align", "center")` for a label centred on `x` with real font metrics.
 pub(crate) fn menu_label(
     name: impl Into<String>,

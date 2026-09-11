@@ -16,7 +16,7 @@ use crate::components::Transform;
 use crate::ecs::{
     Phase, PipelineContext, SimTiming, StepResult, System, SystemEntry, SystemTable, World,
 };
-use crate::result::CnResult;
+use crate::error::CnError;
 
 // The step count the halting world stops at.
 const STOP_AT: f32 = 3.0;
@@ -181,7 +181,7 @@ fn a_run_starts_the_world_and_tolerates_one_already_started() {
 fn starting_twice_is_refused() {
     let mut app = App::with_systems(counting_world(), &TICKING);
     assert_eq!(app.start(), Ok(()));
-    assert_eq!(app.start(), Err(CnResult::InvalidState));
+    assert_eq!(app.start(), Err(CnError::InvalidState));
 }
 
 // The long run the invariant exists for: past the warmup and a full window

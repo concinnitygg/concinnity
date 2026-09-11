@@ -145,10 +145,10 @@ mod tests {
         let plain = build(&w.ctx(), frame([0.0; 3]));
         let shifted = build(&w.ctx(), frame([5.0, 0.0, 0.0]));
         assert_eq!(plain.len(), shifted.len());
-        // Compare ribbon centres: the two corners straddle the line, so their
+        // Compare ribbon centers: the two corners straddle the line, so their
         // midpoint is the segment endpoint itself (the corner offsets rotate
         // with the camera-facing normal and are not comparable directly).
-        let centre = |v: &[LineVertex]| (v[0].pos[0] + v[1].pos[0]) * 0.5;
-        assert!((centre(&shifted) - centre(&plain) - 5.0).abs() < 1e-3);
+        let center = |v: &[LineVertex]| (v[0].pos[0] + v[1].pos[0]) * 0.5;
+        assert!((center(&shifted) - center(&plain) - 5.0).abs() < 1e-3);
     }
 }

@@ -503,7 +503,7 @@ fn a_thrown_hinge_comes_back_onto_its_arc_and_rests_inside_its_limits() {
 }
 
 // A slider is the one kind a throw does not put a stale mass in front of: its
-// carriage rides its own centre, so there is no lever to turn and the block
+// carriage rides its own center, so there is no lever to turn and the block
 // stays what it was. It is here because nothing else in this file hands a
 // prismatic joint a speed, and a rail is worth no less than an arc.
 #[test]

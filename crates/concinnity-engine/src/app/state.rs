@@ -5,7 +5,7 @@ use concinnity_host::store::paths::StateTree;
 use crate::app::startup_error::StartupError;
 use crate::blob;
 use crate::ecs::{SYSTEMS, StepResult, World};
-use crate::result::CnResult;
+use crate::error::CnError;
 use crate::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,8 +94,8 @@ impl App {
     /// Load assets and blob payload data from the primary blob under this app's
     /// state tree, and populate the world. Replaces any previously loaded
     /// world. `NoStateRoot` when the app has no tree to read from.
-    pub fn load_blob(&mut self) -> Result<(), CnResult> {
-        let primary = self.primary_blob().ok_or(CnResult::NoStateRoot)?;
+    pub fn load_blob(&mut self) -> Result<(), CnError> {
+        let primary = self.primary_blob().ok_or(CnError::NoStateRoot)?;
         self.load_blob_from(&primary)?;
         Ok(())
     }
@@ -111,7 +111,7 @@ impl App {
     // `load_blob` against a primary blob file named directly, returning the
     // world's highest blob index so the caller can check the layout it resolved
     // can actually hold it.
-    pub(crate) fn load_blob_from(&mut self, primary: &std::path::Path) -> Result<u32, CnResult> {
+    pub(crate) fn load_blob_from(&mut self, primary: &std::path::Path) -> Result<u32, CnError> {
         let loaded = blob::load_at(primary)?;
         let max_blob_index = loaded.manifest.max_blob_index;
         self.install(loaded);
@@ -178,10 +178,10 @@ impl App {
 
     /// Build the world's systems and run their `init`. Must run once, before
     /// the first step.
-    pub fn start(&mut self) -> Result<(), CnResult> {
+    pub fn start(&mut self) -> Result<(), CnError> {
         if self.status != AppStatus::Created {
             tracing::error!("App must be in Created state to start");
-            return Err(CnResult::InvalidState);
+            return Err(CnError::InvalidState);
         }
         self.install_home();
         self.publish_state_tree();
@@ -264,8 +264,14 @@ impl App {
         let memory =
             budget::MemoryBudget::compute(sysmem::total_physical_bytes(), config.max_memory_mb);
 
-        crate::jobs::configure(threads.job_threads);
-
+        let sized = crate::jobs::configure(threads.job_threads);
+        let job_workers = crate::jobs::pool().thread_count();
+        if !sized && job_workers != threads.job_threads {
+            tracing::warn!(
+                "job pool already built with {job_workers} worker(s); the requested {} cannot take effect",
+                threads.job_threads
+            );
+        }
         tracing::info!(
             "Thread budget: {} core(s), {} job worker(s){}",
             threads.total_cores,
@@ -326,13 +332,13 @@ impl App {
     }
 
     /// Run this app on the runtime loop with default options, consuming it.
-    pub fn run(self) -> Result<(), CnResult> {
+    pub fn run(self) -> Result<(), CnError> {
         self.run_with(crate::app::run::RunOptions::default())
     }
 
     // Run this app on the runtime loop, consuming it. Drives frames until the
     // window closes, a system stops the world, or CTRL+C is received.
-    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), CnResult> {
+    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), CnError> {
         crate::app::run::start_runtime(self, options)
     }
 }
@@ -412,7 +418,7 @@ mod tests {
     fn start_twice_is_rejected() {
         let mut app = App::default();
         assert_eq!(app.start(), Ok(()));
-        assert_eq!(app.start(), Err(CnResult::InvalidState));
+        assert_eq!(app.start(), Err(CnError::InvalidState));
     }
 
     // load_world swaps in a new world and resets to Created, so a started app
@@ -532,7 +538,7 @@ mod tests {
     fn an_app_without_a_tree_publishes_none() {
         let mut app = App::new();
         assert_eq!(app.primary_blob(), None);
-        assert_eq!(app.load_blob(), Err(CnResult::NoStateRoot));
+        assert_eq!(app.load_blob(), Err(CnError::NoStateRoot));
         app.start().unwrap();
         assert!(app.world().resource::<StateTree>().is_none());
     }

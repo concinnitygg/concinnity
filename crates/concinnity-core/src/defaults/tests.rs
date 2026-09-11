@@ -11,7 +11,7 @@ use crate::ecs::World;
 use crate::resource::{EnvironmentMapTable, FontTable, MaterialTable, MeshTable, ResourceEntry};
 
 // Run the pass over a world, as `World::start` does.
-fn complete(world: &mut World) -> Result<(), CnResult> {
+fn complete(world: &mut World) -> Result<(), CnError> {
     let mut ctx = world.context();
     run(&mut ctx)
 }
@@ -122,7 +122,7 @@ fn two_engine_defaults_are_an_error() {
     let mut world = rendering();
     world.add_component(EngineDefaults::default());
     world.add_component(EngineDefaults::default());
-    assert_eq!(complete(&mut world), Err(CnResult::InvalidState));
+    assert_eq!(complete(&mut world), Err(CnError::InvalidState));
 }
 
 // A world lit by an environment map gets the geometry that displays it: a

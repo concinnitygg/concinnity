@@ -1,9 +1,9 @@
-// Classification of a fatal startup failure into the two things it needs to
-// produce: a line for the log, and a sentence for the person looking at the
-// window. `CnResult` is the FFI-facing status enum and carries no context, so
-// the classification happens here where the paths involved are still known.
+//! Classification of a fatal startup failure into the two things it needs to
+//! produce: a line for the log, and a sentence for the person looking at the
+//! window. `CnError` is the FFI-facing status enum and carries no context, so
+//! the classification happens here where the paths involved are still known.
 
-use crate::result::CnResult;
+use crate::error::CnError;
 use std::path::PathBuf;
 
 /// Why the runtime could not reach a playable state.
@@ -21,7 +21,7 @@ pub enum StartupError {
         /// The primary blob file that was read.
         blob: PathBuf,
         /// What the read reported.
-        cause: CnResult,
+        cause: CnError,
     },
     /// The world was packaged as one self-contained blob file, but it needs
     /// overflow payload blobs, which only the directory layout can hold. Their
@@ -42,7 +42,7 @@ impl StartupError {
     /// is present but unusable, since only the first is the user's to fix.
     /// `blob` is the primary blob's path, passed in rather than resolved here
     /// so the classification stays a pure function of its inputs.
-    pub fn from_blob_failure(blob: PathBuf, cause: CnResult) -> Self {
+    pub fn from_blob_failure(blob: PathBuf, cause: CnError) -> Self {
         if blob.exists() {
             StartupError::UnreadableData { blob, cause }
         } else {
@@ -119,7 +119,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let blob = dir.path().join("data").join("0");
 
-        let err = StartupError::from_blob_failure(blob, CnResult::FileIo);
+        let err = StartupError::from_blob_failure(blob, CnError::FileIo);
         assert!(matches!(err, StartupError::MissingData { .. }));
         assert!(err.user_message().contains("Failed to find"));
         assert!(err.log_line().contains("concinnity build"));
@@ -132,11 +132,11 @@ mod tests {
         let blob = dir.path().join("data").join("0");
         std::fs::write(&blob, b"garbage").expect("write blob");
 
-        let err = StartupError::from_blob_failure(blob, CnResult::FileIo);
+        let err = StartupError::from_blob_failure(blob, CnError::FileIo);
         assert!(matches!(err, StartupError::UnreadableData { .. }));
         assert!(err.user_message().contains("Failed to read"));
         // The status the user message deliberately omits stays in the log line.
-        assert!(err.log_line().contains(&CnResult::FileIo.to_string()));
+        assert!(err.log_line().contains(&CnError::FileIo.to_string()));
     }
 
     // Both messages name the path, which is the part the reader can act on.
@@ -148,7 +148,7 @@ mod tests {
             },
             StartupError::UnreadableData {
                 blob: PathBuf::from("/somewhere/data/0"),
-                cause: CnResult::FileIo,
+                cause: CnError::FileIo,
             },
             StartupError::OverflowUnsupported {
                 blob: PathBuf::from("/somewhere/data/0"),

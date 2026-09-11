@@ -54,7 +54,7 @@ pub(crate) fn benches(bench: &mut Bench) {
             .collect();
         let rects: Vec<RectAreaLight> = (0..100)
             .map(|i| RectAreaLight {
-                centre: grid(i + 900),
+                center: grid(i + 900),
                 ..Default::default()
             })
             .collect();

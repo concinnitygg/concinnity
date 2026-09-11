@@ -65,7 +65,7 @@ pub(in crate::metal) struct TransparentDraw {
     // Fragment samplers: `(slot, sampler)`.
     pub(in crate::metal) fragment_samplers:
         Vec<(usize, Retained<ProtocolObject<dyn MTLSamplerState>>)>,
-    // World-space distance from camera to the draw's centre, used for the
+    // World-space distance from camera to the draw's center, used for the
     // back-to-front sort. Larger = farther = drawn first.
     pub(in crate::metal) sort_distance: f32,
 }

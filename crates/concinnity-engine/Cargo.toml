@@ -37,15 +37,15 @@ concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-device = { workspace = true, optional = true }
 
-ciborium = "0.2"
+ciborium = { workspace = true }
 gilrs = "0.11.2"
-kira = "0.12"
+kira = { workspace = true }
 mint = "0.5"
-postcard = { version = "1", default-features = false, features = ["use-std"] }
+postcard = { workspace = true, features = ["use-std"] }
 ctrlc = "3.5.2"
-serde = { version = "1", features = ["derive"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+serde = { workspace = true, features = ["derive", "std"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 crash-handler = "0.8"
@@ -56,8 +56,8 @@ minidump-writer = "0.13"
 # CFRunLoop directly, and needs a MainThreadMarker). The Metal backend's wider
 # objc2 stack lives in concinnity-device.
 core-foundation = "0.10.1"
-objc2 = "0.6.4"
-objc2-app-kit = "0.3.2"
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # Host-memory queries (app/sysmem.rs): sysctl `hw.memsize` + mach `task_info`
@@ -66,17 +66,12 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Host-memory queries (app/sysmem.rs): GlobalMemoryStatusEx + GetProcessMemoryInfo.
-windows = { version = "0.62.2", features = [
-    "Win32_Foundation",
-    "Win32_System_ProcessStatus",
-    "Win32_System_SystemInformation",
-    "Win32_System_Threading",
-] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
-serde_json = { version = "1", features = ["preserve_order"] }
-tempfile = "3.25.0"
+serde_json = { workspace = true, features = ["preserve_order"] }
+tempfile = { workspace = true }
 
 [build-dependencies]
 concinnity-toolchain = { workspace = true }

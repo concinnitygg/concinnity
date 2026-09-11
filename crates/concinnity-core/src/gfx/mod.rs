@@ -18,6 +18,7 @@ pub mod font;
 pub mod frustum;
 pub mod ik;
 pub mod image_decode;
+pub mod jitter;
 pub mod lines;
 pub mod lod;
 pub mod mesh_payload;

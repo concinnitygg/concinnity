@@ -230,9 +230,9 @@ fn capsule(ray: Ray, half_height: f32, radius: f32) -> Option<RayImpact> {
     }
 
     for cap in [half_height, -half_height] {
-        let centre = vec3(0.0, cap, 0.0);
+        let center = vec3(0.0, cap, 0.0);
         let shifted = Ray {
-            origin: ray.origin - centre,
+            origin: ray.origin - center,
             direction: ray.direction,
         };
         let Some(hit) = sphere(shifted, radius) else {

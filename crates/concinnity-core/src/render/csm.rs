@@ -12,7 +12,7 @@
 //!      then bound the corners with a sphere. The sphere bound makes the
 //!      orthographic light frustum rotation-invariant, eliminating shimmer
 //!      when the camera rotates.
-//!   3. Snap the sphere centre, in world space along the light's right/up axes,
+//!   3. Snap the sphere center, in world space along the light's right/up axes,
 //!      to a per-cascade texel grid so the grid stays anchored in the world and
 //!      individual texels don't crawl as the camera translates.
 //!   4. Build a RH look_at from outside the sphere along the light direction
@@ -135,16 +135,16 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         ];
 
         // Bounding sphere of the corners.
-        let mut centre = [0.0_f32; 3];
+        let mut center = [0.0_f32; 3];
         for c in &corners {
-            centre[0] += c[0];
-            centre[1] += c[1];
-            centre[2] += c[2];
+            center[0] += c[0];
+            center[1] += c[1];
+            center[2] += c[2];
         }
-        centre = scale(centre, 1.0 / 8.0);
+        center = scale(center, 1.0 / 8.0);
         let mut r2 = 0.0_f32;
         for c in &corners {
-            let d = sub(*c, centre);
+            let d = sub(*c, center);
             let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
             if dd > r2 {
                 r2 = dd;
@@ -165,23 +165,23 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         let r = normalize3(cross(f, up_l));
         let u = cross(r, f);
 
-        // Texel-grid snap. Quantise the cascade centre along the light's right
+        // Texel-grid snap. Quantise the cascade center along the light's right
         // and up axes to whole shadow texels so the texel grid stays anchored in
         // world space; the texels then stop crawling under camera translation
         // (the shadow stops chasing the camera). The snap must happen in world
-        // space, before look_at: snapping the centre's light-space xy afterwards
-        // is a no-op, because look_at always maps the centre onto the optical
+        // space, before look_at: snapping the center's light-space xy afterwards
+        // is a no-op, because look_at always maps the center onto the optical
         // axis (its light-space xy is identically zero).
         let texel_size = 2.0 * radius / shadow_map_size.max(1) as f32;
-        let cx = dot(r, centre);
-        let cy = dot(u, centre);
+        let cx = dot(r, center);
+        let cy = dot(u, center);
         let snap_dx = round(cx / texel_size) * texel_size - cx;
         let snap_dy = round(cy / texel_size) * texel_size - cy;
-        let centre = add(add(centre, scale(r, snap_dx)), scale(u, snap_dy));
+        let center = add(add(center, scale(r, snap_dx)), scale(u, snap_dy));
 
-        // Build the light view from the snapped centre and an ortho projection
+        // Build the light view from the snapped center and an ortho projection
         // enclosing the sphere. The eye sits at +radius along the light
-        // direction so the sphere centre maps to the middle of the depth range.
+        // direction so the sphere center maps to the middle of the depth range.
         //
         // The near plane is pushed back toward the light by `caster_extent` so
         // casters ABOVE this cascade's volume (tree canopies, tall building
@@ -193,8 +193,8 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         // camera. The extension grows only the depth range, not the XY
         // footprint, so shadow-map resolution is unchanged.
         let caster_extent = shadow_far;
-        let light_eye = add(centre, scale(l_to, radius));
-        let light_view = look_at(light_eye, centre, up_l);
+        let light_eye = add(center, scale(l_to, radius));
+        let light_view = look_at(light_eye, center, up_l);
         let proj = ortho_rh(
             -radius,
             radius,
@@ -407,7 +407,7 @@ mod tests {
         // the texel grid anchored in world space, translating the camera shifts
         // the projected point by a whole number of texels only, so its
         // fractional texel position is invariant. (Before the world-space snap,
-        // the centre was snapped after look_at, which is a no-op, and the grid
+        // the center was snapped after look_at, which is a no-op, and the grid
         // slid continuously with the camera -- the shadow "chased" it.)
         let light = [-0.4, 0.78, 0.5];
         let size = 2048u32;

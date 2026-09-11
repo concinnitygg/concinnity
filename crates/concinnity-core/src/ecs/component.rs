@@ -8,7 +8,7 @@
 
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentAsset, PayloadLocator};
-use crate::result::CnResult;
+use crate::error::CnError;
 
 /// A component a world can hold after the cook: every type an authored world
 /// declares that survives into a blob, plus every type only the runtime mints.
@@ -67,8 +67,8 @@ pub trait Component: Sized + Send + core::fmt::Debug + 'static {
     /// serialized runtime component (cook already ran the asset -> component
     /// translation). The default rejects: runtime-only components are never
     /// stored in a blob, so only loadable types provide an implementation.
-    fn from_baked(_bytes: &[u8]) -> Result<Self, CnResult> {
-        Err(CnResult::AssetInvalidType)
+    fn from_baked(_bytes: &[u8]) -> Result<Self, CnError> {
+        Err(CnError::AssetInvalidType)
     }
 
     /// Called after construction to inject the payload locator from the blob def.

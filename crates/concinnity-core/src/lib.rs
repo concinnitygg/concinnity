@@ -65,6 +65,7 @@ pub mod components;
 pub mod decode;
 pub mod defaults;
 pub mod ecs;
+pub mod error;
 pub mod geometry;
 pub mod gfx;
 pub mod math;
@@ -73,7 +74,6 @@ pub mod physics;
 pub mod platform;
 pub mod render;
 pub mod resource;
-pub mod result;
 pub mod sky;
 pub mod spawn;
 #[cfg(test)]

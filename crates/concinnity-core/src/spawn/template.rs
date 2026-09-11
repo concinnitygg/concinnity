@@ -318,7 +318,6 @@ mod tests {
                 MeshRenderer {
                     mesh: None,
                     material: None,
-                    texture: None,
                     cull_distance: 0.0,
                 },
             );
@@ -377,7 +376,6 @@ mod tests {
                 MeshRenderer {
                     mesh: None,
                     material: None,
-                    texture: None,
                     cull_distance: 0.0,
                 },
             );

@@ -96,7 +96,7 @@ mod tests {
     use super::*;
     use crate::blob::cache::CacheMeta;
     use crate::blob::encode::encode_cnb;
-    use crate::blob::schema::{AssetKind, BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
+    use crate::blob::schema::{BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
     use crate::blob::{BLOB_MAGIC, kind::BlobKind};
     use crate::ecs::PayloadLocator;
     use alloc::vec;
@@ -109,7 +109,6 @@ mod tests {
     fn def(discriminant: u8, args_bytes: Vec<u8>) -> BlobAssetDef {
         BlobAssetDef {
             name: None,
-            kind: AssetKind::Component,
             discriminant,
             args_bytes,
             payload: None,

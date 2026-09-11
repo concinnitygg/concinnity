@@ -4,12 +4,9 @@
 // GraphicsSystem each tick.
 
 use crate::components::InputKey;
+use crate::gfx::input::RenderInput;
 use crate::gfx::keymap::KeyMap;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
-
-// The previously-duplicated InputState collapsed into the shared
-// crate::gfx::input::RenderInput; this alias keeps the historical name.
-pub(crate) use crate::gfx::input::RenderInput as InputState;
 
 // One frame's accumulated mouse input, owned by `WindowState` and handed to
 // [`KeyState::take`] so the drained snapshot carries pointer motion, position,
@@ -173,10 +170,10 @@ impl KeyState {
         }
     }
 
-    // Drain into an InputState snapshot, resetting one-shot flags. The mouse
+    // Drain into a RenderInput snapshot, resetting one-shot flags. The mouse
     // fields (deltas, position, click, held-button, scroll) are owned by
     // `WindowState` and passed in; the keyboard one-shots tracked here are reset.
-    pub(crate) fn take(&mut self, mouse: MouseSnapshot) -> InputState {
+    pub(crate) fn take(&mut self, mouse: MouseSnapshot) -> RenderInput {
         let MouseSnapshot {
             dx: mouse_dx,
             dy: mouse_dy,
@@ -187,7 +184,7 @@ impl KeyState {
             right_click,
             scroll_delta,
         } = mouse;
-        let s = InputState {
+        let s = RenderInput {
             forward: self.forward,
             backward: self.backward,
             left: self.left,
@@ -316,7 +313,7 @@ fn key_from_vk(vk: VIRTUAL_KEY) -> Option<InputKey> {
 mod tests {
     use super::*;
 
-    fn snapshot(ks: &mut KeyState) -> InputState {
+    fn snapshot(ks: &mut KeyState) -> RenderInput {
         ks.take(MouseSnapshot {
             dx: 0.0,
             dy: 0.0,

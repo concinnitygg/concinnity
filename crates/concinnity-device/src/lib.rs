@@ -21,7 +21,7 @@
 )]
 pub(crate) mod gfx {
     pub(crate) use concinnity_core::gfx::{
-        auto_exposure, frustum, image_decode, lod, mesh_payload, morph_targets, profile,
+        auto_exposure, frustum, image_decode, jitter, lod, mesh_payload, morph_targets, profile,
         render_types, rt_reflections, ssao, ssgi, ssr,
     };
     pub(crate) use concinnity_core::render::{
@@ -101,8 +101,6 @@ pub mod precompile;
 // need, so the compile checks skip a host without one instead of failing. Only
 // a backend has shaders to compile.
 #[cfg(all(test, any(backend_metal, backend_dx, backend_vk)))]
-mod slangc_gate;
-
 // Reflection-driven layout guard for the `#[repr(C)]` structs the CPU uploads
 // into the single-source `.slang` shaders: the expected offsets come from
 // slangc, per target, rather than from a hand-written number. Reads the source

@@ -110,10 +110,17 @@ impl MtlContext {
     pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) {
         // RT reflections only when the GPU supports hardware ray tracing;
         // otherwise the toggle persists + value-syncs but renders nothing,
-        // matching the init-time fallback.
-        let rt_settings = q
-            .rt_reflections
-            .filter(|_| raytracing_supported(&self.device));
+        // matching the init-time fallback. The refusal is reported the way the
+        // other two backends report theirs, so a request driven from the debug
+        // port or a persisted settings file does not read as a success.
+        let rt_capable = raytracing_supported(&self.device);
+        if q.rt_reflections.is_some() && !rt_capable {
+            tracing::warn!(
+                "ray-traced reflections requested but the device does not support \
+                 hardware ray tracing; keeping SSR"
+            );
+        }
+        let rt_settings = q.rt_reflections.filter(|_| rt_capable);
 
         // TAA is bypassed while the MetalFX upscaler is active (the scaler does
         // its own temporal accumulation); the velocity pre-pass + G-buffer are

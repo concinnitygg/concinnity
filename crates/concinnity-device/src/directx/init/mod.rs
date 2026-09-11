@@ -447,11 +447,11 @@ impl DxContext {
         let planar_panes: Vec<[f32; 4]> = water_surfaces
             .iter()
             // A water surface's rest plane: horizontal at the surface base height.
-            .map(|s| [0.0, 1.0, 0.0, -s.centre[1]])
+            .map(|s| [0.0, 1.0, 0.0, -s.center[1]])
             .chain(
                 glass_panels
                     .iter()
-                    .map(|p| crate::directx::planar::pane_plane(p.normal, p.centre)),
+                    .map(|p| crate::directx::planar::pane_plane(p.normal, p.center)),
             )
             .collect();
         // Cap at the capacity ceiling the reserved planar resolve SRVs are sized to,

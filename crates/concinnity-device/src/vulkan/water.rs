@@ -51,17 +51,17 @@ fn water_params_from(surface: &WaterSurface, planar: bool) -> WaterParams {
         *slot = wave_to_gpu(src);
     }
     WaterParams {
-        centre: [surface.centre[0], surface.centre[1], surface.centre[2], 0.0],
-        deep_colour: [
-            surface.deep_colour[0],
-            surface.deep_colour[1],
-            surface.deep_colour[2],
+        center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
+        deep_color: [
+            surface.deep_color[0],
+            surface.deep_color[1],
+            surface.deep_color[2],
             0.0,
         ],
-        shallow_colour: [
-            surface.shallow_colour[0],
-            surface.shallow_colour[1],
-            surface.shallow_colour[2],
+        shallow_color: [
+            surface.shallow_color[0],
+            surface.shallow_color[1],
+            surface.shallow_color[2],
             0.0,
         ],
         depth_falloff: surface.depth_falloff_metres,
@@ -169,7 +169,7 @@ fn build_surface_record(
             indices: &idxs,
             params: bytemuck::bytes_of(&params),
             visible: surface.visible,
-            centre: surface.centre,
+            center: surface.center,
             planar_slot,
         },
     )
@@ -290,9 +290,9 @@ mod tests {
     #[test]
     fn water_params_from_maps_fields() {
         let surface = WaterSurface {
-            centre: [1.0, 2.0, 3.0],
-            deep_colour: [0.02, 0.05, 0.12],
-            shallow_colour: [0.1, 0.3, 0.4],
+            center: [1.0, 2.0, 3.0],
+            deep_color: [0.02, 0.05, 0.12],
+            shallow_color: [0.1, 0.3, 0.4],
             depth_falloff_metres: 3.0,
             foam_width_metres: 0.2,
             foam_intensity: 0.5,
@@ -303,9 +303,9 @@ mod tests {
             ..Default::default()
         };
         let p = water_params_from(&surface, true);
-        assert_eq!(p.centre, [1.0, 2.0, 3.0, 0.0]);
-        assert_eq!(p.deep_colour, [0.02, 0.05, 0.12, 0.0]);
-        assert_eq!(p.shallow_colour, [0.1, 0.3, 0.4, 0.0]);
+        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(p.deep_color, [0.02, 0.05, 0.12, 0.0]);
+        assert_eq!(p.shallow_color, [0.1, 0.3, 0.4, 0.0]);
         assert_eq!(p.depth_falloff, 3.0);
         assert_eq!(p.foam_width, 0.2);
         assert_eq!(p.foam_intensity, 0.5);
@@ -337,7 +337,7 @@ mod tests {
     // regression fails the suite without a GPU.
     #[test]
     fn water_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.
@@ -353,7 +353,7 @@ mod tests {
     // `RT_TEXTURED` split) fails the suite without a GPU.
     #[test]
     fn water_rt_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         for &msaa in &[true, false] {

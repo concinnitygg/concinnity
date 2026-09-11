@@ -52,8 +52,8 @@ pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) index_count: u32,
     pub(in crate::metal) params: WaterParams,
     pub(in crate::metal) visible: bool,
-    // World-space centre, for the back-to-front camera-distance sort.
-    pub(in crate::metal) centre: [f32; 3],
+    // World-space center, for the back-to-front camera-distance sort.
+    pub(in crate::metal) center: [f32; 3],
     // Planar reflection slot this surface samples (index into the
     // `PlanarReflectionSet`). `None` when the world has no planar set or this
     // surface's plane overflowed the budget; the shader then keeps the probe/sky
@@ -112,7 +112,7 @@ pub(in crate::metal) fn build_water_surface_record(
         index_count: idxs.len() as u32,
         params: water_params_from(surface),
         visible: surface.visible,
-        centre: surface.centre,
+        center: surface.center,
         // Patched after `assign_planar_slots` runs over all reflectors in init.
         planar_slot: None,
     })
@@ -127,17 +127,17 @@ fn water_params_from(surface: &WaterSurface) -> WaterParams {
         *slot = wave_to_gpu(src);
     }
     WaterParams {
-        centre: [surface.centre[0], surface.centre[1], surface.centre[2], 0.0],
-        deep_colour: [
-            surface.deep_colour[0],
-            surface.deep_colour[1],
-            surface.deep_colour[2],
+        center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
+        deep_color: [
+            surface.deep_color[0],
+            surface.deep_color[1],
+            surface.deep_color[2],
             0.0,
         ],
-        shallow_colour: [
-            surface.shallow_colour[0],
-            surface.shallow_colour[1],
-            surface.shallow_colour[2],
+        shallow_color: [
+            surface.shallow_color[0],
+            surface.shallow_color[1],
+            surface.shallow_color[2],
             0.0,
         ],
         depth_falloff: surface.depth_falloff_metres,
@@ -240,7 +240,7 @@ impl MtlContext {
                     targets.resolve.clone(),
                 ));
             }
-            let c = surface.centre;
+            let c = surface.center;
             let sort_distance =
                 ((c[0] - cam[0]).powi(2) + (c[1] - cam[1]).powi(2) + (c[2] - cam[2]).powi(2))
                     .sqrt();
@@ -336,9 +336,9 @@ mod tests {
     #[test]
     fn water_params_from_maps_fields() {
         let surface = WaterSurface {
-            centre: [1.0, 2.0, 3.0],
-            deep_colour: [0.02, 0.05, 0.12],
-            shallow_colour: [0.1, 0.3, 0.4],
+            center: [1.0, 2.0, 3.0],
+            deep_color: [0.02, 0.05, 0.12],
+            shallow_color: [0.1, 0.3, 0.4],
             depth_falloff_metres: 3.0,
             foam_width_metres: 0.2,
             foam_intensity: 0.5,
@@ -349,9 +349,9 @@ mod tests {
             ..Default::default()
         };
         let p = water_params_from(&surface);
-        assert_eq!(p.centre, [1.0, 2.0, 3.0, 0.0]);
-        assert_eq!(p.deep_colour, [0.02, 0.05, 0.12, 0.0]);
-        assert_eq!(p.shallow_colour, [0.1, 0.3, 0.4, 0.0]);
+        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(p.deep_color, [0.02, 0.05, 0.12, 0.0]);
+        assert_eq!(p.shallow_color, [0.1, 0.3, 0.4, 0.0]);
         assert_eq!(p.depth_falloff, 3.0);
         assert_eq!(p.foam_width, 0.2);
         assert_eq!(p.foam_intensity, 0.5);

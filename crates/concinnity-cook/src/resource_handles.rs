@@ -76,7 +76,7 @@ impl ResourceAssetCompile for RegisteredType {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Material => compile_material_data(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Mesh => crate::compile::mesh_compile::compile_mesh_payload(args, assets_dir)
+            Self::Mesh => crate::compile::mesh::compile_mesh_payload(args, assets_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::SkinnedMesh => compile_skinned_mesh_payload(args),
             // The registry spans every declarable type; only the resource group
@@ -537,21 +537,6 @@ mod tests {
             .unwrap();
         let decal: crate::components::Decal = postcard::from_bytes(&decal_bytes).unwrap();
         assert_eq!(decal.texture, Some(TextureHandle(1)));
-
-        // The legacy texture-on-mesh path (Prop / InstancedProp / SkinnedMesh
-        // `texture`) resolves the same declaration-order handle. SkinnedMesh
-        // uses the identical `de_opt_texture_handle` deserializer.
-        let prop_bytes = RegisteredType::Prop
-            .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
-            .unwrap();
-        let prop: crate::components::Prop = postcard::from_bytes(&prop_bytes).unwrap();
-        assert_eq!(prop.texture, Some(TextureHandle(1)));
-
-        let inst_bytes = RegisteredType::InstancedProp
-            .reserialize_args(&serde_json::json!({"texture": "tex_a"}))
-            .unwrap();
-        let inst: crate::components::InstancedProp = postcard::from_bytes(&inst_bytes).unwrap();
-        assert_eq!(inst.texture, Some(TextureHandle(0)));
     }
 
     // The same invariant for audio clips: an audio-clip reference name resolves

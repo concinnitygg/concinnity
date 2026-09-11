@@ -42,8 +42,8 @@ pub struct TransparentView {
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GlassParams {
-    /// `[x, y, z, _]`: world-space panel centre.
-    pub centre: [f32; 4],
+    /// `[x, y, z, _]`: world-space panel center.
+    pub center: [f32; 4],
     /// `[nx, ny, nz, _]`: unit panel normal (facing direction).
     pub normal: [f32; 4],
     /// `[r, g, b, _]`: colour multiplied into the refracted scene.
@@ -108,12 +108,12 @@ pub struct WaterWaveGpu {
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct WaterParams {
-    /// `[x, y, z, _]`: world-space surface centre.
-    pub centre: [f32; 4],
+    /// `[x, y, z, _]`: world-space surface center.
+    pub center: [f32; 4],
     /// `[r, g, b, _]`: water tint at full column depth.
-    pub deep_colour: [f32; 4],
+    pub deep_color: [f32; 4],
     /// `[r, g, b, _]`: water tint just above the seabed.
-    pub shallow_colour: [f32; 4],
+    pub shallow_color: [f32; 4],
     /// Depth over which the tint blends from shallow to deep, in metres.
     pub depth_falloff: f32,
     /// Width of the shoreline foam band, in world units.
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn glass_params_layout_matches_shader() {
         assert_eq!(size_of::<GlassParams>(), 64);
-        assert_eq!(offset_of!(GlassParams, centre), 0);
+        assert_eq!(offset_of!(GlassParams, center), 0);
         assert_eq!(offset_of!(GlassParams, normal), 16);
         assert_eq!(offset_of!(GlassParams, tint), 32);
         assert_eq!(offset_of!(GlassParams, opacity), 48);
@@ -242,9 +242,9 @@ mod tests {
     #[test]
     fn water_params_layout_matches_shader() {
         assert_eq!(size_of::<WaterParams>(), 224);
-        assert_eq!(offset_of!(WaterParams, centre), 0);
-        assert_eq!(offset_of!(WaterParams, deep_colour), 16);
-        assert_eq!(offset_of!(WaterParams, shallow_colour), 32);
+        assert_eq!(offset_of!(WaterParams, center), 0);
+        assert_eq!(offset_of!(WaterParams, deep_color), 16);
+        assert_eq!(offset_of!(WaterParams, shallow_color), 32);
         assert_eq!(offset_of!(WaterParams, depth_falloff), 48);
         assert_eq!(offset_of!(WaterParams, foam_width), 52);
         assert_eq!(offset_of!(WaterParams, foam_intensity), 56);

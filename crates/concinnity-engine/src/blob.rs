@@ -6,7 +6,7 @@ pub use concinnity_host::store::blob::*;
 use crate::ecs::ComponentAsset;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-use crate::result::CnResult;
+use crate::error::CnError;
 
 /// A world that reads its compiled payloads from `blob`. The world names the
 /// payload store only through its access seam, so this is where the blob file
@@ -46,11 +46,11 @@ pub(crate) struct LoadedBlob {
 
 // `load` against a primary blob file named directly, rather than the
 // state root's `data/` layout. Overflow blobs are its siblings by index.
-pub(crate) fn load_at(primary: &std::path::Path) -> Result<LoadedBlob, CnResult> {
+pub(crate) fn load_at(primary: &std::path::Path) -> Result<LoadedBlob, CnError> {
     resolve(concinnity_host::store::blob::load_raw_at(primary)?)
 }
 
-fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, CnResult> {
+fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, CnError> {
     let components = meta
         .defs
         .iter()
@@ -63,7 +63,7 @@ fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, CnResu
             }
             Ok((def.name, component))
         })
-        .collect::<Result<Vec<_>, CnResult>>()?;
+        .collect::<Result<Vec<_>, CnError>>()?;
 
     Ok(LoadedBlob {
         components,

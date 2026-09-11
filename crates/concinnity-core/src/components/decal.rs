@@ -38,7 +38,7 @@ pub struct Decal {
     /// The [Texture](#texture) asset projected onto the scene.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,
-    /// World-space position of the decal box's centre.
+    /// World-space position of the decal box's center.
     pub position: [f32; 3],
     /// Euler rotation in degrees [pitch, yaw, roll], YXZ order, same as
     /// [Prop](#prop).

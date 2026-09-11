@@ -97,8 +97,8 @@ pub(in crate::directx) struct TransparentRecord {
     params_cbuffer: PooledBuffer,
     params_cbuffer_gva: u64,
     visible: bool,
-    // World-space centre, used for the back-to-front camera-distance sort.
-    centre: [f32; 3],
+    // World-space center, used for the back-to-front camera-distance sort.
+    center: [f32; 3],
     // Planar reflection resolve slot this record samples (index into the
     // `PlanarReflectionSet`). `None` when the world has no planar set or this
     // record's plane overflowed the budget; the shader then keeps the probe/sky
@@ -114,7 +114,7 @@ pub(in crate::directx) struct RecordUpload<'a> {
     pub indices: &'a [u16],
     pub params: &'a [u8],
     pub visible: bool,
-    pub centre: [f32; 3],
+    pub center: [f32; 3],
     pub planar_slot: Option<usize>,
 }
 
@@ -173,7 +173,7 @@ impl TransparentRecord {
             params_cbuffer,
             params_cbuffer_gva,
             visible: upload.visible,
-            centre: upload.centre,
+            center: upload.center,
             planar_slot: upload.planar_slot,
         })
     }
@@ -243,13 +243,13 @@ pub(in crate::directx) struct GlassMeshProducer {
 
 // One see-through mesh's draw for this frame: the shared-buffer slice its
 // `DrawObject` resolved to, the GPU address of its params block in this frame's
-// ring, and its world-space centre for the back-to-front sort.
+// ring, and its world-space center for the back-to-front sort.
 struct GlassMeshDraw {
     index_offset: u32,
     index_count: u32,
     base_vertex: i32,
     params_gva: u64,
-    centre: [f32; 3],
+    center: [f32; 3],
 }
 
 impl GlassMeshProducer {
@@ -352,12 +352,12 @@ unsafe impl Send for TransparentResources {}
 // them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for TransparentResources {}
 
-// World-space distance from the camera to a record centre. Larger = farther =
+// World-space distance from the camera to a record center. Larger = farther =
 // drawn first. Pure; unit tested.
-fn sort_distance(centre: [f32; 3], cam: [f32; 3]) -> f32 {
-    let dx = centre[0] - cam[0];
-    let dy = centre[1] - cam[1];
-    let dz = centre[2] - cam[2];
+fn sort_distance(center: [f32; 3], cam: [f32; 3]) -> f32 {
+    let dx = center[0] - cam[0];
+    let dy = center[1] - cam[1];
+    let dz = center[2] - cam[2];
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
@@ -390,12 +390,12 @@ fn ordered_visible(
     let dists: Vec<f32> = live
         .iter()
         .map(|&(kind, i)| {
-            let centre = match kind {
+            let center = match kind {
                 Producer::Glass => glass[i].0,
                 Producer::Water => water[i].0,
                 Producer::GlassMesh => meshes[i],
             };
-            sort_distance(centre, cam)
+            sort_distance(center, cam)
         })
         .collect();
     crate::gfx::transparent::back_to_front_order(&dists)
@@ -1101,12 +1101,12 @@ impl TransparentResources {
     // Every visible record of the static producers plus this frame's mesh draws,
     // farthest first.
     fn draw_order(&self, meshes: &[[f32; 3]], cam: [f32; 3]) -> Vec<(Producer, usize)> {
-        let centres = |p: &Option<TransparentProducer>| -> Vec<([f32; 3], bool)> {
+        let centers = |p: &Option<TransparentProducer>| -> Vec<([f32; 3], bool)> {
             p.as_ref()
-                .map(|p| p.records.iter().map(|r| (r.centre, r.visible)).collect())
+                .map(|p| p.records.iter().map(|r| (r.center, r.visible)).collect())
                 .unwrap_or_default()
         };
-        ordered_visible(&centres(&self.glass), &centres(&self.water), meshes, cam)
+        ordered_visible(&centers(&self.glass), &centers(&self.water), meshes, cam)
     }
 
     fn record(&self, kind: Producer, index: usize) -> &TransparentRecord {
@@ -1163,7 +1163,7 @@ impl DxContext {
             if !obj.visible || !obj.resident || obj.material.see_through == 0 {
                 continue;
             }
-            let centre = [
+            let center = [
                 0.5 * (obj.bb_min[0] + obj.bb_max[0]),
                 0.5 * (obj.bb_min[1] + obj.bb_max[1]),
                 0.5 * (obj.bb_min[2] + obj.bb_max[2]),
@@ -1195,7 +1195,7 @@ impl DxContext {
                 index_count: index_count as u32,
                 base_vertex: obj.base_vertex,
                 params_gva: ring_base + offset,
-                centre,
+                center,
             });
         }
         draws
@@ -1240,7 +1240,7 @@ impl DxContext {
         } else {
             Vec::new()
         };
-        let mesh_centres: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.centre).collect();
+        let mesh_centres: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
         let order = transparent.draw_order(&mesh_centres, cam);
         if order.is_empty() {
             return Ok(());
@@ -1557,7 +1557,7 @@ mod tests {
         // A see-through mesh sorts against panes and water by the same camera
         // distance, so it is not simply appended after them. Every mesh entry the
         // encoder passes is already visible, which is why the slice carries
-        // centres alone.
+        // centers alone.
         let glass = [([0.0, 0.0, 9.0], true)];
         let water = [([0.0, 0.0, 3.0], true)];
         let meshes = [[0.0, 0.0, 6.0], [0.0, 0.0, 1.0]];

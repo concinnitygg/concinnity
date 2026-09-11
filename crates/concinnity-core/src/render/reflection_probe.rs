@@ -391,10 +391,10 @@ fn point_inside_any(p: [f32; 3], occupancy: &[([f32; 3], [f32; 3])]) -> bool {
 }
 
 // Choose a capture point inside the cell `[x0,x1] x [z0,z1]` (at the given eye
-// height) that does not sit inside scene geometry. Prefers the cell centre; if that
+// height) that does not sit inside scene geometry. Prefers the cell center; if that
 // is occupied (e.g. inside a wall or building footprint at eye height), tries a few
 // vantage points toward the cell's quarters and takes the first open one. Returns
-// the centre unchanged when every candidate is occupied, so the result is never
+// the center unchanged when every candidate is occupied, so the result is never
 // worse than the un-nudged grid.
 fn open_capture_point(
     center: [f32; 3],
@@ -475,7 +475,7 @@ fn solid_from_aabbs(
 
 // Triangle / axis-aligned-box overlap by the separating-axis theorem (the
 // Akenine-Moller "tribox" test, in its plain 13-axis form). `box_c` is the voxel
-// centre, `box_h` its half-extent, `tri` a world-space triangle. The 13 candidate
+// center, `box_h` its half-extent, `tri` a world-space triangle. The 13 candidate
 // axes are the 3 box face normals, the triangle face normal, and the 9 edge x
 // box-axis cross products; the pair is separated on an axis when the triangle's
 // projection interval and the box's `[-r, r]` do not overlap. A degenerate (zero)
@@ -585,7 +585,7 @@ fn solid_from_triangles(
 // a precomputed solid-voxel grid. For every empty voxel counts how many of the six axis
 // directions hit solid geometry before leaving the bounds (six O(voxels) sweeps); treats
 // the well-enclosed empty voxels (`INTERIOR_MIN_ENCLOSED`) as interior; groups them into
-// 6-connected regions; and drops one probe at the centre of each region big enough to be
+// 6-connected regions; and drops one probe at the center of each region big enough to be
 // a room (`INTERIOR_MIN_CLUSTER`), largest first, up to `budget`. Returns empty for an
 // open scene (everything reachable from the sky / sides). The `solid` grid comes from
 // object AABBs (`seed_interior_probes`) or surface-voxelised triangles
@@ -840,18 +840,18 @@ const REFLECTOR_BOUNDS_HALF_HEIGHT: f32 = 2.0;
 /// `half_extents` is per-axis and is expected to be zero on the reflector's flat
 /// axis; every axis is widened to at least `REFLECTOR_BOUNDS_HALF_HEIGHT` so the
 /// result is a real volume rather than a plane.
-pub fn reflector_bounds(centre: [f32; 3], half_extents: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+pub fn reflector_bounds(center: [f32; 3], half_extents: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let half = |a: usize| half_extents[a].abs().max(REFLECTOR_BOUNDS_HALF_HEIGHT);
     (
         [
-            centre[0] - half(0),
-            centre[1] - half(1),
-            centre[2] - half(2),
+            center[0] - half(0),
+            center[1] - half(1),
+            center[2] - half(2),
         ],
         [
-            centre[0] + half(0),
-            centre[1] + half(1),
-            centre[2] + half(2),
+            center[0] + half(0),
+            center[1] + half(1),
+            center[2] + half(2),
         ],
     )
 }
@@ -906,7 +906,7 @@ pub fn auto_seed_probes_with_geometry(
 // The grid half of auto-seed: tile the scene's horizontal extent into at most
 // `budget` cells (sized to `AUTO_SEED_CELL_TARGET`, shaped to the aspect via
 // `fit_grid`), each owning its full-height column as the influence box, capture point
-// = the cell centre nudged to an open vantage at eye height (`occupancy` = the scene's
+// = the cell center nudged to an open vantage at eye height (`occupancy` = the scene's
 // object AABBs) so a probe is not captured from inside a wall.
 fn seed_grid_probes(
     aabb_min: [f32; 3],
@@ -967,7 +967,7 @@ pub fn fold_world_bounds(
     acc
 }
 
-// Pick the eye point a single scene probe captures from: the horizontal centre
+// Pick the eye point a single scene probe captures from: the horizontal center
 // of the scene bounds, raised to eye height above the floor. A probe serves a
 // volume rather than a viewpoint, so centring it degrades most gracefully as a
 // first-person camera roams (the captured cube is still parallax-locked to this
@@ -1037,7 +1037,7 @@ mod tests {
 
     #[test]
     fn probe_eye_point_centres_at_eye_height() {
-        // A tall scene: probe sits at the horizontal centre, eye height off the
+        // A tall scene: probe sits at the horizontal center, eye height off the
         // floor.
         let eye = probe_eye_point([-10.0, 0.0, -4.0], [6.0, 30.0, 12.0]);
         assert!((eye[0] - (-2.0)).abs() < 1e-6, "x not centred: {}", eye[0]);
@@ -1131,7 +1131,7 @@ mod tests {
 
     #[test]
     fn auto_seed_nudges_capture_point_out_of_geometry() {
-        // One probe (small scene), with a wall-like box covering the cell centre at
+        // One probe (small scene), with a wall-like box covering the cell center at
         // eye height. The capture point must move out of it but stay in the box.
         let occ = [([-1.0, 0.0, -1.0], [1.0, 5.0, 1.0])];
         let probes = auto_seed_probes([-3.0, 0.0, -3.0], [3.0, 3.0, 3.0], &occ);
@@ -1144,7 +1144,7 @@ mod tests {
         // Still within the probe's influence box.
         assert!(p[0] >= probes[0].box_min[0] && p[0] <= probes[0].box_max[0]);
         assert!(p[2] >= probes[0].box_min[2] && p[2] <= probes[0].box_max[2]);
-        // When every candidate is occupied, the centre is kept (never drops a probe).
+        // When every candidate is occupied, the center is kept (never drops a probe).
         let everywhere = [([-100.0, -100.0, -100.0], [100.0, 100.0, 100.0])];
         let trapped = auto_seed_probes([-3.0, 0.0, -3.0], [3.0, 3.0, 3.0], &everywhere);
         assert_eq!(trapped.len(), 1);
@@ -1384,7 +1384,7 @@ mod tests {
 
     #[test]
     fn face_centres_look_down_their_axis() {
-        // The centre texel of each face projects to the NDC origin.
+        // The center texel of each face projects to the NDC origin.
         let eye = [0.0, 0.0, 0.0];
         for face in 0..6 {
             let vp = face_view_projection(eye, face, 0.05, 100.0);
@@ -1393,7 +1393,7 @@ mod tests {
             assert!(w > 0.0);
             assert!(
                 nx.abs() < 1e-5 && ny.abs() < 1e-5,
-                "face {face} centre off-origin"
+                "face {face} center off-origin"
             );
         }
     }

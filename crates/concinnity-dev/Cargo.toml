@@ -31,36 +31,27 @@ concinnity-cook = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 
-async-stream = "0.3.6"
-ciborium = "0.2"
-bitflags = "2.0"
-chrono = "0.4.44"
-ctrlc = "3.5.2"
+ciborium = { workspace = true }
 directories = "6.0.0"
-gltf = { version = "1", default-features = false, features = ["utils", "names"] }
-hex = "0.4.3"
+gltf = { workspace = true, features = ["utils", "names"] }
 ignore = "0.4.25"
-libloading = "0.9.0"
-notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
-png = "0.18.1"
+notify = { workspace = true, features = ["macos_fsevent"] }
+png = { workspace = true }
 rand = "0.10.2"
-rayon = "1"
+rayon = { workspace = true }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
-serde = { version = "1", features = ["derive"] }
-serde_bytes = "0.11.19"
-serde_json = { version = "1", features = ["preserve_order"] }
-slotmap = "1.1.1"
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
 # `cn docs` reads the asset prose out of the engine's own sources.
 syn = { version = "3.0.4", features = ["full", "parsing"] }
-thiserror = "2.0.18"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 ureq = "3.2.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
-tempfile = "3.25.0"
+tempfile = { workspace = true }
 
 [build-dependencies]
 concinnity-toolchain = { workspace = true }

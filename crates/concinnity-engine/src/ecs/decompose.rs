@@ -86,7 +86,6 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
                 MeshRenderer {
                     mesh: prop.mesh,
                     material: prop.material,
-                    texture: prop.texture,
                     cull_distance: prop.cull_distance,
                 },
             );

@@ -34,7 +34,7 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::GlassParams;
 fn glass_params_from(panel: &GlassPanel, planar: f32) -> GlassParams {
     let n = panel.normal; // already unit-length from GlassPanel::from_args
     GlassParams {
-        centre: [panel.centre[0], panel.centre[1], panel.centre[2], 0.0],
+        center: [panel.center[0], panel.center[1], panel.center[2], 0.0],
         normal: [n[0], n[1], n[2], 0.0],
         tint: [panel.tint[0], panel.tint[1], panel.tint[2], 0.0],
         opacity: panel.opacity,
@@ -110,7 +110,7 @@ fn build_panel_record(
     panel: &GlassPanel,
     planar_slot: Option<usize>,
 ) -> Result<TransparentRecord, String> {
-    let (verts, idxs) = build_glass_quad(panel.centre, panel.normal, panel.half_size);
+    let (verts, idxs) = build_glass_quad(panel.center, panel.normal, panel.half_size);
 
     // Flatten into the standard engine `Vertex` layout. Tangent is a placeholder
     // (the glass shader rebuilds its frame from the panel normal) and per-vertex
@@ -135,7 +135,7 @@ fn build_panel_record(
             indices: &idxs,
             params: bytemuck::bytes_of(&params),
             visible: panel.visible,
-            centre: panel.centre,
+            center: panel.center,
             planar_slot,
         },
     )
@@ -315,7 +315,7 @@ mod tests {
     // init failure on a GPU host.
     #[test]
     fn glass_mesh_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         for msaa in [false, true] {
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn glass_params_from_maps_fields() {
         let panel = GlassPanel {
-            centre: [1.0, 2.0, 3.0],
+            center: [1.0, 2.0, 3.0],
             normal: [0.0, 0.0, 1.0],
             tint: [0.6, 0.85, 0.9],
             opacity: 0.45,
@@ -336,7 +336,7 @@ mod tests {
             ..Default::default()
         };
         let p = glass_params_from(&panel, 1.0);
-        assert_eq!(p.centre, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
         assert_eq!(p.normal, [0.0, 0.0, 1.0, 0.0]);
         assert_eq!(p.tint, [0.6, 0.85, 0.9, 0.0]);
         assert_eq!(p.opacity, 0.45);
@@ -352,7 +352,7 @@ mod tests {
     // guards.
     #[test]
     fn glass_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.
@@ -371,7 +371,7 @@ mod tests {
     // in gfx::render_types.
     #[test]
     fn glass_rt_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         for &msaa in &[true, false] {

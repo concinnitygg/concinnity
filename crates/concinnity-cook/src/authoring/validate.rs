@@ -355,7 +355,6 @@ mod tests {
                 asset_id: AssetId::default(),
                 mesh: None,
                 material: None,
-                texture: None,
                 instances: Vec::new(),
                 cull_distance: 0.0,
             }
@@ -472,7 +471,7 @@ mod tests {
         #[test]
         fn roundtrip_through_args() {
             let mut v = SdfVolume {
-                centre: [1.0, 2.0, 3.0],
+                center: [1.0, 2.0, 3.0],
                 extent: [4.0, 5.0, 6.0],
                 fragment_shader: "shaders/foo.metal".to_string(),
                 ..Default::default()
@@ -481,7 +480,7 @@ mod tests {
             let json = serde_json::to_value(v.clone()).expect("serialises");
             let back: SdfVolume = serde_json::from_value(json).expect("deserialises");
             let back = super::super::sdf_volume(back);
-            assert_eq!(back.centre, [1.0, 2.0, 3.0]);
+            assert_eq!(back.center, [1.0, 2.0, 3.0]);
             assert_eq!(back.extent, [4.0, 5.0, 6.0]);
             assert_eq!(back.fragment_shader, "shaders/foo.metal");
             assert_eq!(back.params[7], 0.42);

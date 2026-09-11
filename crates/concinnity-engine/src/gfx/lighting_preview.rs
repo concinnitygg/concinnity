@@ -1,19 +1,17 @@
-// src/gfx/lighting_preview.rs
-//
-// Live application of the world's lighting assets. The renderer reads its
-// lighting from GPU state built at load -- the sun is packed into the shared
-// light uniforms, the shadow and post-process knobs are resolved once -- so an
-// editor changing one of them has nothing in the ECS to write: the effect is a
-// backend call. This is that seam. Each function records the calls into the
-// frame's op queue, where submission replays them before the next draw, and
-// keeps the settings state in step so the settings menu and an authoring edit
-// never disagree about what is live.
-//
-// A knob resolves the same way `run_init` resolves it: to the user's persisted
-// settings-menu choice where they made one, otherwise to the world's value
-// under the quality preset's ceiling (`gfx::render_config` holds the shared
-// expressions). So editing a row the user has overridden moves the authored
-// baseline and leaves the picture alone, exactly as relaunching would.
+//! Live application of the world's lighting assets. The renderer reads its
+//! lighting from GPU state built at load -- the sun is packed into the shared
+//! light uniforms, the shadow and post-process knobs are resolved once -- so an
+//! editor changing one of them has nothing in the ECS to write: the effect is a
+//! backend call. This is that seam. Each function records the calls into the
+//! frame's op queue, where submission replays them before the next draw, and
+//! keeps the settings state in step so the settings menu and an authoring edit
+//! never disagree about what is live.
+//!
+//! A knob resolves the same way `run_init` resolves it: to the user's persisted
+//! settings-menu choice where they made one, otherwise to the world's value
+//! under the quality preset's ceiling (`gfx::render_config` holds the shared
+//! expressions). So editing a row the user has overridden moves the authored
+//! baseline and leaves the picture alone, exactly as relaunching would.
 
 use crate::components::{DirectionalLight, GraphicsConfig, PostProcessConfig, VolumetricFog};
 use crate::ecs::{ActiveRenderQueues, World};

@@ -1,4 +1,4 @@
-// src/cli/explain.rs
+// src/command/explain.rs
 // Print one asset's effective entry from the expanded world: the full JSONL
 // line as the build sees it, pasteable into world.jsonl verbatim. This is the
 // override path for injected defaults and expanded assets, which have no line

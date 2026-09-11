@@ -22,7 +22,7 @@ pub(crate) mod font;
 /// they share (tangents, the voxel mesher, chunk streaming) stay in
 /// `concinnity_core::geometry`; this module re-exports what cook code names.
 pub(crate) mod geometry;
-pub mod mesh_compile;
+pub mod mesh;
 pub(crate) mod physics_budget;
 pub(crate) mod root_motion;
 pub(crate) mod scene_partition;

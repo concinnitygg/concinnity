@@ -1446,7 +1446,7 @@ impl UiInputSystem {
     // Drain the world's ScrollPanels into runtime state: snapshot each row
     // element's authored y (so the reflow is `base + dy`), translate the
     // `i32` group index into an `Option`, and bucket each HitRegion into the
-    // panel row whose band its centre falls in (so the region reflows + gates
+    // panel row whose band its center falls in (so the region reflows + gates
     // with that row). Runs once at init, after HitRegions are drained.
     fn init_panels(&mut self, ctx: &mut PipelineContext) {
         let panels = ctx.drain::<ScrollPanel>();
@@ -1515,7 +1515,7 @@ impl UiInputSystem {
             });
         }
 
-        // Bucket each panel-content region into its row by centre y. Only
+        // Bucket each panel-content region into its row by center y. Only
         // content regions (a settings action or a group toggle) are bucketed;
         // chrome regions (tabs, Back -- `screen:show`) are left fixed even when an
         // overflow row's authored y reaches their position. Panels read

@@ -433,10 +433,10 @@ fn a_resting_box_driven_hard_into_the_floor_stays_on_it() {
 // another, not just the box pair the stack tests use. Resting height is the
 // wrong question for the round ones -- a capsule stood on its cap topples
 // because that is what a capsule does -- so the assertion is that the two
-// centres never come closer than the shapes allow.
+// centers never come closer than the shapes allow.
 #[test]
 fn every_shape_pair_holds_the_other_off_rather_than_passing_through() {
-    // Each shape with the closest its surface ever comes to its own centre,
+    // Each shape with the closest its surface ever comes to its own center,
     // which is the distance a contact must never let the other side inside.
     let shapes = [
         ("ball", ColliderShape::Ball { radius: 0.4 }, 0.4),
@@ -467,7 +467,7 @@ fn every_shape_pair_holds_the_other_off_rather_than_passing_through() {
                 )
                 .expect("room");
 
-            let centre = sim.body_pose(base).expect("live").0;
+            let center = sim.body_pose(base).expect("live").0;
             let mut closest = f32::INFINITY;
             for _ in 0..600 {
                 sim.step(TICK);
@@ -476,16 +476,16 @@ fn every_shape_pair_holds_the_other_off_rather_than_passing_through() {
                     position.iter().all(|c| c.is_finite()),
                     "{upper_name} on {lower_name} went unstable: {position:?}"
                 );
-                let gap = ((position[0] - centre[0]).powi(2)
-                    + (position[1] - centre[1]).powi(2)
-                    + (position[2] - centre[2]).powi(2))
+                let gap = ((position[0] - center[0]).powi(2)
+                    + (position[1] - center[1]).powi(2)
+                    + (position[2] - center[2]).powi(2))
                 .sqrt();
                 closest = closest.min(gap);
             }
             let allowed = lower_inradius + upper_inradius - 0.05;
             assert!(
                 closest > allowed,
-                "{upper_name} reached {closest:.4} from the centre of {lower_name}, \
+                "{upper_name} reached {closest:.4} from the center of {lower_name}, \
                  inside the {allowed:.4} the two shapes leave"
             );
         }
@@ -580,10 +580,10 @@ fn a_ray_lands_on_the_surface_the_stack_settled_at() {
             [0.0, -6.0, 0.0],
         ))
         .expect("a landing");
-    let centre = top + 3.0 - hit.toi * 6.0;
+    let center = top + 3.0 - hit.toi * 6.0;
     assert!(
-        (centre - (top + 0.7)).abs() < 0.01,
-        "the capsule should stand its own 0.7 above {top:.4}, stands at {centre:.4}"
+        (center - (top + 0.7)).abs() < 0.01,
+        "the capsule should stand its own 0.7 above {top:.4}, stands at {center:.4}"
     );
 }
 

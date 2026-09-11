@@ -73,7 +73,7 @@ struct SpotShadowData
 
 // One rectangular area light's extent, indexed by GpuLight.data_index. The
 // edges are pre-scaled by the half-extents, so the corners are
-// centre +/- right +/- up.
+// center +/- right +/- up.
 struct AreaLightData
 {
     // xyz = right edge, w = the two-sided flag's bits.

@@ -928,7 +928,7 @@ mod tests {
     // valid SPIR-V from the embedded source.
     #[test]
     fn shadow_bindless_vs_compiles() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
@@ -941,7 +941,7 @@ mod tests {
     // shortest and the ceiling forms both have to survive).
     #[test]
     fn bindless_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         for probes in [1, 7, concinnity_core::render::uniforms::MAX_PROBES as u32] {
@@ -972,7 +972,7 @@ mod tests {
     // compile branch of `surface_source`, which is also what a stale cook does.
     #[test]
     fn a_world_shader_compiles_its_own_bindless_pair() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         let programs = concinnity_core::components::ShaderPrograms {

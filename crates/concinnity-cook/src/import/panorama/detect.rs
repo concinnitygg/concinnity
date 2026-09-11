@@ -144,7 +144,7 @@ fn check_emissive_only(material: &gltf::Material<'_>) -> Result<(), String> {
     Ok(())
 }
 
-// Every vertex sits the same distance from the mesh's centre. Comparing against
+// Every vertex sits the same distance from the mesh's center. Comparing against
 // the mean radius rather than a fixed one keeps the test independent of the
 // sphere's authored scale.
 fn check_spherical(positions: &[[f32; 3]]) -> Result<(), String> {
@@ -156,16 +156,16 @@ fn check_spherical(positions: &[[f32; 3]]) -> Result<(), String> {
         ));
     }
     let n = positions.len() as f32;
-    let mut centre = [0.0f32; 3];
+    let mut center = [0.0f32; 3];
     for p in positions {
         for axis in 0..3 {
-            centre[axis] += p[axis] / n;
+            center[axis] += p[axis] / n;
         }
     }
     let radii: Vec<f32> = positions
         .iter()
         .map(|p| {
-            let d = [p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]];
+            let d = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
             (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
         })
         .collect();

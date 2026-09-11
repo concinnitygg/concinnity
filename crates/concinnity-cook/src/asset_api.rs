@@ -2,10 +2,10 @@
 //!
 //! This module is the single place where "type name + JSON args → BlobAssetDef"
 //! is implemented.
-use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef};
+use crate::ecs::{AssetOrigin, BlobAssetDef};
+use crate::error::CnError;
 use crate::registry::RegisteredType;
 use crate::registry::Registration;
-use crate::result::CnResult;
 
 /// Incoming request to construct an asset from an external caller
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -28,15 +28,15 @@ pub struct AssetRequest {
 /// Does not perform payload compilation (shaders, images, etc.). The build
 /// step calls this first, then runs its compilation pass over the resulting
 /// defs. The HTTP API follows the same two-step pattern
-pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
+pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnError> {
     if let Some(ct) = RegisteredType::parse(&req.asset_type) {
         let reg = ct.registration();
         if reg.origin != AssetOrigin::External {
-            return Err(CnResult::InvalidArgument);
+            return Err(CnError::InvalidArgument);
         }
         // A resource asset is External too, but compiles into the resource
         // stream rather than a component record, so it has no tag to carry.
-        let discriminant = ct.discriminant().ok_or(CnResult::InvalidArgument)?;
+        let discriminant = ct.discriminant().ok_or(CnError::InvalidArgument)?;
         let args = resolve_args(&reg, &req.args);
         // Every record is baked. For a pass-through type the baked component is
         // its reserialized args (the component IS its args); a divergent type
@@ -47,7 +47,6 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
         };
         return Ok(BlobAssetDef {
             name: None,
-            kind: AssetKind::Component,
             discriminant,
             args_bytes,
             payload: None,
@@ -55,7 +54,7 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
     }
 
     tracing::error!("asset_api: unknown asset type '{}'", req.asset_type);
-    Err(CnResult::AssetInvalidType)
+    Err(CnError::AssetInvalidType)
 }
 
 // Resolve the args to use for construction.
@@ -162,7 +161,7 @@ mod tests {
         };
         assert_eq!(
             create_asset_def(&req).unwrap_err(),
-            CnResult::AssetInvalidType
+            CnError::AssetInvalidType
         );
     }
 
@@ -175,7 +174,7 @@ mod tests {
         };
         assert_eq!(
             create_asset_def(&req).unwrap_err(),
-            CnResult::InvalidArgument
+            CnError::InvalidArgument
         );
     }
 
@@ -186,7 +185,6 @@ mod tests {
             args: None,
         };
         let def = create_asset_def(&req).unwrap();
-        assert_eq!(def.kind, AssetKind::Component);
         assert_eq!(
             Some(def.discriminant),
             RegisteredType::parse("ProceduralMesh")
@@ -211,7 +209,6 @@ mod tests {
                 args: None,
             })
             .unwrap();
-            assert_eq!(def.kind, AssetKind::Component, "{}", ct.as_str());
             assert!(!def.args_bytes.is_empty(), "{}", ct.as_str());
         }
     }
@@ -240,7 +237,7 @@ mod tests {
         };
         assert_eq!(
             create_asset_def(&req).unwrap_err(),
-            CnResult::InvalidArgument
+            CnError::InvalidArgument
         );
     }
 

@@ -19,7 +19,7 @@ use crate::ecs::asset_id::AssetId;
 use concinnity_cook::authoring::refs::referenced_names;
 use concinnity_cook::authoring::registry::{self, RegisteredType};
 use concinnity_cook::authoring::world::WorldJsonlAsset;
-use concinnity_core::blob::{AssetKind, BlobAssetDef};
+use concinnity_core::blob::BlobAssetDef;
 use concinnity_core::ecs::ComponentAsset;
 use serde_json::{Map, Value};
 
@@ -75,7 +75,7 @@ pub(super) fn bake(
     ct: RegisteredType,
     id: AssetId,
     args: &Map<String, Value>,
-) -> Result<ComponentAsset, concinnity_core::result::CnResult> {
+) -> Result<ComponentAsset, concinnity_core::error::CnError> {
     let value = Value::Object(args.clone());
     let args_bytes = match registry::bake_divergent(ct, &value)? {
         Some(bytes) => bytes,
@@ -83,10 +83,9 @@ pub(super) fn bake(
     };
     let def = BlobAssetDef {
         name: Some(id),
-        kind: AssetKind::Component,
         discriminant: ct
             .discriminant()
-            .ok_or(concinnity_core::result::CnResult::AssetInvalidType)?,
+            .ok_or(concinnity_core::error::CnError::AssetInvalidType)?,
         args_bytes,
         payload: None,
     };

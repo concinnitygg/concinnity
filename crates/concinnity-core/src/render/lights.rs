@@ -74,7 +74,7 @@ pub fn build_light_data(
         .iter()
         .zip(&slots)
         .map(|(l, &data_index)| GpuLight {
-            position: l.centre,
+            position: l.center,
             range: l.range,
             color: l.color,
             intensity: l.intensity,
@@ -573,9 +573,9 @@ mod tests {
         assert_eq!(max_index, 0);
     }
 
-    fn area(centre: [f32; 3], half_size: [f32; 2]) -> RectAreaLight {
+    fn area(center: [f32; 3], half_size: [f32; 2]) -> RectAreaLight {
         RectAreaLight {
-            centre,
+            center,
             half_size,
             ..RectAreaLight::default()
         }
@@ -610,7 +610,7 @@ mod tests {
         }
     }
 
-    // The area light's centre and emitting direction ride the GpuLight record.
+    // The area light's center and emitting direction ride the GpuLight record.
     #[test]
     fn area_light_centre_and_normal_map_onto_the_gpu_light() {
         let mut l = area([1.0, 2.0, 3.0], [1.0, 1.0]);

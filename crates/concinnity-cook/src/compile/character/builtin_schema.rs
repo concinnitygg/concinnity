@@ -1,6 +1,6 @@
-// The schema the cook ships for its bundled base humanoid, addressed by the
-// reserved name `builtin:humanoid`, and schema lookup by name against a
-// world's CharacterSchema assets.
+//! The schema the cook ships for its bundled base humanoid, addressed by the
+//! reserved name `builtin:humanoid`, and schema lookup by name against a
+//! world's CharacterSchema assets.
 
 use crate::authoring::registry::build_only::CharacterSchema;
 use crate::authoring::world::WorldJsonlAsset;

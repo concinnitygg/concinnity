@@ -323,7 +323,7 @@ pub(crate) fn write_lock(
 ) -> std::io::Result<()> {
     let mut blobs = Vec::new();
     for path in blob_paths {
-        let data = fs::read(path).unwrap_or_default();
+        let data = fs::read(path)?;
         let payload_bytes = payload_section(&data).len() as u64;
         blobs.push(BlobEntry {
             path: path.clone(),
@@ -337,7 +337,9 @@ pub(crate) fn write_lock(
         .map(|(name, def)| LockedAsset {
             name: name.to_string(),
             id: def.name.map(|n| n.0),
-            kind: format!("{:?}", def.kind),
+            kind: crate::registry::RegisteredType::from_discriminant(def.discriminant)
+                .map(|ty| ty.as_str().to_string())
+                .unwrap_or_default(),
             discriminant: def.discriminant,
             args_hash: checksum(&def.args_bytes),
             payload_blob: def.payload.as_ref().map(|p| p.blob_index),
@@ -441,7 +443,7 @@ pub(crate) mod test_output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::{AssetKind, asset_id::AssetId};
+    use crate::ecs::asset_id::AssetId;
     use test_output::Output;
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
@@ -455,7 +457,6 @@ mod tests {
     fn component_def(discriminant: u8, payload: Option<PayloadLocator>) -> BlobAssetDef {
         BlobAssetDef {
             name: Some(AssetId(discriminant as u32)),
-            kind: AssetKind::Component,
             discriminant,
             args_bytes: vec![discriminant, 0xAA],
             payload,
@@ -683,8 +684,14 @@ mod tests {
 
         assert_eq!(lock.assets.len(), 2);
         assert_eq!(lock.assets[0].name, "floor");
-        assert_eq!(lock.assets[0].kind, "Component");
         assert_eq!(lock.assets[0].discriminant, 3);
+        assert_eq!(
+            lock.assets[0].kind,
+            crate::registry::RegisteredType::from_discriminant(3)
+                .expect("discriminant 3 is registered")
+                .as_str(),
+            "the lock names the registry type, not a constant"
+        );
         assert_eq!(lock.assets[0].args_hash, checksum(&defs[0].args_bytes));
         assert_eq!(lock.assets[0].payload_blob, Some(0));
         assert_eq!(lock.assets[1].name, "wall");
@@ -698,20 +705,22 @@ mod tests {
         assert_eq!(lock.shadowed[0].generated_by, "bistro");
     }
 
-    // A lock is still written when a listed blob is unreadable: the entry
-    // records the empty checksum and no payload bytes rather than failing.
+    // The listed blobs are files the build just wrote, so one that cannot be
+    // read back is a real I/O failure: reporting it beats recording the empty
+    // checksum as if the blob had been verified.
     #[test]
-    fn write_lock_tolerates_a_missing_blob_file() {
+    fn write_lock_reports_an_unreadable_blob_file() {
         let output = Output::new();
 
         let paths = vec!["/no/such/data/0".to_string()];
-        write_lock(output.tree(), &[], &[], &[], &[], &paths).expect("write_lock");
-        let written = fs::read_to_string(output.lock_path()).expect("lock written");
+        let err = write_lock(output.tree(), &[], &[], &[], &[], &paths)
+            .expect_err("an unreadable blob fails the lock");
 
-        let lock: BlobLock = serde_json::from_str(&written).expect("lock is valid json");
-        assert_eq!(lock.blobs[0].payload_bytes, 0);
-        assert_eq!(lock.blobs[0].checksum, checksum(b""));
-        assert!(lock.assets.is_empty());
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            !output.lock_path().exists(),
+            "no lock claims a bad checksum"
+        );
     }
 
     #[test]

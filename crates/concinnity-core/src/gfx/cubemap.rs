@@ -96,7 +96,7 @@ mod tests {
         }
     }
 
-    // An even face size has no texel exactly on the centre, so the nearest one
+    // An even face size has no texel exactly on the center, so the nearest one
     // only leans along the axis; what must hold is that it leans the right way.
     #[test]
     fn a_centre_texel_leans_along_its_face_axis() {

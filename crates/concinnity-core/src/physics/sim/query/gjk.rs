@@ -280,12 +280,12 @@ mod tests {
 
     #[test]
     fn a_box_and_a_ball_agree_with_the_distance_worked_out_by_hand() {
-        // Ball centre 3 up, box top face at 0.5, ball radius 0.5.
+        // Ball center 3 up, box top face at 0.5, ball radius 0.5.
         let s = separation(&at(&BALL, vec3(0.0, 3.0, 0.0)), &at(&CUBE, Vec3::ZERO));
         assert!((s.gap - 2.0).abs() < 1.0e-4, "{s:?}");
         assert!((s.on_b - vec3(0.0, 0.5, 0.0)).length() < 1.0e-4, "{s:?}");
 
-        // Off the corner: the diagonal from the box corner to the ball centre.
+        // Off the corner: the diagonal from the box corner to the ball center.
         let corner = separation(&at(&BALL, vec3(3.0, 3.0, 3.0)), &at(&CUBE, Vec3::ZERO));
         let expected = (vec3(3.0, 3.0, 3.0) - vec3(0.5, 0.5, 0.5)).length() - 0.5;
         assert!((corner.gap - expected).abs() < 1.0e-3, "{corner:?}");
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn a_capsule_is_measured_from_its_segment_not_its_centre() {
-        // Upright capsule: the cap reaches 0.75 above centre.
+        // Upright capsule: the cap reaches 0.75 above center.
         let s = separation(&at(&CAPSULE, vec3(0.0, 4.0, 0.0)), &at(&CUBE, Vec3::ZERO));
         assert!((s.gap - (4.0 - 0.75 - 0.5)).abs() < 1.0e-4, "{s:?}");
 

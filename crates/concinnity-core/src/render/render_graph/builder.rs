@@ -1,4 +1,4 @@
-// src/render_graph/builder.rs
+// src/render/render_graph/builder.rs
 //
 // Builder API for the render graph. A `GraphBuilder` collects resource
 // declarations and pass declarations; once every pass has been added,

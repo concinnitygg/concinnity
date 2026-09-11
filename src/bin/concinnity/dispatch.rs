@@ -38,7 +38,7 @@ pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             dev_flags::set_enabled(true);
             dev_flags::set_validation(args.validation);
             args.render.arm();
-            let port = args.debug_port.unwrap_or(8777);
+            let port = args.debug_port;
             concinnity_dev::run_debug(args.file.as_deref(), port)
         }
         Commands::Editor(args) => {
@@ -72,7 +72,7 @@ pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             &args.format,
             args.dmg,
         ),
-        Commands::Mcp(args) => concinnity_dev::run_mcp(args.port),
+        Commands::Mcp(args) => concinnity_dev::run_mcp(args.debug_port),
         Commands::Version => command::version(),
     }
 }

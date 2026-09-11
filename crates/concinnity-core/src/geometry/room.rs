@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn room_normals_point_into_the_interior() {
-        // Every face's normal is a unit axis pointing at the room centre, which
+        // Every face's normal is a unit axis pointing at the room center, which
         // for an origin-centred box means normal . position is negative.
         let (verts, _) = build_room_geometry(3.0, 4.0, -1.0, 1.0);
         for (pos, normal, ..) in &verts {

@@ -45,6 +45,35 @@ fn skinned_pool_free(ctx: &PipelineContext) -> u32 {
         .unwrap_or(0)
 }
 
+// Apply one frame's submit outcome to the world: the memory-pressure signal,
+// the op failures the simulation side must roll back (streamed-mesh uploads,
+// chunk adds; StreamingSystem drains them next tick), and this frame's render
+// stats for the profiler overlay. Backends without GPU-timed stats return the
+// trait's default (all zeros), which the HUD displays as "--".
+fn apply_frame_outcome(
+    ctx: &mut PipelineContext,
+    frame: u64,
+    memory_pressure: bool,
+    failures: Vec<concinnity_core::render::ops::OpFailure>,
+    stats: Option<crate::gfx::profile::RenderStats>,
+) {
+    if memory_pressure {
+        publish_memory_pressure(ctx, frame);
+    }
+    if !failures.is_empty() {
+        match ctx.resource_mut::<crate::ecs::RenderOpFailures>() {
+            Some(pending) => pending.0.extend_from_slice(&failures),
+            None => {
+                ctx.insert_resource(crate::ecs::RenderOpFailures(failures));
+            }
+        }
+    }
+    if let Some(mut stats) = stats {
+        stats.skinned_pool_free = skinned_pool_free(ctx);
+        ctx.profile.render = stats;
+    }
+}
+
 // Record a device-memory failure in the shared [`GpuMemoryPressure`] resource,
 // where the streaming valve can observe it.
 fn publish_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
@@ -92,27 +121,13 @@ impl GraphicsSystem {
             super::submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
         self.snapshot = snapshot;
 
-        if outcome.memory_pressure || outcome.replay.memory_pressure {
-            publish_memory_pressure(ctx, self.frame_count);
-        }
-        // Op failures the simulation side must roll back (streamed-mesh
-        // uploads, chunk adds); StreamingSystem drains them next tick.
-        if !outcome.replay.failures.is_empty() {
-            match ctx.resource_mut::<crate::ecs::RenderOpFailures>() {
-                Some(pending) => pending.0.extend_from_slice(&outcome.replay.failures),
-                None => {
-                    ctx.insert_resource(crate::ecs::RenderOpFailures(outcome.replay.failures));
-                }
-            }
-        }
-        if let Some(mut stats) = outcome.render_stats {
-            // Publish this frame's render stats for the profiler overlay.
-            // Backends without GPU-timed stats return the trait's default
-            // (all zeros), which the HUD displays as "--". The skinned pool
-            // chip reads the engine-owned instance pool.
-            stats.skinned_pool_free = skinned_pool_free(ctx);
-            ctx.profile.render = stats;
-        }
+        apply_frame_outcome(
+            ctx,
+            self.frame_count,
+            outcome.memory_pressure || outcome.replay.memory_pressure,
+            outcome.replay.failures,
+            outcome.render_stats,
+        );
 
         let mut result = outcome.result;
         if result == StepResult::Continue {
@@ -171,20 +186,13 @@ impl GraphicsSystem {
         while let Ok(feedback) = pipe.feedback_rx.try_recv() {
             stop |= feedback.stop;
             deposit_input(ctx, feedback.input);
-            if feedback.replay.memory_pressure {
-                publish_memory_pressure(ctx, self.frame_count);
-            }
-            if !feedback.replay.failures.is_empty() {
-                match ctx.resource_mut::<crate::ecs::RenderOpFailures>() {
-                    Some(pending) => pending.0.extend_from_slice(&feedback.replay.failures),
-                    None => {
-                        ctx.insert_resource(crate::ecs::RenderOpFailures(feedback.replay.failures));
-                    }
-                }
-            }
-            let mut stats = feedback.render_stats;
-            stats.skinned_pool_free = skinned_pool_free(ctx);
-            ctx.profile.render = stats;
+            apply_frame_outcome(
+                ctx,
+                self.frame_count,
+                feedback.replay.memory_pressure,
+                feedback.replay.failures,
+                Some(feedback.render_stats),
+            );
             self.snapshot = feedback.recycled;
         }
 

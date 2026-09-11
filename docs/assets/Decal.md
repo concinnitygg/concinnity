@@ -22,7 +22,7 @@ top of the surfaces they stamp.
 ## Parameters
 
 - `texture`: A string. The [Texture](Texture.md) asset projected onto the scene. Optional.
-- `position`: An array of 3 floats. World-space position of the decal box's centre. Defaults to `[0.0, 0.0, 0.0]`.
+- `position`: An array of 3 floats. World-space position of the decal box's center. Defaults to `[0.0, 0.0, 0.0]`.
 - `rotation_deg`: An array of 3 floats. Euler rotation in degrees [pitch, yaw, roll], YXZ order, same as [Prop](Prop.md). Defaults to `[0.0, 0.0, 0.0]`.
 - `size`: An array of 3 floats. Local-space box extents. Local +Y is the projection axis; the texture is sampled on the local X-Z plane. A non-positive component disables the decal. Defaults to `[1.0, 1.0, 1.0]`.
 - `tint`: An array of 4 floats. Linear-space RGBA tint multiplied with the sampled texture. The alpha channel scales the final blend, so `[1,1,1,0]` hides the decal. Defaults to `[1.0, 1.0, 1.0, 1.0]`.

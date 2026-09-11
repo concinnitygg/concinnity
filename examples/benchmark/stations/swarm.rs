@@ -42,7 +42,7 @@ const CULL_DISTANCE: f32 = 55.0;
 const NEARBY: &str = "nearby";
 
 /// Declare the tokens and the rules that move them.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "swarm_plinth_mesh",
         ProceduralMesh {
@@ -57,7 +57,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         .add(
             "swarm_plinth",
             Prop {
-                position: [centre[0], 0.6, centre[2]],
+                position: [center[0], 0.6, center[2]],
                 ..Default::default()
             },
         )
@@ -83,9 +83,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                         format!("swarm_token_{index}"),
                         Prop {
                             position: [
-                                centre[0] + spread(x, DRIFT[0], DRIFT_SPACING),
+                                center[0] + spread(x, DRIFT[0], DRIFT_SPACING),
                                 DRIFT_BASE_HEIGHT + y as f32 * DRIFT_SPACING,
-                                centre[2] + spread(z, DRIFT[2], DRIFT_SPACING),
+                                center[2] + spread(z, DRIFT[2], DRIFT_SPACING),
                             ],
                             // A token is something the player could reach for,
                             // and the tag is also what marks a prop the engine

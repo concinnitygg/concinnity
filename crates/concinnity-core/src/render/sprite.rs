@@ -299,10 +299,10 @@ const CORNER_SEGMENTS: usize = 6;
 const EDGE_FEATHER: f32 = 1.25;
 
 // The corner-arc samples a rounded rectangle's silhouette is drawn from: each
-// entry is a corner centre and a unit offset, so one boundary describes every
+// entry is a corner center and a unit offset, so one boundary describes every
 // outline concentric with the authored rect (the feathered edge, the inset the
 // stroke leaves). Insetting the rect and dropping the radius by the same
-// amount leaves the centres where they are, which is what lets a stroke sample
+// amount leaves the centers where they are, which is what lets a stroke sample
 // this at two radii.
 fn rounded_boundary(
     rect: [f32; 4],
@@ -988,7 +988,7 @@ mod tests {
         s.screen = Some(AssetId(1));
         let mut clips = no_clips();
         // Reference band [200,200] size [200,60] at a 2x viewport (1280x720 ->
-        // 2560x1440, scale 2 about the centre): forward(200,200)=(400,400),
+        // 2560x1440, scale 2 about the center): forward(200,200)=(400,400),
         // forward(400,260)=(800,520) -> clip [400,400,400,120].
         clips.insert(AssetId(7), [200.0, 200.0, 200.0, 60.0]);
         let calls = build_sprite_calls(

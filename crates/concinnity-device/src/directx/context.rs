@@ -25,7 +25,7 @@ use super::post::ssao::*;
 use super::post::ssr::*;
 use super::post::taa::*;
 use super::texture::*;
-use crate::win32::input::*;
+use crate::gfx::input::RenderInput;
 use crate::win32::window::*;
 
 // Constants
@@ -2398,7 +2398,7 @@ impl DxContext {
         self.win_mut().key.set_keymap(keymap);
     }
 
-    pub(crate) fn take_input(&mut self) -> InputState {
+    pub(crate) fn take_input(&mut self) -> RenderInput {
         take_input_snapshot(self.win_mut())
     }
 

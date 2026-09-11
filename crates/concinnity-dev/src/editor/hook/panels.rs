@@ -504,16 +504,16 @@ impl Panel for TemplatesPanel {
         hook.templates_open = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
-        templates::size()
+        template::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        templates::default_origin(vp[0])
+        template::default_origin(vp[0])
     }
     fn sprite_ids(&self) -> Vec<AssetId> {
-        templates::all_sprite_ids()
+        template::all_sprite_ids()
     }
     fn label_ids(&self) -> Vec<AssetId> {
-        templates::all_label_ids()
+        template::all_label_ids()
     }
     fn press(
         &self,
@@ -525,7 +525,7 @@ impl Panel for TemplatesPanel {
     ) -> bool {
         let _ = world;
         let s = hook.effective_size(PanelKey::Templates);
-        match templates::hit_test(mx, my, o, s) {
+        match template::hit_test(mx, my, o, s) {
             Some(TemplatesAction::Pick(i)) => {
                 hook.open_template_detail(i);
                 true
@@ -536,10 +536,10 @@ impl Panel for TemplatesPanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Templates);
-        templates::apply(world, o, s, hook.open_template, mouse);
+        template::apply(world, o, s, hook.open_template, mouse);
     }
     fn hide(&self, world: &mut World) {
-        templates::hide_all(world);
+        template::hide_all(world);
     }
 }
 

@@ -148,7 +148,7 @@ pub(crate) fn card_rect(card: &Card, band: [f32; 4], pan: [f32; 2]) -> [f32; 4] 
 }
 
 // The pan that brings `card` fully inside the band, moving no further than it
-// has to so selecting a neighbour does not re-centre the whole chart.
+// has to so selecting a neighbour does not re-center the whole chart.
 pub(crate) fn pan_to(card: &Card, canvas: [f32; 2], pan: [f32; 2], chart: &Chart) -> [f32; 2] {
     let x = MARGIN + card.column as f32 * PITCH_X;
     let y = MARGIN + card.row as f32 * PITCH_Y;
@@ -486,20 +486,7 @@ mod tests {
     use serde_json::json;
 
     fn injected_world() -> World {
-        let mut world = World::new();
-        for id in all_sprite_ids() {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        for id in all_label_ids() {
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        world
+        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
     }
 
     fn branching() -> Chart {

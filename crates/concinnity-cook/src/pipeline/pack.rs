@@ -9,7 +9,7 @@ use crate::authoring::world::WorldJsonlAsset;
 use crate::blob::PayloadPacker;
 use crate::components::FileKind;
 use crate::ecs::asset_id;
-use crate::ecs::{AssetKind, BlobAssetDef, ResourceRecord};
+use crate::ecs::{BlobAssetDef, ResourceRecord};
 use crate::registry::RegisteredType;
 use crate::resource_handles::ResourceAssetCompile;
 
@@ -214,9 +214,6 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         .iter()
         .enumerate()
         .filter(|(i, (_, def))| {
-            if def.kind != AssetKind::Component {
-                return false;
-            }
             let Some(ct) = RegisteredType::from_discriminant(def.discriminant) else {
                 return false;
             };
@@ -890,7 +887,6 @@ mod tests {
             "mystery".to_string(),
             BlobAssetDef {
                 name: None,
-                kind: AssetKind::Component,
                 discriminant: 200,
                 args_bytes: Vec::new(),
                 payload: None,

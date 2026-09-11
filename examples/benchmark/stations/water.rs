@@ -21,7 +21,7 @@ const COLUMN_RADIUS: f32 = 0.9;
 const COLUMN_HEIGHT: f32 = 12.0;
 
 /// Declare the pool and what stands in it.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "water_column_mesh",
         ProceduralMesh {
@@ -39,7 +39,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
             .add(
                 format!("water_column_{index}"),
                 Prop {
-                    position: [centre[0] + across, COLUMN_HEIGHT * 0.5, centre[2] + along],
+                    position: [center[0] + across, COLUMN_HEIGHT * 0.5, center[2] + along],
                     ..Default::default()
                 },
             )
@@ -50,7 +50,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
     world.add(
         "water_pool",
         WaterSurface {
-            centre,
+            center,
             extent: EXTENT,
             subdivisions: SUBDIVISIONS,
             waves: vec![
@@ -69,8 +69,8 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                     steepness: 0.2,
                 },
             ],
-            deep_colour: [0.01, 0.04, 0.07],
-            shallow_colour: [0.05, 0.16, 0.20],
+            deep_color: [0.01, 0.04, 0.07],
+            shallow_color: [0.05, 0.16, 0.20],
             depth_falloff_metres: 2.0,
             foam_width_metres: 0.6,
             foam_intensity: 0.4,

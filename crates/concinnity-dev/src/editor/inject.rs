@@ -318,7 +318,7 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
 
 #[cfg(test)]
 mod tests {
-    use super::super::{form_panel, panel, preview, template_panel, templates, view};
+    use super::super::{form_panel, panel, preview, template, template_panel, view};
     use super::*;
 
     // The editor draws its own chrome, so injection turns the world's title bar
@@ -436,8 +436,8 @@ mod tests {
             view::PANEL_BG,
             view::row_bg(0),
             view::check_box(0),
-            templates::PANEL_BG,
-            templates::row_bg(0),
+            template::PANEL_BG,
+            template::row_bg(0),
             template_panel::PANEL_BG,
             template_panel::APPLY_BG,
             template_panel::row_bg(0),
@@ -459,7 +459,7 @@ mod tests {
         assert!(pos(panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(preview::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(view::PANEL_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(templates::PANEL_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(template::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(template_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
 
         // Both typed fields exist, hidden, and reference the reused font.

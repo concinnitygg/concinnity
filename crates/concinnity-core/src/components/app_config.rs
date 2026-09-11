@@ -153,7 +153,7 @@ impl AppConfig {
 impl Component for AppConfig {
     const NAME: &'static str = "AppConfig";
 
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::CnError> {
         Ok(crate::blob::decode_exact(bytes)?)
     }
 }

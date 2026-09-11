@@ -83,4 +83,13 @@ pub(crate) use gpu_profile::probe_gpu_profile;
 // backend keeps its existing `crate::vulkan::{pass_timing,uniforms}`
 // paths through these re-exports. `uniforms` holds the per-pass repr(C) structs;
 // each pass file re-exports the struct(s) it fills so their paths are unchanged.
-pub(crate) use concinnity_core::render::vulkan::{pass_timing, uniforms};
+//
+// Timing here: the start buffer resets the whole block and writes the
+// whole-frame start; each per-pass command buffer writes its own pair around
+// its encode; the end buffer writes the whole-frame end. Unlike D3D12, which
+// can pre-write every slot so a pass that did not run still reads a value,
+// Vulkan forbids writing a timestamp to a query already written without an
+// intervening reset. A pass absent from this frame's graph therefore leaves its
+// reset-but-unwritten slots unavailable; the readback uses WITH_AVAILABILITY
+// and reports 0 for any pair that is not both available.
+pub(crate) use concinnity_core::render::{pass_timing, vulkan::uniforms};

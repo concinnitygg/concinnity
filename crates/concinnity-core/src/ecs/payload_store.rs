@@ -6,7 +6,7 @@
 // `concinnity_host::store` builds over `crate::blob`; tests supply their own.
 
 use crate::ecs::PayloadLocator;
-use crate::result::CnResult;
+use crate::error::CnError;
 
 /// A source of compiled payload bytes addressed by `PayloadLocator`.
 pub trait PayloadStore {
@@ -14,7 +14,7 @@ pub trait PayloadStore {
     /// store may load an overflow section lazily on first access. Errors when
     /// the payload was released, the locator is out of range, or a lazy load
     /// fails.
-    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult>;
+    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnError>;
 
     /// Release an entire blob's in-memory payload once every system that needs
     /// it has finished (e.g. after GPU upload). A store with nothing resident
@@ -40,8 +40,8 @@ pub trait PayloadStore {
 pub struct NoPayloads;
 
 impl PayloadStore for NoPayloads {
-    fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnResult> {
-        Err(CnResult::FileIo)
+    fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnError> {
+        Err(CnError::FileIo)
     }
 
     fn release(&mut self, _blob_index: u32) {}
@@ -66,7 +66,7 @@ mod tests {
             offset: 0,
             len: 4,
         };
-        assert_eq!(store.read(&locator), Err(CnResult::FileIo));
+        assert_eq!(store.read(&locator), Err(CnError::FileIo));
         store.release(0);
         assert!(!store.disk_backed());
         assert_eq!(store.release_all_resident(), 0);

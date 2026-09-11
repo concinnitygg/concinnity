@@ -122,9 +122,9 @@ void histogram_average(uint tid : SV_GroupIndex)
     // Drop the sub-floor bin so a mostly-black frame does not peg the average.
     uint effective_count = (tid == 0u) ? 0u : count;
     float step = params.lum_log2_range / float(HISTOGRAM_BINS);
-    float centre = params.lum_log2_min + (float(tid) + 0.5) * step;
+    float center = params.lum_log2_min + (float(tid) + 0.5) * step;
     reduce_counts[tid] = effective_count;
-    reduce_weighted[tid] = centre * float(effective_count);
+    reduce_weighted[tid] = center * float(effective_count);
     GroupMemoryBarrierWithGroupSync();
 
     for (uint stride = HISTOGRAM_BINS / 2u; stride > 0u; stride >>= 1u)

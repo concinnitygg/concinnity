@@ -35,7 +35,7 @@ const MAX_DT: f32 = 0.1;
 // How far outside the fitted framing distance each moving shot sits.
 const ORBIT_DISTANCE: f32 = 1.15;
 const DRIFT_DISTANCE: f32 = 1.2;
-// Camera elevation above the bounds centre, as an angle off the horizontal.
+// Camera elevation above the bounds center, as an angle off the horizontal.
 // Slightly raised: a look down over the world reads as an establishing shot,
 // while a level camera reads as a screenshot.
 const ELEVATION: f32 = 0.24;
@@ -83,7 +83,7 @@ impl Shot {
 // The cycle, in order. Each hands over to the next through black.
 const CYCLE: [Shot; 3] = [Shot::Orbit, Shot::Spin, Shot::Drift];
 
-// What the shots frame: the previewed world's bounds centre, the sphere radius
+// What the shots frame: the previewed world's bounds center, the sphere radius
 // they frame it at (capped, see `MAX_FRAMED_RADIUS`), the distance that fits
 // that sphere in the view, and the pose the world's own camera holds (which
 // the spin turns on the spot from).
@@ -120,7 +120,7 @@ impl Framing {
             return None;
         }
         // A world too large to frame whole is framed on what its own camera
-        // faces rather than on the middle of its bounds: the centre of a
+        // faces rather than on the middle of its bounds: the center of a
         // street (or of a sky dome that inflated the bounds) is a point in the
         // air with nothing at it, while the author's view is of something.
         let center = match extent > MAX_FRAMED_RADIUS {
@@ -220,8 +220,8 @@ fn ahead_of(home: &CameraPose, distance: f32) -> [f32; 3] {
     ]
 }
 
-// A pose on the ring `distance` from the centre at `azimuth`, raised by the
-// standing elevation and aimed back at the centre.
+// A pose on the ring `distance` from the center at `azimuth`, raised by the
+// standing elevation and aimed back at the center.
 fn ring_pose(f: &Framing, azimuth: f32, distance: f32) -> CameraPose {
     let horizontal = distance * ELEVATION.cos();
     let position = [
@@ -296,7 +296,7 @@ mod tests {
         c
     }
 
-    // Distance from a pose to the framed centre.
+    // Distance from a pose to the framed center.
     fn range(p: &CameraPose, f: &Framing) -> f32 {
         let d = [
             p.position[0] - f.center[0],
@@ -306,8 +306,8 @@ mod tests {
         (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
     }
 
-    // How far off the framed centre a pose is pointing, in world units at the
-    // centre's range.
+    // How far off the framed center a pose is pointing, in world units at the
+    // center's range.
     fn aim_error(p: &CameraPose, f: &Framing) -> f32 {
         let fw = forward(p.yaw, p.pitch);
         let d = range(p, f);
@@ -467,7 +467,7 @@ mod tests {
                     "{:?} looks down on the world",
                     c.shot()
                 );
-                assert!(aim_error(&p, &f) < 1e-3, "{:?} loses the centre", c.shot());
+                assert!(aim_error(&p, &f) < 1e-3, "{:?} loses the center", c.shot());
             }
             c.advance(MAX_DT);
         }

@@ -25,7 +25,7 @@ mod headless_world_tests;
 mod run_tests;
 
 use crate::ecs::{StepResult, SystemTable, World};
-use crate::result::CnResult;
+use crate::error::CnError;
 use fixed_timestep::FixedTimestep;
 
 pub use driver::Driver;
@@ -101,11 +101,11 @@ impl App {
     }
 
     /// Build the world's systems and run their `init`. Runs once: a second
-    /// call is [`InvalidState`](CnResult::InvalidState) rather than a second
+    /// call is [`InvalidState`](CnError::InvalidState) rather than a second
     /// `init` over the running world.
-    pub fn start(&mut self) -> Result<(), CnResult> {
+    pub fn start(&mut self) -> Result<(), CnError> {
         if self.status != AppStatus::Created {
-            return Err(CnResult::InvalidState);
+            return Err(CnError::InvalidState);
         }
         self.world.start(self.table)?;
         self.status = AppStatus::Started;
@@ -122,7 +122,7 @@ impl App {
     /// counters behind that are process-wide, so the check stands down where it
     /// cannot trust them: where no binary installed the tracking allocator, and
     /// where another thread is allocating alongside the loop.
-    pub fn run(&mut self) -> Result<StepResult, CnResult> {
+    pub fn run(&mut self) -> Result<StepResult, CnError> {
         self.start_if_created()?;
         loop {
             let result = self.tick();
@@ -135,7 +135,7 @@ impl App {
     /// Step at most `ticks` times, returning what the last tick reported:
     /// `Continue` when the full count ran, `Stop` or `Done` when the world
     /// ended the run early. The bounded form of [`run`](App::run).
-    pub fn run_for(&mut self, ticks: u64) -> Result<StepResult, CnResult> {
+    pub fn run_for(&mut self, ticks: u64) -> Result<StepResult, CnError> {
         self.start_if_created()?;
         let mut result = StepResult::Continue;
         for _ in 0..ticks {
@@ -148,7 +148,7 @@ impl App {
     }
 
     // Start the world unless the caller already did, so a run is one call.
-    fn start_if_created(&mut self) -> Result<(), CnResult> {
+    fn start_if_created(&mut self) -> Result<(), CnError> {
         if self.status == AppStatus::Created {
             self.start()?;
         }

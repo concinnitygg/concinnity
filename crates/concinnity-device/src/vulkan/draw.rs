@@ -21,20 +21,6 @@ use concinnity_core::gfx::transform::mat4_mul;
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
 pub(in crate::vulkan) use concinnity_core::render::uniforms::ViewUniforms;
 
-// One term of the Halton low-discrepancy sequence, drives the sub-pixel
-// projection jitter so successive TAA frames sample slightly different
-// positions. Mirrors `halton` in metal/draw.rs.
-fn halton(mut index: u32, base: u32) -> f32 {
-    let mut result = 0.0_f32;
-    let mut f = 1.0_f32;
-    while index > 0 {
-        f /= base as f32;
-        result += f * (index % base) as f32;
-        index /= base;
-    }
-    result
-}
-
 // Where `record_frame` records this frame's GPU work: the outer "end" command
 // buffer, the acquired swapchain image, and the frame-in-flight slot the
 // per-frame resources (query pool block, view UBO, cull buffers) index into.
@@ -636,8 +622,10 @@ impl VkContext {
             p
         } else if let Some(taa_frame) = self.taa.as_ref().map(|t| t.taa_frame) {
             let idx = taa_frame % 8 + 1;
-            let jx = (halton(idx, 2) - 0.5) * 2.0 / extent.width.max(1) as f32;
-            let jy = (halton(idx, 3) - 0.5) * 2.0 / extent.height.max(1) as f32;
+            let jx = (crate::gfx::jitter::radical_inverse(idx, 2) - 0.5) * 2.0
+                / extent.width.max(1) as f32;
+            let jy = (crate::gfx::jitter::radical_inverse(idx, 3) - 0.5) * 2.0
+                / extent.height.max(1) as f32;
             let mut p = proj;
             p[2][0] -= jx;
             p[2][1] -= jy;

@@ -741,7 +741,7 @@ fn expand_aabb(aabb: &mut Option<([f32; 3], [f32; 3])>, p: [f32; 3]) {
     }
 }
 
-// Build a Camera3D framed to look at the centre of `aabb` from slightly above
+// Build a Camera3D framed to look at the center of `aabb` from slightly above
 // and in front. Returns `None` for a degenerate (empty) scene: there is
 // nothing to frame, so the runtime falls back to whatever Camera3D the world
 // authored (or none at all).
@@ -770,7 +770,7 @@ fn framed_camera_entry(
     let distance = (radius * 1.4) / half_fov.sin();
     let height_above = radius * 0.6;
 
-    // Camera looks down -Z (yaw=0); place it on the +Z side of the centre.
+    // Camera looks down -Z (yaw=0); place it on the +Z side of the center.
     let pos = [center[0], center[1] + height_above, center[2] + distance];
     let pitch = -(height_above / distance).atan();
     // Near/far framed around the orbit distance so we don't clip the scene.

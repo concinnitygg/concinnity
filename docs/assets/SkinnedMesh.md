@@ -44,7 +44,6 @@ supply them.
 - `morph_target_names`: An array of strings. Morph-target names, one per target, in target order. Filled from the source file's target names when importing; empty for a mesh without morph targets.
 - `morph_deltas`: An array of [MorphDelta](MorphDelta.md) objects. Dense morph-target deltas, target-major: entry `t * vertex_count + v` is target `t`'s delta for vertex `v`. Length must be `morph_target_names.len() * vertices.len()`. An [Animation](Animation.md) with a `morph_track` drives the per-target weights at runtime.
 - `material`: A string. [Material](Material.md); provides the albedo texture plus lighting parameters. Optional.
-- `texture`: A string. [Texture](Texture.md) (older path); ignored when `material` is set. Optional.
 - `position`: An array of 3 floats. World-space position.
 - `rotation_deg`: An array of 3 floats. World rotation, Euler degrees [pitch, yaw, roll], YXZ order.
 - `scale`: An array of 3 floats. World scale.

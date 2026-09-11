@@ -1,17 +1,15 @@
-// src/gfx/draw_preview.rs
-//
-// Live reassignment of a placement's draw slots. A Prop's `material` and
-// `cull_distance` are read once at init: the draw list bakes the material into
-// the GPU draw object and the entity keeps only the handle, so an editor
-// changing either has nothing in the ECS the renderer re-reads. This is that
-// seam. Each function records the backend call into the frame's op queue, where
-// submission replays it before the next draw, and keeps the entity's renderer
-// component in step so the running world and its draws agree on what is bound.
-//
-// What a rebuild would show is the standard. A material the world never loaded,
-// a placement drawn from a Model (whose sub-meshes carry their own materials),
-// and a backend that bakes per-object material state at build time are all
-// refused here rather than reported as applied.
+//! Live reassignment of a placement's draw slots. A Prop's `material` and
+//! `cull_distance` are read once at init: the draw list bakes the material into
+//! the GPU draw object and the entity keeps only the handle, so an editor
+//! changing either has nothing in the ECS the renderer re-reads. This is that
+//! seam. Each function records the backend call into the frame's op queue, where
+//! submission replays it before the next draw, and keeps the entity's renderer
+//! component in step so the running world and its draws agree on what is bound.
+//!
+//! What a rebuild would show is the standard. A material the world never loaded,
+//! a placement drawn from a Model (whose sub-meshes carry their own materials),
+//! and a backend that bakes per-object material state at build time are all
+//! refused here rather than reported as applied.
 
 use crate::components::MeshRenderer;
 use crate::ecs::asset_id::AssetId;
@@ -75,7 +73,7 @@ pub fn drawn_material(world: &World, entity: Entity) -> Option<DrawMaterial> {
         Some(handle) => by_handle(world, handle),
         None => Some(DrawMaterial {
             handle: None,
-            entry: material_entry::from_texture(renderer.texture, texture_count(world)),
+            entry: material_entry::MaterialEntry::UNTEXTURED,
         }),
     }
 }

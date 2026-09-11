@@ -1,4 +1,4 @@
-// src/render_graph/barrier_place.rs
+// src/render/render_graph/barrier_place.rs
 //
 // Where a read run's `* -> Read` transition is recorded, and who relies on it.
 //

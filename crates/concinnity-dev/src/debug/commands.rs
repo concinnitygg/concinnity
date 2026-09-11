@@ -599,7 +599,7 @@ pub(super) fn handle_rebind(text: &str) -> String {
 struct DespawnCmdRequest {
     #[serde(skip)]
     _cmd: String,
-    name: String,
+    target: String,
 }
 
 // Remove an authored placement (and its descendants) live by name: enqueue a
@@ -613,15 +613,15 @@ pub(super) fn handle_despawn(text: &str) -> String {
         Ok(r) => r,
         Err(reply) => return reply,
     };
-    if req.name.trim().is_empty() {
-        return error_reply("despawn: missing 'name'");
+    if req.target.trim().is_empty() {
+        return error_reply("despawn: missing 'target'");
     }
     run_with_reply(
         "despawn",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
             super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Despawn {
-                name: req.name,
+                name: req.target,
                 reply,
             });
         },
@@ -686,7 +686,7 @@ pub(super) fn handle_story(text: &str) -> String {
 struct ReparentCmdRequest {
     #[serde(skip)]
     _cmd: String,
-    child: String,
+    target: String,
     parent: Option<String>,
 }
 
@@ -701,16 +701,16 @@ pub(super) fn handle_reparent(text: &str) -> String {
         Ok(r) => r,
         Err(reply) => return reply,
     };
-    if req.child.trim().is_empty() {
-        return error_reply("reparent: missing 'child'");
+    if req.target.trim().is_empty() {
+        return error_reply("reparent: missing 'target'");
     }
     run_with_reply(
         "reparent",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
             super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Reparent {
-                child: req.child,
-                // An empty / whitespace parent name detaches the child to a root.
+                child: req.target,
+                // An empty / whitespace parent name detaches the target to a root.
                 parent: req.parent.filter(|p| !p.trim().is_empty()),
                 reply,
             });
@@ -968,33 +968,34 @@ mod tests {
     }
 
     #[test]
-    fn despawn_request_parses_name() {
+    fn despawn_request_parses_target() {
         let req: DespawnCmdRequest =
-            serde_json::from_str(r#"{"cmd":"despawn","name":"crate_a"}"#).expect("valid parses");
-        assert_eq!(req.name, "crate_a");
+            serde_json::from_str(r#"{"cmd":"despawn","target":"crate_a"}"#).expect("valid parses");
+        assert_eq!(req.target, "crate_a");
     }
 
     #[test]
-    fn despawn_request_defaults_to_empty_name() {
+    fn despawn_request_defaults_to_an_empty_target() {
         let req: DespawnCmdRequest =
             serde_json::from_str(r#"{"cmd":"despawn"}"#).expect("bare command parses");
-        assert!(req.name.is_empty());
+        assert!(req.target.is_empty());
     }
 
     #[test]
-    fn reparent_request_parses_child_and_parent() {
+    fn reparent_request_parses_target_and_parent() {
         let req: ReparentCmdRequest =
-            serde_json::from_str(r#"{"cmd":"reparent","child":"box_a","parent":"frame"}"#)
+            serde_json::from_str(r#"{"cmd":"reparent","target":"box_a","parent":"frame"}"#)
                 .expect("valid parses");
-        assert_eq!(req.child, "box_a");
+        assert_eq!(req.target, "box_a");
         assert_eq!(req.parent.as_deref(), Some("frame"));
     }
 
     #[test]
     fn reparent_request_parent_optional() {
-        let req: ReparentCmdRequest = serde_json::from_str(r#"{"cmd":"reparent","child":"box_a"}"#)
-            .expect("bare parent parses");
-        assert_eq!(req.child, "box_a");
+        let req: ReparentCmdRequest =
+            serde_json::from_str(r#"{"cmd":"reparent","target":"box_a"}"#)
+                .expect("bare parent parses");
+        assert_eq!(req.target, "box_a");
         assert!(req.parent.is_none());
     }
 
@@ -1218,9 +1219,9 @@ mod tests {
     }
 
     #[test]
-    fn despawn_requires_a_name() {
-        assert_err_reply(&handle_despawn("{}"), "missing 'name'");
-        assert_err_reply(&handle_despawn(r#"{"name":"  "}"#), "missing 'name'");
+    fn despawn_requires_a_target() {
+        assert_err_reply(&handle_despawn("{}"), "missing 'target'");
+        assert_err_reply(&handle_despawn(r#"{"target":"  "}"#), "missing 'target'");
     }
 
     #[test]
@@ -1242,9 +1243,9 @@ mod tests {
     }
 
     #[test]
-    fn reparent_requires_a_child() {
-        assert_err_reply(&handle_reparent("{}"), "missing 'child'");
-        assert_err_reply(&handle_reparent(r#"{"child":" "}"#), "missing 'child'");
+    fn reparent_requires_a_target() {
+        assert_err_reply(&handle_reparent("{}"), "missing 'target'");
+        assert_err_reply(&handle_reparent(r#"{"target":" "}"#), "missing 'target'");
     }
 
     #[test]
@@ -1413,8 +1414,11 @@ mod tests {
                 "rebind",
                 Box::new(|| handle_rebind(r#"{"setting":"key_forward","key":"W"}"#)),
             ),
-            ("despawn", Box::new(|| handle_despawn(r#"{"name":"x"}"#))),
-            ("reparent", Box::new(|| handle_reparent(r#"{"child":"x"}"#))),
+            ("despawn", Box::new(|| handle_despawn(r#"{"target":"x"}"#))),
+            (
+                "reparent",
+                Box::new(|| handle_reparent(r#"{"target":"x"}"#)),
+            ),
             (
                 "spawn",
                 Box::new(|| handle_spawn(r#"{"template":"t","name":"n"}"#)),
@@ -1466,11 +1470,11 @@ mod tests {
             ),
             (
                 "despawn",
-                std::thread::spawn(|| handle_despawn(r#"{"name":"x"}"#)),
+                std::thread::spawn(|| handle_despawn(r#"{"target":"x"}"#)),
             ),
             (
                 "reparent",
-                std::thread::spawn(|| handle_reparent(r#"{"child":"x"}"#)),
+                std::thread::spawn(|| handle_reparent(r#"{"target":"x"}"#)),
             ),
             (
                 "spawn",
@@ -1690,10 +1694,10 @@ mod tests {
     }
 
     #[test]
-    fn despawn_round_trips_the_name() {
+    fn despawn_round_trips_the_target() {
         let _guard = test_support::lock();
         let reply = drive_runtime_handler(
-            || handle_despawn(r#"{"name":"crate_a"}"#),
+            || handle_despawn(r#"{"target":"crate_a"}"#),
             |cmd| match cmd {
                 RuntimeCommand::Despawn { name, reply } => {
                     assert_eq!(name, "crate_a");
@@ -1768,7 +1772,7 @@ mod tests {
     fn reparent_filters_a_whitespace_parent_to_detach() {
         let _guard = test_support::lock();
         let reply = drive_runtime_handler(
-            || handle_reparent(r#"{"child":"box_a","parent":"  "}"#),
+            || handle_reparent(r#"{"target":"box_a","parent":"  "}"#),
             |cmd| match cmd {
                 RuntimeCommand::Reparent {
                     child,
@@ -1790,7 +1794,7 @@ mod tests {
     fn reparent_keeps_a_real_parent() {
         let _guard = test_support::lock();
         let reply = drive_runtime_handler(
-            || handle_reparent(r#"{"child":"box_a","parent":"frame"}"#),
+            || handle_reparent(r#"{"target":"box_a","parent":"frame"}"#),
             |cmd| match cmd {
                 RuntimeCommand::Reparent { parent, reply, .. } => {
                     assert_eq!(parent.as_deref(), Some("frame"));

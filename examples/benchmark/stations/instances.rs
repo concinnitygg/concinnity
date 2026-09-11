@@ -23,7 +23,7 @@ pub(crate) const fn count() -> usize {
 }
 
 /// Declare the lattice.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "instances_mesh",
         ProceduralMesh {
@@ -41,9 +41,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
             for z in 0..LATTICE[2] {
                 instances.push(InstanceTransform {
                     position: [
-                        centre[0] + spread(x, LATTICE[0], SPACING),
+                        center[0] + spread(x, LATTICE[0], SPACING),
                         BASE_HEIGHT + y as f32 * SPACING,
-                        centre[2] + spread(z, LATTICE[2], SPACING),
+                        center[2] + spread(z, LATTICE[2], SPACING),
                     ],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],

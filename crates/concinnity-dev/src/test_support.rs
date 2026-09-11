@@ -45,3 +45,34 @@ pub(crate) fn isolate_state_dir() {
         )),
     );
 }
+
+// A world carrying the editor's injected HUD assets: one blank `Sprite` per
+// sprite id, one blank `TextLabel` per label id, and one blank `TextInput` per
+// field id. Panels that declare no text fields pass an empty `fields` slice.
+pub(crate) fn injected_world(
+    sprites: &[crate::ecs::asset_id::AssetId],
+    labels: &[crate::ecs::asset_id::AssetId],
+    fields: &[crate::ecs::asset_id::AssetId],
+) -> crate::ecs::World {
+    use crate::components::{Sprite, TextInput, TextLabel};
+    let mut world = crate::ecs::World::new();
+    for &id in sprites {
+        world.add_component(Sprite {
+            asset_id: id,
+            ..Default::default()
+        });
+    }
+    for &id in labels {
+        world.add_component(TextLabel {
+            asset_id: id,
+            ..Default::default()
+        });
+    }
+    for &id in fields {
+        world.add_component(TextInput {
+            asset_id: id,
+            ..Default::default()
+        });
+    }
+    world
+}

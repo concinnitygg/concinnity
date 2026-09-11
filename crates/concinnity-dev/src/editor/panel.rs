@@ -845,7 +845,7 @@ fn place_eye(world: &mut World, region: [f32; 4], slot: usize, hidden: bool) {
         );
         widget::set_sprite_visible(world, eye_pupil(slot), false);
     } else {
-        // Open: a stadium lens outline with a filled pupil at its centre.
+        // Open: a stadium lens outline with a filled pupil at its center.
         let h = 8.5;
         place_ring(
             world,
@@ -1288,26 +1288,7 @@ mod tests {
 
     // A world with every panel element injected (hidden), for driving `apply`.
     fn injected_world() -> World {
-        let mut world = World::new();
-        for id in all_sprite_ids() {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        for id in all_label_ids() {
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        for id in all_field_ids() {
-            world.add_component(TextInput {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        world
+        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {

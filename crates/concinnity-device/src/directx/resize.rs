@@ -270,14 +270,14 @@ impl DxContext {
         // bloom chain takes its pooled `mips[0]` and SSAO re-points its
         // `ao_output` RTV/SRV from it. The device is idle at the top of resize,
         // so dropping the old placed resources + heaps is sound.
-        let ssao_on = self.ssao.resources.is_some();
-        let gbuffer_on = self.gbuffer.is_some();
+        let ssao_enabled = self.ssao.resources.is_some();
+        let gbuffer_enabled = self.gbuffer.is_some();
         self.transient_pool.rebuild(
             &self.device,
             &self.command_queue,
             &super::transient_pool::transient_slots(
-                ssao_on,
-                gbuffer_on,
+                ssao_enabled,
+                gbuffer_enabled,
                 (render_w, render_h),
                 (new_w, new_h),
             )?,

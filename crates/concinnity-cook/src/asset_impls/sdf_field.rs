@@ -51,7 +51,7 @@ pub(super) fn compile(
         platform,
         volumetric,
         cast_shadows,
-        crate::slangc_gate::slangc_available(),
+        concinnity_slang::slangc_available(),
     )
 }
 

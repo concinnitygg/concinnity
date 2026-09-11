@@ -39,20 +39,6 @@ use concinnity_core::render::post::device::PostExtent;
 
 use crate::metal::post::post_device::MtlPostDevice;
 
-// One term of the Halton low-discrepancy sequence. Used to drive the
-// sub-pixel projection jitter so successive frames sample slightly different
-// positions for the TAA pass to accumulate.
-fn halton(mut index: u32, base: u32) -> f32 {
-    let mut f = 1.0f32;
-    let mut r = 0.0f32;
-    while index > 0 {
-        f /= base as f32;
-        r += f * (index % base) as f32;
-        index /= base;
-    }
-    r
-}
-
 impl MtlContext {
     // Pump the NSEvent queue and encode one frame to the GPU.
     //
@@ -342,8 +328,8 @@ impl MtlContext {
         let needs_jitter = self.taa.enabled || self.upscale.scaler.is_some();
         let proj_render = if needs_jitter {
             let idx = self.taa.frame % 8 + 1;
-            let jx_pix = halton(idx, 2) - 0.5;
-            let jy_pix = halton(idx, 3) - 0.5;
+            let jx_pix = crate::gfx::jitter::radical_inverse(idx, 2) - 0.5;
+            let jy_pix = crate::gfx::jitter::radical_inverse(idx, 3) - 0.5;
             let jx = jx_pix * 2.0 / render_w as f32;
             let jy = jy_pix * 2.0 / render_h as f32;
             if self.upscale.scaler.is_some() {

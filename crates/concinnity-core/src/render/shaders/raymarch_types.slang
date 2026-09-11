@@ -38,10 +38,10 @@ float sdf_param(SdfParams p, uint i) { return p.vals[i / 4u][i % 4u]; }
 // Each (float3, pad) pair is spelled as one float4 lane: Metal sizes a float3
 // at 16 bytes in a constant buffer where SPIR-V and DXIL size it at 12, so a
 // literal transcription puts every field after the first pair four bytes late
-// on Metal alone. `centre` and `extent` are the xyz of their lane.
+// on Metal alone. `center` and `extent` are the xyz of their lane.
 struct SdfVolumeUniforms
 {
-    float4 centre;
+    float4 center;
     float4 extent;
     // 1 / max_gradient; the cone-step scale factor in `cone_raymarch`.
     float cone_ratio;

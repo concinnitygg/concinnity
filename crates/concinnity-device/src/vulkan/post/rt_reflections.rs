@@ -1195,7 +1195,7 @@ mod tests {
     // `rt_params_layout_*` / `rt_geom_entry_*` tests in gfx::render_types.
     #[test]
     fn rt_reflections_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         // Both the ceiling and a device-shortened probe cube array must compile.

@@ -17,8 +17,7 @@ Rotation notes:
 
 - `model`: A string. A [Model](Model.md) asset. When set, the prop renders all sub-meshes of that model (each with its own material) sharing this prop's transform. Takes precedence over `mesh` and `material`. Optional.
 - `mesh`: A string. A [Mesh](Mesh.md) or [ProceduralMesh](ProceduralMesh.md) asset this prop renders. Used when `model` is unset.
-- `material`: A string. A [Material](Material.md) to use for this prop. When set it takes precedence over `texture` and provides the albedo texture plus the lighting parameters (roughness, metallic, tint, emissive). Used when `model` is unset.
-- `texture`: A string. A [Texture](Texture.md) to use for this prop. Older field: ignored when `material` is set. Unset uses the first declared texture (or a white fallback).
+- `material`: A string. A [Material](Material.md) to use for this prop: the albedo texture plus the lighting parameters (roughness, metallic, tint, emissive). Used when `model` is unset.
 - `position`: An array of 3 floats. World-space position [x, y, z]. Defaults to `[0.0, 0.0, 0.0]`.
 - `rotation_deg`: An array of 3 floats. Euler rotation in degrees [pitch, yaw, roll], applied in YXZ order (yaw first so that rotating around the vertical axis is intuitive). Defaults to `[0.0, 0.0, 0.0]`.
 - `scale`: An array of 3 floats. Non-uniform scale [x, y, z]. Defaults to [1, 1, 1].

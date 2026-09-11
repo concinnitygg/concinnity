@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 
 pub use concinnity_core::blob::{BLOB_MAGIC, HEADER_SIZE, WorldManifest};
 use concinnity_core::blob::{BlobError, parse_cnb, parse_payload_section_start, payload_section};
-use concinnity_core::result::CnResult;
+use concinnity_core::error::CnError;
 
 mod data;
 
@@ -72,7 +72,7 @@ fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
 
 /// Read and deserialize a blob's metadata section (component defs + resource
 /// records). Returns (meta, payload_start_offset).
-pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnResult> {
+pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnError> {
     let data = read_file(path)?;
     parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data).map_err(|e| report(path, e))
 }
@@ -82,35 +82,35 @@ pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnResult> {
 /// `PayloadLocator` offset into an absolute file offset.
 /// Used only by the Metal-driven disk-backed streaming source for now
 /// (Vulkan/DirectX streaming catch-up is a follow-up).
-pub fn payload_section_start(path: &str) -> Result<u64, CnResult> {
+pub fn payload_section_start(path: &str) -> Result<u64, CnError> {
     let mut file = fs::File::open(path).map_err(|e| {
         tracing::error!("Failed to open {}: {}", path, e);
-        CnResult::FileIo
+        CnError::FileIo
     })?;
     let mut header = [0u8; HEADER_SIZE];
     file.read_exact(&mut header).map_err(|e| {
         tracing::error!("Failed to read header of {}: {}", path, e);
-        CnResult::FileIo
+        CnError::FileIo
     })?;
     parse_payload_section_start::<BlobMeta>(&header).map_err(|e| report(path, e))
 }
 
 // Read just the payload section of a blob file into memory.
-fn read_payload_section(path: &str) -> Result<Vec<u8>, CnResult> {
+fn read_payload_section(path: &str) -> Result<Vec<u8>, CnError> {
     let data = read_file(path)?;
     Ok(payload_section(&data).to_vec())
 }
 
-fn read_file(path: &str) -> Result<Vec<u8>, CnResult> {
+fn read_file(path: &str) -> Result<Vec<u8>, CnError> {
     fs::read(path).map_err(|e| {
         tracing::error!("Failed to read {}: {}", path, e);
-        CnResult::FileIo
+        CnError::FileIo
     })
 }
 
 // Log a format failure against the file it came from. The format crate has no
 // path to name, so the diagnostic belongs here.
-fn report(path: &str, e: BlobError) -> CnResult {
+fn report(path: &str, e: BlobError) -> CnError {
     match e {
         BlobError::TooShort => tracing::error!("{}: file too short", path),
         BlobError::BadMagic => tracing::error!("{}: bad magic", path),
@@ -127,7 +127,7 @@ fn report(path: &str, e: BlobError) -> CnResult {
         ),
         BlobError::Encode => tracing::error!("{}: failed to serialize metadata", path),
     }
-    CnResult::FileIo
+    CnError::FileIo
 }
 
 /// Load the blob file at `primary` and the payload store around it, anchoring
@@ -141,7 +141,7 @@ fn report(path: &str, e: BlobError) -> CnResult {
 /// each from disk the first time a locator needs it. Defs are not resolved into
 /// runtime `Asset`s: that resolution depends on the client runtime registry, so
 /// it lives in the client `blob::load` shim.
-pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnResult> {
+pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnError> {
     anchor(primary);
     load_raw_from(blob_path)
 }
@@ -150,8 +150,8 @@ pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnResult> {
 // exercised without the process-global data-dir anchor.
 fn load_raw_from(
     blob_path: impl Fn(u32) -> Option<String>,
-) -> Result<(BlobMeta, BlobData), CnResult> {
-    let (meta, _payload_start) = read_cnb(&blob_path(0).ok_or(CnResult::NoStateRoot)?)?;
+) -> Result<(BlobMeta, BlobData), CnError> {
+    let (meta, _payload_start) = read_cnb(&blob_path(0).ok_or(CnError::NoStateRoot)?)?;
 
     // Cook derives the manifest from the very streams it summarizes, so a
     // mismatch means a corrupt or hand-edited blob.
@@ -161,10 +161,10 @@ fn load_raw_from(
         "blob manifest does not match its record streams"
     );
 
-    let blob0_payload = read_payload_section(&blob_path(0).ok_or(CnResult::NoStateRoot)?)?;
+    let blob0_payload = read_payload_section(&blob_path(0).ok_or(CnError::NoStateRoot)?)?;
     tracing::debug!("Loaded blob 0 payload ({} bytes)", blob0_payload.len());
     let overflow_paths = (1..=meta.manifest.max_blob_index)
-        .map(|i| blob_path(i).ok_or(CnResult::NoStateRoot))
+        .map(|i| blob_path(i).ok_or(CnError::NoStateRoot))
         .collect::<Result<Vec<_>, _>>()?;
 
     let blob_data = BlobData::from_blob_files(blob0_payload, overflow_paths);
@@ -224,10 +224,10 @@ mod tests {
 
     #[test]
     fn format_failures_fold_onto_file_io() {
-        assert_eq!(report("x.cnb", BlobError::BadMagic), CnResult::FileIo);
+        assert_eq!(report("x.cnb", BlobError::BadMagic), CnError::FileIo);
         assert_eq!(
             report("x.cnb", BlobError::ValidityMismatch(99)),
-            CnResult::FileIo
+            CnError::FileIo
         );
     }
 
@@ -235,7 +235,7 @@ mod tests {
     fn read_cnb_errors_on_a_missing_file() {
         assert_eq!(
             read_cnb("/nonexistent/cn/blob/path.cnb"),
-            Err(CnResult::FileIo)
+            Err(CnError::FileIo)
         );
     }
 
@@ -263,12 +263,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad").to_string_lossy().into_owned();
         std::fs::write(&path, vec![0u8; HEADER_SIZE]).unwrap();
-        assert_eq!(payload_section_start(&path), Err(CnResult::FileIo));
+        assert_eq!(payload_section_start(&path), Err(CnError::FileIo));
     }
 
     #[test]
     fn load_raw_reads_blob0_eagerly_and_defers_overflow() {
-        use concinnity_core::ecs::{AssetKind, PayloadLocator};
+        use concinnity_core::ecs::PayloadLocator;
 
         let dir = tempfile::tempdir().unwrap();
         let path_for = |idx: u32| {
@@ -285,7 +285,6 @@ mod tests {
         // `max_blob_index` to name the overflow file.
         let defs = vec![BlobAssetDef {
             name: None,
-            kind: AssetKind::Component,
             discriminant: 1,
             args_bytes: Vec::new(),
             payload: Some(PayloadLocator {
@@ -330,6 +329,6 @@ mod tests {
     // it has to name itself rather than folding onto a file-not-found.
     #[test]
     fn load_raw_without_a_layout_reports_no_state_root() {
-        assert_eq!(load_raw_from(|_| None).err(), Some(CnResult::NoStateRoot));
+        assert_eq!(load_raw_from(|_| None).err(), Some(CnError::NoStateRoot));
     }
 }

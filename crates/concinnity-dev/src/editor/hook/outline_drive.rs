@@ -169,10 +169,10 @@ fn push_rect_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     let Some(light) = ctx.world.get::<RectAreaLight>(ctx.entity) else {
         return;
     };
-    let centre = anchored_position(ctx.world, ctx.entity, light.centre);
+    let center = anchored_position(ctx.world, ctx.entity, light.center);
     shapes::push_rect(
         out,
-        centre,
+        center,
         light.unit_normal(),
         light.half_size,
         light.range,

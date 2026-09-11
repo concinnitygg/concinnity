@@ -33,7 +33,7 @@ pub(crate) struct Station {
 
 /// The corridor, station by station, in the order the camera meets them.
 ///
-/// Every station stands on the centre line. The camera reaches each one along
+/// Every station stands on the center line. The camera reaches each one along
 /// a half circle of that station's own radius, and the half circles alternate
 /// sides, so consecutive ones meet where their shared tangent is and the path
 /// runs on without a straight stretch between them.
@@ -88,7 +88,7 @@ pub(crate) const STATIONS: &[Station] = &[
     },
 ];
 
-/// Where the camera's path begins, on the centre line ahead of the first
+/// Where the camera's path begins, on the center line ahead of the first
 /// station.
 pub(crate) const START_Z: f32 = 0.0;
 
@@ -96,7 +96,7 @@ pub(crate) const START_Z: f32 = 0.0;
 ///
 /// Each one sits its own radius plus its neighbour's behind the last, which is
 /// the spacing that makes their half circles meet.
-pub(crate) fn centre(index: usize) -> [f32; 3] {
+pub(crate) fn center(index: usize) -> [f32; 3] {
     let mut z = START_Z;
     for (i, station) in STATIONS.iter().enumerate().take(index + 1) {
         z -= station.radius;
@@ -107,7 +107,7 @@ pub(crate) fn centre(index: usize) -> [f32; 3] {
     [0.0, 0.0, z]
 }
 
-/// Which side of the centre line station `index` is circled on: `1` bulges
+/// Which side of the center line station `index` is circled on: `1` bulges
 /// toward +X and `-1` toward -X. They alternate, which is what makes one half
 /// circle leave along the tangent the next arrives on.
 pub(crate) fn side(index: usize) -> f32 {
@@ -117,14 +117,14 @@ pub(crate) fn side(index: usize) -> f32 {
 /// How far along -Z the path reaches, past the last station.
 pub(crate) fn corridor_end() -> f32 {
     let last = STATIONS.len() - 1;
-    centre(last)[2] - STATIONS[last].radius
+    center(last)[2] - STATIONS[last].radius
 }
 
 /// Declare the corridor everything stands on, then every station on it.
 pub(crate) fn declare_all(world: &mut WorldBuilder) {
     ground::declare(world);
     for (index, station) in STATIONS.iter().enumerate() {
-        (station.declare)(world, centre(index));
+        (station.declare)(world, center(index));
     }
 }
 
@@ -152,7 +152,7 @@ mod tests {
     fn the_stations_stand_in_path_order_down_the_corridor() {
         for index in 1..STATIONS.len() {
             assert!(
-                centre(index)[2] < centre(index - 1)[2],
+                center(index)[2] < center(index - 1)[2],
                 "{} stands ahead of {}",
                 STATIONS[index].segment,
                 STATIONS[index - 1].segment,
@@ -166,8 +166,8 @@ mod tests {
     #[test]
     fn each_half_circle_ends_where_the_next_one_begins() {
         for index in 1..STATIONS.len() {
-            let leaving = centre(index - 1)[2] - STATIONS[index - 1].radius;
-            let arriving = centre(index)[2] + STATIONS[index].radius;
+            let leaving = center(index - 1)[2] - STATIONS[index - 1].radius;
+            let arriving = center(index)[2] + STATIONS[index].radius;
             assert!(
                 (leaving - arriving).abs() < 1e-3,
                 "{} leaves at {leaving} and {} begins at {arriving}",
@@ -175,7 +175,7 @@ mod tests {
                 STATIONS[index].segment,
             );
         }
-        assert!((centre(0)[2] + STATIONS[0].radius - START_Z).abs() < 1e-3);
+        assert!((center(0)[2] + STATIONS[0].radius - START_Z).abs() < 1e-3);
     }
 
     // The sides alternate, which is what makes the tangent continuous where two

@@ -113,9 +113,9 @@ struct WaterWave
 // cannot desynchronise them from the CPU struct.
 struct WaterParams
 {
-    float4 centre;         // world-space surface centre
-    float4 deep_colour;    // linear RGB at full column depth
-    float4 shallow_colour; // linear RGB at the shore
+    float4 center;         // world-space surface center
+    float4 deep_color;    // linear RGB at full column depth
+    float4 shallow_color; // linear RGB at the shore
     float depth_falloff;
     float foam_width;
     float foam_intensity;
@@ -407,10 +407,10 @@ WaterPoint gerstner_displace(float2 rest_xz, float time)
 WaterVertexOut water_vertex(WaterVertexIn v)
 {
     // The grid is built centred on the origin in the XZ plane, so the surface
-    // centre rides in through the params rather than the vertex buffer.
-    float2 rest_xz = float2(v.pos.x + params.centre.x, v.pos.z + params.centre.z);
+    // center rides in through the params rather than the vertex buffer.
+    float2 rest_xz = float2(v.pos.x + params.center.x, v.pos.z + params.center.z);
     WaterPoint p = gerstner_displace(rest_xz, view.time);
-    p.pos.y += params.centre.y;
+    p.pos.y += params.center.y;
 
     WaterVertexOut o;
     o.world_pos = p.pos;
@@ -481,8 +481,8 @@ WaterSurfacePoint water_surface(WaterVertexOut i)
 
     // Tint: exponential shallow to deep blend over `depth_falloff` metres.
     float depth_t = 1.0 - exp(-water_depth / max(params.depth_falloff, 1e-3));
-    float3 tinted = lerp(params.shallow_colour.rgb, params.deep_colour.rgb, depth_t);
-    float3 below = lerp(refracted * params.shallow_colour.rgb, tinted, depth_t);
+    float3 tinted = lerp(params.shallow_color.rgb, params.deep_color.rgb, depth_t);
+    float3 below = lerp(refracted * params.shallow_color.rgb, tinted, depth_t);
 
     // Foam: a soft band where the seabed is just below the surface, which is
     // both the shoreline and any intersection line with standing geometry.

@@ -1025,7 +1025,7 @@ impl Simulation {
     }
 
     #[cfg(test)]
-    /// Apply an impulse through a body's centre of mass, waking it.
+    /// Apply an impulse through a body's center of mass, waking it.
     pub(crate) fn apply_impulse(&mut self, handle: BodyHandle, impulse: [f32; 3]) {
         if let Some(body) = self.bodies.get_mut(pool_handle(handle)) {
             body.linear_velocity += Vec3::from_array(impulse) * body.inv_mass;
@@ -1515,8 +1515,8 @@ mod tests {
             .shape_cast(&ShapeCast::new(capsule, [0.0, 4.0, 0.0], [0.0, -8.0, 0.0]))
             .expect("the floor is down there");
 
-        // The capsule reaches 0.9 below its centre, so it stops with its
-        // centre 0.9 above the floor.
+        // The capsule reaches 0.9 below its center, so it stops with its
+        // center 0.9 above the floor.
         let landed = 4.0 - hit.toi * 8.0;
         assert!((landed - 0.9).abs() < 0.01, "landed at {landed}");
         assert!(hit.normal[1] > 0.99, "standing on it: {:?}", hit.normal);

@@ -18,7 +18,7 @@
 //     36 indices, allocated once at init. The encoder draws back faces
 //     only (cull mode = Front) so we get exactly one fragment per pixel
 //     inside the box regardless of camera position.
-//   * Per-volume `SdfVolumeUniforms` cbuffer (static: `centre`, `extent`,
+//   * Per-volume `SdfVolumeUniforms` cbuffer (static: `center`, `extent`,
 //     `params`, ... don't change frame-to-frame) allocated once at init.
 //   * Per-frame `RaymarchView` cbuffer ring (triple-buffered).
 //   * Colour attachment = `hdr_resolve` (LOAD, opaque write). Depth
@@ -72,7 +72,7 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
-        centre: v.centre,
+        center: v.center,
         _pad0: 0.0,
         extent: v.extent,
         _pad1: 0.0,
@@ -96,7 +96,7 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     // preserved for future runtime mutation).
     pub(in crate::directx) shadow_pso: Option<ID3D12PipelineState>,
     // Per-volume cbuffer (CPU-visible upload heap, written once at build
-    // time and never modified: the asset's centre / extent / params are
+    // time and never modified: the asset's center / extent / params are
     // static). Held because `volume_cbuffer_gva` below is only valid while
     // this buffer is alive.
     #[expect(
@@ -1063,7 +1063,7 @@ impl RaymarchResources {
             } else {
                 None
             };
-            // Per-volume cbuffer (static: `centre`, `extent`,
+            // Per-volume cbuffer (static: `center`, `extent`,
             // `params` don't change frame-to-frame).
             let uniforms = volume_uniforms_from(vol);
             let cb_size = align256(std::mem::size_of::<RaymarchVolumeUniforms>() as u64);

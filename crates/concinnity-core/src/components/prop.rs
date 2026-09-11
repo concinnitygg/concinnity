@@ -2,12 +2,10 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
-use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
-use crate::ecs::de_opt_texture_handle;
 use alloc::string::{String, ToString};
 
 /// Collision volume attached to a [Prop](#prop).
@@ -78,17 +76,11 @@ pub struct Prop {
     /// renders. Used when `model` is unset.
     #[serde(deserialize_with = "de_opt_mesh_handle")]
     pub mesh: Option<MeshHandle>,
-    /// A [Material](#material) to use for this prop. When set it takes
-    /// precedence over `texture` and provides the albedo texture plus the
-    /// lighting parameters (roughness, metallic, tint, emissive). Used when
+    /// A [Material](#material) to use for this prop: the albedo texture plus
+    /// the lighting parameters (roughness, metallic, tint, emissive). Used when
     /// `model` is unset.
     #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
-    /// A [Texture](#texture) to use for this prop. Older field: ignored when
-    /// `material` is set. Unset uses the first declared texture (or a white
-    /// fallback).
-    #[serde(deserialize_with = "de_opt_texture_handle")]
-    pub texture: Option<TextureHandle>,
     /// World-space position [x, y, z].
     pub position: [f32; 3],
     /// Euler rotation in degrees [pitch, yaw, roll], applied in YXZ order
@@ -140,7 +132,6 @@ impl Default for Prop {
             model: None,
             mesh: None,
             material: None,
-            texture: None,
             position: [0.0, 0.0, 0.0],
             rotation_deg: [0.0, 0.0, 0.0],
             scale: [1.0, 1.0, 1.0],
@@ -185,7 +176,6 @@ mod tests {
         assert!(p.model.is_none());
         assert!(p.mesh.is_none());
         assert!(p.material.is_none());
-        assert!(p.texture.is_none());
         assert!(p.parent.is_none());
         assert!(p.scene.is_none());
     }
@@ -194,15 +184,13 @@ mod tests {
     fn every_reference_resolves_through_its_own_seam() {
         crate::test_support::install_resolvers();
         let p: Prop = serde_json::from_str(
-            r#"{"model":"crate_model","mesh":"crate_mesh","material":"wood","texture":"tex_wood",
-                "parent":"shelf","scene":"vault"}"#,
+            r#"{"model":"crate_model","mesh":"crate_mesh","material":"wood","parent":"shelf","scene":"vault"}"#,
         )
         .unwrap();
         // A Model is still an interned name; the resource kinds are handles.
         assert_eq!(p.model, Some(AssetId(11)));
         assert_eq!(p.mesh, Some(MeshHandle(10)));
         assert_eq!(p.material, Some(MaterialHandle(4)));
-        assert_eq!(p.texture, Some(TextureHandle(8)));
         assert_eq!(p.parent, Some(AssetId(5)));
         assert_eq!(p.scene, Some(AssetId(5)));
     }

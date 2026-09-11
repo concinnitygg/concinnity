@@ -83,7 +83,7 @@ struct TransparentView
 // cannot desynchronise them from the CPU struct.
 struct GlassParams
 {
-    float4 centre; // world-space pane centre
+    float4 center; // world-space pane center
     float4 normal; // unit pane normal (facing direction)
     float4 tint;   // colour multiplied into the refracted scene
     float opacity;

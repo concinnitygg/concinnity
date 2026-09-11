@@ -369,17 +369,17 @@ mod tests {
             Vec3::ZERO,
         )
         .expect("a hit");
-        // The ball's centre at contact is 0.5 out from the box's corner.
-        let centre = vec3(-6.0, 6.0, 0.0) + vec3(6.0, -6.0, 0.0) * hit.toi;
+        // The ball's center at contact is 0.5 out from the box's corner.
+        let center = vec3(-6.0, 6.0, 0.0) + vec3(6.0, -6.0, 0.0) * hit.toi;
         let corner = vec3(-0.5, 0.5, 0.0);
-        assert!(((centre - corner).length() - 0.5).abs() < 1.0e-2, "{hit:?}");
+        assert!(((center - corner).length() - 0.5).abs() < 1.0e-2, "{hit:?}");
     }
 
     // The depth is what a caller separating from a surface it started inside
     // moves by, so it has to be the real overlap and not the touch tolerance.
     #[test]
     fn a_sweep_reports_how_far_it_has_to_move_to_be_clear() {
-        // Ball radius 0.5 with its centre 0.4 from the wall face: 0.1 in.
+        // Ball radius 0.5 with its center 0.4 from the wall face: 0.1 in.
         let inside = run(
             &BALL,
             vec3(0.0, 0.0, -0.9),

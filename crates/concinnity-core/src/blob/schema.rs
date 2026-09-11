@@ -14,8 +14,6 @@ pub struct BlobAssetDef {
     /// The asset's interned identity. `None` for unnamed runtime-only assets.
     /// Injected into the component at load time via `Component::inject_name`.
     pub name: Option<AssetId>,
-    /// The record's asset kind. Always [`AssetKind::Component`].
-    pub kind: AssetKind,
     /// The component type's registry tag.
     pub discriminant: u8,
     /// The serialized runtime component (cook already ran the asset -> component
@@ -25,15 +23,6 @@ pub struct BlobAssetDef {
     pub args_bytes: Vec<u8>,
     /// Where the component's compiled payload lives, when it has one.
     pub payload: Option<PayloadLocator>,
-}
-
-/// The blob carries only components: every system is internal client code,
-/// constructed at runtime from world content, never serialized. This kind is
-/// kept as the single discriminator the blob format records per asset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum AssetKind {
-    /// A runtime component.
-    Component,
 }
 
 /// The kinds of resource the runtime keeps in per-kind tables, one dense handle
@@ -220,7 +209,6 @@ mod tests {
     fn sample_meta() -> BlobMeta {
         let defs = vec![BlobAssetDef {
             name: Some(AssetId(3)),
-            kind: AssetKind::Component,
             discriminant: 42,
             args_bytes: vec![9, 8, 7],
             payload: Some(PayloadLocator {
@@ -308,7 +296,6 @@ mod tests {
     fn manifest_derives_counts_and_max_blob_index() {
         let def = |disc: u8, blob_index: u32| BlobAssetDef {
             name: None,
-            kind: AssetKind::Component,
             discriminant: disc,
             args_bytes: Vec::new(),
             payload: Some(PayloadLocator {

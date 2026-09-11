@@ -31,7 +31,7 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             sun_color,
         })),
         everywhere(mirror!(GlassParams => "GlassParams" {
-            centre,
+            center,
             normal,
             tint,
             opacity,
@@ -87,9 +87,9 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
         })),
         everywhere(mirror!(WaterWaveGpu => "WaterWave" { dir_amp_wave, speed_steep_pad, })),
         everywhere(mirror!(WaterParams => "WaterParams" {
-            centre,
-            deep_colour,
-            shallow_colour,
+            center,
+            deep_color,
+            shallow_color,
             depth_falloff,
             foam_width,
             foam_intensity,

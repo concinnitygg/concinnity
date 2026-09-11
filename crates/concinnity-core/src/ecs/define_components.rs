@@ -158,7 +158,7 @@ macro_rules! define_components {
             /// deserialize the runtime component via `Component::from_baked`
             /// (every record is baked -- cook already ran the asset -> component
             /// translation).
-            pub fn from_baked(def: &BlobAssetDef) -> Result<Self, CnResult> {
+            pub fn from_baked(def: &BlobAssetDef) -> Result<Self, CnError> {
                 $(
                     if def.discriminant == ComponentTag::$variant as u8 {
                         let mut c = <$ty as Component>::from_baked(&def.args_bytes)?;
@@ -168,7 +168,7 @@ macro_rules! define_components {
                         return Ok(ComponentAsset::$variant(c));
                     }
                 )+
-                Err(CnResult::AssetInvalidType)
+                Err(CnError::AssetInvalidType)
             }
 
             /// Inject a payload locator into the component after construction.

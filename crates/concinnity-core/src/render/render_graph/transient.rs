@@ -1,4 +1,4 @@
-// src/render_graph/transient.rs
+// src/render/render_graph/transient.rs
 //
 // The slot list a backend's transient pool is built from, and the check that
 // keeps that list sound.

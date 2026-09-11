@@ -354,7 +354,7 @@ pub(super) struct RaymarchState {
     // One GPU record per `SdfVolume` asset: the per-volume render pipeline
     // (compiled lazily at init from the user's fragment shader source + the
     // engine-shipped helpers/template) plus the static per-volume uniforms
-    // (centre, extent, params, ...). Drives the pass at `PassId::Raymarch`.
+    // (center, extent, params, ...). Drives the pass at `PassId::Raymarch`.
     pub volumes: Vec<super::raymarch::RaymarchVolumeRecord>,
     // Shared unit-cube proxy geometry (8 vertices, 36 indices). `Some` whenever
     // any `SdfVolume` exists in the world; the encoder reads them per-frame and

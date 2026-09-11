@@ -74,7 +74,7 @@ const CUBE_LAYERS: [AssetId; 3] = [AssetId(2), AssetId(3), AssetId(4)];
 // degree of eye level: the stars meet their reflections on that line too.
 const WATER_HALF_EXTENT: f32 = 459.0;
 // The fixed viewpoint: on the cube, tipped down just far enough that the
-// horizon sits a little above the frame's centre, with sky over it. The far
+// horizon sits a little above the frame's center, with sky over it. The far
 // plane reaches past the pool's far edge everywhere the frame shows it.
 const CAMERA_POSITION: [f32; 3] = [0.0, 2.0, 9.0];
 const CAMERA_PITCH: f32 = -0.09;
@@ -211,7 +211,7 @@ fn cube_world() -> Result<World, String> {
     // use is evaluated per fragment, and the displacement itself is too
     // shallow to see at that scale.
     world.add_component(WaterSurface {
-        centre: [0.0, 0.0, 0.0],
+        center: [0.0, 0.0, 0.0],
         extent: [WATER_HALF_EXTENT, WATER_HALF_EXTENT],
         subdivisions: 240,
         waves: vec![
@@ -230,8 +230,8 @@ fn cube_world() -> Result<World, String> {
                 steepness: 0.05,
             },
         ],
-        deep_colour: [0.006, 0.010, 0.018],
-        shallow_colour: [0.02, 0.05, 0.07],
+        deep_color: [0.006, 0.010, 0.018],
+        shallow_color: [0.02, 0.05, 0.07],
         depth_falloff_metres: 1.5,
         foam_width_metres: 0.0,
         foam_intensity: 0.0,
@@ -350,7 +350,7 @@ fn spin_rotation() -> BehaviorExpr {
 mod tests {
     use super::*;
 
-    // Where `point` falls on the frame, up the screen from its centre, as a
+    // Where `point` falls on the frame, up the screen from its center, as a
     // fraction of half its height: 1.0 is the top edge. The camera looks down
     // its own `pitch` with no yaw, so its basis is the world's turned about x.
     fn screen_height_fraction(eye: [f32; 3], pitch: f32, point: [f32; 3]) -> f32 {
@@ -409,7 +409,7 @@ mod tests {
         (0..3).map(|k| forward[k] * (point[k] - eye[k])).sum()
     }
 
-    // Where `point` falls across the frame from its centre, in the same units
+    // Where `point` falls across the frame from its center, in the same units
     // as `screen_height_fraction`. The window is wider than it is tall, so a
     // point inside 1.0 here is inside the frame horizontally as well.
     fn screen_width_fraction(eye: [f32; 3], pitch: f32, point: [f32; 3]) -> f32 {
@@ -425,7 +425,7 @@ mod tests {
         point[0].abs() < WATER_HALF_EXTENT && point[2].abs() < WATER_HALF_EXTENT
     }
 
-    // The sky angle at which the sun's centre reaches the water plane, found
+    // The sky angle at which the sun's center reaches the water plane, found
     // by bisection over the descent.
     fn touchdown_angle() -> f32 {
         let at = |angle: f32| sky_rotated(sun_position(), angle);
@@ -499,7 +499,7 @@ mod tests {
     }
 
     // The composition: the pool's far edge, the line the sky meets the water
-    // at, sits a little above the frame's centre, so most of the frame is
+    // at, sits a little above the frame's center, so most of the frame is
     // water with a band of stars over it.
     #[test]
     fn the_horizon_sits_just_above_the_centre_of_the_frame() {

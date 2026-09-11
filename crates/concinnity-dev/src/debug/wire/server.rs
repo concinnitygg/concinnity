@@ -232,7 +232,7 @@ impl DebugHook for DebugServer {
         ) {
             state.budget = Some(crate::debug::state::BudgetSnapshot {
                 total_cores: threads.total_cores,
-                job_threads: threads.job_threads,
+                job_threads: concinnity_engine::jobs::pool().thread_count(),
                 total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),
                 budget_mib: memory.budget_mib(),
                 overridden: memory.overridden,

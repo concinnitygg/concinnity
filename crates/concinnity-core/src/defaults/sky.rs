@@ -6,8 +6,8 @@ use alloc::string::ToString;
 
 use crate::components::{Camera3D, Material, ProceduralMesh, Prop};
 use crate::ecs::PipelineContext;
+use crate::error::CnError;
 use crate::resource::{EnvironmentMapTable, append_material, append_mesh};
-use crate::result::CnResult;
 use crate::{bake, geometry};
 
 use super::Minter;
@@ -19,7 +19,7 @@ const SKY_SIZE_MAX: f32 = 400.0;
 const SKY_FAR_FRACTION: f32 = 0.9;
 const CAMERA_FAR_DEFAULT: f32 = 200.0;
 
-pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(), CnResult> {
+pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(), CnError> {
     let lit = ctx
         .resource::<EnvironmentMapTable>()
         .is_some_and(|t| !t.is_empty());
@@ -40,7 +40,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
     let mesh_id = minter.id();
     let (vertices, indices) = geometry::build_skybox(size);
     let payload = bake::mesh::finish_mesh_payload(vertices, indices, 1, &[])
-        .map_err(|_| CnResult::InvalidArgument)?;
+        .map_err(|_| CnError::InvalidArgument)?;
     let mesh = append_mesh(ctx, mesh_id, payload);
     ctx.push(ProceduralMesh {
         asset_id: mesh_id,

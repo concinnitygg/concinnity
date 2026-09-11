@@ -1,20 +1,18 @@
-// src/gfx/graphics_system/mod.rs
-//
-// GraphicsSystem: the 3D renderer driver. An internal system (not a declarable
-// asset); `World::start` constructs one when the world declares a
-// `GraphicsConfig`. Deliberately a directory rather than a single file; the
-// system is large enough that splitting it by responsibility is worth it:
-//   mod.rs       struct + System/Debug trait impls (init/step delegate out)
-//   init.rs      run_init: one-time backend + draw-list setup
-//   lines.rs     published world-space lines -> ribbon geometry
-//   frame.rs     run_step: extraction of the frame's draw inputs into the
-//                owned RenderSnapshot (the only per-frame world reads)
-//   submit.rs    replay of one RenderSnapshot onto the backend (no world
-//                access by construction)
-//   streaming.rs texture / normal-map / mesh / voxel-world streaming setup
-//                (the per-frame drive lives in gfx::streaming_system)
-//   scene.rs     scene-flow wiring + scene visibility
-//   helpers.rs   shared free functions
+//! GraphicsSystem: the 3D renderer driver. An internal system (not a declarable
+//! asset); `World::start` constructs one when the world declares a
+//! `GraphicsConfig`. Deliberately a directory rather than a single file; the
+//! system is large enough that splitting it by responsibility is worth it:
+//!   mod.rs       struct + System/Debug trait impls (init/step delegate out)
+//!   init.rs      run_init: one-time backend + draw-list setup
+//!   lines.rs     published world-space lines -> ribbon geometry
+//!   frame.rs     run_step: extraction of the frame's draw inputs into the
+//!                owned RenderSnapshot (the only per-frame world reads)
+//!   submit.rs    replay of one RenderSnapshot onto the backend (no world
+//!                access by construction)
+//!   streaming.rs texture / normal-map / mesh / voxel-world streaming setup
+//!                (the per-frame drive lives in gfx::streaming_system)
+//!   scene.rs     scene-flow wiring + scene visibility
+//!   helpers.rs   shared free functions
 
 use concinnity_host::store::paths::StateTree;
 

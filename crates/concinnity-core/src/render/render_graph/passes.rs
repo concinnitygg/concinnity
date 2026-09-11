@@ -1,4 +1,4 @@
-// src/render_graph/passes.rs
+// src/render/render_graph/passes.rs
 //
 // Stable identity for every render-graph pass. Used by:
 //

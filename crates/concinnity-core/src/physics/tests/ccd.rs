@@ -43,7 +43,7 @@ const CAPSULE: ColliderShape = ColliderShape::Capsule {
     radius: 0.1,
 };
 
-/// How far each shape reaches below its own centre.
+/// How far each shape reaches below its own center.
 const BALL_REACH: f32 = 0.1;
 const BOX_REACH: f32 = 0.1;
 const CAPSULE_REACH: f32 = 0.25;
@@ -162,7 +162,7 @@ fn every_shape_arrives_on_the_slab_at_every_speed() {
 
 // And what the solver does with the impact afterwards: arriving on the slab
 // is worth nothing if the contact then throws the body off it. A rounded
-// shape carries its whole impulse through one contact point on its centre
+// shape carries its whole impulse through one contact point on its center
 // line, so it was never in any doubt. A box spreads the same impulse over the
 // four corners of a face, each with a lever arm under it, and holds only
 // because the manifold's points are solved as one system rather than one
@@ -243,7 +243,7 @@ fn two_bodies_running_at_each_other_meet_instead_of_swapping_places() {
         run(200.0, false).0,
         "without the sweep the two have to pass through"
     );
-    // Two 0.1 balls stop with their centres 0.2 apart, whatever they closed at.
+    // Two 0.1 balls stop with their centers 0.2 apart, whatever they closed at.
     for speed in [200.0, 600.0, 2000.0, 10_000.0] {
         let (crossed, closest) = run(speed, true);
         assert!(!crossed, "at {speed} one ended up on the other's side");
@@ -593,7 +593,7 @@ fn a_jointed_body_stopped_by_the_sweep_does_not_fight_the_joint() {
     let (furthest, stretched, swept) = run(true);
     assert!(swept > 0, "the arm has to have been fast enough to sweep");
     // The wall's near face is at 0.65 and the arm reaches 0.15 in front of
-    // its centre, so it is held with its centre at 0.5.
+    // its center, so it is held with its center at 0.5.
     assert!(
         furthest < 0.52,
         "with it the arm is held at the wall, and reached {furthest}"

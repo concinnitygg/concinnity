@@ -1270,7 +1270,7 @@ mod tests {
     // prev_clip the fragment consumes for the motion vector.
     #[test]
     fn gbuffer_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         let ctx = super::super::super::builtins::Ctx::plain(false);

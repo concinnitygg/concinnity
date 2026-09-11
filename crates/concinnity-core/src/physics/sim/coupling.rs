@@ -87,7 +87,7 @@ pub(crate) struct Coupling {
 }
 
 impl Coupling {
-    /// Build from each point's offsets to the two body centres, in the order
+    /// Build from each point's offsets to the two body centers, in the order
     /// the manifold holds them.
     pub(crate) fn build(
         a: &SolverBody,
@@ -258,7 +258,7 @@ mod tests {
     const BOX_CENTRE: Vec3 = vec3(0.0, HALF, 0.0);
 
     /// The four bottom corners of `small_box`, against an immovable floor, as
-    /// the offsets to each body's centre the coupling is built from.
+    /// the offsets to each body's center the coupling is built from.
     fn corner_anchors() -> [(Vec3, Vec3); 4] {
         [(-HALF, -HALF), (HALF, -HALF), (HALF, HALF), (-HALF, HALF)].map(|(x, z)| {
             let point = vec3(x, 0.0, z);

@@ -229,7 +229,7 @@ fn the_help_reports_an_optional_command_defaulting_to_the_editor() {
 // lines it answered with.
 fn mcp_session(port: &str, messages: &[&str]) -> String {
     let mut child = Command::new(BIN)
-        .args(["mcp", "--port", port])
+        .args(["mcp", "--debug-port", port])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

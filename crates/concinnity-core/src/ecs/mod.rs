@@ -20,7 +20,7 @@
 //! On top of that sit the pieces the engine reaches for: the [`Component`]
 //! metadata trait, the plain data types the registry and blob format are built
 //! from ([`AssetOrigin`], [`AssetPayload`], [`PayloadLocator`],
-//! [`BlobAssetDef`], [`AssetKind`]), the [`System`] behavior trait, and the
+//! [`BlobAssetDef`]), the [`System`] behavior trait, and the
 //! [`World`]: the components, resources, events, payloads, profile, and frame
 //! scratch a tick reads and writes, plus the systems that run over them and
 //! their schedule. The system table itself ([`SystemTable`]) names a host's own
@@ -188,6 +188,6 @@ pub use resolver::{
 // the registry macros keep naming `ecs::{BlobAssetDef, ResourceKind, ...}`
 // unchanged.
 pub use crate::blob::{
-    AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind,
-    ResourceRecord, SceneGroup,
+    BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, ResourceRecord,
+    SceneGroup,
 };

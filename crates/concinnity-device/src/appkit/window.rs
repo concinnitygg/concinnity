@@ -24,7 +24,8 @@ use super::chrome::{
     apply_title_bar, set_window_buttons_hidden, window_buttons_hidden, windowed_style_mask,
 };
 use super::display_mode::{self, FullscreenDisplayMode};
-use super::input::{InputState, KeyState, key_from_mac, printable_char};
+use super::input::{KeyState, key_from_mac, printable_char};
+use crate::gfx::input::RenderInput;
 
 unsafe extern "C" {
     // Moves the OS cursor without generating a mouse-moved event.
@@ -527,8 +528,8 @@ impl AppKitWindow {
     // InputKey booleans reflect what is held right now; mouse deltas are cleared
     // after being read so they don't accumulate across frames.
     // `interact` and `jump` are true for exactly one frame per key press then cleared.
-    pub(crate) fn take_input(&mut self) -> InputState {
-        let snapshot = InputState {
+    pub(crate) fn take_input(&mut self) -> RenderInput {
+        let snapshot = RenderInput {
             forward: self.keys.forward,
             backward: self.keys.backward,
             left: self.keys.left,

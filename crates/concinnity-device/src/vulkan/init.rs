@@ -930,7 +930,7 @@ impl VkContext {
         //  Derived once here rather than restated at the build site below: the
         //  pool gate and the feature gate disagreeing would mean the pool places
         //  no images while the feature expects them, or the reverse.
-        let gbuffer_on = taa_enabled
+        let gbuffer_enabled = taa_enabled
             || ssao_settings.is_some()
             || ssr_settings.is_some()
             || ssgi_settings.is_some()
@@ -947,7 +947,7 @@ impl VkContext {
             &super::transient_pool::transient_slots(
                 ssao_settings.is_some(),
                 bloom_on,
-                gbuffer_on,
+                gbuffer_enabled,
                 render_extent,
                 swapchain_extent,
             )?,
@@ -1611,11 +1611,11 @@ impl VkContext {
         //  replacing the separate SSR / SSAO / velocity pre-passes. The skinned
         //  variant is built lazily by `upload_skinned` once the joint-set layout
         //  exists (it doesn't at init). Mirrors the DirectX `self.gbuffer` build.
-        //  The gate is `gbuffer_on`, the same value the transient pool was built
+        //  The gate is `gbuffer_enabled`, the same value the transient pool was built
         //  from, so the pool cannot place the MRT channels for a pre-pass that is
         //  not built (harmless) or -- the dangerous direction -- leave them
         //  unplaced for one that is.
-        let gbuffer_opt = if gbuffer_on {
+        let gbuffer_opt = if gbuffer_enabled {
             Some(super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &alloc,
@@ -3305,11 +3305,11 @@ impl VkContext {
         let planar_reflectors: Vec<[f32; 4]> = water_surfaces
             .iter()
             // A water surface's rest plane: horizontal at the surface base height.
-            .map(|s| [0.0, 1.0, 0.0, -s.centre[1]])
+            .map(|s| [0.0, 1.0, 0.0, -s.center[1]])
             .chain(
                 glass_panels
                     .iter()
-                    .map(|p| crate::vulkan::planar::pane_plane(p.normal, p.centre)),
+                    .map(|p| crate::vulkan::planar::pane_plane(p.normal, p.center)),
             )
             .collect();
         // Cap at the capacity ceiling the reserved planar targets are sized to, so a

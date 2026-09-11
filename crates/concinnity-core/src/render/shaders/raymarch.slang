@@ -177,7 +177,7 @@ float rasterised_distance(float2 px, float3 cam, float4 sv_pos) { return 1e30; }
 
 // The proxy geometry is a unit cube at +/-1 in the engine's 56-byte vertex
 // layout; only position is fetched. Scaling by the volume's extent and offsetting
-// by its centre lands it on the bounding box, and the encoders cull front faces
+// by its center lands it on the bounding box, and the encoders cull front faces
 // so each pixel inside the box takes exactly one fragment whether the camera is
 // outside the box or in it.
 struct RaymarchVertexIn
@@ -196,7 +196,7 @@ struct RaymarchVertexOut
     float3 world_pos : WORLDPOS;
 };
 
-float3 proxy_world_pos(float3 pos) { return pos * VOL.extent.xyz + VOL.centre.xyz; }
+float3 proxy_world_pos(float3 pos) { return pos * VOL.extent.xyz + VOL.center.xyz; }
 
 #if defined(RAYMARCH_SURFACE) || defined(RAYMARCH_VOLUMETRIC)
 
@@ -234,8 +234,8 @@ RaymarchFragOut raymarch_fragment(RaymarchVertexOut input)
     // The proxy's back faces rasterised, so `world_pos` is on the far side of
     // the box. The slab test gives entry and exit both, and handles a camera
     // inside the box uniformly.
-    float3 box_min = VOL.centre.xyz - VOL.extent.xyz;
-    float3 box_max = VOL.centre.xyz + VOL.extent.xyz;
+    float3 box_min = VOL.center.xyz - VOL.extent.xyz;
+    float3 box_max = VOL.center.xyz + VOL.extent.xyz;
     float2 box_t = rayBox(cam, ray_dir, box_min, box_max);
     if (box_t.y < max(box_t.x, 0.0)) discard;
     float t_enter = max(box_t.x, 0.001);
@@ -296,8 +296,8 @@ float4 raymarch_volumetric_fragment(RaymarchVertexOut input) : SV_Target
     float3 cam = VIEW.cam_pos.xyz;
     float3 ray_dir = normalize(input.world_pos - cam);
 
-    float3 box_min = VOL.centre.xyz - VOL.extent.xyz;
-    float3 box_max = VOL.centre.xyz + VOL.extent.xyz;
+    float3 box_min = VOL.center.xyz - VOL.extent.xyz;
+    float3 box_max = VOL.center.xyz + VOL.extent.xyz;
     float2 box_t = rayBox(cam, ray_dir, box_min, box_max);
     if (box_t.y < max(box_t.x, 0.0)) discard;
     float t_enter = max(box_t.x, 0.001);
@@ -363,8 +363,8 @@ float raymarch_shadow_fragment(RaymarchVertexOut input) : SV_DepthLessEqual
     // culled front faces. Stepping back by the bounding-sphere diameter lets the
     // slab test pick up the true front-face entry from outside the box.
     float3 origin = input.world_pos - ray_dir * (length(VOL.extent.xyz) * 2.5);
-    float3 box_min = VOL.centre.xyz - VOL.extent.xyz;
-    float3 box_max = VOL.centre.xyz + VOL.extent.xyz;
+    float3 box_min = VOL.center.xyz - VOL.extent.xyz;
+    float3 box_max = VOL.center.xyz + VOL.extent.xyz;
     float2 box_t = rayBox(origin, ray_dir, box_min, box_max);
     if (box_t.y < max(box_t.x, 0.0)) discard;
     float t_enter = max(box_t.x, 0.001);

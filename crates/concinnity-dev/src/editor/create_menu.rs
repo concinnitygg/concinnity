@@ -77,10 +77,10 @@ pub(crate) fn placeable_types() -> Vec<&'static str> {
 }
 
 // The authored arg key holding the type's world position ("position", or
-// "centre" for the panel lights).
+// "center" for the panel lights).
 pub(crate) fn position_key(ty: &str) -> &'static str {
-    if super::form::working_args(ty, None).contains_key("centre") {
-        "centre"
+    if super::form::working_args(ty, None).contains_key("center") {
+        "center"
     } else {
         "position"
     }

@@ -19,7 +19,7 @@ use crate::physics::sim::math::{Mat3, Vec3};
 pub(crate) struct Arm {
     pub(crate) inv_mass: f32,
     pub(crate) inv_inertia: Mat3,
-    /// Offset from the body's centre to the point the row acts through.
+    /// Offset from the body's center to the point the row acts through.
     pub(crate) lever: Vec3,
 }
 

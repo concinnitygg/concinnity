@@ -122,7 +122,7 @@ void light_cull_kernel(uint3 tid : SV_DispatchThreadID)
     {
         float3 lp = lights[li].position_range.xyz;
         float  r  = lights[li].position_range.w;
-        // Sphere vs AABB: distance from the light centre to the clamped point.
+        // Sphere vs AABB: distance from the light center to the clamped point.
         float3 d = lp - clamp(lp, aabb_min, aabb_max);
         if (dot(d, d) <= r * r)
         {

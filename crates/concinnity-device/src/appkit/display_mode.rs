@@ -1,4 +1,4 @@
-// src/metal/display_mode.rs
+// src/appkit/display_mode.rs
 //
 // Display-mode enumeration and fullscreen mode switching via CoreGraphics.
 // `enumerate` lists the modes (pixel resolution + refresh rate) the window's

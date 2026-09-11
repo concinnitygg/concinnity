@@ -9,7 +9,7 @@ use crate::components::{
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{MaterialHandle, MeshHandle, TextureHandle};
+use crate::ecs::{MaterialHandle, MeshHandle};
 use crate::gfx::material_entry::{MaterialEntry, resolve_material_slots};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
@@ -28,13 +28,19 @@ pub(crate) type RoomGeometry = (Room, Vec<Vertex>, Vec<u16>, Vec<(f32, Vec<u16>)
 // handle (dev-only), the always-resident handle set, and the asset id ->
 // handle map for the geometry producers that are still components
 // (ProceduralMesh / VoxelChunk / File).
-pub(crate) type MeshGeometryMaps = (
-    Vec<LoadedMesh>,
-    std::collections::HashMap<usize, MeshSourceMeta>,
-    std::collections::HashSet<usize>,
-    std::collections::HashMap<AssetId, usize>,
-    std::collections::HashMap<usize, DeferredMeshSeed>,
-);
+pub(crate) struct MeshGeometry {
+    /// Decoded geometry, indexed by the unified mesh-source handle.
+    pub meshes: Vec<LoadedMesh>,
+    /// File-backed `Mesh` source metadata keyed by handle (dev-only).
+    pub sources: std::collections::HashMap<usize, MeshSourceMeta>,
+    /// Handles whose props must stay resident regardless of streaming.
+    pub always_resident: std::collections::HashSet<usize>,
+    /// Asset id to handle, for the geometry producers that are still
+    /// components (`ProceduralMesh` / `VoxelChunk` / `File`).
+    pub component_handles: std::collections::HashMap<AssetId, usize>,
+    /// Payload references captured for meshes whose decode was deferred.
+    pub deferred_seeds: std::collections::HashMap<usize, DeferredMeshSeed>,
+}
 
 // A deferred mesh's payload reference, captured while its decode was skipped:
 // the locator, plus the raw bytes when the blob is RAM-backed (an in-memory
@@ -141,7 +147,6 @@ pub(crate) struct RenderableItem {
     pub model: Option<AssetId>,
     pub mesh: Option<MeshHandle>,
     pub material: Option<MaterialHandle>,
-    pub texture: Option<TextureHandle>,
     pub cull_distance: f32,
     pub(crate) is_dynamic: bool,
 }
@@ -157,14 +162,13 @@ pub(crate) fn decomposed_renderable_item(
 ) -> RenderableItem {
     use crate::components::{Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup};
 
-    let (model, mesh, material, texture, cull_distance) =
-        if let Some(m) = ctx.get::<ModelRenderer>(entity) {
-            (Some(m.model), None, None, None, m.cull_distance)
-        } else if let Some(m) = ctx.get::<MeshRenderer>(entity) {
-            (None, m.mesh, m.material, m.texture, m.cull_distance)
-        } else {
-            (None, None, None, None, 0.0)
-        };
+    let (model, mesh, material, cull_distance) = if let Some(m) = ctx.get::<ModelRenderer>(entity) {
+        (Some(m.model), None, None, m.cull_distance)
+    } else if let Some(m) = ctx.get::<MeshRenderer>(entity) {
+        (None, m.mesh, m.material, m.cull_distance)
+    } else {
+        (None, None, None, 0.0)
+    };
     let is_dynamic = ctx.get::<Pickup>(entity).is_some()
         || ctx.get::<Interactable>(entity).is_some()
         || ctx.get::<Parent>(entity).is_some()
@@ -174,7 +178,6 @@ pub(crate) fn decomposed_renderable_item(
         model,
         mesh,
         material,
-        texture,
         cull_distance,
         is_dynamic,
     }
@@ -251,7 +254,7 @@ pub(crate) fn load_mesh_geometry(
     ctx: &mut PipelineContext,
     deferred: &DeferredMeshSources,
     blob_disk_backed: bool,
-) -> Option<MeshGeometryMaps> {
+) -> Option<MeshGeometry> {
     let mut deferred_payloads: std::collections::HashMap<usize, DeferredMeshSeed> =
         std::collections::HashMap::new();
     let mesh_table = ctx
@@ -513,13 +516,13 @@ pub(crate) fn load_mesh_geometry(
         .filter_map(|pm| component_mesh_handles.get(&pm.asset_id).copied())
         .collect();
 
-    Some((
-        geometry,
-        mesh_sources,
-        always_resident_meshes,
-        component_mesh_handles,
-        deferred_payloads,
-    ))
+    Some(MeshGeometry {
+        meshes: geometry,
+        sources: mesh_sources,
+        always_resident: always_resident_meshes,
+        component_handles: component_mesh_handles,
+        deferred_seeds: deferred_payloads,
+    })
 }
 
 // Decode all Room mesh payloads and collect blob indices for the release step.
@@ -733,18 +736,17 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                         return None;
                     }
                 };
-                let mat_entry =
-                    match resolve_material_slots(sub.material, None, material_map, texture_count) {
-                        Ok(entry) => entry,
-                        Err(mat_id) => {
-                            tracing::error!(
-                                "GraphicsSystem: Model {} sub-mesh material {} not found",
-                                model_id,
-                                mat_id.index()
-                            );
-                            return None;
-                        }
-                    };
+                let mat_entry = match resolve_material_slots(sub.material, material_map) {
+                    Ok(entry) => entry,
+                    Err(mat_id) => {
+                        tracing::error!(
+                            "GraphicsSystem: Model {} sub-mesh material {} not found",
+                            model_id,
+                            mat_id.index()
+                        );
+                        return None;
+                    }
+                };
                 let (bb_min, bb_max) =
                     if item.is_dynamic || always_resident_meshes.contains(&sub_mesh) {
                         UNCULLED_BB
@@ -810,14 +812,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     return None;
                 }
             };
-            // The texture handle is the texture's declaration-order pool slot;
-            // an out-of-range handle falls back to slot 0.
-            let mat_entry = match resolve_material_slots(
-                item.material,
-                item.texture,
-                material_map,
-                texture_count,
-            ) {
+            let mat_entry = match resolve_material_slots(item.material, material_map) {
                 Ok(entry) => entry,
                 Err(mat_id) => {
                     tracing::error!(
@@ -904,12 +899,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 return None;
             }
         };
-        let mat_entry = match resolve_material_slots(
-            inst.material,
-            inst.texture,
-            material_map,
-            texture_count,
-        ) {
+        let mat_entry = match resolve_material_slots(inst.material, material_map) {
             Ok(entry) => entry,
             Err(mat_id) => {
                 tracing::error!(
@@ -1077,7 +1067,6 @@ mod tests {
             model: None,
             mesh: None,
             material: None,
-            texture: None,
             position,
             rotation_deg: [0.0, 0.0, 0.0],
             scale: [1.0, 1.0, 1.0],
@@ -1125,7 +1114,6 @@ mod tests {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
-            texture: None,
             cull_distance: 0.0,
             instances: vec![
                 crate::components::InstanceTransform {
@@ -1204,7 +1192,6 @@ mod tests {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
-            texture: None,
             cull_distance: 0.0,
             instances: Vec::new(),
         };
@@ -1247,7 +1234,6 @@ mod tests {
             model: None,
             mesh: Some(MeshHandle(0)),
             material: None,
-            texture: None,
             cull_distance: 0.0,
             is_dynamic: false,
         }];
@@ -1314,7 +1300,6 @@ mod tests {
             MeshRenderer {
                 mesh: prop.mesh,
                 material: prop.material,
-                texture: prop.texture,
                 cull_distance: prop.cull_distance,
             },
         );
@@ -1329,7 +1314,6 @@ mod tests {
                 model: None,
                 mesh: Some(MeshHandle(10)),
                 material: Some(MaterialHandle(20)),
-                texture: None,
                 cull_distance: 50.0,
                 is_dynamic: true,
             }
@@ -1344,7 +1328,6 @@ mod tests {
             // test item's handle is the geometry index it draws.
             mesh: Some(MeshHandle(mesh.0)),
             material: None,
-            texture: None,
             cull_distance: 0.0,
             is_dynamic: false,
         }
@@ -1356,7 +1339,6 @@ mod tests {
             model: Some(model),
             mesh: None,
             material: None,
-            texture: None,
             cull_distance: 0.0,
             is_dynamic: false,
         }
@@ -1522,10 +1504,10 @@ mod tests {
         assert_eq!(ri.len(), 9);
     }
 
-    // A single-mesh item with a texture (and no material) resolves the texture
-    // slot and keeps the default material.
+    // A single-mesh item naming no material binds the reserved albedo and
+    // normal-map fallbacks under the default material.
     #[test]
-    fn build_draw_list_single_mesh_resolves_texture_slot() {
+    fn build_draw_list_single_mesh_without_a_material_is_untextured() {
         let mesh_geometry = vec![unit_quad_mesh()];
         // The texture handle is the pool slot directly; the pool size (3) makes
         // slot 2 in range.
@@ -1534,7 +1516,6 @@ mod tests {
             model: None,
             mesh: Some(MeshHandle(0)),
             material: None,
-            texture: Some(TextureHandle(2)),
             cull_distance: 0.0,
             is_dynamic: false,
         };
@@ -1554,7 +1535,7 @@ mod tests {
         let DrawListData { draw_objects, .. } = data;
 
         assert_eq!(draw_objects.len(), 1);
-        assert_eq!(draw_objects[0].texture_slot, 2);
+        assert_eq!(draw_objects[0].texture_slot, NO_ALBEDO_SLOT);
         assert_eq!(draw_objects[0].normal_map_slot, NO_NORMAL_MAP_SLOT);
     }
 
@@ -1676,7 +1657,6 @@ mod tests {
                 model: None,
                 mesh: None,
                 material: None,
-                texture: None,
                 cull_distance: 0.0,
                 is_dynamic: false,
             }],
@@ -1695,7 +1675,6 @@ mod tests {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(999)),
             material: None,
-            texture: None,
             cull_distance: 0.0,
             instances: vec![crate::components::InstanceTransform::default()],
         };
@@ -1716,7 +1695,6 @@ mod tests {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: Some(MaterialHandle(404)),
-            texture: None,
             cull_distance: 0.0,
             instances: vec![crate::components::InstanceTransform::default()],
         };
@@ -1834,8 +1812,13 @@ mod tests {
         let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
         let mut ctx = world.ctx();
 
-        let (geometry, sources, resident, component_handles, _deferred) =
-            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
+        let MeshGeometry {
+            meshes: geometry,
+            sources,
+            always_resident: resident,
+            component_handles,
+            ..
+        } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
         assert_eq!(geometry.len(), 1);
         let m = &geometry[0];
         assert_eq!(m.vertices.len(), 3);
@@ -1867,8 +1850,11 @@ mod tests {
             .bounds
             .insert(0, ([-1.0, -2.0, -3.0], [1.0, 2.0, 3.0]));
 
-        let (geometry, _sources, _resident, _handles, seeds) =
-            load_mesh_geometry(&mut ctx, &deferred, false).expect("ok");
+        let MeshGeometry {
+            meshes: geometry,
+            deferred_seeds: seeds,
+            ..
+        } = load_mesh_geometry(&mut ctx, &deferred, false).expect("ok");
         assert_eq!(geometry.len(), 1);
         assert!(geometry[0].vertices.is_empty(), "decode skipped");
         assert_eq!(
@@ -1893,8 +1879,11 @@ mod tests {
         let mut deferred = DeferredMeshSources::default();
         deferred.by_handle.insert(0);
 
-        let (geometry, _sources, _resident, _handles, seeds) =
-            load_mesh_geometry(&mut ctx, &deferred, false).expect("ok");
+        let MeshGeometry {
+            meshes: geometry,
+            deferred_seeds: seeds,
+            ..
+        } = load_mesh_geometry(&mut ctx, &deferred, false).expect("ok");
         assert_eq!(geometry[0].vertices.len(), 3, "no bounds record -> decode");
         assert!(seeds.is_empty());
     }
@@ -1914,8 +1903,12 @@ mod tests {
         let mut world = b.seal();
         let mut ctx = world.ctx();
 
-        let (geometry, _sources, resident, component_handles, _deferred) =
-            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
+        let MeshGeometry {
+            meshes: geometry,
+            always_resident: resident,
+            component_handles,
+            ..
+        } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
         // The lone component-backed producer got the first handle.
         assert_eq!(component_handles.get(&AssetId(2)), Some(&0));
         assert_eq!(geometry.len(), 1);
@@ -1947,8 +1940,12 @@ mod tests {
         world.resources.insert(payloads);
         let mut ctx = world.ctx();
 
-        let (geometry, _sources, resident, component_handles, _deferred) =
-            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
+        let MeshGeometry {
+            meshes: geometry,
+            always_resident: resident,
+            component_handles,
+            ..
+        } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
         assert_eq!(geometry.len(), 3);
         assert_eq!(component_handles.get(&AssetId(2)), Some(&1));
         assert_eq!(
@@ -1999,8 +1996,13 @@ mod tests {
     fn load_mesh_geometry_empty_world_is_ok_and_empty() {
         let mut world = BlobWorld::new().seal();
         let mut ctx = world.ctx();
-        let (geometry, sources, resident, component_handles, _deferred) =
-            load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("ok");
+        let MeshGeometry {
+            meshes: geometry,
+            sources,
+            always_resident: resident,
+            component_handles,
+            ..
+        } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("ok");
         assert!(geometry.is_empty() && sources.is_empty() && resident.is_empty());
         assert!(component_handles.is_empty());
     }
@@ -2090,7 +2092,6 @@ mod tests {
                 model: Some(AssetId(100)),
                 mesh: None,
                 material: None,
-                texture: None,
                 cull_distance: 30.0,
                 is_dynamic: false,
             }

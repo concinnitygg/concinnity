@@ -1,12 +1,10 @@
-// src/app/syscpu.rs
-//
-// Host-CPU queries, the sibling of `app::sysmem`. One value: the CPU time this
-// process has burned across all its threads. Utilization is a rate, not a
-// reading, so `CpuSampler` turns successive queries into one.
-//
-// Deliberately a small hand-rolled platform shim rather than a dependency like
-// `sysinfo`, matching sysmem: one syscall per platform, `None` when the
-// platform call is unavailable or fails, and callers degrade to "unknown".
+//! Host-CPU queries, the sibling of `app::sysmem`. One value: the CPU time this
+//! process has burned across all its threads. Utilization is a rate, not a
+//! reading, so `CpuSampler` turns successive queries into one.
+//!
+//! Deliberately a small hand-rolled platform shim rather than a dependency like
+//! `sysinfo`, matching sysmem: one syscall per platform, `None` when the
+//! platform call is unavailable or fails, and callers degrade to "unknown".
 
 use std::time::{Duration, Instant};
 

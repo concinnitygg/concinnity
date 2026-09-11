@@ -1,44 +1,44 @@
-// Single-source engine shader programs for the DirectX backend.
-//
-// Each program compiles a `.slang` file under `src/shaders/` (the
-// backend-neutral single-source directory) to a signed DXIL container, at
-// build time where the host can and at renderer init otherwise, cached in the
-// content-addressed shader cache. slangc resolves dxil.dll itself, so the
-// containers it emits are already signed for D3D12.
-//
-// The bindless main pair compiles the source's `DXIL_ABI` block, whose
-// register() annotations reproduce the bindless main root signature in
-// `init/pipelines.rs` slot for slot: that layout is a contract, since a world
-// Shader asset builds its own PSO against the same root signature (see
-// world_shaders.rs). `assert_slang_dxil_abi` in build.rs locks it. The two
-// compute kernels need no ABI block: slangc assigns b0/t0/u0 from declaration
-// order, which is what their root signatures already bind.
-//
-// The G-buffer pre-pass and shadow families take the same `DXIL_ABI` block for
-// a weaker reason: nothing outside the engine binds them, but their root
-// signatures hand the same declarations entirely different slots than the Metal
-// and Vulkan hosts do, so the shared source cannot carry one set of registers
-// for all three. `assert_slang_dxil_abi` in build.rs locks every one of them,
-// which is what a macOS edit to the shared file runs into under
-// `dx_crosscheck.sh`.
-//
-// The fullscreen post passes need no ABI block either, and for a stronger
-// reason than the compute kernels: nothing outside the engine binds them at
-// all. slangc splits each top-level `Sampler2D` into a `Texture2D` + a
-// `SamplerState` and numbers both from declaration order, so a pass with N
-// sources lands on t0..tN-1 *and* s0..sN-1 -- where the hand HLSL declared one
-// sampler for all of them. The root signatures name the samplers they hand out
-// (a pass's static samplers are the same descriptor repeated).
-//
-// Declaration order is what the root signatures follow, and it is not always
-// the order the hand HLSL used: the SSR resolve's probe cube array lands at t4
-// (not the hand shader's t7) with its `ProbeSet` at b1 (not b4), and the
-// reflection composite reads scene / G-buffer / roughness at t1 / t2 / t3 where
-// the HLSL had roughness first.
-//
-// These are shader model 6.0 rather than the FXC path's 5.1: the bindless pool
-// index is non-uniform across a fragment wave, and `NonUniformResourceIndex`
-// is an SM 6.0 construct.
+//! Single-source engine shader programs for the DirectX backend.
+//!
+//! Each program compiles a `.slang` file under `src/shaders/` (the
+//! backend-neutral single-source directory) to a signed DXIL container, at
+//! build time where the host can and at renderer init otherwise, cached in the
+//! content-addressed shader cache. slangc resolves dxil.dll itself, so the
+//! containers it emits are already signed for D3D12.
+//!
+//! The bindless main pair compiles the source's `DXIL_ABI` block, whose
+//! register() annotations reproduce the bindless main root signature in
+//! `init/pipelines.rs` slot for slot: that layout is a contract, since a world
+//! Shader asset builds its own PSO against the same root signature (see
+//! world_shaders.rs). `assert_slang_dxil_abi` in build.rs locks it. The two
+//! compute kernels need no ABI block: slangc assigns b0/t0/u0 from declaration
+//! order, which is what their root signatures already bind.
+//!
+//! The G-buffer pre-pass and shadow families take the same `DXIL_ABI` block for
+//! a weaker reason: nothing outside the engine binds them, but their root
+//! signatures hand the same declarations entirely different slots than the Metal
+//! and Vulkan hosts do, so the shared source cannot carry one set of registers
+//! for all three. `assert_slang_dxil_abi` in build.rs locks every one of them,
+//! which is what a macOS edit to the shared file runs into under
+//! `dx_crosscheck.sh`.
+//!
+//! The fullscreen post passes need no ABI block either, and for a stronger
+//! reason than the compute kernels: nothing outside the engine binds them at
+//! all. slangc splits each top-level `Sampler2D` into a `Texture2D` + a
+//! `SamplerState` and numbers both from declaration order, so a pass with N
+//! sources lands on t0..tN-1 *and* s0..sN-1 -- where the hand HLSL declared one
+//! sampler for all of them. The root signatures name the samplers they hand out
+//! (a pass's static samplers are the same descriptor repeated).
+//!
+//! Declaration order is what the root signatures follow, and it is not always
+//! the order the hand HLSL used: the SSR resolve's probe cube array lands at t4
+//! (not the hand shader's t7) with its `ProbeSet` at b1 (not b4), and the
+//! reflection composite reads scene / G-buffer / roughness at t1 / t2 / t3 where
+//! the HLSL had roughness first.
+//!
+//! These are shader model 6.0 rather than the FXC path's 5.1: the bindless pool
+//! index is non-uniform across a fragment wave, and `NonUniformResourceIndex`
+//! is an SM 6.0 construct.
 
 /// One DXIL program: which shader file, which entry point, at which
 /// shader-model profile, under which variant defines.

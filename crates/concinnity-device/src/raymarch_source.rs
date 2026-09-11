@@ -253,7 +253,7 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
     // proves: each variant reaches only the entries its family declares.
     #[test]
     fn every_raymarch_entry_compiles_on_every_backend() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         let work = concinnity_host::scratch::Scratch::dir("raymarch-compile-guard")

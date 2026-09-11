@@ -137,7 +137,7 @@ float3 tonemap(float2 uv)
 }
 
 // Smooth radial corner darkening. `strength` 0 disables it; 1 fully darkens the
-// corners. The squared-distance falloff keeps the centre untouched.
+// corners. The squared-distance falloff keeps the center untouched.
 float vignette_factor(float2 uv)
 {
     float2 d = uv - 0.5;
@@ -152,7 +152,7 @@ float fade_scale()
 }
 
 // Sample the 3D colour-grading LUT with the tonemapped, display-referred sRGB
-// colour. The half-texel correction maps an input of 0 / 1 to the centres of
+// colour. The half-texel correction maps an input of 0 / 1 to the centers of
 // the first / last texels so trilinear filtering stays accurate edge to edge; a
 // 2x2x2 identity LUT then reproduces the input exactly.
 float3 apply_lut(float3 c)
@@ -235,7 +235,7 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     float3 c = tonemap(uv);
 
     // FXAA is gated by post.fxaa (off for the Off anti-aliasing mode). When
-    // disabled, grade + vignette the tonemapped centre directly and skip the
+    // disabled, grade + vignette the tonemapped center directly and skip the
     // neighbour samples the edge filter would otherwise take.
     if (post.fxaa < 0.5)
     {
@@ -244,7 +244,7 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 
     // FXAA 3.11-style edge detection on the encoded image. Each neighbour is
     // composited with bloom and remapped through the same tonemap + gamma so
-    // luma compares stay consistent with the centre sample.
+    // luma compares stay consistent with the center sample.
     float3 n = tonemap(uv + float2(0.0, -inv_size.y));
     float3 s = tonemap(uv + float2(0.0,  inv_size.y));
     float3 e = tonemap(uv + float2( inv_size.x, 0.0));
@@ -267,7 +267,7 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     }
 
     // Pick the dominant edge direction (horizontal vs vertical) and step half a
-    // texel along the perpendicular for a 2-tap blur averaged with the centre.
+    // texel along the perpendicular for a 2-tap blur averaged with the center.
     float horz_diff = abs(l_n + l_s - 2.0 * l_c) * 2.0 + abs(l_e + l_w - 2.0 * l_c);
     float vert_diff = abs(l_e + l_w - 2.0 * l_c) * 2.0 + abs(l_n + l_s - 2.0 * l_c);
     bool horizontal = horz_diff >= vert_diff;

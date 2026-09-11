@@ -53,4 +53,12 @@ pub(crate) use gpu_profile::probe_gpu_profile;
 // backend keeps its existing `crate::directx::{pass_timing,uniforms}`
 // paths through these re-exports. `uniforms` holds the per-pass repr(C) structs;
 // each pass file re-exports the struct(s) it fills so their paths are unchanged.
-pub(crate) use concinnity_core::render::directx::{pass_timing, uniforms};
+//
+// Timing here: `execute_graph` issues an EndQuery before and after each pass's
+// encode, and the resolve at the end of the command list copies the whole block
+// into the persistently-mapped readback buffer. The CPU reads the previous
+// frame's block at the top of `draw_frame`, after the matching fence wait gates
+// the GPU writes. SsaoPrepass and SsaoKernel are bundled inside their parent
+// encoder, and the FogFroxel / Upscale / Transparent / Raymarch arms are no-ops
+// here, so those slots stay zero and drop out of the on-screen chip.
+pub(crate) use concinnity_core::render::{directx::uniforms, pass_timing};

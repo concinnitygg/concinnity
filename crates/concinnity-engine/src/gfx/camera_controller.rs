@@ -1,10 +1,8 @@
-// src/gfx/camera_controller.rs
-//
-// First-person / fly-through camera controller. An internal system (not a
-// declarable asset): `World::start` constructs one when the world has a
-// `Camera3D` whose `controller` is set, reading that controller's config. It
-// turns mouse/keyboard input into a `Camera3D` orientation and a movement
-// intent for the player's `RigidBody`.
+//! First-person / fly-through camera controller. An internal system (not a
+//! declarable asset): `World::start` constructs one when the world has a
+//! `Camera3D` whose `controller` is set, reading that controller's config. It
+//! turns mouse/keyboard input into a `Camera3D` orientation and a movement
+//! intent for the player's `RigidBody`.
 
 use crate::components::{Camera3D, CameraController, FrameInput, Interactable, Transform};
 use crate::ecs::{Entity, PipelineContext, StepResult, System};

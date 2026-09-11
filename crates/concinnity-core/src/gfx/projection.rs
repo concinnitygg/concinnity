@@ -61,10 +61,10 @@ pub fn view_from_basis(eye: [f32; 3], right: [f32; 3], up: [f32; 3], forward: [f
     ]
 }
 
-/// World-to-view for a camera at `eye` aimed at `centre`, with `up` resolving
+/// World-to-view for a camera at `eye` aimed at `center`, with `up` resolving
 /// the roll.
-pub fn look_at(eye: [f32; 3], centre: [f32; 3], up: [f32; 3]) -> Mat4 {
-    let f = normalize3(sub(centre, eye));
+pub fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> Mat4 {
+    let f = normalize3(sub(center, eye));
     let r = normalize3(cross(f, up));
     view_from_basis(eye, r, cross(r, f), f)
 }
@@ -197,12 +197,12 @@ mod tests {
     #[test]
     fn look_at_agrees_with_the_basis_it_derives() {
         let eye = [3.0, -1.5, 2.0];
-        let centre = [0.4, 0.9, -2.0];
+        let center = [0.4, 0.9, -2.0];
         let up = [0.0, 1.0, 0.0];
-        let f = normalize3(sub(centre, eye));
+        let f = normalize3(sub(center, eye));
         let r = normalize3(cross(f, up));
         assert_eq!(
-            look_at(eye, centre, up),
+            look_at(eye, center, up),
             view_from_basis(eye, r, cross(r, f), f)
         );
     }

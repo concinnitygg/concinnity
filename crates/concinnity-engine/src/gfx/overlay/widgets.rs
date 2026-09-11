@@ -233,8 +233,8 @@ pub(super) fn build_text_input_overlay(
     let line_h = font
         .map(|f| f.size_px * ti.scale)
         .unwrap_or(ti.height * 0.6);
-    // Text baseline math centres the cap band in `[y, y + line_h]`, so placing
-    // the line box's top here vertically centres the text in the field.
+    // Text baseline math centers the cap band in `[y, y + line_h]`, so placing
+    // the line box's top here vertically centers the text in the field.
     let text_y = ti.y + (ti.height - line_h) / 2.0;
 
     out.begin();
@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(labels[0].content, "aa");
     }
 
-    // Without a loaded font there is no line height to centre on, so the text
+    // Without a loaded font there is no line height to center on, so the text
     // falls back to the row's midpoint.
     #[test]
     fn build_dropdown_overlay_without_a_loaded_font_centres_on_a_zero_line() {
@@ -643,7 +643,7 @@ mod tests {
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].content, "type here");
         assert_eq!(labels[0].color, ti.placeholder_color);
-        // Text starts at the padding inset; the 16px line centres in the 40px box.
+        // Text starts at the padding inset; the 16px line centers in the 40px box.
         assert_eq!((labels[0].x, labels[0].y), (8.0, 12.0));
     }
 

@@ -47,10 +47,10 @@ mod tests {
         let d = displace(&fx.input());
         // Ring r sits at along = r / 10.
         let at = |r: usize| vec3::length(d[r * 8]);
-        assert!((at(5) - 0.1).abs() < 1e-5, "peak at the centre");
+        assert!((at(5) - 0.1).abs() < 1e-5, "peak at the center");
         let expected_4 = 0.1 * (-(0.1_f32).powi(2) / (2.0 * 0.01)).exp();
         assert!((at(4) - expected_4).abs() < 1e-5, "{}", at(4));
-        assert!((at(4) - at(6)).abs() < 1e-5, "symmetric about the centre");
+        assert!((at(4) - at(6)).abs() < 1e-5, "symmetric about the center");
         assert!(at(0) < 1e-5 && at(10) < 1e-5, "nothing at the ends");
     }
 

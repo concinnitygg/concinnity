@@ -3,7 +3,7 @@
 // The raymarched SDF volume pass. Both blocks are bound by every backend, so
 // both mirror everywhere.
 //
-// `SdfVolumeUniforms` is the reason this file exists. Its centre and extent were
+// `SdfVolumeUniforms` is the reason this file exists. Its center and extent were
 // spelled as a `float3` beside a `float` pad, which is what the CPU uploads and
 // what SPIR-V and DXIL lay out -- but Metal sizes a constant-buffer `float3` at
 // 16 bytes, so every field after the first pair sat four bytes late there and
@@ -29,7 +29,7 @@ pub(in crate::shader_layout) fn surface() -> Vec<Case> {
         // The two float4 lanes carry an xyz and a pad each; the Rust side keeps
         // them spelled as the three-component value plus the pad it uploads.
         everywhere(mirror!(RaymarchVolumeUniforms => "SdfVolumeUniforms" {
-            [centre, _pad0] => ["centre"],
+            [center, _pad0] => ["center"],
             [extent, _pad1] => ["extent"],
             cone_ratio,
             max_distance,

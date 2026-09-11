@@ -284,12 +284,8 @@ pub(crate) struct ControlsSettings {
 }
 
 impl Settings {
-    // Load from `tree`'s `settings` file (CBOR). When the file is absent, fall back
-    // to migrating any graphics/audio/controls choices from the legacy
-    // `config.json` (where they used to live) so an existing user's choices are
-    // not silently reset. The migrated values are persisted on the next `save()`
-    // (a settings change). Returns defaults when nothing is stored or the file
-    // is unreadable.
+    // Load from `tree`'s `settings` file (CBOR). Returns defaults when nothing
+    // is stored or the file is unreadable.
     pub(crate) fn load(tree: Option<&StateTree>) -> Self {
         tree.map(|tree| Self::load_from(&tree.settings_path()))
             .unwrap_or_default()

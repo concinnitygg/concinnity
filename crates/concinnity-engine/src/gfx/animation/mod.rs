@@ -1,16 +1,14 @@
-// src/gfx/animation/mod.rs
-//
-// Skeletal animation playback. An internal system (not a declarable asset):
-// `World::start` constructs one whenever the world contains any `Animation`
-// or `AnimationGraph` component, then it produces fresh skinning matrices for each
-// `SkeletonPose` every frame.
-//
-// Each target `SkinnedMesh` gets a bucket of clips driven in one of two
-// modes: `Flat` blends every clip by a live weight vector (startup fade-in +
-// runtime crossfades; see `flat`), while `Graph` walks a compiled animation
-// state machine whose transitions are driven by the target's `AnimationParams`
-// component (see `graph`). Runtime debug commands for both modes are drained
-// in `commands`.
+//! Skeletal animation playback. An internal system (not a declarable asset):
+//! `World::start` constructs one whenever the world contains any `Animation`
+//! or `AnimationGraph` component, then it produces fresh skinning matrices for each
+//! `SkeletonPose` every frame.
+//!
+//! Each target `SkinnedMesh` gets a bucket of clips driven in one of two
+//! modes: `Flat` blends every clip by a live weight vector (startup fade-in +
+//! runtime crossfades; see `flat`), while `Graph` walks a compiled animation
+//! state machine whose transitions are driven by the target's `AnimationParams`
+//! component (see `graph`). Runtime debug commands for both modes are drained
+//! in `commands`.
 
 mod commands;
 mod flat;

@@ -10,10 +10,6 @@ use objc2_app_kit::NSEvent;
 
 use crate::components::InputKey;
 
-// The previously-duplicated InputState collapsed into the shared
-// crate::gfx::input::RenderInput; this alias keeps the historical name.
-pub(crate) use crate::gfx::input::RenderInput as InputState;
-
 // Persistent key state tracked across frames. InputKey booleans are set on KeyDown
 // and cleared on KeyUp; they are never reset between frames so that held keys
 // remain active even when no repeat event arrives (avoiding the OS key-repeat

@@ -1,6 +1,6 @@
 //! src/geometry/glass_quad.rs: flat rectangular quad for a GlassPanel.
 //!
-//! Builds a single 4-vertex / 6-index quad centred at `centre`, facing
+//! Builds a single 4-vertex / 6-index quad centred at `center`, facing
 //! `normal`, sized by `half_size` (half-width along the panel tangent,
 //! half-height along its bitangent). The tangent frame is derived from the
 //! normal so the panel can face any direction. Per-vertex normals are the
@@ -43,7 +43,7 @@ pub fn plane_basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 
 /// Build the quad for a glass panel: its vertices and triangle indices.
 pub fn build_glass_quad(
-    centre: [f32; 3],
+    center: [f32; 3],
     normal: [f32; 3],
     half_size: [f32; 2],
 ) -> (Verts, Vec<u16>) {
@@ -55,9 +55,9 @@ pub fn build_glass_quad(
 
     let corner = |su: f32, sv: f32| -> [f32; 3] {
         [
-            centre[0] + tangent[0] * su * hw + bitangent[0] * sv * hh,
-            centre[1] + tangent[1] * su * hw + bitangent[1] * sv * hh,
-            centre[2] + tangent[2] * su * hw + bitangent[2] * sv * hh,
+            center[0] + tangent[0] * su * hw + bitangent[0] * sv * hh,
+            center[1] + tangent[1] * su * hw + bitangent[1] * sv * hh,
+            center[2] + tangent[2] * su * hw + bitangent[2] * sv * hh,
         ]
     };
 
@@ -90,12 +90,12 @@ mod tests {
 
     #[test]
     fn vertices_are_coplanar_with_panel_normal() {
-        let centre = [1.0, 2.0, -3.0];
+        let center = [1.0, 2.0, -3.0];
         let normal = [0.0, 0.0, 1.0];
-        let (v, _) = build_glass_quad(centre, normal, [2.0, 1.5]);
+        let (v, _) = build_glass_quad(center, normal, [2.0, 1.5]);
         for (pos, vn, _, _) in &v {
-            // Each corner lies in the plane through centre with the panel normal.
-            let rel = [pos[0] - centre[0], pos[1] - centre[1], pos[2] - centre[2]];
+            // Each corner lies in the plane through center with the panel normal.
+            let rel = [pos[0] - center[0], pos[1] - center[1], pos[2] - center[2]];
             assert!(dot(rel, normal).abs() < 1e-5);
             assert_eq!(*vn, normal);
         }

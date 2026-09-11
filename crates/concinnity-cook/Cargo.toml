@@ -22,31 +22,30 @@ concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-slang = { workspace = true }
 
-bytemuck = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-thiserror = "2.0.18"
-tracing = "0.1.44"
-postcard = { version = "1", default-features = false, features = ["use-std"] }
-fbxcel = { version = "0.9.0", default-features = false, features = ["tree"] }
-gltf = { version = "1", default-features = false, features = ["utils", "names", "extras"] }
-hex = "0.4.3"
+bytemuck = { workspace = true }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+tracing = { workspace = true }
+postcard = { workspace = true, features = ["use-std"] }
+fbxcel = { workspace = true, features = ["tree"] }
+gltf = { workspace = true, features = ["utils", "names", "extras"] }
+hex = { workspace = true }
 jpeg-decoder = "0.3"
-kira = "0.12"
+kira = { workspace = true }
 ktx2 = "0.5"
 basisu = "=0.1.0"
 ruzstd = "0.9.0"
-png = "0.18.1"
+png = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false }
-rayon = "1"
-sha2 = "0.11.0"
+rayon = { workspace = true }
+sha2 = { workspace = true }
 time = { version = "0.3.47", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
 # The binary FBX writer builds synthetic .fbx fixtures for the importer tests.
-fbxcel = { version = "0.9.0", default-features = false, features = ["tree", "writer"] }
-tempfile = "3.25.0"
+fbxcel = { workspace = true, features = ["tree", "writer"] }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

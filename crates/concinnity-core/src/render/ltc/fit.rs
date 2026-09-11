@@ -1,4 +1,4 @@
-// src/ltc/fit.rs
+// src/render/ltc/fit.rs
 //
 // Fits linearly transformed cosines (LTC) to the GGX BRDF, producing the lookup
 // table the rectangular area-light shading path samples.

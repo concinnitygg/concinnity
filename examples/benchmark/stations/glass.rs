@@ -41,7 +41,7 @@ const SLAB_HALF_EXTENTS: [f32; 3] = [4.5, 3.2, 0.06];
 const SLAB_HEIGHT: f32 = 3.6;
 
 /// Declare the floor, the panels, the marks, and what shows through.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "glass_floor_mesh",
         ProceduralMesh {
@@ -54,7 +54,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         .add(
             "glass_floor",
             Prop {
-                position: [centre[0], 0.2, centre[2]],
+                position: [center[0], 0.2, center[2]],
                 ..Default::default()
             },
         )
@@ -75,9 +75,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                 format!("glass_block_{index}"),
                 Prop {
                     position: [
-                        centre[0] + spread(index % 5, 5, 4.2),
+                        center[0] + spread(index % 5, 5, 4.2),
                         2.8,
-                        centre[2] + spread(index / 5, 2, 6.0) - 8.0,
+                        center[2] + spread(index / 5, 2, 6.0) - 8.0,
                     ],
                     rotation_deg: [0.0, index as f32 * 17.0, 0.0],
                     ..Default::default()
@@ -92,7 +92,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
     world.add(
         "glass_pane",
         GlassPanel {
-            centre: [centre[0], PANEL_HEIGHT, centre[2] - 5.0],
+            center: [center[0], PANEL_HEIGHT, center[2] - 5.0],
             normal: [1.0, 0.0, 0.15],
             half_size: PANEL_HALF_SIZE,
             tint: [0.72, 0.86, 0.92],
@@ -118,9 +118,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                 format!("glass_slab_{index}"),
                 Prop {
                     position: [
-                        centre[0] + 3.0,
+                        center[0] + 3.0,
                         SLAB_HEIGHT,
-                        centre[2] + spread(index, SLABS, SLAB_SPACING),
+                        center[2] + spread(index, SLABS, SLAB_SPACING),
                     ],
                     rotation_deg: [0.0, 90.0, 0.0],
                     ..Default::default()
@@ -138,9 +138,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                     format!("glass_mark_{index}"),
                     Decal {
                         position: [
-                            centre[0] + spread(x, DECALS[0], DECAL_SPACING),
+                            center[0] + spread(x, DECALS[0], DECAL_SPACING),
                             0.6,
-                            centre[2] + spread(z, DECALS[1], DECAL_SPACING),
+                            center[2] + spread(z, DECALS[1], DECAL_SPACING),
                         ],
                         rotation_deg: [0.0, index as f32 * 23.0, 0.0],
                         size: DECAL_SIZE,

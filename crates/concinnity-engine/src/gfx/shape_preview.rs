@@ -1,9 +1,9 @@
-// Live CharacterShape re-resolution. GraphicsSystem resolves every shape once
-// at init (`graphics_system/character_shape.rs`); an editor dragging a slider
-// needs the same resolution against the running world's SkeletonPose each
-// frame, without rebuilding the world. This is that narrow seam: what a mesh
-// exposes to a shape (its morph-target and joint names) and a re-seed of its
-// pose through an edited shape.
+//! Live CharacterShape re-resolution. GraphicsSystem resolves every shape once
+//! at init (`graphics_system/character_shape.rs`); an editor dragging a slider
+//! needs the same resolution against the running world's SkeletonPose each
+//! frame, without rebuilding the world. This is that narrow seam: what a mesh
+//! exposes to a shape (its morph-target and joint names) and a re-seed of its
+//! pose through an edited shape.
 
 use crate::components::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
 use crate::ecs::asset_id::AssetId;

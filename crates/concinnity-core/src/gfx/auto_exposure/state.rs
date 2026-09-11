@@ -79,7 +79,7 @@ impl AutoExposureState {
 // Convert a histogram (256 bin counts) into the weighted-average log-luminance
 // the EMA consumes. Mirrors what the average-pass compute kernel does on GPU,
 // kept in pure Rust so the math is unit-testable without a device. Bins are
-// weighted by their centre log-luminance: bin `i` covers
+// weighted by their center log-luminance: bin `i` covers
 // `[LUM_LOG2_MIN + i*step, LUM_LOG2_MIN + (i+1)*step)`. Bin 0 is treated as
 // "below sensor floor" and weighted-in only when every other bin is empty,
 // so a mostly-black frame still produces a finite EV.
@@ -92,8 +92,8 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
         if n == 0 {
             continue;
         }
-        let centre = LUM_LOG2_MIN + (i as f32 + 0.5) * step;
-        weighted_sum += centre as f64 * n as f64;
+        let center = LUM_LOG2_MIN + (i as f32 + 0.5) * step;
+        weighted_sum += center as f64 * n as f64;
         count += n as u64;
     }
     if count == 0 {
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn average_log_luminance_ignores_underflow_bin() {
         // Pixels in bin 0 are below the sensor floor; they should not pull the
-        // average down. The result should equal the centre of bin 100.
+        // average down. The result should equal the center of bin 100.
         let mut histogram = [0u32; HISTOGRAM_BINS];
         histogram[0] = 10_000;
         histogram[100] = 1;

@@ -26,23 +26,23 @@ detail = []
 
 [dependencies]
 
-bytemuck = { version = "1", default-features = false, features = ["derive"] }
+bytemuck = { workspace = true, features = ["derive"] }
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
 hashbrown = "0.17.1"
 libm = "0.2"
-postcard = { version = "1", default-features = false, features = ["alloc"] }
-serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+postcard = { workspace = true, features = ["alloc"] }
+serde = { workspace = true, features = ["alloc", "derive"] }
 serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
 spin = { version = "0.12.3", default-features = false, features = ["once"] }
-thiserror = { version = "2.0.18", default-features = false }
+thiserror = { workspace = true }
 
 [dev-dependencies]
-ciborium = "0.2"
-rayon = "1"
-serde_json = { version = "1", features = ["preserve_order"] }
+ciborium = { workspace = true }
+rayon = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
 
 [build-dependencies]
-rayon = "1"
+rayon = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-// src/render_graph/validate.rs
+// src/render/render_graph/validate.rs
 //
 // Barrier-coverage check over a `CompiledGraph`. The compile pass derives each
 // pass's barrier lists by walking each resource's timeline; this module replays

@@ -1,4 +1,4 @@
-// src/render_graph/compile.rs
+// src/render/render_graph/compile.rs
 //
 // Frozen `CompiledGraph` produced by `GraphBuilder::compile`. The compile
 // pass:

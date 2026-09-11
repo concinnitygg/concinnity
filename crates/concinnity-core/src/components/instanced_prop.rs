@@ -2,11 +2,9 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
-use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
-use crate::ecs::de_opt_texture_handle;
 use alloc::vec::Vec;
 
 /// Per-instance transform within an `InstancedProp`.
@@ -49,12 +47,9 @@ pub struct InstancedProp {
     /// [VoxelChunk](#voxelchunk), or mesh-kind [File](#file) asset.
     #[serde(deserialize_with = "de_opt_mesh_handle")]
     pub mesh: Option<MeshHandle>,
-    /// A [Material](#material); takes precedence over `texture` when set.
+    /// A [Material](#material) providing the albedo texture plus lighting parameters.
     #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
-    /// Older texture-only reference; ignored when `material` is set.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
-    pub texture: Option<TextureHandle>,
     /// Per-instance transforms. Empty list renders nothing.
     pub instances: Vec<InstanceTransform>,
     /// View-distance cutoff in world units per instance. 0 = always draw.
@@ -67,7 +62,6 @@ impl Default for InstancedProp {
             asset_id: AssetId::default(),
             mesh: None,
             material: None,
-            texture: None,
             instances: Vec::new(),
             cull_distance: 0.0,
         }
@@ -93,7 +87,6 @@ mod tests {
         assert!(p.instances.is_empty());
         assert!(p.mesh.is_none());
         assert!(p.material.is_none());
-        assert!(p.texture.is_none());
         // Zero means "no distance cull", not "cull everything".
         assert_eq!(p.cull_distance, 0.0);
     }
@@ -102,13 +95,12 @@ mod tests {
     fn an_authored_instance_list_parses_and_round_trips_through_postcard() {
         crate::test_support::install_resolvers();
         let p: InstancedProp = serde_json::from_str(
-            r#"{"mesh":"tree_mesh","material":"bark","texture":"bark_tex","cull_distance":120,
+            r#"{"mesh":"tree_mesh","material":"bark","cull_distance":120,
                 "instances":[{"position":[1,0,2]},{"position":[3,0,4],"scale":[2,2,2]}]}"#,
         )
         .unwrap();
         assert_eq!(p.mesh, Some(MeshHandle(9)));
         assert_eq!(p.material, Some(MaterialHandle(4)));
-        assert_eq!(p.texture, Some(TextureHandle(8)));
         assert_eq!(p.instances.len(), 2);
         // A copy that mentions only its position keeps unit scale.
         assert_eq!(p.instances[0].scale, [1.0, 1.0, 1.0]);

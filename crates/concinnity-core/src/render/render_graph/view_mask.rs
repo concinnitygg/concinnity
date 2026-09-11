@@ -1,4 +1,4 @@
-// src/render_graph/view_mask.rs
+// src/render/render_graph/view_mask.rs
 //
 // Per-frame masking of the graph inputs by the viewport's view mode + show
 // flags: the runtime counterpart to the init-time requirement trims. Pure

@@ -1,4 +1,4 @@
-// src/ltc/polygon.rs
+// src/render/ltc/polygon.rs
 //
 // The closed-form clamped-cosine polygon integral that area-light shading is
 // built on, plus the horizon clipping it needs.
@@ -197,12 +197,12 @@ mod tests {
 
     // A quad wound so its front face points back at the shading point, which is
     // the one-sided orientation that should contribute.
-    fn facing_quad(centre: Vec3, half: f32) -> [Vec3; 4] {
+    fn facing_quad(center: Vec3, half: f32) -> [Vec3; 4] {
         [
-            [centre[0] - half, centre[1] - half, centre[2]],
-            [centre[0] + half, centre[1] - half, centre[2]],
-            [centre[0] + half, centre[1] + half, centre[2]],
-            [centre[0] - half, centre[1] + half, centre[2]],
+            [center[0] - half, center[1] - half, center[2]],
+            [center[0] + half, center[1] - half, center[2]],
+            [center[0] + half, center[1] + half, center[2]],
+            [center[0] - half, center[1] + half, center[2]],
         ]
     }
 

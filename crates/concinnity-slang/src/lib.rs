@@ -152,6 +152,23 @@ pub fn slangc_path() -> Option<&'static Path> {
     resolved().as_ref().ok().map(|s| s.path.as_path())
 }
 
+/// Whether this host can compile `.slang` sources.
+///
+/// The cook asks before compiling a Shader or an SdfVolume field and fails
+/// naming the asset when the answer is no, so a build never quietly produces a
+/// world missing what it declared. Shader tests ask for the opposite reason:
+/// they check the shader, not the toolchain, and slangc is absent on a
+/// build-only host (a CI image, a container) where every one of them would fail
+/// for the same reason and say nothing about the source.
+///
+/// ```
+/// // True only where a qualifying slangc resolves.
+/// let _ = concinnity_slang::slangc_available();
+/// ```
+pub fn slangc_available() -> bool {
+    slangc_path().is_some()
+}
+
 /// Why no candidate qualified, or `None` when one did. It names the compiler it
 /// rejected and what to install, so a caller reporting the absence does not
 /// compose its own wording and cannot report an old slangc as a missing one.

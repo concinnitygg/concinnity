@@ -63,7 +63,7 @@ struct Masses {
 /// each re-derive it.
 #[derive(Clone, Copy)]
 struct Placement {
-    /// Offset from the second body's centre to its anchor.
+    /// Offset from the second body's center to its anchor.
     lever_b: Vec3,
     /// Offset the linear rows act through, which is the anchor for a joint
     /// that holds a point and the whole separation for one that slides.

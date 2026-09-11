@@ -1163,7 +1163,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
         ..Default::default()
     });
     h.tick(&mut world);
-    assert!(!vis(&world, view::PANEL_BG) && !vis(&world, templates::PANEL_BG));
+    assert!(!vis(&world, view::PANEL_BG) && !vis(&world, template::PANEL_BG));
 
     // Frame 2: click the top-bar View button -> the View panel opens.
     let view_btn = hud::layout(vp[0]).view;
@@ -1200,7 +1200,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
     );
     h.tick(&mut world);
     assert!(h.templates_open, "the Templates row toggled the panel on");
-    assert!(vis(&world, templates::PANEL_BG), "Templates panel shown");
+    assert!(vis(&world, template::PANEL_BG), "Templates panel shown");
 }
 
 // Picking a template row spawns the detail panel (title "Template <name>",
@@ -1230,12 +1230,12 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
     });
     h.tick(&mut world);
     assert!(
-        vis(&world, templates::PANEL_BG) && !vis(&world, template_panel::PANEL_BG),
+        vis(&world, template::PANEL_BG) && !vis(&world, template_panel::PANEL_BG),
         "Templates list shown; detail panel still hidden"
     );
 
     // Click the first template row -> the detail panel spawns.
-    let row = rect(&world, templates::row_bg(0));
+    let row = rect(&world, template::row_bg(0));
     set_input(
         &mut world,
         FrameInput {

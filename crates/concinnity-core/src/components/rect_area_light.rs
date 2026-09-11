@@ -9,13 +9,13 @@
 /// leaves a stretched rectangular reflection on glossy materials. Use it for
 /// windows, ceiling panels, screens, and practical lights.
 ///
-/// The panel is positioned by `centre`, oriented by `normal` (the direction it
+/// The panel is positioned by `center`, oriented by `normal` (the direction it
 /// emits), and sized by `half_size`, matching [GlassPanel](#glasspanel).
 ///
 /// ```rust
 /// # use concinnity_core::components::RectAreaLight;
 /// RectAreaLight {
-///     centre: [0.0, 3.0, -4.0],
+///     center: [0.0, 3.0, -4.0],
 ///     normal: [0.0, 0.0, 1.0],
 ///     half_size: [1.5, 1.0],
 ///     color: [1.0, 0.95, 0.85],
@@ -27,8 +27,8 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RectAreaLight {
-    /// World-space position of the panel's centre.
-    pub centre: [f32; 3],
+    /// World-space position of the panel's center.
+    pub center: [f32; 3],
     /// Direction the panel emits. Normalised on load; defaults to `+Z` when
     /// degenerate.
     pub normal: [f32; 3],
@@ -48,7 +48,7 @@ pub struct RectAreaLight {
 impl Default for RectAreaLight {
     fn default() -> Self {
         Self {
-            centre: [0.0, 3.0, 0.0],
+            center: [0.0, 3.0, 0.0],
             normal: [0.0, -1.0, 0.0],
             half_size: [1.0, 1.0],
             color: [1.0, 1.0, 1.0],
@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn the_default_panel_is_a_ceiling_light_facing_down() {
         let l = RectAreaLight::default();
-        assert_eq!(l.centre, [0.0, 3.0, 0.0]);
+        assert_eq!(l.center, [0.0, 3.0, 0.0]);
         assert_eq!(l.normal, [0.0, -1.0, 0.0]);
         assert_eq!(l.half_size, [1.0, 1.0]);
         assert_eq!(l.intensity, 12.0);
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn an_authored_panel_parses_and_round_trips_through_postcard() {
         let l: RectAreaLight = serde_json::from_str(
-            r#"{"centre":[0,1.5,-4],"normal":[0,0,1],"half_size":[2,0.5],
+            r#"{"center":[0,1.5,-4],"normal":[0,0,1],"half_size":[2,0.5],
                 "color":[1,0.95,0.9],"intensity":30,"range":25,"two_sided":true}"#,
         )
         .unwrap();
@@ -87,7 +87,7 @@ mod tests {
 
         let bytes = postcard::to_allocvec(&l).unwrap();
         let back: RectAreaLight = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.centre, [0.0, 1.5, -4.0]);
+        assert_eq!(back.center, [0.0, 1.5, -4.0]);
         assert_eq!(back.half_size, [2.0, 0.5]);
         assert_eq!(back.color, [1.0, 0.95, 0.9]);
         assert_eq!(back.intensity, 30.0);

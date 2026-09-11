@@ -23,6 +23,17 @@ pub(crate) struct MaterialEntry {
     pub(crate) shader_bucket: u32,
 }
 
+impl MaterialEntry {
+    /// The entry a draw with no material of its own binds: the default
+    /// uniforms over the reserved albedo and normal-map fallbacks.
+    pub(crate) const UNTEXTURED: MaterialEntry = MaterialEntry {
+        albedo_slot: NO_ALBEDO_SLOT,
+        normal_map_slot: NO_NORMAL_MAP_SLOT,
+        uniforms: MaterialUniforms::DEFAULT,
+        shader_bucket: 0,
+    };
+}
+
 /// The entry a decoded `Material` bakes to against a texture pool of
 /// `texture_count` entries. `Err` names the reference that points past the
 /// pool, which cook validated and so marks a corrupt build.
@@ -66,36 +77,17 @@ pub(crate) fn of(mat: &Material, texture_count: usize) -> Result<MaterialEntry, 
     })
 }
 
-/// The entry a draw binds with no material of its own: the legacy texture
-/// reference contributes its albedo slot (falling back to the white entry when
-/// past `texture_count`) over the default material.
-pub(crate) fn from_texture(texture: Option<TextureHandle>, texture_count: usize) -> MaterialEntry {
-    let albedo_slot = match texture {
-        Some(tex_id) if tex_id.index() < texture_count => tex_id.index(),
-        _ => NO_ALBEDO_SLOT,
-    };
-    MaterialEntry {
-        albedo_slot,
-        normal_map_slot: NO_NORMAL_MAP_SLOT,
-        uniforms: MaterialUniforms::DEFAULT,
-        shader_bucket: 0,
-    }
-}
-
-// Resolve the (albedo_slot, normal_map_slot, material) a draw object binds. A
-// material handle wins and must resolve in `material_map`; an unresolved one
-// comes back as `Err(handle)` so the caller can log its own context. With no
-// material, the legacy texture path above applies.
+// Resolve the material a draw object binds. A material handle must resolve in
+// `material_map`; an unresolved one comes back as `Err(handle)` so the caller
+// can log its own context. A draw naming no material binds `UNTEXTURED`.
 pub(crate) fn resolve_material_slots(
     material: Option<MaterialHandle>,
-    texture: Option<TextureHandle>,
     material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
-    texture_count: usize,
 ) -> Result<MaterialEntry, MaterialHandle> {
-    if let Some(mat_id) = material {
-        return material_map.get(&mat_id).copied().ok_or(mat_id);
+    match material {
+        Some(mat_id) => material_map.get(&mat_id).copied().ok_or(mat_id),
+        None => Ok(MaterialEntry::UNTEXTURED),
     }
-    Ok(from_texture(texture, texture_count))
 }
 
 #[cfg(test)]
@@ -150,33 +142,34 @@ mod tests {
         assert_eq!(of(&mat, 0).expect("bakes").shader_bucket, 3);
     }
 
-    // The legacy texture path: an in-range handle is the albedo slot. Slot 0
-    // would be a real texture, so an unusable handle takes the white fallback
-    // instead, under the default material and bucket.
+    // A draw naming no material binds the reserved fallbacks under the default
+    // uniforms and the world default shader bucket.
     #[test]
-    fn a_texture_only_draw_takes_the_default_material() {
-        let entry = from_texture(Some(TextureHandle(1)), 4);
-        assert_eq!(entry.albedo_slot, 1);
+    fn a_draw_without_a_material_is_untextured() {
+        let entry = MaterialEntry::UNTEXTURED;
+        assert_eq!(entry.albedo_slot, NO_ALBEDO_SLOT);
         assert_eq!(entry.normal_map_slot, NO_NORMAL_MAP_SLOT);
         assert_eq!(entry.shader_bucket, 0);
+
+        let map = std::collections::HashMap::new();
         assert_eq!(
-            from_texture(Some(TextureHandle(9)), 4).albedo_slot,
+            resolve_material_slots(None, &map)
+                .expect("resolves")
+                .albedo_slot,
             NO_ALBEDO_SLOT
         );
-        assert_eq!(from_texture(None, 4).albedo_slot, NO_ALBEDO_SLOT);
     }
 
-    // A material handle outranks the legacy texture and must resolve.
+    // A material handle must resolve in the table.
     #[test]
-    fn a_material_handle_wins_over_the_texture() {
+    fn a_material_handle_must_resolve() {
         let entry = of(&material(), 4).expect("bakes");
         let map = std::collections::HashMap::from([(MaterialHandle(2), entry)]);
-        let got = resolve_material_slots(Some(MaterialHandle(2)), Some(TextureHandle(1)), &map, 4)
-            .expect("resolves");
+        let got = resolve_material_slots(Some(MaterialHandle(2)), &map).expect("resolves");
         assert_eq!(got.uniforms.roughness, 0.25);
         assert_eq!(got.albedo_slot, NO_ALBEDO_SLOT, "the material's own albedo");
         assert_eq!(
-            resolve_material_slots(Some(MaterialHandle(5)), None, &map, 4).err(),
+            resolve_material_slots(Some(MaterialHandle(5)), &map).err(),
             Some(MaterialHandle(5))
         );
     }

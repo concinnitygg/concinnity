@@ -132,7 +132,7 @@ pub use world::World;
 
 // The status a failed call reports, carried by [`Error`] and returned by the
 // world's own systems.
-pub use concinnity_core::result::CnResult;
+pub use concinnity_core::error::CnError;
 
 // The two macros an application writes against, exported at the crate root
 // because `#[macro_export]` puts them there: the component mask a system's

@@ -25,7 +25,7 @@ const LIFETIME: [f32; 2] = [3.0, 5.0];
 const MAX_PARTICLES: u32 = 16_000;
 
 /// Declare the vents, their plumes, and the light inside each one.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "particles_vent_mesh",
         ProceduralMesh {
@@ -39,7 +39,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
 
     for index in 0..VENTS {
         let along = spread(index, VENTS, VENT_SPACING);
-        let at = [centre[0] + along * 0.35, 0.0, centre[2] + along];
+        let at = [center[0] + along * 0.35, 0.0, center[2] + along];
         world
             .add(
                 format!("particles_vent_{index}"),

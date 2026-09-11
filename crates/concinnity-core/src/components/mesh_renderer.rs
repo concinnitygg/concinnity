@@ -1,9 +1,9 @@
 // src/components/mesh_renderer.rs
 
-use crate::ecs::{MaterialHandle, MeshHandle, TextureHandle};
+use crate::ecs::{MaterialHandle, MeshHandle};
 
-/// Single-mesh render description for an entity: which mesh, material, and
-/// optional legacy texture to draw, plus an optional view-distance cutoff.
+/// Single-mesh render description for an entity: which mesh and material to
+/// draw, plus an optional view-distance cutoff.
 ///
 /// Runtime-only. Mutually exclusive with `ModelRenderer` on an entity (an
 /// entity has one or the other), which encodes the mesh-vs-model choice a
@@ -16,8 +16,6 @@ pub struct MeshRenderer {
     /// A `Material` providing albedo plus lighting parameters, addressed by its
     /// `MaterialHandle`.
     pub material: Option<MaterialHandle>,
-    /// Legacy texture, used only when `material` is unset.
-    pub texture: Option<TextureHandle>,
     /// View-distance cutoff in world units; 0 keeps the draw visible at any
     /// distance.
     pub cull_distance: f32,

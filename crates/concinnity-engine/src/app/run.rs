@@ -15,7 +15,7 @@
 use crate::app::runloop;
 use crate::app::startup_error::StartupError;
 use crate::app::state::App;
-use crate::result::CnResult;
+use crate::error::CnError;
 use concinnity_host::store::paths::StateTree;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
@@ -102,7 +102,7 @@ pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
 }
 
 // A refused start, in the form a process exit status is built from.
-fn start_failure(e: CnResult) -> std::io::Error {
+fn start_failure(e: CnError) -> std::io::Error {
     std::io::Error::other(format!("failed to start app: {e}"))
 }
 
@@ -185,7 +185,7 @@ pub fn run_from(tree: &StateTree, blob: BlobSource<'_>) -> std::io::Result<()> {
 // single-threaded world loop) -- until the window closes, a system stops the
 // world, or CTRL+C is received. External callers reach this through
 // `App::run` / `App::run_with`.
-pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), CnResult> {
+pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), CnError> {
     // A host that installed its own subscriber keeps it (`try_init` no-ops),
     // so an embedded app gets logs without wiring any up itself.
     init_logging();
@@ -324,7 +324,7 @@ mod tests {
 
         assert_eq!(
             app.run_with(RunOptions::default()),
-            Err(CnResult::InvalidState),
+            Err(CnError::InvalidState),
             "a second start is refused"
         );
     }

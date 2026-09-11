@@ -25,14 +25,14 @@ pub(crate) struct RigPhysics {
     shape: CharacterCapsule,
     // Current vertical velocity (world units/second).
     pub vy: f32,
-    // Authoritative simulated capsule centre with its render blend snapshots.
+    // Authoritative simulated capsule center with its render blend snapshots.
     center: PointInterp,
     // The rig position written back last frame. A component position that
     // differs was moved externally and is adopted with no blend.
     written_pos: Option<[f32; 3]>,
 }
 
-// Capsule centre for a rig's mesh-origin position: the capsule stands on
+// Capsule center for a rig's mesh-origin position: the capsule stands on
 // the origin (the mesh's feet).
 fn center_of(rig: &CharacterRig) -> [f32; 3] {
     [

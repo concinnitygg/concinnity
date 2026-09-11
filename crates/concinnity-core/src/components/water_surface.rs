@@ -48,14 +48,14 @@ impl Default for WaterWave {
 /// waves. It refracts and reflects the scene, blends from a shallow to a deep
 /// colour with depth, and adds shoreline foam.
 ///
-/// The surface is positioned by `centre` and sized by `extent` (XZ
+/// The surface is positioned by `center` and sized by `extent` (XZ
 /// half-widths). The mesh itself is flat; all height variation comes from the
 /// animated waves.
 ///
 /// ```rust
 /// # use concinnity_core::components::WaterSurface;
 /// WaterSurface {
-///     centre: [0.0, 0.4, 0.0],
+///     center: [0.0, 0.4, 0.0],
 ///     extent: [12.0, 8.0],
 ///     subdivisions: 96,
 ///     ..Default::default()
@@ -67,8 +67,8 @@ pub struct WaterSurface {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// World-space position of the surface's centre.
-    pub centre: [f32; 3],
+    /// World-space position of the surface's center.
+    pub center: [f32; 3],
     /// Half-width and half-depth of the surface `[x, z]`, in world units.
     pub extent: [f32; 2],
     /// Grid subdivisions across the surface. Higher gives smoother waves.
@@ -78,9 +78,9 @@ pub struct WaterSurface {
     /// gentle wave.
     pub waves: Vec<WaterWave>,
     /// Linear-space RGB colour of deep water.
-    pub deep_colour: [f32; 3],
+    pub deep_color: [f32; 3],
     /// Linear-space RGB colour of shallow water near the shore.
-    pub shallow_colour: [f32; 3],
+    pub shallow_color: [f32; 3],
     /// Depth over which the colour blends from shallow to deep, in metres.
     pub depth_falloff_metres: f32,
     /// Width of the shoreline foam band, in metres.
@@ -104,12 +104,12 @@ impl Default for WaterSurface {
     fn default() -> Self {
         Self {
             asset_id: AssetId::default(),
-            centre: [0.0, 0.0, 0.0],
+            center: [0.0, 0.0, 0.0],
             extent: [10.0, 10.0],
             subdivisions: 64,
             waves: vec![WaterWave::default()],
-            deep_colour: [0.02, 0.05, 0.15],
-            shallow_colour: [0.20, 0.50, 0.55],
+            deep_color: [0.02, 0.05, 0.15],
+            shallow_color: [0.20, 0.50, 0.55],
             depth_falloff_metres: 4.0,
             foam_width_metres: 0.30,
             foam_intensity: 0.8,
@@ -144,8 +144,8 @@ mod tests {
         assert_eq!(s.subdivisions, 64);
         // Deep water is darker and bluer than shallow: the depth gradient is
         // what reads as water rather than a tinted mirror.
-        assert!(s.deep_colour[2] > s.deep_colour[0]);
-        assert!(s.shallow_colour[1] > s.deep_colour[1]);
+        assert!(s.deep_color[2] > s.deep_color[0]);
+        assert!(s.shallow_color[1] > s.deep_color[1]);
         assert_eq!(s.depth_falloff_metres, 4.0);
         assert_eq!(s.foam_width_metres, 0.3);
         assert_eq!(s.foam_intensity, 0.8);
@@ -158,10 +158,10 @@ mod tests {
     #[test]
     fn a_multi_wave_surface_parses_and_round_trips_through_postcard() {
         let s: WaterSurface = serde_json::from_str(
-            r#"{"centre":[0,0.2,-5],"extent":[40,25],"subdivisions":128,
+            r#"{"center":[0,0.2,-5],"extent":[40,25],"subdivisions":128,
                 "waves":[{"amplitude":0.4,"wavelength":12,"direction":[0.7,0.7]},
                          {"amplitude":0.05,"wavelength":1.5,"speed":2.5,"steepness":0.1}],
-                "deep_colour":[0,0.02,0.1],"shallow_colour":[0.1,0.4,0.45],
+                "deep_color":[0,0.02,0.1],"shallow_color":[0.1,0.4,0.45],
                 "depth_falloff_metres":8,"foam_width_metres":0.6,"foam_intensity":1.2,
                 "fresnel_power":4,"roughness":0.02,"refraction_strength":0.3,
                 "visible":false}"#,
@@ -176,7 +176,7 @@ mod tests {
 
         let bytes = postcard::to_allocvec(&s).unwrap();
         let back: WaterSurface = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.centre, [0.0, 0.2, -5.0]);
+        assert_eq!(back.center, [0.0, 0.2, -5.0]);
         assert_eq!(back.extent, [40.0, 25.0]);
         assert_eq!(back.subdivisions, 128);
         assert_eq!(back.waves[1].speed, 2.5);

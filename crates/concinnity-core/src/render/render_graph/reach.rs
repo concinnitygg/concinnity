@@ -1,4 +1,4 @@
-// src/render_graph/reach.rs
+// src/render/render_graph/reach.rs
 //
 // Transitive-closure bitset over a DAG whose edges all point from a lower
 // index to a higher one, which is what a topologically sorted pass list gives

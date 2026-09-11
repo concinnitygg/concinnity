@@ -45,7 +45,7 @@ pub(crate) struct Heightfield {
     rows: usize,
     cols: usize,
     heights: Vec<f32>,
-    /// World position of the grid's centre.
+    /// World position of the grid's center.
     origin: Vec3,
     /// Half the footprint on `x` and `z`, and the multiplier on a stored
     /// height.

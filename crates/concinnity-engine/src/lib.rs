@@ -1,5 +1,7 @@
-//! The runtime crate. Holds the world loop, the ECS, the GraphicsSystem renderer
-//! driver, audio, and physics. The GPU-free render-prep lives in
+//! The runtime crate. Holds the world loop, the ECS schedule, the
+//! GraphicsSystem renderer driver, and audio. Physics and behavior evaluation
+//! live in `concinnity_core`; this crate drives them, lending them a job pool
+//! and a save directory. The GPU-free render-prep lives in
 //! `concinnity_core::render` and the hardware backends (Metal/DirectX/Vulkan/
 //! Win32) in concinnity-device; this crate drives them through a
 //! `Box<dyn RenderBackend>` from `concinnity_device::init_backend` and never
@@ -22,7 +24,7 @@ mod bench;
 // from concinnity-core. Re-exported under the historical crate::* paths so the
 // rest of the client keeps resolving. world.jsonl I/O lives in concinnity-cook
 // (authoring), which the runtime does not link.
-pub(crate) use concinnity_core::{bake, geometry, result};
+pub(crate) use concinnity_core::{bake, error, geometry};
 
 // The access-declaration mask builders, reached crate-wide as
 // `crate::component_mask!` / `crate::resource_mask!`.

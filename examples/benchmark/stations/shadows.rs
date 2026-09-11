@@ -37,7 +37,7 @@ const SPOTS: usize = 8;
 const SPOT_HEIGHT: f32 = 13.0;
 
 /// Declare the grove, the ground under it, and the lights over it.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "shadows_terrain_mesh",
         ProceduralMesh {
@@ -53,7 +53,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         .add(
             "shadows_terrain",
             Prop {
-                position: [centre[0], 0.05, centre[2]],
+                position: [center[0], 0.05, center[2]],
                 ..Default::default()
             },
         )
@@ -85,8 +85,8 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         for z in 0..GROVE[1] {
             let index = x * GROVE[1] + z;
             let at = [
-                centre[0] + spread(x, GROVE[0], GROVE_SPACING),
-                centre[2] + spread(z, GROVE[1], GROVE_SPACING),
+                center[0] + spread(x, GROVE[0], GROVE_SPACING),
+                center[2] + spread(z, GROVE[1], GROVE_SPACING),
             ];
             // A little lean per tree, so no two casters throw the same shadow.
             let lean = (index % 7) as f32 - 3.0;
@@ -123,7 +123,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         world.add(
             format!("shadows_spot_{index}"),
             SpotLight {
-                position: [centre[0] + along, SPOT_HEIGHT, centre[2] + along * 0.3],
+                position: [center[0] + along, SPOT_HEIGHT, center[2] + along * 0.3],
                 direction: [0.0, -1.0, 0.0],
                 color: [1.0, 0.94 - index as f32 * 0.03, 0.80],
                 intensity: 140.0,

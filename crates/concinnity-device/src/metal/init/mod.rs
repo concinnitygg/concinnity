@@ -573,9 +573,9 @@ impl MtlContext {
 
         // GPU-driven cascaded-shadow resources: the frustum-only
         // shadow decision kernel and the depth-only bindless shadow render
-        // pipeline. Built only on the bindless path with
-        // shadows enabled; non-bindless / no-shadow worlds keep the legacy
-        // per-cascade CPU shadow loop and leave these `None`. The shadow ICB +
+        // pipeline. Built only for a scene world with shadows enabled; a
+        // UI-only or shadowless world leaves these `None` and renders no
+        // cascades. The shadow ICB +
         // its argument buffer are allocated lazily by `ensure_shadow_icb_capacity`
         // (sized to NUM_SHADOW_CASCADES * cull_count once geometry is known).
         let (shadow_cull_pipeline, shadow_bindless_pipeline) = if shadow_pipeline_state.is_some()
@@ -968,13 +968,13 @@ impl MtlContext {
             let mut planes: Vec<[f32; 4]> = Vec::new();
             for s in &water_surfaces {
                 // Horizontal plane at the surface base height, normal +y.
-                planes.push([0.0, 1.0, 0.0, -s.centre[1]]);
+                planes.push([0.0, 1.0, 0.0, -s.center[1]]);
             }
             for g in &glass_panels {
-                // The pane plane: normal (unit from `from_args`) through centre,
+                // The pane plane: normal (unit from `from_args`) through center,
                 // so `n . p + d = 0` on the pane.
                 let n = g.normal;
-                let d = -(n[0] * g.centre[0] + n[1] * g.centre[1] + n[2] * g.centre[2]);
+                let d = -(n[0] * g.center[0] + n[1] * g.center[1] + n[2] * g.center[2]);
                 planes.push([n[0], n[1], n[2], d]);
             }
             // The budget is capped at the capacity ceiling the mirror targets + ICB

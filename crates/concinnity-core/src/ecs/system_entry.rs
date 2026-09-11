@@ -16,7 +16,7 @@
 use alloc::boxed::Box;
 
 use crate::ecs::{Access, EventStore, Phase, PipelineContext, System, World};
-use crate::result::CnResult;
+use crate::error::CnError;
 
 /// One row of the system table. Table order is run order.
 pub struct SystemEntry {
@@ -43,7 +43,7 @@ pub struct SystemEntry {
 
 /// A host's completion pass: it runs over the world before the gates read it,
 /// and fails the start when the world cannot be completed.
-pub type CompleteWorld = fn(&mut PipelineContext) -> Result<(), CnResult>;
+pub type CompleteWorld = fn(&mut PipelineContext) -> Result<(), CnError>;
 
 /// A host's system table and the load-time passes only the host can supply.
 ///

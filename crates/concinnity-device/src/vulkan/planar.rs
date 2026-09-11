@@ -50,14 +50,14 @@ const PLANAR_CLIP_BIAS: f32 = 0.02;
 const PLANAR_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
 // World-space plane [nx, ny, nz, d] (unit normal, n . p + d = 0 on the surface)
-// for a glass pane with unit normal through centre. Pure; unit tested. The init
+// for a glass pane with unit normal through center. Pure; unit tested. The init
 // path feeds these to assign_planar_slots.
-pub(in crate::vulkan) fn pane_plane(normal: [f32; 3], centre: [f32; 3]) -> [f32; 4] {
+pub(in crate::vulkan) fn pane_plane(normal: [f32; 3], center: [f32; 3]) -> [f32; 4] {
     [
         normal[0],
         normal[1],
         normal[2],
-        -(normal[0] * centre[0] + normal[1] * centre[1] + normal[2] * centre[2]),
+        -(normal[0] * center[0] + normal[1] * center[1] + normal[2] * center[2]),
     ]
 }
 
@@ -1024,12 +1024,12 @@ mod tests {
 
     #[test]
     fn pane_plane_passes_through_centre_with_unit_normal() {
-        // A pane facing +z through (1, 2, 3): the plane constant places the centre
+        // A pane facing +z through (1, 2, 3): the plane constant places the center
         // on the surface (n . c + d == 0), and the normal is carried unchanged.
         let p = pane_plane([0.0, 0.0, 1.0], [1.0, 2.0, 3.0]);
         assert_eq!([p[0], p[1], p[2]], [0.0, 0.0, 1.0]);
         let signed = p[0] * 1.0 + p[1] * 2.0 + p[2] * 3.0 + p[3];
-        assert!(signed.abs() < 1e-5, "centre lies on the plane");
+        assert!(signed.abs() < 1e-5, "center lies on the plane");
     }
 
     #[test]

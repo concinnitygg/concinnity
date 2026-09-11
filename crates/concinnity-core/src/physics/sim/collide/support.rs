@@ -39,7 +39,7 @@ pub(crate) struct OrientedBox {
 }
 
 impl OrientedBox {
-    /// How far the box reaches from its centre along a world direction.
+    /// How far the box reaches from its center along a world direction.
     pub(crate) fn extent_along(&self, direction: Vec3) -> f32 {
         (direction.dot(self.pose.axis(0))).abs() * self.half.x
             + (direction.dot(self.pose.axis(1))).abs() * self.half.y

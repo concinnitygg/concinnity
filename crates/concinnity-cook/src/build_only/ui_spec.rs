@@ -15,7 +15,7 @@ use crate::authoring::spec::{asset, spec_to_value};
 use crate::components::Font;
 
 // A settings/menu TextLabel value with `centered` pinned false: the default-font
-// pass would otherwise recenter a font-carrying label onto the viewport centre,
+// pass would otherwise recenter a font-carrying label onto the viewport center,
 // stacking every menu label. Left-aligned; see `centered_label` for the
 // real-metrics centered variant.
 pub(crate) fn label_value(

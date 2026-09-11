@@ -24,8 +24,8 @@ use crate::ecs::{
     PayloadStore, Phase, PipelineContext, Resources, RuntimeComponent, StepResult, System,
     SystemEntry, SystemTable,
 };
+use crate::error::CnError;
 use crate::gfx::profile::FrameProfile;
-use crate::result::CnResult;
 
 // The per-frame scratch reserve. An engine constant rather than an authored
 // field: a schema field would be blob churn for a knob nobody should have to
@@ -521,7 +521,7 @@ impl World {
 
     /// Build the systems `table` gates in for this world's content and run
     /// their `init`.
-    pub fn start(&mut self, table: &SystemTable) -> Result<(), CnResult> {
+    pub fn start(&mut self, table: &SystemTable) -> Result<(), CnError> {
         // The host's completion pass, before the gates read the world: an
         // injected component brings its own system into the schedule. Guarded
         // by the same once-per-world flag as the build below, so a second

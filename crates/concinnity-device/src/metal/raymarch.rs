@@ -106,29 +106,29 @@ pub(in crate::metal) struct RaymarchVolumeRecord {
     // drawing this frame does; the binding at fragment texture(4) stands
     // either way, so this selects no pipeline variant.
     pub(in crate::metal) refractive: bool,
-    // Asset-side AABB centre / half-widths. `encode_raymarch` derives the
+    // Asset-side AABB center / half-widths. `encode_raymarch` derives the
     // world-space AABB from these to frustum-cull the volume each frame.
     pub(in crate::metal) world_centre: [f32; 3],
     pub(in crate::metal) world_extent: [f32; 3],
 }
 
-// True when a volume at `centre` with half-widths `extent` is not entirely
+// True when a volume at `center` with half-widths `extent` is not entirely
 // outside the camera frustum. Factored out of the draw loop so the cull
 // predicate can be unit-tested without a GPU-backed `RaymarchVolumeRecord`.
 pub(in crate::metal) fn volume_in_frustum(
-    centre: [f32; 3],
+    center: [f32; 3],
     extent: [f32; 3],
     frustum: &crate::gfx::frustum::Frustum,
 ) -> bool {
     let min = [
-        centre[0] - extent[0],
-        centre[1] - extent[1],
-        centre[2] - extent[2],
+        center[0] - extent[0],
+        center[1] - extent[1],
+        center[2] - extent[2],
     ];
     let max = [
-        centre[0] + extent[0],
-        centre[1] + extent[1],
-        centre[2] + extent[2],
+        center[0] + extent[0],
+        center[1] + extent[1],
+        center[2] + extent[2],
     ];
     frustum.intersects_aabb(min, max)
 }
@@ -400,14 +400,14 @@ pub(in crate::metal) fn build_raymarch_volume_record(
         volumetric: volume.volumetric,
         cast_shadows: volume.cast_shadows,
         refractive: crate::raymarch_source::taps_scene(&programs),
-        world_centre: volume.centre,
+        world_centre: volume.center,
         world_extent: volume.extent,
     })
 }
 
 fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
-        centre: volume.centre,
+        center: volume.center,
         _pad0: 0.0,
         extent: volume.extent,
         _pad1: 0.0,
@@ -423,7 +423,7 @@ fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
 // in `Vertex` shape so the proxy works through the engine's standard
 // vertex descriptor (the same five-attribute layout the main pass and
 // every custom mesh shader expect). 8 corners in `[-0.5, 0.5]^3`; the
-// vertex shader scales by `vol.extent` and translates by `vol.centre`.
+// vertex shader scales by `vol.extent` and translates by `vol.center`.
 // Indices wind 36 CCW triangles (the encoder culls front faces so the
 // rasteriser only fires for back faces).
 type RaymarchCubeBuffers = (
@@ -435,9 +435,9 @@ pub(in crate::metal) fn build_raymarch_cube_buffers(
     device: &ProtocolObject<dyn MTLDevice>,
 ) -> Result<RaymarchCubeBuffers, String> {
     // `extent` in SdfVolume is the AABB half-widths: the box spans
-    // `centre ± extent`. The vertex shader computes `pos * extent +
-    // centre`, so the proxy corners must be at `±1.0` for the scaled
-    // corners to land at `centre ± extent`.
+    // `center ± extent`. The vertex shader computes `pos * extent +
+    // center`, so the proxy corners must be at `±1.0` for the scaled
+    // corners to land at `center ± extent`.
     #[rustfmt::skip]
     let corners: [Vertex; 8] = [
         v([-1.0, -1.0, -1.0]),

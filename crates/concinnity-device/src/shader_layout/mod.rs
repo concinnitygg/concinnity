@@ -55,7 +55,7 @@ const _: () = assert!(concinnity_core::render::uniforms::MAX_PROBES == 8);
 // out of a target it cannot build on, which is otherwise indistinguishable from
 // a layout failure.
 fn check(program: &Program, cases: &[Case]) {
-    if !crate::slangc_gate::slangc_available() {
+    if !concinnity_slang::slangc_available() {
         return;
     }
     let mut drift = Vec::new();
@@ -149,7 +149,7 @@ fn main_bindless_layouts_match_the_shader() {
 // parameter nothing fills and sample undefined contents.
 #[test]
 fn the_metal_main_pass_declares_no_discrete_texture_or_sampler() {
-    if !crate::slangc_gate::slangc_available() {
+    if !concinnity_slang::slangc_available() {
         return;
     }
     let json = programs::reflection(&programs::MAIN_BINDLESS_VERT, Target::Metal)

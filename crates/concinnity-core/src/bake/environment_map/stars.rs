@@ -143,7 +143,7 @@ fn splat(pixels: &mut [[f32; 3]], dir: [f32; 3], colour: [f32; 3], u: f32, v: f3
     }
 }
 
-// Latitude of a texel row's centre, matching the equirect sampler's mapping.
+// Latitude of a texel row's center, matching the equirect sampler's mapping.
 fn row_theta(row: u32) -> f32 {
     PI * (row as f32 + 0.5) / HEIGHT as f32
 }

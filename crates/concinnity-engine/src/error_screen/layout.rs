@@ -2,7 +2,7 @@
 // button's hit rect.
 //
 // Everything is laid out in window pixels against the live drawable size, so
-// the screen re-centres when the window is resized. The labels are deliberately
+// the screen re-centers when the window is resized. The labels are deliberately
 // not screen-owned: a `Screen` maps through the reference-canvas overlay
 // transform, and this path has no world to own one.
 
@@ -106,7 +106,7 @@ pub(super) fn build(
     }];
 
     // One label per authored line, each centred on its own. A single label
-    // holding the newlines would centre the block and left-align the lines
+    // holding the newlines would center the block and left-align the lines
     // inside it, which reads as ragged for a two-line error.
     let mut y = win_h * MESSAGE_Y;
     for line in message.lines() {
@@ -263,7 +263,7 @@ mod tests {
     }
 
     // Each authored line gets its own centred label. A single label holding the
-    // newlines would centre the block and left-align its lines, which leaves a
+    // newlines would center the block and left-align its lines, which leaves a
     // short path hanging off the left of the sentence above it.
     #[test]
     fn each_message_line_is_centered_independently() {
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(lines.len(), 2, "one label per authored line");
         assert!(!lines[0].content.contains('\n'));
         for line in lines {
-            assert_eq!(line.x, 640.0, "each line centres on the window");
+            assert_eq!(line.x, 640.0, "each line centers on the window");
         }
         assert!(lines[1].y > lines[0].y, "the second line stacks below");
         // Stacked without overlapping: the gap clears the first line's box.

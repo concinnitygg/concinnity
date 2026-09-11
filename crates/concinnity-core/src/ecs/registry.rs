@@ -47,7 +47,7 @@
 
 use crate::define_components;
 use crate::ecs::{BlobAssetDef, Component, PayloadLocator};
-use crate::result::CnResult;
+use crate::error::CnError;
 
 /// The one component list. `$cb` is a macro that receives the `Variant => Type`
 /// entries and expands to whatever registry it builds from them. Type paths are
@@ -73,7 +73,7 @@ macro_rules! for_each_component {
                 Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
                 CameraTrack       => $crate::components::CameraTrack { manual, external, singleton, id, args: CameraTrack },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
-                Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("texture", "Texture"), ("scene", "Scene"), ("parent", "Prop"), ("parent", "SkyRotation")], consumed: PropInstance },
+                Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("scene", "Scene"), ("parent", "Prop"), ("parent", "SkyRotation")], consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
                 PropBody          => $crate::components::PropBody { gen, external, consumed },
                 Room              => $crate::components::Room { manual, external, compiled, useful_blank, args: Room, refs: [("texture", "Texture"), ("wall_texture", "Texture"), ("floor_texture", "Texture"), ("ceiling_texture", "Texture")], consumed },
@@ -89,7 +89,7 @@ macro_rules! for_each_component {
                 File              => $crate::components::File { manual, external, compiled, args: File, consumed },
                 BlockType         => $crate::components::BlockType { gen, external, id, useful_blank, consumed },
                 VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk, consumed },
-                InstancedProp     => $crate::components::InstancedProp { gen, external, id, renders, validate: instanced_prop, refs: [("material", "Material"), ("texture", "Texture")], consumed },
+                InstancedProp     => $crate::components::InstancedProp { gen, external, id, renders, validate: instanced_prop, refs: [("material", "Material")], consumed },
                 PostProcessConfig => $crate::components::PostProcessConfig { manual, external, singleton, consumed },
                 Animation         => $crate::components::Animation { gen, external, id, consumed },
                 SkeletonPose      => $crate::components::SkeletonPose { runtime, build: skeleton_pose },
@@ -285,7 +285,7 @@ macro_rules! cn_impl_components {
         impl $crate::ecs::Component for $ty {
             const NAME: &'static str = stringify!($variant);
             $($body)*
-            fn from_baked(bytes: &[u8]) -> Result<Self, $crate::result::CnResult> {
+            fn from_baked(bytes: &[u8]) -> Result<Self, $crate::error::CnError> {
                 Ok($crate::blob::decode_exact(bytes)?)
             }
         }
@@ -305,9 +305,9 @@ mod tests {
     use crate::components::{Prop, Transform};
     use crate::ecs::asset_id::AssetId;
     use crate::ecs::{
-        AssetKind, ComponentAsset, ComponentStorage, ComponentTag, PayloadLocator, ResourceKind,
+        ComponentAsset, ComponentStorage, ComponentTag, PayloadLocator, ResourceKind,
     };
-    use crate::result::CnResult;
+    use crate::error::CnError;
     use alloc::vec::Vec;
 
     // Both halves of the shared list, so the tests below drive the generated
@@ -454,7 +454,6 @@ mod tests {
     fn baked(discriminant: u8, args_bytes: Vec<u8>, name: Option<AssetId>) -> BlobAssetDef {
         BlobAssetDef {
             name,
-            kind: AssetKind::Component,
             discriminant,
             args_bytes,
             payload: None,
@@ -484,7 +483,7 @@ mod tests {
     fn a_record_no_tag_claims_is_rejected() {
         assert_eq!(
             ComponentAsset::from_baked(&baked(u8::MAX, Vec::new(), None)).err(),
-            Some(CnResult::AssetInvalidType)
+            Some(CnError::AssetInvalidType)
         );
     }
 

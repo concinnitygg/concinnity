@@ -7,7 +7,7 @@ use concinnity::cook::{EnvironmentMap, WorldBuilder};
 use crate::palette;
 
 // How far past the ends of the path the floor reaches, and how far to either
-// side of the centre line, so its edge never enters frame.
+// side of the center line, so its edge never enters frame.
 const MARGIN: f32 = 45.0;
 const HALF_WIDTH: f32 = 70.0;
 

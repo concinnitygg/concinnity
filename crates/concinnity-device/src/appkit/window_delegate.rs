@@ -1,4 +1,4 @@
-// src/metal/window_delegate.rs
+// src/appkit/window_delegate.rs
 //
 // NSWindowDelegate that tracks native-fullscreen state authoritatively.
 //

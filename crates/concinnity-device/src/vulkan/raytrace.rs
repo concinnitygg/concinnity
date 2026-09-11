@@ -3274,7 +3274,7 @@ mod tests {
 
     #[test]
     fn rt_skin_kernel_compiles() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         // The skin compute kernel compiles to SPIR-V. Its payload offsets and

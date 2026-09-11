@@ -101,20 +101,21 @@ impl concinnity_core::bake::environment_map::RowScheduler for PoolRows {
 // Worker count set by `configure`, consulted by `JobPool::build` on first use.
 static CONFIGURED_THREADS: OnceLock<usize> = OnceLock::new();
 
-// Auto worker count: one per logical core, less one for the main thread,
-// floored at one.
-fn default_threads() -> usize {
+/// Worker count when nothing configures the pool: one per logical core, less
+/// one for the main thread, floored at one.
+pub fn default_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).max(1))
         .unwrap_or(1)
 }
 
-/// Set the process-wide job pool's worker count. The App calls this from its
-/// `ThreadBudget` at start, before any system uses the pool. It takes effect
-/// only if called before the first `pool()` access (the pool is built once);
-/// a later call, or a value below one, is ignored/clamped.
-pub fn configure(threads: usize) {
-    let _ = CONFIGURED_THREADS.set(threads.max(1));
+/// Set the process-wide job pool's worker count, returning whether the value
+/// was recorded. The App calls this from its `ThreadBudget` at start, before
+/// any system uses the pool. It takes effect only if called before the first
+/// `pool()` access (the pool is built once); a later call is refused and
+/// reported as `false`, and a value below one is clamped.
+pub fn configure(threads: usize) -> bool {
+    CONFIGURED_THREADS.set(threads.max(1)).is_ok()
 }
 
 /// The process-wide job pool, built on first access.

@@ -1,15 +1,13 @@
-// src/app/budget.rs
-//
-// Process-level resource budgets computed once at App start from the host
-// machine and the world's `AppConfig` overrides, then published as world
-// resources so systems (and the debug server) can read them. Two budgets:
-//
-//   ThreadBudget  how many worker threads the shared job pool runs.
-//   MemoryBudget  a soft ceiling on host memory the runtime aims to stay under.
-//
-// The budgets are advisory today: they are computed, logged, and reported.
-// Cooperative enforcement (streaming byte budgets, back-off near the ceiling)
-// is a separate follow-up; nothing here aborts or caps an allocation.
+//! Process-level resource budgets computed once at App start from the host
+//! machine and the world's `AppConfig` overrides, then published as world
+//! resources so systems (and the debug server) can read them. Two budgets:
+//!
+//!   ThreadBudget  how many worker threads the shared job pool runs.
+//!   MemoryBudget  a soft ceiling on host memory the runtime aims to stay under.
+//!
+//! The budgets are advisory today: they are computed, logged, and reported.
+//! Cooperative enforcement (streaming byte budgets, back-off near the ceiling)
+//! is a separate follow-up; nothing here aborts or caps an allocation.
 
 // Absolute default cap on the memory budget regardless of how much RAM the
 // machine has, so a workstation with hundreds of GiB does not implicitly invite
@@ -36,9 +34,8 @@ pub struct ThreadBudget {
 }
 
 impl ThreadBudget {
-    // `job_threads_override` of 0 means "auto": one worker per core, less one
-    // for the main thread (the historical `available_parallelism() - 1`). A
-    // non-zero override is honored but never exceeds the core count.
+    // `job_threads_override` of 0 means "auto", deferring to the job pool's own
+    // default. A non-zero override is honored but never exceeds the core count.
     pub(crate) fn compute(job_threads_override: u32) -> Self {
         let total_cores = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -46,7 +43,7 @@ impl ThreadBudget {
         let job_threads = if job_threads_override > 0 {
             (job_threads_override as usize).min(total_cores)
         } else {
-            total_cores.saturating_sub(1).max(1)
+            concinnity_host::thread::jobs::default_threads()
         };
         Self {
             total_cores,

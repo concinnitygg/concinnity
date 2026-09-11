@@ -306,7 +306,7 @@ pub(crate) fn push_frustum(out: &mut Vec<Line>, f: &Frustum, s: Stroke) {
 // nothing for a degenerate half size.
 pub(crate) fn push_rect(
     out: &mut Vec<Line>,
-    centre: [f32; 3],
+    center: [f32; 3],
     normal: [f32; 3],
     half_size: [f32; 2],
     range: f32,
@@ -318,7 +318,7 @@ pub(crate) fn push_rect(
     let (tangent, bitangent) = plane_basis(normal);
     let corner = |su: f32, sv: f32| {
         add(
-            centre,
+            center,
             add(
                 scale(tangent, su * half_size[0]),
                 scale(bitangent, sv * half_size[1]),
@@ -336,7 +336,7 @@ pub(crate) fn push_rect(
         s,
     );
     if range > 0.0 {
-        seg(out, centre, add(centre, scale(normal, range)), s);
+        seg(out, center, add(center, scale(normal, range)), s);
     }
 }
 

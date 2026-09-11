@@ -18,7 +18,8 @@ use serde_json::{Value, json};
 /// Whether a command reads the world snapshot or mutates the running world.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Access {
-    /// Answers from the per-frame snapshot and changes nothing.
+    /// Answers without changing the world, whether from the per-frame snapshot
+    /// or from a query the engine thread runs on its behalf.
     ReadOnly,
     /// Queues a change the engine applies on a later frame.
     Mutating,
@@ -42,6 +43,9 @@ pub(crate) enum Kind {
     Vec3,
     Vec4,
     NumberList,
+    /// A string drawn from a closed set. The set reaches the client as a JSON
+    /// Schema `enum`, so it is not restated in the description.
+    Choice(&'static [&'static str]),
 }
 
 impl Kind {
@@ -63,6 +67,7 @@ impl Kind {
             Kind::Vec3 => numbers(3),
             Kind::Vec4 => numbers(4),
             Kind::NumberList => json!({ "type": "array", "items": { "type": "number" } }),
+            Kind::Choice(values) => json!({ "type": "string", "enum": values }),
         }
     }
 }
@@ -392,7 +397,7 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "cull-status",
         description: "Read the GPU cull's per-object status buffer back and report how many objects were drawn, frustum-culled, Hi-Z-rejected, or redrawn by the disocclusion pass.",
-        access: Access::Mutating,
+        access: Access::ReadOnly,
         params: &[],
     },
     Command {
@@ -456,13 +461,13 @@ const COMMANDS: &[Command] = &[
         params: &[
             required(
                 "setting",
-                Kind::Text,
-                "Setting key, one of taa, ssao, ssr, ssgi, auto_exposure.",
+                Kind::Choice(&["taa", "ssao", "ssr", "ssgi", "auto_exposure"]),
+                "Setting key.",
             ),
             optional(
                 "op",
-                Kind::Text,
-                "Cycle direction, next or prev. Defaults to next.",
+                Kind::Choice(&["next", "prev"]),
+                "Cycle direction. Defaults to next.",
             ),
         ],
     },
@@ -487,18 +492,18 @@ const COMMANDS: &[Command] = &[
         name: "despawn",
         description: "Remove an authored placement and its descendants from the running world.",
         access: Access::Mutating,
-        params: &[required("name", Kind::Text, "Placement name to remove.")],
+        params: &[required("target", Kind::Text, "Placement name to remove.")],
     },
     Command {
         name: "reparent",
         description: "Move an authored placement under a new parent, or detach it to a root.",
         access: Access::Mutating,
         params: &[
-            required("child", Kind::Text, "Placement name to move."),
+            required("target", Kind::Text, "Placement name to move."),
             optional(
                 "parent",
                 Kind::TextOrNull,
-                "New parent placement name; omit to detach the child to a root.",
+                "New parent placement name; omit to detach the target to a root.",
             ),
         ],
     },
@@ -538,8 +543,22 @@ const COMMANDS: &[Command] = &[
         params: &[
             required(
                 "action",
-                Kind::Text,
-                "One of start, continue, advance, choose, slot, auto, skip, log, save, load, pause, settings, settings_back.",
+                Kind::Choice(&[
+                    "start",
+                    "continue",
+                    "advance",
+                    "choose",
+                    "slot",
+                    "auto",
+                    "skip",
+                    "log",
+                    "save",
+                    "load",
+                    "pause",
+                    "settings",
+                    "settings_back",
+                ]),
+                "Story control action.",
             ),
             optional(
                 "option",
@@ -611,6 +630,9 @@ mod tests {
                 Kind::Vec3 => json!([0.0, 0.0, 0.0]),
                 Kind::Vec4 => json!([0.0, 0.0, 0.0, 0.0]),
                 Kind::NumberList => json!([0.0, 1.0]),
+                // A closed set must sample one of its own members, so the
+                // request struct sees a value its parser accepts.
+                Kind::Choice(values) => json!(values[0]),
             };
             body.insert(param.name.to_string(), value);
         }

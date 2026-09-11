@@ -1,4 +1,4 @@
-// src/check.rs
+// src/authoring/check.rs
 // Validate a world JSONL without producing blob files.
 //
 // Runs the validation front half of the build pipeline (load, expand, and

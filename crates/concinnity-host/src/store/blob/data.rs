@@ -5,7 +5,7 @@
 // both of which that crate is deliberately free of.
 
 use concinnity_core::ecs::PayloadLocator;
-use concinnity_core::result::CnResult;
+use concinnity_core::error::CnError;
 
 // State of one blob file's payload section.
 //
@@ -94,11 +94,11 @@ impl BlobData {
     /// An `Unloaded` overflow blob is read from its file on first access and
     /// becomes `Loaded`. Errors if the locator is out of range, the blob was
     /// released, or the on-demand load fails.
-    pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
+    pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnError> {
         let idx = locator.blob_index as usize;
         let slot = self.slots.get_mut(idx).ok_or_else(|| {
             tracing::error!("BlobData: blob {} is out of range", locator.blob_index);
-            CnResult::FileIo
+            CnError::FileIo
         })?;
         if let BlobSlot::Unloaded(path) = slot {
             tracing::debug!(
@@ -113,10 +113,10 @@ impl BlobData {
             BlobSlot::Loaded(bytes) => bytes,
             BlobSlot::Released => {
                 tracing::error!("BlobData: blob {} has been released", locator.blob_index);
-                return Err(CnResult::FileIo);
+                return Err(CnError::FileIo);
             }
             // Unreachable: an Unloaded slot was loaded just above.
-            BlobSlot::Unloaded(_) => return Err(CnResult::FileIo),
+            BlobSlot::Unloaded(_) => return Err(CnError::FileIo),
         };
 
         let start = locator.offset as usize;
@@ -127,7 +127,7 @@ impl BlobData {
                 locator.len,
                 locator.blob_index
             );
-            CnResult::FileIo
+            CnError::FileIo
         })?;
         section.get(start..end).ok_or_else(|| {
             tracing::error!(
@@ -137,7 +137,7 @@ impl BlobData {
                 locator.blob_index,
                 section.len()
             );
-            CnResult::FileIo
+            CnError::FileIo
         })
     }
 
@@ -189,7 +189,7 @@ impl BlobData {
 // The runtime `PayloadStore` a `PipelineContext` hands to systems. A thin
 // adapter over the inherent API so the pure ECS mechanism names no blob type.
 impl concinnity_core::ecs::PayloadStore for BlobData {
-    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
+    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnError> {
         BlobData::read(self, locator)
     }
 
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn read_errors_when_a_deferred_overflow_blob_is_missing() {
         let mut bd = BlobData::from_blob_files(Vec::new(), vec!["/nonexistent/cn/1".into()]);
-        assert_eq!(bd.read(&locator(1, 0, 1)), Err(CnResult::FileIo));
+        assert_eq!(bd.read(&locator(1, 0, 1)), Err(CnError::FileIo));
     }
 
     #[test]

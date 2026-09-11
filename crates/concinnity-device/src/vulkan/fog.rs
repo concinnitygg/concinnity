@@ -1102,7 +1102,7 @@ mod tests {
 
     #[test]
     fn fog_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         // Compile the rewritten froxel-sampling fragment shader (both MSAA

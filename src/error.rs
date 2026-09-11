@@ -3,7 +3,7 @@
 #[cfg(feature = "std")]
 use std::path::PathBuf;
 
-use concinnity_core::result::CnResult;
+use concinnity_core::error::CnError;
 
 /// Why an application could not load its world, or could not run it.
 ///
@@ -29,7 +29,7 @@ pub enum Error {
         /// The primary blob file that was read.
         blob: PathBuf,
         /// What the read reported.
-        cause: CnResult,
+        cause: CnError,
     },
 
     /// The world was packaged as one self-contained blob file, but it needs
@@ -50,7 +50,7 @@ pub enum Error {
 
     /// The world refused to start, or a system stopped it with a failure.
     #[error(transparent)]
-    Runtime(#[from] CnResult),
+    Runtime(#[from] CnError),
 }
 
 #[cfg(feature = "std")]
@@ -96,21 +96,21 @@ pub(crate) fn from_startup(error: concinnity_engine::StartupError) -> Error {
 mod tests {
     use super::Error;
     use alloc::string::ToString;
-    use concinnity_core::result::CnResult;
+    use concinnity_core::error::CnError;
 
     // The one variant every tier reports, so the signature ports whether or
     // not there is an operating system underneath it.
     #[test]
     fn a_runtime_failure_carries_the_status_it_was_built_from() {
-        let error = Error::from(CnResult::InvalidState);
-        assert_eq!(error, Error::Runtime(CnResult::InvalidState));
-        assert_eq!(error.to_string(), CnResult::InvalidState.to_string());
+        let error = Error::from(CnError::InvalidState);
+        assert_eq!(error, Error::Runtime(CnError::InvalidState));
+        assert_eq!(error.to_string(), CnError::InvalidState.to_string());
     }
 
     #[cfg(feature = "std")]
     mod std_tier {
         use super::super::Error;
-        use concinnity_core::result::CnResult;
+        use concinnity_core::error::CnError;
         use std::io::ErrorKind;
         use std::path::PathBuf;
 
@@ -126,7 +126,7 @@ mod tests {
                 Error::MissingData { blob: blob() },
                 Error::UnreadableData {
                     blob: blob(),
-                    cause: CnResult::FileIo,
+                    cause: CnError::FileIo,
                 },
                 Error::OverflowUnsupported {
                     blob: blob(),
@@ -142,10 +142,10 @@ mod tests {
         fn an_unreadable_blob_reports_what_the_read_said() {
             let error = Error::UnreadableData {
                 blob: blob(),
-                cause: CnResult::FileIo,
+                cause: CnError::FileIo,
             };
             assert!(
-                error.to_string().contains(&CnResult::FileIo.to_string()),
+                error.to_string().contains(&CnError::FileIo.to_string()),
                 "{error}"
             );
         }
@@ -172,7 +172,7 @@ mod tests {
                 (
                     Error::UnreadableData {
                         blob: blob(),
-                        cause: CnResult::FileIo,
+                        cause: CnError::FileIo,
                     },
                     ErrorKind::InvalidData,
                 ),
@@ -183,7 +183,7 @@ mod tests {
                     },
                     ErrorKind::InvalidData,
                 ),
-                (Error::Runtime(CnResult::InvalidState), ErrorKind::Other),
+                (Error::Runtime(CnError::InvalidState), ErrorKind::Other),
             ];
 
             for (error, kind) in cases {
@@ -209,11 +209,11 @@ mod tests {
                 (
                     S::UnreadableData {
                         blob: blob(),
-                        cause: CnResult::FileIo,
+                        cause: CnError::FileIo,
                     },
                     Error::UnreadableData {
                         blob: blob(),
-                        cause: CnResult::FileIo,
+                        cause: CnError::FileIo,
                     },
                 ),
                 (

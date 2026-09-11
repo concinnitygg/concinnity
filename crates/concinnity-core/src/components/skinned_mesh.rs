@@ -9,10 +9,8 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::PayloadLocator;
-use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_material_handle;
-use crate::ecs::de_opt_texture_handle;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -157,9 +155,6 @@ pub struct SkinnedMesh {
     /// parameters.
     #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
-    /// [Texture](#texture) (older path); ignored when `material` is set.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
-    pub texture: Option<TextureHandle>,
     /// World-space position.
     pub position: [f32; 3],
     /// World rotation, Euler degrees [pitch, yaw, roll], YXZ order.
@@ -284,15 +279,13 @@ mod tests {
     fn an_imported_mesh_round_trips_through_postcard() {
         crate::test_support::install_resolvers();
         let m: SkinnedMesh = serde_json::from_str(
-            r#"{"source":"hero.glb","skin_index":1,"material":"skin_mat","texture":"skin_tex",
-                "vertices":[{"pos":[0,0,0]}],"indices":[0],
+            r#"{"source":"hero.glb","skin_index":1,"material":"skin_mat","vertices":[{"pos":[0,0,0]}],"indices":[0],
                 "morph_target_names":["smile"],"morph_deltas":[{"position":[0,0.1,0]}],
                 "position":[1,0,2],"scale":[1,1,1],"lod_levels":2,"lod_distances":[10],
                 "max_instances":4,"capsule":{"half_height":0.9,"radius":0.35}}"#,
         )
         .unwrap();
         assert_eq!(m.material, Some(MaterialHandle(8)));
-        assert_eq!(m.texture, Some(TextureHandle(8)));
         assert_eq!(m.morph_target_names, ["smile"]);
 
         let bytes = postcard::to_allocvec(&m).unwrap();

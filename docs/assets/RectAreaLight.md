@@ -11,12 +11,12 @@ panel's real dimensions, so a wide softbox wraps light around a surface and
 leaves a stretched rectangular reflection on glossy materials. Use it for
 windows, ceiling panels, screens, and practical lights.
 
-The panel is positioned by `centre`, oriented by `normal` (the direction it
+The panel is positioned by `center`, oriented by `normal` (the direction it
 emits), and sized by `half_size`, matching [GlassPanel](GlassPanel.md).
 
 ## Parameters
 
-- `centre`: An array of 3 floats. World-space position of the panel's centre. Defaults to `[0.0, 3.0, 0.0]`.
+- `center`: An array of 3 floats. World-space position of the panel's center. Defaults to `[0.0, 3.0, 0.0]`.
 - `normal`: An array of 3 floats. Direction the panel emits. Normalised on load; defaults to `+Z` when degenerate.
 - `half_size`: An array of 2 floats. Half-width and half-height of the panel, in world units. Defaults to `[1.0, 1.0]`.
 - `color`: An array of 3 floats. Linear-space RGB colour of the light. Defaults to `[1.0, 1.0, 1.0]`.

@@ -31,14 +31,14 @@ pub struct RaymarchView {
     pub sky_rot: [[f32; 4]; 3],
 }
 
-/// Per-volume uniforms, 176 bytes. `centre` and `extent` each pair with the pad
+/// Per-volume uniforms, 176 bytes. `center` and `extent` each pair with the pad
 /// that completes their `float4` lane, for the reason above.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct RaymarchVolumeUniforms {
-    /// World-space centre of the bounding box.
-    pub centre: [f32; 3],
-    /// Padding completing the lane `centre` opens.
+    /// World-space center of the bounding box.
+    pub center: [f32; 3],
+    /// Padding completing the lane `center` opens.
     pub _pad0: f32,
     /// Half-widths of the bounding box.
     pub extent: [f32; 3],

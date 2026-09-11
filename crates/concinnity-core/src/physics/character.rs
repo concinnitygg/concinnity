@@ -9,7 +9,7 @@ use crate::physics::LayerMask;
 /// One character-capsule move request.
 #[derive(Debug, Clone, Copy)]
 pub struct CharacterMoveInput {
-    /// World-space capsule centre before the move.
+    /// World-space capsule center before the move.
     pub center: [f32; 3],
     /// Desired translation for this tick.
     pub desired: [f32; 3],

@@ -51,7 +51,7 @@ use ray::{BoundsProbe, Ray};
 pub struct ShapeCast {
     /// What to sweep.
     pub shape: ColliderShape,
-    /// Where the shape's centre starts, in world space.
+    /// Where the shape's center starts, in world space.
     pub origin: [f32; 3],
     /// The shape's orientation, held for the whole sweep.
     pub euler_deg: [f32; 3],

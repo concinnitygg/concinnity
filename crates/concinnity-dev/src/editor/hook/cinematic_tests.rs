@@ -115,7 +115,7 @@ fn a_previewed_world_is_taken_by_the_attract_camera() {
     assert!(h.cinematic.is_some(), "the cycle is running");
     let opened = pose(&world);
     assert_ne!(opened, AUTHORED, "the shot placed the camera");
-    // It stands off the bounds centre, looking down on it.
+    // It stands off the bounds center, looking down on it.
     assert!(opened.position[1] > 1.0 && opened.pitch < 0.0, "{opened:?}");
     let f = fade(&world);
     assert!(f.visible && f.tint[3] > 0.9, "the cycle opens on black");

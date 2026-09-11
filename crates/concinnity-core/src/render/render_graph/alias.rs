@@ -1,4 +1,4 @@
-// src/render_graph/alias.rs
+// src/render/render_graph/alias.rs
 //
 // Transient-resource memory aliasing planner. The compile pass records which
 // passes touch each resource and the schedule's happens-before relation over

@@ -20,7 +20,7 @@ pub(super) fn block_type_to_chunk(bt: &BlockType) -> crate::geometry::ChunkBlock
 }
 
 // World-space position used to score a draw object for texture streaming:
-// the AABB centre when bounds are finite, otherwise the model-matrix
+// the AABB center when bounds are finite, otherwise the model-matrix
 // translation (dynamic props carry a non-finite sentinel AABB).
 pub(super) fn draw_object_position(obj: &crate::gfx::render_types::DrawObject) -> [f32; 3] {
     let finite = obj
@@ -229,7 +229,7 @@ mod tests {
         assert!(!block_type_to_chunk(&bt).solid);
     }
 
-    // Finite bounds score at the AABB centre.
+    // Finite bounds score at the AABB center.
     #[test]
     fn draw_object_position_uses_aabb_centre_when_finite() {
         let obj = draw(IDENTITY, [-2.0, 0.0, 4.0], [4.0, 6.0, 8.0], 0, 0, 0);

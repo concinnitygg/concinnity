@@ -196,10 +196,8 @@ impl SettingsState {
                     let quality = gsys::derive_quality_settings(&self.post_config);
                     ops.record(move |backend| backend.update_quality_params(quality));
                 } else if !settings::is_controls_slider(&cmd.setting) {
-                    {
-                        let params = self.post_process;
-                        ops.record(move |backend| backend.update_post_process(params));
-                    }
+                    let params = self.post_process;
+                    ops.record(move |backend| backend.update_post_process(params));
                 }
                 // Ambient (IBL) scale lives in LightUniforms, not
                 // PostProcessParams, so it takes a dedicated setter.
@@ -332,10 +330,8 @@ impl SettingsState {
                 // Auto-exposure may have flipped off; re-push the static
                 // post-process params so exposure reverts (mirrors the
                 // quality-toggle arm below).
-                {
-                    let params = self.post_process;
-                    ops.record(move |backend| backend.update_post_process(params));
-                }
+                let params = self.post_process;
+                ops.record(move |backend| backend.update_post_process(params));
                 // Restart-required: update the live render scale for the
                 // row label only (the upscaler + targets are sized at init,
                 // so it takes effect at the next launch).
@@ -350,25 +346,19 @@ impl SettingsState {
                 self.shadow_map_size = self.authored_shadow_map_size.min(ceiling.shadow_map_size);
                 self.shadow_update =
                     quality_preset::clamp_shadow_update(self.authored_shadow_update, &ceiling);
-                {
-                    let update = self.shadow_update;
-                    ops.record(move |backend| backend.set_shadow_update(update));
-                }
+                let update = self.shadow_update;
+                ops.record(move |backend| backend.set_shadow_update(update));
                 // Shadow distance: live (the cascade-split math reads it
                 // each frame), so re-derive from the authored baseline and
                 // push it to the backend.
                 self.shadow_distance = self.authored_shadow_distance.min(ceiling.shadow_distance);
-                {
-                    let distance = self.shadow_distance;
-                    ops.record(move |backend| backend.set_shadow_distance(distance));
-                }
+                let distance = self.shadow_distance;
+                ops.record(move |backend| backend.set_shadow_distance(distance));
                 // Shadow cascade count: live (the per-frame split + schedule
                 // read it), so re-derive from the authored baseline and push.
                 self.shadow_cascades = self.authored_shadow_cascades.min(ceiling.shadow_cascades);
-                {
-                    let count = self.shadow_cascades;
-                    ops.record(move |backend| backend.set_shadow_cascades(count));
-                }
+                let count = self.shadow_cascades;
+                ops.record(move |backend| backend.set_shadow_cascades(count));
                 // Anisotropy: restart-required, so re-derive from the
                 // authored baseline for the row label only (the sampler is
                 // built at init; the new degree takes effect next launch).
@@ -498,10 +488,8 @@ impl SettingsState {
                 "vsync" => {
                     let next = settings::cycle(self.vsync as usize, opts.len(), cmd.op);
                     self.vsync = next == 1;
-                    {
-                        let on = self.vsync;
-                        ops.record(move |backend| backend.set_vsync(on));
-                    }
+                    let on = self.vsync;
+                    ops.record(move |backend| backend.set_vsync(on));
                     cfg.graphics.vsync = Some(self.vsync);
                     Some(opts[next])
                 }
@@ -551,10 +539,8 @@ impl SettingsState {
                     // window at the display size (no-op while fullscreen
                     // is still animating; each backend guards that).
                     if mode == WindowMode::Windowed {
-                        {
-                            let (w, h) = (self.window_args.width, self.window_args.height);
-                            ops.record(move |backend| backend.set_window_size(w, h));
-                        }
+                        let (w, h) = (self.window_args.width, self.window_args.height);
+                        ops.record(move |backend| backend.set_window_size(w, h));
                     }
                     // The Resolution row only applies in fullscreen, so
                     // the new mode grays it out or restores it (the
@@ -663,10 +649,8 @@ impl SettingsState {
                     // toggle-on is harmless: the AE loop overwrites it next
                     // frame.
                     if key == "auto_exposure" {
-                        {
-                            let params = self.post_process;
-                            ops.record(move |backend| backend.update_post_process(params));
-                        }
+                        let params = self.post_process;
+                        ops.record(move |backend| backend.update_post_process(params));
                     }
                     Some(opts[next])
                 }
@@ -703,10 +687,8 @@ impl SettingsState {
                     // live (the TAA pass itself rebuilt via the call above).
                     if key == "aa_mode" {
                         self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
-                        {
-                            let params = self.post_process;
-                            ops.record(move |backend| backend.update_post_process(params));
-                        }
+                        let params = self.post_process;
+                        ops.record(move |backend| backend.update_post_process(params));
                     }
                     Some(opts[next])
                 }
@@ -767,10 +749,8 @@ impl SettingsState {
                     let cur = settings::shadow_update_index(self.shadow_update);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.shadow_update = settings::shadow_update_at(next);
-                    {
-                        let update = self.shadow_update;
-                        ops.record(move |backend| backend.set_shadow_update(update));
-                    }
+                    let update = self.shadow_update;
+                    ops.record(move |backend| backend.set_shadow_update(update));
                     cfg.graphics.shadow_update = Some(self.shadow_update);
                     self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
@@ -781,10 +761,8 @@ impl SettingsState {
                     let cur = settings::shadow_distance_index(self.shadow_distance);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.shadow_distance = settings::shadow_distance_at(next);
-                    {
-                        let distance = self.shadow_distance;
-                        ops.record(move |backend| backend.set_shadow_distance(distance));
-                    }
+                    let distance = self.shadow_distance;
+                    ops.record(move |backend| backend.set_shadow_distance(distance));
                     cfg.graphics.shadow_distance = Some(self.shadow_distance);
                     self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
@@ -795,10 +773,8 @@ impl SettingsState {
                     let cur = settings::shadow_cascades_index(self.shadow_cascades);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.shadow_cascades = settings::shadow_cascades_at(next);
-                    {
-                        let count = self.shadow_cascades;
-                        ops.record(move |backend| backend.set_shadow_cascades(count));
-                    }
+                    let count = self.shadow_cascades;
+                    ops.record(move |backend| backend.set_shadow_cascades(count));
                     cfg.graphics.shadow_cascades = Some(self.shadow_cascades);
                     self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])

@@ -10,14 +10,14 @@ use crate::ecs::asset_id::AssetId;
 /// displacement, and no depth-based colour. It's a simple building block for
 /// translucent surfaces such as windows, ice, holograms, or force fields.
 ///
-/// The panel is positioned by `centre`, oriented by `normal` (the facing
+/// The panel is positioned by `center`, oriented by `normal` (the facing
 /// direction), and sized by `half_size` (half-width along the panel's tangent,
 /// half-height along its bitangent).
 ///
 /// ```rust
 /// # use concinnity_core::components::GlassPanel;
 /// GlassPanel {
-///     centre: [0.0, 2.0, -3.0],
+///     center: [0.0, 2.0, -3.0],
 ///     normal: [0.0, 0.0, 1.0],
 ///     half_size: [2.0, 1.5],
 ///     tint: [0.6, 0.85, 0.9],
@@ -32,8 +32,8 @@ pub struct GlassPanel {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// World-space position of the panel's centre.
-    pub centre: [f32; 3],
+    /// World-space position of the panel's center.
+    pub center: [f32; 3],
     /// Facing direction of the panel. Normalised on load; defaults to +Z when
     /// degenerate.
     pub normal: [f32; 3],
@@ -57,7 +57,7 @@ impl Default for GlassPanel {
     fn default() -> Self {
         Self {
             asset_id: AssetId::default(),
-            centre: [0.0, 1.0, 0.0],
+            center: [0.0, 1.0, 0.0],
             normal: [0.0, 0.0, 1.0],
             half_size: [1.0, 1.0],
             tint: [0.7, 0.85, 0.95],
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn a_blank_panel_is_a_visible_half_transparent_unit_square() {
         let g = GlassPanel::default();
-        assert_eq!(g.centre, [0.0, 1.0, 0.0]);
+        assert_eq!(g.center, [0.0, 1.0, 0.0]);
         assert_eq!(g.normal, [0.0, 0.0, 1.0]);
         assert_eq!(g.half_size, [1.0, 1.0]);
         assert_eq!(g.opacity, 0.5);
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn an_authored_panel_parses_and_round_trips_through_postcard() {
         let g: GlassPanel = serde_json::from_str(
-            r#"{"centre":[2,1,-3],"normal":[1,0,0],"half_size":[0.6,1.2],
+            r#"{"center":[2,1,-3],"normal":[1,0,0],"half_size":[0.6,1.2],
                 "tint":[1,1,1],"opacity":0.2,"refraction_strength":0.1,"visible":false}"#,
         )
         .unwrap();
@@ -99,7 +99,7 @@ mod tests {
 
         let bytes = postcard::to_allocvec(&g).unwrap();
         let back: GlassPanel = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.centre, [2.0, 1.0, -3.0]);
+        assert_eq!(back.center, [2.0, 1.0, -3.0]);
         assert_eq!(back.half_size, [0.6, 1.2]);
         assert_eq!(back.tint, [1.0, 1.0, 1.0]);
         assert_eq!(back.opacity, 0.2);

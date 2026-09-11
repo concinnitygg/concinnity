@@ -689,7 +689,7 @@ mod tests {
     // round-trip tests.
     #[test]
     fn ssr_resolve_shaders_compile() {
-        if !crate::slangc_gate::slangc_available() {
+        if !concinnity_slang::slangc_available() {
             return;
         }
         super::compile_ssr_shaders(false).expect("ssr resolve shaders must compile");

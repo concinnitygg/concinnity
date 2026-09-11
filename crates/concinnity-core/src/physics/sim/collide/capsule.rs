@@ -538,11 +538,11 @@ mod tests {
         // Box edge running along Y at (1, ., 1); capsule axis horizontal and
         // perpendicular to the diagonal, just overlapping the edge.
         let d = core::f32::consts::FRAC_1_SQRT_2;
-        let centre = vec3(1.1, 0.0, 1.1);
+        let center = vec3(1.1, 0.0, 1.1);
         let along = vec3(d, 0.0, -d) * 0.5;
         assert!(box_capsule(
             oriented(vec3(1.0, 1.0, 1.0), Vec3::ZERO, [0.0; 3]),
-            (centre - along, centre + along),
+            (center - along, center + along),
             0.2,
             0.0,
             &mut m
@@ -570,11 +570,11 @@ mod tests {
     fn a_capsule_aimed_at_a_box_corner_contacts_at_the_nearest_points() {
         let mut m = manifold();
         let d = 1.0 / (3.0f32).sqrt();
-        let centre = vec3(1.2, 1.2, 1.2);
+        let center = vec3(1.2, 1.2, 1.2);
         let along = vec3(d, d, d) * 0.3;
         assert!(box_capsule(
             oriented(vec3(1.0, 1.0, 1.0), Vec3::ZERO, [0.0; 3]),
-            (centre - along, centre + along),
+            (center - along, center + along),
             0.2,
             0.0,
             &mut m

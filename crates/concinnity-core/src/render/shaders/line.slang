@@ -1,7 +1,7 @@
 // World-space line pass: single source for every backend.
 //
 // The CPU expanded each line into a camera-facing ribbon whose corners already
-// sit off the line centre (gfx::lines::build_vertices), so the vertex stage
+// sit off the line center (gfx::lines::build_vertices), so the vertex stage
 // only applies the camera VP.
 //
 // Alpha does the two things a line needs: `edge` fades the outer pixel of the

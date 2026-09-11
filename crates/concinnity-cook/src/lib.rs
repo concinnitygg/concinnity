@@ -33,7 +33,7 @@
 )]
 
 pub(crate) use concinnity_core::gfx;
-pub(crate) use concinnity_core::{components, result};
+pub(crate) use concinnity_core::{components, error};
 
 // The vocabulary's ECS surface, with the build-time name interner shadowing its
 // `asset_id`: the interner keeps a per-thread table, so it lives in
@@ -90,7 +90,6 @@ mod file_stamp;
 pub mod import;
 pub mod pipeline;
 pub mod resource_handles;
-mod slangc_gate;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode API stays in concinnity-core.

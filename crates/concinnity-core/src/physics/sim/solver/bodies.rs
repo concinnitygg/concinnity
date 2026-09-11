@@ -92,7 +92,7 @@ impl SolverBody {
         self.linear_velocity + self.angular_velocity.cross(r)
     }
 
-    /// Take an impulse through an arm from the centre of mass.
+    /// Take an impulse through an arm from the center of mass.
     ///
     /// A body the step cannot move is left alone rather than added to by zero:
     /// its inverse mass and inertia are both zero, so the arithmetic changed

@@ -18,7 +18,7 @@ use crate::physics::{
 const TICK: f32 = 1.0 / 60.0;
 const HALF_HEIGHT: f32 = 0.6;
 const RADIUS: f32 = 0.3;
-/// Distance from the capsule's centre to the ground it stands on.
+/// Distance from the capsule's center to the ground it stands on.
 const STAND: f32 = HALF_HEIGHT + RADIUS;
 /// Walking speed as a per-tick displacement.
 const PACE: f32 = 0.05;
@@ -158,7 +158,7 @@ fn walled() -> Mover {
 fn a_move_into_a_wall_is_stopped_by_it() {
     let mut mover = walled();
     mover.walk_for(60, 0.0, PACE);
-    // The capsule's surface stops against the face, so its centre stops a
+    // The capsule's surface stops against the face, so its center stops a
     // radius short of it.
     assert!(
         (mover.z() - (1.0 - RADIUS)).abs() < 0.01,
@@ -520,7 +520,7 @@ fn a_non_finite_move_translates_nowhere() {
     assert_eq!(mover.center, before, "the capsule drifted");
 }
 
-// The same guard on the other side: a capsule whose own centre has gone
+// The same guard on the other side: a capsule whose own center has gone
 // non-finite cannot be resolved against anything, so the move is refused
 // rather than searching from an unusable position.
 #[test]

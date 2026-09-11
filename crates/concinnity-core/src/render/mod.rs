@@ -5,9 +5,16 @@
 //!
 //! Sits above [`crate::gfx`], which holds the layouts and the kernels this
 //! prepares into, and owns no device or window handle of its own: a frame's
-//! work is built here and handed to whichever backend implements the seam. The
-//! device backends (concinnity-device) and the runtime driver
-//! (concinnity-engine) are the two consumers.
+//! work is built here and handed to whichever backend implements the seam.
+//!
+//! Three crates consume it. The device backends (concinnity-device) implement
+//! it, and the runtime driver (concinnity-engine) drives a frame through it,
+//! with simulation systems queueing their GPU mutations as [`ops`] so the
+//! submit path replays them in record order. The dev tooling
+//! (concinnity-dev) is the third: asset hot-reload and the debug verbs call
+//! the backend directly from `DebugHook::tick` on the render thread, outside
+//! that ordering guarantee, because they run between frames rather than inside
+//! one.
 
 pub mod area_light;
 pub mod backend;

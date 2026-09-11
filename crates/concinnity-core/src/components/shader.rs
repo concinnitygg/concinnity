@@ -193,7 +193,7 @@ impl ShaderPrograms {
 impl Component for Shader {
     const NAME: &'static str = "Shader";
 
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::CnError> {
         Ok(crate::blob::decode_exact(bytes)?)
     }
 

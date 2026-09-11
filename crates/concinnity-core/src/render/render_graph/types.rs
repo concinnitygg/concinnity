@@ -1,4 +1,4 @@
-// src/render_graph/types.rs
+// src/render/render_graph/types.rs
 //
 // Shared, backend-agnostic types for the render graph: resource handles,
 // resource descriptions, state / access enums, and the small structs the

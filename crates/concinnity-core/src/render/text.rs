@@ -112,7 +112,7 @@ pub fn derive_cap_px(metrics: &FontMetrics, size_px: f32) -> f32 {
 }
 
 /// Width of the widest line of `content` in scaled pixels: what a label's
-/// background box and its centre / right alignment are both sized against.
+/// background box and its center / right alignment are both sized against.
 pub fn widest_line_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
     content
         .split('\n')
@@ -354,7 +354,7 @@ pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<La
 
 /// Build one TextDrawCall per TextLabel, laying out character quads using the
 /// loaded font metrics. When `win_w` and `win_h` are both > 0.0, labels with
-/// `centered = true` are repositioned to the centre of the viewport. `clips`
+/// `centered = true` are repositioned to the center of the viewport. `clips`
 /// maps an element id to a reference-space clip band; a label found there has
 /// its call scissored to that band (mapped to the window), so a scrollable
 /// panel's off-band rows do not bleed over its chrome.

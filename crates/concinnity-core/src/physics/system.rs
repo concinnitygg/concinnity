@@ -112,7 +112,7 @@ struct PlayerPhysics {
     // The capsule each tick's move is resolved against. Its dimensions come
     // from the RigidBody at init and never change afterwards.
     shape: CharacterCapsule,
-    // Camera eye Y minus capsule-centre Y.
+    // Camera eye Y minus capsule-center Y.
     eye_offset: f32,
     // False for a free-flying camera (no RigidBody): no gravity, no jump.
     has_gravity: bool,
@@ -122,7 +122,7 @@ struct PlayerPhysics {
     vy: f32,
     // Whether the capsule rested on a surface last tick.
     grounded: bool,
-    // Authoritative simulated capsule centre with its render blend snapshots.
+    // Authoritative simulated capsule center with its render blend snapshots.
     center: PointInterp,
     // The eye position written back last frame. A Camera3D position that
     // differs was moved externally (free-fly, a teleport) and is adopted with
@@ -1490,7 +1490,7 @@ mod tests {
             kind: "spherical".to_string(),
             body_a: Some(bob_id),
             body_b: None,
-            // The bob's own centre hangs one unit from the anchor point.
+            // The bob's own center hangs one unit from the anchor point.
             anchor_a: [-1.0, 0.0, 0.0],
             anchor_b: [0.0, 4.0, 0.0],
             ..Default::default()

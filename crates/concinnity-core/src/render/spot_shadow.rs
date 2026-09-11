@@ -206,7 +206,7 @@ mod tests {
         assert!((clip[2] / clip[3]) < 1.0);
     }
 
-    // The cone axis maps to the centre of the slice, and the outer cone edge
+    // The cone axis maps to the center of the slice, and the outer cone edge
     // lands on the NDC boundary -- i.e. the frustum exactly contains the cone.
     #[test]
     fn the_cone_inscribes_the_shadow_frustum() {
@@ -217,10 +217,10 @@ mod tests {
         l.range = 20.0;
         let d = spot_shadow_data(&l);
 
-        // Straight down the axis: dead centre.
-        let centre = transform(d.light_vp, [0.0, 0.0, 0.0]);
-        assert!((centre[0] / centre[3]).abs() < 1e-4);
-        assert!((centre[1] / centre[3]).abs() < 1e-4);
+        // Straight down the axis: dead center.
+        let center = transform(d.light_vp, [0.0, 0.0, 0.0]);
+        assert!((center[0] / center[3]).abs() < 1e-4);
+        assert!((center[1] / center[3]).abs() < 1e-4);
 
         // 10 units down, offset by tan(30 deg) * 10: exactly the cone edge.
         let edge_x = 30.0_f32.to_radians().tan() * 10.0;

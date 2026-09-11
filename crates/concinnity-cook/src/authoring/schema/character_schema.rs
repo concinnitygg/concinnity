@@ -111,7 +111,7 @@ impl ProportionGroup {
 pub struct SynthParams {
     /// Displacement at full weight, in model units.
     pub amplitude: f32,
-    /// `bulge`: centre along the bone, as a fraction of its length.
+    /// `bulge`: center along the bone, as a fraction of its length.
     pub along: f32,
     /// `bulge`: width of the lobe along the bone, as a fraction of its length.
     pub sigma: f32,

@@ -256,9 +256,9 @@ impl DxContext {
         // (`ssao_ao_srv_gpu`) falls back to the 1x1 white slot when off, so a
         // turn-off needs no rewire beyond dropping the resources.
         let ssao_was = self.ssao.resources.is_some();
-        let gbuffer_on = self.gbuffer.is_some();
+        let gbuffer_enabled = self.gbuffer.is_some();
         if desired_ssao && !ssao_was {
-            self.rebuild_transient_pool_and_consumers(true, gbuffer_on)?;
+            self.rebuild_transient_pool_and_consumers(true, gbuffer_enabled)?;
             let ao_resource = self
                 .transient_pool
                 .resource_for("ao_output")
@@ -286,7 +286,7 @@ impl DxContext {
         } else if !desired_ssao && ssao_was {
             // Drop before the pool rebuild removes the `ao_output` it points at.
             self.ssao.resources = None;
-            self.rebuild_transient_pool_and_consumers(false, gbuffer_on)?;
+            self.rebuild_transient_pool_and_consumers(false, gbuffer_enabled)?;
         }
 
         Ok(())
@@ -372,15 +372,15 @@ impl DxContext {
     // toggled feature leaves the other one's descriptors naming freed memory.
     fn rebuild_transient_pool_and_consumers(
         &mut self,
-        ssao_on: bool,
-        gbuffer_on: bool,
+        ssao_enabled: bool,
+        gbuffer_enabled: bool,
     ) -> Result<(), String> {
         self.transient_pool.rebuild(
             &self.device,
             &self.command_queue,
             &super::transient_pool::transient_slots(
-                ssao_on,
-                gbuffer_on,
+                ssao_enabled,
+                gbuffer_enabled,
                 (self.extent.render_width, self.extent.render_height),
                 (self.extent.output_width, self.extent.output_height),
             )?,

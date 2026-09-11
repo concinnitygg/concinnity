@@ -14,9 +14,9 @@ use crate::gfx::render_types::*;
 
 use super::allocator::PooledBuffer;
 use super::draw::*;
-use super::input::*;
 use super::post::*;
 use super::texture::*;
+use crate::gfx::input::RenderInput;
 
 // Off-screen HDR render-target format. The main pass renders linear-light
 // radiance into this; the composite pass tonemaps it down to the swapchain's
@@ -2074,7 +2074,7 @@ impl VkContext {
             .map(std::sync::Arc::clone)
     }
 
-    pub(crate) fn take_input(&mut self) -> InputState {
+    pub(crate) fn take_input(&mut self) -> RenderInput {
         // Both platform windows snapshot straight into the shared RenderInput.
         self.window_mut().take_input()
     }

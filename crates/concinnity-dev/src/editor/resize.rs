@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn interior_and_outside_miss() {
-        // Dead centre: no band.
+        // Dead center: no band.
         assert_eq!(hit_test(O, S, T, 200.0, 250.0), None);
         // Fully outside on every side.
         assert_eq!(hit_test(O, S, T, 50.0, 250.0), None);

@@ -22,7 +22,7 @@ use super::bodies::SolverBody;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ConstraintPoint {
-    /// Offset from each body's centre to the contact, as of the top of the
+    /// Offset from each body's center to the contact, as of the top of the
     /// step. Rotated by the body's delta rotation as the substeps advance.
     anchor_a: Vec3,
     anchor_b: Vec3,

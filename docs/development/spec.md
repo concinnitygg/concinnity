@@ -102,6 +102,19 @@ into a shipped player.
 
 Crates are defined under [crates/](../../crates).
 
+| Crate                  | Role                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `concinnity-core`      | The runtime vocabulary and the CPU compute over it: components, ECS, render prep, physics, bake.   |
+| `concinnity-host`      | What the engine needs from the machine it runs on: paths, the blob store, threads.                |
+| `concinnity-engine`    | The runtime: world loop, `GraphicsSystem` renderer driver, audio, input.                          |
+| `concinnity-device`    | The hardware-facing backends: Metal, DirectX 12, Vulkan.                                          |
+| `concinnity-cook`      | The build side, kept out of the runtime foundation so that foundation carries no build code.      |
+| `concinnity-dev`       | The dev tooling library: everything the `concinnity` binary does, minus its argv parsing.         |
+| `concinnity-slang`     | The `slangc` invocation, shared by build scripts and the renderer.                                |
+| `concinnity-toolchain` | Shared build-script support for the workspace.                                                    |
+| `concinnity-ffi`       | The C ABI a host application links to embed the engine.                                           |
+| `concinnity-testing`   | Test scaffolding shared by the workspace; a dev-dependency only.                                  |
+
 ### 2.2 Binaries
 
 Both binaries are targets of the root `concinnity` package, over the libraries
@@ -109,7 +122,7 @@ under `crates/`.
 
 | Binary           | Purpose                                                                                                                      |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `concinnity`     | Developer CLI: `init`, `new`, `build`, `run`, `debug`, `editor`, `add`, `rm`, `list`, `explain`, `test`, `export`, `docs`.   |
+| `concinnity`     | Developer CLI: `init`, `new`, `build`, `run`, `debug`, `editor`, `add`, `rm`, `list`, `explain`, `test`, `export`, `docs`, `mcp`, `version`. |
 | `concinnity-run` | Shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor. |
 
 `concinnity run` and `concinnity-run` drive the same engine loop. The
@@ -117,7 +130,9 @@ difference is where the state root is anchored and how a missing world is
 reported. `concinnity debug` compiles a world in memory and stands up a
 localhost inspection channel; `concinnity editor` compiles one the same way and
 overlays the in-engine editor on it. Neither of those paths exists in a shipped
-player.
+player. `concinnity mcp` bridges that same inspection channel to an MCP client
+over stdio, forwarding each tool call to the debug endpoint a running
+`cn debug` or `cn editor` serves.
 
 ### 2.3 Execution phases
 
@@ -1582,10 +1597,10 @@ voxel-world chunks. Each frame the streaming system scores every item against th
 camera, plans loads and evictions, and dispatches to background workers. Results
 come back as recorded ops that upload at the next submission.
 
-Scoring centres differ by kind. A texture is ranked by the camera's distance to
+Scoring centers differ by kind. A texture is ranked by the camera's distance to
 the nearest draw that samples it; albedo and normal maps share one pool, so a
 draw contributes its position to both the slot it samples as albedo and the slot
-it samples as a normal map. A mesh is scored by its AABB centre.
+it samples as a normal map. A mesh is scored by its AABB center.
 
 Only static, frustum-cullable draws stream. Skybox, rooms, and dynamic props
 stay resident so structural geometry never pops in.
@@ -1762,7 +1777,7 @@ crate does no logging: it never knows which file the bytes came from, so the
 caller that opened the file owns the diagnostic and maps each variant to a
 message naming the path.
 
-**`CnResult`** — the coarse status enum at the runtime's outer boundary.
+**`CnError`** — the coarse status enum at the runtime's outer boundary.
 `Success`, `AssetInvalidType`, `InvalidState`, `InvalidArgument`, `FileIo`.
 Deliberately context-free; classification into something actionable happens
 where the paths involved are still known.

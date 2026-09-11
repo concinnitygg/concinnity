@@ -5,8 +5,8 @@
 // post-process effects in `directx/post/` (bloom / TAA / SSAO):
 //
 //   shadow.rs              cascaded shadow map (depth-only, per cascade)
-//   main.rs                SSAO pre-pass + main HDR pass (bindless / legacy /
-//                          instanced / skinned) + HDR resolve barriers
+//   main.rs                SSAO pre-pass + main HDR pass (bindless indirect,
+//                          skinned tail, phase-2 re-issue) + HDR resolve barriers
 //   composite.rs           ACES tonemap + composite + text overlay
 //   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
@@ -34,20 +34,6 @@ mod spot_shadow;
 // that lives in `core::render`; re-export it so
 // `crate::directx::draw::ViewUniforms` is unchanged for the passes that fill it.
 pub(in crate::directx) use concinnity_core::render::uniforms::ViewUniforms;
-
-// One term of the Halton low-discrepancy sequence; drives the sub-pixel
-// projection jitter so successive TAA frames sample slightly different
-// positions. Mirrors `halton` in vulkan/draw.rs and metal/draw.rs.
-fn halton(mut index: u32, base: u32) -> f32 {
-    let mut result = 0.0_f32;
-    let mut f = 1.0_f32;
-    while index > 0 {
-        f /= base as f32;
-        result += f * (index % base) as f32;
-        index /= base;
-    }
-    result
-}
 
 // The command list + back-buffer target this frame records into.
 #[derive(Clone, Copy)]
@@ -371,8 +357,10 @@ impl DxContext {
             }
             (None, Some(taa)) => {
                 let idx = taa.frame.get() % 8 + 1;
-                let jx = (halton(idx, 2) - 0.5) * 2.0 / width.max(1) as f32;
-                let jy = (halton(idx, 3) - 0.5) * 2.0 / height.max(1) as f32;
+                let jx =
+                    (crate::gfx::jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / width.max(1) as f32;
+                let jy = (crate::gfx::jitter::radical_inverse(idx, 3) - 0.5) * 2.0
+                    / height.max(1) as f32;
                 let mut p = proj;
                 p[2][0] -= jx;
                 p[2][1] -= jy;

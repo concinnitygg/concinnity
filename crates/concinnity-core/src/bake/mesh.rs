@@ -119,8 +119,8 @@ fn build_lod_alternates(
     Ok(out)
 }
 
-/// Bounding-sphere radius around the mesh AABB centre. Cheap upper bound on
-/// the per-vertex distance to centre, used to seed default LOD thresholds.
+/// Bounding-sphere radius around the mesh AABB center. Cheap upper bound on
+/// the per-vertex distance to center, used to seed default LOD thresholds.
 pub fn bounding_sphere_radius(positions: &[[f32; 3]]) -> f32 {
     if positions.is_empty() {
         return 1.0;

@@ -138,7 +138,7 @@ pub(crate) fn support_point(shape: &ColliderShape, pose: Pose, direction: Vec3) 
 
 /// The part of the shape's core facing `-normal`, and how far its surface
 /// stands off that core: the face for a box, the axis for a capsule, the
-/// centre for a ball.
+/// center for a ball.
 ///
 /// The core rather than the surface, because which triangle owns a contact is
 /// decided by where it stands on the ground and the surface point does not

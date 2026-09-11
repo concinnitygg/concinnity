@@ -37,7 +37,7 @@ static const uint CLUSTER_LIGHT_LIST_STRIDE = 64u;
 static const float REFLECTION_ROUGHNESS_CUT = 0.6;
 
 // Edge of the LTC lookup tables, and the scale / bias that map [0, 1] onto
-// texel centres. Must match LTC_LUT_SIZE in `core::render`'s ltc module.
+// texel centers. Must match LTC_LUT_SIZE in `core::render`'s ltc module.
 static const float LTC_LUT_SIZE  = 64.0;
 static const float LTC_LUT_SCALE = (LTC_LUT_SIZE - 1.0) / LTC_LUT_SIZE;
 static const float LTC_LUT_BIAS  = 0.5 / LTC_LUT_SIZE;
@@ -549,16 +549,16 @@ float4 shade_surface(VertexOut in, GpuObjectData od)
             {
                 continue;
             }
-            float3 centre = pos_w;
+            float3 center = pos_w;
             float3 right  = AREA_LIGHTS[ai].right_two_sided.xyz;
             float3 up     = AREA_LIGHTS[ai].up_pad.xyz;
             bool two_sided = asuint(AREA_LIGHTS[ai].right_two_sided.w) != 0u;
 
-            // Range is a cutoff measured from the panel centre, matching the
+            // Range is a cutoff measured from the panel center, matching the
             // sphere the clustered cull bins this light with. The physical
             // falloff is already in the form factor: the panel subtends a
             // smaller solid angle further away.
-            float centre_dist = length(centre - in.world_pos);
+            float centre_dist = length(center - in.world_pos);
             float window = clamp(1.0 - centre_dist / range, 0.0, 1.0);
             window = window * window;
             if (window <= 0.0)
@@ -567,10 +567,10 @@ float4 shade_surface(VertexOut in, GpuObjectData od)
             }
 
             float3 corners[4];
-            corners[0] = centre - right - up;
-            corners[1] = centre + right - up;
-            corners[2] = centre + right + up;
-            corners[3] = centre - right + up;
+            corners[0] = center - right - up;
+            corners[1] = center + right - up;
+            corners[2] = center + right + up;
+            corners[3] = center - right + up;
 
             // Diffuse needs no lookup: it is the polygon integral under the
             // plain clamped cosine, i.e. an identity transform.

@@ -155,7 +155,7 @@ fn font_less_text(ctx: &PipelineContext) -> bool {
 }
 
 // Per-streamed-mesh data from `mesh_stream_data`: the draw-object index of each
-// streamed mesh, its scoring centre, and its decoded per-mesh geometry copy.
+// streamed mesh, its scoring center, and its decoded per-mesh geometry copy.
 // The three vecs are column-aligned.
 struct MeshStreamData {
     draw_indices: Vec<usize>,
@@ -192,7 +192,7 @@ fn texture_stream_centers(
 // Only static, frustum-cullable draws stream; skybox, rooms, and dynamic props
 // (sentinel AABB) stay resident so structural geometry never pops in. Each
 // payload copies the draw's region of the shared vertex/index buffers, scored by
-// its AABB centre; indices are stored mesh-relative and narrowed to u16 (each
+// its AABB center; indices are stored mesh-relative and narrowed to u16 (each
 // per-mesh region fits in u16 by the build-time splitter). Draws whose
 // build-time offsets fall out of range are skipped defensively.
 fn mesh_stream_data(
@@ -869,7 +869,6 @@ impl GraphicsSystem {
         &mut self,
         skinned_geometry: &[SkinnedGeometry],
         material_map: &std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>,
-        texture_count: usize,
         capture_sources: bool,
     ) -> Option<SkinnedMeshAssembly> {
         let mut skinned_vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex> = Vec::new();
@@ -903,23 +902,20 @@ impl GraphicsSystem {
             lod_alternates: lod_alts,
         } in skinned_geometry
         {
-            let mat_entry = match crate::gfx::material_entry::resolve_material_slots(
-                sm.material,
-                sm.texture,
-                material_map,
-                texture_count,
-            ) {
-                Ok(entry) => entry,
-                Err(mat_id) => {
-                    tracing::error!(
-                        "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
-                        name_id,
-                        mat_id.index()
-                    );
-                    self.failed = true;
-                    return None;
-                }
-            };
+            let mat_entry =
+                match crate::gfx::material_entry::resolve_material_slots(sm.material, material_map)
+                {
+                    Ok(entry) => entry,
+                    Err(mat_id) => {
+                        tracing::error!(
+                            "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
+                            name_id,
+                            mat_id.index()
+                        );
+                        self.failed = true;
+                        return None;
+                    }
+                };
             let (texture_slot, normal_map_slot, material) = (
                 mat_entry.albedo_slot,
                 mat_entry.normal_map_slot,
@@ -1812,13 +1808,13 @@ impl GraphicsSystem {
         // mesh streamer decodes the payload when the owning scene pins.
         let deferred_mesh_sources =
             super::streaming::deferred_mesh_sources(ctx, streaming_config.is_some());
-        let (
-            mesh_geometry,
-            mesh_sources,
-            always_resident_meshes,
-            component_mesh_handles,
-            deferred_mesh_seeds,
-        ) = match draw_list::load_mesh_geometry(ctx, &deferred_mesh_sources, blob_disk_backed) {
+        let draw_list::MeshGeometry {
+            meshes: mesh_geometry,
+            sources: mesh_sources,
+            always_resident: always_resident_meshes,
+            component_handles: component_mesh_handles,
+            deferred_seeds: deferred_mesh_seeds,
+        } = match draw_list::load_mesh_geometry(ctx, &deferred_mesh_sources, blob_disk_backed) {
             Some(m) => m,
             None => {
                 self.failed = true;
@@ -1886,12 +1882,7 @@ impl GraphicsSystem {
             pool_reservations: skinned_pool_reservations,
             morphs: mut skinned_morphs,
             source_map: skinned_mesh_source_map,
-        } = match self.assemble_skinned_meshes(
-            &skinned_geometry,
-            &material_map,
-            texture_count,
-            capture_sources,
-        ) {
+        } = match self.assemble_skinned_meshes(&skinned_geometry, &material_map, capture_sources) {
             Some(assembly) => assembly,
             None => return,
         };
@@ -2473,7 +2464,7 @@ impl GraphicsSystem {
                 .iter()
                 .map(|w| {
                     crate::gfx::reflection_probe::reflector_bounds(
-                        w.centre,
+                        w.center,
                         [w.extent[0], 0.0, w.extent[1]],
                     )
                 })
@@ -2481,7 +2472,7 @@ impl GraphicsSystem {
                     // A pane is an oriented quad; its longest half-side bounds it on
                     // every axis whatever its normal.
                     let r = g.half_size[0].max(g.half_size[1]);
-                    crate::gfx::reflection_probe::reflector_bounds(g.centre, [r, r, r])
+                    crate::gfx::reflection_probe::reflector_bounds(g.center, [r, r, r])
                 }));
             let tris = gather_auto_seed_triangles(&draw_objects, &all_vertices, &all_indices)
                 .unwrap_or_default();
@@ -2597,7 +2588,6 @@ impl GraphicsSystem {
         // Tests inject a mock backend factory through `test_hooks`; production
         // always routes to the compile-time-selected real backend. Inline (not
         // a method) because `backend_init` still borrows `self.window_args`.
-        #[cfg(test)]
         let built = match reuse_backend {
             Some(mut backend) => match backend.reload_world(backend_init) {
                 Ok(()) => {
@@ -2611,28 +2601,22 @@ impl GraphicsSystem {
                     None
                 }
             },
-            None => match self.test_hooks.as_mut() {
-                Some(hooks) => (hooks.backend_factory)(backend_init),
-                // A test builds no real device: one that forgets its hooks
-                // fails its own assertions instead of opening a window.
-                None => None,
-            },
-        };
-        #[cfg(not(test))]
-        let built = match reuse_backend {
-            Some(mut backend) => match backend.reload_world(backend_init) {
-                Ok(()) => {
-                    tracing::info!(
-                        "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
-                    );
-                    Some(backend)
+            None => {
+                #[cfg(test)]
+                {
+                    match self.test_hooks.as_mut() {
+                        Some(hooks) => (hooks.backend_factory)(backend_init),
+                        // A test builds no real device: one that forgets its
+                        // hooks fails its own assertions instead of opening a
+                        // window.
+                        None => None,
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: reload_world failed: {e}");
-                    None
+                #[cfg(not(test))]
+                {
+                    crate::device::init_backend(backend_init)
                 }
-            },
-            None => crate::device::init_backend(backend_init),
+            }
         };
         self.backend = built;
 

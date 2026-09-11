@@ -2,7 +2,7 @@
 // single place, so each routine here finds the closest point on the other
 // shape and hands the result to the same sphere-against-sphere core.
 //
-// The one case that is not a closest-point query is a sphere whose centre is
+// The one case that is not a closest-point query is a sphere whose center is
 // inside a box: there is no closest surface point to aim at, so the shallowest
 // face is used as the way out.
 
@@ -15,7 +15,7 @@ use super::support::{OrientedBox, Sphere};
 const SINGLE_POINT_ID: u32 = 0;
 
 /// Contact between two spheres, with the normal pointing from `a` toward `b`.
-/// `fallback` is the normal used when the centres coincide.
+/// `fallback` is the normal used when the centers coincide.
 pub(crate) fn spheres(
     a: Sphere,
     b: Sphere,
@@ -217,7 +217,7 @@ mod tests {
         assert!((m.normal - expected).length() < 1.0e-4, "{:?}", m.normal);
     }
 
-    // A sphere whose centre has sunk inside the box has no closest surface
+    // A sphere whose center has sunk inside the box has no closest surface
     // point; it must still be pushed out by the shallowest face.
     #[test]
     fn a_sphere_inside_a_box_leaves_by_the_nearest_face() {

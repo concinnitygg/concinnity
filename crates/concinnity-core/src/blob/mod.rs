@@ -49,8 +49,8 @@ pub use frame::{FrameError, decode_exact};
 pub use kind::BlobKind;
 pub use parse::{parse_cnb, parse_payload_section_start, payload_section};
 pub use schema::{
-    AssetKind, BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind,
-    ResourceRecord, SceneGroup, WorldManifest,
+    BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, ResourceRecord,
+    SceneGroup, WorldManifest,
 };
 
 // The identity and payload-address types the records carry, owned by the

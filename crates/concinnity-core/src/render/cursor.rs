@@ -166,7 +166,7 @@ struct Silhouette {
 
 // The silhouette for `shape`. The arrow is unrotated (hotspot at its tip); each
 // resize cursor is the shared horizontal double-arrow rotated onto its axis
-// (hotspot at its centre).
+// (hotspot at its center).
 fn cursor_geometry(shape: CursorShape) -> Silhouette {
     const DIAG: f32 = core::f32::consts::FRAC_1_SQRT_2;
     let arrow = || Silhouette {

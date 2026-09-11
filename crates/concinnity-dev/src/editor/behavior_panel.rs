@@ -396,7 +396,7 @@ pub(crate) enum BehaviorAction {
     Consume,
 }
 
-// Where the panel sits until the user drags it: left of centre below the top
+// Where the panel sits until the user drags it: left of center below the top
 // bar, clear of the Story and Import anchors.
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [
@@ -1430,26 +1430,7 @@ mod tests {
     use crate::editor::behavior::outline;
 
     fn injected_world() -> World {
-        let mut world = World::new();
-        for id in all_sprite_ids() {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        for id in all_label_ids() {
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        for id in all_field_ids() {
-            world.add_component(TextInput {
-                asset_id: id,
-                ..Default::default()
-            });
-        }
-        world
+        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
     }
 
     fn sample_chart() -> &'static Chart {

@@ -1,25 +1,23 @@
-// src/gfx/streaming_system/mod.rs
-//
-// StreamingSystem: drives the asset-streaming pools (albedo/normal texture,
-// mesh geometry, and infinite voxel-world chunks), and publishes the
-// camera-relative view the draw consumes. Streaming policy (scoring, dispatch,
-// residency) runs here; the GPU effects are recorded into the frame's op
-// queue with owned payloads and replayed at submission, with slot decisions
-// from the engine's `RenderSlots` allocator. An upload the backend refuses
-// comes back one tick later as a `RenderOpFailures` entry and is rolled back
-// at the top of the next step.
-//
-// Scheduled immediately before GraphicsSystem, so a chunk world's view rebase
-// (see `CameraRelativeView`) is ready for this same frame's submit, and any
-// recorded texture / mesh upload lands before the draw. GraphicsSystem's init
-// builds the streamers (world content + backend support) and parks them here
-// as the `StreamingState` resource; each step takes it and puts it back, so
-// the state and the `PipelineContext` are never borrowed together (the same
-// handoff the settings and overlay states use).
-//
-// The streamers themselves (the OS-coupled worker threads + channels) live in
-// `crate::gfx::streaming::{texture, mesh, chunk}`; this module only
-// scores, dispatches, and applies their results each frame.
+//! StreamingSystem: drives the asset-streaming pools (albedo/normal texture,
+//! mesh geometry, and infinite voxel-world chunks), and publishes the
+//! camera-relative view the draw consumes. Streaming policy (scoring, dispatch,
+//! residency) runs here; the GPU effects are recorded into the frame's op
+//! queue with owned payloads and replayed at submission, with slot decisions
+//! from the engine's `RenderSlots` allocator. An upload the backend refuses
+//! comes back one tick later as a `RenderOpFailures` entry and is rolled back
+//! at the top of the next step.
+//!
+//! Scheduled immediately before GraphicsSystem, so a chunk world's view rebase
+//! (see `CameraRelativeView`) is ready for this same frame's submit, and any
+//! recorded texture / mesh upload lands before the draw. GraphicsSystem's init
+//! builds the streamers (world content + backend support) and parks them here
+//! as the `StreamingState` resource; each step takes it and puts it back, so
+//! the state and the `PipelineContext` are never borrowed together (the same
+//! handoff the settings and overlay states use).
+//!
+//! The streamers themselves (the OS-coupled worker threads + channels) live in
+//! `crate::gfx::streaming::{texture, mesh, chunk}`; this module only
+//! scores, dispatches, and applies their results each frame.
 
 use crate::components::Camera3D;
 use crate::ecs::asset_id::AssetId;

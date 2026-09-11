@@ -406,3 +406,28 @@ Ubuntu; translate them to your distribution's equivalents as needed.
 ```sh
 cargo build --release
 ```
+
+## Testing
+
+The workspace runs its tests under [nextest](https://nexte.st):
+
+```sh
+cargo nextest run --workspace --features concinnity/cook,concinnity/editor
+```
+
+Doctests are a separate pass, because `--all-targets` skips them:
+
+```sh
+cargo test --doc --workspace
+```
+
+### Discipline scans
+
+Three integration tests scan the workspace's own source rather than exercising
+it, and each fails the build on a pattern rather than on a value:
+
+| Test                               | What it forbids                                                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `tests/headless_discipline.rs`     | A test that stands up a window, which hangs on an event loop the harness cannot end.                        |
+| `tests/global_state_discipline.rs` | Reaching process-global state (working directory, open project, development flags) without the shared lock. |
+| `tests/file_access_discipline.rs`  | Writing to a hand-picked path under the system temporary directory instead of a per-run one.                |

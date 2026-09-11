@@ -1,13 +1,13 @@
-// Recognises the "panorama sphere" packaging a lot of downloadable environment
-// images ship in: a `.glb` holding one inverted sphere you stand inside, its
-// image painted on the emissive channel over a black base colour so nothing
-// lights or shades it. Imported as geometry that file renders as a ball in the
-// middle of the scene; what the author wanted was a sky.
-//
-// `detect` is the predicate and `equirect` the extractor. Detection is
-// deliberately narrow: every ordinary `.glb` must keep importing as scene
-// geometry, so a file that misses any one criterion is rejected with the
-// reason rather than reinterpreted.
+//! Recognises the "panorama sphere" packaging a lot of downloadable environment
+//! images ship in: a `.glb` holding one inverted sphere you stand inside, its
+//! image painted on the emissive channel over a black base colour so nothing
+//! lights or shades it. Imported as geometry that file renders as a ball in the
+//! middle of the scene; what the author wanted was a sky.
+//!
+//! `detect` is the predicate and `equirect` the extractor. Detection is
+//! deliberately narrow: every ordinary `.glb` must keep importing as scene
+//! geometry, so a file that misses any one criterion is rejected with the
+//! reason rather than reinterpreted.
 
 mod detect;
 mod equirect;

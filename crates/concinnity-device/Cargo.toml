@@ -29,44 +29,30 @@ concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-slang = { workspace = true }
 
-postcard = { version = "1", default-features = false, features = ["use-std"] }
-bytemuck = { version = "1", features = ["derive"] }
-hex = "0.4.3"
+bytemuck = { workspace = true, features = ["derive"] }
+hex = { workspace = true }
 libloading = "0.9.0"
-png = "0.18.1"
-rayon = "1"
-tracing = "0.1.44"
-notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
-sha2 = "0.11.0"
+png = { workspace = true }
+rayon = { workspace = true }
+tracing = { workspace = true }
+notify = { workspace = true, features = ["macos_fsevent"] }
+sha2 = { workspace = true }
 
 [target.'cfg(not(any(target_vendor = "apple", target_os = "windows")))'.dependencies]
-ash = "0.38"
+ash = { workspace = true }
 
 [target.'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))'.dependencies]
 glfw = "0.62.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-ash = { version = "0.38", optional = true }
-windows = { version = "0.62.2", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Direct3D",
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Direct3D_Dxc",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Gdi",
-    "Win32_Security",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Threading",
-    "Win32_UI_Input",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_WindowsAndMessaging",
-] }
+ash = { workspace = true, optional = true }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Direct3D_Dxc", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
+ash = { workspace = true, optional = true }
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
-objc2 = "0.6.4"
+objc2 = { workspace = true }
 objc2-foundation = "0.3.2"
 objc2-metal = "0.3.2"
 objc2-metal-fx = "0.3.2"
@@ -74,14 +60,13 @@ objc2-metal-kit = "0.3.2"
 objc2-quartz-core = "0.3.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ash = { version = "0.38", optional = true }
-objc2-app-kit = "0.3.2"
+objc2-app-kit = { workspace = true }
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
-serde_json = "1"
+serde_json = { workspace = true }
 
 [build-dependencies]
 concinnity-core = { workspace = true }

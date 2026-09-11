@@ -1,4 +1,4 @@
-// asset_impls/file.rs
+// src/asset_impls/file.rs
 
 use concinnity_core::components::File;
 use concinnity_core::components::FileKind;

@@ -389,7 +389,6 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::blob::AssetKind;
 
     fn record(kind: ResourceKind, handle: u32, blob: u32, offset: u64, len: u64) -> ResourceRecord {
         ResourceRecord {
@@ -585,7 +584,6 @@ mod tests {
         };
         let def = |disc: u8, args_bytes: Vec<u8>, payload| BlobAssetDef {
             name: None,
-            kind: AssetKind::Component,
             discriminant: disc,
             args_bytes,
             payload,

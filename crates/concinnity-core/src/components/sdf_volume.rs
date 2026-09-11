@@ -29,7 +29,7 @@ pub const SDF_PARAMS_LEN: usize = 32;
 /// ```rust
 /// # use concinnity_core::components::SdfVolume;
 /// SdfVolume {
-///     centre: [0.0, 2.0, -4.0],
+///     center: [0.0, 2.0, -4.0],
 ///     extent: [2.0, 2.0, 2.0],
 ///     max_gradient: 1.0,
 ///     max_steps: 64,
@@ -43,8 +43,8 @@ pub struct SdfVolume {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// World-space centre of the bounding box.
-    pub centre: [f32; 3],
+    /// World-space center of the bounding box.
+    pub center: [f32; 3],
     /// XYZ half-widths of the bounding box. The raymarch is clipped to the box,
     /// so the SDF only has to be well-defined inside this region.
     pub extent: [f32; 3],
@@ -90,7 +90,7 @@ impl Default for SdfVolume {
     fn default() -> Self {
         Self {
             asset_id: AssetId::default(),
-            centre: [0.0, 0.0, 0.0],
+            center: [0.0, 0.0, 0.0],
             extent: [1.0, 1.0, 1.0],
             fragment_shader: String::new(),
             max_gradient: 1.0,
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn a_blank_volume_is_a_visible_unit_box_that_receives_shadows() {
         let v = SdfVolume::default();
-        assert_eq!(v.centre, [0.0, 0.0, 0.0]);
+        assert_eq!(v.center, [0.0, 0.0, 0.0]);
         assert_eq!(v.extent, [1.0, 1.0, 1.0]);
         assert_eq!(v.max_steps, 64);
         assert_eq!(v.max_distance, 30.0);
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn an_authored_volume_parses_and_round_trips_through_postcard() {
         let v: SdfVolume = serde_json::from_str(
-            r#"{"centre":[0,2,0],"extent":[3,3,3],"max_gradient":2.0,
+            r#"{"center":[0,2,0],"extent":[3,3,3],"max_gradient":2.0,
                 "fragment_shader":"shaders/blob.slang",
                 "cast_shadows":true,"visible":false}"#,
         )
@@ -206,7 +206,7 @@ pub const SDF_MAX_STEPS_FLOOR: u32 = 8;
 impl Component for SdfVolume {
     const NAME: &'static str = "SdfVolume";
 
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::result::CnResult> {
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::CnError> {
         Ok(crate::blob::decode_exact(bytes)?)
     }
 
@@ -247,7 +247,7 @@ mod runtime_tests {
     #[test]
     fn defaults_are_sensible() {
         let v = SdfVolume::default();
-        assert_eq!(v.centre, [0.0, 0.0, 0.0]);
+        assert_eq!(v.center, [0.0, 0.0, 0.0]);
         assert_eq!(v.extent, [1.0, 1.0, 1.0]);
         assert_eq!(v.max_gradient, 1.0);
         assert_eq!(v.max_steps, 64);

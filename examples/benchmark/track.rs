@@ -117,16 +117,16 @@ pub(crate) fn segment_window(segment: &str) -> (f32, f32) {
 
 // Where the camera stands `chord` runs into station `index`'s half circle.
 //
-// The arc starts on the centre line ahead of the station and ends on it
+// The arc starts on the center line ahead of the station and ends on it
 // behind, bulging to the station's own side in between.
 fn arc_point(index: usize, chord: usize) -> [f32; 3] {
     let station = &STATIONS[index];
-    let centre = stations::centre(index);
+    let center = stations::center(index);
     let angle = core::f32::consts::PI * chord as f32 / CHORDS as f32;
     [
-        centre[0] + stations::side(index) * station.radius * angle.sin(),
+        center[0] + stations::side(index) * station.radius * angle.sin(),
         HEIGHT,
-        centre[2] + station.radius * angle.cos(),
+        center[2] + station.radius * angle.cos(),
     ]
 }
 
@@ -162,7 +162,7 @@ mod tests {
         travel_legs().iter().map(leg_seconds).sum()
     }
 
-    // The corridor runs one way. Each half circle bulges off the centre line
+    // The corridor runs one way. Each half circle bulges off the center line
     // and comes back to it further along, so the camera meets each station once
     // and the segments come out in path order.
     #[test]
@@ -175,8 +175,8 @@ mod tests {
                 "{} doubles back",
                 STATIONS[index].segment
             );
-            assert!((start[0]).abs() < 1e-3, "an arc starts off the centre line");
-            assert!((end[0]).abs() < 1e-3, "an arc ends off the centre line");
+            assert!((start[0]).abs() < 1e-3, "an arc starts off the center line");
+            assert!((end[0]).abs() < 1e-3, "an arc ends off the center line");
         }
     }
 

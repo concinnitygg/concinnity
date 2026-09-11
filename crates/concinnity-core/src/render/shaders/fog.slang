@@ -182,7 +182,7 @@ float fog_shadow_factor(float3 world_pos, float view_depth)
 #endif
 }
 
-// World-space position at a froxel centre. `z_slice` is a floating-point slab
+// World-space position at a froxel center. `z_slice` is a floating-point slab
 // index; the caller offsets it by an interleaved-gradient-noise jitter.
 float3 froxel_to_world(uint x, uint y, float z_slice)
 {
@@ -247,7 +247,7 @@ void fog_froxel_kernel(uint3 tid : SV_DispatchThreadID)
 
     for (uint z = 0u; z < froxel.froxel_dims.z; ++z)
     {
-        // Jittered slab centre. The slab integral stays exact in the
+        // Jittered slab center. The slab integral stays exact in the
         // constant-density limit because `tau` uses the full slab width; only
         // the sample point shifts.
         float z_jittered = float(z) + ign - 0.5;

@@ -588,8 +588,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// Show or hide the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     /// independent of camera capture. Edge-triggered by the backend, so calling
     /// it every frame with the same value is cheap. Default no-op: a backend
-    /// without a free-mode cursor hide leaves the system cursor visible (DX /
-    /// Vulkan today).
+    /// without a free-mode cursor hide leaves the system cursor visible.
     fn set_ui_cursor_hidden(&mut self, hidden: bool) {
         let _ = hidden;
     }
@@ -597,8 +596,8 @@ pub trait RenderBackend: SceneControl + Send {
     /// Whether the real cursor has left the window, so an in-engine UI cursor
     /// should stop drawing (windowed / borderless). The backend confines the
     /// cursor to the active screen while in fullscreen, so it reports `false`
-    /// there. Default `false` (inside): backends without window-bounds tracking
-    /// (DX / Vulkan today) always draw the in-engine cursor.
+    /// there. Default `false` (inside): a backend without window-bounds tracking
+    /// always draws the in-engine cursor.
     fn cursor_outside_window(&self) -> bool {
         false
     }
@@ -607,15 +606,15 @@ pub trait RenderBackend: SceneControl + Send {
     /// coexists with a captured camera. In this mode Escape routes to the ECS
     /// (so the menu shows/hides) instead of releasing the cursor inline, and a
     /// click never recaptures the cursor (it fires a UI action). Set once at
-    /// setup. Default no-op: backends without dynamic capture (DX / Vulkan today)
-    /// keep the static behavior.
+    /// setup. Default no-op: a backend without dynamic capture keeps the static
+    /// behavior.
     fn set_menu_mode(&mut self, on: bool) {
         let _ = on;
     }
 
     /// Drive cursor capture from the menu state each frame: capture for camera
     /// control, release while a menu is open. Edge-triggered by the backend.
-    /// Default no-op (DX / Vulkan): they keep their startup capture decision.
+    /// Default no-op: the startup capture decision stands.
     fn set_camera_capture(&mut self, capture: bool) {
         let _ = capture;
     }
@@ -623,8 +622,8 @@ pub trait RenderBackend: SceneControl + Send {
     /// Supply the reflection-probe placements (from declared `ReflectionProbe`
     /// assets, or empty to auto-seed from the scene bounds). The backend bakes a
     /// cube per placement and samples the nearest for the specular reflection.
-    /// Pushed once after construction. Default no-op: backends without probe
-    /// support (DX / Vulkan today) keep the sky reflection.
+    /// Pushed once after construction. Default no-op: a backend without probe
+    /// support keeps the sky reflection.
     fn set_reflection_probes(
         &mut self,
         probes: &[crate::render::reflection_probe::ProbePlacement],
@@ -693,8 +692,8 @@ pub trait RenderBackend: SceneControl + Send {
     /// Set the live ambient (IBL) light scale. Unlike the post-process params
     /// above, `ambient_intensity` lives in the shared `LightUniforms` (uploaded
     /// each frame by the main lighting pass), so it takes its own setter rather
-    /// than `update_post_process`. Default no-op: only Metal mutates it live
-    /// today; DirectX / Vulkan keep the init-time value (they read it at init).
+    /// than `update_post_process`. Default no-op: a backend that reads the scale
+    /// only at init keeps the init-time value.
     fn set_ambient_intensity(&mut self, value: f32) {
         let _ = value;
     }
@@ -726,8 +725,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// ray-tracing acceleration structures) are built once at init, so applying a
     /// change rebuilds the affected resources in place rather than flipping a
     /// uniform. Default no-op: a backend that only reads these at init ignores
-    /// runtime changes (DirectX / Vulkan today), so the choice persists and takes
-    /// effect at the next launch there.
+    /// runtime changes, so the choice takes effect at the next launch there.
     fn apply_quality_settings(&mut self, settings: QualitySettings) {
         let _ = settings;
     }
@@ -736,8 +734,8 @@ pub trait RenderBackend: SceneControl + Send {
     /// the policy at the start of each shadow pass, so a change takes effect on the
     /// next draw with no pipeline rebuild or allocation (unlike the shadow map
     /// resolution, which is sized once at init). Default no-op: a backend that only
-    /// reads the cadence at init keeps the init-time value (DirectX / Vulkan
-    /// today), so the choice persists and takes effect at the next launch there.
+    /// reads the cadence at init keeps the init-time value, so the choice takes
+    /// effect at the next launch there.
     fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
         let _ = update;
     }
@@ -747,8 +745,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// each draw, so a change takes effect on the next frame with no allocation or
     /// rebuild (it sizes no GPU resource, unlike the shadow map resolution).
     /// Default no-op: a backend that only reads the distance at init keeps the
-    /// init-time value (DirectX / Vulkan today), so the choice persists and takes
-    /// effect at the next launch there.
+    /// init-time value, so the choice takes effect at the next launch there.
     fn set_shadow_distance(&mut self, distance: u32) {
         let _ = distance;
     }
@@ -758,8 +755,7 @@ pub trait RenderBackend: SceneControl + Send {
     /// are projected, rendered, and sampled (the array capacity stays 4), so a
     /// change takes effect on the next frame with no resize or rebuild. Default
     /// no-op: a backend that only reads the count at init keeps the init-time
-    /// value (DirectX / Vulkan today), so the choice persists and takes effect at
-    /// the next launch there.
+    /// value, so the choice takes effect at the next launch there.
     fn set_shadow_cascades(&mut self, count: u32) {
         let _ = count;
     }
@@ -774,16 +770,15 @@ pub trait RenderBackend: SceneControl + Send {
     /// feature is ignored here and applies when the feature next turns on. The
     /// structural sub-knobs (gather resolution, ray / step counts) are NOT live and
     /// still ride `apply_quality_settings`. Default no-op: a backend that reads
-    /// these only at init keeps the init-time values (DirectX / Vulkan today), so
-    /// the choice persists and takes effect at the next launch there.
+    /// these only at init keeps the init-time values, so the choice takes effect
+    /// at the next launch there.
     fn update_quality_params(&mut self, settings: QualitySettings) {
         let _ = settings;
     }
 
     /// Shared atomic flag the backend polls at frame start to trigger a
     /// shader rebuild. `Some` only under `cn debug` on backends that ship
-    /// hot-reload (Metal today); `None` on production runs and on backends
-    /// that have not implemented hot-reload yet. The debug server reads this
+    /// hot-reload; `None` on production runs and on backends that do not. The debug server reads this
     /// to forward `reload-shaders` commands; the filesystem watcher writes
     /// it directly. Default: `None`.
     fn shader_reload_flag(&self) -> Option<alloc::sync::Arc<core::sync::atomic::AtomicBool>> {
@@ -833,10 +828,10 @@ pub trait RenderBackend: SceneControl + Send {
     /// size-changing `.glb` re-export means the existing
     /// [`Self::update_mesh_geometry`] in-place write no longer fits.
     /// `wait_idle` first; the rebuild swaps the GPU buffers wholesale.
-    /// Default no-op: backends that have not implemented the rebuild
-    /// return `Ok(())` and the size-changing reload is logged + skipped at
-    /// the caller (the existing in-place path already errored on size
-    /// mismatch).
+    /// Default no-op: a backend that has not implemented the rebuild reports
+    /// success without rebuilding. Nothing reaches this path there, because the
+    /// default [`Self::draw_geometry_size`] returns `None`, so no size change is
+    /// ever detected.
     fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> RenderResult<()> {
         let _ = changes;
         Ok(())
@@ -879,10 +874,9 @@ pub trait RenderBackend: SceneControl + Send {
     /// (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
     /// all stay untouched; only the `index_offset` / `index_count` on each
     /// `SkinnedDrawObject` (and the buffers themselves) move. Default no-op
-    /// (returns an empty layout vec): backends that have not implemented
-    /// the rebuild leave the size-changing reload as logged + skipped at
-    /// the caller, the same behaviour as before, since the in-place path
-    /// already errored on size mismatch.
+    /// (returns an empty layout vec): a backend that has not implemented the
+    /// rebuild reports success without rebuilding, and nothing reaches this
+    /// path there for the same reason as the static case above.
     fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,

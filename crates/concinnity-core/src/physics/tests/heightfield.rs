@@ -18,7 +18,7 @@ const TICK: f32 = 1.0 / 60.0;
 const EXTENT: f32 = 20.0;
 const HALF_HEIGHT: f32 = 0.6;
 const RADIUS: f32 = 0.3;
-/// Distance from a character capsule's centre to the ground it stands on.
+/// Distance from a character capsule's center to the ground it stands on.
 const STAND: f32 = HALF_HEIGHT + RADIUS;
 
 fn params(friction: f32) -> DynamicParams {

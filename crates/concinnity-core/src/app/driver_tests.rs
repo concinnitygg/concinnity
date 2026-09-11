@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use crate::app::{App, Driver};
 use crate::components::Transform;
 use crate::ecs::{Phase, PipelineContext, StepResult, System, SystemEntry, SystemTable, World};
-use crate::result::CnResult;
+use crate::error::CnError;
 
 // The step count the halting world stops at.
 const STOP_AT: f32 = 3.0;
@@ -35,8 +35,8 @@ fn counter(world: &World) -> Option<Box<dyn System>> {
 
 // A completion pass that refuses the world, which is what a start failure looks
 // like from outside the loop.
-fn refuse(_: &mut PipelineContext) -> Result<(), CnResult> {
-    Err(CnResult::InvalidState)
+fn refuse(_: &mut PipelineContext) -> Result<(), CnError> {
+    Err(CnError::InvalidState)
 }
 
 const ENTRIES: &[SystemEntry] = &[SystemEntry {
@@ -80,7 +80,7 @@ fn driver(table: &'static SystemTable) -> Box<dyn Driver> {
 fn a_driver_starts_the_world_it_holds() {
     let mut driver = driver(&COUNTING);
     assert_eq!(driver.start(), Ok(()));
-    assert_eq!(driver.start(), Err(CnResult::InvalidState));
+    assert_eq!(driver.start(), Err(CnError::InvalidState));
 }
 
 // An unbounded run through the trait reports that it ran, not which of the
@@ -94,7 +94,7 @@ fn a_driver_runs_the_world_to_its_end() {
 // fails the run rather than stepping a half-built world.
 #[test]
 fn a_run_reports_a_refused_start() {
-    assert_eq!(driver(&REFUSING).run(), Err(CnResult::InvalidState));
+    assert_eq!(driver(&REFUSING).run(), Err(CnError::InvalidState));
 }
 
 // The other way out: the world comes back as it was handed over, so a caller

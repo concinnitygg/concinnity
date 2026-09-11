@@ -104,9 +104,9 @@ pub(crate) fn eligible(ty: &str) -> bool {
 }
 
 // The asset's authored world position: a 3-number `position` (or, for panel
-// lights, `centre`) arg.
+// lights, `center`) arg.
 pub(crate) fn position_of(args: &serde_json::Map<String, serde_json::Value>) -> Option<[f32; 3]> {
-    ["position", "centre"]
+    ["position", "center"]
         .into_iter()
         .find_map(|k| vec3(args, k))
 }
@@ -420,7 +420,7 @@ mod tests {
             Some([1.0, 2.0, 3.0])
         );
         assert_eq!(
-            position_of(&args(serde_json::json!({"centre": [4.0, 5.0, 6.0]}))),
+            position_of(&args(serde_json::json!({"center": [4.0, 5.0, 6.0]}))),
             Some([4.0, 5.0, 6.0])
         );
         assert_eq!(position_of(&args(serde_json::json!({"radius": 2.0}))), None);

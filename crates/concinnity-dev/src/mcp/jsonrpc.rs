@@ -62,7 +62,6 @@ pub(super) fn parse(line: &str) -> Incoming {
             method: method.to_string(),
             params,
         },
-        (true, Some(_), None) => Incoming::Silent,
         (_, _, Some(id)) => invalid(id, INVALID_REQUEST, "not a JSON-RPC 2.0 request"),
         (_, _, None) => Incoming::Silent,
     }

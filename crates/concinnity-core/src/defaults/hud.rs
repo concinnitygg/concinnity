@@ -9,7 +9,7 @@ use crate::components::{DebugHud, StatHud, TextLabel};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentSlot, FontHandle};
-use crate::result::CnResult;
+use crate::error::CnError;
 
 use super::Minter;
 
@@ -39,14 +39,14 @@ const STAT_SLOTS: [Slot<StatHud>; 6] = [
 pub(super) fn inject_debug_hud(
     ctx: &mut PipelineContext,
     minter: &mut Minter,
-) -> Result<(), CnResult> {
+) -> Result<(), CnError> {
     complete(ctx, minter, &DEBUG_SLOTS, true)
 }
 
 pub(super) fn complete_stat_hud(
     ctx: &mut PipelineContext,
     minter: &mut Minter,
-) -> Result<(), CnResult> {
+) -> Result<(), CnError> {
     complete(ctx, minter, &STAT_SLOTS, false)
 }
 
@@ -57,7 +57,7 @@ fn complete<H>(
     minter: &mut Minter,
     slots: &[Slot<H>],
     synthesize: bool,
-) -> Result<(), CnResult>
+) -> Result<(), CnError>
 where
     H: ComponentSlot + Clone + Default,
 {

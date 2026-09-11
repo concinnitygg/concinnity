@@ -1,4 +1,4 @@
-// src/render_graph/schedule.rs
+// src/render/render_graph/schedule.rs
 //
 // Two-queue schedule derived from the compiled pass order. The compile pass
 // hands this module the topologically sorted passes plus the dependency edges

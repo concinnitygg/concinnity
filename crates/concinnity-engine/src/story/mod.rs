@@ -1,4 +1,4 @@
-// src/story.rs
+// src/story/mod.rs
 //
 // Story playback: drives a compiled `Story` graph through the stage screen its
 // build expansion generated. An internal system (not a declarable asset):

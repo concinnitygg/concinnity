@@ -477,7 +477,7 @@ impl SpotShadowData {
 }
 
 /// One rectangular area light's extent, indexed by `GpuLight.data_index`. The
-/// centre is the GpuLight's `position` and the emitting direction its
+/// center is the GpuLight's `position` and the emitting direction its
 /// `direction`; only the two in-plane edge vectors and the sidedness flag need
 /// the extra room.
 ///
@@ -531,7 +531,7 @@ pub struct TextVertex {
 #[repr(C)]
 pub struct LineVertex {
     /// World-space position of this ribbon corner. Already offset off the line
-    /// centre by the CPU expansion, so the shader only applies the camera VP.
+    /// center by the CPU expansion, so the shader only applies the camera VP.
     pub pos: [f32; 3],
     /// Signed offset across the ribbon: -1 on one edge, +1 on the other. The
     /// fragment fades the outer pixel from it, so lines antialias without MSAA.
@@ -1142,19 +1142,19 @@ pub struct DrawObject {
     /// Upper corner of the world-space culling AABB.
     pub bb_max: [f32; 3],
     /// If > 0, the object is skipped when the camera is further than this from
-    /// the AABB centre. Lets a Prop opt in to distance-based unloading.
+    /// the AABB center. Lets a Prop opt in to distance-based unloading.
     pub cull_distance: f32,
     /// LOD1..N slices for this draw, in ascending `switch_distance` order.
     /// Empty when the mesh declared `lod_levels <= 1`; the renderer then
     /// always uses the LOD0 `(index_offset, index_count)` carried on this
     /// object. With non-empty alternates the renderer picks the highest
-    /// slice whose threshold is ≤ the camera→AABB-centre distance each frame.
+    /// slice whose threshold is ≤ the camera→AABB-center distance each frame.
     pub lod_alternates: Vec<LodSlice>,
 }
 
 impl DrawObject {
     /// Pick the active `(index_offset, index_count)` for this object given
-    /// the current camera distance to its AABB centre. Returns the LOD0
+    /// the current camera distance to its AABB center. Returns the LOD0
     /// pair when no alternates are present or when the camera is closer
     /// than the first alternate's threshold; otherwise returns the
     /// highest-indexed alternate whose `switch_distance` ≤ `distance`.
@@ -1387,10 +1387,10 @@ pub fn pack_skinned_record(
     let mut lo = [0.0f32; 3];
     let mut hi = [0.0f32; 3];
     for a in 0..3 {
-        let centre = 0.5 * (obj.local_bb_min[a] + obj.local_bb_max[a]);
+        let center = 0.5 * (obj.local_bb_min[a] + obj.local_bb_max[a]);
         let half = 0.5 * (obj.local_bb_max[a] - obj.local_bb_min[a]) * SKINNED_BB_PAD_FACTOR;
-        lo[a] = centre - half;
-        hi[a] = centre + half;
+        lo[a] = center - half;
+        hi[a] = center + half;
     }
     let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(lo, hi, obj.model);
     let bounds = RecordBounds {
@@ -1530,7 +1530,7 @@ pub struct InstancedCluster {
     pub local_bb_min: [f32; 3],
     /// Upper corner of the mesh-local bind AABB.
     pub local_bb_max: [f32; 3],
-    /// View-distance cutoff applied to the cluster centre. 0 = no cutoff.
+    /// View-distance cutoff applied to the cluster center. 0 = no cutoff.
     pub cull_distance: f32,
     /// Per-instance column-major model matrices. Uploaded to a transient GPU
     /// buffer each frame.
@@ -1572,7 +1572,7 @@ impl InstancedCluster {
     /// degenerates to the legacy one-`drawIndexedInstanced` path.
     ///
     /// Per-instance distance uses the model-matrix translation rather than
-    /// a transformed-AABB centre: close enough for distance-keyed swaps
+    /// a transformed-AABB center: close enough for distance-keyed swaps
     /// without paying the per-instance AABB transform every pass.
     pub fn lod_buckets(&self, cam_pos: [f32; 3]) -> Vec<InstancedLodBucket> {
         // Fast path: no alternates → single LOD0 bucket containing every
@@ -1727,7 +1727,7 @@ impl SkinnedDrawObject {
     /// World-space translation of this object (column 3 of the model
     /// matrix). Skinned objects have no static AABB (they deform every
     /// frame), so per-frame LOD picks use the model translation as the
-    /// stand-in for an AABB centre.
+    /// stand-in for an AABB center.
     pub fn translation(&self) -> [f32; 3] {
         [self.model[3][0], self.model[3][1], self.model[3][2]]
     }

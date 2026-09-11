@@ -1,16 +1,16 @@
-// Single-source engine shader programs for the Vulkan backend.
-//
-// Each program compiles a `.slang` file under `src/shaders/` (the
-// backend-neutral single-source directory) to SPIR-V, at build time where the
-// host has slangc and at renderer init otherwise, cached in the
-// content-addressed shader cache. The runtime `POOL_SIZE` / `MAX_PROBES`
-// values are injected as `#define` lines into the source text, so the cache
-// keys them.
-//
-// The `[[vk::binding]]` annotations (and ParameterBlock member order) in the
-// sources are the engine's descriptor-set layouts. slangc names every
-// single-entry SPIR-V entry point `main`, which is what pipeline stage creation
-// asks for.
+//! Single-source engine shader programs for the Vulkan backend.
+//!
+//! Each program compiles a `.slang` file under `src/shaders/` (the
+//! backend-neutral single-source directory) to SPIR-V, at build time where the
+//! host has slangc and at renderer init otherwise, cached in the
+//! content-addressed shader cache. The runtime `POOL_SIZE` / `MAX_PROBES`
+//! values are injected as `#define` lines into the source text, so the cache
+//! keys them.
+//!
+//! The `[[vk::binding]]` annotations (and ParameterBlock member order) in the
+//! sources are the engine's descriptor-set layouts. slangc names every
+//! single-entry SPIR-V entry point `main`, which is what pipeline stage creation
+//! asks for.
 
 /// Which runtime capacities a program bakes into its source as `#define`s.
 /// They ride the source text rather than a command line so the shader cache

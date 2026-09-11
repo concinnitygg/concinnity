@@ -1,4 +1,4 @@
-// src/cli/export.rs
+// src/export.rs
 //
 // `cn export`: package a built world into a distributable app. Builds the world
 // (reusing the normal build cache), then assembles a self-contained bundle: the

@@ -16,6 +16,6 @@ camera driven by something else (a `CameraShot` / `Scene` cutscene).
 - `sprint_multiplier`: A float. Sprint multiplier applied when the sprint key is held. Defaults to `3.0`.
 - `mouse_sensitivity`: A float. Mouse look sensitivity in radians per pixel. Defaults to `0.0015`.
 - `player_radius`: A float. Margin kept between the camera and the bounds box (world units). Defaults to `0.3`.
-- `bounds_min`: An array of 3 floats. AABB minimum corner the camera centre must stay inside [x, y, z]. Defaults to `[—, —, —]`.
-- `bounds_max`: An array of 3 floats. AABB maximum corner the camera centre must stay inside [x, y, z]. Defaults to `[—, —, —]`.
+- `bounds_min`: An array of 3 floats. AABB minimum corner the camera center must stay inside [x, y, z]. Defaults to `[—, —, —]`.
+- `bounds_max`: An array of 3 floats. AABB maximum corner the camera center must stay inside [x, y, z]. Defaults to `[—, —, —]`.
 - `follow`: A [FollowController](FollowController.md) object. Third-person follow settings; see [FollowController](FollowController.md). When set, the camera orbits the followed character and WASD steers the character instead of the camera (`free_fly` and the bounds box are ignored). `null` (the default) keeps the first-person / fly modes.

@@ -10,13 +10,13 @@ Unlike [WaterSurface](WaterSurface.md) it has no animation, no surface
 displacement, and no depth-based colour. It's a simple building block for
 translucent surfaces such as windows, ice, holograms, or force fields.
 
-The panel is positioned by `centre`, oriented by `normal` (the facing
+The panel is positioned by `center`, oriented by `normal` (the facing
 direction), and sized by `half_size` (half-width along the panel's tangent,
 half-height along its bitangent).
 
 ## Parameters
 
-- `centre`: An array of 3 floats. World-space position of the panel's centre. Defaults to `[0.0, 1.0, 0.0]`.
+- `center`: An array of 3 floats. World-space position of the panel's center. Defaults to `[0.0, 1.0, 0.0]`.
 - `normal`: An array of 3 floats. Facing direction of the panel. Normalised on load; defaults to +Z when degenerate.
 - `half_size`: An array of 2 floats. Half-width and half-height of the panel, in world units. Defaults to `[1.0, 1.0]`.
 - `tint`: An array of 3 floats. Linear-space RGB colour the glass tints the scene behind it. Defaults to `[0.7, 0.85, 0.95]`.

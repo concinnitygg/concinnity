@@ -1,4 +1,4 @@
-// src/cli/new.rs
+// src/command/new.rs
 
 use std::path::{Path, PathBuf};
 

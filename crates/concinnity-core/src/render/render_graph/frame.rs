@@ -1,4 +1,4 @@
-// src/render_graph/frame.rs
+// src/render/render_graph/frame.rs
 //
 // Per-frame graph builder. On Metal, every pass that ran inline
 // through `draw_frame` now dispatches through a single
@@ -384,31 +384,21 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // graph collapses to the minimal `Main -> Composite` (Composite still
     // presents the overlay). Main survives as a bare clear because the backend
     // feeds it an empty visible set this frame; the opaque overlay covers it.
+    // Spread from `all_off` rather than from `inputs`, so a gate added to
+    // `FrameGraphInputs` later is off here by construction. Only the fields
+    // named below survive the mask: the frame's real dimensions, and the three
+    // flags that describe graph shape rather than a gated pass.
     let masked = if inputs.world_hidden {
         Some(FrameGraphInputs {
-            shadow_enabled: false,
-            bindless_cull_enabled: false,
-            auto_exposure_enabled: false,
-            bloom_enabled: false,
-            velocity_enabled: false,
-            taa_enabled: false,
-            ssr_enabled: false,
-            particles_enabled: false,
-            fog_enabled: false,
-            decals_enabled: false,
-            ssr_prepass_enabled: false,
-            ssao_enabled: false,
-            upscale_enabled: false,
-            transparent_enabled: false,
-            lines_enabled: false,
-            raymarch_enabled: false,
-            two_pass_occlusion_enabled: false,
-            ssgi_enabled: false,
-            rt_reflections_enabled: false,
-            clustered_lighting_enabled: false,
-            shadowed_spot_count: 0,
-            spot_shadow_slice_size: 512,
-            ..*inputs
+            shadow_map_size: inputs.shadow_map_size,
+            hdr_width: inputs.hdr_width,
+            hdr_height: inputs.hdr_height,
+            hdr_sample_count: inputs.hdr_sample_count,
+            unified_gbuffer_prepass: inputs.unified_gbuffer_prepass,
+            world_hidden: true,
+            composite_reads_ao: inputs.composite_reads_ao,
+            hiz_build_enabled: inputs.hiz_build_enabled,
+            ..FrameGraphInputs::all_off()
         })
     } else {
         None

@@ -526,7 +526,7 @@ fn a_blendspace_exposes_every_grid_member() {
 }
 
 // Bilinear across the four grid members surrounding the parameter point: a
-// point on a corner is that member alone, and the centre is an even quarter
+// point on a corner is that member alone, and the center is an even quarter
 // each.
 #[test]
 fn a_2d_blendspace_weights_bilinearly_across_its_grid() {
@@ -535,9 +535,9 @@ fn a_2d_blendspace_weights_bilinearly_across_its_grid() {
     assert_eq!(play.weights(&[0.0, 0.0]), vec![1.0, 0.0, 0.0, 0.0]);
     assert_eq!(play.weights(&[1.0, 1.0]), vec![0.0, 0.0, 0.0, 1.0]);
 
-    let centre = play.weights(&[0.5, 0.5]);
-    for w in &centre {
-        assert!((w - 0.25).abs() < 1e-5, "{centre:?}");
+    let center = play.weights(&[0.5, 0.5]);
+    for w in &center {
+        assert!((w - 0.25).abs() < 1e-5, "{center:?}");
     }
 
     // Outside the grid clamps to the nearest edge rather than extrapolating.

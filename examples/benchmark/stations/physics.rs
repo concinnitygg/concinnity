@@ -48,7 +48,7 @@ const CHAIN_ANCHOR_HEIGHT: f32 = 9.0;
 const SENSORS: usize = 4;
 
 /// Declare the pen, the bodies, the chains, and the sensors.
-pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
+pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     world.add(
         "physics_config",
         PhysicsConfig {
@@ -76,7 +76,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         },
     );
 
-    pen(world, centre);
+    pen(world, center);
 
     for x in 0..BODIES[0] {
         for y in 0..BODIES[1] {
@@ -88,9 +88,9 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
                         name.as_str(),
                         Prop {
                             position: [
-                                centre[0] + spread(x, BODIES[0], BODY_SPACING),
+                                center[0] + spread(x, BODIES[0], BODY_SPACING),
                                 BODY_DROP_HEIGHT + y as f32 * BODY_SPACING,
-                                centre[2] + spread(z, BODIES[2], BODY_SPACING),
+                                center[2] + spread(z, BODIES[2], BODY_SPACING),
                             ],
                             collider: Some(PropCollider {
                                 shape: "ball".to_string(),
@@ -117,13 +117,13 @@ pub(crate) fn declare(world: &mut WorldBuilder, centre: [f32; 3]) {
         }
     }
 
-    chains(world, centre);
-    sensors(world, centre);
+    chains(world, center);
+    sensors(world, center);
 }
 
 // Four static walls, so the bodies stay in the frame the camera looks at
 // instead of rolling out of it.
-fn pen(world: &mut WorldBuilder, centre: [f32; 3]) {
+fn pen(world: &mut WorldBuilder, center: [f32; 3]) {
     let half_extents = [PEN_HALF_WIDTH, PEN_WALL_HALF_HEIGHT, PEN_WALL_THICKNESS];
     world.add(
         "physics_wall_mesh",
@@ -147,9 +147,9 @@ fn pen(world: &mut WorldBuilder, centre: [f32; 3]) {
                 format!("physics_wall_{index}"),
                 Prop {
                     position: [
-                        centre[0] + offset[0],
+                        center[0] + offset[0],
                         PEN_WALL_HALF_HEIGHT,
-                        centre[2] + offset[1],
+                        center[2] + offset[1],
                     ],
                     rotation_deg: [0.0, turn, 0.0],
                     collider: Some(PropCollider {
@@ -167,7 +167,7 @@ fn pen(world: &mut WorldBuilder, centre: [f32; 3]) {
 
 // Chains hung from nothing: the first link joints to a world anchor and each
 // one below joints to the link above it.
-fn chains(world: &mut WorldBuilder, centre: [f32; 3]) {
+fn chains(world: &mut WorldBuilder, center: [f32; 3]) {
     for chain in 0..CHAINS {
         let along = spread(chain, CHAINS, PEN_HALF_WIDTH * 0.5);
         for link in 0..CHAIN_LINKS {
@@ -178,9 +178,9 @@ fn chains(world: &mut WorldBuilder, centre: [f32; 3]) {
                     name.as_str(),
                     Prop {
                         position: [
-                            centre[0] + along,
+                            center[0] + along,
                             CHAIN_ANCHOR_HEIGHT - link as f32 * LINK_DROP,
-                            centre[2] + along * 0.4,
+                            center[2] + along * 0.4,
                         ],
                         collider: Some(PropCollider {
                             shape: "cuboid".to_string(),
@@ -211,9 +211,9 @@ fn chains(world: &mut WorldBuilder, centre: [f32; 3]) {
                     anchor_a: [0.0, LINK_HALF_EXTENT, 0.0],
                     anchor_b: if link == 0 {
                         [
-                            centre[0] + along,
+                            center[0] + along,
                             CHAIN_ANCHOR_HEIGHT + LINK_DROP,
-                            centre[2] + along * 0.4,
+                            center[2] + along * 0.4,
                         ]
                     } else {
                         [0.0, -LINK_HALF_EXTENT, 0.0]
@@ -231,15 +231,15 @@ fn chains(world: &mut WorldBuilder, centre: [f32; 3]) {
 
 // Sensors over the pen. They collide with nothing; the cost is the overlap
 // test they run against every dynamic body each step.
-fn sensors(world: &mut WorldBuilder, centre: [f32; 3]) {
+fn sensors(world: &mut WorldBuilder, center: [f32; 3]) {
     for index in 0..SENSORS {
         world.add(
             format!("physics_sensor_{index}"),
             TriggerVolume {
                 position: [
-                    centre[0] + spread(index, SENSORS, PEN_HALF_WIDTH * 0.6),
+                    center[0] + spread(index, SENSORS, PEN_HALF_WIDTH * 0.6),
                     3.0,
-                    centre[2],
+                    center[2],
                 ],
                 collider: PropCollider {
                     shape: "cuboid".to_string(),
