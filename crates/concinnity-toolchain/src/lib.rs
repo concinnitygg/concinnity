@@ -158,7 +158,7 @@ pub(crate) fn resolve_backend(target_os: &str, features: BackendFeatures) -> Opt
         return Some(Backend::Vk);
     }
     match target_os {
-        "macos" => (features.metal || features.native).then_some(Backend::Metal),
+        "macos" | "ios" => (features.metal || features.native).then_some(Backend::Metal),
         "windows" => (features.directx || features.native).then_some(Backend::Dx),
         _ => features.native.then_some(Backend::Vk),
     }
@@ -463,11 +463,37 @@ mod tests {
         assert_eq!(resolve_backend("windows", features(&["metal"])), None);
         assert_eq!(resolve_backend("linux", features(&["metal"])), None);
         assert_eq!(resolve_backend("linux", features(&["directx"])), None);
+        assert_eq!(resolve_backend("ios", features(&["directx"])), None);
+    }
+
+    // iOS renders with Metal, not with the Vulkan the catch-all arm hands
+    // every other target.
+    #[test]
+    fn ios_resolves_to_metal() {
+        assert_eq!(
+            resolve_backend("ios", features(&["native"])),
+            Some(Backend::Metal)
+        );
+        assert_eq!(
+            resolve_backend("ios", features(&["metal"])),
+            Some(Backend::Metal)
+        );
+        assert_eq!(resolve_backend("ios", features(&[])), None);
+    }
+
+    // Android has no Metal and no DirectX, so the catch-all arm is the right
+    // answer there.
+    #[test]
+    fn android_resolves_to_vulkan() {
+        assert_eq!(
+            resolve_backend("android", features(&["native"])),
+            Some(Backend::Vk)
+        );
     }
 
     #[test]
     fn no_backend_feature_resolves_to_no_backend() {
-        for target_os in ["macos", "windows", "linux"] {
+        for target_os in ["macos", "windows", "linux", "ios", "android"] {
             assert_eq!(resolve_backend(target_os, features(&[])), None);
         }
     }

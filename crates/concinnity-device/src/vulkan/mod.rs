@@ -58,7 +58,7 @@ mod upload_ring;
 mod water;
 #[cfg(target_os = "windows")]
 mod win32_window;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 pub(crate) mod window;
 mod wire_cache;
 mod wireframe;
@@ -66,12 +66,14 @@ mod world_shaders;
 
 // The platform window VkContext owns: the shared native Win32 layer on Windows
 // and the shared native AppKit layer on macOS (one window/input implementation
-// with the DirectX and Metal backends respectively), GLFW on Linux.
+// with the DirectX and Metal backends respectively), GLFW on the desktop Unix
+// tier. The gate matches the manifest's, so a target with no window layer
+// fails naming this alias rather than naming a missing crate.
 #[cfg(target_os = "macos")]
 pub(crate) use appkit_window::AppKitVkWindow as PlatformWindow;
 #[cfg(target_os = "windows")]
 pub(crate) use win32_window::Win32Window as PlatformWindow;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 pub(crate) use window::GlfwWindow as PlatformWindow;
 
 pub(crate) use context::VkContext;

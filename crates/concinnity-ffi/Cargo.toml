@@ -1,0 +1,49 @@
+[package]
+name = "concinnity-ffi"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "C ABI for embedding the Concinnity engine in a host application"
+readme = "README.md"
+keywords = ["gamedev", "engine", "ffi", "concinnity"]
+categories = ["game-engines"]
+publish = false
+include = [
+    "/README.md",
+    "/src",
+    "/build.rs",
+    "/cbindgen.toml",
+]
+
+[lib]
+name = "concinnity_ffi"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["native"]
+native = ["concinnity-engine/native", "dep:concinnity-device", "concinnity-device/native"]
+metal = ["concinnity-engine/metal", "dep:concinnity-device", "concinnity-device/metal"]
+directx = ["concinnity-engine/directx", "dep:concinnity-device", "concinnity-device/directx"]
+vulkan = ["concinnity-engine/vulkan", "dep:concinnity-device", "concinnity-device/vulkan"]
+
+[dependencies]
+concinnity-core = { workspace = true }
+concinnity-engine = { workspace = true }
+concinnity-host = { workspace = true }
+concinnity-device = { workspace = true, optional = true }
+tracing = "0.1.44"
+
+[dev-dependencies]
+concinnity-testing = { workspace = true }
+tempfile = "3.25.0"
+
+[build-dependencies]
+cbindgen = "0.29"
+concinnity-toolchain = { workspace = true }
+
+[lints]
+workspace = true

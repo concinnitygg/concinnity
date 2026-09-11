@@ -306,13 +306,15 @@ impl App {
         self.status = AppStatus::Created;
     }
 
-    // single world step, for callers that drive their own outer loop
-    // (e.g. run_loop_macos in crate::app::run, which interleaves CFRunLoop pumps).
-    // The FPS-cap pacer holds the step's start to its target interval first,
-    // then the simulation clock publishes the frame's fixed-tick budget. The
-    // menu state read is the previous frame's, the same one-frame lag the
-    // pacer's clamp accepts.
-    pub(crate) fn world_step(&mut self) -> StepResult {
+    /// Advance the world one frame, for a caller that drives its own outer
+    /// loop: the run loop that interleaves platform event pumps, and a host
+    /// application whose OS owns the loop and calls this per display refresh.
+    ///
+    /// The FPS-cap pacer holds the step's start to its target interval first,
+    /// then the simulation clock publishes the frame's fixed-tick budget. The
+    /// menu state read is the previous frame's, the same one-frame lag the
+    /// pacer's clamp accepts.
+    pub fn world_step(&mut self) -> StepResult {
         self.pacer.pace(&self.world);
         let paused = self
             .world

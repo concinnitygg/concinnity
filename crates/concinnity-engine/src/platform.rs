@@ -37,7 +37,7 @@ pub fn current() -> Platform {
 #[cfg(any(test, not(any(backend_metal, backend_dx, backend_vk))))]
 fn native_platform(target_os: &str) -> Platform {
     match target_os {
-        "macos" => Platform::Metal,
+        "macos" | "ios" => Platform::Metal,
         "windows" => Platform::Hlsl,
         _ => Platform::Glsl,
     }
@@ -60,5 +60,7 @@ mod tests {
         assert_eq!(native_platform("macos"), Platform::Metal);
         assert_eq!(native_platform("windows"), Platform::Hlsl);
         assert_eq!(native_platform("linux"), Platform::Glsl);
+        assert_eq!(native_platform("ios"), Platform::Metal);
+        assert_eq!(native_platform("android"), Platform::Glsl);
     }
 }

@@ -52,6 +52,10 @@ const GLOBAL_WRITES: &[&str] = &[
     "set_current_dir(",
     "dev_flags::set_",
     "set_pending_animations(",
+    // The C ABI's host state: one open world per process, which every cn_
+    // entry point reads or replaces.
+    "cn_init(",
+    "cn_world_",
 ];
 
 fn workspace_root() -> PathBuf {

@@ -218,7 +218,10 @@ fn the_help_reports_an_optional_command_defaulting_to_the_editor() {
     let out = run(&["--help"]);
     expect_ok(&out, "cn --help");
     let help = stdout(&out);
-    assert!(help.contains("Usage: concinnity [COMMAND]"), "{help}");
+    // The usage line carries the binary name, which Windows spells with its
+    // `.exe` suffix; the brackets around COMMAND are what says it is optional.
+    assert!(help.contains("Usage: concinnity"), "{help}");
+    assert!(help.contains("[COMMAND]"), "{help}");
     assert!(help.contains("[default command]"), "{help}");
 }
 
