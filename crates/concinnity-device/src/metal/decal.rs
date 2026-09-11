@@ -12,8 +12,12 @@
 // stamping the texture onto whatever surface fills the box.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::render::decal::DecalSet;
+use concinnity_core::render::uniforms::DecalView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlendFactor, MTLCommandBuffer as _, MTLDevice as _, MTLIndexType, MTLLoadAction,
     MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
@@ -24,11 +28,7 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
-
 use super::scoped_encoder::ScopedEncoder;
-use crate::gfx::decal::DecalSet;
-use concinnity_core::render::uniforms::DecalView;
-use objc2_foundation::ns_string;
 
 // All projected-decal state grouped into one feature unit: the decal slot
 // table, the pipeline, the shared unit-cube geometry, and the sampler. The
@@ -62,7 +62,7 @@ impl MtlContext {
         // Inverse of `vp`, computed once in `draw_frame` and shared across the
         // depth-reconstruction passes; see `GraphFrameParams::inv_vp`.
         inv_vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
     ) -> Result<u32, String> {
         let pipeline = match &self.decal.pipeline {
             Some(p) => p,

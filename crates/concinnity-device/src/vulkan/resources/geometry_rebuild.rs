@@ -15,13 +15,14 @@
 // draws, so any subsequent `upload_mesh` will fail allocation. `cn debug`-
 // only by design; matches DirectX + Metal.
 
-use std::collections::HashMap;
-
 use ash::vk;
-
-use crate::gfx::backend::{DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout};
-use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::render_types::LodSlice;
+use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::gfx::render_types::LodSlice;
+use concinnity_core::render::backend::{
+    DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
+};
+use concinnity_core::render::rt_geom;
+use std::collections::HashMap;
 
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;
@@ -435,7 +436,7 @@ impl VkContext {
         )?;
         // Whole u32 words for the index buffer; see `upload_skinned`.
         let new_ibuf = self.alloc.create_buffer(
-            crate::gfx::rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
+            rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;

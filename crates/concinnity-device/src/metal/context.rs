@@ -1,5 +1,22 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::components;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::{
+    ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
+};
+use concinnity_core::render::backend;
+use concinnity_core::render::decal;
+use concinnity_core::render::draw_slot;
+use concinnity_core::render::error;
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::particles;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::shadow_schedule;
+use concinnity_core::render::spot_shadow;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -9,10 +26,6 @@ use objc2_metal::{
     MTLSamplerState, MTLTexture,
 };
 use objc2_metal_kit::MTKView;
-
-use crate::gfx::render_types::{
-    ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
-};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureGpu;
@@ -94,10 +107,7 @@ pub(super) struct DrawState {
     // inputs match the cached key reuses it instead of rebuilding. Taken out
     // during `execute_graph` (which needs `&mut self`) and put back after, so a
     // steady scene compiles once.
-    pub graph_cache: Option<(
-        crate::gfx::render_graph::FrameGraphInputs,
-        crate::gfx::render_graph::CompiledGraph,
-    )>,
+    pub graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
     // Total instances across every cluster. Each instance is folded into the
     // GPU-driven cull buffers as an extra `GpuObjectData` record after the
     // static objects, so the cull dispatch + indirect draw cover
@@ -123,8 +133,8 @@ pub(super) struct InstancedState {
     // per-frame static fill, so the transient object / draw-args rings carry
     // both. `draw_args` carries each cluster's base LOD slice; the per-frame
     // build patches the instances of clusters that declare alternates.
-    pub records: Vec<crate::gfx::render_types::GpuObjectData>,
-    pub draw_args: Vec<crate::gfx::render_types::GpuDrawArgs>,
+    pub records: Vec<render_types::GpuObjectData>,
+    pub draw_args: Vec<render_types::GpuDrawArgs>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
     // per-instance LOD pass entirely: without alternates the base slice above
     // is the right answer for every instance, for the life of the world.
@@ -158,13 +168,13 @@ pub(super) struct ViewState {
 pub(super) struct ProbeState {
     // The where/box list (declared `ReflectionProbe` assets or
     // `auto_seed_probes`).
-    pub placements: Vec<crate::gfx::reflection_probe::ProbePlacement>,
+    pub placements: Vec<reflection_probe::ProbePlacement>,
     // The baked cube per placement, parallel to `placements`.
     pub maps: Vec<ProbeCube>,
     // Staggered bake cursor. Reset to the placement count when placements are
     // set; each eligible frame bakes a bounded budget and advances it, so the
     // load cost spreads over several frames instead of one.
-    pub bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
+    pub bake_queue: reflection_probe::ProbeBakeQueue,
     // Per-probe influence boxes + count, pushed to the fragment shader at
     // buffer(6). `EMPTY` until a bake.
     pub set: concinnity_core::render::uniforms::ProbeSet,
@@ -217,7 +227,7 @@ pub(super) struct ShadowState {
     pub map_size: u32,
     // Cascade re-render policy from `GraphicsConfig.shadow_update`. Hybrid
     // refreshes the near cascade every frame and the far cascades round-robin.
-    pub update: crate::components::ShadowUpdate,
+    pub update: components::ShadowUpdate,
     // Shadow distance in world units (`GraphicsConfig.shadow_distance`), read by
     // the per-frame cascade-split computation and capped at the camera far
     // plane. Mutable so `set_shadow_distance` can change it live.
@@ -228,7 +238,7 @@ pub(super) struct ShadowState {
     pub cascades: u32,
     // Round-robin clock + primed-set for the cascade schedule; advanced once per
     // frame by `next_shadow_cascade_mask`.
-    pub scheduler: crate::gfx::shadow_schedule::ShadowCascadeScheduler,
+    pub scheduler: shadow_schedule::ShadowCascadeScheduler,
     // Cascades re-rendered this frame (bit `i` = cascade `i`). Computed in
     // draw_frame and read by encode_shadow_pass so the two agree on which slices
     // to refresh and which to leave intact.
@@ -257,7 +267,7 @@ pub(super) struct SpotShadowState {
     pub count: u32,
     // Prime-then-round-robin refresh schedule over the spot slices, the spot
     // analogue of `ShadowState::scheduler`.
-    pub scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
+    pub scheduler: spot_shadow::SpotShadowScheduler,
     // Which spot slices re-render this frame; set once per frame in draw_frame
     // and read by encode_spot_shadow_pass.
     pub render_mask: u32,
@@ -288,8 +298,8 @@ pub(super) struct FrameRings {
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
     pub joint: super::transient::JointRing,
-    pub object_scratch: Vec<crate::gfx::render_types::GpuObjectData>,
-    pub draw_args_scratch: Vec<crate::gfx::render_types::GpuDrawArgs>,
+    pub object_scratch: Vec<render_types::GpuObjectData>,
+    pub draw_args_scratch: Vec<render_types::GpuDrawArgs>,
 }
 
 // Transparent water surfaces and the pipelines that draw them. The RT variants
@@ -440,7 +450,7 @@ pub(super) struct WindowState {
 pub(super) struct Diagnostics {
     // Per-frame draw-call / VRAM / GPU-time counters surfaced to the profiler
     // overlay via `render_stats`.
-    pub frame_stats: crate::gfx::profile::RenderStats,
+    pub frame_stats: profile::RenderStats,
     // GPU execution time of the last completed frame, in microseconds. Written
     // by each command buffer's completion handler.
     pub gpu_time_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
@@ -454,7 +464,7 @@ pub(super) struct Diagnostics {
     // First classified GPU failure observed on a completed frame command buffer,
     // parked here by the completion handler until the next draw_frame reports it
     // across the backend boundary.
-    pub device_error: std::sync::Arc<std::sync::Mutex<Option<crate::gfx::error::RenderError>>>,
+    pub device_error: std::sync::Arc<std::sync::Mutex<Option<error::RenderError>>>,
     // Count of render-graph per-pass command-buffer faults logged so far. Each
     // graph pass commits its own command buffer; this throttle logs the first
     // handful (with the pass name + error) so the *original* fault in a
@@ -488,7 +498,7 @@ pub(super) struct HdrState {
     // Resolved HDR encoding of the swapchain (scRGB-linear vs PQ), or `None` on
     // the SDR path. Read only by the headless `screenshot` path to decode the
     // captured `RGBA16Float` EDR drawable. Mirrors DX `hdr.encoding`.
-    pub encoding: Option<crate::gfx::hdr_output::HdrEncoding>,
+    pub encoding: Option<hdr_output::HdrEncoding>,
     // The world's HDR-output *request* this context was built with (before EDR
     // negotiation could fall it back to SDR). Reported by `hot_swap_config` so a
     // live `cn editor` world reload can tell whether the new world would produce
@@ -678,7 +688,7 @@ pub(crate) struct MtlContext {
     // Post-process tunables (bloom intensity / threshold / knee). Pushed to
     // the bloom prefilter and composite fragment shaders. `bloom_intensity`
     // of 0 skips the bloom passes entirely.
-    pub(super) post_process: crate::gfx::render_types::PostProcessParams,
+    pub(super) post_process: render_types::PostProcessParams,
     // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares
     // none, so the composite pass binds a valid 3D texture either way.
@@ -1165,8 +1175,8 @@ impl MtlContext {
 
     // Device capability flags for the settings menu. Ray tracing is queried
     // from the live MTLDevice (cheap; the same check the RT pass gates on).
-    pub(crate) fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
-        crate::gfx::backend::DeviceCapabilities {
+    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
+        backend::DeviceCapabilities {
             ray_tracing: super::raytrace::raytracing_supported(&self.device),
             // Upscaling always goes through MetalFX; there is no selector.
             selectable_upscaler: false,
@@ -1181,14 +1191,14 @@ impl MtlContext {
 
     // Coarse GPU performance profile for default-quality selection, read live
     // from the MTLDevice (cheap; the same kind of device query as capabilities).
-    pub(crate) fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
+    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
         super::gpu_profile::device_profile(&self.device)
     }
 
     // Render statistics for the most recent `draw_frame`, for the profiler
     // overlay. The GPU frame time is the last value reported by a completed
     // command buffer, so it may lag the draw counts by a frame or two.
-    pub(crate) fn render_stats(&self) -> crate::gfx::profile::RenderStats {
+    pub(crate) fn render_stats(&self) -> profile::RenderStats {
         let mut stats = self.diagnostics.frame_stats;
         // `gpu_wait_us` was written by `draw_frame` itself and rides along in
         // `frame_stats`.
@@ -1259,15 +1269,15 @@ impl MtlContext {
     pub(super) fn place_draw_object(
         &mut self,
         obj: DrawObject,
-        dst: crate::gfx::draw_slot::SlotAlloc,
+        dst: draw_slot::SlotAlloc,
     ) -> usize {
         match dst {
-            crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
+            draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
                 self.model_history.reoccupy_draw(slot);
                 slot
             }
-            crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+            draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
                     self.draw.objects.len(),
@@ -1297,7 +1307,7 @@ impl MtlContext {
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
-        dst: crate::gfx::draw_slot::SlotAlloc,
+        dst: draw_slot::SlotAlloc,
     ) -> Result<(), String> {
         let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
             format!(
@@ -1338,7 +1348,7 @@ impl MtlContext {
     pub(crate) fn set_draw_material(
         &mut self,
         draw_idx: usize,
-        material: crate::gfx::render_types::MaterialUniforms,
+        material: render_types::MaterialUniforms,
         texture_slot: usize,
         normal_map_slot: usize,
     ) {
@@ -1370,10 +1380,7 @@ impl MtlContext {
     // A vacated slot from [`Self::remove_decal`] is reused before growing
     // the slot table so a steady-state spawn/despawn pattern (bullet holes,
     // footprints) stays bounded.
-    pub(crate) fn add_decal(
-        &mut self,
-        record: crate::gfx::decal::DecalRecord,
-    ) -> Result<usize, String> {
+    pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> Result<usize, String> {
         if self.decal.pipeline.is_none() {
             let (ps, vbuf, ibuf, samp) = super::init::effects::build_decal_resources_for_runtime(
                 &self.device,
@@ -1410,7 +1417,7 @@ impl MtlContext {
     // [`Self::remove_emitter`] are reused before growing the vec.
     pub(crate) fn add_emitter(
         &mut self,
-        record: crate::gfx::particles::ParticleEmitterRecord,
+        record: particles::ParticleEmitterRecord,
     ) -> Result<usize, String> {
         if self.particle.pipelines.is_none() {
             let pipelines =
@@ -1475,7 +1482,7 @@ impl MtlContext {
     }
 
     // Drain the classified GPU failure a completion handler parked, if any.
-    pub(super) fn take_device_error(&self) -> Option<crate::gfx::error::RenderError> {
+    pub(super) fn take_device_error(&self) -> Option<error::RenderError> {
         self.diagnostics
             .device_error
             .lock()
@@ -1484,7 +1491,7 @@ impl MtlContext {
     }
 }
 
-impl crate::gfx::scene_flow::SceneControl for MtlContext {
+impl scene_flow::SceneControl for MtlContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }

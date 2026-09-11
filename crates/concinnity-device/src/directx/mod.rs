@@ -47,7 +47,6 @@ mod world_shaders;
 
 pub(crate) use context::DxContext;
 pub(crate) use gpu_profile::probe_gpu_profile;
-
 // GPU-free host structs live in `core::render` (counted for coverage); the
 // backend keeps its existing `crate::directx::{pass_timing,uniforms}`
 // paths through these re-exports. `uniforms` holds the per-pass repr(C) structs;

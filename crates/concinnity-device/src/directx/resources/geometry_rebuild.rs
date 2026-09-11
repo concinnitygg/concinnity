@@ -7,11 +7,12 @@
 // round-trip (READBACK staging for the old contents, UPLOAD staging for
 // the new ones) where Metal can just read `StorageModeShared` `contents()`.
 
+use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::gfx::render_types::LodSlice;
+use concinnity_core::render::backend;
+use concinnity_core::render::rt_geom;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
-
-use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::render_types::LodSlice;
 
 use super::super::com;
 use super::super::context::DxContext;
@@ -43,7 +44,7 @@ impl DxContext {
     // at frame start, when the renderer is otherwise quiet.
     pub(crate) fn rebuild_static_geometry(
         &mut self,
-        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
+        changes: Vec<backend::DrawGeometryUpdate>,
     ) -> Result<(), String> {
         use std::collections::HashMap;
 
@@ -52,7 +53,7 @@ impl DxContext {
         // source `.glb` size actually changed.
         self.wait_idle();
 
-        let mut change_map: HashMap<usize, crate::gfx::backend::DrawGeometryUpdate> =
+        let mut change_map: HashMap<usize, backend::DrawGeometryUpdate> =
             changes.into_iter().map(|c| (c.draw_idx, c)).collect();
 
         // Read the current shared buffers back to CPU memory via READBACK
@@ -384,8 +385,8 @@ impl DxContext {
     // through `update_skinned_skeleton`, not this call.
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,
-        changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>,
-    ) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String> {
+        changes: Vec<backend::SkinnedDrawGeometryUpdate>,
+    ) -> Result<Vec<backend::SkinnedSlotLayout>, String> {
         use std::collections::HashMap;
 
         let v_buf = self.skinned.vertex_buffer.clone().ok_or(
@@ -397,7 +398,7 @@ impl DxContext {
 
         self.wait_idle();
 
-        let mut change_map: HashMap<usize, crate::gfx::backend::SkinnedDrawGeometryUpdate> =
+        let mut change_map: HashMap<usize, backend::SkinnedDrawGeometryUpdate> =
             changes.into_iter().map(|c| (c.skinned_index, c)).collect();
 
         // Read the live skinned buffers back to CPU memory via READBACK
@@ -456,7 +457,7 @@ impl DxContext {
         // geometry into the fresh CPU buffers.
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
         let mut new_indices: Vec<u32> = Vec::new();
-        let mut layouts: Vec<crate::gfx::backend::SkinnedSlotLayout> =
+        let mut layouts: Vec<backend::SkinnedSlotLayout> =
             Vec::with_capacity(self.skinned.slots.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
@@ -474,7 +475,7 @@ impl DxContext {
                 for &local in &change.indices {
                     new_indices.push(u32::from(local) + new_v_base);
                 }
-                layouts.push(crate::gfx::backend::SkinnedSlotLayout {
+                layouts.push(backend::SkinnedSlotLayout {
                     skinned_index,
                     vertex_base: new_v_base,
                     vertex_count: new_v_count,
@@ -528,7 +529,7 @@ impl DxContext {
                     })?;
                     new_indices.push(local + new_v_base);
                 }
-                layouts.push(crate::gfx::backend::SkinnedSlotLayout {
+                layouts.push(backend::SkinnedSlotLayout {
                     skinned_index,
                     vertex_base: new_v_base,
                     vertex_count: obj.vertex_count,
@@ -565,7 +566,7 @@ impl DxContext {
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
         // Whole u32 words for the index buffer; see `upload_skinned`.
-        let ibuf_bytes = crate::gfx::rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
+        let ibuf_bytes = rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
         let new_vbuf = create_buffer(
             &self.alloc,
             new_v_bytes,

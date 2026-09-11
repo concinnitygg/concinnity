@@ -6,12 +6,10 @@
 // and the draw -- is written once in `concinnity_core::render::post::taa` and
 // reaches D3D12 through `DxPostDevice`.
 
-use std::cell::Cell;
-
-use windows::Win32::Graphics::Direct3D12::*;
-
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
+use std::cell::Cell;
+use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
 use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};

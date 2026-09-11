@@ -9,18 +9,20 @@
 // [`crate::metal::text.upload::TextUploadRing`]).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::TextDrawCall;
+use concinnity_core::render::fullscreen;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLIndexType, MTLLoadAction, MTLPrimitiveType,
     MTLRenderCommandEncoder as _, MTLScissorRect, MTLStoreAction, MTLTexture,
 };
 
-use crate::gfx::render_types::TextDrawCall;
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use objc2_foundation::ns_string;
 
 impl MtlContext {
     // pub(in crate::metal) so the render-graph executor in
@@ -98,7 +100,7 @@ impl MtlContext {
         );
         // Post-process tunables (bloom intensity) plus the scene-transition
         // fade at buffer(0).
-        let composite = crate::gfx::render_types::CompositeParams {
+        let composite = render_types::CompositeParams {
             post: self.post_process,
             fade: self.view.scene_fade,
             view_mode: channel_view,
@@ -123,7 +125,7 @@ impl MtlContext {
             let logical = self.window.view.bounds().size;
             let win_w = logical.width as f32;
             let win_h = logical.height as f32;
-            let text_uniforms = crate::gfx::render_types::TextUniforms {
+            let text_uniforms = render_types::TextUniforms {
                 win_width: win_w,
                 win_height: win_h,
                 _pad: [0.0; 2],
@@ -155,7 +157,7 @@ impl MtlContext {
             // What the loop already left bound. The encoder's default scissor is
             // the full attachment, but the cache starts empty and so re-sets it
             // once rather than assuming that.
-            let mut binds = crate::gfx::fullscreen::TextBindCache::new();
+            let mut binds = fullscreen::TextBindCache::new();
 
             for (call, range) in text_calls.iter().zip(text_ranges) {
                 if call.vertices.is_empty() {
@@ -167,7 +169,7 @@ impl MtlContext {
                 // band: skip the draw entirely.
                 let scissor = match call.clip_rect {
                     Some(clip) => {
-                        let scissor = crate::gfx::fullscreen::clip_rect_to_scissor(
+                        let scissor = fullscreen::clip_rect_to_scissor(
                             clip,
                             (win_w, win_h),
                             (fb_w as u32, fb_h as u32),

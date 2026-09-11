@@ -15,7 +15,6 @@
 // layouts still declared inline in `init.rs`.
 
 use ash::vk;
-
 use concinnity_core::render::uniforms::MAX_PROBES;
 
 // One descriptor binding: (binding index, descriptor type, shader stages).

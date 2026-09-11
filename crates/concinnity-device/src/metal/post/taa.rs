@@ -7,12 +7,11 @@
 // `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLRenderPipelineState, MTLTexture};
-
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::metal::context::MtlContext;
 use crate::metal::post::post_device::MtlPostDevice;

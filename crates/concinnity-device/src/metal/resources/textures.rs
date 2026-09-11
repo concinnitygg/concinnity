@@ -5,6 +5,8 @@
 // asset hot-reload (`cn debug` only) for envmaps + LUTs.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::bake;
+
 use crate::metal::context::MtlContext;
 use crate::metal::texture::{upload_texture, upload_texture_image};
 
@@ -68,7 +70,7 @@ impl MtlContext {
     // rebuild. The new payload may declare different mip / face sizes than
     // the original -- `EnvironmentMapTextures` is replaced wholesale.
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::bake::environment_map::deserialize(payload)
+        let view = bake::environment_map::deserialize(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {}", e))?;
         let new_env = crate::metal::texture::upload_environment_map(
             &self.allocator,

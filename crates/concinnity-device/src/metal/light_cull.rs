@@ -7,20 +7,19 @@
 // lights instead of iterating every light.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
     MTLLibrary as _, MTLResourceOptions, MTLSize,
 };
 
-use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
-
 use super::context::MtlContext;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-use objc2_foundation::ns_string;
 
 // Clustered-lighting GPU state: the binning compute pipeline and the per-cluster
 // light-index buffer it writes / the forward pass reads. The buffer is always

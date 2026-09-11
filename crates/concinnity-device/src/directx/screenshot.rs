@@ -18,11 +18,10 @@
 // `swapchain.last_present_index`, so a capture in the brief window before the next
 // present returns a clean error rather than reading an unrendered buffer.
 
+use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::render::hdr_output::HdrEncoding;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-
-use crate::gfx::hdr_output::HdrEncoding;
-use crate::gfx::image_decode::{self, PixelLayout};
 
 use super::com;
 use super::context::DxContext;

@@ -2,17 +2,39 @@
 // state. Mirrors the public API of VkContext / MtlContext so GraphicsSystem can
 // drive all three backends identically.
 
+use concinnity_core::components;
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::*;
+use concinnity_core::render::backend;
+use concinnity_core::render::backend::FrameParams;
+use concinnity_core::render::backend_init;
+use concinnity_core::render::csm;
+use concinnity_core::render::decal;
+use concinnity_core::render::display_mode;
+use concinnity_core::render::error;
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
+use concinnity_core::render::lights;
+use concinnity_core::render::particles;
+use concinnity_core::render::planar_reflection;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::shadow_schedule;
+use concinnity_core::render::skinned_slots;
+use concinnity_core::render::slot_rewrites;
+use concinnity_core::render::spot_shadow;
+use concinnity_core::render::volumetric_fog;
 use std::cell::RefCell;
 use std::sync::OnceLock;
-
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::{GetCurrentThreadId, WaitForSingleObject};
 use windows::core::Interface;
-
-use crate::gfx::backend::FrameParams;
-use crate::gfx::render_types::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureResources;
@@ -25,7 +47,6 @@ use super::post::ssao::*;
 use super::post::ssr::*;
 use super::post::taa::*;
 use super::texture::*;
-use crate::gfx::input::RenderInput;
 use crate::win32::window::*;
 
 // Constants
@@ -169,7 +190,7 @@ pub(super) struct SkinnedState {
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
     // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
     // records this backend shares with Metal and Vulkan.
-    pub slots: crate::gfx::skinned_slots::SkinnedSlots,
+    pub slots: skinned_slots::SkinnedSlots,
     // Per-frame, per-object joint-matrix upload buffers, indexed
     // [frame_idx][skinned_idx]. Each holds MAX_JOINTS float4x4 matrices,
     // persistently mapped; rewritten each frame from `slots.joint_matrices`.
@@ -404,7 +425,7 @@ pub(super) struct SsaoState {
 // are only touched on the render thread.
 pub(super) struct ParticleState {
     pub resources: Option<ParticleResources>,
-    pub records: Vec<Option<crate::gfx::particles::ParticleEmitterRecord>>,
+    pub records: Vec<Option<particles::ParticleEmitterRecord>>,
     pub emitter_state: Vec<Option<ParticleEmitterGpuState>>,
     pub free_slots: Vec<usize>,
     pub srv_base_slot: usize,
@@ -419,7 +440,7 @@ pub(super) struct ParticleState {
 // the per-frame params ring by decal id.
 pub(super) struct DecalState {
     pub state: Option<DecalResources>,
-    pub set: crate::gfx::decal::DecalSet,
+    pub set: decal::DecalSet,
 }
 
 // Temporal upscaling (AMD FidelityFX FSR3 / DLSS / XeSS). `backend` is `Some`
@@ -433,7 +454,7 @@ pub(super) struct DecalState {
 // previous frame's elapsed time feeding FSR's `frameTimeDelta`.
 pub(super) struct UpscaleState {
     pub backend: Option<Box<dyn super::post::upscale::UpscaleBackend>>,
-    pub requested: crate::components::UpscalerBackend,
+    pub requested: components::UpscalerBackend,
     pub jitter: std::cell::Cell<[f32; 2]>,
     pub prev_elapsed: std::cell::Cell<f32>,
 }
@@ -447,8 +468,8 @@ pub(super) struct UpscaleState {
 // Metal pattern.
 pub(super) struct AutoExposureState {
     pub resources: Option<AutoExposureResources>,
-    pub settings: Option<crate::gfx::auto_exposure::AutoExposureSettings>,
-    pub state: Option<crate::gfx::auto_exposure::AutoExposureState>,
+    pub settings: Option<auto_exposure::AutoExposureSettings>,
+    pub state: Option<auto_exposure::AutoExposureState>,
     pub bias_ev: f32,
     pub last_elapsed: f32,
 }
@@ -466,7 +487,7 @@ pub(super) struct ShadowState {
     pub light_dir: [f32; 3],
     // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
     // refreshes the near cascade every frame and the far cascades round-robin.
-    pub update: crate::components::ShadowUpdate,
+    pub update: components::ShadowUpdate,
     // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
     // per-frame cascade-split computation and capped at the camera far plane.
     pub distance: u32,
@@ -476,7 +497,7 @@ pub(super) struct ShadowState {
     pub cascades: u32,
     // Round-robin clock + primed-set for the cascade schedule; advanced once per
     // frame in record_frame.
-    pub scheduler: crate::gfx::shadow_schedule::ShadowCascadeScheduler,
+    pub scheduler: shadow_schedule::ShadowCascadeScheduler,
     // Cascades re-rendered this frame (bit `i` = cascade `i`). Set in
     // record_frame and read by encode_shadow_pass so the two agree on which
     // slices to refresh and which to leave intact.
@@ -511,7 +532,7 @@ pub(super) struct SpotShadowState {
     pub ubo_stride: u64,
     pub slice_size: u32,
     // Round-robin clock + primed set, advanced once per frame in record_frame.
-    pub scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
+    pub scheduler: spot_shadow::SpotShadowScheduler,
     // Slices re-rendered this frame (bit `i` = slice `i`). Set in record_frame
     // and read by encode_spot_shadow_pass.
     pub render_mask: u32,
@@ -568,7 +589,7 @@ pub(super) struct AreaLightState {
 // light CBV; `update_directional_lights` re-derives both.
 pub(super) struct FogState {
     pub resources: Option<FogResources>,
-    pub settings: Option<crate::gfx::volumetric_fog::FogSettings>,
+    pub settings: Option<volumetric_fog::FogSettings>,
     pub sun_dir: [f32; 3],
     pub sun_color: [f32; 3],
 }
@@ -594,7 +615,7 @@ pub(super) struct DxUniforms {
     // The values the light ring carries. A live Ambient-slider or
     // directional-light change mutates this and re-arms `light_dirty`;
     // `record_frame` writes the frame's own slot, so no in-flight read is raced.
-    pub light_uniforms: crate::gfx::render_types::LightUniforms,
+    pub light_uniforms: render_types::LightUniforms,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
 }
@@ -777,12 +798,7 @@ pub(super) struct DrawState {
     // `RefCell` because `record_frame` is &self; taken out before
     // `execute_graph` and put back after so a steady scene compiles the graph
     // once and reuses it thereafter.
-    pub graph_cache: RefCell<
-        Option<(
-            crate::gfx::render_graph::FrameGraphInputs,
-            crate::gfx::render_graph::CompiledGraph,
-        )>,
-    >,
+    pub graph_cache: RefCell<Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>>,
     // Build-time `objects` count. Streamed chunks are appended past this, so a
     // draw index >= `draw.n_objects` identifies a chunk.
     pub n_objects: usize,
@@ -843,10 +859,10 @@ pub(super) struct ProbeState {
     // Placements (declared `ReflectionProbe` assets or an auto-seeded grid).
     // Indexed in order by the staggered capture pass; one cube is baked per
     // placement.
-    pub placements: Vec<crate::gfx::reflection_probe::ProbePlacement>,
+    pub placements: Vec<reflection_probe::ProbePlacement>,
     // Staggered bake cursor over `placements`: a not-yet-baked probe falls back
     // to the sky until its turn, so no single frame pays the whole capture.
-    pub bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
+    pub bake_queue: reflection_probe::ProbeBakeQueue,
     // Per-frame probe set (parallax boxes + live count) bound to the forward /
     // SSR / RT shaders. `EMPTY` until a bake installs a cube; distinct from
     // `env_map` so the skybox + diffuse irradiance keep the sky.
@@ -885,7 +901,7 @@ pub(super) struct ProbeState {
 // copy has been re-pointed, every list recorded against the old resource has
 // retired, and the tick's fence wait covers the upload submission itself.
 pub(super) struct StreamState {
-    pub pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue,
+    pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: Vec<super::texture::StreamedUploadRetire>,
 }
@@ -968,7 +984,7 @@ pub(super) struct Diagnostics {
     // (filled by `draw_frame`) plus VRAM bytes pulled from the adapter. Lives in
     // a `Cell` because the per-pass increments happen through the `&self`
     // `record_frame` path. Surfaced to the profiler overlay via `render_stats`.
-    pub frame_stats: std::cell::Cell<crate::gfx::profile::RenderStats>,
+    pub frame_stats: std::cell::Cell<profile::RenderStats>,
     // CPU-side accumulator for this frame's draw calls. The Metal + Vulkan
     // executors use the same pattern: encoders (which may run in parallel) bump
     // this atomic via `inc_draw_calls`; the main thread drains it into
@@ -1003,11 +1019,11 @@ pub(crate) struct DxContext {
     // backend (rebuilding only world content on the retained device + window +
     // swapchain) instead of a full rebuild -- but only when the new world's
     // `swapchain_config` still matches. See `reload_world`.
-    pub(super) swapchain_config: crate::gfx::backend_init::SwapchainConfig,
+    pub(super) swapchain_config: backend_init::SwapchainConfig,
     // The resolved HDR-output mode, retained so a reload can reconstruct the
     // `DeviceAndWindow` reuse bundle without re-negotiating HDR on the
     // (unchanged) swapchain. (The DXGI format is already in `swapchain.format`.)
-    pub(super) hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    pub(super) hdr_mode: hdr_output::HdrOutputMode,
 
     pub(super) swapchain: SwapchainState,
 
@@ -1086,7 +1102,7 @@ pub(crate) struct DxContext {
     pub(super) bloom: BloomState,
     // Post-process tunables (bloom / exposure / vignette). Drives whether the
     // bloom chain runs and feeds the bloom-prefilter + composite root constants.
-    pub(super) post_process: crate::gfx::render_types::PostProcessParams,
+    pub(super) post_process: render_types::PostProcessParams,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer (SSR, SSGI, SSAO, TAA, or temporal upscaling) is enabled: one
@@ -1261,7 +1277,7 @@ pub(crate) struct DxContext {
     // `HdrOutputMode`. `None` on the SDR path. Only the headless `screenshot`
     // path reads it, to decode the float swapchain for display. Mirrors the
     // `encoding` the Vulkan screenshot path pulls from `VkContext::hdr_mode`.
-    pub(super) hdr_encoding: Option<crate::gfx::hdr_output::HdrEncoding>,
+    pub(super) hdr_encoding: Option<hdr_output::HdrEncoding>,
 
     // Shader hot-reload state. See [`HotReloadState`].
     pub(super) hot_reload: HotReloadState,
@@ -1339,10 +1355,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl DxContext {
-    pub(crate) fn draw_frame(
-        &mut self,
-        params: FrameParams<'_>,
-    ) -> crate::gfx::error::RenderResult<()> {
+    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         let FrameParams {
             elapsed,
             fov_y_radians,
@@ -1551,7 +1564,7 @@ impl DxContext {
         } else {
             0
         };
-        let mut pass_times_us = [("", 0u32); crate::gfx::profile::MAX_PASS_TIMINGS];
+        let mut pass_times_us = [("", 0u32); profile::MAX_PASS_TIMINGS];
         if timestamps_live {
             // Walk the PASS_COUNT pairs that follow the whole-frame pair
             // and surface (pass-name, micros) tuples for the StatHud chip.
@@ -1560,8 +1573,8 @@ impl DxContext {
             // (see the pre-init loop in `record_frame`) so `ts_end > ts_start`
             // evaluates false and they report 0 µs; the shared
             // `passes_text` filter naturally hides them from the chip.
-            for (i, name) in crate::gfx::render_graph::PASS_NAMES.iter().enumerate() {
-                if i >= crate::gfx::profile::MAX_PASS_TIMINGS {
+            for (i, name) in render_graph::PASS_NAMES.iter().enumerate() {
+                if i >= profile::MAX_PASS_TIMINGS {
                     break;
                 }
                 // Slot 2 + 2*i = start, slot 3 + 2*i = end (skip the
@@ -1590,28 +1603,26 @@ impl DxContext {
         self.diagnostics
             .draw_calls_accum
             .store(0, std::sync::atomic::Ordering::Relaxed);
-        self.diagnostics
-            .frame_stats
-            .set(crate::gfx::profile::RenderStats {
-                draw_calls: 0,
-                objects,
-                skinned_visible,
-                skinned_pool_free,
-                gpu_frame_us,
-                // The fence wait alone so far; `Present` below adds to it.
-                gpu_wait_us: gpu_wait.micros(),
-                vram_bytes,
-                transient_pool_bytes: self.transient_pool.allocated_bytes(),
-                pass_times_us,
-                // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
-                // chip. `None` when the world stayed on the authored static
-                // exposure; the chip blanks itself in that case. Mirrors
-                // `MtlContext::render_stats`.
-                auto_exposure_ev: self.auto_exposure.state.as_ref().map(|s| s.current_ev),
-                // Captured from the resolved `HdrOutputMode` at init. `None` on
-                // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
-                max_edr: self.max_edr,
-            });
+        self.diagnostics.frame_stats.set(profile::RenderStats {
+            draw_calls: 0,
+            objects,
+            skinned_visible,
+            skinned_pool_free,
+            gpu_frame_us,
+            // The fence wait alone so far; `Present` below adds to it.
+            gpu_wait_us: gpu_wait.micros(),
+            vram_bytes,
+            transient_pool_bytes: self.transient_pool.allocated_bytes(),
+            pass_times_us,
+            // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
+            // chip. `None` when the world stayed on the authored static
+            // exposure; the chip blanks itself in that case. Mirrors
+            // `MtlContext::render_stats`.
+            auto_exposure_ev: self.auto_exposure.state.as_ref().map(|s| s.current_ev),
+            // Captured from the resolved `HdrOutputMode` at init. `None` on
+            // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
+            max_edr: self.max_edr,
+        });
 
         // Flush any D3D12 validation messages from the previous frame.
         self.flush_validation();
@@ -1729,18 +1740,17 @@ impl DxContext {
         if !self.shadow.dsvs.is_empty() {
             let aspect =
                 self.extent.render_width.max(1) as f32 / self.extent.render_height.max(1) as f32;
-            let fresh =
-                crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
-                    view: self.view.matrix,
-                    cam_pos,
-                    fov_y_rad: fov_y_radians,
-                    aspect,
-                    near,
-                    shadow_distance: (self.shadow.distance as f32).min(far),
-                    light_dir_to_source: self.shadow.light_dir,
-                    shadow_map_size: self.shadow.map_size,
-                    active_cascades: self.shadow.cascades,
-                });
+            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
+                view: self.view.matrix,
+                cam_pos,
+                fov_y_rad: fov_y_radians,
+                aspect,
+                near,
+                shadow_distance: (self.shadow.distance as f32).min(far),
+                light_dir_to_source: self.shadow.light_dir,
+                shadow_map_size: self.shadow.map_size,
+                active_cascades: self.shadow.cascades,
+            });
             let update = self.shadow.update;
             let mask = self
                 .shadow
@@ -1749,7 +1759,7 @@ impl DxContext {
             self.shadow.render_mask = mask;
             self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
             self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..crate::gfx::render_types::NUM_SHADOW_CASCADES {
+            for i in 0..render_types::NUM_SHADOW_CASCADES {
                 if mask & (1u32 << i) != 0 {
                     self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
                 }
@@ -1762,7 +1772,7 @@ impl DxContext {
         // init. A no-op (mask stays 0) when the world has no shadowed spot.
         self.spot_shadow.advance(matches!(
             self.shadow.update,
-            crate::components::ShadowUpdate::EveryFrame
+            components::ShadowUpdate::EveryFrame
         ));
 
         // 3. record_frame fans non-composite passes onto rayon workers
@@ -1979,7 +1989,7 @@ impl DxContext {
     // the timestamp pair this slot resolved on its previous trip through the
     // ring (so a `FRAMES`-stale window, matching Metal's "frame or two
     // stale" reading).
-    pub(crate) fn render_stats(&self) -> crate::gfx::profile::RenderStats {
+    pub(crate) fn render_stats(&self) -> profile::RenderStats {
         self.diagnostics.frame_stats.get()
     }
 
@@ -2079,7 +2089,7 @@ impl DxContext {
     // before. Shared with the other backends through
     // `planar_reflection::planar_pass_needed`.
     pub(super) fn planar_pass_needed(&self) -> bool {
-        crate::gfx::planar_reflection::planar_pass_needed(
+        planar_reflection::planar_pass_needed(
             self.planar_reflection.is_some(),
             self.transparent
                 .as_ref()
@@ -2268,7 +2278,7 @@ impl DxContext {
     // Switch window mode / resize at runtime (windowed / borderless / fullscreen
     // and content-size presets). The Win32 work lives in `window.rs`; the resize
     // path picks up the resulting WM_SIZE.
-    pub(crate) fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: components::WindowMode) {
         do_set_window_mode(self.win_mut(), mode);
     }
 
@@ -2278,13 +2288,13 @@ impl DxContext {
 
     // The display modes (resolution + refresh rate) of the monitor the window
     // sits on, feeding the Resolution settings row (the caller dedups + sorts).
-    pub(crate) fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<display_mode::DisplayMode> {
         crate::win32::display_mode::enumerate(self.win().hwnd)
     }
 
     // The mode the window's monitor is currently running (what the Resolution
     // row shows before the user ever picks one).
-    pub(crate) fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<display_mode::DisplayMode> {
         crate::win32::display_mode::current(self.win().hwnd)
     }
 
@@ -2292,17 +2302,14 @@ impl DxContext {
     // Applied by the per-frame reconcile in `window_closed` (which also
     // restores the desktop mode on leaving fullscreen), so a choice made in
     // any window mode takes effect when fullscreen is (or becomes) active.
-    pub(crate) fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
         self.fullscreen_display.set_desired(mode);
     }
 
     // Replace the live post-process tunables, pushed to the bloom + composite
     // shaders each frame. The composite's display-output flags are not part of
     // the payload, so the EDR path negotiated at init survives every push.
-    pub(crate) fn update_post_process(
-        &mut self,
-        tunables: crate::gfx::render_types::PostProcessTunables,
-    ) {
+    pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
         self.post_process.set_tunables(tunables);
     }
 
@@ -2323,27 +2330,24 @@ impl DxContext {
     // fog sun are derived from the first light on the CPU, so both are
     // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
     // changed one only re-arms the light CBV ring.
-    pub(crate) fn update_directional_lights(
-        &mut self,
-        lights: &[crate::components::DirectionalLight],
-    ) {
-        let (directional, num_directional) = crate::gfx::lights::directional_light_data(lights);
+    pub(crate) fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]) {
+        let (directional, num_directional) = lights::directional_light_data(lights);
         let uniforms = &mut self.uniforms.light_uniforms;
         if uniforms.directional == directional && uniforms.num_directional == num_directional {
             return;
         }
         uniforms.directional = directional;
         uniforms.num_directional = num_directional;
-        self.shadow.light_dir = crate::gfx::lights::sun_direction(&self.uniforms.light_uniforms);
+        self.shadow.light_dir = lights::sun_direction(&self.uniforms.light_uniforms);
         self.fog.sun_dir = self.shadow.light_dir;
-        self.fog.sun_color = crate::gfx::lights::sun_color(&self.uniforms.light_uniforms);
+        self.fog.sun_color = lights::sun_color(&self.uniforms.light_uniforms);
         self.uniforms.mark_lights_dirty();
     }
 
     // Set the live shadow cascade re-render cadence. The per-frame cascade split
     // reads `shadow.update` at the start of each draw (see draw_frame), so a
     // change takes effect on the next frame with no rebuild or allocation.
-    pub(crate) fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: components::ShadowUpdate) {
         self.shadow.update = update;
     }
 
@@ -2374,7 +2378,7 @@ impl DxContext {
     // ride `apply_quality_settings`), so only its scalar intensity / distance are
     // updated. The SSR settings live one level deeper than Metal's (inside the
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
-    pub(crate) fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
+    pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
         if let (Some(live), Some(res)) = (q.ssao, self.ssao.resources.as_mut()) {
             res.settings = live;
         }
@@ -2394,7 +2398,7 @@ impl DxContext {
 
     // Replace the runtime movement key map. The window message loop decodes
     // key events through it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.win_mut().key.set_keymap(keymap);
     }
 
@@ -2416,8 +2420,8 @@ impl DxContext {
 
     // Device capability flags for the settings menu. RT reflects the DXR-tier
     // query made at init (`rt_capable`).
-    pub(crate) fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
-        crate::gfx::backend::DeviceCapabilities {
+    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
+        backend::DeviceCapabilities {
             ray_tracing: self.rt_capable,
             selectable_upscaler: true,
             // The cull BVH + RT tables key fixed build-time slot indices and
@@ -2433,8 +2437,10 @@ impl DxContext {
     // Coarse GPU performance profile for default-quality selection, read live
     // from the adapter description (vendor id + dedicated VRAM). `UNKNOWN` when
     // the adapter does not expose the v3 interface or the desc query fails.
-    pub(crate) fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
-        use crate::gfx::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
+    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
+        use concinnity_core::render::backend::{
+            GpuClassInput, GpuProfile, GpuVendor, classify_tier,
+        };
         let Some(adapter) = self.adapter.as_ref() else {
             return GpuProfile::UNKNOWN;
         };
@@ -2470,7 +2476,7 @@ impl DxContext {
     }
 }
 
-impl crate::gfx::scene_flow::SceneControl for DxContext {
+impl scene_flow::SceneControl for DxContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }

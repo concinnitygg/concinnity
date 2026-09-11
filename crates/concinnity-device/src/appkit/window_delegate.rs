@@ -14,14 +14,13 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSWindow, NSWindowDelegate, NSWindowStyleMask};
 use objc2_foundation::NSNotification;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) struct FullscreenIvars {
     is_fullscreen: Arc<AtomicBool>,

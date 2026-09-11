@@ -20,23 +20,29 @@ pub(in crate::metal) mod main;
 mod shadow;
 mod spot_shadow;
 
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::jitter;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::rt_reflections::RtParamsInputs;
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::backend::FrameParams;
+use concinnity_core::render::csm;
+use concinnity_core::render::error;
+use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::render_graph::FrameGraphInputs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _};
 
-use crate::gfx::backend::FrameParams;
-use crate::gfx::render_graph::FrameGraphInputs;
-use crate::gfx::rt_reflections::RtParamsInputs;
-
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
 use super::uniforms::*;
-use concinnity_core::gfx::projection::perspective_rh;
-use concinnity_core::gfx::transform::mat4_mul;
-use concinnity_core::render::post::device::PostExtent;
-
 use crate::metal::post::post_device::MtlPostDevice;
 
 impl MtlContext {
@@ -88,7 +94,7 @@ impl MtlContext {
         // frame time) to the profiler overlay. `objects` is the total scene
         // size: static draw objects, every instanced-cluster instance, and
         // skinned meshes.
-        self.diagnostics.frame_stats = crate::gfx::profile::RenderStats::default();
+        self.diagnostics.frame_stats = profile::RenderStats::default();
         let instanced_total: usize = self
             .instanced
             .clusters
@@ -253,18 +259,17 @@ impl MtlContext {
             }
         };
         if self.shadow.pipeline_state.is_some() {
-            let fresh =
-                crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
-                    view: self.view.matrix,
-                    cam_pos,
-                    fov_y_rad: fov_y_radians,
-                    aspect: cascade_aspect,
-                    near,
-                    shadow_distance: (self.shadow.distance as f32).min(far),
-                    light_dir_to_source: self.shadow.light_dir,
-                    shadow_map_size: self.shadow.map_size,
-                    active_cascades: self.shadow.cascades,
-                });
+            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
+                view: self.view.matrix,
+                cam_pos,
+                fov_y_rad: fov_y_radians,
+                aspect: cascade_aspect,
+                near,
+                shadow_distance: (self.shadow.distance as f32).min(far),
+                light_dir_to_source: self.shadow.light_dir,
+                shadow_map_size: self.shadow.map_size,
+                active_cascades: self.shadow.cascades,
+            });
             // Pick this frame's cascades and refresh only their VPs; cascades
             // skipped this frame keep the VP their slice was rendered with so
             // the Main pass samples each slice consistently. Splits depend only
@@ -273,7 +278,7 @@ impl MtlContext {
             self.shadow.render_mask = mask;
             self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
             self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..crate::gfx::render_types::NUM_SHADOW_CASCADES {
+            for i in 0..render_types::NUM_SHADOW_CASCADES {
                 if mask & (1u32 << i) != 0 {
                     self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
                 }
@@ -330,8 +335,8 @@ impl MtlContext {
         let needs_jitter = self.taa.enabled || self.upscale.scaler.is_some();
         let proj_render = if needs_jitter {
             let idx = self.taa.frame % 8 + 1;
-            let jx_pix = crate::gfx::jitter::radical_inverse(idx, 2) - 0.5;
-            let jy_pix = crate::gfx::jitter::radical_inverse(idx, 3) - 0.5;
+            let jx_pix = jitter::radical_inverse(idx, 2) - 0.5;
+            let jy_pix = jitter::radical_inverse(idx, 3) - 0.5;
             let jx = jx_pix * 2.0 / render_w as f32;
             let jy = jy_pix * 2.0 / render_h as f32;
             if self.upscale.scaler.is_some() {
@@ -352,7 +357,7 @@ impl MtlContext {
         // world-space position from depth (fog, decals, raymarch, transparent),
         // instead of each pass re-inverting `vp` independently.
         let inv_vp = mat4_inverse(vp);
-        let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
+        let frustum = Frustum::from_view_projection(vp);
 
         // The probe cube handles, for every pass that samples the set. Built
         // ahead of the bindless prep below and outside its world-hidden gate:
@@ -544,12 +549,12 @@ impl MtlContext {
         // FogFroxel volume extras: view matrix + volume dimensions + near/far
         // so the compute kernel can place each froxel in world-space and the
         // fragment shader can map a scene depth into the volume's Z axis.
-        let fog_froxel_params = fog_settings.map(|fog| crate::gfx::render_types::FogFroxelParams {
+        let fog_froxel_params = fog_settings.map(|fog| render_types::FogFroxelParams {
             view: self.view.matrix,
             froxel_dims: [
-                crate::gfx::render_graph::FOG_FROXEL_X,
-                crate::gfx::render_graph::FOG_FROXEL_Y,
-                crate::gfx::render_graph::FOG_FROXEL_Z,
+                render_graph::FOG_FROXEL_X,
+                render_graph::FOG_FROXEL_Y,
+                render_graph::FOG_FROXEL_Z,
             ],
             _pad_align: 0,
             z_near: near.max(1e-3),
@@ -566,12 +571,12 @@ impl MtlContext {
         // graph node is omitted, so a list the skipped pass did not write is never
         // read. Stored on self so the shared main-pass bind can push it; a local
         // copy feeds the LightCull arm.
-        let clustered = crate::gfx::lights::clustered_lighting_active(
+        let clustered = lights::clustered_lighting_active(
             self.light_cull.pipeline.is_some(),
             self.light_uniforms.num_local_lights,
         );
         let cluster_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
-        self.cluster_params = crate::gfx::render_types::ClusterParams {
+        self.cluster_params = render_types::ClusterParams {
             inv_view_proj: cluster_inv_vp,
             cam_pos,
             z_near: near.max(1e-3),
@@ -581,9 +586,9 @@ impl MtlContext {
                 -self.view.matrix[2][2],
             ],
             z_far: far,
-            grid_x: crate::gfx::render_types::CLUSTER_GRID_X,
-            grid_y: crate::gfx::render_types::CLUSTER_GRID_Y,
-            grid_z: crate::gfx::render_types::CLUSTER_GRID_Z,
+            grid_x: render_types::CLUSTER_GRID_X,
+            grid_y: render_types::CLUSTER_GRID_Y,
+            grid_z: render_types::CLUSTER_GRID_Z,
             num_lights: self.light_uniforms.num_local_lights.max(0) as u32,
             screen_w: render_w as f32,
             screen_h: render_h as f32,
@@ -749,14 +754,12 @@ impl MtlContext {
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
             shadowed_spot_count: self.spot_shadow.count,
-            spot_shadow_slice_size: crate::gfx::render_types::spot_shadow_slice_size(
-                self.shadow.map_size,
-            ),
+            spot_shadow_slice_size: render_types::spot_shadow_slice_size(self.shadow.map_size),
         };
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.
-        let graph_inputs = crate::gfx::render_graph::apply_view(&graph_inputs, view_mode, show);
+        let graph_inputs = render_graph::apply_view(&graph_inputs, view_mode, show);
         // Reuse the cached compiled graph when this frame's inputs match the
         // ones it was built from (the common case: graph topology changes only
         // when a feature toggles or a target resizes). Taken out of the cache so
@@ -764,7 +767,7 @@ impl MtlContext {
         // it; put back after execution. A mismatch (or a cold cache) rebuilds.
         let graph = match self.draw.graph_cache.take() {
             Some((cached_inputs, cached_graph)) if cached_inputs == graph_inputs => cached_graph,
-            _ => crate::gfx::render_graph::build_frame_graph(&graph_inputs)
+            _ => render_graph::build_frame_graph(&graph_inputs)
                 .map_err(|e| format!("frame graph: {}", e))?,
         };
         // This frame's skinned deformed-vertex buffer (skinned fold), cloned into
@@ -990,7 +993,7 @@ impl MtlContext {
                         // draw_frame to report across the backend boundary.
                         let classified = match cb.error() {
                             Some(e) => super::error::classify_ns_error(&e),
-                            None => crate::gfx::error::RenderError::Other(
+                            None => error::RenderError::Other(
                                 "frame command buffer faulted without an error object".to_string(),
                             ),
                         };

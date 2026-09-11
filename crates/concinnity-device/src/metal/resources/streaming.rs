@@ -5,7 +5,8 @@
 // hot-reload.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use crate::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::mesh_payload::Vertex;
+
 use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, zero_buffer_region};
 
 impl MtlContext {

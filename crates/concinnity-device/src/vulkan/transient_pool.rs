@@ -23,16 +23,15 @@
 // otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
+use concinnity_core::render::render_graph::{
+    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
+};
 use std::collections::HashMap;
-
-use crate::vulkan::owned::VkDevice;
 
 use super::texture::{
     create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
 };
-use crate::gfx::render_graph::{
-    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
-};
+use crate::vulkan::owned::VkDevice;
 
 // The raw device handles the pool allocates with. The pool deliberately stays
 // off the device allocator: its slots alias images on purpose, which the

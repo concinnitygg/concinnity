@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::mipmap;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
@@ -8,7 +9,7 @@ use super::allocator::{DeviceAllocator, PooledTexture};
 use super::descriptors::TextureDesc;
 
 // Upload a 2-D RGBA texture from raw pixel bytes with a full mip chain.
-// The chain is box-filtered on the CPU (`crate::gfx::mipmap`) and every level
+// The chain is box-filtered on the CPU (`concinnity_core::render::mipmap`) and every level
 // is written so the texture minifies through hardware trilinear / aniso
 // selection instead of aliasing from a single mip-0 sample at a distance.
 // The texture is created with ShaderRead usage so it can be sampled in
@@ -31,7 +32,7 @@ pub(super) fn upload_texture(
         ));
     }
 
-    let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
+    let chain = mipmap::generate_mip_chain(width, height, pixels);
 
     let desc = TextureDesc {
         width: width as usize,

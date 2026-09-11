@@ -22,15 +22,14 @@
 
 use ash::vk;
 
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 use crate::vulkan::wire_cache::WireCache;
 

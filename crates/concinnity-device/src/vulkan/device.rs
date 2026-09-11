@@ -1,9 +1,8 @@
 // src/vulkan/device.rs
 //
 // Vulkan physical/logical device selection and queue-family queries.
-use std::ffi::{CStr, CString, c_void};
-
 use ash::{Device, vk};
+use std::ffi::{CStr, CString, c_void};
 
 use crate::vulkan::post::{ResolvedBackend, UpscaleSdk};
 

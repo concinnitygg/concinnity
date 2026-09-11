@@ -10,11 +10,25 @@
 // rests on. Forwarders that rename, drop args, or have a custom body stay
 // hand-written below the macro. Mirrors src/metal/backend.rs.
 
-use crate::gfx::backend::{ChunkMesh, FrameParams, RenderBackend};
-use crate::gfx::input::RenderInput;
-use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::profile::RenderStats;
-use crate::gfx::render_types::SkinnedDrawObject;
+use concinnity_core::bake;
+use concinnity_core::components;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::gfx::profile::RenderStats;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::SkinnedDrawObject;
+use concinnity_core::render::backend;
+use concinnity_core::render::backend::{ChunkMesh, FrameParams, RenderBackend};
+use concinnity_core::render::backend_init;
+use concinnity_core::render::decal;
+use concinnity_core::render::display_mode;
+use concinnity_core::render::draw_slot;
+use concinnity_core::render::error;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
+use concinnity_core::render::particles;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::volumetric_fog;
 
 use super::context::{DxContext, debug_assert_main_thread};
 
@@ -57,28 +71,28 @@ impl RenderBackend for DxContext {
         fn cursor_outside_window(&self) -> bool;
         fn set_menu_mode(&mut self, on: bool);
         fn set_camera_capture(&mut self, capture: bool);
-        fn set_reflection_probes(&mut self, probes: &[crate::gfx::reflection_probe::ProbePlacement]);
+        fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]);
         fn set_vsync(&mut self, on: bool);
-        fn set_window_mode(&mut self, mode: crate::components::WindowMode);
+        fn set_window_mode(&mut self, mode: components::WindowMode);
         fn set_window_size(&mut self, width: u32, height: u32);
-        fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode>;
-        fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode>;
-        fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode);
+        fn display_modes(&self) -> Vec<display_mode::DisplayMode>;
+        fn current_display_mode(&self) -> Option<display_mode::DisplayMode>;
+        fn set_display_mode(&mut self, mode: display_mode::DisplayMode);
         fn update_post_process(
             &mut self,
-            tunables: crate::gfx::render_types::PostProcessTunables,
+            tunables: render_types::PostProcessTunables,
         );
         fn set_ambient_intensity(&mut self, value: f32);
-        fn update_directional_lights(&mut self, lights: &[crate::components::DirectionalLight]);
-        fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap);
-        fn apply_quality_settings(&mut self, settings: crate::gfx::backend::QualitySettings);
-        fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate);
+        fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
+        fn set_keymap(&mut self, keymap: &KeyMap);
+        fn apply_quality_settings(&mut self, settings: backend::QualitySettings);
+        fn set_shadow_update(&mut self, update: components::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);
         fn set_shadow_cascades(&mut self, count: u32);
-        fn update_quality_params(&mut self, settings: crate::gfx::backend::QualitySettings);
+        fn update_quality_params(&mut self, settings: backend::QualitySettings);
         fn take_input(&mut self) -> RenderInput;
         fn wait_idle(&self);
-        fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()>;
+        fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()>;
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
         fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
         fn retire_draw_object(&mut self, draw_idx: usize);
@@ -92,22 +106,22 @@ impl RenderBackend for DxContext {
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
-        fn add_decal(&mut self, record: crate::gfx::decal::DecalRecord) -> Result<usize, String>;
+        fn add_decal(&mut self, record: decal::DecalRecord) -> Result<usize, String>;
         fn remove_decal(&mut self, decal_id: usize) -> Result<(), String>;
-        fn add_emitter(&mut self, record: crate::gfx::particles::ParticleEmitterRecord) -> Result<usize, String>;
+        fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> Result<usize, String>;
         fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String>;
         fn render_stats(&self) -> RenderStats;
-        fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities;
-        fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile;
+        fn capabilities(&self) -> backend::DeviceCapabilities;
+        fn gpu_profile(&self) -> backend::GpuProfile;
         fn logical_size(&self) -> (f32, f32);
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
-        fn update_fog_settings(&mut self, settings: Option<crate::gfx::volumetric_fog::FogSettings>);
-        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
+        fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
+        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
         fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> Result<(), String>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
-        fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: crate::gfx::draw_slot::SlotAlloc) -> Result<(), String>;
+        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<backend::SkinnedSlotLayout>, String>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> Result<(), String>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -116,17 +130,14 @@ impl RenderBackend for DxContext {
     // The swapchain config this live context was built with. A live `cn editor`
     // reload reuses this backend (via `reload_world`) only when the new world's
     // `swapchain_config` matches; otherwise the swap does a full rebuild.
-    fn hot_swap_config(&self) -> Option<crate::gfx::backend_init::SwapchainConfig> {
+    fn hot_swap_config(&self) -> Option<backend_init::SwapchainConfig> {
         Some(self.swapchain_config)
     }
 
     // Rebuild the world's content on the retained device + window + swapchain.
     // Inherent method named `apply_world_reload` so this forwarder does not
     // shadow-and-recurse (mirrors the Metal backend).
-    fn reload_world(
-        &mut self,
-        init: crate::gfx::backend_init::BackendInit<'_>,
-    ) -> crate::gfx::error::RenderResult<()> {
+    fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> error::RenderResult<()> {
         Ok(self.apply_world_reload(init)?)
     }
 
@@ -136,8 +147,8 @@ impl RenderBackend for DxContext {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::bake::texture::TextureImage,
-    ) -> crate::gfx::error::RenderResult<()> {
+        image: &bake::texture::TextureImage,
+    ) -> error::RenderResult<()> {
         debug_assert_main_thread("update_texture_slot");
         Ok(DxContext::update_texture_slot(self, slot, image)?)
     }
@@ -148,7 +159,7 @@ impl RenderBackend for DxContext {
         verts: &[Vertex],
         idxs: &[u16],
         frame: u64,
-    ) -> crate::gfx::error::RenderResult<()> {
+    ) -> error::RenderResult<()> {
         debug_assert_main_thread("upload_mesh");
         Ok(DxContext::upload_mesh(self, draw_idx, verts, idxs, frame)?)
     }
@@ -157,7 +168,7 @@ impl RenderBackend for DxContext {
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-    ) -> crate::gfx::error::RenderResult<()> {
+    ) -> error::RenderResult<()> {
         debug_assert_main_thread("setup_chunk_streaming");
         Ok(DxContext::setup_chunk_streaming(
             self,
@@ -169,21 +180,21 @@ impl RenderBackend for DxContext {
     fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
-        dst: crate::gfx::draw_slot::SlotAlloc,
-    ) -> crate::gfx::error::RenderResult<()> {
+        dst: draw_slot::SlotAlloc,
+    ) -> error::RenderResult<()> {
         debug_assert_main_thread("add_chunk_mesh");
         DxContext::add_chunk_mesh(self, mesh, dst)
     }
 
-    fn update_environment_map(&mut self, payload: &[u8]) -> crate::gfx::error::RenderResult<()> {
+    fn update_environment_map(&mut self, payload: &[u8]) -> error::RenderResult<()> {
         debug_assert_main_thread("update_environment_map");
         Ok(DxContext::update_environment_map(self, payload)?)
     }
 
     fn rebuild_static_geometry(
         &mut self,
-        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
-    ) -> crate::gfx::error::RenderResult<()> {
+        changes: Vec<backend::DrawGeometryUpdate>,
+    ) -> error::RenderResult<()> {
         debug_assert_main_thread("rebuild_static_geometry");
         Ok(DxContext::rebuild_static_geometry(self, changes)?)
     }
@@ -191,11 +202,11 @@ impl RenderBackend for DxContext {
     fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::WorldShader<'_>,
-    ) -> crate::gfx::error::RenderResult<()> {
+        shader: backend_init::WorldShader<'_>,
+    ) -> error::RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
         DxContext::install_world_shader(self, bucket, shader)
-            .map_err(crate::gfx::error::RenderError::ShaderCompile)
+            .map_err(error::RenderError::ShaderCompile)
     }
 
     fn upload_skinned(
@@ -203,7 +214,7 @@ impl RenderBackend for DxContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-    ) -> crate::gfx::error::RenderResult<()> {
+    ) -> error::RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
         // Every skinned stage is the engine's own here: the world's fragment is
         // shader model 5.1, which D3D12 cannot pair with the engine's 6.0
@@ -215,7 +226,7 @@ impl RenderBackend for DxContext {
     // allocation can fail), so the forwarder logs instead of propagating.
     fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
     ) {
         debug_assert_main_thread("upload_skinned_morphs");
         if let Err(e) = DxContext::upload_skinned_morphs(self, morphs) {

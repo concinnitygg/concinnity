@@ -12,15 +12,16 @@
 // called with `hot_reload = true`. Production `cn run` never instantiates it.
 // Mirrors src/metal/hot_reload.rs.
 
+use concinnity_core::render::backend_init;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use windows::Win32::Graphics::Direct3D12::ID3D12PipelineState;
 
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
-use windows::Win32::Graphics::Direct3D12::ID3D12PipelineState;
 
 // Rebuild a feature's PSO(s) into a temporary only when the feature is live,
 // propagating any compile/create error out of the enclosing `reload_shaders`.
@@ -701,7 +702,7 @@ impl DxContext {
                 hot_reload: self.hot_reload.enabled,
             },
             0,
-            crate::gfx::backend_init::WorldShader {
+            backend_init::WorldShader {
                 programs: world,
                 deferred: false,
             },

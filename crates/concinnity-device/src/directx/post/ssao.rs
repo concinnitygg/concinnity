@@ -10,13 +10,12 @@
 // fallback (built once in init/effects.rs) so the multiplier is a pass-through
 // 1.0. Mirrors src/metal/post/ssao.rs.
 
+use concinnity_core::gfx::render_types::SsaoParams;
+use concinnity_core::gfx::ssao;
+use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-
-use concinnity_core::render::post::device::PostBlend;
-
-use crate::gfx::render_types::SsaoParams;
 
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
@@ -184,7 +183,7 @@ fn create_ssao_blur_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSi
 // Drops cleanly with the context: all D3D12 objects are COM-refcounted.
 pub(in crate::directx) struct SsaoResources {
     // Resolved authored tunables; turned into a per-frame `SsaoParams` push.
-    pub(in crate::directx) settings: crate::gfx::ssao::SsaoSettings,
+    pub(in crate::directx) settings: ssao::SsaoSettings,
 
     // Raw GTAO kernel output (R8) and the blurred final occlusion (R8) the
     // main pass samples.
@@ -232,7 +231,7 @@ impl SsaoResources {
         ctx: SsaoDeviceCtx,
         width: u32,
         height: u32,
-        settings: crate::gfx::ssao::SsaoSettings,
+        settings: ssao::SsaoSettings,
         handles: SsaoDescriptorHandles,
         // The pooled `ao_output` resource (placed in `DxContext::transient_pool`);
         // SSAO writes its RTV + SRV but does not own it.

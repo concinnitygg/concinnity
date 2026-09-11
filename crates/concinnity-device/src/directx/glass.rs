@@ -17,23 +17,22 @@
 // compiled through `slang_builtins`; the ray-traced fragments need shader model
 // 6.5 for their inline ray query, the base pair 6.0.
 
+use concinnity_core::components::GlassPanel;
+use concinnity_core::geometry::glass_quad::build_glass_quad;
+use concinnity_core::gfx::mesh_payload::Vertex;
 use windows::Win32::Graphics::Direct3D12::*;
+// `GlassParams` (the per-panel cbuffer) is a GPU-free layout struct that lives
+// in `core::render`; re-export it so `crate::directx::glass::GlassParams` is
+// unchanged for the `glass_params_from` path.
+pub(in crate::directx) use concinnity_core::render::uniforms::GlassParams;
 
 use super::allocator::DeviceAllocator;
-use crate::components::GlassPanel;
 use crate::directx::context::dump_on_err;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::transparent::{
     GlassMeshProducer, RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
 };
-use crate::geometry::glass_quad::build_glass_quad;
-use crate::gfx::mesh_payload::Vertex;
-
-// `GlassParams` (the per-panel cbuffer) is a GPU-free layout struct that lives
-// in `core::render`; re-export it so `crate::directx::glass::GlassParams` is
-// unchanged for the `glass_params_from` path.
-pub(in crate::directx) use concinnity_core::render::uniforms::GlassParams;
 
 // Build the per-panel `GlassParams` from an authored panel. Pure; unit
 // tested. Mirrors `metal::glass::glass_params_from`.

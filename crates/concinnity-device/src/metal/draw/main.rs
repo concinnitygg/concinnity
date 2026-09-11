@@ -20,8 +20,11 @@
 // combo.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::uniforms::ViewUniforms;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer, MTLClearColor, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLLoadAction,
     MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
@@ -30,8 +33,6 @@ use objc2_metal::{
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use concinnity_core::render::uniforms::ViewUniforms;
-use objc2_foundation::ns_string;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
 // `self.view_matrix` for the on-screen main pass (and its phase-2 sibling) but
@@ -560,7 +561,7 @@ impl MtlContext {
         let cluster_params = if clustered {
             self.cluster_params
         } else {
-            crate::gfx::render_types::ClusterParams {
+            render_types::ClusterParams {
                 use_clusters: 0,
                 ..self.cluster_params
             }

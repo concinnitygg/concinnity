@@ -5,24 +5,25 @@
 // bindless texture argument buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::cull_status::CullStatus;
+use concinnity_core::gfx::frustum::{Frustum, transform_aabb};
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::model_history::HistoryMode;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::{NSString, ns_string};
 use objc2_metal::{
     MTLArgumentEncoder, MTLCommandBuffer as _, MTLComputePassDescriptor, MTLComputePipelineState,
     MTLDevice as _, MTLFunction as _, MTLLibrary as _, MTLRenderPipelineState,
 };
-
-use concinnity_core::gfx::cull_status::CullStatus;
 
 use super::context::*;
 use super::encode::ComputeEncode;
 use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::*;
-
-use objc2_foundation::{NSString, ns_string};
 
 // All GPU-driven cull state grouped into one feature unit: the phase-1 +
 // phase-2 cull pipelines, their indirect command buffers + argument
@@ -153,9 +154,9 @@ pub(super) fn metal_flat_pool_indices(
     texture_count: usize,
     texture_slot: usize,
     normal_map_slot: usize,
-    material: &crate::gfx::render_types::MaterialUniforms,
+    material: &render_types::MaterialUniforms,
 ) -> FlatPoolIndices {
-    use crate::gfx::render_types::{albedo_pool_index, normal_pool_index};
+    use concinnity_core::gfx::render_types::{albedo_pool_index, normal_pool_index};
     let cap = (super::context::BINDLESS_TEXTURE_COUNT as u32).saturating_sub(1);
     let tc = texture_count as u32;
     let clamp = |i: u32| i.min(cap);
@@ -182,10 +183,10 @@ pub(super) fn metal_flat_pool_indices(
 // all four texture indices through `metal_flat_pool_indices` and clamps them to
 // its fixed-size MSL pool; the addressing itself now matches DX/VK.
 pub(super) fn metal_instance_records(
-    clusters: &[crate::gfx::render_types::InstancedCluster],
+    clusters: &[render_types::InstancedCluster],
     texture_count: usize,
-) -> Vec<crate::gfx::render_types::GpuObjectData> {
-    use crate::gfx::render_types::GpuObjectData;
+) -> Vec<render_types::GpuObjectData> {
+    use concinnity_core::gfx::render_types::GpuObjectData;
     let total: usize = clusters.iter().map(|c| c.instances.len()).sum();
     let mut records = Vec::with_capacity(total);
     for cluster in clusters {
@@ -196,11 +197,8 @@ pub(super) fn metal_instance_records(
             &cluster.material,
         );
         for &model in &cluster.instances {
-            let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(
-                cluster.local_bb_min,
-                cluster.local_bb_max,
-                model,
-            );
+            let (bb_min, bb_max) =
+                transform_aabb(cluster.local_bb_min, cluster.local_bb_max, model);
             records.push(GpuObjectData {
                 model,
                 tint: cluster.material.tint,
@@ -230,16 +228,16 @@ pub(super) fn metal_instance_records(
 // `metal_flat_pool_indices` -- the same convention the static + instanced
 // records use.
 pub(super) fn metal_skinned_record(
-    obj: &crate::gfx::render_types::SkinnedDrawObject,
+    obj: &render_types::SkinnedDrawObject,
     texture_count: usize,
-) -> crate::gfx::render_types::GpuObjectData {
+) -> render_types::GpuObjectData {
     let idx = metal_flat_pool_indices(
         texture_count,
         obj.texture_slot,
         obj.normal_map_slot,
         &obj.material,
     );
-    let mut rec = crate::gfx::render_types::pack_skinned_record(obj, idx.albedo, idx.normal);
+    let mut rec = render_types::pack_skinned_record(obj, idx.albedo, idx.normal);
     rec.emissive_map_index = idx.emissive;
     rec.orm_map_index = idx.orm;
     rec
@@ -258,7 +256,7 @@ struct CullSceneBuffers<'a> {
 // The camera the cull kernel tests records against: the frustum planes plus the
 // eye position for the distance-based LOD pick.
 struct CullView<'a> {
-    frustum: &'a crate::gfx::frustum::Frustum,
+    frustum: &'a Frustum,
     cam_pos: [f32; 3],
 }
 
@@ -349,7 +347,7 @@ impl MtlContext {
         &mut self,
         ring_slot: usize,
     ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
-        use crate::gfx::render_types::GpuObjectData;
+        use concinnity_core::gfx::render_types::GpuObjectData;
         if self.cull_count() == 0 {
             return Ok(None);
         }
@@ -427,7 +425,7 @@ impl MtlContext {
         ring_slot: usize,
         history: HistoryMode,
     ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
-        use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+        use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if self.cull_count() == 0 {
             return Ok(None);
         }
@@ -445,7 +443,7 @@ impl MtlContext {
             // Pick this frame's active LOD by camera distance: the bindless
             // main pass then renders the chosen slice with no shader-side
             // change. Objects with no alternates fall straight through to LOD0.
-            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
@@ -457,7 +455,7 @@ impl MtlContext {
                 // The record's shader bucket rides the upper flag bits so the
                 // cull kernel can route its command into that bucket's ICB.
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | crate::gfx::render_types::draw_args_bucket_bits(obj.shader_bucket)
+                    | render_types::draw_args_bucket_bits(obj.shader_bucket)
                     | self.model_history.draw_flags(i, i),
             });
         }
@@ -470,7 +468,7 @@ impl MtlContext {
             let instance_base = args.len();
             args.extend_from_slice(&self.instanced.draw_args);
             if self.instanced.any_lod {
-                crate::gfx::lod::for_each_instance_lod(
+                lod::for_each_instance_lod(
                     &self.instanced.clusters,
                     cam_pos,
                     |record, index_offset, index_count| {
@@ -490,7 +488,7 @@ impl MtlContext {
         if self.draw.n_skinned > 0 {
             let base = args.len();
             for (k, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
-                let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+                let d = lod::skinned_camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
                 args.push(GpuDrawArgs {
                     index_count: index_count as u32,
@@ -523,7 +521,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
         cam_pos: [f32; 3],
         counts: crate::metal::context::DrawRecordCounts,
     ) -> Result<(), String> {
@@ -569,7 +567,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
         cam_pos: [f32; 3],
         slot: usize,
     ) -> Result<(), String> {
@@ -752,7 +750,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
         cam_pos: [f32; 3],
     ) -> Result<u32, String> {
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
@@ -867,7 +865,7 @@ impl MtlContext {
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
     ) -> Result<(), String> {
-        use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+        use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
         let (Some(pipeline), Some(encode), Some(icb), Some(arg_buf), Some(status)) = (
             &self.cull.shadow_pipeline,
@@ -920,9 +918,7 @@ impl MtlContext {
             // Cascade light frustum: world-space planes from the cascade's light
             // view-projection (the caster-extent near push baked into light_vps
             // survives, so off-screen / tall casters are kept).
-            let frustum = crate::gfx::frustum::Frustum::from_view_projection(
-                self.shadow.uniforms.light_vps[c],
-            );
+            let frustum = Frustum::from_view_projection(self.shadow.uniforms.light_vps[c]);
             let mut planes = [[0.0f32; 4]; 6];
             for (i, p) in frustum.planes.iter().enumerate() {
                 planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -1236,7 +1232,7 @@ pub(super) fn build_shadow_cull_pipeline(
 #[cfg(test)]
 mod tests {
     use super::metal_flat_pool_indices;
-    use crate::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
     #[test]
     fn flat_pool_indices_share_one_handle_indexed_pool() {

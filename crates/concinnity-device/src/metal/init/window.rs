@@ -6,6 +6,8 @@
 // exists).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::hdr_output::HdrOutputMode;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -17,7 +19,6 @@ use objc2_metal::{MTLDevice, MTLPixelFormat};
 use objc2_metal_kit::MTKView;
 use objc2_quartz_core::CAMetalLayer;
 
-use crate::gfx::hdr_output::HdrOutputMode;
 use crate::metal::context::{take_embedded_pump_events, take_embedded_view};
 
 pub(crate) struct WindowSetup {
@@ -329,7 +330,7 @@ pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
 // layer is reported and treated as a no-op (the renderer then falls back to
 // the standard sRGB SDR path silently; we already log warn-level above when
 // EDR is requested but not achievable).
-fn configure_hdr_layer(mtk_view: &MTKView, encoding: crate::gfx::hdr_output::HdrEncoding) {
+fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
     let Some(layer) = mtk_view.layer() else {
         tracing::warn!(
             "HDR display requested but MTKView has no backing layer: falling back to SDR"
@@ -357,13 +358,13 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: crate::gfx::hdr_output::Hdr
     //     directly; the panel decodes via the PQ EOTF. Same Display P3
     //     primaries as the linear path so the gamut situation is unchanged.
     let (name, label): (_, &str) = match encoding {
-        crate::gfx::hdr_output::HdrEncoding::ExtendedLinear => (
+        hdr_output::HdrEncoding::ExtendedLinear => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceExtendedLinearDisplayP3 },
             "kCGColorSpaceExtendedLinearDisplayP3",
         ),
-        crate::gfx::hdr_output::HdrEncoding::Pq => (
+        hdr_output::HdrEncoding::Pq => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceDisplayP3_PQ },

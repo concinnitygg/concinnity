@@ -11,8 +11,7 @@
 // physical device), which the resolver treats as "no clamp".
 
 use ash::vk;
-
-use crate::gfx::backend::{
+use concinnity_core::render::backend::{
     GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
 };
 

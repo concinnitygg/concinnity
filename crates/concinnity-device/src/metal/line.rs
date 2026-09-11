@@ -14,8 +14,10 @@
 // hardware.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types::LineVertex;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlendFactor, MTLBuffer, MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
     MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
@@ -26,11 +28,8 @@ use objc2_metal::{
 use super::context::{MtlContext, bytes_of_slice};
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
-
 use super::scoped_encoder::ScopedEncoder;
 use super::transient::TransientRing;
-use crate::gfx::render_types::LineVertex;
-use objc2_foundation::ns_string;
 
 // How much of a line still shows where scene geometry is in front of it. A
 // faint trace keeps the axes readable inside a dense scene without letting

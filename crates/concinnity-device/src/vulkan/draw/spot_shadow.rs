@@ -13,12 +13,13 @@
 // which stays correct until a caster moves.
 
 use ash::vk;
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use concinnity_core::render::csm;
 
-use crate::vulkan::owned::VkDevice;
-
-use crate::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
 use crate::vulkan::context::{VkContext, VkSpotShadow};
+use crate::vulkan::owned::VkDevice;
 use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::texture::GpuImage;
 
@@ -99,7 +100,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkS
         let uniforms: Vec<ShadowUniforms> = spot_shadows
             .iter()
             .map(|sd| {
-                let mut u = crate::gfx::csm::empty_shadow_uniforms();
+                let mut u = csm::empty_shadow_uniforms();
                 u.light_vps[0] = sd.light_vp;
                 u.active_cascades = 1;
                 u
@@ -348,7 +349,7 @@ impl VkContext {
                 // Pick the LOD by camera distance: the shadow pass uses
                 // the same slice the main pass will, so silhouettes track
                 // when the runtime swaps to a coarser LOD.
-                let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+                let d = lod::camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
                 let push = ShadowPush {
                     model: obj.model,
@@ -446,7 +447,7 @@ impl VkContext {
                     }
                     // Match the Main pass's per-object LOD pick so shadow
                     // silhouettes track the active skinned LOD.
-                    let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+                    let d = lod::skinned_camera_distance(obj, cam_pos);
                     let (index_offset, index_count) = obj.active_lod(d);
                     device.cmd_bind_descriptor_sets(
                         cmd,

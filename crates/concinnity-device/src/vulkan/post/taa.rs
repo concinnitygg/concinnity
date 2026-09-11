@@ -13,7 +13,6 @@
 // previous frame's output either way.
 
 use ash::vk;
-
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 

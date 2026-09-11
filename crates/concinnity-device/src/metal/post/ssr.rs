@@ -6,6 +6,8 @@
 // single unit Vulkan / DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::ssr::SsrSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -13,7 +15,6 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
-use crate::gfx::ssr::SsrSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::encode::RenderEncode;
@@ -169,7 +170,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_ssr_resolve(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        ssr_params: &crate::gfx::render_types::SsrParams,
+        ssr_params: &render_types::SsrParams,
     ) -> Result<u32, String> {
         // The pre-pass channels are pool-owned, so they are fetched here rather
         // than cached: a pool rebuild repacks every slot.

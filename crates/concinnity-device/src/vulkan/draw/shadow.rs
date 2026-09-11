@@ -23,10 +23,10 @@
 // `PassId::Shadow` here.
 
 use ash::vk;
-
-use crate::vulkan::owned::VkDevice;
+use concinnity_core::gfx::render_types;
 
 use super::super::context::VkContext;
+use crate::vulkan::owned::VkDevice;
 
 impl VkContext {
     // Encode the cascaded-shadow-map render passes for frame slot
@@ -79,7 +79,7 @@ impl VkContext {
         // its slice keeps the depth + VP from when it was last rendered (the
         // graph-driven producer/consumer barriers still round-trip every layer,
         // preserving the contents). The 0 sentinel falls back to all cascades.
-        let all_cascades = (1u32 << crate::gfx::render_types::NUM_SHADOW_CASCADES) - 1;
+        let all_cascades = (1u32 << render_types::NUM_SHADOW_CASCADES) - 1;
         let render_mask = if self.shadow.render_mask == 0 {
             all_cascades
         } else {

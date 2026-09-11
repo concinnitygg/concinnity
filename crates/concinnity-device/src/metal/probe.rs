@@ -55,10 +55,10 @@
 //     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::ptr::NonNull;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::render::reflection_probe::{
+    self, BakeAction, BakePhase, BakeSignals, PrefilterPlan,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -66,11 +66,13 @@ use objc2_metal::{
     MTLDevice as _, MTLPixelFormat, MTLResourceOptions, MTLTexture, MTLTextureType,
     MTLTextureUsage,
 };
+use std::ptr::NonNull;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::probe_prefilter::{PrefilterGpu, create_capture_cube};
-use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, BakeSignals, PrefilterPlan};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and
 // firefly clamp. Shared with the DirectX and Vulkan backends (and with the
@@ -516,7 +518,7 @@ impl MtlContext {
 
         let vp = reflection_probe::face_view_projection(eye, face, near, far);
         let view = reflection_probe::face_view_matrix(eye, face);
-        let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
+        let frustum = Frustum::from_view_projection(vp);
 
         let RenderingBake { done, gpu, .. } = self
             .probe

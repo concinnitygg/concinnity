@@ -10,6 +10,7 @@
 // context is dropped. Outside fullscreen the choice is only remembered; the
 // windowed resize path is unaffected.
 
+use concinnity_core::render::display_mode::DisplayMode;
 use objc2_app_kit::{NSScreen, NSWindow};
 use objc2_core_foundation::{CFDictionary, CFRetained, Type, kCFBooleanTrue};
 use objc2_core_graphics::{
@@ -17,8 +18,6 @@ use objc2_core_graphics::{
     CGDisplaySetDisplayMode, CGError, CGMainDisplayID, kCGDisplayShowDuplicateLowResolutionModes,
 };
 use objc2_foundation::{NSNumber, ns_string};
-
-use crate::gfx::display_mode::DisplayMode;
 
 // The id of the display `window` sits on, falling back to the main display
 // (also the embedded-mode answer, where no engine window exists).

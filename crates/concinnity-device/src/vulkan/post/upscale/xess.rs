@@ -22,16 +22,14 @@
     reason = "inline XeSS bindings keep the SDK's own C type names"
 )]
 
+use ash::vk;
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use ash::vk;
-
-use crate::vulkan::owned::VkDevice;
-
 use super::{UpscaleCamera, UpscaleImage, UpscaleInputs, VkUpscaleBackend, copy_ext_names};
 use crate::vulkan::context::HDR_FORMAT;
+use crate::vulkan::owned::VkDevice;
 use crate::vulkan::texture::GpuImage;
 
 // xess_result_t: 0 == success, negative == error, positive == warning.

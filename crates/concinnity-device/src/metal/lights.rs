@@ -6,7 +6,8 @@
 // from the first light and cached -- the cascade shadow direction -- is
 // re-derived here, since nothing else refreshes it.
 
-use crate::components::DirectionalLight;
+use concinnity_core::components::DirectionalLight;
+use concinnity_core::render::lights;
 
 use super::context::MtlContext;
 
@@ -15,7 +16,7 @@ impl MtlContext {
     // reflection params all read `light_uniforms` afresh each draw, so they need
     // nothing beyond the rewrite; `shadow.light_dir` is the one init-time cache.
     pub(crate) fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
-        let (directional, num_directional) = crate::gfx::lights::directional_light_data(lights);
+        let (directional, num_directional) = lights::directional_light_data(lights);
         if self.light_uniforms.directional == directional
             && self.light_uniforms.num_directional == num_directional
         {
@@ -23,6 +24,6 @@ impl MtlContext {
         }
         self.light_uniforms.directional = directional;
         self.light_uniforms.num_directional = num_directional;
-        self.shadow.light_dir = crate::gfx::lights::sun_direction(&self.light_uniforms);
+        self.shadow.light_dir = lights::sun_direction(&self.light_uniforms);
     }
 }

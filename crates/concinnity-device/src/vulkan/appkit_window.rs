@@ -14,6 +14,10 @@
 // and the window's backing scale each time the swapchain asks.
 
 use ash::vk;
+use concinnity_core::components::WindowMode;
+use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSView};
@@ -21,10 +25,6 @@ use objc2_foundation::NSSize;
 use objc2_quartz_core::CAMetalLayer;
 
 use crate::appkit::{AppKitWindow, AppKitWindowParts, chrome, window_delegate};
-use crate::components::WindowMode;
-use crate::gfx::display_mode::DisplayMode;
-use crate::gfx::input::RenderInput;
-use crate::gfx::keymap::KeyMap;
 
 pub(crate) struct AppKitVkWindow {
     win: AppKitWindow,

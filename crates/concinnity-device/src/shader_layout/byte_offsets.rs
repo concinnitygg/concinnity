@@ -33,8 +33,8 @@ pub(super) fn shader_const(source: &str, name: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::shader_const;
-    use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-    use crate::gfx::morph_targets::MorphEntry;
+    use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+    use concinnity_core::gfx::morph_targets::MorphEntry;
     use concinnity_core::render::shaders::RT_SKIN;
     use std::mem::{offset_of, size_of};
 

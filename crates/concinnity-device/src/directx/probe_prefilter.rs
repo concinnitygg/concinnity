@@ -24,11 +24,10 @@
 // sample it. The probe cube sits in UNORDERED_ACCESS for every dispatch that
 // writes it and moves to PIXEL_SHADER_RESOURCE at install.
 
-use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
-
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::com;
 use super::context::DxContext;

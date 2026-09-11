@@ -18,11 +18,11 @@
 // returns a clean error rather than reading an unrendered image.
 
 use ash::vk;
+use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
 
 use super::context::VkContext;
 use super::texture::one_shot_submit;
-use crate::gfx::hdr_output::{HdrEncoding, HdrOutputMode};
-use crate::gfx::image_decode::{self, PixelLayout};
 
 impl VkContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on

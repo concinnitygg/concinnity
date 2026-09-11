@@ -12,12 +12,10 @@
 // it keys on the view. Both caches are append-only for the life of a swapchain,
 // which bounds them at one entry per (format, load) and one per live target.
 
-use std::sync::Mutex;
-
 use ash::vk;
-
 use concinnity_core::render::post::device::PostLoadOp;
 use concinnity_core::render::render_graph::PixelFormat;
+use std::sync::Mutex;
 
 use crate::vulkan::owned::{OwnedFramebuffer, OwnedRenderPass, VkDevice};
 use crate::vulkan::transient_pool::image_format;

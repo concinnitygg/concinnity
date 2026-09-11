@@ -39,21 +39,21 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSRange;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
     MTLLibrary as _, MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
+// GPU-free repr(C) push struct; lives in `core::render` so its layout test
+// counts toward coverage. Re-exported so this file's existing `HizParams` path
+// is unchanged.
+use concinnity_core::render::uniforms::HizParams;
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-// GPU-free repr(C) push struct; lives in `core::render` so its layout test
-// counts toward coverage. Re-exported so this file's existing `HizParams` path
-// is unchanged.
-use concinnity_core::render::uniforms::HizParams;
-use objc2_foundation::ns_string;
 
 // Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
 // DirectX `[numthreads(8, 8, 1)]`).

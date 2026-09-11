@@ -26,6 +26,8 @@
 // main depth attachment (decals, fog, and SSAO/SSR pre-passes already share
 // that target).
 
+use concinnity_core::render::hiz_spd::{self, Plan};
+use concinnity_core::render::uniforms::HizSpdParams;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -35,9 +37,6 @@ use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::uav_barrier;
-
-use concinnity_core::render::hiz_spd::{self, Plan};
-use concinnity_core::render::uniforms::HizSpdParams;
 
 // DWORD count of the `HizSpdParams` cbuffer.
 const HIZ_PARAMS_DWORDS: u32 = (std::mem::size_of::<HizSpdParams>() / 4) as u32;

@@ -11,13 +11,12 @@
 // machine with no slangc says so, naming the Shader, rather than drawing
 // nothing. The sibling of `raymarch_source`.
 
-use std::borrow::Cow;
-
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::slang_programs::surface::{self, Sources, Stage};
 use concinnity_core::render::slang_source;
 use concinnity_slang::{SlangJob, SlangTarget};
+use std::borrow::Cow;
 
 /// Which host asks, and under which capacities.
 #[derive(Clone, Copy)]

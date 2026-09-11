@@ -6,10 +6,11 @@
 // keep the matrices fresh from the gameplay-side pose update.
 
 use ash::vk;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::mesh_payload::SkinnedVertex;
+use concinnity_core::gfx::render_types::*;
 use concinnity_core::gfx::transform::IDENTITY;
-
-use crate::gfx::mesh_payload::SkinnedVertex;
-use crate::gfx::render_types::*;
+use concinnity_core::render::rt_geom;
 
 use super::super::context::*;
 use super::super::pipeline::{compile_skinned_shadow_shader, create_skinned_shadow_pipeline};
@@ -99,7 +100,7 @@ impl VkContext {
         // Never zero-length: the ray-traced hit path binds this as a storage
         // buffer of index words and its descriptor takes the whole size.
         let skinned_ibuf = self.alloc.create_buffer(
-            crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
@@ -328,7 +329,7 @@ impl VkContext {
     // once after `upload_skinned`. Mirrors the DirectX `upload_skinned_morphs`.
     pub(in crate::vulkan) fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
     ) -> Result<(), String> {
         use std::collections::HashMap;
 

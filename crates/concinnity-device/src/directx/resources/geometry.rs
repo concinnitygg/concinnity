@@ -5,13 +5,11 @@
 // geometry replacement for hot-reload, and the init-time seeding of the
 // streaming headroom.
 
+use concinnity_core::gfx::mesh_payload::Vertex;
 use windows::Win32::Graphics::Direct3D12::*;
 
-use crate::gfx::mesh_payload::Vertex;
-
-use super::super::texture::{create_buffer, one_shot_submit, transition_barrier};
-
 use super::super::context::*;
+use super::super::texture::{create_buffer, one_shot_submit, transition_barrier};
 
 impl DxContext {
     // Copy `data` into a sub-region of a DEFAULT-heap geometry buffer.

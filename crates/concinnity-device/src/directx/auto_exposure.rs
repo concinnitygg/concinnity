@@ -9,12 +9,12 @@
 // the scene's actual luminance and the exposure applied to it, invisible at
 // human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.
 
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use crate::gfx::auto_exposure::HISTOGRAM_BINS;
-
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -301,7 +301,7 @@ impl DxContext {
     // precomputed `bins / range` scale match the `gfx::auto_exposure::LUM_LOG2_*`
     // constants exactly.
     fn auto_exposure_params(&self) -> AutoExposureParams {
-        use crate::gfx::auto_exposure::{LUM_LOG2_MAX, LUM_LOG2_MIN};
+        use concinnity_core::gfx::auto_exposure::{LUM_LOG2_MAX, LUM_LOG2_MIN};
         let range = LUM_LOG2_MAX - LUM_LOG2_MIN;
         AutoExposureParams {
             lum_log2_min: LUM_LOG2_MIN,
@@ -345,7 +345,7 @@ impl DxContext {
         let avg_log_lum = if avg_log_lum.is_finite() {
             avg_log_lum
         } else {
-            crate::gfx::auto_exposure::LUM_LOG2_MIN
+            auto_exposure::LUM_LOG2_MIN
         };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);

@@ -40,8 +40,11 @@
 // static paths cannot use the same trick.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::ptr::NonNull;
-
+use concinnity_core::gfx::render_types::{
+    DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
+};
+use concinnity_core::gfx::rt_reflections::RtReflectionSettings;
+use concinnity_core::render::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;
@@ -57,19 +60,17 @@ use objc2_metal::{
     MTLPrimitiveAccelerationStructureDescriptor, MTLRenderCommandEncoder, MTLRenderPipelineState,
     MTLRenderStages, MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
 };
+use std::ptr::NonNull;
+// The dynamic-update mode ladder lives in `core::render`; re-exported so the
+// `super::raytrace::RtDynamicMode` path (init + draw) keeps resolving.
+pub(crate) use concinnity_core::render::rt_geom::RtDynamicMode;
+// Shared with the Vulkan and DirectX hosts: one `.slang` declares it now.
+use concinnity_core::render::uniforms::SkinParams;
 
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
 use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey};
 use super::transient::RetirePool;
-use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
-use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
-use crate::gfx::rt_reflections::RtReflectionSettings;
-// The dynamic-update mode ladder lives in `core::render`; re-exported so the
-// `super::raytrace::RtDynamicMode` path (init + draw) keeps resolving.
-pub(crate) use crate::gfx::rt_geom::RtDynamicMode;
-// Shared with the Vulkan and DirectX hosts: one `.slang` declares it now.
-use concinnity_core::render::uniforms::SkinParams;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The RT kernel reads positions at this stride; the
@@ -2052,6 +2053,7 @@ fn upload_buffer<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::gfx::render_types;
 
     #[test]
     fn pack_instance_transform_drops_affine_row_and_keeps_columns() {
@@ -2189,7 +2191,7 @@ mod tests {
             model: [[0.0; 4]; 4],
             texture_slot: 0,
             normal_map_slot: 0,
-            material: crate::gfx::render_types::MaterialUniforms::DEFAULT,
+            material: render_types::MaterialUniforms::DEFAULT,
             visible: true,
             resident: true,
             bb_min: [0.0; 3],

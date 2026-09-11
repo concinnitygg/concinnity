@@ -6,14 +6,14 @@
 // the per-frame `encode_bloom` encoder. Mirrors src/metal/post/bloom.rs.
 
 use ash::vk;
-
-use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
+use concinnity_core::render::fullscreen;
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::*;
 use super::super::pipeline::GraphicsStages;
 use super::super::resources::alloc_descriptor_sets;
 use super::super::texture::*;
+use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Upper bound on `bloom_mip_count` (which clamps to 4..=6). The bloom
@@ -359,7 +359,7 @@ pub(in crate::vulkan) fn alloc_bloom_input_sets(
 // + draws each sub-pass in Vulkan. `Args` is the frame-in-flight index selecting
 // the per-frame framebuffers + descriptor sets (the scene input is pre-wired into
 // `bloom.input_sets[frame_idx][0]`, so prefilter needs no extra argument).
-impl crate::gfx::fullscreen::BloomEncoder for VkContext {
+impl fullscreen::BloomEncoder for VkContext {
     type Rec = vk::CommandBuffer;
     type Args = usize;
 
@@ -430,7 +430,7 @@ impl VkContext {
     // `bloom.mips[frame_idx][0]` holds the accumulated bloom the composite pass
     // samples. Called only when `post_process.bloom_intensity > 0`.
     pub(in crate::vulkan) fn encode_bloom(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
-        crate::gfx::fullscreen::encode_bloom_chain(self, &cmd, frame_idx);
+        fullscreen::encode_bloom_chain(self, &cmd, frame_idx);
     }
 
     // One fullscreen-triangle bloom sub-pass: render into `framebuffer` (sized

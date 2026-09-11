@@ -6,6 +6,15 @@
 // world that disables an effect pays zero construction cost.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
+use concinnity_core::gfx::rt_reflections::RtReflectionSettings;
+use concinnity_core::gfx::ssao::SsaoSettings;
+use concinnity_core::gfx::ssgi::SsgiSettings;
+use concinnity_core::gfx::ssr::SsrSettings;
+use concinnity_core::render::decal::DecalRecord;
+use concinnity_core::render::particles::ParticleEmitterRecord;
+use concinnity_core::render::volumetric_fog::FogSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -13,14 +22,6 @@ use objc2_metal::{
     MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState,
 };
 
-use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
-use crate::gfx::decal::DecalRecord;
-use crate::gfx::particles::ParticleEmitterRecord;
-use crate::gfx::rt_reflections::RtReflectionSettings;
-use crate::gfx::ssao::SsaoSettings;
-use crate::gfx::ssgi::SsgiSettings;
-use crate::gfx::ssr::SsrSettings;
-use crate::gfx::volumetric_fog::FogSettings;
 use crate::metal::allocator::DeviceAllocator;
 use crate::metal::auto_exposure::{AutoExposurePipelines, build_auto_exposure_pipelines};
 use crate::metal::decal::build_decal_pipeline;
@@ -693,8 +694,7 @@ pub(crate) fn build_decal_resources_for_runtime(
 fn make_auto_exposure_histogram(
     device: &ProtocolObject<dyn MTLDevice>,
 ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
-    let hist_bytes =
-        vec![0u8; std::mem::size_of::<u32>() * crate::gfx::auto_exposure::HISTOGRAM_BINS];
+    let hist_bytes = vec![0u8; std::mem::size_of::<u32>() * auto_exposure::HISTOGRAM_BINS];
     // SAFETY: the pointer and length describe the live `hist_bytes` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     unsafe {

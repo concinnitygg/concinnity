@@ -6,6 +6,7 @@
 // grid. The forward pass then shades each fragment from only its cluster's
 // lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
 
+use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -15,7 +16,6 @@ use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_buffer, create_uav_buffer};
-use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
 // Byte stride between the two `ClusterParams` slots in a frame's constant
 // buffer. Root CBVs must be 256-byte aligned, so each slot is padded up.
@@ -257,6 +257,7 @@ impl DxContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::gfx::render_types;
 
     // The kernel hardcodes the list stride + per-cluster cap as `static const
     // uint`s, so they must track the Rust values the CPU sizes the buffer with.
@@ -266,7 +267,7 @@ mod tests {
         assert!(kernel.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));
-        let max_per_cluster = crate::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
+        let max_per_cluster = render_types::MAX_LIGHTS_PER_CLUSTER;
         assert!(kernel.contains(&format!("MAX_LIGHTS_PER_CLUSTER = {max_per_cluster}u")));
     }
 }

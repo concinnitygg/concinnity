@@ -36,19 +36,22 @@
 // topology refresh still allocates fresh and parks its orphans (and its own
 // dedicated scratch) in `retire`.
 
+use concinnity_core::gfx::render_types::{
+    DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
+};
+use concinnity_core::render::rt_geom::{
+    cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
+};
+use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
+use concinnity_core::render::rt_topology::{GeomSig, plan_topology_refresh};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
-
-use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
-use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
-use crate::gfx::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
-use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
 // The dynamic-update mode ladder lives in `core::render`; re-exported so the
 // `super::raytrace::RtDynamicMode` path (init + context) keeps resolving.
-pub(super) use crate::gfx::rt_geom::RtDynamicMode;
+pub(super) use concinnity_core::render::rt_geom::RtDynamicMode;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::FRAMES;
 use super::texture::{create_buffer, create_uav_buffer, transition_barrier};

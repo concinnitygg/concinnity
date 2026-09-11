@@ -15,14 +15,13 @@
 // (post/descriptors.rs) instead of slots reserved for the effect by name in
 // `init/heap_layout.rs`.
 
-use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-use windows::Win32::Graphics::Direct3D12::*;
-
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, resolved_texture,
 };
 use concinnity_core::render::post::program::PostProgram;
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
+use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::dump_on_err;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};

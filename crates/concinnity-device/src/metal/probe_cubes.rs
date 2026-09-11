@@ -14,13 +14,12 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::uniforms::MAX_PROBES;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLArgumentEncoder, MTLBuffer, MTLDevice, MTLFunction as _, MTLRenderCommandEncoder,
 };
-
-use concinnity_core::render::uniforms::MAX_PROBES;
 
 use super::context::MtlContext;
 use super::encode::RenderEncode;

@@ -21,11 +21,11 @@
 // pass encoders run through `&MtlContext`, whose parallel-encode contract is
 // read-only field access (see `metal/parallel_encoder.rs`).
 
+use concinnity_core::gfx::render_types::TextDrawCall;
+use concinnity_core::render::fullscreen;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
-
-use crate::gfx::render_types::TextDrawCall;
 
 use super::context::write_buffer_region;
 use super::transient::grow_to;
@@ -42,7 +42,7 @@ pub(super) struct TextRange {
 }
 
 fn align_up(offset: usize) -> usize {
-    crate::gfx::fullscreen::align_up(offset as u64, TEXT_UPLOAD_ALIGN) as usize
+    fullscreen::align_up(offset as u64, TEXT_UPLOAD_ALIGN) as usize
 }
 
 // Lay out every call's vertex and index block back to back at aligned offsets,
@@ -148,7 +148,7 @@ impl TextUploadRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::TextVertex;
+    use concinnity_core::gfx::render_types::TextVertex;
 
     // A call carrying `glyphs` quads: 4 vertices + 6 indices each, the shape
     // `gfx::text::build_text_calls` emits.
@@ -211,7 +211,7 @@ mod tests {
         let calls = [glyph_call(4), glyph_call(1), glyph_call(120)];
         let mut ranges = Vec::new();
         let total = plan_text_upload(&calls, &mut ranges) as u64;
-        let reserved = crate::gfx::fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
+        let reserved = fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
         assert!(
             total <= reserved,
             "planned {total} exceeded reserved {reserved}"

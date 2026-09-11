@@ -7,6 +7,10 @@
 // swap must walk every set that samples this slot.
 
 use ash::vk;
+use concinnity_core::bake;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::draw_slot;
+use concinnity_core::render::error;
 
 use super::super::context::*;
 use super::super::texture::{
@@ -92,8 +96,8 @@ impl VkContext {
     pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::bake::texture::TextureImage,
-    ) -> crate::gfx::error::RenderResult<()> {
+        image: &bake::texture::TextureImage,
+    ) -> error::RenderResult<()> {
         if slot >= self.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -142,7 +146,7 @@ impl VkContext {
 
     // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
     pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        let gray = crate::bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         Ok(self.update_texture_slot(slot, &gray)?)
     }
 
@@ -252,7 +256,7 @@ impl VkContext {
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::bake::environment_map::deserialize(payload)
+        let view = bake::environment_map::deserialize(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(
@@ -364,9 +368,9 @@ impl VkContext {
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
-        dst: crate::gfx::draw_slot::SlotAlloc,
+        dst: draw_slot::SlotAlloc,
     ) -> Result<(), String> {
-        if crate::gfx::render_types::runtime_reserve_full(
+        if render_types::runtime_reserve_full(
             &self.draw.objects,
             self.draw.n_objects,
             self.draw.n_runtime,
@@ -388,7 +392,7 @@ impl VkContext {
         let normal_map_slot = src.normal_map_slot;
         let material = src.material;
         let cull_distance = src.cull_distance;
-        let obj = crate::gfx::render_types::DrawObject {
+        let obj = render_types::DrawObject {
             vertex_offset: src.vertex_offset,
             vertex_count: src.vertex_count,
             index_offset: src.index_offset,
@@ -412,14 +416,14 @@ impl VkContext {
 
         // Write at the engine-allocated destination slot.
         match dst {
-            crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
+            draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
                 // The slot's model-history entry belongs to the prior occupant,
                 // so the clone reprojects through its own transform for one
                 // frame rather than ghosting from that occupant's.
                 self.model_history.borrow_mut().reoccupy_draw(slot);
             }
-            crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+            draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
                     self.draw.objects.len(),

@@ -3,9 +3,9 @@
 // wnd_proc (window.rs); this struct is the snapshot consumed by
 // GraphicsSystem each tick.
 
-use crate::components::InputKey;
-use crate::gfx::input::RenderInput;
-use crate::gfx::keymap::KeyMap;
+use concinnity_core::components::InputKey;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 // One frame's accumulated mouse input, owned by `WindowState` and handed to

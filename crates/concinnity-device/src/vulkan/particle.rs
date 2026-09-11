@@ -22,24 +22,22 @@
 // appear in screen-space reflections and are temporally stabilized by the
 // TAA history. Mirrors src/directx/particle.rs and src/metal/particle.rs.
 
-use std::cell::Cell;
-
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
-use crate::gfx::render_types::ParticleParams;
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types::ParticleParams;
+use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use concinnity_core::render::uniforms::GpuParticle;
 use concinnity_core::render::uniforms::ParticleView;
+use std::cell::Cell;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
 use super::texture::GpuUploadContext;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Cap on the number of simultaneously-live particle emitters. The
@@ -976,7 +974,7 @@ impl VkContext {
         frame_idx: usize,
         frame: &(f32, u32, Vec<u32>),
         vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;

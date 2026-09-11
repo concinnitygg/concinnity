@@ -15,7 +15,6 @@
 
 use std::ffi::{CStr, c_void};
 use std::ptr;
-
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};

@@ -5,6 +5,8 @@
 // support query, and swapchain creation. Returns a `DeviceAndWindow` bundle
 // that init/mod.rs unpacks into the constructor's local state.
 
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::hdr_output::HdrOutputMode;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -12,7 +14,6 @@ use windows::core::Interface;
 
 use crate::directx::context::FRAMES;
 use crate::directx::texture::HDR_FORMAT;
-use crate::gfx::hdr_output::HdrOutputMode;
 use crate::win32::window::{WindowState, create_window};
 
 pub(super) struct DeviceAndWindow {
@@ -287,7 +288,7 @@ pub(super) fn setup(
         let want_pq = matches!(
             hdr_mode,
             HdrOutputMode::Hdr {
-                encoding: crate::gfx::hdr_output::HdrEncoding::Pq,
+                encoding: hdr_output::HdrEncoding::Pq,
                 ..
             }
         );
@@ -344,7 +345,7 @@ pub(super) fn setup(
                             HdrOutputMode::Hdr { max_edr, .. } => max_edr,
                             HdrOutputMode::Sdr => unreachable!(),
                         },
-                        encoding: crate::gfx::hdr_output::HdrEncoding::ExtendedLinear,
+                        encoding: hdr_output::HdrEncoding::ExtendedLinear,
                     };
                 }
             } else {

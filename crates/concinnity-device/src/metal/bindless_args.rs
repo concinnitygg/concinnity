@@ -15,7 +15,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use core::ptr::NonNull;
-
 use objc2::Message as _;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

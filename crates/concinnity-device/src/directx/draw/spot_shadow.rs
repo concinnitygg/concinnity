@@ -15,9 +15,8 @@
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
-use crate::directx::context::DxContext;
-
 use super::shadow::ShadowPassBinding;
+use crate::directx::context::DxContext;
 
 impl DxContext {
     // pub(in crate::directx) so the render-graph executor can dispatch this pass.

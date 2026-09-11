@@ -25,9 +25,18 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::sdf_volume::SdfVolume;
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::LightUniforms;
+use concinnity_core::platform::Platform;
+use concinnity_core::render::slang_programs::raymarch::{self, Family};
+use concinnity_slang::SlangTarget;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLBlitCommandEncoder as _, MTLBuffer,
     MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCullMode, MTLDevice, MTLIndexType,
@@ -35,28 +44,18 @@ use objc2_metal::{
     MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
     MTLResourceOptions, MTLStoreAction, MTLVertexFormat, MTLVertexStepFunction,
 };
-
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::platform::Platform;
-use concinnity_core::render::slang_programs::raymarch::{self, Family};
-use concinnity_slang::SlangTarget;
-
-use crate::components::sdf_volume::SdfVolume;
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::LightUniforms;
-
-use super::context::MtlContext;
-use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use super::encode::RenderEncode;
-use super::pipeline::ns_str;
-use super::scoped_encoder::ScopedEncoder;
-use objc2_foundation::ns_string;
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported at `pub(in crate::metal)` so the graph executor, the shadow pass
 // and this file keep their existing paths.
 pub(in crate::metal) use concinnity_core::render::uniforms::{
     RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,
 };
+
+use super::context::MtlContext;
+use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
+use super::encode::RenderEncode;
+use super::pipeline::ns_str;
+use super::scoped_encoder::ScopedEncoder;
 
 // Metal buffer index for the proxy cube's vertex stream.
 //
@@ -68,7 +67,7 @@ pub(in crate::metal) use concinnity_core::render::uniforms::{
 // the two buffers it read.
 const RAYMARCH_VERTEX_BUFFER: usize = 5;
 
-// `RaymarchLights` mirror of `crate::gfx::render_types::LightUniforms`.
+// `RaymarchLights` mirror of `concinnity_core::gfx::render_types::LightUniforms`.
 // The Rust struct already has the right layout; we just hand the
 // buffer over to the shader at buffer(2). Kept as a type alias so the
 // raymarch encoder can reference it without re-defining the layout.
@@ -118,7 +117,7 @@ pub(in crate::metal) struct RaymarchVolumeRecord {
 pub(in crate::metal) fn volume_in_frustum(
     center: [f32; 3],
     extent: [f32; 3],
-    frustum: &crate::gfx::frustum::Frustum,
+    frustum: &Frustum,
 ) -> bool {
     let min = [
         center[0] - extent[0],
@@ -512,7 +511,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         view: &RaymarchView,
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
     ) -> Result<u32, String> {
         if self.raymarch.volumes.is_empty() {
             return Ok(0);
@@ -747,7 +746,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         view: &RaymarchView,
     ) -> Result<u32, String> {
-        use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+        use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
         if !self.any_raymarch_shadow_casters() {
             return Ok(0);
         }
@@ -850,7 +849,7 @@ mod tests {
 
     #[test]
     fn volume_in_frustum_culls_offscreen_boxes() {
-        use crate::gfx::frustum::Frustum;
+        use concinnity_core::gfx::frustum::Frustum;
         // Identity view-projection -> the visible region is the [-1, 1]^3 clip
         // cube. A unit box at the origin overlaps it; a box far to the right is
         // entirely past the right clip plane and is culled.

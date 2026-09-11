@@ -52,11 +52,13 @@
 //      wrong question, since a plain clone touches the same counter.
 // Re-audit this list whenever a new pass migrates onto the fan-out.
 
+use concinnity_core::render::parallel_ctx;
+
 use super::context::VkContext;
 
 // The wrapper itself is the shared generic shim in `gfx::parallel_ctx`; this
 // alias keeps the `ParallelCtxRef<'a>` spelling at the vulkan call sites.
-pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a, VkContext>;
+pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, VkContext>;
 
 // SAFETY: see the module doc above for the complete audit of interior-mutable
 // state reachable during `encode_pass_into` (atomic draw-call accumulator,
@@ -66,4 +68,4 @@ pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a
 // concurrent shared read, and
 // each worker records into a distinct command buffer from a distinct command
 // pool.
-unsafe impl crate::gfx::parallel_ctx::ParallelEncodeCtx for VkContext {}
+unsafe impl parallel_ctx::ParallelEncodeCtx for VkContext {}

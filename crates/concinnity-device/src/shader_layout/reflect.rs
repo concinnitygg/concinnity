@@ -12,9 +12,8 @@
 // `varyingInput` bindings with attribute indices instead of byte offsets, so
 // they never appear here.
 
-use std::collections::BTreeMap;
-
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 // One member of a shader struct, as slangc lays it out for the target.
 pub(super) struct ShaderField {

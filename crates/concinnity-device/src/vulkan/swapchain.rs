@@ -3,8 +3,7 @@
 // Vulkan swapchain, attachment, and framebuffer creation, plus the
 // swapchain rebuild path.
 use ash::vk;
-
-use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
+use concinnity_core::render::hdr_output;
 
 use super::allocator::DeviceAllocator;
 use super::context::*;
@@ -24,6 +23,7 @@ use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
 use super::texture::*;
 use super::transparent::{TransparentDeviceCtx, TransparentRebuildTargets};
+use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
 
 //  Swapchain rebuild
 
@@ -838,7 +838,7 @@ pub(super) struct SwapchainConfig {
     // resolve in init.rs), so the chosen encoding and color space stay in
     // sync. Each arm falls back through scRGB to the SDR default if its
     // preferred pair is unexpectedly absent.
-    pub hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr_output::HdrOutputMode,
     // Lock presentation to the display refresh. `true` forces FIFO (always
     // present, vsync); `false` prefers MAILBOX (uncapped render loop, no
     // tearing), then IMMEDIATE, falling back to FIFO when neither is offered.
@@ -896,7 +896,7 @@ pub(super) fn create_swapchain_inner(
         hdr_mode,
         vsync,
     } = config;
-    use crate::gfx::hdr_output::{HdrEncoding, HdrOutputMode};
+    use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
     // SAFETY: a property query on a live handle; it only reads.
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
         .map_err(|e| format!("surface caps: {e}"))?;

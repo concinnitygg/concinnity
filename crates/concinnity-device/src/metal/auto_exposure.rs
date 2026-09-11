@@ -20,8 +20,12 @@
 // makes for the transient rings.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
+use concinnity_core::render::uniforms::*;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer as _, MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePassDescriptor,
     MTLComputePipelineState, MTLDevice as _, MTLLibrary as _, MTLSize, MTLTexture as _,
@@ -31,9 +35,6 @@ use super::context::*;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
-use concinnity_core::render::uniforms::*;
-use objc2_foundation::ns_string;
 
 // All auto-exposure (EV adaptation) state grouped into one feature unit: the
 // resolved tunables, the EMA-tracked adapted EV, the authored bias, the
@@ -66,7 +67,7 @@ impl MtlContext {
     // log-luminance range and the precomputed `bins / range` scale match the
     // `gfx::auto_exposure::LUM_LOG2_*` constants exactly.
     fn auto_exposure_params(&self) -> AutoExposureParams {
-        use crate::gfx::auto_exposure::{HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
+        use concinnity_core::gfx::auto_exposure::{HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
         let range = LUM_LOG2_MAX - LUM_LOG2_MIN;
         AutoExposureParams {
             lum_log2_min: LUM_LOG2_MIN,
@@ -111,7 +112,7 @@ impl MtlContext {
         let avg_log_lum = if avg_log_lum.is_finite() {
             avg_log_lum
         } else {
-            crate::gfx::auto_exposure::LUM_LOG2_MIN
+            auto_exposure::LUM_LOG2_MIN
         };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
@@ -192,12 +193,12 @@ impl MtlContext {
         enc.set_buffer(output, 0, 1);
         enc.set_value(&params, 2);
         let avg_grid = MTLSize {
-            width: crate::gfx::auto_exposure::HISTOGRAM_BINS,
+            width: auto_exposure::HISTOGRAM_BINS,
             height: 1,
             depth: 1,
         };
         let avg_tg = MTLSize {
-            width: crate::gfx::auto_exposure::HISTOGRAM_BINS,
+            width: auto_exposure::HISTOGRAM_BINS,
             height: 1,
             depth: 1,
         };

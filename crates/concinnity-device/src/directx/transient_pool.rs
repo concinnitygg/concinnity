@@ -22,16 +22,15 @@
 // `ao_output` only when SSAO is on); `resource_for` returns `None` otherwise and
 // the consumer keeps its disabled-feature fallback.
 
+use concinnity_core::render::render_graph::{
+    ClearValue, PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture,
+    plan_pool_slots,
+};
 use std::collections::HashMap;
-
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::texture::{one_shot_submit, transition_barrier};
-use crate::gfx::render_graph::{
-    ClearValue, PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture,
-    plan_pool_slots,
-};
 
 // Everything about one label that is fixed once the pool is built: which placed
 // resource backs it, and which member it reclaims heap memory from. The executor
@@ -413,6 +412,7 @@ pub(super) fn transient_slots(
 mod tests {
     use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
+    use concinnity_core::render::render_graph;
 
     // `transient_slots` is pure CPU (it builds slot descriptions; no device), so
     // the planner-routed grouping is testable headlessly.
@@ -534,7 +534,7 @@ mod tests {
             .expect("roughness pooled");
         assert_eq!(
             roughness.clear,
-            crate::gfx::render_graph::ClearValue::Color(GBUFFER_ROUGHNESS_CLEAR)
+            render_graph::ClearValue::Color(GBUFFER_ROUGHNESS_CLEAR)
         );
     }
 

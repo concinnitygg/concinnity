@@ -26,14 +26,16 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::planar_reflection;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
-use concinnity_core::gfx::transform::mat4_mul;
 
 // Clip the reflection a hair toward the kept (camera) side of the plane so
 // geometry exactly on the surface is not lost to near-plane precision.
@@ -46,8 +48,7 @@ const PLANAR_CLIP_BIAS: f32 = 0.02;
 // lower under a quality preset / GPU tier (fewer full-res mirror passes on weaker
 // hardware), never higher; reflectors past the active budget fall back to the
 // box-projected probe cube.
-pub(in crate::metal) const MAX_PLANAR_PLANES: usize =
-    crate::gfx::planar_reflection::MAX_PLANAR_PLANES;
+pub(in crate::metal) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
 // Per-frame planar reflection render targets for one plane, sized to the render
 // resolution. MSAA color + depth (rendered into, then resolved) plus a
@@ -183,9 +184,8 @@ impl MtlContext {
         // the reflection aligned with the reflective fragment's screen-space sample.
         let proj = mat4_mul(params.vp, mat4_inverse(self.view.matrix));
         for (slot, (plane, targets)) in set.planes.iter().zip(set.targets.iter()).enumerate() {
-            let oriented =
-                crate::gfx::planar_reflection::orient_plane_toward(*plane, params.cam_pos);
-            let m = crate::gfx::planar_reflection::planar_matrices(
+            let oriented = planar_reflection::orient_plane_toward(*plane, params.cam_pos);
+            let m = planar_reflection::planar_matrices(
                 self.view.matrix,
                 proj,
                 params.cam_pos,
@@ -198,7 +198,7 @@ impl MtlContext {
             // outside its frustum) is captured. The reflected view-proj already
             // carries the oblique near-plane clip, so its extracted frustum also
             // rejects geometry behind the reflector.
-            let mirror_frustum = crate::gfx::frustum::Frustum::from_view_projection(m.view_proj);
+            let mirror_frustum = Frustum::from_view_projection(m.view_proj);
             // The GPU cull kernel re-runs into this plane's mirror ICB, which
             // the face render executes. A frame with no cull records has no
             // mirror to fill, and the face render then draws nothing.

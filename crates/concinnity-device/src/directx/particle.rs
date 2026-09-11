@@ -20,6 +20,9 @@
 // space reflections and are temporally stabilized by TAA history. Mirrors
 // src/metal/particle.rs.
 
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types::ParticleParams;
+use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -33,8 +36,6 @@ use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_uav_buffer, transition_barrier, write_texture_srv,
 };
-use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
-use crate::gfx::render_types::ParticleParams;
 
 // Cap on the number of simultaneously-live particle emitters. The SRV heap
 // reserves a fixed block of `MAX_EMITTERS` per-emitter albedo SRV slots at
@@ -826,7 +827,7 @@ impl DxContext {
         frame_idx: usize,
         frame: &ParticleFrame,
         vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;

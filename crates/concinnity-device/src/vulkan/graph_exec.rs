@@ -32,15 +32,15 @@
 //     `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay timing-only and
 //     the executor rejects them as graph nodes.
 
-use ash::vk;
-
 use ash::Device;
-
-use crate::gfx::frustum::Frustum;
-use crate::gfx::render_graph::{
+use ash::vk;
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
+use concinnity_core::render::render_graph;
+use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
 };
-use crate::gfx::render_types::{LineVertex, TextDrawCall};
+use concinnity_host::thread::jobs;
 
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
 use super::context::VkContext;
@@ -404,7 +404,7 @@ fn emit_pass_epilogue(
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
     use super::barrier_translate::vk_state;
-    use crate::gfx::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
+    use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
 
     let driven: Vec<bool> = registry.targets.iter().map(|t| t.is_some()).collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
@@ -593,7 +593,7 @@ impl VkContext {
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &scratch.registry);
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_slot_aliasing_sound(
+        render_graph::assert_slot_aliasing_sound(
             graph,
             self.transient_pool.slot_labels(),
             "vulkan",
@@ -608,7 +608,7 @@ impl VkContext {
         // queues at once and that every wait names an already-recorded producer,
         // which is what this asserts.
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_serial_order_honors_schedule(graph, "vulkan");
+        render_graph::assert_serial_order_honors_schedule(graph, "vulkan");
         // Per-pass aliasing barriers for the pooled transients that share memory
         // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
         // slot is shared.
@@ -625,7 +625,7 @@ impl VkContext {
         let registry_ref = registry;
         let alias_barriers_ref = alias_barriers;
 
-        crate::jobs::pool().install(|| {
+        jobs::pool().install(|| {
             rayon::scope(|scope| {
                 for (idx, pass) in graph.passes.iter().enumerate() {
                     if Some(idx) == composite_idx {
@@ -634,8 +634,7 @@ impl VkContext {
                     let pass_id = pass.id;
                     scope.spawn(move |_| {
                         let ctx = ctx_ref.as_ctx();
-                        let pool_idx =
-                            frame_idx * crate::gfx::render_graph::PASS_COUNT + pass_id as usize;
+                        let pool_idx = frame_idx * render_graph::PASS_COUNT + pass_id as usize;
                         let buf = ctx.commands.pass_command_buffers[pool_idx];
                         let set_err = |msg: String| {
                             let mut lock = first_error_ref.lock().unwrap();

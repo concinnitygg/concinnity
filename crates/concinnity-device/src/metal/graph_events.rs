@@ -19,7 +19,7 @@
 // the terminals are above every pass value, and the next frame's slice starts
 // above every value this frame reserved.
 
-use crate::gfx::render_graph::{CompiledGraph, PassQueue};
+use concinnity_core::render::render_graph::{CompiledGraph, PassQueue};
 
 // Values a frame reserves past one per compiled pass: a terminal per queue.
 const TERMINAL_SLOTS: u64 = PassQueue::COUNT as u64;
@@ -162,7 +162,7 @@ pub(super) fn plan_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
+    use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
     use std::collections::BTreeSet;
 
     // A graph with fog, particles, clustered lighting and the two-pass GPU-cull

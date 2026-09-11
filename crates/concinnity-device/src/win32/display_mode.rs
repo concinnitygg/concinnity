@@ -11,6 +11,7 @@
 // Outside fullscreen the choice is only remembered. Mirrors
 // `metal/display_mode.rs`.
 
+use concinnity_core::render::display_mode::{DisplayMode, best_native_index};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
     CDS_FULLSCREEN, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
@@ -18,8 +19,6 @@ use windows::Win32::Graphics::Gdi::{
     MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
 };
 use windows::core::PCWSTR;
-
-use crate::gfx::display_mode::{DisplayMode, best_native_index};
 
 // The GDI device name (e.g. "\\.\DISPLAY1") of the monitor `hwnd` is mostly
 // on, the key the EnumDisplaySettings/ChangeDisplaySettings calls address a

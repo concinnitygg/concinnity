@@ -12,21 +12,20 @@
 // as the DirectX and Metal hosts.
 
 use ash::vk;
+use concinnity_core::components::GlassPanel;
+use concinnity_core::geometry::glass_quad::build_glass_quad;
+use concinnity_core::gfx::mesh_payload::Vertex;
+// `GlassParams` (the per-panel UBO) is a GPU-free layout struct that lives in
+// `core::render`; re-export it so `crate::vulkan::glass::GlassParams` is
+// unchanged for the `glass_params_from` path.
+pub(in crate::vulkan) use concinnity_core::render::uniforms::GlassParams;
 
 use super::allocator::DeviceAllocator;
-use crate::components::GlassPanel;
-use crate::geometry::glass_quad::build_glass_quad;
-use crate::gfx::mesh_payload::Vertex;
 use crate::vulkan::slang_builtins::SlangCompile;
 use crate::vulkan::transparent::{
     GlassMeshProducer, ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord,
     TransparentVertexInput, create_transparent_pipeline,
 };
-
-// `GlassParams` (the per-panel UBO) is a GPU-free layout struct that lives in
-// `core::render`; re-export it so `crate::vulkan::glass::GlassParams` is
-// unchanged for the `glass_params_from` path.
-pub(in crate::vulkan) use concinnity_core::render::uniforms::GlassParams;
 
 // Build the per-panel `GlassParams` from an authored panel. `planar` is 1.0 when
 // the pane has a planar reflection slot, else 0.0. Pure; unit tested. Mirrors

@@ -12,13 +12,13 @@
 // called with `hot_reload = true`. Production `cn run` never instantiates
 // it. Mirrors `directx/hot_reload.rs` and `metal/hot_reload.rs`.
 
+use ash::vk;
+use concinnity_core::render::backend_init;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-
-use ash::vk;
 
 use super::auto_exposure::{AutoExposureResources, compile_auto_exposure_shaders};
 use super::context::VkContext;
@@ -600,7 +600,7 @@ impl VkContext {
                 probe_count: self.descriptors.probe_cube_count as usize,
             },
             0,
-            crate::gfx::backend_init::WorldShader {
+            backend_init::WorldShader {
                 programs: world,
                 deferred: false,
             },

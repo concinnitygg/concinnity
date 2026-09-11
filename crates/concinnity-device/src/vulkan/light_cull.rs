@@ -7,17 +7,15 @@
 // lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
-};
-use crate::vulkan::record::Recorder;
-
-use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
+use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::{SHADER_ENTRY, spv_module};
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
+};
+use crate::vulkan::record::Recorder;
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Byte size of the per-cluster light-index buffer: CLUSTER_COUNT blocks of
@@ -266,7 +264,7 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
+    use concinnity_core::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
 
     // The kernel hardcodes the list stride + per-cluster cap as constants, so
     // they must track the Rust values the CPU sizes the buffer with.

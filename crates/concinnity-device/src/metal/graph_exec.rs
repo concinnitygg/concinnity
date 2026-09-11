@@ -81,25 +81,26 @@
 // resources are ever introduced, the point-1 assumption breaks even within a
 // queue, and explicit `MTLFence`s become necessary.)
 
-use std::sync::atomic::Ordering;
-
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _, MTLTexture};
-
-use crate::gfx::frustum::Frustum;
-use crate::gfx::render_graph::{CompiledGraph, PassId, PassQueue};
-use crate::gfx::render_types::{
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
+use concinnity_core::render::planar_reflection;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::render_graph::{CompiledGraph, PassId, PassQueue};
+use concinnity_core::render::uniforms::GBufferView;
+use concinnity_host::thread::jobs;
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _, MTLTexture};
+use std::sync::atomic::Ordering;
 
 use super::context::MtlContext;
 use super::frame_pacing::FrameJoin;
 use super::graph_events;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
 use super::uniforms::VelocityUniforms;
-use concinnity_core::render::uniforms::GBufferView;
 
 // What `execute_graph` leaves for `draw_frame` to finish. The composite pass
 // rides the command buffer `draw_frame` owns, so the graphics queue's frame
@@ -233,11 +234,7 @@ impl MtlContext {
         join: &std::sync::Arc<FrameJoin>,
     ) -> Result<GraphSubmission, String> {
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_slot_aliasing_sound(
-            graph,
-            self.transient_pool.slot_labels(),
-            "metal",
-        );
+        render_graph::assert_slot_aliasing_sound(graph, self.transient_pool.slot_labels(), "metal");
         // Both submission paths need the compiled order to be a topological
         // order for each queue at once, with every wait naming a producer
         // recorded earlier: the two-queue path because it commits each queue's
@@ -245,7 +242,7 @@ impl MtlContext {
         // that queue signals no later, the single-queue fallback because it
         // flattens the schedule back into one stream. This asserts both.
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_serial_order_honors_schedule(graph, "metal");
+        render_graph::assert_serial_order_honors_schedule(graph, "metal");
 
         // Per-frame particle-state mutations live on `&mut self` and have
         // to happen before the read-only `encode_particles` path runs. We
@@ -294,7 +291,7 @@ impl MtlContext {
         let pass_fault_count = std::sync::Arc::clone(&self.diagnostics.pass_fault_count);
         let plan_ref = plan.as_ref();
         let ctx_ref = ParallelCtxRef::new(self);
-        crate::jobs::pool().install(|| {
+        jobs::pool().install(|| {
             rayon::scope(|scope| {
                 for (idx, pass) in graph.passes.iter().enumerate() {
                     if Some(idx) == composite_idx {
@@ -823,7 +820,7 @@ impl MtlContext {
                 // reflector when RT is off; a glass-only world under a live trace
                 // skips it. Encoded before `encode_transparent` on the same command
                 // buffer, which samples the resolves.
-                let planar_live = crate::gfx::planar_reflection::planar_pass_needed(
+                let planar_live = planar_reflection::planar_pass_needed(
                     self.planar_reflection
                         .as_ref()
                         .is_some_and(|s| !s.targets.is_empty()),

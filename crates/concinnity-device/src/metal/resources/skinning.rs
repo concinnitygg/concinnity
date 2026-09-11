@@ -5,7 +5,13 @@
 // joint-count changes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::mesh_payload::SkinnedVertex;
+use concinnity_core::gfx::render_types::SkinnedDrawObject;
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::backend;
+use concinnity_core::render::rt_geom;
+use concinnity_core::render::skinned_slots::SkinnedSlots;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -14,9 +20,6 @@ use objc2_metal::{
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use crate::gfx::mesh_payload::SkinnedVertex;
-use crate::gfx::render_types::SkinnedDrawObject;
-use crate::gfx::skinned_slots::SkinnedSlots;
 use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 
@@ -29,7 +32,7 @@ fn upload_skinned_index_buffer(
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
     let buffer = device
         .newBufferWithLength_options(
-            crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()),
+            rt_geom::skinned_index_buffer_bytes(indices.len()),
             MTLResourceOptions::StorageModeShared,
         )
         .ok_or_else(|| format!("{label}: failed to create skinned index buffer"))?;
@@ -100,7 +103,7 @@ pub(crate) struct MorphBinding {
 // Skinned vertex layout: the 56-byte static attributes (pos / normal /
 // tangent / color / uv) plus `ushort4` joint indices (offset 56) and
 // `float4` weights (offset 64). 80-byte stride; matches `SkinnedVertex` in
-// [`crate::gfx::mesh_payload`]. Shared between init (one-shot in
+// [`concinnity_core::gfx::mesh_payload`]. Shared between init (one-shot in
 // [`MtlContext::upload_skinned`]) and the hot-reload pipeline rebuild path
 // so both produce byte-for-byte identical descriptors.
 pub(crate) fn make_skinned_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
@@ -205,8 +208,8 @@ impl MtlContext {
     // which `upload_skinned` consumes and drops.
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,
-        changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>,
-    ) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String> {
+        changes: Vec<backend::SkinnedDrawGeometryUpdate>,
+    ) -> Result<Vec<backend::SkinnedSlotLayout>, String> {
         use std::collections::HashMap;
 
         let v_buf = self.skinned.vertex_buffer.as_ref().ok_or(
@@ -221,7 +224,7 @@ impl MtlContext {
         // `cn debug` and only when the source `.glb` size actually changed.
         self.wait_idle();
 
-        let mut change_map: HashMap<usize, crate::gfx::backend::SkinnedDrawGeometryUpdate> =
+        let mut change_map: HashMap<usize, backend::SkinnedDrawGeometryUpdate> =
             changes.into_iter().map(|c| (c.skinned_index, c)).collect();
 
         let old_v_len = v_buf.length() / std::mem::size_of::<SkinnedVertex>();
@@ -243,7 +246,7 @@ impl MtlContext {
 
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
         let mut new_indices: Vec<u32> = Vec::new();
-        let mut layouts: Vec<crate::gfx::backend::SkinnedSlotLayout> =
+        let mut layouts: Vec<backend::SkinnedSlotLayout> =
             Vec::with_capacity(self.skinned.slots.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
@@ -261,7 +264,7 @@ impl MtlContext {
                 for &local in &change.indices {
                     new_indices.push(u32::from(local) + new_v_base);
                 }
-                layouts.push(crate::gfx::backend::SkinnedSlotLayout {
+                layouts.push(backend::SkinnedSlotLayout {
                     skinned_index,
                     vertex_base: new_v_base,
                     vertex_count: new_v_count,
@@ -315,7 +318,7 @@ impl MtlContext {
                     })?;
                     new_indices.push(local + new_v_base);
                 }
-                layouts.push(crate::gfx::backend::SkinnedSlotLayout {
+                layouts.push(backend::SkinnedSlotLayout {
                     skinned_index,
                     vertex_base: new_v_base,
                     vertex_count: obj.vertex_count,
@@ -571,7 +574,7 @@ impl MtlContext {
     // template's `Arc`, so each unique entry set becomes one GPU buffer.
     pub(crate) fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
     ) -> Result<(), String> {
         use std::collections::HashMap;
 

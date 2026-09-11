@@ -21,14 +21,13 @@
 // 8-byte HDR `RGBA16Float`), not a fixed texel size.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::render::hdr_output::HdrEncoding;
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLCommandBuffer as _, MTLCommandEncoder as _,
     MTLCommandQueue as _, MTLDevice as _, MTLOrigin, MTLPixelFormat, MTLRegion, MTLSize,
     MTLStorageMode, MTLTexture as _,
 };
-
-use crate::gfx::hdr_output::HdrEncoding;
-use crate::gfx::image_decode::{self, PixelLayout};
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;

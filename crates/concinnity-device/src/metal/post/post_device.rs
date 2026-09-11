@@ -8,18 +8,17 @@
 // mechanism.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::post::device::{
+    PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, resolved_texture,
+};
+use concinnity_core::render::post::program::PostProgram;
+use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLRenderPipelineState, MTLSamplerState,
     MTLTexture,
 };
-
-use concinnity_core::render::post::device::{
-    PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, resolved_texture,
-};
-use concinnity_core::render::post::program::PostProgram;
-use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
 
 use crate::metal::encode::RenderEncode;
 use crate::metal::pass_timing::PassTimingResources;

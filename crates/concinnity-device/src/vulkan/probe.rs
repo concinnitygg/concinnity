@@ -8,7 +8,7 @@
 // diffuse irradiance keep sampling `env_map` so the visible sky is never replaced.
 //
 // The cube math + the staggered-bake state machine are backend-agnostic
-// (`crate::gfx::reflection_probe`); this module drives the placement intake + the
+// (`concinnity_core::render::reflection_probe`); this module drives the placement intake + the
 // GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
 //
 // `set_reflection_probes` converts the graphics-system placements (auto-seeding a
@@ -25,8 +25,14 @@
 // shaders (see the reflection_probes.md DX/VK port checklist).
 
 use ash::vk;
-
-use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::reflection_probe::{
+    self, BakeAction, BakePhase, BakeSignals, PrefilterPlan, ProbePlacement,
+};
+use concinnity_core::render::uniforms::MAX_PROBES;
+use concinnity_core::render::uniforms::ProbeSet;
+use concinnity_core::render::uniforms::ProbeUniforms;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
@@ -37,13 +43,7 @@ use super::hiz::CullHizParams;
 use super::probe_prefilter::PrefilterGpu;
 use super::resources::alloc_descriptor_sets;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
-use crate::gfx::frustum::Frustum;
-use crate::gfx::reflection_probe::{
-    self, BakeAction, BakePhase, BakeSignals, PrefilterPlan, ProbePlacement,
-};
-use concinnity_core::render::uniforms::MAX_PROBES;
-use concinnity_core::render::uniforms::ProbeSet;
-use concinnity_core::render::uniforms::ProbeUniforms;
+use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the DirectX and Metal backends (and with the build-time CPU
@@ -376,10 +376,8 @@ impl VkContext {
         // Bake-owned cull buffers, zeroed first so the untouched instance tail reads
         // as disabled (a probe omits instanced geometry in V1), then filled with this
         // probe's static + chunk + skinned records (LOD by probe eye).
-        let object_size =
-            self.cull_count() * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>();
-        let args_size =
-            self.cull_count() * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>();
+        let object_size = self.cull_count() * std::mem::size_of::<render_types::GpuObjectData>();
+        let args_size = self.cull_count() * std::mem::size_of::<render_types::GpuDrawArgs>();
         bake.object_buf.zero_bytes(0, object_size);
         bake.draw_args_buf.zero_bytes(0, args_size);
         self.build_object_records_into(&bake.object_buf);
@@ -1250,7 +1248,9 @@ impl BakeResources {
     }
 
     fn new(ctx: &VkContext) -> Result<BakeResources, String> {
-        use crate::gfx::render_types::{GpuDrawArgs, GpuObjectData, LightUniforms, ShadowUniforms};
+        use concinnity_core::gfx::render_types::{
+            GpuDrawArgs, GpuObjectData, LightUniforms, ShadowUniforms,
+        };
         let device = &ctx.device;
         let alloc = &ctx.alloc;
         let msaa = ctx.msaa_samples != vk::SampleCountFlags::TYPE_1;
@@ -1581,7 +1581,7 @@ impl BakeResources {
             let cluster_params_info = vk::DescriptorBufferInfo::default()
                 .buffer(ctx.light_cull.unclustered_buffer.buffer())
                 .offset(0)
-                .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
+                .range(std::mem::size_of::<render_types::ClusterParams>() as u64);
             let cluster_write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
@@ -1684,26 +1684,26 @@ fn make_ubo_bytes(
     Ok(buf)
 }
 
-fn light_bytes(u: &crate::gfx::render_types::LightUniforms) -> &[u8] {
+fn light_bytes(u: &render_types::LightUniforms) -> &[u8] {
     // SAFETY: `LightUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them, so
     // it has no padding and every byte is initialized; the slice borrows it and does not outlive
     // it.
     unsafe {
         std::slice::from_raw_parts(
             u as *const _ as *const u8,
-            std::mem::size_of::<crate::gfx::render_types::LightUniforms>(),
+            std::mem::size_of::<render_types::LightUniforms>(),
         )
     }
 }
 
-fn shadow_bytes(u: &crate::gfx::render_types::ShadowUniforms) -> &[u8] {
+fn shadow_bytes(u: &render_types::ShadowUniforms) -> &[u8] {
     // SAFETY: `ShadowUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them,
     // so it has no padding and every byte is initialized; the slice borrows it and does not outlive
     // it.
     unsafe {
         std::slice::from_raw_parts(
             u as *const _ as *const u8,
-            std::mem::size_of::<crate::gfx::render_types::ShadowUniforms>(),
+            std::mem::size_of::<render_types::ShadowUniforms>(),
         )
     }
 }

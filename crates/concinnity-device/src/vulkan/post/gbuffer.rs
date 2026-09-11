@@ -23,13 +23,8 @@
 // pipelines frames-in-flight deep.
 
 use ash::vk;
-use concinnity_core::gfx::transform::IDENTITY;
-
-use crate::vulkan::owned::{
-    OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
-};
-
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
@@ -37,6 +32,9 @@ use super::super::context::VkContext;
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::owned::{
+    OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.

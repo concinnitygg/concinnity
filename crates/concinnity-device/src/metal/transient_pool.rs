@@ -35,21 +35,21 @@
 // before (the main pass samples a 1x1 white texture when SSAO is off).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::render_graph::{
+    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLDevice as _, MTLHazardTrackingMode, MTLHeap, MTLHeapDescriptor, MTLHeapType, MTLPixelFormat,
     MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
 };
-
 // `ClearValue` is deliberately absent: Metal takes a clear value on the render
 // pass descriptor rather than baking it into the texture, so the graph's clear
 // is consumed where the pass is encoded, not here. DirectX translates it at
 // creation, which is why its pool reads the field and this one does not.
-use crate::gfx::render_graph::{
-    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
-};
 use crate::metal::context::MtlContext;
+
 use crate::metal::descriptors::TextureDesc;
 
 struct PooledTexture {
@@ -322,6 +322,7 @@ impl MtlContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::render::render_graph;
 
     // `transient_slots` is pure CPU (it builds slot descriptions; no device), so
     // the planner-routed grouping is testable headlessly.
@@ -446,7 +447,7 @@ mod tests {
             usage: TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
             // Carried by the graph for DirectX's sake; the Metal descriptor has
             // nowhere to put it.
-            clear: crate::gfx::render_graph::ClearValue::Color([0.0; 4]),
+            clear: render_graph::ClearValue::Color([0.0; 4]),
         });
         assert_eq!(desc.textureType(), MTLTextureType::Type3D);
         assert_eq!(desc.depth(), 64);

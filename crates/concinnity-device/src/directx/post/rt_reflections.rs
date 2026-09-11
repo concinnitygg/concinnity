@@ -16,15 +16,13 @@
 // (the floor for the inline ray query) through `slang_builtins`; the Metal and
 // Vulkan hosts bind the same source at their own slots.
 
+use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use concinnity_core::render::post::device::PostBlend;
-
-use crate::gfx::render_types::RtParams;
-use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
-
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};

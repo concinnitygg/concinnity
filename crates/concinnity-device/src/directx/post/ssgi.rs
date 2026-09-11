@@ -15,22 +15,20 @@
 // Pipelines, the `gi` target, and the encoder live together so the effect is a
 // single unit. Mirrors src/metal/post/ssgi.rs.
 
+use concinnity_core::gfx::render_types::SsgiParams;
+use concinnity_core::gfx::ssgi::SsgiSettings;
+use concinnity_core::render::fullscreen::{FullscreenPass, encode_fullscreen};
+use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::texture::transition_barrier;
-use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
-use concinnity_core::render::post::device::PostBlend;
-
-use crate::gfx::render_types::SsgiParams;
-use crate::gfx::ssgi::SsgiSettings;
-
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
+use crate::directx::texture::transition_barrier;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_rt_target, write_format_rtv, write_format_srv,
 };

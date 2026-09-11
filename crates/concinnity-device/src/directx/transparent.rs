@@ -35,6 +35,11 @@
 // opaque reflective glass the main pass draws -- so it runs only under the RT
 // root signature and is inert while RT is off.
 
+use concinnity_core::components::{GlassPanel, WaterSurface};
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::gfx::rt_reflections::RtParamsInputs;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -42,15 +47,11 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use crate::components::{GlassPanel, WaterSurface};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_hdr_resolve_target, transition_barrier, upload_buffer,
 };
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::RtParams;
-use crate::gfx::rt_reflections::RtParamsInputs;
 
 // RtParams push size (144 B; see gfx::render_types::RtParams), shared with the
 // RT-reflection resolve.
@@ -62,7 +63,7 @@ const RT_PARAMS_UBO_SIZE: u64 = 144;
 use concinnity_core::render::uniforms::GlassMeshParams;
 pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
 
-pub(in crate::directx) use crate::gfx::transparent::Producer;
+pub(in crate::directx) use concinnity_core::render::transparent::Producer;
 
 // One drawable record of either producer: a static world-space (glass) or
 // origin-centered grid (water) VB + IB plus a per-record uniform CBV. Both are
@@ -344,7 +345,7 @@ unsafe impl Send for TransparentResources {}
 // them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for TransparentResources {}
 
-use crate::gfx::transparent::ordered_visible;
+use concinnity_core::render::transparent::ordered_visible;
 
 // Root-signature layout (binds 1:1 with the `DXIL_ABI` declarations in
 // glass.slang and water.slang, which are deliberately identical):
@@ -1110,7 +1111,7 @@ impl DxContext {
                 0.5 * (obj.bb_min[1] + obj.bb_max[1]),
                 0.5 * (obj.bb_min[2] + obj.bb_max[2]),
             ];
-            let d = crate::gfx::lod::camera_distance(obj, cam);
+            let d = lod::camera_distance(obj, cam);
             let (index_offset, index_count) = obj.active_lod(d);
             let t = obj.material.tint;
             let params = GlassMeshParams {

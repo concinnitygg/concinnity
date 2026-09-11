@@ -12,20 +12,19 @@
 // pass-through 1.0. Mirrors src/directx/post/ssao.rs.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-use crate::vulkan::record::Recorder;
-
-use crate::gfx::render_types::SsaoParams;
+use concinnity_core::gfx::render_types::SsaoParams;
+use concinnity_core::gfx::ssao;
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::VkContext;
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
+use crate::vulkan::record::Recorder;
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
@@ -36,7 +35,7 @@ pub(in crate::vulkan) const SSAO_OCCLUSION_FORMAT: vk::Format = vk::Format::R8_U
 // All `vk::*` handles are owned by this struct and freed on `destroy`.
 pub(in crate::vulkan) struct SsaoResources {
     // Resolved authored tunables; turned into a per-frame `SsaoParams` push.
-    pub(in crate::vulkan) settings: crate::gfx::ssao::SsaoSettings,
+    pub(in crate::vulkan) settings: ssao::SsaoSettings,
 
     // The kernel pass writes `ao_raw` through this render pass: it discards
     // on load (UNDEFINED) and stores SHADER_READ_ONLY so the blur can sample
@@ -340,7 +339,7 @@ impl SsaoResources {
         width: u32,
         height: u32,
         frames: usize,
-        settings: crate::gfx::ssao::SsaoSettings,
+        settings: ssao::SsaoSettings,
         ao_views: &[vk::ImageView],
         hot_reload: bool,
     ) -> Result<Self, String> {

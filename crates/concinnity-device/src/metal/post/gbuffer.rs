@@ -9,8 +9,11 @@
 // effect is a single unit the other backends can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::uniforms::GBufferView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLClearColor, MTLCommandBuffer as _, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
     MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
@@ -18,15 +21,11 @@ use objc2_metal::{
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use crate::gfx::mesh_payload::Vertex;
-
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_builtins;
-use concinnity_core::render::uniforms::GBufferView;
-use objc2_foundation::ns_string;
 
 // All unified-G-buffer pre-pass state grouped into one unit: the shared
 // targets (normal+depth / roughness / velocity / sampleable depth) and the one

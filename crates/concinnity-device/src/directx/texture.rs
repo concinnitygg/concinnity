@@ -2,6 +2,7 @@
 // All texture uploads use an upload heap (CPU-visible) that is copied to a
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
+use concinnity_core::render::mipmap;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
@@ -292,7 +293,7 @@ pub(super) fn upload_texture_resource_deferred(
 
     // Box-filtered mip chain so the texture minifies through hardware trilinear /
     // aniso selection instead of aliasing from a single mip-0 sample.
-    let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
+    let chain = mipmap::generate_mip_chain(width, height, pixels);
     let levels: Vec<TextureLevel<'_>> = chain
         .iter()
         .map(|m| TextureLevel {

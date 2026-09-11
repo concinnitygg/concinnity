@@ -12,11 +12,12 @@
 // component is present. GLFW's CursorDisabled mode delivers raw relative
 // deltas directly via CursorPos events, so no manual warping is needed.
 
-use crate::components::{InputKey, WindowMode};
-use crate::gfx::display_mode::DisplayMode;
-use crate::gfx::keymap::KeyMap;
-
-use crate::gfx::input::RenderInput;
+use concinnity_core::components::{InputKey, WindowMode};
+use concinnity_core::render::display_mode;
+use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::input;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
 
 // Owns the GLFW library handle, the window, and the event receiver.
 //
@@ -514,8 +515,7 @@ impl GlfwWindow {
     // fullscreen it applies immediately by re-entering fullscreen at the new
     // mode; otherwise the next switch to Fullscreen picks it up.
     pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
-        let Some(idx) = crate::gfx::display_mode::best_native_index(&self.display_modes, mode)
-        else {
+        let Some(idx) = display_mode::best_native_index(&self.display_modes, mode) else {
             tracing::warn!(
                 "display has no {}x{} mode; keeping the current mode",
                 mode.width,
@@ -664,8 +664,7 @@ impl GlfwWindow {
                     // cursor is free. GLFW yoffset is in notches, positive when
                     // rotated away from the user; convert to a scroll_delta
                     // increment (matching the Metal sign convention).
-                    self.input.scroll_delta +=
-                        crate::gfx::input::wheel_notches_to_scroll_delta(yoffset as f32);
+                    self.input.scroll_delta += input::wheel_notches_to_scroll_delta(yoffset as f32);
                 }
                 _ => {}
             }

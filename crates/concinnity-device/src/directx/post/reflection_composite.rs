@@ -16,11 +16,10 @@
 // each render their reflection target, then call `encode_reflection_composite` with
 // that target's SRV. Mirrors src/metal/post/ssr.rs (the composite half).
 
+use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::{DxContext, dump_on_err};
-use concinnity_core::render::post::device::PostBlend;
-
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;

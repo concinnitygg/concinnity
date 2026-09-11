@@ -10,20 +10,19 @@
 // same 64 bytes per record a second time.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::uniforms::ModelHistoryParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer, MTLComputeCommandEncoder as _, MTLComputePipelineState,
     MTLDevice as _, MTLLibrary as _, MTLSize,
 };
 
-use concinnity_core::render::uniforms::ModelHistoryParams;
-
 use super::context::MtlContext;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-use objc2_foundation::ns_string;
 
 // Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
 const THREADGROUP: usize = 64;

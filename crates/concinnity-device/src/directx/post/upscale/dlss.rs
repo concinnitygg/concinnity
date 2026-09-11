@@ -16,7 +16,6 @@
 
 use std::ffi::c_void;
 use std::ptr;
-
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 

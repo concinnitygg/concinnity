@@ -5,9 +5,8 @@
 // the decision is a pure function over an extension-name list and can be tested
 // without a loader.
 
-use std::ffi::CStr;
-
 use ash::vk;
+use std::ffi::CStr;
 
 // The optional instance extensions an instance should enable.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

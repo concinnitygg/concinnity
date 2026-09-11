@@ -3,11 +3,10 @@
 // content-addressed cache, or a filesystem for. The declarations themselves are
 // re-exported here, so every call site still names them through this module.
 
+pub(super) use concinnity_core::render::slang_programs::vk::*;
 use concinnity_slang as slang;
 
 use super::builtins::Ctx;
-
-pub(super) use concinnity_core::render::slang_programs::vk::*;
 
 // What a declaration can do once a compiler and a cache are in reach. A trait
 // rather than an inherent impl because `SlangProgram` is defined in
@@ -214,7 +213,9 @@ mod tests {
     // Rust values the CPU sizes buffers with.
     #[test]
     fn cluster_constants_match_render_types() {
-        use crate::gfx::render_types::{CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER};
+        use concinnity_core::gfx::render_types::{
+            CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER,
+        };
         for src in [
             concinnity_core::render::shaders::LIGHT_CULL,
             concinnity_core::render::shaders::MAIN_SHADING,

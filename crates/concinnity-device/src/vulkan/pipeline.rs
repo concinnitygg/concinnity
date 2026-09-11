@@ -3,11 +3,11 @@
 // cooked artifacts.
 
 use ash::vk;
-
-use crate::gfx::shadow_bias;
-use crate::vulkan::owned::{OwnedPipeline, VkDevice};
+use concinnity_core::render::backend_init;
+use concinnity_core::render::shadow_bias;
 
 use super::builtins;
+use crate::vulkan::owned::{OwnedPipeline, VkDevice};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // The uniform and push-constant layouts are the `.slang` sources' own, held
@@ -383,7 +383,7 @@ pub(super) fn build_bucket_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    shader: crate::gfx::backend_init::WorldShader<'_>,
+    shader: backend_init::WorldShader<'_>,
     engine_default: &(Vec<u8>, Vec<u8>),
 ) -> Result<OwnedPipeline, String> {
     let (vert_spv, frag_spv) = match shader.programs {
@@ -427,7 +427,7 @@ pub(super) fn build_bucket_pipeline(
 pub(super) fn build_world_pipeline_table(
     device: &VkDevice,
     targets: BucketPipelineTargets,
-    bucket_shaders: &[crate::gfx::backend_init::WorldShader<'_>],
+    bucket_shaders: &[backend_init::WorldShader<'_>],
     engine_default: &(Vec<u8>, Vec<u8>),
 ) -> Result<Vec<Option<OwnedPipeline>>, String> {
     let mut table = Vec::with_capacity(bucket_shaders.len());

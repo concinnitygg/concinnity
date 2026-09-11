@@ -12,9 +12,8 @@
 // presented pixels. Readback is synchronous (it idles the GPU), so it is a
 // probe-only path, never a per-frame one. Mirrors src/vulkan/cull_readback.rs.
 
-use windows::Win32::Graphics::Direct3D12::*;
-
 use concinnity_core::gfx::cull_status;
+use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::{DxContext, FRAMES};
 use super::texture::{create_buffer, one_shot_submit};

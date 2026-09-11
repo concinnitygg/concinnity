@@ -14,10 +14,9 @@
 // as Metal's encoder-state fill mode does. A device without `fillModeNonSolid`
 // gets no twin and keeps solid fill.
 
-use crate::vulkan::owned::OwnedPipeline;
-
 use super::context::VkContext;
 use super::pipeline::{MeshPipelineTargets, create_main_pipeline_wireframe};
+use crate::vulkan::owned::OwnedPipeline;
 
 // The Wireframe twin of the GPU-driven main pipeline. `None` means the pass
 // it mirrors is not live either (or the build failed), in which case the pass

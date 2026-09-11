@@ -18,21 +18,20 @@
 // bake now stays on the GPU timeline.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::reflection_probe::PrefilterPlan;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSRange;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
     MTLLibrary as _, MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
-use concinnity_core::render::reflection_probe::PrefilterPlan;
-
 use super::allocator::{DeviceAllocator, PooledTexture};
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
-use objc2_foundation::ns_string;
 
 // Threadgroup tile size, matching the kernels' `[numthreads(8, 8, 1)]`. The
 // third dispatch dimension is the six cube faces, one thread deep.

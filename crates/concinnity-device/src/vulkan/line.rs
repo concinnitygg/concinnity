@@ -14,16 +14,15 @@
 // Mirrors src/directx/line.rs and src/metal/line.rs.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSetLayout, VkDevice,
-};
+use concinnity_core::gfx::render_types::LineVertex;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::GraphicsStages;
-use crate::gfx::render_types::LineVertex;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // How much of a line still shows where scene geometry is in front of it. A

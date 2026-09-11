@@ -55,22 +55,24 @@
 // per-material hit shaders, which screen-space reflections do not.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
+use concinnity_core::gfx::render_types::{
+    DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
 };
-
-use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
-use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
-use crate::gfx::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
-use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
+use concinnity_core::render::rt_geom::{
+    cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
+};
+use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
+use concinnity_core::render::rt_topology::{GeomSig, plan_topology_refresh};
 use concinnity_core::render::uniforms::SkinParams;
 // The dynamic-update mode ladder lives in `core::render`; re-exported so the
 // `crate::vulkan::raytrace::RtDynamicMode` path (init + context) keeps resolving.
-pub(super) use crate::gfx::rt_geom::RtDynamicMode;
+pub(super) use concinnity_core::render::rt_geom::RtDynamicMode;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::pipeline::{SHADER_ENTRY, spv_module};
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
@@ -3127,6 +3129,7 @@ impl super::context::VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::gfx::mesh_payload;
 
     #[test]
     fn next_slot_wraps_around_the_ring() {
@@ -3290,9 +3293,6 @@ mod tests {
     fn vertex_stride_matches_the_deformed_payload() {
         // The BLAS strides the deformed buffer by this constant, and the skin
         // kernel writes it in the static `Vertex` layout.
-        assert_eq!(
-            size_of::<crate::gfx::mesh_payload::Vertex>() as u64,
-            VERTEX_STRIDE
-        );
+        assert_eq!(size_of::<mesh_payload::Vertex>() as u64, VERTEX_STRIDE);
     }
 }

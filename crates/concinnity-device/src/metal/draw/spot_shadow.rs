@@ -12,20 +12,23 @@
 // depth it last rendered, which stays correct until a caster moves.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::components;
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::render_types::{ShadowPassPush, ShadowUniforms, SpotShadowData};
+use concinnity_core::render::csm;
+use concinnity_core::render::shadow_bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLIndexType, MTLLoadAction,
     MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
 };
 
-use crate::gfx::render_types::{ShadowPassPush, ShadowUniforms, SpotShadowData};
-use crate::gfx::shadow_bias;
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::ModelUniforms;
-use objc2_foundation::ns_string;
 
 // A spot slice's matrix always lands in slot 0 of its one-matrix
 // `ShadowUniforms`, so the shadow VS's cascade index is constant here.
@@ -44,10 +47,7 @@ impl MtlContext {
     // round-robin clock. Called once per frame from draw_frame; the result is
     // stashed in `spot_shadow.render_mask` for encode_spot_shadow_pass.
     pub(in crate::metal) fn next_spot_shadow_mask(&mut self) -> u32 {
-        let every_frame = matches!(
-            self.shadow.update,
-            crate::components::ShadowUpdate::EveryFrame
-        );
+        let every_frame = matches!(self.shadow.update, components::ShadowUpdate::EveryFrame);
         self.spot_shadow
             .scheduler
             .next_mask(every_frame, self.spot_shadow.count as usize)
@@ -187,7 +187,7 @@ impl MtlContext {
             // Pick the LOD by camera distance -- the shadow pass uses the
             // same slice the main pass will, so silhouettes track when the
             // runtime swaps to a coarser LOD.
-            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let index_byte_offset = index_offset * std::mem::size_of::<u32>();
             // SAFETY: `index_byte_offset` and `index_count` come from `active_lod`, which returns a
@@ -295,7 +295,7 @@ impl MtlContext {
                 continue;
             }
             let model_uniforms = ModelUniforms { model: obj.model };
-            let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+            let d = lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let index_byte_offset = index_offset * std::mem::size_of::<u32>();
             enc.set_vertex_value(&model_uniforms, 2);
@@ -321,7 +321,7 @@ impl MtlContext {
     // a second pipeline or a second uniform layout.
     fn spot_slice_uniforms(&self, slice: u32) -> ShadowUniforms {
         let data = self.spot_shadow_data(slice);
-        let mut uniforms = crate::gfx::csm::empty_shadow_uniforms();
+        let mut uniforms = csm::empty_shadow_uniforms();
         uniforms.light_vps[SPOT_SLICE_IDX as usize] = data.light_vp;
         uniforms.active_cascades = 1;
         uniforms

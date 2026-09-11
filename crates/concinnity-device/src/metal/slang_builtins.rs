@@ -14,11 +14,10 @@
 // `assert_slang_metal_abi` locks the emitted slot assignment.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_slang as slang;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLFunction, MTLLibrary};
-
-use concinnity_slang as slang;
 
 use super::pipeline::{load_library, ns_str};
 
@@ -615,6 +614,7 @@ pub(super) fn entry_function(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::gfx::ssr;
 
     // The values the build script baked into the precompiled metallibs must
     // match the capacities the host binds, or the shader indexes past what
@@ -685,7 +685,7 @@ mod tests {
     fn reflection_roughness_cut_matches_canonical() {
         let expected = format!(
             "static const float REFLECTION_ROUGHNESS_CUT = {:?};",
-            crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
+            ssr::REFLECTION_ROUGHNESS_CUT
         );
         for (name, src) in [
             (

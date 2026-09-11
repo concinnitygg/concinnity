@@ -3,20 +3,39 @@
 // backends identically.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::backend::FrameParams;
-use crate::gfx::render_types::*;
+use concinnity_core::components;
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::*;
+use concinnity_core::render::backend;
+use concinnity_core::render::backend::FrameParams;
+use concinnity_core::render::backend_init;
+use concinnity_core::render::decal;
+use concinnity_core::render::display_mode;
+use concinnity_core::render::error;
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
+use concinnity_core::render::lights;
+use concinnity_core::render::particles;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::shadow_schedule;
+use concinnity_core::render::skinned_slots;
+use concinnity_core::render::slot_rewrites;
+use concinnity_core::render::spot_shadow;
+use concinnity_core::render::volumetric_fog;
 
 use super::allocator::PooledBuffer;
 use super::draw::*;
 use super::post::*;
 use super::texture::*;
-use crate::gfx::input::RenderInput;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 // Off-screen HDR render-target format. The main pass renders linear-light
 // radiance into this; the composite pass tonemaps it down to the swapchain's
@@ -60,7 +79,7 @@ pub(super) struct VkShadow {
     pub(super) light_dir: [f32; 3],
     // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
     // refreshes the near cascade every frame and the far cascades round-robin.
-    pub(super) update: crate::components::ShadowUpdate,
+    pub(super) update: components::ShadowUpdate,
     // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
     // per-frame cascade-split computation and capped at the camera far plane.
     pub(super) distance: u32,
@@ -70,7 +89,7 @@ pub(super) struct VkShadow {
     pub(super) cascades: u32,
     // Round-robin clock + primed-set for the cascade schedule; advanced once per
     // frame in draw_frame.
-    pub(super) scheduler: crate::gfx::shadow_schedule::ShadowCascadeScheduler,
+    pub(super) scheduler: shadow_schedule::ShadowCascadeScheduler,
     // Cascades re-rendered this frame (bit `i` = cascade `i`). Set in draw_frame
     // and read by encode_shadow_pass so the two agree on which slices to refresh
     // and which to leave intact.
@@ -112,7 +131,7 @@ pub(super) struct VkSpotShadow {
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) _descriptor_pool: OwnedDescriptorPool,
     // Round-robin clock + primed set, advanced once per frame in draw_frame.
-    pub(super) scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
+    pub(super) scheduler: spot_shadow::SpotShadowScheduler,
     // Slices re-rendered this frame (bit `i` = slice `i`).
     pub(super) render_mask: u32,
 }
@@ -181,7 +200,7 @@ pub(super) struct VkSkinned {
     pub(super) index_buffer_bytes: u64,
     // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
     // records this backend shares with Metal and DirectX.
-    pub(super) slots: crate::gfx::skinned_slots::SkinnedSlots,
+    pub(super) slots: skinned_slots::SkinnedSlots,
     // Per-(frame, object) joint storage buffers (host-mapped) + their
     // descriptor sets. Indexed [frame_idx][skinned_idx].
     pub(super) joint_buffers: Vec<Vec<PooledBuffer>>,
@@ -631,7 +650,7 @@ pub(super) struct VkUniforms {
     // The values the ring carries. A live Ambient-slider or directional-light
     // change mutates this and re-arms `light_dirty`; `record_frame` writes the
     // frame's own slot, so no in-flight read is ever raced.
-    pub(super) light_uniforms: crate::gfx::render_types::LightUniforms,
+    pub(super) light_uniforms: render_types::LightUniforms,
 }
 
 impl VkUniforms {
@@ -652,7 +671,7 @@ impl VkUniforms {
 // the per-decal albedo sets and the per-frame params ring by decal id.
 pub(super) struct DecalState {
     pub resources: Option<crate::vulkan::decal::DecalResources>,
-    pub set: crate::gfx::decal::DecalSet,
+    pub set: decal::DecalSet,
 }
 
 // Volumetric fog. `resources` is `Some` only when the world declared a
@@ -664,7 +683,7 @@ pub(super) struct DecalState {
 // re-derives both.
 pub(super) struct FogState {
     pub resources: Option<crate::vulkan::fog::FogResources>,
-    pub settings: Option<crate::gfx::volumetric_fog::FogSettings>,
+    pub settings: Option<volumetric_fog::FogSettings>,
     pub sun_dir: [f32; 3],
     pub sun_color: [f32; 3],
 }
@@ -677,8 +696,8 @@ pub(super) struct FogState {
 // previous frame's elapsed time used to derive `dt` for the EMA.
 pub(super) struct AutoExposureState {
     pub resources: Option<crate::vulkan::auto_exposure::AutoExposureResources>,
-    pub settings: Option<crate::gfx::auto_exposure::AutoExposureSettings>,
-    pub state: Option<crate::gfx::auto_exposure::AutoExposureState>,
+    pub settings: Option<auto_exposure::AutoExposureSettings>,
+    pub state: Option<auto_exposure::AutoExposureState>,
     pub bias_ev: f32,
     pub last_elapsed: f32,
 }
@@ -711,7 +730,7 @@ pub(super) struct HotReloadState {
 // to be interior-mut).
 pub(super) struct ParticleState {
     pub resources: Option<crate::vulkan::particle::ParticleResources>,
-    pub records: Vec<Option<crate::gfx::particles::ParticleEmitterRecord>>,
+    pub records: Vec<Option<particles::ParticleEmitterRecord>>,
     pub emitter_state: Vec<Option<crate::vulkan::particle::ParticleEmitterGpuState>>,
     pub free_slots: Vec<usize>,
     pub last_elapsed: std::cell::Cell<f32>,
@@ -783,10 +802,7 @@ pub(super) struct DrawState {
     // inputs match the cached key reuses the compiled graph instead of
     // rebuilding it. Taken out during `execute_graph` (which needs `&mut self`)
     // and put back after, so a steady scene compiles the graph once.
-    pub graph_cache: Option<(
-        crate::gfx::render_graph::FrameGraphInputs,
-        crate::gfx::render_graph::CompiledGraph,
-    )>,
+    pub graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
     // Scratch the graph executor refills each frame: the per-resource barrier
     // targets and the per-pass aliasing barriers. Their contents are derived from
     // live state every frame (so no handle can go stale here); only the
@@ -859,7 +875,7 @@ pub(super) struct ProbeState {
     // once after construction via `set_reflection_probes`. The cube capture that
     // bakes one prefiltered cube per placement runs across later frames; held
     // here so that capture can walk them.
-    pub placements: Vec<crate::gfx::reflection_probe::ProbePlacement>,
+    pub placements: Vec<reflection_probe::ProbePlacement>,
     // The probe set (count + per-probe parallax boxes) bound to the forward /
     // SSR / RT shaders. `EMPTY` (count 0 = sky reflection) until the staggered
     // capture bakes cubes and installs them; each install bumps the count.
@@ -872,7 +888,7 @@ pub(super) struct ProbeState {
     // Hands out placements in order; at most one probe is `rendering` (six faces
     // submitting one per frame, on per-face fences) and one `prefiltering` (its
     // capture convolving into its cube on the GPU, one destination mip per frame).
-    pub bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
+    pub bake_queue: reflection_probe::ProbeBakeQueue,
     pub rendering: Option<super::probe::RenderingBake>,
     pub prefiltering: Option<super::probe::PrefilteringBake>,
     // The three convolution kernels and the layouts they bind, built at init under
@@ -891,7 +907,7 @@ pub(super) struct ProbeState {
 // submission itself (a swap lands between frames, after the previous frame's
 // submit, so a frame-slot-keyed drain would free it too soon).
 pub(super) struct StreamState {
-    pub pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue,
+    pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: Vec<StreamedUploadRetire>,
 }
@@ -1003,7 +1019,7 @@ pub(crate) struct VkContext {
     // Post-process tunables (bloom intensity / threshold / knee, exposure,
     // vignette). Drives whether the bloom passes run and feeds the composite
     // + bloom-prefilter push constants.
-    pub(super) post_process: crate::gfx::render_types::PostProcessParams,
+    pub(super) post_process: render_types::PostProcessParams,
 
     // Temporal anti-aliasing resources. `Some` only when the world's
     // `PostProcessConfig` set `taa: true`; `None` skips the velocity pre-pass
@@ -1030,7 +1046,7 @@ pub(crate) struct VkContext {
     // Kept so a swapchain resize rebuilds the same backend via `build_upscaler`
     // (the DLSS / XeSS device extensions are fixed at device creation, so the
     // resize must re-resolve to the same first choice; it does, deterministically).
-    pub(super) upscale_requested: crate::components::UpscalerBackend,
+    pub(super) upscale_requested: components::UpscalerBackend,
 
     // Screen-space ambient occlusion (GTAO) resources. `Some` only when the
     // world's `PostProcessConfig` set `ssao: true`; `None` binds the
@@ -1185,7 +1201,7 @@ pub(crate) struct VkContext {
     // in `BGRA8_UNORM` + sRGB-nonlinear and the ACES + gamma + FXAA + LUT path
     // runs unchanged. Mirrors `DxContext::hdr_mode`. Stored so the swapchain
     // rebuild path preserves the format + color space on resize.
-    pub(super) hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    pub(super) hdr_mode: hdr_output::HdrOutputMode,
 
     // GPU-compute particle system. See [`ParticleState`].
     pub(super) particle: ParticleState,
@@ -1204,7 +1220,7 @@ pub(crate) struct VkContext {
     // profiler overlay via [`Self::render_stats`]. Lives in a `Cell` because
     // the `objects` / `gpu_frame_us` / `vram_bytes` fields are filled from
     // `&mut self` in `draw_frame`. Mirrors `DxContext::frame_stats`.
-    pub(super) frame_stats: std::cell::Cell<crate::gfx::profile::RenderStats>,
+    pub(super) frame_stats: std::cell::Cell<profile::RenderStats>,
     // Draw-call accumulator the pass encoders bump via `inc_draw_calls`. An
     // `AtomicU32` (not the `frame_stats` Cell) because the parallel
     // command-buffer recording fans the encoders onto rayon workers that bump
@@ -1305,7 +1321,7 @@ pub(crate) struct VkContext {
     // (`reload_world`) reuses this backend in place only when the new world's
     // `swapchain_config` still matches; a mismatch routes to a full rebuild.
     // Mirrors `DxContext::swapchain_config`.
-    pub(super) swapchain_config: crate::gfx::backend_init::SwapchainConfig,
+    pub(super) swapchain_config: backend_init::SwapchainConfig,
     // Set on the OUTGOING context of a `reload_world` right before its successor
     // replaces it: the successor inherits (shares) this context's instance,
     // device, surface, and swapchain, so this context's `Drop` must free only
@@ -1368,10 +1384,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 //  Public API
 
 impl VkContext {
-    pub(crate) fn draw_frame(
-        &mut self,
-        params: FrameParams<'_>,
-    ) -> crate::gfx::error::RenderResult<()> {
+    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         let FrameParams {
             elapsed,
             fov_y_radians,
@@ -1519,7 +1532,7 @@ impl VkContext {
         // `WITH_AVAILABILITY` so a pass that did not run this trip (its slots were
         // reset but never written) reads back unavailable -> 0, without stalling
         // the host (no `WAIT`). Zero before a slot has been visited a second time.
-        let empty_pass_times = [("", 0u32); crate::gfx::profile::MAX_PASS_TIMINGS];
+        let empty_pass_times = [("", 0u32); profile::MAX_PASS_TIMINGS];
         let (gpu_frame_us, pass_times_us) = if let Some(pool) = self.timestamp_query_pool {
             // One [value, availability] pair per query slot (TYPE_64 +
             // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
@@ -1551,8 +1564,8 @@ impl VkContext {
                 };
                 let frame_us = pair_micros(0, 1);
                 let mut times = empty_pass_times;
-                for (i, name) in crate::gfx::render_graph::PASS_NAMES.iter().enumerate() {
-                    if i >= crate::gfx::profile::MAX_PASS_TIMINGS {
+                for (i, name) in render_graph::PASS_NAMES.iter().enumerate() {
+                    if i >= profile::MAX_PASS_TIMINGS {
                         break;
                     }
                     times[i] = (*name, pair_micros(2 + 2 * i, 3 + 2 * i));
@@ -1571,7 +1584,7 @@ impl VkContext {
         // drains it back into `frame_stats.draw_calls` once recording is done.
         self.draw_calls_accum
             .store(0, std::sync::atomic::Ordering::Relaxed);
-        self.frame_stats.set(crate::gfx::profile::RenderStats {
+        self.frame_stats.set(profile::RenderStats {
             draw_calls: 0,
             objects,
             skinned_visible,
@@ -1595,8 +1608,8 @@ impl VkContext {
             // synthesized placeholder set in `init`); `None` on SDR blanks the
             // chip. Mirrors `DxContext` / `MtlContext::render_stats`.
             max_edr: match self.hdr_mode {
-                crate::gfx::hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-                crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
+                hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+                hdr_output::HdrOutputMode::Sdr => None,
             },
         });
 
@@ -1856,7 +1869,7 @@ impl VkContext {
     // through the ring (so the reading is `frames_in_flight`-stale by
     // construction, matching DirectX / Metal). Per-pass GPU timing is
     // still a follow-up.
-    pub(crate) fn render_stats(&self) -> crate::gfx::profile::RenderStats {
+    pub(crate) fn render_stats(&self) -> profile::RenderStats {
         self.frame_stats.get()
     }
 
@@ -1943,7 +1956,7 @@ impl VkContext {
     // Switch window mode / resize at runtime. The GLFW work lives in window.rs;
     // the framebuffer-size change drives a swapchain rebuild via the present
     // path's OUT_OF_DATE handling.
-    pub(crate) fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: components::WindowMode) {
         self.window_mut().set_window_mode(mode);
     }
 
@@ -1954,25 +1967,22 @@ impl VkContext {
     // The display modes feeding the Resolution settings row; enumeration,
     // the fullscreen mode hold, and the desktop-mode restore all live in
     // window.rs (GLFW owns the video-mode switching).
-    pub(crate) fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<display_mode::DisplayMode> {
         self.window().display_modes()
     }
 
-    pub(crate) fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<display_mode::DisplayMode> {
         self.window().current_display_mode()
     }
 
-    pub(crate) fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
         self.window_mut().set_display_mode(mode);
     }
 
     // Replace the live post-process tunables, pushed to the bloom + composite
     // shaders each frame. The composite's display-output flags are not part of
     // the payload, so the EDR path negotiated at init survives every push.
-    pub(crate) fn update_post_process(
-        &mut self,
-        tunables: crate::gfx::render_types::PostProcessTunables,
-    ) {
+    pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
         self.post_process.set_tunables(tunables);
     }
 
@@ -1993,27 +2003,24 @@ impl VkContext {
     // fog sun are derived from the first light on the CPU, so both are
     // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
     // changed one only re-arms the light UBO ring.
-    pub(crate) fn update_directional_lights(
-        &mut self,
-        lights: &[crate::components::DirectionalLight],
-    ) {
-        let (directional, num_directional) = crate::gfx::lights::directional_light_data(lights);
+    pub(crate) fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]) {
+        let (directional, num_directional) = lights::directional_light_data(lights);
         let uniforms = &mut self.uniforms.light_uniforms;
         if uniforms.directional == directional && uniforms.num_directional == num_directional {
             return;
         }
         uniforms.directional = directional;
         uniforms.num_directional = num_directional;
-        self.shadow.light_dir = crate::gfx::lights::sun_direction(&self.uniforms.light_uniforms);
+        self.shadow.light_dir = lights::sun_direction(&self.uniforms.light_uniforms);
         self.fog.sun_dir = self.shadow.light_dir;
-        self.fog.sun_color = crate::gfx::lights::sun_color(&self.uniforms.light_uniforms);
+        self.fog.sun_color = lights::sun_color(&self.uniforms.light_uniforms);
         self.uniforms.light_dirty.mark_all();
     }
 
     // Set the live shadow cascade re-render cadence. The per-frame cascade split
     // reads `shadow.update` at the start of each draw (see draw.rs), so a change
     // takes effect on the next frame with no rebuild or allocation.
-    pub(crate) fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: components::ShadowUpdate) {
         self.shadow.update = update;
     }
 
@@ -2044,7 +2051,7 @@ impl VkContext {
     // ride `apply_quality_settings`), so only its scalar intensity / distance are
     // updated. Auto-exposure settings live flat on the context here
     // (`auto_exposure.settings`), not inside a resources struct as on Metal.
-    pub(crate) fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
+    pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;
         }
@@ -2079,7 +2086,7 @@ impl VkContext {
 
     // Replace the runtime movement key map. The window's key decode routes
     // through it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.window_mut().set_keymap(keymap);
     }
 
@@ -2105,8 +2112,8 @@ impl VkContext {
     // Device capability flags for the settings menu. RT reflects whether the
     // ray-query device extensions were enabled at device creation
     // (`rt_capable`).
-    pub(crate) fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
-        crate::gfx::backend::DeviceCapabilities {
+    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
+        backend::DeviceCapabilities {
             ray_tracing: self.rt_capable,
             selectable_upscaler: true,
             // The cull BVH + RT tables key fixed build-time slot indices and
@@ -2123,8 +2130,8 @@ impl VkContext {
     // from the physical device: vendor id, discrete / integrated device type,
     // and the summed DEVICE_LOCAL heap size as the VRAM budget (the true heap
     // size, unlike the residency chip which sums live usage).
-    pub(crate) fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
-        use crate::gfx::backend::{
+    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
+        use concinnity_core::render::backend::{
             GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
         };
         // SAFETY: a property query on a live handle; it only reads.
@@ -2170,7 +2177,7 @@ impl VkContext {
     }
 }
 
-impl crate::gfx::scene_flow::SceneControl for VkContext {
+impl scene_flow::SceneControl for VkContext {
     fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }

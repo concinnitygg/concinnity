@@ -19,23 +19,21 @@
 //
 // Mirrors src/directx/fog.rs and src/metal/fog.rs.
 
-use concinnity_core::gfx::transform::mat4_inverse;
-
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use crate::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
+use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
+use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_core::render::volumetric_fog;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
 use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
+};
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::slang_builtins::SlangCompile;
 
@@ -899,7 +897,7 @@ impl VkContext {
     // `cn debug` world.jsonl hot-reload).
     pub(in crate::vulkan) fn apply_fog_settings(
         &mut self,
-        settings: Option<crate::gfx::volumetric_fog::FogSettings>,
+        settings: Option<volumetric_fog::FogSettings>,
     ) {
         if settings.is_some() && self.fog.resources.is_none() {
             tracing::warn!(
@@ -1071,7 +1069,7 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
-    use crate::gfx::render_types::{FogFroxelParams, FogParams};
+    use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
     use std::mem::size_of;
 
     #[test]

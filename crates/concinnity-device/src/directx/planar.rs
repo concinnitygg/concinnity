@@ -26,7 +26,10 @@
 // instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
 // (the bindless face render omits the skinned tail), exactly like the probe capture.
 
+use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::planar_reflection;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -40,7 +43,6 @@ use super::texture::{
     HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_sampled_target,
     create_uav_buffer, transition_barrier, write_format_rtv, write_hdr_srv,
 };
-use concinnity_core::gfx::transform::mat4_mul;
 
 // The engine capacity ceiling for distinct reflection planes: the count the
 // reserved planar targets + resolve SRVs are sized to. Single-sourced from
@@ -48,8 +50,7 @@ use concinnity_core::gfx::transform::mat4_mul;
 // The per-frame budget passed to `assign_planar_slots` at init can be lower under a
 // quality preset / GPU tier, never higher; panes past it fall back to the
 // box-projected probe cube.
-pub(in crate::directx) const MAX_PLANAR_PLANES: usize =
-    crate::gfx::planar_reflection::MAX_PLANAR_PLANES;
+pub(in crate::directx) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
 // Clip the reflection a hair toward the kept (camera) side of the plane so
 // geometry exactly on the surface is not lost to near-plane precision. Matches
@@ -466,9 +467,9 @@ impl DxContext {
         // and collect the reflected frustum + eye for the mirror cull. Inline,
         // since the set never holds more planes than the engine ceiling; the
         // filler entries past `plane_count` are never read.
-        const NO_PLANE: (crate::gfx::frustum::Frustum, [f32; 3]) = (
-            crate::gfx::frustum::Frustum {
-                planes: [crate::gfx::frustum::Plane {
+        const NO_PLANE: (Frustum, [f32; 3]) = (
+            Frustum {
+                planes: [Plane {
                     normal: [0.0; 3],
                     d: 0.0,
                 }; 6],
@@ -477,11 +478,8 @@ impl DxContext {
         );
         let mut cull_planes = [NO_PLANE; MAX_PLANAR_PLANES];
         for (slot, cull_plane) in cull_planes.iter_mut().enumerate().take(set.plane_count()) {
-            let oriented = crate::gfx::planar_reflection::orient_plane_toward(
-                set.planes[slot],
-                params.cam_pos,
-            );
-            let m = crate::gfx::planar_reflection::planar_matrices(
+            let oriented = planar_reflection::orient_plane_toward(set.planes[slot], params.cam_pos);
+            let m = planar_reflection::planar_matrices(
                 self.view.matrix,
                 proj,
                 params.cam_pos,
@@ -513,10 +511,7 @@ impl DxContext {
                     std::mem::size_of::<ViewUniforms>(),
                 );
             }
-            *cull_plane = (
-                crate::gfx::frustum::Frustum::from_view_projection(m.view_proj),
-                m.eye,
-            );
+            *cull_plane = (Frustum::from_view_projection(m.view_proj), m.eye);
         }
 
         // Reflected-frustum mirror cull into the per-plane regions of this frame's
@@ -770,9 +765,6 @@ mod tests {
         // the single `gfx::planar_reflection` source, so this guards that the shared
         // capacity the heap layout assumes is still 4.
         assert_eq!(MAX_PLANAR_PLANES, 4);
-        assert_eq!(
-            MAX_PLANAR_PLANES,
-            crate::gfx::planar_reflection::MAX_PLANAR_PLANES
-        );
+        assert_eq!(MAX_PLANAR_PLANES, planar_reflection::MAX_PLANAR_PLANES);
     }
 }

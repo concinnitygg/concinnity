@@ -15,7 +15,6 @@
 // `<effect>_srv_extra` to the heap cascade.
 
 use std::cell::Cell;
-
 use windows::Win32::Graphics::Direct3D12::*;
 
 // Post targets the shared passes may hold at once. The temporal resolve is two;

@@ -40,34 +40,32 @@
 //     template's caveat). Volumes whose bbox sits fully behind
 //     rasterized geometry pay the full march cost.
 
-use std::ffi::c_void;
-
-use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
-
 use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::sdf_volume::SdfVolume;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
+use std::ffi::c_void;
+use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::*;
+// One declaration for all three backends, in `core::render::uniforms`.
+// Re-exported so `crate::directx::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
+// stay the paths the encode and `volume_uniforms_from` sites use.
+pub(in crate::directx) use concinnity_core::render::uniforms::{
+    RaymarchView, RaymarchVolumeUniforms,
+};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
-use crate::components::sdf_volume::SdfVolume;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_fallback_white_resource, create_hdr_resolve_target,
     transition_barrier,
-};
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::LightUniforms;
-
-// One declaration for all three backends, in `core::render::uniforms`.
-// Re-exported so `crate::directx::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
-// stay the paths the encode and `volume_uniforms_from` sites use.
-pub(in crate::directx) use concinnity_core::render::uniforms::{
-    RaymarchView, RaymarchVolumeUniforms,
 };
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
@@ -1487,13 +1485,13 @@ impl DxContext {
         // frame: a skipped cascade's slice must stay exactly as it was last fully
         // rendered (raster + SDF), so we neither clear nor add to it. The 0
         // sentinel falls back to all cascades. Mirrors Metal.
-        let all_cascades = (1u32 << crate::gfx::render_types::NUM_SHADOW_CASCADES) - 1;
+        let all_cascades = (1u32 << render_types::NUM_SHADOW_CASCADES) - 1;
         let render_mask = if self.shadow.render_mask == 0 {
             all_cascades
         } else {
             self.shadow.render_mask
         };
-        for cascade_idx in 0..crate::gfx::render_types::NUM_SHADOW_CASCADES {
+        for cascade_idx in 0..render_types::NUM_SHADOW_CASCADES {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }

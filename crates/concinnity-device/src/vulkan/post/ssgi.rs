@@ -18,21 +18,19 @@
 // descriptor sets carry only image samplers.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
-use crate::gfx::render_types::SsgiParams;
-use crate::gfx::ssgi::SsgiSettings;
+use concinnity_core::gfx::render_types::SsgiParams;
+use concinnity_core::gfx::ssgi::SsgiSettings;
+use concinnity_core::render::fullscreen::{FullscreenPass, encode_fullscreen};
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // SPIR-V blobs for the SSGI pipelines. Produced by [`compile_ssgi_shaders`];

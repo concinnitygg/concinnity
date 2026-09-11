@@ -17,12 +17,11 @@
 // Mirrors `directx/upload_ring.rs`; `metal/text_upload.rs` does the same job
 // against one `StorageModeShared` buffer per slot.
 
+use ash::vk;
+use concinnity_core::render::fullscreen::align_up;
 use std::cell::RefCell;
 
-use ash::vk;
-
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::gfx::fullscreen::align_up;
 
 // Sub-range alignment. 256 bytes satisfies every offset rule a bound
 // vertex / index sub-range can face, MoltenVK's translation to Metal's

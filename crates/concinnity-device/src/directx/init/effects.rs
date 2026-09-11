@@ -5,6 +5,10 @@
 // SSAO (gated on `ssao_settings.is_some()`). Each gated block pays zero cost
 // when its setting is off.
 
+use concinnity_core::gfx::rt_reflections;
+use concinnity_core::gfx::ssao;
+use concinnity_core::gfx::ssgi;
+use concinnity_core::gfx::ssr;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledTexture};
@@ -98,10 +102,10 @@ pub(super) struct EffectDimensions {
 // when the feature is off. `rt_supported` is the DXR-tier capability; RT builds
 // only when both it and `rt_reflection_settings` are set.
 pub(super) struct EffectSettings {
-    pub ssao_settings: Option<crate::gfx::ssao::SsaoSettings>,
-    pub ssr_settings: Option<crate::gfx::ssr::SsrSettings>,
-    pub ssgi_settings: Option<crate::gfx::ssgi::SsgiSettings>,
-    pub rt_reflection_settings: Option<crate::gfx::rt_reflections::RtReflectionSettings>,
+    pub ssao_settings: Option<ssao::SsaoSettings>,
+    pub ssr_settings: Option<ssr::SsrSettings>,
+    pub ssgi_settings: Option<ssgi::SsgiSettings>,
+    pub rt_reflection_settings: Option<rt_reflections::RtReflectionSettings>,
     pub rt_supported: bool,
 }
 

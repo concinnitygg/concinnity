@@ -20,8 +20,12 @@
 // are temporally stabilized by TAA.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
+use concinnity_core::render::uniforms::ParticleView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlendFactor, MTLBuffer, MTLCommandBuffer as _, MTLComputeCommandEncoder as _,
     MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice as _, MTLLibrary as _,
@@ -30,18 +34,14 @@ use objc2_metal::{
     MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
     MTLSamplerState, MTLSize, MTLStoreAction,
 };
-
-use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
+// GPU-free repr(C) structs; live in `core::render` so their layout tests
+// count toward coverage. Re-exported so this file's existing paths are unchanged.
+use concinnity_core::render::uniforms::GpuParticle;
 
 use super::context::MtlContext;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-// GPU-free repr(C) structs; live in `core::render` so their layout tests
-// count toward coverage. Re-exported so this file's existing paths are unchanged.
-use concinnity_core::render::uniforms::GpuParticle;
-use concinnity_core::render::uniforms::ParticleView;
-use objc2_foundation::ns_string;
 
 // Byte stride between an emitter's per-frame spawn-counter slots. The counter
 // itself is one `u32`; the padding buys the 256-byte buffer-offset alignment
@@ -276,7 +276,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         frame: &ParticleFrame,
         vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
     ) -> Result<u32, String> {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(0);

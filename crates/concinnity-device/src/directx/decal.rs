@@ -11,7 +11,9 @@
 // are reflected and tracked by the temporal history just like the rest of
 // the scene. Mirrors src/metal/decal.rs.
 
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::decal::DecalRecord;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -23,7 +25,6 @@ use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_buffer, upload_buffer, write_texture_srv};
-use crate::gfx::decal::DecalRecord;
 
 // Compile the decal vertex + fragment shaders; the MSAA variant keeps the
 // fragment shader's depth SRV declaration in sync with the resource's
@@ -463,7 +464,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
     ) {
         let decals = match &self.decal.state {
             Some(s) => s,

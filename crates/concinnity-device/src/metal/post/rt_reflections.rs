@@ -13,8 +13,10 @@
 // pre-pass is forced on whenever RT reflections are enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType,
     MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLStoreAction,
@@ -27,7 +29,6 @@ use crate::metal::post::fullscreen::{
 };
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_builtins::SlangLib;
-use objc2_foundation::ns_string;
 
 // Fragment sampler index the textured variant reads the bindless pool through.
 // slangc splits the combined screen sources into texture + sampler pairs at
@@ -70,7 +71,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_rt_reflections(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        rt_params: &crate::gfx::render_types::RtParams,
+        rt_params: &render_types::RtParams,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     ) -> Result<u32, String> {
         let (targets, accel, gb_normal_depth, gb_roughness) = match (

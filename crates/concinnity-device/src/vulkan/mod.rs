@@ -67,14 +67,12 @@ mod world_shaders;
 // fails naming this alias rather than naming a missing crate.
 #[cfg(target_os = "macos")]
 pub(crate) use appkit_window::AppKitVkWindow as PlatformWindow;
+pub(crate) use context::VkContext;
+pub(crate) use gpu_profile::probe_gpu_profile;
 #[cfg(target_os = "windows")]
 pub(crate) use win32_window::Win32Window as PlatformWindow;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 pub(crate) use window::GlfwWindow as PlatformWindow;
-
-pub(crate) use context::VkContext;
-pub(crate) use gpu_profile::probe_gpu_profile;
-
 // GPU-free host structs live in `core::render` (counted for coverage); the
 // backend keeps its existing `crate::vulkan::{pass_timing,uniforms}`
 // paths through these re-exports. `uniforms` holds the per-pass repr(C) structs;

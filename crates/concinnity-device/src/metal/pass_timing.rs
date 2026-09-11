@@ -65,7 +65,6 @@ use objc2_metal::{
     MTLCounterSampleBuffer, MTLCounterSampleBufferDescriptor, MTLCounterSamplingPoint,
     MTLCounterSet, MTLDevice, MTLRenderPassDescriptor, MTLStorageMode,
 };
-
 // `PassId` and `PASS_COUNT` live in the shared render-graph module so the
 // per-pass GPU timer and the future graph executor key off the same enum.
 // Adding a new pass = adding a new variant there + a new entry in
@@ -73,7 +72,7 @@ use objc2_metal::{
 // timing to flow. The passes.rs `every_pass_id_round_trips_to_its_name` test
 // forces those edits at compile time, and `slot_pair` debug_asserts the index
 // at runtime, so a missed registration cannot silently report zero GPU time.
-pub(super) use crate::gfx::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
+pub(super) use concinnity_core::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
 
 // Frames in flight on Apple Silicon. The sample buffer ring is sized to
 // this so frame N's resolve never overlaps frame N+1's GPU writes.

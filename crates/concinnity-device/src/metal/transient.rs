@@ -14,11 +14,10 @@
 // Each slot grows power-of-two on demand (like `ensure_icb_capacity`) and is
 // never shrunk, so steady state does zero allocation.
 
-use std::collections::VecDeque;
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
+use std::collections::VecDeque;
 
 use super::context::{bytes_of_slice, write_buffer_region};
 

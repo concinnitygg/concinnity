@@ -26,8 +26,10 @@
 // whatever it launched as (persisted for the next launch).
 
 use ash::vk;
-
-use crate::gfx::backend::QualitySettings;
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::rt_reflections;
+use concinnity_core::gfx::ssr;
+use concinnity_core::render::backend::QualitySettings;
 
 use super::context::VkContext;
 
@@ -145,9 +147,7 @@ impl VkContext {
         // to the inert defaults (the resolve never runs, but `new` needs a
         // concrete `SsrSettings`).
         if ssr_needed && self.ssr.is_none() {
-            let settings = q
-                .ssr
-                .unwrap_or_else(|| crate::gfx::ssr::SsrSettings::resolve(0.0, 0.0));
+            let settings = q.ssr.unwrap_or_else(|| ssr::SsrSettings::resolve(0.0, 0.0));
             let ssr = super::post::ssr::SsrResources::new(
                 &super::post::ssr::SsrGpuContext {
                     alloc: &self.alloc,
@@ -222,8 +222,7 @@ impl VkContext {
                 self.hot_reload.enabled,
             )?;
             self.auto_exposure.resources = Some(resources);
-            self.auto_exposure.state =
-                Some(crate::gfx::auto_exposure::AutoExposureState::new(settings));
+            self.auto_exposure.state = Some(auto_exposure::AutoExposureState::new(settings));
             self.auto_exposure.settings = q.auto_exposure;
             self.auto_exposure.bias_ev = q.auto_exposure_bias_ev;
         } else if !desired_ae && self.auto_exposure.resources.is_some() {
@@ -369,7 +368,7 @@ impl VkContext {
     // device (`wait_idle`). `rebuild_swapchain` refreshes the output target after.
     fn build_rt_runtime(
         &mut self,
-        settings: crate::gfx::rt_reflections::RtReflectionSettings,
+        settings: rt_reflections::RtReflectionSettings,
     ) -> Result<(), String> {
         let accel = match crate::vulkan::raytrace::build_rt_accel(
             crate::vulkan::raytrace::RtDeviceCtx {

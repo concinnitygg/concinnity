@@ -13,19 +13,18 @@
 // `metal/auto_exposure.rs` and `directx/auto_exposure.rs`.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::auto_exposure::HISTOGRAM_BINS;
-use crate::vulkan::uniforms::AUTO_EXPOSURE_PUSH_BYTES;
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use concinnity_core::render::uniforms::AutoExposureParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::{SHADER_ENTRY, spv_module};
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
+use crate::vulkan::uniforms::AUTO_EXPOSURE_PUSH_BYTES;
 
 // Compile the auto-exposure build + average compute kernels. Used at init
 // and by shader hot-reload to rebuild the two compute pipelines.
@@ -409,7 +408,7 @@ impl VkContext {
     // log-luminance range and the precomputed `bins / range` scale match the
     // `gfx::auto_exposure::LUM_LOG2_*` constants exactly.
     fn auto_exposure_params(&self) -> AutoExposureParams {
-        use crate::gfx::auto_exposure::{LUM_LOG2_MAX, LUM_LOG2_MIN};
+        use concinnity_core::gfx::auto_exposure::{LUM_LOG2_MAX, LUM_LOG2_MIN};
         let range = LUM_LOG2_MAX - LUM_LOG2_MIN;
         AutoExposureParams {
             lum_log2_min: LUM_LOG2_MIN,
@@ -453,7 +452,7 @@ impl VkContext {
         let avg_log_lum = if avg_log_lum.is_finite() {
             avg_log_lum
         } else {
-            crate::gfx::auto_exposure::LUM_LOG2_MIN
+            auto_exposure::LUM_LOG2_MIN
         };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);

@@ -23,31 +23,27 @@
 // consumes `.glsl` payloads; `.metal` / `.hlsl` SDFs are skipped at init with a
 // logged warning and the rest of the world renders unchanged.
 
-use concinnity_core::gfx::transform::mat4_inverse;
-
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
-    VkDevice,
-};
-
-use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::components::SdfVolume;
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{LightUniforms, ShadowUniforms};
-
+use concinnity_core::components::SdfVolume;
 use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::GraphicsStages;
 use super::render_pass::create_main_render_pass_two_pass;
 use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
+};
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
+    VkDevice,
 };
 
 // 36 indices for the unit-cube proxy: front faces are culled so each pixel

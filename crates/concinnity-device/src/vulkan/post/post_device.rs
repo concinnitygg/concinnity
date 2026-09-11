@@ -12,7 +12,6 @@
 // another effect might own.
 
 use ash::vk;
-
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, resolved_texture,
 };

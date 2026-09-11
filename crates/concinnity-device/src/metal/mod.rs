@@ -62,10 +62,9 @@ mod world_shaders;
 // unconditionally so their unit tests count toward coverage); re-exported here
 // so the backend keeps its `super::uniforms` path.
 pub(crate) use concinnity_core::render::metal::uniforms;
-
+pub use context::{set_embedded_pump_events, set_preview_view};
+pub(crate) use gpu_profile::probe_gpu_profile;
 // `set_preview_view` / `set_embedded_pump_events` are the play-in-view
 // embedding hooks the out-of-tree Swift app drives through its FFI crate; no
 // crate in this workspace calls them.
 pub(crate) use context::MtlContext;
-pub use context::{set_embedded_pump_events, set_preview_view};
-pub(crate) use gpu_profile::probe_gpu_profile;

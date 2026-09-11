@@ -14,6 +14,7 @@
 // Unlike Metal there is no on-disk GPU-binary cache behind the build: see
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
+use concinnity_core::render::backend_init;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;
@@ -26,7 +27,7 @@ impl DxContext {
     pub(in crate::directx) fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::WorldShader<'_>,
+        shader: backend_init::WorldShader<'_>,
     ) -> Result<(), String> {
         let slot = self.world_pipeline_slot(bucket)?;
         let root_sig = self

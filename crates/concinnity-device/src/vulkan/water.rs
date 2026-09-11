@@ -14,23 +14,22 @@
 // as the DirectX and Metal hosts.
 
 use ash::vk;
-
-use super::allocator::DeviceAllocator;
-use crate::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
-use crate::geometry::water_grid::build_water_grid;
-use crate::gfx::mesh_payload::Vertex;
-use crate::vulkan::slang_builtins::SlangCompile;
-use crate::vulkan::transparent::{
-    ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord, TransparentVertexInput,
-    create_transparent_pipeline,
-};
-
+use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
+use concinnity_core::geometry::water_grid::build_water_grid;
+use concinnity_core::gfx::mesh_payload::Vertex;
 // `WaterParams` / `WaterWaveGpu` (the per-surface UBO and its wave lanes) are
 // GPU-free layout structs that live in `core::render`; re-export them so
 // `crate::vulkan::water::WaterParams` is unchanged for the `water_params_from`
 // path.
 pub(in crate::vulkan) use concinnity_core::render::uniforms::{
     WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
+};
+
+use super::allocator::DeviceAllocator;
+use crate::vulkan::slang_builtins::SlangCompile;
+use crate::vulkan::transparent::{
+    ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord, TransparentVertexInput,
+    create_transparent_pipeline,
 };
 
 // The shader-side wave lane for one authored wave. Pure; unit tested.

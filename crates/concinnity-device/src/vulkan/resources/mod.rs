@@ -22,10 +22,9 @@
 
 use ash::vk;
 
-use crate::vulkan::owned::{OwnedSetLayout, VkDevice};
-
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::texture;
+use crate::vulkan::owned::{OwnedSetLayout, VkDevice};
 
 mod geometry;
 mod geometry_rebuild;

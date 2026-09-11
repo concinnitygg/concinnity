@@ -9,40 +9,6 @@
 //! `Box<dyn RenderBackend>` obtained from `init_backend`, never naming a concrete
 //! context type.
 
-// Bridge so the backends' historical `crate::gfx::<X>` paths resolve: the GPU
-// data layouts, render math, and CPU kernels (`concinnity_core::gfx`) plus the
-// render-prep modules (`concinnity_core::render`). Each
-// backend consumes a different subset and one backend compiles per build, so a
-// portion of these re-exports is unused on any given build - suppress it
-// crate-wide rather than gate every item per backend.
-#[expect(
-    unused_imports,
-    reason = "one backend compiles per build, so each consumes only a subset of these re-exports"
-)]
-pub(crate) mod gfx {
-    pub(crate) use concinnity_core::gfx::{
-        auto_exposure, frustum, image_decode, jitter, lod, mesh_payload, morph_targets, profile,
-        render_types, rt_reflections, ssao, ssgi, ssr,
-    };
-    pub(crate) use concinnity_core::render::{
-        backend, backend_init, csm, decal, display_mode, draw_slot, error, fullscreen, hdr_output,
-        input, keymap, lights, ltc, mipmap, parallel_ctx, particles, planar_reflection,
-        reflection_probe, render_graph, rt_geom, rt_refit, rt_topology, scene_flow, shadow_bias,
-        shadow_schedule, skinned_pool, skinned_slots, slot_rewrites, spot_shadow, transparent,
-        volumetric_fog,
-    };
-}
-
-// Asset data types, the runtime build helpers, and the mesh/chunk geometry the
-// backends reach by their historical `crate::` paths, plus the shared rayon job
-// pool.
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) use concinnity_core::components;
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) use concinnity_core::{bake, geometry};
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) use concinnity_host::thread::jobs;
-
 #[cfg(backend_dx)]
 pub(crate) mod directx;
 // The CPU's blocked-on-GPU time, shared by the three backends so

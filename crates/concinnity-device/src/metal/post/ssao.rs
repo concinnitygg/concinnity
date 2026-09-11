@@ -9,6 +9,8 @@
 // pre-pass over the visible static, instanced, and skinned geometry.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::ssao::SsaoSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -16,7 +18,6 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
-use crate::gfx::ssao::SsaoSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::encode::RenderEncode;
@@ -117,7 +118,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_ssao(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        ssao_params: &crate::gfx::render_types::SsaoParams,
+        ssao_params: &render_types::SsaoParams,
     ) -> Result<u32, String> {
         let (targets, kernel_ps, blur_ps, gbuffer) = match (
             &self.ssao.targets,

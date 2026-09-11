@@ -4,10 +4,11 @@
 // re-imported `.glb` source no longer fits each draw's init-time slot.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::LodSlice;
+use concinnity_core::render::backend;
 use objc2_metal::{MTLBuffer as _, MTLResourceOptions};
 
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::LodSlice;
 use crate::metal::context::{MtlContext, bytes_of_slice};
 
 impl MtlContext {
@@ -30,7 +31,7 @@ impl MtlContext {
     // the streaming poll).
     pub(crate) fn rebuild_static_geometry(
         &mut self,
-        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
+        changes: Vec<backend::DrawGeometryUpdate>,
     ) -> Result<(), String> {
         use std::collections::HashMap;
 
@@ -40,7 +41,7 @@ impl MtlContext {
         // actually changed.
         self.wait_idle();
 
-        let mut change_map: HashMap<usize, crate::gfx::backend::DrawGeometryUpdate> =
+        let mut change_map: HashMap<usize, backend::DrawGeometryUpdate> =
             changes.into_iter().map(|c| (c.draw_idx, c)).collect();
 
         // Read views over the current shared buffers. `StorageModeShared`

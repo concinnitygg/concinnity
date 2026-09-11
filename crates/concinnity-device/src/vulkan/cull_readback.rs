@@ -13,10 +13,10 @@
 // probe-only path, never a per-frame one. Mirrors src/directx/cull_readback.rs.
 
 use ash::vk;
+use concinnity_core::gfx::cull_status;
 
 use super::context::VkContext;
 use super::texture::one_shot_submit;
-use concinnity_core::gfx::cull_status;
 
 impl VkContext {
     // Read the last submitted frame's cull-status buffer back to the host, one

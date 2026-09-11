@@ -4,11 +4,11 @@
 // add / remove / move-chunk-mesh operations driven after init.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::DrawObject;
+use concinnity_core::render::backend::ChunkMesh;
+use concinnity_core::render::draw_slot;
 use objc2_metal::{MTLBuffer, MTLResourceOptions};
-
-use crate::gfx::backend::ChunkMesh;
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::DrawObject;
 
 use super::context::*;
 
@@ -70,7 +70,7 @@ impl MtlContext {
     pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
-        dst: crate::gfx::draw_slot::SlotAlloc,
+        dst: draw_slot::SlotAlloc,
     ) -> Result<(), String> {
         let ChunkMesh {
             verts: vertices,
@@ -173,7 +173,7 @@ impl MtlContext {
         draw_idx: usize,
         retire_frame: u64,
     ) -> Result<(), String> {
-        let region = crate::gfx::draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
         zero_buffer_region(
             &self.vertex_buffer,
             region.vertex_offset as usize,
@@ -201,6 +201,6 @@ impl MtlContext {
         draw_idx: usize,
         model: [[f32; 4]; 4],
     ) -> Result<(), String> {
-        crate::gfx::draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
+        draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
     }
 }

@@ -9,6 +9,11 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::components::GlassPanel;
+use concinnity_core::geometry::glass_quad::build_glass_quad;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::transparent;
+use concinnity_core::render::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -16,15 +21,10 @@ use objc2_metal::{
     MTLRenderPipelineState, MTLResourceOptions, MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use crate::components::GlassPanel;
-use crate::geometry::glass_quad::build_glass_quad;
-use crate::gfx::mesh_payload::Vertex;
-
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::slang_builtins;
 use super::transparent::{TransparentDraw, bytes_of};
-use concinnity_core::render::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 
 // Refraction offset + Fresnel falloff for a transparent glass MESH. A `Material`
 // carries no glass-specific tunables (unlike a `GlassPanel`), so these match the
@@ -342,7 +342,7 @@ impl MtlContext {
                 ));
             }
             let c = panel.center;
-            let sort_distance = crate::gfx::transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
+            let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
                 vertex_buffer: panel.vertex_buffer.clone(),

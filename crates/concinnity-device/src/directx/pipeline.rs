@@ -15,6 +15,7 @@
 // own files: bloom/TAA/SSAO in directx/post/, cull at directx/cull.rs,
 // main + shadow in directx/init/pipelines.rs.
 
+use concinnity_core::gfx::render_types;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -234,7 +235,7 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Ve
 // Number of 32-bit root constants the composite pass declares at b0: one per
 // `CompositeParams` float, so the shader's cbuffer is fully backed.
 pub(super) const COMPOSITE_ROOT_CONSTANTS: u32 =
-    (std::mem::size_of::<crate::gfx::render_types::CompositeParams>() / 4) as u32;
+    (std::mem::size_of::<render_types::CompositeParams>() / 4) as u32;
 
 // Root signature for the composite pass: a 1-SRV descriptor table at t0 (the
 // scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV

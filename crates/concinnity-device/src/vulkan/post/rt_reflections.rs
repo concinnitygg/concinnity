@@ -22,20 +22,19 @@
 // rebuild; see `crate::vulkan::raytrace`).
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::render_types::RtParams;
-use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::render::planar_reflection;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 use crate::vulkan::wire_cache::WireCache;
 
@@ -918,7 +917,7 @@ impl VkContext {
     // before. Shared with the other backends through
     // `planar_reflection::planar_pass_needed`.
     pub(in crate::vulkan) fn planar_pass_needed(&self) -> bool {
-        crate::gfx::planar_reflection::planar_pass_needed(
+        planar_reflection::planar_pass_needed(
             self.planar_reflection.is_some(),
             self.transparent
                 .as_ref()

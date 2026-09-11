@@ -10,20 +10,23 @@
 //   composite.rs           ACES tonemap + composite + text overlay
 //   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
-use concinnity_core::gfx::transform::mat4_inverse;
-use windows::Win32::Graphics::Direct3D12::*;
-
-use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
-use crate::gfx::render_types::{
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::jitter;
+use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::render_types::{
     CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, ClusterParams, LightUniforms, LineVertex,
     ShadowUniforms, TextDrawCall,
 };
+use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::lights;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
+use windows::Win32::Graphics::Direct3D12::*;
 
 use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
-use concinnity_core::gfx::projection::perspective_rh;
-use concinnity_core::gfx::transform::mat4_mul;
 
 mod composite;
 mod main;
@@ -208,7 +211,7 @@ impl DxContext {
         // with local lights) and at least one light is still live. Drives both
         // `ClusterParams::use_clusters` below and the `LightCull` graph node, so
         // the forward pass never reads a list the skipped pass did not write.
-        let clustered = crate::gfx::lights::clustered_lighting_active(
+        let clustered = lights::clustered_lighting_active(
             self.light_cull.pso.is_some(),
             self.uniforms.light_uniforms.num_local_lights,
         );
@@ -318,8 +321,7 @@ impl DxContext {
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.
-        let seed_inputs =
-            crate::gfx::render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
+        let seed_inputs = render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
 
         // Compute the camera VPs the main + velocity passes consume.
         let proj = perspective_rh(fov_y_radians, aspect, near, far);
@@ -357,10 +359,8 @@ impl DxContext {
             }
             (None, Some(taa)) => {
                 let idx = taa.frame.get() % 8 + 1;
-                let jx =
-                    (crate::gfx::jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / width.max(1) as f32;
-                let jy = (crate::gfx::jitter::radical_inverse(idx, 3) - 0.5) * 2.0
-                    / height.max(1) as f32;
+                let jx = (jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / width.max(1) as f32;
+                let jy = (jitter::radical_inverse(idx, 3) - 0.5) * 2.0 / height.max(1) as f32;
                 let mut p = proj;
                 p[2][0] -= jx;
                 p[2][1] -= jy;
@@ -433,7 +433,7 @@ impl DxContext {
             );
         }
 
-        let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp_mat);
+        let frustum = Frustum::from_view_projection(vp_mat);
 
         let (view_gva, light_gva, local_lights_gva) = (
             com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),

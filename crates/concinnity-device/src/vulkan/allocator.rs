@@ -49,11 +49,11 @@
 // only ever used from one at a time, and workers given `&VkContext` only read
 // handles, never drop or allocate.
 
+use ash::{Device, vk};
+use concinnity_core::render::error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
-
-use ash::{Device, vk};
 
 use crate::suballoc::block_alloc::{BlockAllocator, Placement};
 
@@ -441,7 +441,7 @@ impl DeviceAllocator {
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         props: vk::MemoryPropertyFlags,
-    ) -> crate::gfx::error::RenderResult<PooledBuffer> {
+    ) -> error::RenderResult<PooledBuffer> {
         let info = vk::BufferCreateInfo::default()
             .size(size.max(1))
             .usage(usage)
@@ -492,7 +492,7 @@ impl DeviceAllocator {
         &self,
         info: &vk::ImageCreateInfo,
         props: vk::MemoryPropertyFlags,
-    ) -> crate::gfx::error::RenderResult<PooledImage> {
+    ) -> error::RenderResult<PooledImage> {
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let image = unsafe { self.device.create_image(info, None) }
@@ -646,7 +646,7 @@ impl DeviceAllocator {
         props: vk::MemoryPropertyFlags,
         kind: ResourceKind,
         device_address: bool,
-    ) -> crate::gfx::error::RenderResult<Reservation> {
+    ) -> error::RenderResult<Reservation> {
         let memory_type = self.find_memory_type(reqs.memory_type_bits, props)?;
         let key = PoolKey {
             memory_type,
@@ -745,7 +745,7 @@ impl DeviceAllocator {
         memory_type: u32,
         size: u64,
         device_address: bool,
-    ) -> crate::gfx::error::RenderResult<(vk::DeviceMemory, *mut u8)> {
+    ) -> error::RenderResult<(vk::DeviceMemory, *mut u8)> {
         let mut flags_info =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
         let mut info = vk::MemoryAllocateInfo::default()

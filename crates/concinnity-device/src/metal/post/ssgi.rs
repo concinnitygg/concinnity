@@ -16,6 +16,8 @@
 // unit Vulkan / DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::ssgi::SsgiSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -23,7 +25,6 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
-use crate::gfx::ssgi::SsgiSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::encode::RenderEncode;
@@ -135,7 +136,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_ssgi(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        ssgi_params: &crate::gfx::render_types::SsgiParams,
+        ssgi_params: &render_types::SsgiParams,
     ) -> Result<u32, String> {
         let (targets, gather_ps, composite_ps, gbuffer) = match (
             &self.ssgi.targets,

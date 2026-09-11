@@ -8,7 +8,7 @@
 // diffuse irradiance keep sampling `env_map` so the visible sky is never replaced.
 //
 // The cube math + the staggered-bake state machine are backend-agnostic
-// (`crate::gfx::reflection_probe`); this module drives the GPU capture, mirroring
+// (`concinnity_core::render::reflection_probe`); this module drives the GPU capture, mirroring
 // `crate::metal::probe`. The bake is STAGGERED + ASYNCHRONOUS across frames so the
 // render thread never blocks: one probe is in flight at a time, its six cube faces
 // submitted one per frame into a capture cube, then convolved into the probe cube
@@ -38,6 +38,11 @@
 //   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
 //     a probe bakes on an early frame), exactly like Metal.
 
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::reflection_probe::{
+    self, BakeAction, BakePhase, BakeSignals, PrefilterPlan,
+};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -50,7 +55,6 @@ use super::texture::{
     HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
     transition_barrier,
 };
-use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, BakeSignals, PrefilterPlan};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the Metal and Vulkan backends (and with the build-time CPU
@@ -478,9 +482,8 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let light_bytes = unsafe {
             std::slice::from_raw_parts(
-                &self.uniforms.light_uniforms as *const crate::gfx::render_types::LightUniforms
-                    as *const u8,
-                std::mem::size_of::<crate::gfx::render_types::LightUniforms>(),
+                &self.uniforms.light_uniforms as *const render_types::LightUniforms as *const u8,
+                std::mem::size_of::<render_types::LightUniforms>(),
             )
         };
         let (light_cbv, light_gva) = make_snapshot_cbv(alloc, light_bytes)?;
@@ -489,9 +492,8 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let shadow_bytes = unsafe {
             std::slice::from_raw_parts(
-                &self.shadow.uniforms as *const crate::gfx::render_types::ShadowUniforms
-                    as *const u8,
-                std::mem::size_of::<crate::gfx::render_types::ShadowUniforms>(),
+                &self.shadow.uniforms as *const render_types::ShadowUniforms as *const u8,
+                std::mem::size_of::<render_types::ShadowUniforms>(),
             )
         };
         let (shadow_cbv, shadow_gva) = make_snapshot_cbv(alloc, shadow_bytes)?;
@@ -603,7 +605,7 @@ impl DxContext {
         };
 
         let vp = reflection_probe::face_view_projection(eye, face, near, far);
-        let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
+        let frustum = Frustum::from_view_projection(vp);
 
         // A fresh allocator + list per face, held until the fence proves the face
         // retired, so no in-flight allocator is ever reset.

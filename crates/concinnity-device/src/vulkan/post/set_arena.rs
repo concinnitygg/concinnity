@@ -16,9 +16,8 @@
 // of the frame, after that slot's fence wait, so every set the pool handed out
 // last time round has retired.
 
-use std::sync::Mutex;
-
 use ash::vk;
+use std::sync::Mutex;
 
 use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
 

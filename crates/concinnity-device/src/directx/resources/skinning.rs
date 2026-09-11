@@ -5,15 +5,16 @@
 // skinned geometry upload, and the per-frame joint / morph-weight uploads.
 // The per-slot CPU records these uploads read live in `gfx::skinned_slots`.
 
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::gfx::render_types::*;
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::rt_geom;
+use concinnity_core::render::shadow_bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::super::allocator::PooledBuffer;
-use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::render_types::*;
-use crate::gfx::shadow_bias;
-
 use super::super::com;
 use super::super::context::*;
 use super::super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
@@ -190,7 +191,7 @@ impl DxContext {
         let skinned_index_buffer = upload_buffer_padded(
             &self.alloc,
             idx_bytes,
-            crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
@@ -492,7 +493,7 @@ impl DxContext {
     // carries morphs. Called once after `upload_skinned`.
     pub(in crate::directx) fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
     ) -> Result<(), String> {
         use std::collections::HashMap;
 

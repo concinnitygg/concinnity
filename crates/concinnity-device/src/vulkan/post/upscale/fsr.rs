@@ -29,16 +29,14 @@
     reason = "inline FFX bindings keep the SDK's own C type names"
 )]
 
+use ash::vk;
+use ash::vk::Handle;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 
-use ash::vk;
-use ash::vk::Handle;
-
-use crate::vulkan::owned::VkDevice;
-
 use super::{UpscaleCamera, UpscaleInputs, UpscalerGpu, VkUpscaleBackend};
+use crate::vulkan::owned::VkDevice;
 use crate::vulkan::texture::GpuImage;
 
 // FFX API bindings (subset)

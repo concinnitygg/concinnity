@@ -2,17 +2,28 @@
 //
 // VkContext construction: platform window creation and the one-time GPU
 // resource setup performed by VkContext::new.
-use concinnity_core::gfx::transform::IDENTITY;
-use std::ffi::{CStr, CString, c_char};
-
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
-    VkDevice,
-};
-
-use crate::gfx::render_types::*;
+use concinnity_core::bake;
+use concinnity_core::components;
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::*;
+use concinnity_core::gfx::ssr;
+use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::backend_init;
+use concinnity_core::render::csm;
+use concinnity_core::render::decal;
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::lights;
+use concinnity_core::render::ltc;
+use concinnity_core::render::planar_reflection;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::skinned_slots;
+use concinnity_core::render::slot_rewrites;
+use std::ffi::{CStr, CString, c_char};
 
 use super::context::*;
 use super::device::*;
@@ -28,18 +39,22 @@ use super::render_pass::*;
 use super::resources::*;
 use super::swapchain::*;
 use super::texture::{self, *};
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
+    VkDevice,
+};
 
 //  Construction
 
 impl VkContext {
     // Construct a fresh context, acquiring its own OS window + Vulkan
     // instance / device / surface / swapchain.
-    pub(crate) fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
 
     // Construct from the assembled backend inputs (see
-    // `crate::gfx::backend_init::BackendInit` for per-field docs); the
+    // `concinnity_core::render::backend_init::BackendInit` for per-field docs); the
     // Vulkan-specific behavior of each input is documented inline below.
     //
     // `reuse` is `Some` only on a live editor `reload_world` (see
@@ -48,11 +63,8 @@ impl VkContext {
     // pool) is inherited from the outgoing context instead of acquired fresh,
     // and every per-world resource below is rebuilt on it. `None` acquires it
     // all fresh, the normal launch path.
-    fn build(
-        init: crate::gfx::backend_init::BackendInit<'_>,
-        reuse: Option<VkReuse>,
-    ) -> Result<Self, String> {
-        use crate::gfx::backend_init::{
+    fn build(init: backend_init::BackendInit<'_>, reuse: Option<VkReuse>) -> Result<Self, String> {
+        use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx, WorldShader,
         };
         let BackendInit {
@@ -206,7 +218,7 @@ impl VkContext {
                     title,
                     width,
                     height,
-                    &crate::components::WindowMode::Windowed,
+                    &components::WindowMode::Windowed,
                     true,
                     title_bar,
                 )?;
@@ -533,11 +545,7 @@ impl VkContext {
                 } else {
                     1.0
                 };
-                let hdr_mode = crate::gfx::hdr_output::HdrOutputMode::resolve(
-                    hdr_display,
-                    pq_capable,
-                    max_edr,
-                );
+                let hdr_mode = hdr_output::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
                 if hdr_display && !hdr_mode.is_hdr() {
                     tracing::warn!(
                         "HDR display requested but no surface format advertises an HDR color space \
@@ -741,7 +749,7 @@ impl VkContext {
         // stays -1) but the descriptor must be valid. The tables are
         // scene-independent, so they are uploaded either way.
         let area_light_data = if area_lights.is_empty() {
-            vec![crate::gfx::render_types::AreaLightData::ZERO]
+            vec![render_types::AreaLightData::ZERO]
         } else {
             area_lights.clone()
         };
@@ -752,21 +760,16 @@ impl VkContext {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         upload_static_records(&area_light_buffer, &area_light_data);
-        let ltc_size = crate::gfx::ltc::LTC_LUT_SIZE as u32;
+        let ltc_size = ltc::LTC_LUT_SIZE as u32;
         let ltc_upload = GpuUploadContext {
             alloc: &alloc,
             device: &device,
             command_pool,
             queue: graphics_queue,
         };
-        let ltc_matrix_image =
-            upload_float_lut(&ltc_upload, ltc_size, 4, crate::gfx::ltc::matrix_texels())?;
-        let ltc_magnitude_image = upload_float_lut(
-            &ltc_upload,
-            ltc_size,
-            2,
-            crate::gfx::ltc::magnitude_texels(),
-        )?;
+        let ltc_matrix_image = upload_float_lut(&ltc_upload, ltc_size, 4, ltc::matrix_texels())?;
+        let ltc_magnitude_image =
+            upload_float_lut(&ltc_upload, ltc_size, 2, ltc::magnitude_texels())?;
         // Linear clamp-to-edge: the LUT is indexed by roughness / view angle, so
         // an edge sample must not wrap.
         let ltc_sampler = create_sampler_cube_linear(&device)?;
@@ -775,8 +778,7 @@ impl VkContext {
         // the cascade resolution (a spot slice covers a single cone, not a
         // view-frustum slab). Passing size 0 yields the 1x1 fallback, which is
         // what a world with no shadowed spot binds.
-        let spot_shadow_slice_size =
-            crate::gfx::render_types::spot_shadow_slice_size(effective_shadow_size);
+        let spot_shadow_slice_size = render_types::spot_shadow_slice_size(effective_shadow_size);
         let spot_shadow_map = create_shadow_map_array(
             &GpuUploadContext {
                 alloc: &alloc,
@@ -1073,13 +1075,13 @@ impl VkContext {
         // Per-frame CSM updates use the first directional light's direction;
         // we cache it here at init so subsequent frames don't have to look it
         // up. Matches the Metal/DirectX pattern.
-        let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
+        let shadow_light_dir = lights::sun_direction(&light_uniforms);
         // Sun direction + intensity-weighted color for the volumetric-fog
         // encoder, cached because the light UBO is uploaded rather than pushed
         // each frame. `update_directional_lights` re-derives both.
         let fog_sun_dir = shadow_light_dir;
-        let fog_sun_color = crate::gfx::lights::sun_color(&light_uniforms);
-        let shadow_uniforms = crate::gfx::csm::empty_shadow_uniforms();
+        let fog_sun_color = lights::sun_color(&light_uniforms);
+        let shadow_uniforms = csm::empty_shadow_uniforms();
         for ubo in &shadow_ubos {
             upload_shadow_uniforms(ubo, &shadow_uniforms);
         }
@@ -1107,7 +1109,7 @@ impl VkContext {
         //  IBL resources (always created so descriptor bindings 4/5 are valid)
         let cube_sampler = create_sampler_cube_linear(&device)?;
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::bake::environment_map::deserialize(bytes)
+            let view = bake::environment_map::deserialize(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
                 &GpuUploadContext {
@@ -1149,7 +1151,7 @@ impl VkContext {
         // 2x2x2 identity LUT so the composite pass always binds a valid 3D
         // texture. With the identity LUT the grade is a no-op at any strength.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::bake::color_lut::deserialize(bytes)
+            let (size, data) = bake::color_lut::deserialize(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
             upload_color_lut(
                 &GpuUploadContext {
@@ -1386,14 +1388,14 @@ impl VkContext {
         let post_pc_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(std::mem::size_of::<crate::gfx::render_types::PostProcessParams>() as u32);
+            .size(std::mem::size_of::<render_types::PostProcessParams>() as u32);
 
         // The composite shader reads the same tunables plus the scene fade, so
         // its range covers the wider `CompositeParams`.
         let composite_pc_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(std::mem::size_of::<crate::gfx::render_types::CompositeParams>() as u32);
+            .size(std::mem::size_of::<render_types::CompositeParams>() as u32);
 
         // Composite layout: one descriptor set (HDR resolve + bloom mip 0).
         let composite_set_layouts = [composite_set_layout.handle()];
@@ -1569,7 +1571,7 @@ impl VkContext {
         // settings, so fall back to the defaults (the resolve never runs, so the
         // values are inert, but `SsrResources::new` needs a concrete `SsrSettings`).
         let ssr_build_settings =
-            ssr_settings.unwrap_or_else(|| crate::gfx::ssr::SsrSettings::resolve(0.0, 0.0));
+            ssr_settings.unwrap_or_else(|| ssr::SsrSettings::resolve(0.0, 0.0));
         // RT reflections reuse the SSR depth + normal + roughness pre-pass
         // G-buffer (like SSGI), so the pre-pass half is built whenever SSR, SSGI,
         // *or* RT (and the device supports it) is on. `rt_wanted` is derived up
@@ -1781,7 +1783,7 @@ impl VkContext {
         // active AND shadows are enabled. The depth-only shadow draw reuses the
         // shadow-global + bindless sets, so it adds no sets here.
         let shadow_cull_set_count = if bindless_active && shadow_pipeline_opt.is_some() {
-            n_frames * crate::gfx::render_types::NUM_SHADOW_CASCADES as u32
+            n_frames * render_types::NUM_SHADOW_CASCADES as u32
         } else {
             0
         };
@@ -1921,7 +1923,7 @@ impl VkContext {
             let cluster_params_info = vk::DescriptorBufferInfo::default()
                 .buffer(light_cull.params_buffers[i].buffer())
                 .offset(0)
-                .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
+                .range(std::mem::size_of::<render_types::ClusterParams>() as u64);
             let cluster_list_info = vk::DescriptorBufferInfo::default()
                 .buffer(light_cull.cluster_buffer.buffer())
                 .offset(0)
@@ -2136,7 +2138,7 @@ impl VkContext {
             // Sized for `n_cull` so the instanced merge's records fit past the
             // `n_objects` static prefix.
             let object_buffer_size =
-                (n_cull * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>()) as u64;
+                (n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64;
             let mut buffers = Vec::with_capacity(frames);
             for _ in 0..frames {
                 buffers.push(alloc.create_buffer(
@@ -2217,7 +2219,7 @@ impl VkContext {
         let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
         let world_pipelines = match (bindless_pipeline_layout.as_ref(), bucket_shaders.is_empty()) {
             (Some(layout), false) => {
-                let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
+                let max = render_types::MAX_SHADER_BUCKETS;
                 if bucket_shaders.len() + 1 > max {
                     return Err(format!(
                         "world declares {} Shaders but at most {max} can be routed",
@@ -2515,10 +2517,8 @@ impl VkContext {
             // indirect-command buffers (device-local, GPU-written). `n_cull`
             // covers the static objects plus the merged instances.
             let n = n_cull as u64;
-            let object_buffer_size =
-                n * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>() as u64;
-            let draw_args_size =
-                n * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>() as u64;
+            let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
+            let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
             // One `n_cull`-command region per shader bucket: the cull kernel writes
             // every record's slot in each region and the main pass issues one
             // indirect draw per region under that bucket's pipeline.
@@ -2611,7 +2611,7 @@ impl VkContext {
         // geometry) and the world declares instanced props. Mirrors
         // `directx/init/mod.rs`.
         if n_instances > 0 && !object_buffers.is_empty() {
-            use crate::gfx::render_types::{
+            use concinnity_core::gfx::render_types::{
                 GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
             };
             let records = instance_object_records(&instanced_clusters, gpu_textures.len() as u32);
@@ -2670,7 +2670,7 @@ impl VkContext {
             && shadow_pipeline_opt.is_some()
             && let Some(bl_set_layout) = bindless_set_layout.as_ref()
         {
-            let cascades = crate::gfx::render_types::NUM_SHADOW_CASCADES;
+            let cascades = render_types::NUM_SHADOW_CASCADES;
             // Lean shadow cull set layout: objects(0) + draw-args(1) + commands(2).
             let sc_bindings: Vec<_> = (0..3u32)
                 .map(|b| {
@@ -2729,10 +2729,8 @@ impl VkContext {
             // indirect buffer; the cull dispatch for cascade `c` binds set
             // `[frame][c]`, and the cascade's draws read buffer `[frame][c]`.
             let n = n_cull as u64;
-            let object_buffer_size =
-                n * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>() as u64;
-            let draw_args_size =
-                n * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>() as u64;
+            let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
+            let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
             let indirect_size = n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
             let mut sc_indirect_bufs: Vec<Vec<super::allocator::PooledBuffer>> =
                 Vec::with_capacity(frames);
@@ -2893,10 +2891,8 @@ impl VkContext {
             && occlusion_two_pass
         {
             let n = n_cull as u64;
-            let object_buffer_size =
-                n * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>() as u64;
-            let draw_args_size =
-                n * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>() as u64;
+            let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
+            let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
             // Bucket-expanded exactly like the phase-1 buffers: `Main2` issues the
             // same per-bucket regions over this buffer.
             let indirect_size = shader_bucket_count as u64
@@ -3317,7 +3313,7 @@ impl VkContext {
         // stale/over-large preset value can never over-allocate.
         let planar_budget = planar_planes.min(crate::vulkan::planar::MAX_PLANAR_PLANES);
         let planar_assignment =
-            crate::gfx::planar_reflection::assign_planar_slots(&planar_reflectors, planar_budget);
+            planar_reflection::assign_planar_slots(&planar_reflectors, planar_budget);
         // The reflected-frustum mirror cull is bindless-only (it needs the GPU cull
         // set layout + the per-frame object/draw-args SSBOs); a non-bindless world
         // has no `cull_set_layout`, so planar is skipped and its panes keep the
@@ -3486,7 +3482,7 @@ impl VkContext {
                     linear_sampler.handle(),
                     hot_reload,
                 )?;
-                let state = crate::gfx::auto_exposure::AutoExposureState::new(settings);
+                let state = auto_exposure::AutoExposureState::new(settings);
                 (Some(resources), Some(state))
             } else {
                 (None, None)
@@ -3544,7 +3540,7 @@ impl VkContext {
             start_command_pools.push(pool);
             start_command_buffers.push(buf);
         }
-        let pass_pool_count = frames * crate::gfx::render_graph::PASS_COUNT;
+        let pass_pool_count = frames * render_graph::PASS_COUNT;
         let mut pass_command_pools = Vec::with_capacity(pass_pool_count);
         let mut pass_command_buffers = Vec::with_capacity(pass_pool_count);
         for _ in 0..pass_pool_count {
@@ -3717,7 +3713,7 @@ impl VkContext {
             },
             instanced: VkInstanced {
                 lod_buckets: vec![Vec::new(); instanced_clusters.len()],
-                any_lod: crate::gfx::lod::any_cluster_has_lod(&instanced_clusters),
+                any_lod: lod::any_cluster_has_lod(&instanced_clusters),
                 clusters: instanced_clusters,
             },
             composite: super::context::CompositeState {
@@ -3771,7 +3767,7 @@ impl VkContext {
                 resources: decals_state,
                 // Authored decals land in the table through `add_decal`, which
                 // also writes each one's albedo descriptor.
-                set: crate::gfx::decal::DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
+                set: decal::DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
             },
             lines: crate::vulkan::line::LineState::empty(),
             hdr_mode,
@@ -3806,7 +3802,7 @@ impl VkContext {
                 watcher: shader_watcher,
             },
             world_shader: world_programs.cloned(),
-            frame_stats: std::cell::Cell::new(crate::gfx::profile::RenderStats::default()),
+            frame_stats: std::cell::Cell::new(profile::RenderStats::default()),
             draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
             timestamp_query_pool,
             timestamp_period_ns: timestamp_period,
@@ -3840,7 +3836,7 @@ impl VkContext {
                 vertex_buffer_bytes: 0,
                 index_buffer: super::allocator::PooledBuffer::null(),
                 index_buffer_bytes: 0,
-                slots: crate::gfx::skinned_slots::SkinnedSlots::new(),
+                slots: skinned_slots::SkinnedSlots::new(),
                 joint_buffers: Vec::new(),
                 joint_sets: Vec::new(),
                 skin: None,
@@ -3912,13 +3908,13 @@ impl VkContext {
                 placements: Vec::new(),
                 set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
                 maps: Vec::new(),
-                bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
+                bake_queue: reflection_probe::ProbeBakeQueue::new(0),
                 rendering: None,
                 prefiltering: None,
                 prefilter: probe_prefilter,
             },
             stream: super::context::StreamState {
-                pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue::new(frames),
+                pool_rewrites: slot_rewrites::SlotRewriteQueue::new(frames),
                 frame: 0,
                 retires: Vec::new(),
             },
@@ -3927,7 +3923,7 @@ impl VkContext {
             // The swap-decision key for a future live reload of this context
             // (see `hot_swap_config` / `reload_world`). Normalized `frames` (>=1)
             // matches how `BackendInit::swapchain_config` clamps it.
-            swapchain_config: crate::gfx::backend_init::SwapchainConfig {
+            swapchain_config: backend_init::SwapchainConfig {
                 frames_in_flight: frames,
                 hdr_display,
                 hdr_pq,
@@ -3988,7 +3984,7 @@ impl VkContext {
     // and mark the session failed without a leak.
     pub(in crate::vulkan) fn apply_world_reload(
         &mut self,
-        init: crate::gfx::backend_init::BackendInit<'_>,
+        init: backend_init::BackendInit<'_>,
     ) -> Result<(), String> {
         self.wait_idle();
         // The loaders + `ash::{Entry,Instance,Device}` are dispatch-table clones
@@ -4076,7 +4072,7 @@ struct SharedHardware {
     // This device's ceiling for the HDR format, not the count the world runs
     // at: `resolve_sample_count` clamps the world's request against it.
     max_msaa_samples: vk::SampleCountFlags,
-    hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    hdr_mode: hdr_output::HdrOutputMode,
     memory_budget_supported: bool,
     rt_capable: bool,
     update_after_bind: bool,
@@ -4113,7 +4109,7 @@ pub(in crate::vulkan) struct VkReuse {
     swapchain_images: Vec<vk::Image>,
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
-    hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
+    hdr_mode: hdr_output::HdrOutputMode,
     memory_budget_supported: bool,
     rt_capable: bool,
     update_after_bind: bool,

@@ -27,10 +27,9 @@
 // terminal event before presenting -- would also be correct, but it puts the
 // present behind `HizFinal` and so pays for the slot with latency.
 
+use dispatch2::{DispatchRetained, DispatchSemaphore, DispatchTime};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-use dispatch2::{DispatchRetained, DispatchSemaphore, DispatchTime};
 
 // Counting semaphore bounding how many frames the CPU may queue ahead of the
 // GPU. Seeded to the frames-in-flight depth at construction.

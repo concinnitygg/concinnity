@@ -7,10 +7,9 @@
 // classify_tier (gfx/backend.rs) maps these to a tier so every backend
 // classifies the same way.
 
+use concinnity_core::render::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily};
-
-use crate::gfx::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
 
 // Probe the system default GPU's profile without building the renderer, for the
 // auto-config quality ceiling that must be resolved before the backend (and its

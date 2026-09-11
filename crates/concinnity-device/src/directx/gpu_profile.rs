@@ -9,11 +9,10 @@
 // `UNKNOWN` on any failure (no factory, no suitable adapter, desc query fails),
 // which the resolver treats as "no clamp".
 
+use concinnity_core::render::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
-
-use crate::gfx::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
 
 pub(crate) fn probe_gpu_profile() -> GpuProfile {
     probe_adapter().unwrap_or(GpuProfile::UNKNOWN)

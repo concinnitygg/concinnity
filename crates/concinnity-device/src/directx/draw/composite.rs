@@ -8,20 +8,19 @@
 // buffer (see [`TextUploadRing`]) and binds sub-views into it, so no per-frame
 // GPU buffers are allocated.
 
+use concinnity_core::gfx::render_types::TextUniforms;
+use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
+use concinnity_core::render::fullscreen;
+use concinnity_core::render::fullscreen::TextBindCache;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 
-use crate::gfx::fullscreen::TextBindCache;
-use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
-
 use crate::directx::context::DxContext;
-use crate::directx::upload_ring::UPLOAD_ALIGN;
-use concinnity_core::gfx::render_types::TextUniforms;
-
 use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
 use crate::directx::pipeline::COMPOSITE_ROOT_CONSTANTS;
 use crate::directx::texture::transition_barrier;
+use crate::directx::upload_ring::UPLOAD_ALIGN;
 
 // Per-invocation binding context for the composite pass. The back-buffer is a
 // cheap COM-refcount clone so `Args` carries no borrow (the trait's associated
@@ -45,7 +44,7 @@ pub(crate) struct DxCompositeArgs {
 // to `RENDER_TARGET` for the draws, and is returned to `PRESENT` on exit; the HDR
 // target is expected to already be in `PIXEL_SHADER_RESOURCE` (the main pass
 // leaves it that way).
-impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
+impl fullscreen::CompositeEncoder for DxContext {
     type Rec = ID3D12GraphicsCommandList;
     type Args = DxCompositeArgs;
 
@@ -185,11 +184,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         let ui = (args.width as f32, args.height as f32);
         let scissor = match call.clip_rect {
             Some(clip) => {
-                match crate::gfx::fullscreen::clip_rect_to_scissor(
-                    clip,
-                    ui,
-                    (args.width, args.height),
-                ) {
+                match fullscreen::clip_rect_to_scissor(clip, ui, (args.width, args.height)) {
                     // Row scrolled fully out of its band: nothing to draw.
                     None => return Ok(()),
                     Some(rect) => rect,
@@ -284,7 +279,7 @@ impl DxContext {
         // never reallocates out from under an already-bound sub-view). The frame
         // fence in `draw_frame` has already confirmed the GPU is done with this
         // slot, so resetting / growing it now is race-free.
-        let text_bytes = crate::gfx::fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
+        let text_bytes = fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
         self.text
             .upload
             .reserve(&self.alloc, frame_idx, text_bytes)?;
@@ -302,6 +297,6 @@ impl DxContext {
                 0
             },
         };
-        crate::gfx::fullscreen::encode_composite_chain(self, cmd, &args, text_calls)
+        fullscreen::encode_composite_chain(self, cmd, &args, text_calls)
     }
 }

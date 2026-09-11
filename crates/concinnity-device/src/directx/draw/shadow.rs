@@ -16,10 +16,10 @@
 // covered. Spot slices keep the per-object caster encoders below: the indirect
 // buffer is laid out per cascade and has no slots for them.
 
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
-
-use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
@@ -317,7 +317,7 @@ impl DxContext {
                 // Pick the LOD by camera distance; the shadow pass uses the same
                 // slice the main pass will, so silhouettes track when the runtime
                 // swaps to a coarser LOD.
-                let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+                let d = lod::camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
                 cmd.SetGraphicsRoot32BitConstants(
                     0,
@@ -412,7 +412,7 @@ impl DxContext {
                 // rasterize. Per-cascade LOD would technically be cheaper for
                 // distant cascades, but matching main keeps cascade seams free
                 // of silhouette swaps. Mirrors Metal.
-                let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+                let d = lod::skinned_camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
                 let push = ShadowPush {
                     model: obj.model,

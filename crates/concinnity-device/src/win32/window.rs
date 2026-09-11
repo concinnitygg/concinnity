@@ -3,14 +3,14 @@
 // Win32 window creation, the window proc, cursor capture/release, and the
 // message pump, shared by the DirectX backend and the Vulkan backend's
 // Windows window (vulkan/win32_window.rs).
+use concinnity_core::components::WindowMode;
+use concinnity_core::render::input;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_ESCAPE, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::*;
-
-use crate::components::WindowMode;
 
 use super::chrome::windowed_style;
 use super::input::*;
@@ -593,7 +593,7 @@ unsafe extern "system" fn wnd_proc(
                 if !state.cursor_captured {
                     let raw = (wparam.0 >> 16) as i16 as f32;
                     let notches = raw / WHEEL_DELTA as f32;
-                    state.scroll_delta += crate::gfx::input::wheel_notches_to_scroll_delta(notches);
+                    state.scroll_delta += input::wheel_notches_to_scroll_delta(notches);
                 }
                 LRESULT(0)
             }
@@ -821,7 +821,7 @@ pub(crate) fn frame_tick(
 // backends' `take_input`. The mouse delta, pending click, and scroll are
 // one-shot (reset here); the held-button flag persists until WM_LBUTTONUP and
 // the keyboard one-shots are reset inside `KeyState::take`.
-pub(crate) fn take_input_snapshot(state: &mut WindowState) -> crate::gfx::input::RenderInput {
+pub(crate) fn take_input_snapshot(state: &mut WindowState) -> input::RenderInput {
     let dx = state.mouse_dx;
     let dy = state.mouse_dy;
     let mx = state.mouse_x;

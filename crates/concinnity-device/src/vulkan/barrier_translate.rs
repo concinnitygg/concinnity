@@ -36,8 +36,7 @@
 // so the next frame's producer opens from the layout it names.
 
 use ash::vk;
-
-use crate::gfx::render_graph::{GraphResourceClass, ReadStages, ResourceState};
+use concinnity_core::render::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 
 // The layout a resource sits in between frames, from which its first transition
 // of a frame opens and to which the frame's last transition returns it.

@@ -22,17 +22,16 @@
 // before `create_instance`) and threaded into `device::create_logical_device`;
 // see its docs.
 
+use ash::vk;
+use concinnity_core::components::UpscalerBackend;
+use concinnity_core::gfx::jitter;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
 
-use ash::vk;
-
-use crate::vulkan::owned::VkDevice;
-
-use crate::components::UpscalerBackend;
 use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::context::{HDR_FORMAT, VkContext};
 use crate::vulkan::graph_exec::GraphFrameParams;
+use crate::vulkan::owned::VkDevice;
 use crate::vulkan::texture::{GpuImage, create_image, create_image_view, one_shot_submit};
 
 #[cfg(ngx_sdk_bundled)]
@@ -155,7 +154,7 @@ pub(super) fn frame_delta_ms(prev: &Cell<f32>, now: f32) -> f32 {
 // [-0.5, 0.5] render-pixel units; the same value jitters the camera projection
 // (see `draw.rs`) so the rasterized scene and the upscale agree.
 pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
-    crate::gfx::jitter::offset(frame_index)
+    jitter::offset(frame_index)
 }
 
 // Create the display-res output image a backend writes (RGBA16F,
@@ -810,7 +809,7 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::UpscalerBackend as B;
+    use concinnity_core::components::UpscalerBackend as B;
 
     fn resolved(req: B, dlss: bool, xess: bool, fsr: bool) -> ResolvedBackend {
         backend_order(req, dlss, xess, fsr)[0]

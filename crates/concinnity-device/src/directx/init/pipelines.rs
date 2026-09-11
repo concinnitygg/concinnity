@@ -14,6 +14,9 @@
 // in `directx/cull.rs`; the skinned shadow pipeline (built lazily once a
 // `SkinnedMesh` is uploaded) lives in `directx/resources.rs`.
 
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::backend_init;
+use concinnity_core::render::shadow_bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -33,7 +36,6 @@ use crate::directx::pipeline::{
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_buffer, create_uav_buffer};
-use crate::gfx::shadow_bias;
 
 // Shader compilation
 
@@ -696,7 +698,7 @@ pub(in crate::directx) fn build_bucket_pipeline(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
     bucket: usize,
-    shader: crate::gfx::backend_init::WorldShader<'_>,
+    shader: backend_init::WorldShader<'_>,
 ) -> Result<ID3D12PipelineState, String> {
     let (vs, ps) = match shader.programs {
         Some(programs) => (
@@ -746,7 +748,7 @@ fn build_world_pipeline_table(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
-    bucket_shaders: &[crate::gfx::backend_init::WorldShader<'_>],
+    bucket_shaders: &[backend_init::WorldShader<'_>],
 ) -> Result<Vec<Option<ID3D12PipelineState>>, String> {
     let mut table = Vec::with_capacity(bucket_shaders.len());
     for (i, shader) in bucket_shaders.iter().enumerate() {
@@ -832,7 +834,7 @@ pub(super) struct MainPipelines {
 // `install_world_shader`.
 #[derive(Clone, Copy)]
 pub(super) struct MainPipelineShaders<'a> {
-    pub world_shaders: &'a [crate::gfx::backend_init::WorldShader<'a>],
+    pub world_shaders: &'a [backend_init::WorldShader<'a>],
 }
 
 // Record counts + MSAA that size the GPU-driven bindless pass's cull / object /
@@ -904,11 +906,8 @@ pub(super) fn build_main_pipelines(
     // and `clone_reserve` the spawned-clone one; both live in the single
     // runtime reserve between the instances and the skinned tail (see
     // `DrawState::n_runtime`).
-    let n_cull = n_objects
-        + n_instances
-        + n_chunk_max
-        + crate::gfx::render_types::clone_reserve(n_objects)
-        + n_skinned;
+    let n_cull =
+        n_objects + n_instances + n_chunk_max + render_types::clone_reserve(n_objects) + n_skinned;
     // The GPU-driven main pass. The engine's pair is compiled regardless of the
     // world default: it is the program for every bucket that declares no Shader
     // and the source of the Wireframe twin. Bucket 0 takes the world default's
@@ -930,7 +929,7 @@ pub(super) fn build_main_pipelines(
     let world_pipelines = if bucket_shaders.is_empty() {
         Vec::new()
     } else {
-        let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
+        let max = render_types::MAX_SHADER_BUCKETS;
         if bucket_shaders.len() + 1 > max {
             return Err(format!(
                 "world declares {} Shaders but at most {max} can be routed",
@@ -949,9 +948,8 @@ pub(super) fn build_main_pipelines(
     let mut object_buffer_resources: Vec<PooledBuffer> = Vec::new();
     let mut object_buffer_ptrs: Vec<*mut u8> = Vec::new();
     if main_bindless_pso.is_some() && n_cull > 0 {
-        let object_buffer_size = align256(
-            (n_cull * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>()) as u64,
-        );
+        let object_buffer_size =
+            align256((n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64);
         // `FRAMES + 1`: the extra slot (index `FRAMES`) is reserved for the
         // asynchronous reflection-probe capture, which builds its CPU-written
         // bindless buffers into a slot the frame never touches (it uses
@@ -1018,9 +1016,8 @@ pub(super) fn build_main_pipelines(
             )?);
         }
 
-        let draw_args_size = align256(
-            (n_cull * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>()) as u64,
-        );
+        let draw_args_size =
+            align256((n_cull * std::mem::size_of::<render_types::GpuDrawArgs>()) as u64);
         // Default-heap indirect-command buffers (UAV target for the cull
         // kernel; ExecuteIndirect source for the bindless static pass). One
         // `n_cull`-command region per shader bucket: the cull kernel writes every
@@ -1092,7 +1089,7 @@ pub(super) fn build_main_pipelines(
                 info_queue,
                 create_cull_pso(device, &crs, &scs),
             )?);
-            let cascades = crate::gfx::render_types::NUM_SHADOW_CASCADES as u64;
+            let cascades = render_types::NUM_SHADOW_CASCADES as u64;
             let shadow_indirect_size =
                 align256(cascades * (n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
             for _ in 0..FRAMES {

@@ -26,9 +26,10 @@
 // slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
 // so no rewire or rebuild is needed.
 
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::rt_reflections;
+use concinnity_core::render::backend::QualitySettings;
 use windows::Win32::Graphics::Direct3D12::*;
-
-use crate::gfx::backend::QualitySettings;
 
 use super::context::DxContext;
 use super::post::bloom::{create_bloom_mips_at, write_color_rtv};
@@ -239,7 +240,7 @@ impl DxContext {
             self.auto_exposure.state = q
                 .auto_exposure
                 .as_ref()
-                .map(crate::gfx::auto_exposure::AutoExposureState::new);
+                .map(auto_exposure::AutoExposureState::new);
             self.auto_exposure.settings = q.auto_exposure;
             self.auto_exposure.bias_ev = q.auto_exposure_bias_ev;
         } else if !desired_ae && self.auto_exposure.resources.is_some() {
@@ -302,7 +303,7 @@ impl DxContext {
     // static geometry still reflects, just without skinned hits).
     fn build_rt_runtime(
         &mut self,
-        settings: crate::gfx::rt_reflections::RtReflectionSettings,
+        settings: rt_reflections::RtReflectionSettings,
     ) -> Result<(), String> {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {

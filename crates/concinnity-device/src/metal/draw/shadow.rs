@@ -15,19 +15,19 @@
 // their per-draw caster body lives in [`spot_shadow`](spot_shadow.rs).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush};
+use concinnity_core::render::shadow_bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLLoadAction,
     MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
 };
 
-use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush};
-use crate::gfx::shadow_bias;
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use objc2_foundation::ns_string;
 
 impl MtlContext {
     // Choose which shadow cascades to re-render this frame and advance the

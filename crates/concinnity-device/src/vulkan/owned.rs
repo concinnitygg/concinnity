@@ -31,9 +31,9 @@
 // `reload_world` inherits the device by cloning the handle, so the outgoing
 // context's retiring objects are drained by its successor.
 
-use std::sync::{Arc, Mutex};
-
 use ash::vk;
+use concinnity_core::render::shadow_bias;
+use std::sync::{Arc, Mutex};
 
 // One retired object, tagged with the call that destroys it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -276,7 +276,7 @@ impl VkDevice {
     // convention's clamp when it was, and render unclamped when it was not.
     pub(in crate::vulkan) fn depth_bias_clamp(&self) -> f32 {
         if self.inner.depth_bias_clamp {
-            crate::gfx::shadow_bias::RASTER_CLAMP
+            shadow_bias::RASTER_CLAMP
         } else {
             0.0
         }

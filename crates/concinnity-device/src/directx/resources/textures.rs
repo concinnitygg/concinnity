@@ -5,9 +5,10 @@
 // the runtime clone of a static draw object (which reuses the source's
 // descriptors).
 
+use concinnity_core::bake;
+use concinnity_core::gfx::render_types::*;
+use concinnity_core::render::draw_slot;
 use windows::Win32::Graphics::Direct3D12::*;
-
-use crate::gfx::render_types::*;
 
 use super::super::context::*;
 use super::super::texture::*;
@@ -81,7 +82,7 @@ impl DxContext {
     pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::bake::texture::TextureImage,
+        image: &bake::texture::TextureImage,
     ) -> Result<(), String> {
         if slot >= self.descriptors.textures.len() {
             return Err(format!(
@@ -148,7 +149,7 @@ impl DxContext {
     // back. The gray is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
     pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        let gray = crate::bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         self.update_texture_slot(slot, &gray)
     }
 
@@ -181,7 +182,7 @@ impl DxContext {
     // now-stale SRVs) before they are overwritten and dropped. Mirrors
     // `MtlContext::update_environment_map`.
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
-        let view = crate::bake::environment_map::deserialize(payload)
+        let view = bake::environment_map::deserialize(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
         let irr_srv_cpu = self.env_map.irradiance.srv_cpu;
@@ -221,7 +222,7 @@ impl DxContext {
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
-        dst: crate::gfx::draw_slot::SlotAlloc,
+        dst: draw_slot::SlotAlloc,
     ) -> Result<(), String> {
         if runtime_reserve_full(&self.draw.objects, self.draw.n_objects, self.draw.n_runtime) {
             return Err(format!(
@@ -266,14 +267,14 @@ impl DxContext {
 
         // Write at the engine-allocated destination slot.
         match dst {
-            crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
+            draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
                 // The slot's model-history entry belongs to the prior occupant,
                 // so the clone reprojects through its own transform for one
                 // frame rather than ghosting from that occupant's.
                 self.model_history.borrow_mut().reoccupy_draw(slot);
             }
-            crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+            draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
                     self.draw.objects.len(),

@@ -44,15 +44,17 @@
 // reads those pools in its vertex stage, with the transition between them
 // derived from the graph rather than emitted inline.
 
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
 use concinnity_core::gfx::transform::mat4_inverse;
-use std::sync::Mutex;
-
-use windows::Win32::Graphics::Direct3D12::*;
-
-use crate::gfx::render_graph::{
+use concinnity_core::render::lights;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
 };
-use crate::gfx::render_types::{LineVertex, TextDrawCall};
+use concinnity_host::thread::jobs;
+use std::sync::Mutex;
+use windows::Win32::Graphics::Direct3D12::*;
 
 use super::barrier_translate::{DxBarrier, d3d12_barrier, d3d12_restore};
 use super::context::DxContext;
@@ -321,7 +323,7 @@ fn emit_pass_prologue(
             // that resolves to instead of the resting state.
             debug_assert_eq!(
                 op.source_state(),
-                crate::gfx::render_graph::ResourceState::Undefined,
+                render_graph::ResourceState::Undefined,
                 "a reclaimed transient is transitioned from a state the discard replaced"
             );
             stage_graph_barrier(&mut batch, registry, op, Some(DISCARD_STATE));
@@ -404,7 +406,7 @@ fn emit_graph_restores(
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
     use super::barrier_translate::d3d12_state;
-    use crate::gfx::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
+    use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
 
     let driven: Vec<bool> = registry.targets.iter().map(|t| t.is_some()).collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
@@ -565,7 +567,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub cur_vp: [[f32; 4]; 4],
     // Camera frustum derived from `vp_mat`. Consumed by Main's
     // per-cluster culling and the bundled SSAO pre-pass.
-    pub frustum: &'a crate::gfx::frustum::Frustum,
+    pub frustum: &'a Frustum,
     // Vertical FOV in radians. Consumed by Main's SSAO pre-pass
     // (depth-reconstruction geometry) and SsrResolve's ray-march
     // projection.
@@ -633,7 +635,7 @@ impl DxContext {
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &registry);
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_slot_aliasing_sound(
+        render_graph::assert_slot_aliasing_sound(
             graph,
             self.transient_pool.slot_labels(),
             "directx",
@@ -648,7 +650,7 @@ impl DxContext {
         // queues at once and that every wait names an already-recorded producer,
         // which is what this asserts.
         #[cfg(debug_assertions)]
-        crate::gfx::render_graph::assert_serial_order_honors_schedule(graph, "directx");
+        render_graph::assert_serial_order_honors_schedule(graph, "directx");
         let registry_ref = &registry;
         // Likewise resolve the per-pass aliasing barriers (which pooled transients
         // reclaim a shared heap region) once, shared read-only into the workers.
@@ -656,7 +658,7 @@ impl DxContext {
         let alias_barriers_ref = &alias_barriers;
         let frame_idx = params.frame_idx;
 
-        crate::jobs::pool().install(|| {
+        jobs::pool().install(|| {
             rayon::scope(|scope| {
                 for (idx, pass) in graph.passes.iter().enumerate() {
                     if Some(idx) == composite_idx {
@@ -1119,7 +1121,7 @@ impl DxContext {
         params: &GraphFrameParams<'_>,
     ) -> super::transparent::TransparentView {
         let inv_vp = mat4_inverse(params.vp_mat);
-        let (sun_dir, sun_color) = crate::gfx::lights::glint_sun(&self.uniforms.light_uniforms);
+        let (sun_dir, sun_color) = lights::glint_sun(&self.uniforms.light_uniforms);
         super::transparent::TransparentView {
             vp: params.vp_mat,
             inv_vp,

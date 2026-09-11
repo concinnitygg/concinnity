@@ -19,6 +19,7 @@
 // `particle.last_elapsed`, `particle.frame_index`, the per-emitter
 // `spawn_state`) all happen on the main thread before the fan-out.
 
+use concinnity_core::render::parallel_ctx;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLCommandBuffer;
@@ -52,7 +53,7 @@ unsafe impl Send for SendableCmdBuf {}
 // buffers, textures, and pipeline states are thread-safe for shared read.
 // The wrapper itself is the shared generic shim in `gfx::parallel_ctx`; this
 // alias keeps the `ParallelCtxRef<'a>` spelling at the metal call sites.
-pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a, MtlContext>;
+pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, MtlContext>;
 
 // SAFETY: see the type-level safety contract above. Workers reach `&MtlContext`
 // for strictly read-only encode work; the lone `&mut self` mutations
@@ -60,4 +61,4 @@ pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a
 // the per-emitter `spawn_state`) all happen on the main thread before the
 // fan-out, and Apple's Metal device, queue, buffers, textures, and pipeline
 // states are thread-safe for shared read.
-unsafe impl crate::gfx::parallel_ctx::ParallelEncodeCtx for MtlContext {}
+unsafe impl parallel_ctx::ParallelEncodeCtx for MtlContext {}

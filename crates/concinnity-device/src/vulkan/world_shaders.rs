@@ -12,11 +12,11 @@
 // Mirrors `metal/world_shaders.rs` and `directx/world_shaders.rs`.
 
 use ash::vk;
-
-use crate::vulkan::owned::OwnedPipeline;
+use concinnity_core::render::backend_init;
 
 use super::context::VkContext;
 use super::pipeline::{BucketPipelineTargets, build_bucket_pipeline};
+use crate::vulkan::owned::OwnedPipeline;
 
 impl VkContext {
     // Build the bindless main-pass pipeline for one shader bucket. Replaces
@@ -25,7 +25,7 @@ impl VkContext {
     pub(in crate::vulkan) fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: crate::gfx::backend_init::WorldShader<'_>,
+        shader: backend_init::WorldShader<'_>,
     ) -> Result<(), String> {
         let slot = self.world_pipeline_slot(bucket)?;
         let layout = self

@@ -9,6 +9,10 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::components::{InputKey, WindowMode};
+use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,
@@ -16,16 +20,11 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDate, NSPoint, NSSize};
 
-use crate::components::{InputKey, WindowMode};
-use crate::gfx::display_mode::DisplayMode;
-use crate::gfx::keymap::KeyMap;
-
 use super::chrome::{
     apply_title_bar, set_window_buttons_hidden, window_buttons_hidden, windowed_style_mask,
 };
 use super::display_mode::{self, FullscreenDisplayMode};
 use super::input::{KeyState, key_from_mac, printable_char};
-use crate::gfx::input::RenderInput;
 
 unsafe extern "C" {
     // Moves the OS cursor without generating a mouse-moved event.

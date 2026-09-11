@@ -14,10 +14,10 @@
 // from sub-ranges of it, so no GPU buffer is created per label per frame.
 
 use ash::vk;
-
-use crate::gfx::fullscreen::TextBindCache;
-use crate::gfx::render_types::{CompositeParams, TextDrawCall};
 use concinnity_core::gfx::render_types::TextUniforms;
+use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall};
+use concinnity_core::render::fullscreen;
+use concinnity_core::render::fullscreen::TextBindCache;
 
 use super::super::context::VkContext;
 use super::super::upload_ring::UPLOAD_ALIGN;
@@ -35,7 +35,7 @@ pub(crate) struct VkCompositeArgs {
 // texture via `composite.sets[frame_idx]` (wired at init / on resize) and writes
 // the ACES + gamma + FXAA tonemap into `composite.framebuffers[image_index]`;
 // text is drawn after in the same render pass so it sits on top in LDR space.
-impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
+impl fullscreen::CompositeEncoder for VkContext {
     type Rec = vk::CommandBuffer;
     type Args = VkCompositeArgs;
 
@@ -177,11 +177,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         // room in the frame's upload buffer.
         let scissor = match call.clip_rect {
             Some(clip) => {
-                match crate::gfx::fullscreen::clip_rect_to_scissor(
-                    clip,
-                    ui,
-                    (extent.width, extent.height),
-                ) {
+                match fullscreen::clip_rect_to_scissor(clip, ui, (extent.width, extent.height)) {
                     None => return Ok(()),
                     Some(rect) => rect,
                 }
@@ -257,7 +253,7 @@ impl VkContext {
         // never reallocates out from under an already-bound sub-range). The
         // frame fence waited before this frame's recording has already confirmed
         // the GPU is done with this slot, so resetting / growing it is race-free.
-        let text_bytes = crate::gfx::fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
+        let text_bytes = fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
         self.text
             .upload
             .reserve(&self.alloc, frame_idx, text_bytes)?;
@@ -266,6 +262,6 @@ impl VkContext {
             image_index: image_index as usize,
             frame_idx,
         };
-        crate::gfx::fullscreen::encode_composite_chain(self, &cmd, &args, text_calls)
+        fullscreen::encode_composite_chain(self, &cmd, &args, text_calls)
     }
 }

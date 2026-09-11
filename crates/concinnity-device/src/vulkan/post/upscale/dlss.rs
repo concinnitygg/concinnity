@@ -20,16 +20,14 @@
 // (exposure + tonemap run after the upscale), so 1.0 is the identity value.
 // Validated against NGX SDK 1.5.0 by the constant + layout asserts in the tests.
 
+use ash::vk;
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use ash::vk;
-
-use crate::vulkan::owned::VkDevice;
-
 use super::{UpscaleCamera, UpscaleInputs, VkUpscaleBackend};
 use crate::vulkan::context::HDR_FORMAT;
+use crate::vulkan::owned::VkDevice;
 use crate::vulkan::texture::{GpuImage, create_image, create_image_view, one_shot_submit};
 
 // NGX result: 0x1 is success; failure codes share the 0xBAD00000 high bits.

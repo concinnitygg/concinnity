@@ -49,7 +49,7 @@ impl DxContext {
     // `update_model` / `update_visibility` edits are reflected; a no-op when
     // the bindless pass is inactive.
     pub(in crate::directx) fn build_object_buffer(&self, frame_idx: usize) {
-        use crate::gfx::render_types::{
+        use concinnity_core::gfx::render_types::{
             GpuObjectData, albedo_pool_index, normal_pool_index, pack_object_record,
             pack_skinned_record,
         };

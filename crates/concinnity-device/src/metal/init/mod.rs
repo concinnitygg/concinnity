@@ -24,18 +24,29 @@ pub(super) mod effects;
 pub(crate) mod pipelines;
 mod window;
 // Runtime vsync toggle reaches the backing CAMetalLayer through this helper.
-pub(crate) use window::set_display_sync;
-
+use concinnity_core::bake;
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::backend_init;
+use concinnity_core::render::csm;
+use concinnity_core::render::decal;
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::lights;
+use concinnity_core::render::ltc;
+use concinnity_core::render::planar_reflection;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::skinned_slots;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDevice as _,
     MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
 };
-
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+pub(crate) use window::set_display_sync;
 
 use super::allocator::DeviceAllocator;
 use super::context::*;
@@ -60,10 +71,10 @@ pub(super) struct ReuseHandles {
 
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
-    // inputs (see `crate::gfx::backend_init::BackendInit` for per-field docs).
+    // inputs (see `concinnity_core::render::backend_init::BackendInit` for per-field docs).
     // The shadow pass is engine-internal and enabled whenever
     // `shadows.map_size > 0`.
-    pub(crate) fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
 
@@ -74,10 +85,10 @@ impl MtlContext {
     // the two is identical: the same pipelines, buffers, textures, and targets
     // are built from `init` either way.
     fn build(
-        init: crate::gfx::backend_init::BackendInit<'_>,
+        init: backend_init::BackendInit<'_>,
         reuse: Option<ReuseHandles>,
     ) -> Result<Self, String> {
-        use crate::gfx::backend_init::{
+        use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx,
         };
         let BackendInit {
@@ -247,7 +258,7 @@ impl MtlContext {
         // Material-referenced shaders (ShaderHandle 1..) each get a bindless
         // pipeline; the cull kernel routes their draws into per-bucket ICBs.
         let world_pipelines = if requirements.scene && world_shaders.len() > 1 {
-            let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
+            let max = render_types::MAX_SHADER_BUCKETS;
             if world_shaders.len() > max {
                 return Err(format!(
                     "world declares {} Shaders but at most {max} are supported",
@@ -311,7 +322,7 @@ impl MtlContext {
         // no local lights gets a one-element placeholder; num_local_lights == 0
         // keeps the shader from reading it.
         let local_light_buffer = {
-            use crate::gfx::render_types::GpuLight;
+            use concinnity_core::gfx::render_types::GpuLight;
             if local_lights.is_empty() {
                 allocator.alloc_buffer(
                     std::mem::size_of::<GpuLight>(),
@@ -337,12 +348,12 @@ impl MtlContext {
         } else {
             create_shadow_map_array(
                 &device,
-                crate::gfx::render_types::spot_shadow_slice_size(shadow_map_size),
+                render_types::spot_shadow_slice_size(shadow_map_size),
                 spot_shadow_count,
             )?
         };
         let spot_shadow_buffer = {
-            use crate::gfx::render_types::SpotShadowData;
+            use concinnity_core::gfx::render_types::SpotShadowData;
             if spot_shadows.is_empty() {
                 allocator.alloc_buffer(
                     std::mem::size_of::<SpotShadowData>(),
@@ -362,7 +373,7 @@ impl MtlContext {
         // zero-length buffer, so a world with no area light gets a one-element
         // placeholder the shader never reads (every data_index stays -1).
         let area_light_buffer = {
-            use crate::gfx::render_types::AreaLightData;
+            use concinnity_core::gfx::render_types::AreaLightData;
             if area_lights.is_empty() {
                 allocator.alloc_buffer(
                     std::mem::size_of::<AreaLightData>(),
@@ -382,14 +393,14 @@ impl MtlContext {
         // simply never samples them when no area light is declared.
         let ltc_matrix_texture = create_lut_texture(
             &allocator,
-            crate::gfx::ltc::matrix_texels(),
-            crate::gfx::ltc::LTC_LUT_SIZE as u32,
+            ltc::matrix_texels(),
+            ltc::LTC_LUT_SIZE as u32,
             4,
         )?;
         let ltc_magnitude_texture = create_lut_texture(
             &allocator,
-            crate::gfx::ltc::magnitude_texels(),
-            crate::gfx::ltc::LTC_LUT_SIZE as u32,
+            ltc::magnitude_texels(),
+            ltc::LTC_LUT_SIZE as u32,
             2,
         )?;
 
@@ -517,7 +528,7 @@ impl MtlContext {
         // bound. The fragment shader uses `prefilter_mip_count == 0` to
         // detect the fallback and skip IBL math.
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::bake::environment_map::deserialize(bytes)
+            let view = bake::environment_map::deserialize(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
                 &allocator,
@@ -538,7 +549,7 @@ impl MtlContext {
         // 2x2x2 identity LUT so the composite pass always binds a valid 3D
         // texture. With the identity LUT the grade is a no-op at any strength.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::bake::color_lut::deserialize(bytes)
+            let (size, data) = bake::color_lut::deserialize(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {}", e))?;
             upload_color_lut(&allocator, size, data)?
         } else {
@@ -557,18 +568,13 @@ impl MtlContext {
                 (
                     Some(shadow_ps),
                     shadow_tex,
-                    crate::gfx::csm::empty_shadow_uniforms(),
+                    csm::empty_shadow_uniforms(),
                     shadow_map_size,
                 )
             } else {
                 // 1x1 fallback depth array (value 1.0 = fully lit).
                 let shadow_tex = create_shadow_map_fallback(&device)?;
-                (
-                    None,
-                    shadow_tex,
-                    crate::gfx::csm::empty_shadow_uniforms(),
-                    1,
-                )
+                (None, shadow_tex, csm::empty_shadow_uniforms(), 1)
             };
 
         // GPU-driven cascaded-shadow resources: the frustum-only
@@ -590,7 +596,7 @@ impl MtlContext {
 
         // Cache the first directional light's direction; per-frame CSM updates
         // use it. `update_directional_lights` re-caches it when the sun changes.
-        let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
+        let shadow_light_dir = lights::sun_direction(&light_uniforms);
 
         // Window + MTKView + initial drawable sizing. A geometry-less world
         // is clamped to 1x1 HDR/bloom/effect targets so the composite pass
@@ -638,8 +644,8 @@ impl MtlContext {
         // must know scRGB-linear vs PQ to turn the captured `RGBA16Float`
         // drawable into a display-correct PNG). `None` on the SDR path.
         let hdr_encoding = match hdr_mode {
-            crate::gfx::hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
+            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr_output::HdrOutputMode::Sdr => None,
         };
         // Pair the authored tunables with the resolved mode's output flags. On
         // the SDR path both flags stay 0.0 and the shader runs the full ACES +
@@ -849,7 +855,7 @@ impl MtlContext {
         // The slot table the decal pass draws from: authored decals seed it in
         // order, and a runtime add reuses whatever `remove_decal` freed. Metal
         // reserves no per-decal descriptors, so the table is uncapped.
-        let mut decal_set = crate::gfx::decal::DecalSet::new(usize::MAX, frames_in_flight);
+        let mut decal_set = decal::DecalSet::new(usize::MAX, frames_in_flight);
         for record in decals {
             decal_set
                 .insert(record)
@@ -981,8 +987,7 @@ impl MtlContext {
             // slots are sized to, so a stale/over-large preset value can never
             // over-allocate.
             let planar_budget = planar_planes.min(super::planar::MAX_PLANAR_PLANES);
-            let assignment =
-                crate::gfx::planar_reflection::assign_planar_slots(&planes, planar_budget);
+            let assignment = planar_reflection::assign_planar_slots(&planes, planar_budget);
             // Record each reflector's slot (water first, then glass, matching the
             // push order above).
             for (rec, slot) in water_records.iter_mut().zip(assignment.slots.iter()) {
@@ -1066,8 +1071,8 @@ impl MtlContext {
         // debug WS can report it. The shader flag in `post_process.hdr_output`
         // tracks "is HDR on" as a bool; this captures the multiplier itself.
         let max_edr = match hdr_mode {
-            crate::gfx::hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
+            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr_output::HdrOutputMode::Sdr => None,
         };
 
         // Build the scene acceleration structure for hardware ray-traced
@@ -1146,7 +1151,7 @@ impl MtlContext {
         // for the clusters that declare alternates.
         let n_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
         let (instance_records, instance_draw_args) = {
-            use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+            use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
             let records =
                 super::cull::metal_instance_records(&instanced_clusters, gpu_textures.len());
             let mut args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
@@ -1236,7 +1241,7 @@ impl MtlContext {
                 n_skinned: 0,
             },
             instanced: super::context::InstancedState {
-                any_lod: crate::gfx::lod::any_cluster_has_lod(&instanced_clusters),
+                any_lod: lod::any_cluster_has_lod(&instanced_clusters),
                 clusters: instanced_clusters,
                 records: instance_records,
                 draw_args: instance_draw_args,
@@ -1284,7 +1289,7 @@ impl MtlContext {
                 placements: Vec::new(),
                 maps: Vec::new(),
                 // Empty until `set_reflection_probes` supplies placements.
-                bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
+                bake_queue: reflection_probe::ProbeBakeQueue::new(0),
                 set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
                 rendering: None,
                 prefiltering: None,
@@ -1359,7 +1364,7 @@ impl MtlContext {
                 pipeline: light_cull_pipeline,
                 cluster_buffer: cluster_light_buffer,
             },
-            cluster_params: crate::gfx::render_types::ClusterParams::ZERO,
+            cluster_params: render_types::ClusterParams::ZERO,
             particle: super::particle::ParticleState {
                 records: particles.into_iter().map(Some).collect(),
                 emitter_state: particle_emitter_state.into_iter().map(Some).collect(),
@@ -1390,7 +1395,7 @@ impl MtlContext {
                 shadow_pipeline_state: None,
                 vertex_buffer: None,
                 index_buffer: None,
-                slots: crate::gfx::skinned_slots::SkinnedSlots::new(),
+                slots: skinned_slots::SkinnedSlots::new(),
                 skin_pipeline: None,
                 deformed: Vec::new(),
                 deformed_primed: std::sync::atomic::AtomicBool::new(false),
@@ -1421,7 +1426,7 @@ impl MtlContext {
                 was_visible: false,
             },
             diagnostics: super::context::Diagnostics {
-                frame_stats: crate::gfx::profile::RenderStats::default(),
+                frame_stats: profile::RenderStats::default(),
                 gpu_time_us: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 render_fault_logged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 device_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -1505,7 +1510,7 @@ impl MtlContext {
     // frames-in-flight are guaranteed to still match.
     pub(super) fn apply_world_reload(
         &mut self,
-        init: crate::gfx::backend_init::BackendInit<'_>,
+        init: backend_init::BackendInit<'_>,
     ) -> Result<(), String> {
         debug_assert_main_thread("apply_world_reload");
         self.wait_idle();

@@ -6,8 +6,8 @@
 // buffer. Used by mesh streaming (here), chunk streaming, and skinned upload.
 
 use ash::vk;
-
-use crate::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error;
 
 use super::super::context::*;
 use super::super::texture;
@@ -69,7 +69,7 @@ impl VkContext {
         vertices: &[Vertex],
         indices: &[u16],
         frame: u64,
-    ) -> crate::gfx::error::RenderResult<()> {
+    ) -> error::RenderResult<()> {
         let obj = self
             .draw
             .objects
@@ -104,7 +104,7 @@ impl VkContext {
             .mesh_vtx_alloc
             .alloc(v_len as u64)
             .ok_or_else(|| {
-                crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
+                error::RenderError::OutOfDeviceMemory(format!(
                     "upload_mesh: draw {}: no free vertex space for {} bytes",
                     draw_idx, v_len
                 ))
@@ -115,7 +115,7 @@ impl VkContext {
                 self.geometry
                     .mesh_vtx_alloc
                     .free(v_off as u64, v_len as u64, 0);
-                return Err(crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
+                return Err(error::RenderError::OutOfDeviceMemory(format!(
                     "upload_mesh: draw {}: no free index space for {} bytes",
                     draw_idx, i_len
                 )));

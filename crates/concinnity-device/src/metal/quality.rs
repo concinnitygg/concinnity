@@ -12,7 +12,10 @@
 // bloom, decals, fog, particles, and the uploaded geometry are untouched (so no
 // particle-sim reset and no multi-second geometry re-upload).
 
-use crate::gfx::backend::QualitySettings;
+use concinnity_core::components;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::backend;
+use concinnity_core::render::backend::QualitySettings;
 
 use super::context::MtlContext;
 use super::init::effects::{
@@ -39,10 +42,7 @@ impl MtlContext {
     // so the EDR path negotiated at init survives every push. Auto-exposure,
     // when on, overwrites `exposure` each frame from the adapted EV, so a static
     // exposure change is only visible with auto-exposure off.
-    pub(crate) fn update_post_process(
-        &mut self,
-        tunables: crate::gfx::render_types::PostProcessTunables,
-    ) {
+    pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
         self.post_process.set_tunables(tunables);
     }
 
@@ -59,7 +59,7 @@ impl MtlContext {
     // `shadow.update` at the start of each shadow pass, so a change takes effect
     // on the next draw. Every cascade is already primed, so switching policy never
     // leaves a slice unsampled (priming is one-shot per cascade, not per policy).
-    pub(crate) fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: components::ShadowUpdate) {
         self.shadow.update = update;
     }
 
@@ -88,7 +88,7 @@ impl MtlContext {
     // wholesale; SSGI keeps its gather resolution / ray / step counts (those size
     // the gather target or ride `apply_quality_settings`), so only its scalar
     // intensity / distance are updated.
-    pub(crate) fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
+    pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.settings.as_mut()) {
             *cur = live;
         }

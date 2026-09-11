@@ -3,9 +3,8 @@
 // content-addressed cache, or a filesystem for. The declarations themselves are
 // re-exported here, so every call site still names them through this module.
 
-use concinnity_slang as slang;
-
 pub(super) use concinnity_core::render::slang_programs::dx::*;
+use concinnity_slang as slang;
 
 // What a declaration can do once a compiler and a cache are in reach. A trait
 // rather than an inherent impl because `SlangProgram` is defined in
@@ -107,6 +106,7 @@ pub(crate) fn precompile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::gfx::ssr;
 
     #[test]
     fn variant_gates_and_abi_define_lead_the_source() {
@@ -226,7 +226,7 @@ mod tests {
     fn reflection_roughness_cut_matches_canonical() {
         let expected = format!(
             "static const float REFLECTION_ROUGHNESS_CUT = {:?};",
-            crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
+            ssr::REFLECTION_ROUGHNESS_CUT
         );
         for (name, src) in [
             (
@@ -255,7 +255,9 @@ mod tests {
     // values the CPU sizes buffers with.
     #[test]
     fn cluster_constants_match_render_types() {
-        use crate::gfx::render_types::{CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER};
+        use concinnity_core::gfx::render_types::{
+            CLUSTER_LIGHT_LIST_STRIDE, MAX_LIGHTS_PER_CLUSTER,
+        };
         for src in [
             concinnity_core::render::shaders::LIGHT_CULL,
             concinnity_core::render::shaders::MAIN_SHADING,

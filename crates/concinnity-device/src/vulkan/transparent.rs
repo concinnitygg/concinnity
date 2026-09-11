@@ -26,20 +26,20 @@
 // as the DirectX and Metal hosts.
 
 use ash::vk;
+use concinnity_core::components::{GlassPanel, WaterSurface};
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::gfx::rt_reflections::RtParamsInputs;
 use concinnity_core::gfx::transform::mat4_inverse;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSetLayout, VkDevice,
-};
+use concinnity_core::render::lights;
+pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
+// `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
+// lives in `core::render`; re-export it so the encode path and the graph's
+// view builder can keep naming it through this module.
+use concinnity_core::render::uniforms::GlassMeshParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::components::{GlassPanel, WaterSurface};
-use crate::gfx::mesh_payload::Vertex;
-
-use crate::gfx::render_types::RtParams;
-use crate::gfx::rt_reflections::RtParamsInputs;
-
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::GraphicsStages;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
@@ -48,12 +48,10 @@ use super::texture::{
     one_shot_submit, transition_image_layout_range,
 };
 use super::wire_cache::WireCache;
-
-// `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
-// lives in `core::render`; re-export it so the encode path and the graph's
-// view builder can keep naming it through this module.
-use concinnity_core::render::uniforms::GlassMeshParams;
-pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 
 // The live acceleration-structure handles wired into the transparent RT
 // descriptor ring. Passed once at init (`None` when RT is not live at launch)
@@ -84,7 +82,7 @@ pub(in crate::vulkan) struct TransparentRtDynamic {
     pub skinned_indices: vk::Buffer,
 }
 
-pub(in crate::vulkan) use crate::gfx::transparent::Producer;
+pub(in crate::vulkan) use concinnity_core::render::transparent::Producer;
 
 // Per-record GPU state: the static world-space quad (glass) or origin-centered
 // grid (water) VB + IB, the per-record params UBO + its descriptor set, and the
@@ -434,7 +432,7 @@ fn align_up(size: u64, align: u64) -> u64 {
     size.div_ceil(align) * align
 }
 
-use crate::gfx::transparent::ordered_visible;
+use concinnity_core::render::transparent::ordered_visible;
 
 fn create_rt_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
@@ -1790,7 +1788,7 @@ impl VkContext {
                 0.5 * (obj.bb_min[1] + obj.bb_max[1]),
                 0.5 * (obj.bb_min[2] + obj.bb_max[2]),
             ];
-            let d = crate::gfx::lod::camera_distance(obj, cam);
+            let d = lod::camera_distance(obj, cam);
             let (index_offset, index_count) = obj.active_lod(d);
             let t = obj.material.tint;
             let params = GlassMeshParams {
@@ -1823,7 +1821,7 @@ impl VkContext {
         cam_pos: [f32; 3],
         time: f32,
     ) -> TransparentView {
-        let (sun_dir, sun_color) = crate::gfx::lights::glint_sun(&self.uniforms.light_uniforms);
+        let (sun_dir, sun_color) = lights::glint_sun(&self.uniforms.light_uniforms);
         TransparentView {
             vp,
             inv_vp: mat4_inverse(vp),

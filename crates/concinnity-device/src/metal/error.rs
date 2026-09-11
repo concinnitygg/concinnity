@@ -5,7 +5,7 @@
 // command buffers, so the completion handler classifies here and parks the
 // result on the context for the next draw_frame to report.
 
-use crate::gfx::error::{DeviceLostReason, RenderError};
+use concinnity_core::render::error::{DeviceLostReason, RenderError};
 use objc2_foundation::NSError;
 use objc2_metal::MTLCommandBufferError;
 

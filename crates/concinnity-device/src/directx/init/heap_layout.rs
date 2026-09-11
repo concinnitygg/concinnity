@@ -42,11 +42,10 @@
 //   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
 //   srv_slots                      total descriptor count (heap size)
 
+use super::HIZ_MAX_MIPS;
 use crate::directx::context::FRAMES;
 use crate::directx::decal::MAX_DECALS;
 use crate::directx::particle::MAX_EMITTERS;
-
-use super::HIZ_MAX_MIPS;
 use crate::directx::post::descriptors::POST_TARGET_SLOTS;
 use crate::directx::probe_prefilter::PROBE_MAX_MIPS;
 

@@ -3,10 +3,11 @@
 // a device-local image via a one-shot command buffer.
 
 use ash::vk;
-
-use crate::vulkan::owned::{OwnedSampler, VkDevice};
+use concinnity_core::render::error;
+use concinnity_core::render::mipmap;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
+use crate::vulkan::owned::{OwnedSampler, VkDevice};
 
 // Opaque handle to a GPU image: cached raw handles for the bind sites, backed
 // by a pooled allocation that owns the image, its memory, and every view.
@@ -116,7 +117,7 @@ pub(super) struct ImageSpec {
 pub(super) fn create_image(
     alloc: &DeviceAllocator,
     spec: &ImageSpec,
-) -> crate::gfx::error::RenderResult<PooledImage> {
+) -> error::RenderResult<PooledImage> {
     let &ImageSpec {
         width,
         height,
@@ -478,7 +479,7 @@ impl StreamedUploadRetire {
 // ONLY, fragment-stage scope) orders every later submission on the same queue
 // after the copy, so the image is safe to sample from any subsequently
 // submitted frame; only freeing the returned in-flight resources needs GPU
-// retirement. The chain is box-filtered on the CPU (`crate::gfx::mipmap`) and
+// retirement. The chain is box-filtered on the CPU (`concinnity_core::render::mipmap`) and
 // every level is uploaded so the texture minifies through hardware trilinear /
 // aniso selection instead of aliasing from a single mip-0 sample at a distance.
 pub(super) fn upload_texture_deferred(
@@ -486,7 +487,7 @@ pub(super) fn upload_texture_deferred(
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
+) -> error::RenderResult<(GpuImage, UploadInFlight)> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(format!(
@@ -499,7 +500,7 @@ pub(super) fn upload_texture_deferred(
         .into());
     }
 
-    let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
+    let chain = mipmap::generate_mip_chain(width, height, pixels);
     let levels: Vec<TextureLevel<'_>> = chain
         .iter()
         .map(|m| TextureLevel {
@@ -539,7 +540,7 @@ fn vk_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> v
 pub(super) fn upload_texture_image_deferred(
     ctx: &GpuUploadContext,
     image: &concinnity_core::bake::texture::TextureImage,
-) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
+) -> error::RenderResult<(GpuImage, UploadInFlight)> {
     use concinnity_core::bake::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
@@ -564,7 +565,7 @@ pub(super) fn upload_texture_image_deferred(
 pub(super) fn upload_texture_image(
     ctx: &GpuUploadContext,
     image: &concinnity_core::bake::texture::TextureImage,
-) -> crate::gfx::error::RenderResult<GpuImage> {
+) -> error::RenderResult<GpuImage> {
     let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
     finish_upload(ctx, in_flight)?;
     Ok(img)
@@ -599,7 +600,7 @@ fn upload_texture_levels_deferred(
     ctx: &GpuUploadContext,
     format: vk::Format,
     levels: &[TextureLevel<'_>],
-) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
+) -> error::RenderResult<(GpuImage, UploadInFlight)> {
     let &GpuUploadContext {
         alloc,
         device,

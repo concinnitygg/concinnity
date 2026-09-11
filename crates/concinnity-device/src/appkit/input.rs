@@ -6,9 +6,8 @@
 // every backend that renders into an NSView; `window.rs` owns the event pump
 // that drives them. Mirrors `win32/input.rs`.
 
+use concinnity_core::components::InputKey;
 use objc2_app_kit::NSEvent;
-
-use crate::components::InputKey;
 
 // Persistent key state tracked across frames. InputKey booleans are set on KeyDown
 // and cleared on KeyUp; they are never reset between frames so that held keys

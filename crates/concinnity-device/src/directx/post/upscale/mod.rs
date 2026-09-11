@@ -14,10 +14,10 @@
 // `encode_upscale` (in fsr.rs) drives whichever backend is active through the
 // trait; only the inner vendor evaluate differs.
 
+use concinnity_core::components::UpscalerBackend;
+use concinnity_core::gfx::jitter;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-
-use crate::components::UpscalerBackend;
 
 #[cfg(ngx_sdk_bundled)]
 mod dlss;
@@ -185,7 +185,7 @@ fn write_output_srv(device: &ID3D12Device, res: &ID3D12Resource, cpu: D3D12_CPU_
 // [-0.5, 0.5] render-pixel units; the same value jitters the camera projection
 // (see `draw_frame`) so the rasterized scene and the upscale agree.
 pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
-    crate::gfx::jitter::offset(frame_index)
+    jitter::offset(frame_index)
 }
 
 // Backend selection
@@ -319,7 +319,7 @@ pub(in crate::directx) fn build_upscaler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::UpscalerBackend as B;
+    use concinnity_core::components::UpscalerBackend as B;
 
     // The backend a request resolves to: the first candidate in the order.
     fn resolved(req: B, dlss: bool, xess: bool, fsr3: bool) -> ResolvedBackend {

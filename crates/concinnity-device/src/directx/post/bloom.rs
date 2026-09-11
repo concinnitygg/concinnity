@@ -8,11 +8,11 @@
 // Mirrors src/metal/post/bloom.rs: same mip-count clamp (4..=6), same
 // Karis 13-tap prefilter, same plain 13-tap downsample + 9-tap tent upsample.
 
+use concinnity_core::gfx::render_types::PostProcessParams;
+use concinnity_core::render::fullscreen;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-
-use crate::gfx::render_types::PostProcessParams;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
@@ -312,7 +312,7 @@ pub(in crate::directx) fn write_color_rtv(
 // transitions its destination mip to RENDER_TARGET for the draw and back to
 // PIXEL_SHADER_RESOURCE so the next pass (or composite) can sample it; every mip
 // therefore ends the frame back in its created state.
-impl crate::gfx::fullscreen::BloomEncoder for DxContext {
+impl fullscreen::BloomEncoder for DxContext {
     type Rec = ID3D12GraphicsCommandList;
     type Args = D3D12_GPU_DESCRIPTOR_HANDLE;
 
@@ -424,7 +424,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
     ) {
-        crate::gfx::fullscreen::encode_bloom_chain(self, cmd, scene_srv);
+        fullscreen::encode_bloom_chain(self, cmd, scene_srv);
     }
 
     // One fullscreen-triangle bloom sub-pass: sample `src_srv`, render into

@@ -30,20 +30,20 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
+use concinnity_core::geometry::water_grid::build_water_grid;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::transparent;
+use concinnity_core::render::uniforms::TransparentView;
+use concinnity_core::render::uniforms::{WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
-
-use crate::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
-use crate::geometry::water_grid::build_water_grid;
-use crate::gfx::mesh_payload::Vertex;
 
 use super::context::MtlContext;
 use super::glass::build_transparent_pipeline_stages;
 use super::slang_builtins;
 use super::transparent::{TransparentDraw, bytes_of};
-use concinnity_core::render::uniforms::TransparentView;
-use concinnity_core::render::uniforms::{WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
 
 // Per-surface GPU state: a static tessellated grid VB + IB.
 pub(in crate::metal) struct WaterSurfaceRecord {
@@ -241,7 +241,7 @@ impl MtlContext {
                 ));
             }
             let c = surface.center;
-            let sort_distance = crate::gfx::transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
+            let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
                 vertex_buffer: surface.vertex_buffer.clone(),

@@ -7,6 +7,9 @@
 //   * The shared depth-stencil state used by main + shadow passes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::components::ShaderPrograms;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::backend_init;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -15,12 +18,10 @@ use objc2_metal::{
     MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use crate::gfx::mesh_payload::Vertex;
 use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
 use crate::metal::cull::{CullPipeline, build_cull_pipeline};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::pipeline::{ns_str, world_library};
-use concinnity_core::components::ShaderPrograms;
 
 pub(crate) struct MainPipelineBundle {
     pub pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
@@ -229,7 +230,7 @@ pub(crate) type WorldPipelineTable =
 pub(crate) fn build_world_pipeline_table(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
-    extra_shaders: &[crate::gfx::backend_init::WorldShader<'_>],
+    extra_shaders: &[backend_init::WorldShader<'_>],
     hot_reload: bool,
     sample_count: u32,
 ) -> Result<WorldPipelineTable, String> {

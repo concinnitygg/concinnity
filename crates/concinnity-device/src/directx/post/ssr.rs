@@ -9,15 +9,14 @@
 //
 // Mirrors src/metal/post/ssr.rs.
 
+use concinnity_core::gfx::render_types::SsrParams;
+use concinnity_core::gfx::ssr;
+use concinnity_core::render::fullscreen::{FullscreenPass, encode_fullscreen};
+use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
-use concinnity_core::render::post::device::PostBlend;
-
-use crate::gfx::render_types::SsrParams;
-
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
@@ -229,7 +228,7 @@ fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
 // this `None`.
 pub(in crate::directx) struct SsrResolve {
     // Resolved authored tunables; turned into a per-frame `SsrParams` push.
-    pub(in crate::directx) settings: crate::gfx::ssr::SsrSettings,
+    pub(in crate::directx) settings: ssr::SsrSettings,
 
     // SSR resolve output: the HDR scene with reflections composited in.
     // Becomes the "scene" SRV the TAA / bloom / composite passes consume.
@@ -260,7 +259,7 @@ pub(in crate::directx) struct SsrResources {
 pub(in crate::directx) struct SsrInitInputs {
     // Resolved authored tunables; `Some` only when the SSR resolve is on. With
     // `None` (a SSGI-only build) the resolve output + pipeline are skipped.
-    pub resolve_settings: Option<crate::gfx::ssr::SsrSettings>,
+    pub resolve_settings: Option<ssr::SsrSettings>,
     // SSR resolve output: CPU RTV plus the (CPU, GPU) SRV pair TAA / bloom /
     // composite consume as the scene color.
     pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,

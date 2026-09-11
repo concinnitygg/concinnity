@@ -12,6 +12,7 @@
 // never instantiates it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::mesh_payload;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
@@ -212,7 +213,7 @@ fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
         ],
         &[VertexLayout {
             buffer_index: 1,
-            stride: std::mem::size_of::<crate::gfx::mesh_payload::Vertex>(),
+            stride: std::mem::size_of::<mesh_payload::Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     )

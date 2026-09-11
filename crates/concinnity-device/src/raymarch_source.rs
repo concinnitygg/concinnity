@@ -11,13 +11,12 @@
 // checkout, digests differently, and recompiles. A machine with no slangc says
 // so, naming the volume, rather than drawing nothing.
 
-use std::borrow::Cow;
-
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_core::render::slang_source;
 use concinnity_slang::{SlangJob, SlangTarget};
+use std::borrow::Cow;
 
 /// Decode a volume's payload. A payload that does not decode is a build the
 /// renderer cannot use, and saying which volume is the whole of the fix.

@@ -3,7 +3,6 @@
 // fields.
 
 use std::mem::ManuallyDrop;
-
 use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 use windows::core::Interface;
 

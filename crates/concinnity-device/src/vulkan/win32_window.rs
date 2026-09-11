@@ -9,11 +9,11 @@
 // created directly through VK_KHR_win32_surface.
 
 use ash::vk;
+use concinnity_core::components::WindowMode;
+use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap::KeyMap;
 
-use crate::components::WindowMode;
-use crate::gfx::display_mode::DisplayMode;
-use crate::gfx::input::RenderInput;
-use crate::gfx::keymap::KeyMap;
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
 use crate::win32::window::{
     WindowState, create_window, do_capture_cursor, do_release_cursor, do_set_ui_cursor_hidden,

@@ -19,7 +19,10 @@
 //
 // Mirrors src/metal/fog.rs.
 
+use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_core::render::volumetric_fog;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -31,8 +34,6 @@ use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_buffer};
-use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use crate::gfx::render_types::{FogFroxelParams, FogParams};
 
 // Compile the fog vertex + fragment shaders; the MSAA define keeps the
 // fragment shader's depth SRV declaration in sync with the resource's
@@ -626,10 +627,7 @@ impl DxContext {
     // (`debug::hot_reload::passes`), reached through the `RenderBackend`
     // vtable. Mirrors the other bin-only runtime-mutation seams on this
     // backend.
-    pub(crate) fn update_fog_settings(
-        &mut self,
-        settings: Option<crate::gfx::volumetric_fog::FogSettings>,
-    ) {
+    pub(crate) fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
         if settings.is_some() && self.fog.resources.is_none() {
             tracing::warn!(
                 "VolumetricFog hot-reload: world started without fog, so the fog \

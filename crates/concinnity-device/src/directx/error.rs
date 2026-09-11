@@ -4,13 +4,12 @@
 // Device removal is detected at Present; `classify_present_failure` refines
 // the loss class with the device's own `GetDeviceRemovedReason` verdict.
 
+use concinnity_core::render::error::{DeviceLostReason, RenderError};
 use windows::Win32::Foundation::E_OUTOFMEMORY;
 use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
 };
 use windows::core::HRESULT;
-
-use crate::gfx::error::{DeviceLostReason, RenderError};
 
 // Pure mapping from an HRESULT to the boundary class, testable without a GPU.
 // `context` names the failing call for the log.

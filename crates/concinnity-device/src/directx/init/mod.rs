@@ -25,15 +25,29 @@
 //   * Per-frame command infrastructure (allocator/list/fence), per-cluster
 //     instance upload buffers, and the final `Self { ... }` literal.
 
+use concinnity_core::bake;
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::*;
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::backend_init;
+use concinnity_core::render::csm;
+use concinnity_core::render::decal;
+use concinnity_core::render::hdr_output;
+use concinnity_core::render::lights;
+use concinnity_core::render::ltc;
+use concinnity_core::render::particles;
+use concinnity_core::render::planar_reflection;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::skinned_slots;
+use concinnity_core::render::slot_rewrites;
 use std::cell::RefCell;
-
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::Threading::CreateEventW;
-
-use crate::directx::allocator::{PooledBuffer, PooledTexture};
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::*;
 
 use super::com;
 use super::context::*;
@@ -41,6 +55,7 @@ use super::draw::*;
 use super::post::bloom::bloom_mip_count;
 use super::post::descriptors::{POST_TARGET_SLOTS, PostDescriptors};
 use super::texture::*;
+use crate::directx::allocator::{PooledBuffer, PooledTexture};
 
 mod adapter;
 mod effects;
@@ -56,8 +71,8 @@ pub(in crate::directx) const HIZ_MAX_MIPS: usize = 15;
 
 impl DxContext {
     // Construct a fresh context (new device + window + swapchain) from the
-    // assembled backend inputs (see `crate::gfx::backend_init::BackendInit`).
-    pub(crate) fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+    // assembled backend inputs (see `concinnity_core::render::backend_init::BackendInit`).
+    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
 
@@ -69,10 +84,10 @@ impl DxContext {
     // targets are built from `init` either way; the DirectX-specific behavior
     // of each input is documented inline below.
     fn build(
-        init: crate::gfx::backend_init::BackendInit<'_>,
+        init: backend_init::BackendInit<'_>,
         reuse: Option<window::DeviceAndWindow>,
     ) -> Result<Self, String> {
-        use crate::gfx::backend_init::{
+        use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx, WorldShader,
         };
         let BackendInit {
@@ -231,7 +246,7 @@ impl DxContext {
         // committed allocation.
         let alloc = super::allocator::DeviceAllocator::new(&device, &command_queue, FRAMES);
         // The swapchain config the caller's reload gate compares against.
-        let swapchain_config = crate::gfx::backend_init::SwapchainConfig {
+        let swapchain_config = backend_init::SwapchainConfig {
             frames_in_flight: frames_in_flight.max(1),
             hdr_display,
             hdr_pq,
@@ -458,7 +473,7 @@ impl DxContext {
         // so a stale/over-large preset value can never over-allocate.
         let planar_budget = planar_planes.min(crate::directx::planar::MAX_PLANAR_PLANES);
         let planar_assignment =
-            crate::gfx::planar_reflection::assign_planar_slots(&planar_panes, planar_budget);
+            planar_reflection::assign_planar_slots(&planar_panes, planar_budget);
         let planar_resolve_srv_extra = planar_assignment.representatives.len();
 
         let heap_layout::SrvHeapLayout {
@@ -659,8 +674,7 @@ impl DxContext {
         // every light-space matrix are fixed here; only the depth refreshes.
         // A world with no shadowed spot still binds a 1x1 fallback so the main
         // pass's SRV is never unwritten.
-        let spot_shadow_slice_size =
-            crate::gfx::render_types::spot_shadow_slice_size(effective_shadow_size);
+        let spot_shadow_slice_size = render_types::spot_shadow_slice_size(effective_shadow_size);
         let (spot_shadow_resource, spot_shadow_dsvs) = if spot_shadows.is_empty() {
             let fb = create_fallback_shadow_array(
                 &alloc,
@@ -684,12 +698,12 @@ impl DxContext {
         // spot gets a one-element identity buffer: the shader never indexes it
         // (every `shadow_index` is -1) but the root SRV must still be valid.
         let spot_shadow_data = if spot_shadows.is_empty() {
-            vec![crate::gfx::render_types::SpotShadowData::ZERO]
+            vec![render_types::SpotShadowData::ZERO]
         } else {
             spot_shadows.clone()
         };
         let spot_shadow_buffer = {
-            use crate::gfx::render_types::SpotShadowData;
+            use concinnity_core::gfx::render_types::SpotShadowData;
             let size = align256((spot_shadow_data.len() * size_of::<SpotShadowData>()) as u64);
             let buf = create_buffer(
                 &alloc,
@@ -719,7 +733,7 @@ impl DxContext {
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map spot-shadow UBO: {e}"))?;
             for (i, sd) in spot_shadows.iter().enumerate() {
-                let mut u = crate::gfx::csm::empty_shadow_uniforms();
+                let mut u = csm::empty_shadow_uniforms();
                 u.light_vps[0] = sd.light_vp;
                 u.active_cascades = 1;
                 // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
@@ -743,12 +757,12 @@ impl DxContext {
         // still gets a one-element buffer, since the shader never reads it
         // (`data_index` stays -1) but the root SRV must be valid.
         let area_light_data = if area_lights.is_empty() {
-            vec![crate::gfx::render_types::AreaLightData::ZERO]
+            vec![render_types::AreaLightData::ZERO]
         } else {
             area_lights.clone()
         };
         let area_light_buffer = {
-            use crate::gfx::render_types::AreaLightData;
+            use concinnity_core::gfx::render_types::AreaLightData;
             let size = align256((area_light_data.len() * size_of::<AreaLightData>()) as u64);
             let buf = create_buffer(
                 &alloc,
@@ -763,12 +777,12 @@ impl DxContext {
         // Area-light LTC tables. Scene-independent (they depend only on the
         // build-time fit), so they are created unconditionally and the shader
         // simply never samples them when no area light is declared.
-        let ltc_size = crate::gfx::ltc::LTC_LUT_SIZE as u32;
+        let ltc_size = ltc::LTC_LUT_SIZE as u32;
         let ltc_matrix_texture = upload_float_lut(
             &alloc,
             ltc_size,
             4,
-            crate::gfx::ltc::matrix_texels(),
+            ltc::matrix_texels(),
             slot_cpu(ltc_srv_base_slot),
             slot_gpu(ltc_srv_base_slot),
         )?;
@@ -776,7 +790,7 @@ impl DxContext {
             &alloc,
             ltc_size,
             2,
-            crate::gfx::ltc::magnitude_texels(),
+            ltc::magnitude_texels(),
             slot_cpu(ltc_srv_base_slot + 1),
             slot_gpu(ltc_srv_base_slot + 1),
         )?;
@@ -786,7 +800,7 @@ impl DxContext {
         // upload both cubes. Otherwise bind a 1×1 gray fallback for each; the
         // shader keys off prefilter_mip_count == 0 to skip IBL math.
         let env_map = if let Some(bytes) = env_map_bytes {
-            let view = crate::bake::environment_map::deserialize(bytes)
+            let view = bake::environment_map::deserialize(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {e}"))?;
             upload_environment_map(
                 &alloc,
@@ -891,13 +905,13 @@ impl DxContext {
         };
 
         // Cache the first directional light's direction for per-frame CSM updates.
-        let shadow_light_dir = crate::gfx::lights::sun_direction(&light_uniforms);
+        let shadow_light_dir = lights::sun_direction(&light_uniforms);
 
         // Cache the first directional light's color * intensity for the
         // volumetric-fog encoder, since `LightUniforms` is uploaded rather than
         // pushed each frame. `update_directional_lights` re-derives both.
         let fog_sun_dir = shadow_light_dir;
-        let fog_sun_color = crate::gfx::lights::sun_color(&light_uniforms);
+        let fog_sun_color = lights::sun_color(&light_uniforms);
 
         // Albedo texture pool
         // One ID3D12Resource per input texture; SRVs are written below at
@@ -1050,7 +1064,7 @@ impl DxContext {
         // so the composite pass always binds a valid Texture3D. With the
         // identity LUT the grade is a no-op at any `lut_strength`.
         let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = crate::bake::color_lut::deserialize(bytes)
+            let (size, data) = bake::color_lut::deserialize(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
             upload_color_lut(
                 &alloc,
@@ -1154,7 +1168,7 @@ impl DxContext {
             shadow_ubo_resources.push(buf);
         }
 
-        let shadow_uniforms = crate::gfx::csm::empty_shadow_uniforms();
+        let shadow_uniforms = csm::empty_shadow_uniforms();
         // Seed every frame's shadow UBO with the empty uniforms; per-frame
         // compute_shadow_uniforms in record_frame overwrites them.
         for ptr in &shadow_ubo_ptrs {
@@ -1177,7 +1191,7 @@ impl DxContext {
         // still allocates a one-element placeholder; the shader's
         // `num_local_lights == 0` guard keeps it from being read.
         let local_light_buffer = {
-            use crate::gfx::render_types::GpuLight;
+            use concinnity_core::gfx::render_types::GpuLight;
             let size =
                 align256((local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64);
             let buf = create_buffer(
@@ -1291,7 +1305,7 @@ impl DxContext {
         // bindless pass is active with build-time geometry) and the world declares
         // instanced props.
         if n_instances > 0 && !object_buffer_ptrs.is_empty() {
-            use crate::gfx::render_types::{
+            use concinnity_core::gfx::render_types::{
                 GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
             };
             let records = instance_object_records(&instanced_clusters, flat_albedo_count as u32);
@@ -1662,8 +1676,7 @@ impl DxContext {
         }
         // The slot table the decal pass draws from. Each authored decal takes
         // the slot whose albedo SRV was just written above, in the same order.
-        let mut decal_set =
-            crate::gfx::decal::DecalSet::new(crate::directx::decal::MAX_DECALS, FRAMES);
+        let mut decal_set = decal::DecalSet::new(crate::directx::decal::MAX_DECALS, FRAMES);
         for record in decals {
             decal_set
                 .insert(record)
@@ -1735,7 +1748,7 @@ impl DxContext {
                         slot_cpu(particle_srv_base_slot + i),
                     );
                 }
-                let recs: Vec<Option<crate::gfx::particles::ParticleEmitterRecord>> =
+                let recs: Vec<Option<particles::ParticleEmitterRecord>> =
                     particles.into_iter().map(Some).collect();
                 (Some(resources), recs, states)
             } else {
@@ -1772,7 +1785,7 @@ impl DxContext {
         // workers can encode in parallel without contending. Allocators
         // are very lightweight (a few KB of CPU-side bookkeeping each);
         // a 21-pass × 3-frame pool is ~63 entries.
-        let pass_pool_size = FRAMES * crate::gfx::render_graph::PASS_COUNT;
+        let pass_pool_size = FRAMES * render_graph::PASS_COUNT;
         let mut pass_allocators: Vec<ID3D12CommandAllocator> = Vec::with_capacity(pass_pool_size);
         let mut pass_cmd_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(pass_pool_size);
         for _ in 0..pass_pool_size {
@@ -1861,7 +1874,7 @@ impl DxContext {
                     info_queue.as_ref(),
                     crate::directx::auto_exposure::AutoExposureResources::new(&alloc, hot_reload),
                 )?;
-                let state = crate::gfx::auto_exposure::AutoExposureState::new(settings);
+                let state = auto_exposure::AutoExposureState::new(settings);
                 (Some(resources), Some(state))
             } else {
                 (None, None)
@@ -2177,7 +2190,7 @@ impl DxContext {
                 cascades: shadow_cascades,
                 scheduler: Default::default(),
                 render_mask: 0,
-                uniforms: crate::gfx::csm::empty_shadow_uniforms(),
+                uniforms: csm::empty_shadow_uniforms(),
             },
             spot_shadow: super::context::SpotShadowState {
                 resource: spot_shadow_resource,
@@ -2238,7 +2251,7 @@ impl DxContext {
                 index_buffer: None,
                 vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW::default(),
                 index_buffer_view: D3D12_INDEX_BUFFER_VIEW::default(),
-                slots: crate::gfx::skinned_slots::SkinnedSlots::new(),
+                slots: skinned_slots::SkinnedSlots::new(),
                 joint_buffers: Vec::new(),
                 joint_ptrs: Vec::new(),
                 skin_pipeline: None,
@@ -2378,7 +2391,7 @@ impl DxContext {
             },
             current_frame: 0,
             stream: super::context::StreamState {
-                pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue::new(FRAMES),
+                pool_rewrites: slot_rewrites::SlotRewriteQueue::new(FRAMES),
                 frame: 0,
                 retires: Vec::new(),
             },
@@ -2400,7 +2413,7 @@ impl DxContext {
                 n_skinned: 0,
             },
             instanced: DxInstanced {
-                any_lod: crate::gfx::lod::any_cluster_has_lod(&instanced_clusters),
+                any_lod: lod::any_cluster_has_lod(&instanced_clusters),
                 clusters: instanced_clusters,
                 // One outer Vec entry per cluster; populated each frame by
                 // `build_instance_upload` from `lod_buckets(cam_pos)`. The
@@ -2420,7 +2433,7 @@ impl DxContext {
             },
             wireframe: Default::default(),
             diagnostics: super::context::Diagnostics {
-                frame_stats: std::cell::Cell::new(crate::gfx::profile::RenderStats::default()),
+                frame_stats: std::cell::Cell::new(profile::RenderStats::default()),
                 draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
                 info_queue,
             },
@@ -2440,12 +2453,12 @@ impl DxContext {
                 last_elapsed: 0.0,
             },
             max_edr: match hdr_mode {
-                crate::gfx::hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-                crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
+                hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+                hdr_output::HdrOutputMode::Sdr => None,
             },
             hdr_encoding: match hdr_mode {
-                crate::gfx::hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-                crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
+                hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+                hdr_output::HdrOutputMode::Sdr => None,
             },
             hot_reload: super::context::HotReloadState {
                 enabled: hot_reload,
@@ -2460,7 +2473,7 @@ impl DxContext {
             // placements (declared or auto-seeded). See [`super::context`].
             probe: super::context::ProbeState {
                 placements: Vec::new(),
-                bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
+                bake_queue: reflection_probe::ProbeBakeQueue::new(0),
                 set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
                 rendering: None,
                 prefiltering: None,
@@ -2493,7 +2506,7 @@ impl DxContext {
     // is left `None`; the caller drops this backend and marks the session failed.
     pub(in crate::directx) fn apply_world_reload(
         &mut self,
-        init: crate::gfx::backend_init::BackendInit<'_>,
+        init: backend_init::BackendInit<'_>,
     ) -> Result<(), String> {
         self.wait_idle();
         let reuse = window::DeviceAndWindow {

@@ -42,15 +42,14 @@
 
 use ash::vk;
 
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::pipeline::{SHADER_ENTRY, spv_module};
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
+};
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
 
 // Upper bound on the Hi-Z mip count, used to size the dedicated descriptor pool

@@ -16,9 +16,8 @@
 // `DXIL_ABI` where the root signature is. Reflecting a family without its gate
 // would read a declaration no backend compiles.
 
-use std::collections::BTreeMap;
-
 use concinnity_slang as slang;
+use std::collections::BTreeMap;
 
 use crate::shader_layout::reflect::{self, ShaderStruct};
 use crate::slang_source;

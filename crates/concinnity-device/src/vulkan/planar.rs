@@ -24,24 +24,25 @@
 // skinned tail is not drawn into a mirror (static + instance + chunk only).
 
 use ash::vk;
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::transform::mat4_inverse;
-
-use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPass, VkDevice};
+use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::planar_reflection;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
 use super::draw::ViewUniforms;
 use super::resources::alloc_descriptor_sets;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
-use concinnity_core::gfx::transform::mat4_mul;
+use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPass, VkDevice};
 
 // The engine capacity ceiling for distinct reflection planes: the count the
 // reserved planar targets are sized to. Single-sourced from `gfx::planar_reflection`
 // so the three backends stay in lockstep by construction. The per-frame budget
 // passed to `assign_planar_slots` at init can be lower under a quality preset / GPU
 // tier, never higher; panes past it fall back to the box-projected probe cube.
-pub(in crate::vulkan) const MAX_PLANAR_PLANES: usize =
-    crate::gfx::planar_reflection::MAX_PLANAR_PLANES;
+pub(in crate::vulkan) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
 // Clip the reflection a hair toward the kept (camera) side of the plane so
 // geometry exactly on the surface is not lost to near-plane precision. Matches
@@ -462,7 +463,7 @@ impl PlanarReflectionSet {
         // Per-(plane, frame) reflected-frustum cull output: a DEVICE_LOCAL indirect +
         // status SSBO each, sized by the build-time object count (resize never
         // touches them).
-        use crate::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let object_range = (cull.cull_count * std::mem::size_of::<GpuObjectData>()).max(4) as u64;
         let args_range = (cull.cull_count * std::mem::size_of::<GpuDrawArgs>()).max(4) as u64;
         let indirect_size =
@@ -570,7 +571,7 @@ impl PlanarReflectionSet {
             let cluster_params_info = vk::DescriptorBufferInfo::default()
                 .buffer(cluster_params_ubo)
                 .offset(0)
-                .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
+                .range(std::mem::size_of::<render_types::ClusterParams>() as u64);
             let cluster_write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
@@ -894,9 +895,8 @@ impl VkContext {
         };
 
         for slot in 0..set.plane_count() {
-            let oriented =
-                crate::gfx::planar_reflection::orient_plane_toward(set.planes[slot], cam_pos);
-            let m = crate::gfx::planar_reflection::planar_matrices(
+            let oriented = planar_reflection::orient_plane_toward(set.planes[slot], cam_pos);
+            let m = planar_reflection::planar_matrices(
                 self.view.matrix,
                 proj,
                 cam_pos,
@@ -925,7 +925,7 @@ impl VkContext {
             // geometry visible only in the reflection is captured. The oblique clip
             // already rides the view-proj, so the extracted frustum also rejects
             // geometry behind the reflector.
-            let frustum = crate::gfx::frustum::Frustum::from_view_projection(m.view_proj);
+            let frustum = Frustum::from_view_projection(m.view_proj);
             self.encode_probe_cull(cmd, set.cull_sets[ring], set.hiz_set, &frustum, m.eye);
             // Order the previous mirror render's attachment writes before this one's
             // layout transition. `main_render_pass` declares both attachments
@@ -1048,9 +1048,6 @@ mod tests {
         // `gfx::planar_reflection` source, so this guards that the shared capacity
         // the allocation assumes is still 4.
         assert_eq!(MAX_PLANAR_PLANES, 4);
-        assert_eq!(
-            MAX_PLANAR_PLANES,
-            crate::gfx::planar_reflection::MAX_PLANAR_PLANES
-        );
+        assert_eq!(MAX_PLANAR_PLANES, planar_reflection::MAX_PLANAR_PLANES);
     }
 }

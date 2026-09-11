@@ -47,11 +47,6 @@
 // every allocation and drop happens on the main thread.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::rc::{Rc, Weak};
-
 use objc2::Message as _;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -59,6 +54,10 @@ use objc2_metal::{
     MTLBuffer, MTLCPUCacheMode, MTLDevice as _, MTLHazardTrackingMode, MTLHeap, MTLHeapDescriptor,
     MTLHeapType, MTLResourceOptions, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::rc::{Rc, Weak};
 
 use crate::suballoc::block_alloc::{BlockAllocator, Placement};
 

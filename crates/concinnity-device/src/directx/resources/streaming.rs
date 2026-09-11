@@ -4,11 +4,12 @@
 // that seeds the chunk sub-allocators, then per-chunk add / remove / move
 // within that headroom.
 
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::*;
+use concinnity_core::render::backend::ChunkMesh;
+use concinnity_core::render::draw_slot;
+use concinnity_core::render::error;
 use windows::Win32::Graphics::Direct3D12::*;
-
-use crate::gfx::backend::ChunkMesh;
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::*;
 
 use super::super::com;
 use super::super::context::*;
@@ -119,8 +120,8 @@ impl DxContext {
     pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
-        dst: crate::gfx::draw_slot::SlotAlloc,
-    ) -> crate::gfx::error::RenderResult<()> {
+        dst: draw_slot::SlotAlloc,
+    ) -> error::RenderResult<()> {
         let ChunkMesh {
             verts: vertices,
             idxs: indices,
@@ -145,7 +146,7 @@ impl DxContext {
             .vtx_alloc
             .alloc(v_len as u64)
             .ok_or_else(|| {
-                crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
+                error::RenderError::OutOfDeviceMemory(format!(
                     "add_chunk_mesh: no free chunk vertex space for {} bytes",
                     v_len
                 ))
@@ -156,7 +157,7 @@ impl DxContext {
                 self.chunk_stream
                     .vtx_alloc
                     .free(v_off as u64, v_len as u64, 0);
-                return Err(crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
+                return Err(error::RenderError::OutOfDeviceMemory(format!(
                     "add_chunk_mesh: no free chunk index space for {} bytes",
                     i_len
                 )));
@@ -213,11 +214,11 @@ impl DxContext {
 
         // Write at the engine-allocated destination slot.
         let draw_idx = match dst {
-            crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
+            draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw.objects[slot] = obj;
                 slot
             }
-            crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+            draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
                     self.draw.objects.len(),
@@ -251,7 +252,7 @@ impl DxContext {
         draw_idx: usize,
         retire_frame: u64,
     ) -> Result<(), String> {
-        let region = crate::gfx::draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
         self.chunk_stream
             .vtx_alloc
             .free(region.vertex_offset, region.vertex_bytes, retire_frame);
@@ -269,6 +270,6 @@ impl DxContext {
         draw_idx: usize,
         model: [[f32; 4]; 4],
     ) -> Result<(), String> {
-        crate::gfx::draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
+        draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
     }
 }

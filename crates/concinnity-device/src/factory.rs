@@ -7,12 +7,15 @@
 // choke point - the client holds only a `Box<dyn RenderBackend>` and never names
 // a concrete backend context.
 
+use concinnity_core::render::backend;
+use concinnity_core::render::backend_init;
+
 /// Probe a cheap throwaway device handle to classify the GPU, so the auto-config
 /// quality ceiling can influence the render targets / effect pipelines the backend
 /// sizes at init. Each backend creates only the cheap handle it needs and
 /// classifies it: Metal the default-device handle, DirectX the DXGI adapter (no
 /// device / swapchain), Vulkan a surface-free instance (destroyed immediately).
-pub fn probe_gpu_profile() -> crate::gfx::backend::GpuProfile {
+pub fn probe_gpu_profile() -> backend::GpuProfile {
     #[cfg(backend_dx)]
     {
         crate::directx::probe_gpu_profile()
@@ -27,15 +30,15 @@ pub fn probe_gpu_profile() -> crate::gfx::backend::GpuProfile {
     }
     #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
     {
-        crate::gfx::backend::GpuProfile::UNKNOWN
+        backend::GpuProfile::UNKNOWN
     }
 }
 
 /// Route the assembled `BackendInit` to the backend selected at compile time.
 /// Construction inputs are documented on `BackendInit` itself.
 pub fn init_backend(
-    init: crate::gfx::backend_init::BackendInit<'_>,
-) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
+    init: backend_init::BackendInit<'_>,
+) -> Option<Box<dyn backend::RenderBackend>> {
     #[cfg(backend_dx)]
     {
         match crate::directx::DxContext::new(init) {

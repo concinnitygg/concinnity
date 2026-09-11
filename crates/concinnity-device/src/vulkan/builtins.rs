@@ -14,7 +14,7 @@
 // has: the shaders declare the array unsized and read whatever the set layout
 // was built with, so this never reaches the source text.
 pub(crate) fn world_pool_size(texture_count: usize) -> usize {
-    texture_count.max(1) + crate::gfx::render_types::FALLBACK_TEXTURE_COUNT
+    texture_count.max(1) + render_types::FALLBACK_TEXTURE_COUNT
 }
 
 // Inputs a call site supplies to assemble a program's source.
@@ -77,6 +77,8 @@ pub(crate) fn precompile(
     }
 }
 
+use concinnity_core::gfx::render_types;
+
 use crate::vulkan::slang_builtins::SlangCompile;
 
 #[cfg(test)]
@@ -102,7 +104,7 @@ mod tests {
             let gpu_textures = texture_count.max(1);
             assert_eq!(
                 world_pool_size(texture_count),
-                gpu_textures + crate::gfx::render_types::FALLBACK_TEXTURE_COUNT
+                gpu_textures + render_types::FALLBACK_TEXTURE_COUNT
             );
             assert!(world_pool_size(texture_count) > texture_count);
         }

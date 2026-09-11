@@ -12,17 +12,11 @@
 // the rest of the scene. Mirrors `src/directx/decal.rs` and
 // `src/metal/decal.rs`.
 
-use concinnity_core::gfx::transform::mat4_inverse;
-use std::cell::Cell;
-
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::decal::DecalRecord;
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::decal::DecalRecord;
+use std::cell::Cell;
 // `DecalView` (per-frame, 144 bytes) is the layout struct shared with the other
 // backends; the per-decal `DecalParams` (160 bytes, inside the 256-byte stride
 // slot) rides the set's slots. Both mirror `shaders/decal.slang`.
@@ -32,6 +26,10 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::GraphicsStages;
 use super::texture::GpuImage;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Cap on the number of active decals: the descriptor pool reserves a
@@ -708,7 +706,7 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         vp: [[f32; 4]; 4],
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
     ) {
         let decals = match &self.decal.resources {
             Some(s) => s,

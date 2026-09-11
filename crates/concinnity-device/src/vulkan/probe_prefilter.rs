@@ -25,7 +25,6 @@
 // SHADER_READ_ONLY_OPTIMAL at install.
 
 use ash::vk;
-
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
 

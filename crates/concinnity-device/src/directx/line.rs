@@ -13,6 +13,7 @@
 //
 // Mirrors src/metal/line.rs.
 
+use concinnity_core::gfx::render_types::LineVertex;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -25,7 +26,6 @@ use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, create_buffer};
 use crate::directx::upload_ring::{UPLOAD_ALIGN, UploadRing, align_up};
-use crate::gfx::render_types::LineVertex;
 
 // How much of a line still shows where scene geometry is in front of it. A
 // faint trace keeps the lines readable inside a dense scene without letting

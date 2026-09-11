@@ -22,9 +22,13 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::transparent;
+use concinnity_core::render::uniforms::TransparentView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _,
     MTLIndexType, MTLLoadAction, MTLPrimitiveType, MTLRenderCommandEncoder as _,
@@ -34,8 +38,6 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
-use concinnity_core::render::uniforms::TransparentView;
-use objc2_foundation::ns_string;
 
 // One translucent draw recorded for the transparent pass. Self-contained
 // except for the shared [`TransparentView`], which `encode_transparent` binds
@@ -114,7 +116,7 @@ impl MtlContext {
         view: &TransparentView,
         scene_pre_taa: &Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>,
         draws: &[TransparentDraw],
-        rt_params: Option<&crate::gfx::render_types::RtParams>,
+        rt_params: Option<&render_types::RtParams>,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     ) -> Result<u32, String> {
         if draws.is_empty() {
@@ -250,7 +252,7 @@ impl MtlContext {
         }
 
         let distances: Vec<f32> = draws.iter().map(|d| d.sort_distance).collect();
-        let order = crate::gfx::transparent::back_to_front_order(&distances);
+        let order = transparent::back_to_front_order(&distances);
 
         for &i in &order {
             let d = &draws[i];

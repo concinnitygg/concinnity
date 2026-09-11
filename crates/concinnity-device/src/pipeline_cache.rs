@@ -13,9 +13,8 @@
 // checkpoint, so the two serializations a session makes (end of init, then
 // teardown) cost one write between them rather than one each.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use concinnity_core::blob::CacheEntryKind;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Neither VkPipelineCache nor a D3D12 pipeline library evicts internally, so a
 // long-lived checkout accumulates entries for every edited shader. Past this

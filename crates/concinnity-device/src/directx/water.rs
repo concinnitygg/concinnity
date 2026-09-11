@@ -13,25 +13,24 @@
 // `slang_builtins`; the ray-traced fragment needs shader model 6.5 for its
 // inline ray query, the base pair 6.0.
 
+use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
+use concinnity_core::geometry::water_grid::build_water_grid;
+use concinnity_core::gfx::mesh_payload::Vertex;
 use windows::Win32::Graphics::Direct3D12::*;
-
-use super::allocator::DeviceAllocator;
-use crate::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
-use crate::directx::context::dump_on_err;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::transparent::{
-    RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
-};
-use crate::geometry::water_grid::build_water_grid;
-use crate::gfx::mesh_payload::Vertex;
-
 // `WaterParams` / `WaterWaveGpu` (the per-surface cbuffer and its wave lanes)
 // are GPU-free layout structs that live in `core::render`; re-export them so
 // `crate::directx::water::WaterParams` is unchanged for the
 // `water_params_from` path.
 pub(in crate::directx) use concinnity_core::render::uniforms::{
     WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
+};
+
+use super::allocator::DeviceAllocator;
+use crate::directx::context::dump_on_err;
+use crate::directx::slang_builtins;
+use crate::directx::slang_builtins::SlangCompile;
+use crate::directx::transparent::{
+    RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
 };
 
 // The shader-side wave lane for one authored wave. Pure; unit tested.

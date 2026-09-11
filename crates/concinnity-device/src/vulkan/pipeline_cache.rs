@@ -16,10 +16,10 @@
 
 use ash::vk::Handle;
 use ash::{Device, vk};
-
-use super::owned::{OwnedPipeline, VkDevice};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use super::owned::{OwnedPipeline, VkDevice};
 
 // The installed cache handle, read by every pipeline creation. Zero (null)
 // until `install`, so creation sites degrade to uncached before init or after

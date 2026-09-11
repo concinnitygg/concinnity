@@ -14,18 +14,18 @@
 // `scene * T + scattered` automatically.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_core::render::volumetric_fog::FogSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
     MTLLibrary as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
     MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
     MTLTextureType, MTLTextureUsage,
 };
-
-use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use crate::gfx::render_types::{FogFroxelParams, FogParams};
-use crate::gfx::volumetric_fog::FogSettings;
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
@@ -36,7 +36,6 @@ use super::post::fullscreen::{
 };
 use super::scoped_encoder::ScopedEncoder;
 use super::slang_builtins::{FOG_FRAG, FOG_FROXEL};
-use objc2_foundation::ns_string;
 
 // All volumetric-fog state grouped into one feature unit: the resolved
 // tunables, the fullscreen ray-march pipeline, and the froxel-volume compute
@@ -240,7 +239,7 @@ pub(super) fn build_fog_froxel_pipeline(
 
 // Allocate the 3D `RGBA16Float` volume the froxel kernel writes and the
 // fog fragment shader samples. Dimensions live in
-// [`crate::gfx::render_graph::FOG_FROXEL_X`] / `Y` / `Z`.
+// [`concinnity_core::render::render_graph::FOG_FROXEL_X`] / `Y` / `Z`.
 pub(super) fn build_fog_froxel_volume(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {

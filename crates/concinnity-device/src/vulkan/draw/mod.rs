@@ -10,21 +10,27 @@ mod shadow;
 pub(in crate::vulkan) mod spot_shadow;
 
 use ash::vk;
-use concinnity_core::gfx::transform::mat4_inverse;
-use concinnity_core::render::model_history::HistoryMode;
-
-use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph};
-use crate::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
-
-use super::context::VkContext;
-use super::graph_exec::GraphFrameParams;
+use concinnity_core::components;
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::jitter;
+use concinnity_core::gfx::lod;
 use concinnity_core::gfx::projection::perspective_rh;
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
+use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::gfx::transform::mat4_mul;
-
+use concinnity_core::render::csm;
+use concinnity_core::render::lights;
+use concinnity_core::render::model_history::HistoryMode;
+use concinnity_core::render::render_graph;
+use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
 pub(in crate::vulkan) use concinnity_core::render::uniforms::ViewUniforms;
+
+use super::context::VkContext;
+use super::graph_exec::GraphFrameParams;
 
 // Where `record_frame` records this frame's GPU work: the outer "end" command
 // buffer, the acquired swapchain image, and the frame-in-flight slot the
@@ -76,7 +82,7 @@ impl VkContext {
         &self,
         buf: &super::allocator::PooledBuffer,
     ) {
-        use crate::gfx::render_types::{
+        use concinnity_core::gfx::render_types::{
             GpuObjectData, albedo_pool_index, normal_pool_index, pack_object_record,
             pack_skinned_record,
         };
@@ -157,13 +163,13 @@ impl VkContext {
     // the probe bake shares that body and deliberately leaves its instance tail
     // zeroed, which disables instances in a bake.
     fn patch_instance_lod_into(&self, buf: &super::allocator::PooledBuffer, cam_pos: [f32; 3]) {
-        use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+        use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if !self.instanced.any_lod {
             return;
         }
         let stride = std::mem::size_of::<GpuDrawArgs>();
         let base = self.draw.n_objects;
-        crate::gfx::lod::for_each_instance_lod(
+        lod::for_each_instance_lod(
             &self.instanced.clusters,
             cam_pos,
             |record, index_offset, index_count| {
@@ -190,7 +196,9 @@ impl VkContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) {
-        use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
+        use concinnity_core::gfx::render_types::{
+            GpuDrawArgs, draw_args_bucket_bits, draw_args_flags,
+        };
         let stride = std::mem::size_of::<GpuDrawArgs>();
         let mut model_history = self.model_history.borrow_mut();
         model_history.begin(history, self.cull_count());
@@ -217,7 +225,7 @@ impl VkContext {
         {
             // Per-frame active LOD pick. Objects with no alternates fall
             // straight through to LOD0.
-            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
@@ -248,7 +256,7 @@ impl VkContext {
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits
             // its template's.
-            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             // A clone copies its template's material, so a see-through one
             // leaves the opaque pass the way the static loop's does.
@@ -290,7 +298,7 @@ impl VkContext {
             .take(self.draw.n_skinned)
             .enumerate()
         {
-            let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+            let d = lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let rec = GpuDrawArgs {
                 index_count: index_count as u32,
@@ -405,18 +413,17 @@ impl VkContext {
             extent.width as f32 / extent.height as f32
         };
         if self.shadow.pipeline.is_some() {
-            let fresh =
-                crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
-                    view: self.view.matrix,
-                    cam_pos,
-                    fov_y_rad: fov_y_radians,
-                    aspect: cascade_aspect,
-                    near,
-                    shadow_distance: (self.shadow.distance as f32).min(far),
-                    light_dir_to_source: self.shadow.light_dir,
-                    shadow_map_size: self.shadow.map_size,
-                    active_cascades: self.shadow.cascades,
-                });
+            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
+                view: self.view.matrix,
+                cam_pos,
+                fov_y_rad: fov_y_radians,
+                aspect: cascade_aspect,
+                near,
+                shadow_distance: (self.shadow.distance as f32).min(far),
+                light_dir_to_source: self.shadow.light_dir,
+                shadow_map_size: self.shadow.map_size,
+                active_cascades: self.shadow.cascades,
+            });
             // Advance the cascade schedule and refresh only this frame's
             // cascades' light VPs; skipped cascades keep the VP + depth their
             // slice was last rendered with, so the Main pass samples each cascade
@@ -431,7 +438,7 @@ impl VkContext {
             self.shadow.render_mask = mask;
             self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
             self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..crate::gfx::render_types::NUM_SHADOW_CASCADES {
+            for i in 0..render_types::NUM_SHADOW_CASCADES {
                 if mask & (1u32 << i) != 0 {
                     self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
                 }
@@ -445,7 +452,7 @@ impl VkContext {
         // init. A no-op (mask stays 0) when the world has no shadowed spot.
         self.spot_shadow.advance(matches!(
             self.shadow.update,
-            crate::components::ShadowUpdate::EveryFrame
+            components::ShadowUpdate::EveryFrame
         ));
 
         // Push this frame's skinning matrices into the per-frame joint buffers
@@ -474,7 +481,7 @@ impl VkContext {
         // with local lights) and at least one light is still live. Drives both
         // `ClusterParams::use_clusters` below and the `LightCull` graph node, so
         // the forward pass never reads a list the skipped pass did not write.
-        let clustered = crate::gfx::lights::clustered_lighting_active(
+        let clustered = lights::clustered_lighting_active(
             self.light_cull.pipeline.is_some(),
             self.uniforms.light_uniforms.num_local_lights,
         );
@@ -591,8 +598,7 @@ impl VkContext {
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.
-        let seed_inputs =
-            crate::gfx::render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
+        let seed_inputs = render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
 
         //  Camera projection + per-frame view state. Computed before the main
         //  render pass begins so the GPU-cull compute dispatch (which Vulkan
@@ -627,10 +633,8 @@ impl VkContext {
             p
         } else if let Some(taa_frame) = self.taa.as_ref().map(|t| t.taa_frame) {
             let idx = taa_frame % 8 + 1;
-            let jx = (crate::gfx::jitter::radical_inverse(idx, 2) - 0.5) * 2.0
-                / extent.width.max(1) as f32;
-            let jy = (crate::gfx::jitter::radical_inverse(idx, 3) - 0.5) * 2.0
-                / extent.height.max(1) as f32;
+            let jx = (jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / extent.width.max(1) as f32;
+            let jy = (jitter::radical_inverse(idx, 3) - 0.5) * 2.0 / extent.height.max(1) as f32;
             let mut p = proj;
             p[2][0] -= jx;
             p[2][1] -= jy;
@@ -649,7 +653,7 @@ impl VkContext {
         // (zero iterations) rather than reading a list the skipped binning pass
         // never wrote. The planar / probe global sets bind the static
         // `use_clusters = 0` copy instead.
-        let cluster_params = crate::gfx::render_types::ClusterParams {
+        let cluster_params = render_types::ClusterParams {
             inv_view_proj: mat4_inverse(mat4_mul(proj, self.view.matrix)),
             cam_pos,
             z_near: near.max(1e-3),
@@ -659,9 +663,9 @@ impl VkContext {
                 -self.view.matrix[2][2],
             ],
             z_far: far,
-            grid_x: crate::gfx::render_types::CLUSTER_GRID_X,
-            grid_y: crate::gfx::render_types::CLUSTER_GRID_Y,
-            grid_z: crate::gfx::render_types::CLUSTER_GRID_Z,
+            grid_x: render_types::CLUSTER_GRID_X,
+            grid_y: render_types::CLUSTER_GRID_Y,
+            grid_z: render_types::CLUSTER_GRID_Z,
             num_lights: self.uniforms.light_uniforms.num_local_lights.max(0) as u32,
             screen_w: extent.width as f32,
             screen_h: extent.height as f32,
@@ -706,7 +710,7 @@ impl VkContext {
         // path. Uploaded every frame so a later install is picked up immediately.
         self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe.set);
 
-        let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp_mat);
+        let frustum = Frustum::from_view_projection(vp_mat);
 
         // Compute-cull host-side prep: rebuild this frame's
         // `GpuObjectData` + `GpuDrawArgs` storage buffers with the

@@ -12,20 +12,19 @@
 // the HDR scene with reflections composited in.
 
 use ash::vk;
-
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-
-use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
-use crate::gfx::render_types::SsrParams;
-use crate::vulkan::allocator::DeviceAllocator;
+use concinnity_core::gfx::render_types::SsrParams;
+use concinnity_core::gfx::ssr;
+use concinnity_core::render::fullscreen::{FullscreenPass, encode_fullscreen};
 
 use super::super::context::VkContext;
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::allocator::DeviceAllocator;
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // HDR-format SSR resolve output. Replaces the raw HDR resolve as the scene
@@ -36,7 +35,7 @@ pub(in crate::vulkan) const SSR_OUTPUT_FORMAT: vk::Format = vk::Format::R16G16B1
 // All `vk::*` handles are owned by this struct and freed on `destroy`.
 pub(in crate::vulkan) struct SsrResources {
     // Resolved authored tunables; turned into a per-frame `SsrParams` push.
-    pub(in crate::vulkan) settings: crate::gfx::ssr::SsrSettings,
+    pub(in crate::vulkan) settings: ssr::SsrSettings,
 
     // Render pass.
     pub(in crate::vulkan) resolve_render_pass: OwnedRenderPass,
@@ -296,7 +295,7 @@ fn create_resolve_pipeline(
 // the hot-reload flag.
 pub(in crate::vulkan) struct SsrInitInputs<'a> {
     // Resolved authored tunables.
-    pub settings: crate::gfx::ssr::SsrSettings,
+    pub settings: ssr::SsrSettings,
     // Per-frame HDR resolve scene views feeding the resolve sets.
     pub hdr_resolve_views: &'a [vk::ImageView],
     // Prefilter cubemap + its sampler for the IBL fallback all resolve sets bind.

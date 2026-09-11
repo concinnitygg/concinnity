@@ -22,6 +22,8 @@
 //
 // Mirrors `metal/parallel_encoder.rs`.
 
+use concinnity_core::render::parallel_ctx;
+use concinnity_core::render::render_graph;
 use windows::Win32::Graphics::Direct3D12::ID3D12GraphicsCommandList;
 
 use super::context::DxContext;
@@ -62,7 +64,7 @@ unsafe impl Send for SendableCmdList {}
 // pass, both already thread-safe.
 // The wrapper itself is the shared generic shim in `gfx::parallel_ctx`; this
 // alias keeps the `ParallelCtxRef<'a>` spelling at the directx call sites.
-pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a, DxContext>;
+pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, DxContext>;
 
 // SAFETY: see the type-level safety contract above. The contract is
 // **read-only**: any mutable field access from a worker (RefCell::borrow_mut,
@@ -72,10 +74,10 @@ pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a
 // in the G-buffer pass, both already thread-safe; D3D12 device-derived objects
 // (root signatures, PSOs, descriptor heaps, mapped upload buffers, fence) are
 // thread-safe for shared read per Microsoft's free-threading rules.
-unsafe impl crate::gfx::parallel_ctx::ParallelEncodeCtx for DxContext {}
+unsafe impl parallel_ctx::ParallelEncodeCtx for DxContext {}
 
 // Index into the per-pass `pass_allocators` / `pass_cmd_lists` pools
 // in `DxContext`. Layout: `frame_idx * PASS_COUNT + (PassId as usize)`.
-pub(super) fn pool_index(frame_idx: usize, pass_id: crate::gfx::render_graph::PassId) -> usize {
-    frame_idx * crate::gfx::render_graph::PASS_COUNT + pass_id as usize
+pub(super) fn pool_index(frame_idx: usize, pass_id: render_graph::PassId) -> usize {
+    frame_idx * render_graph::PASS_COUNT + pass_id as usize
 }

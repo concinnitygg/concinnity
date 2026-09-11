@@ -23,9 +23,8 @@
 // by the resolver) before translating, so the first per-frame transition has a
 // `from` matching the resource's actual state. The arm below is a fallback.
 
+use concinnity_core::render::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 use windows::Win32::Graphics::Direct3D12::*;
-
-use crate::gfx::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 
 // Map a `Read`'s consuming-stage union to the matching shader-resource states.
 // D3D12 splits shader reads in two, not three: FRAGMENT is

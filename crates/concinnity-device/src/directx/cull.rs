@@ -16,6 +16,9 @@
 // object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
 // signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
 
+use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::render_types;
 use concinnity_core::render::model_history::HistoryMode;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -272,7 +275,7 @@ impl DxContext {
     // emitted, so the caller can disable the unused reserve tail.
     pub(in crate::directx) fn for_each_runtime_record<F>(&self, mut emit: F) -> usize
     where
-        F: FnMut(usize, usize, &crate::gfx::render_types::DrawObject),
+        F: FnMut(usize, usize, &render_types::DrawObject),
     {
         if self.draw.n_runtime == 0 {
             return 0;
@@ -324,7 +327,9 @@ impl DxContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) {
-        use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
+        use concinnity_core::gfx::render_types::{
+            GpuDrawArgs, draw_args_bucket_bits, draw_args_flags,
+        };
         let Some(&ptr) = self.cull.draw_args_buffer_ptrs.get(frame_idx) else {
             return;
         };
@@ -354,7 +359,7 @@ impl DxContext {
         {
             // Per-frame active LOD pick. Objects with no alternates fall
             // straight through to LOD0.
-            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
@@ -395,7 +400,7 @@ impl DxContext {
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits
             // its template's.
-            let d = crate::gfx::lod::camera_distance(obj, cam_pos);
+            let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             // A clone copies its template's material, so a see-through one
             // leaves the opaque pass the way the static loop's does.
@@ -454,7 +459,7 @@ impl DxContext {
             .take(self.draw.n_skinned)
             .enumerate()
         {
-            let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
+            let d = lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let rec = GpuDrawArgs {
                 index_count: index_count as u32,
@@ -485,7 +490,7 @@ impl DxContext {
         // instances of the clusters that have them.
         if self.instanced.any_lod {
             let instance_base = self.draw.n_objects;
-            crate::gfx::lod::for_each_instance_lod(
+            lod::for_each_instance_lod(
                 &self.instanced.clusters,
                 cam_pos,
                 |record, index_offset, index_count| {
@@ -524,7 +529,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
         // The GPU-driven pre-pass both fills and reads the model-history ring.
@@ -638,7 +643,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         slot: usize,
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
         let cull_pso = self
@@ -738,7 +743,7 @@ impl DxContext {
         render_mask: u32,
         cam_pos: [f32; 3],
     ) {
-        use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+        use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
         let (Some(shadow_cull_pso), Some(cull_root), Some(indirect), Some(status)) = (
             self.cull.cull_pso_shadow.as_ref(),
             self.cull.cull_root_sig.as_ref(),
@@ -791,9 +796,7 @@ impl DxContext {
                 if render_mask & (1u32 << c) == 0 {
                     continue;
                 }
-                let frustum = crate::gfx::frustum::Frustum::from_view_projection(
-                    self.shadow.uniforms.light_vps[c],
-                );
+                let frustum = Frustum::from_view_projection(self.shadow.uniforms.light_vps[c]);
                 let mut cull_params = CullParams {
                     planes: [[0.0; 4]; 6],
                     cam_pos,
@@ -856,7 +859,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        planes: &[(crate::gfx::frustum::Frustum, [f32; 3])],
+        planes: &[(Frustum, [f32; 3])],
         indirect: &ID3D12Resource,
         status_gva: u64,
         // Per-plane region stride, in commands: the FIXED build-time record capacity
@@ -975,7 +978,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        frustum: &crate::gfx::frustum::Frustum,
+        frustum: &Frustum,
         cur_vp: [[f32; 4]; 4],
     ) {
         let (Some(cull_pso2), Some(cull_root), Some(hiz), Some(indirect)) = (

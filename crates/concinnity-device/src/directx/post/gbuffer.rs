@@ -17,7 +17,6 @@
 
 use concinnity_core::gfx::transform::IDENTITY;
 use std::cell::RefCell;
-
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

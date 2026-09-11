@@ -12,10 +12,9 @@
 //! The segment is built in memory and written once when the run finishes, so
 //! warming a hundred artifacts costs one file write rather than a hundred.
 
-use std::path::Path;
-
 use concinnity_host::store::cache::{CACHE_BUDGET_BYTES, Segment};
 use concinnity_host::store::paths::StateTree;
+use std::path::Path;
 
 use crate::shader_cache::Ensured;
 

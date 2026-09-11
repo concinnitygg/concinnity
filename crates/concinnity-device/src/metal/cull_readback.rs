@@ -20,12 +20,11 @@
 // behind the blit.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::cull_status;
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _,
     MTLCommandQueue as _, MTLDevice as _, MTLResourceOptions,
 };
-
-use concinnity_core::gfx::cull_status;
 
 use super::context::MtlContext;
 
