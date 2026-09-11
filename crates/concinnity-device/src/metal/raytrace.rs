@@ -833,7 +833,7 @@ impl crate::metal::context::MtlContext {
         ) else {
             return Ok(());
         };
-        if self.skinned.draw_objects.is_empty() {
+        if self.skinned.slots.draw_objects.is_empty() {
             return Ok(());
         }
         let cenc = cmd_buf
@@ -841,7 +841,7 @@ impl crate::metal::context::MtlContext {
             .ok_or("failed to create main-skin compute encoder")?;
         cenc.set_pipeline(skin_pipeline);
         let tg = skin_pipeline.maxTotalThreadsPerThreadgroup().clamp(1, 64);
-        for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
             let Some(joint_buf) = joint_bufs.get(i) else {
                 continue;
             };
@@ -850,6 +850,7 @@ impl crate::metal::context::MtlContext {
             // the kernel indexes.
             let joint_count = self
                 .skinned
+                .slots
                 .joint_matrices
                 .get(i)
                 .map(|m| m.len().max(1))

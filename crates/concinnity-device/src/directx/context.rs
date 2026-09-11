@@ -167,14 +167,14 @@ pub(super) struct SkinnedState {
     pub index_buffer: Option<PooledBuffer>,
     pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
-    pub draw_objects: Vec<SkinnedDrawObject>,
+    // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
+    // records this backend shares with Metal and Vulkan.
+    pub slots: crate::gfx::skinned_slots::SkinnedSlots,
     // Per-frame, per-object joint-matrix upload buffers, indexed
     // [frame_idx][skinned_idx]. Each holds MAX_JOINTS float4x4 matrices,
-    // persistently mapped; rewritten each frame from `joint_matrices`.
+    // persistently mapped; rewritten each frame from `slots.joint_matrices`.
     pub joint_buffers: Vec<Vec<PooledBuffer>>,
     pub joint_ptrs: Vec<Vec<*mut u8>>,
-    // Current skinning matrices per skinned object, parallel to `draw_objects`.
-    pub joint_matrices: Vec<Vec<[[f32; 4]; 4]>>,
     // GPU-driven main-pass skinning. `skin_pipeline` is the `rt_skin` compute
     // kernel reused to deform the bind-pose verts into a per-frame buffer for the
     // bindless main pass (independent of RT, which keeps its own skin dispatch);
@@ -188,19 +188,17 @@ pub(super) struct SkinnedState {
     pub skin_pipeline: Option<super::raytrace::SkinPipeline>,
     pub deformed_buffers: Vec<ID3D12Resource>,
     pub deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW>,
-    // Morph targets, parallel to `draw_objects`. `morph_delta_buffers[i]` is the
-    // per-mesh packed sparse morph buffer (`PayloadMorphs::packed_words`;
-    // instance copies share the
+    // Morph targets, parallel to `slots.draw_objects`. `morph_delta_buffers[i]`
+    // is the per-mesh packed sparse morph buffer
+    // (`PayloadMorphs::packed_words`; instance copies share the
     // template's resource) or `None` for a mesh without morph targets;
-    // `morph_target_counts[i]` is its target count (0 = none). `morph_weights[i]`
-    // is the object's current weights (empty without morphs), rewritten by
-    // `update_morph_weights` and copied into the per-frame `morph_weight_buffers`
-    // ([frame_idx][skinned_idx], one f32 per target, persistently mapped) by
-    // `upload_morph_weights`. `morph_weight_buffers` is empty when no skinned
-    // object carries morphs.
+    // `morph_target_counts[i]` is its target count (0 = none). The per-frame
+    // `morph_weight_buffers` ([frame_idx][skinned_idx], one f32 per target,
+    // persistently mapped) are filled from `slots.morph_weights` by
+    // `upload_morph_weights`, and are empty when no skinned object carries
+    // morphs.
     pub morph_delta_buffers: Vec<Option<PooledBuffer>>,
     pub morph_target_counts: Vec<u32>,
-    pub morph_weights: Vec<Vec<f32>>,
     pub morph_weight_buffers: Vec<Vec<PooledBuffer>>,
     pub morph_weight_ptrs: Vec<Vec<*mut u8>>,
     // `false` until the deformed-vertex ring has been posed at least one full
@@ -1465,14 +1463,16 @@ impl DxContext {
             .iter()
             .map(|c| c.instances.len())
             .sum();
-        let objects =
-            (self.draw.objects.len() + instanced_total + self.skinned.draw_objects.len()) as u32;
+        let objects = (self.draw.objects.len()
+            + instanced_total
+            + self.skinned.slots.draw_objects.len()) as u32;
         // Live skinned count: authored meshes plus runtime-spawned instances,
         // excluding the hidden pre-reserved pool slots. `objects` above counts the
         // whole pool and so stays flat across skinned spawn/despawn; this tracks
         // the visible count, so a spawn bumps it and a despawn drops it.
         let skinned_visible = self
             .skinned
+            .slots
             .draw_objects
             .iter()
             .filter(|o| o.visible)

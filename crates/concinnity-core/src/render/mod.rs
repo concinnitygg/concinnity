@@ -56,6 +56,7 @@ pub mod shaders;
 pub mod shadow_bias;
 pub mod shadow_schedule;
 pub mod skinned_pool;
+pub mod skinned_slots;
 pub mod slang_programs;
 pub mod slang_source;
 pub mod slot_rewrites;

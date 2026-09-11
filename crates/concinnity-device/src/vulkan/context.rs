@@ -179,14 +179,13 @@ pub(super) struct VkSkinned {
     // hot-reload write lands in. Zero until `upload_skinned` runs.
     pub(super) vertex_buffer_bytes: u64,
     pub(super) index_buffer_bytes: u64,
-    pub(super) draw_objects: Vec<SkinnedDrawObject>,
+    // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
+    // records this backend shares with Metal and DirectX.
+    pub(super) slots: crate::gfx::skinned_slots::SkinnedSlots,
     // Per-(frame, object) joint storage buffers (host-mapped) + their
     // descriptor sets. Indexed [frame_idx][skinned_idx].
     pub(super) joint_buffers: Vec<Vec<PooledBuffer>>,
     pub(super) joint_sets: Vec<Vec<vk::DescriptorSet>>,
-    // Current skinning matrices per skinned object, parallel to `draw_objects`.
-    // Rewritten each frame by `update_skinned_pose`.
-    pub(super) joint_matrices: Vec<Vec<[[f32; 4]; 4]>>,
     // GPU-driven main-pass skinning fold. `skin` is the `rt_skin` compute pipeline
     // (reused independently of RT) + its per-(frame, object) descriptor sets,
     // written once in `build_main_skin`. `deformed` is one storage+vertex buffer
@@ -196,22 +195,19 @@ pub(super) struct VkSkinned {
     // `None`/empty until `upload_skinned` runs with the bindless cull path active.
     pub(super) skin: Option<super::raytrace::SkinPipeline>,
     pub(super) deformed: Vec<super::raytrace::DeviceBuffer>,
-    // Morph targets, parallel to `draw_objects`. `morph_delta_unique` owns the
-    // per-mesh packed sparse morph device buffers (`PayloadMorphs::packed_words`,
-    // deduped by source
+    // Morph targets, parallel to `slots.draw_objects`. `morph_delta_unique`
+    // owns the per-mesh packed sparse morph device buffers
+    // (`PayloadMorphs::packed_words`, deduped by source
     // `Arc`); `morph_delta_buffers[i]` is object `i`'s handle into them (null =
-    // morphless). `morph_target_counts[i]` is its target count (0 = none).
-    // `morph_weights[i]` is the object's current weights (empty without morphs),
-    // rewritten by `update_morph_weights` and copied into the per-(frame, object)
-    // host-mapped `morph_weight_buffers` ([frame_idx][skinned_idx], one f32 per
-    // target) by `upload_morph_weights`. The weight buffers/memories/ptrs are
-    // empty when no skinned object carries morphs. The skin descriptor sets'
-    // morph bindings (3 = deltas, 4 = weights) are re-pointed in
-    // `upload_skinned_morphs`.
+    // morphless). `morph_target_counts[i]` is its target count (0 = none). The
+    // per-(frame, object) host-mapped `morph_weight_buffers`
+    // ([frame_idx][skinned_idx], one f32 per target) are filled from
+    // `slots.morph_weights` by `upload_morph_weights`, and are empty when no
+    // skinned object carries morphs. The skin descriptor sets' morph bindings
+    // (3 = deltas, 4 = weights) are re-pointed in `upload_skinned_morphs`.
     pub(super) morph_delta_unique: Vec<PooledBuffer>,
     pub(super) morph_delta_buffers: Vec<vk::Buffer>,
     pub(super) morph_target_counts: Vec<u32>,
-    pub(super) morph_weights: Vec<Vec<f32>>,
     pub(super) morph_weight_buffers: Vec<Vec<PooledBuffer>>,
     // `false` until the deformed-vertex ring has been posed at least one full
     // frame. While false the GPU-driven G-buffer velocity binds the current
@@ -1500,14 +1496,16 @@ impl VkContext {
             .iter()
             .map(|c| c.instances.len())
             .sum();
-        let objects =
-            (self.draw.objects.len() + instanced_total + self.skinned.draw_objects.len()) as u32;
+        let objects = (self.draw.objects.len()
+            + instanced_total
+            + self.skinned.slots.draw_objects.len()) as u32;
         // Live skinned count: authored meshes plus runtime-spawned instances,
         // excluding the hidden pre-reserved pool slots. `objects` above counts the
         // whole pool and so stays flat across skinned spawn/despawn; this tracks
         // the visible count, so a spawn bumps it and a despawn drops it.
         let skinned_visible = self
             .skinned
+            .slots
             .draw_objects
             .iter()
             .filter(|o| o.visible)

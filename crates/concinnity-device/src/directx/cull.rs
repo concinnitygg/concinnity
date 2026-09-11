@@ -448,6 +448,7 @@ impl DxContext {
         let base = self.skinned_record_base();
         for (k, obj) in self
             .skinned
+            .slots
             .draw_objects
             .iter()
             .take(self.draw.n_skinned)
@@ -467,7 +468,7 @@ impl DxContext {
             };
             // SAFETY: the buffers reserved `draw.n_skinned` records past
             // `skinned_record_base()` at init (threaded capacity), and the loop
-            // is bounded by `self.skinned.draw_objects.len() == self.draw.n_skinned`.
+            // is bounded by `self.skinned.slots.draw_objects.len() == self.draw.n_skinned`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuDrawArgs as *const u8,

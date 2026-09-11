@@ -319,7 +319,7 @@ impl MtlContext {
     ) -> Result<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
         self.rings
             .joint
-            .write_all(&self.device, ring_slot, &self.skinned.joint_matrices)
+            .write_all(&self.device, ring_slot, &self.skinned.slots.joint_matrices)
     }
 
     // Build this frame's per-object morph-weight buffers, from the same ring
@@ -335,7 +335,7 @@ impl MtlContext {
     ) -> Result<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
         self.rings
             .joint
-            .write_weights(&self.device, ring_slot, &self.skinned.morph_weights)
+            .write_weights(&self.device, ring_slot, &self.skinned.slots.morph_weights)
     }
 
     // Build the per-frame `GpuObjectData` buffer the GPU-driven pass consumes:
@@ -401,7 +401,7 @@ impl MtlContext {
         // cull. Rebuilt every frame (the record's AABB + model follow obj.model,
         // which animates), unlike the cached static instance records.
         if self.draw.n_skinned > 0 {
-            for obj in &self.skinned.draw_objects {
+            for obj in &self.skinned.slots.draw_objects {
                 objects.push(metal_skinned_record(obj, texture_count));
             }
         }
@@ -489,7 +489,7 @@ impl MtlContext {
         // skinned index buffer (see encode_cull's `skinned_base`).
         if self.draw.n_skinned > 0 {
             let base = args.len();
-            for (k, obj) in self.skinned.draw_objects.iter().enumerate() {
+            for (k, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
                 let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
                 args.push(GpuDrawArgs {

@@ -194,42 +194,35 @@ impl VkContext {
 
     // Free a streamed chunk's geometry region and retire its `DrawObject`
     // slot for reuse.
+    //
+    // `retire_frame` is `current_frame + frames_in_flight` so an in-flight
+    // submission never has the freed region overwritten by a later
+    // `add_chunk_mesh`. The region is not zeroed: a non-resident draw is
+    // skipped everywhere and an `alloc` hands back exactly `size` bytes that
+    // `add_chunk_mesh` fully overwrites.
     pub(crate) fn remove_chunk_mesh(
         &mut self,
         draw_idx: usize,
         retire_frame: u64,
     ) -> Result<(), String> {
-        let obj =
-            self.draw.objects.get(draw_idx).ok_or_else(|| {
-                format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
-            })?;
-        let v_off = obj.vertex_offset as u64;
-        let v_len = (obj.vertex_count * std::mem::size_of::<Vertex>()) as u64;
-        let i_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
-        let i_len = (obj.index_count * std::mem::size_of::<u32>()) as u64;
-        self.chunk_stream.vtx_alloc.free(v_off, v_len, retire_frame);
-        self.chunk_stream.idx_alloc.free(i_off, i_len, retire_frame);
-        let obj = &mut self.draw.objects[draw_idx];
-        obj.visible = false;
-        obj.resident = false;
+        let region = crate::gfx::draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+        self.chunk_stream
+            .vtx_alloc
+            .free(region.vertex_offset, region.vertex_bytes, retire_frame);
+        self.chunk_stream
+            .idx_alloc
+            .free(region.index_offset, region.index_bytes, retire_frame);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
         self.rt_topology_dirty = true;
         Ok(())
     }
 
-    // Rewrite a resident chunk's model matrix.
     pub(crate) fn set_chunk_model(
         &mut self,
         draw_idx: usize,
         model: [[f32; 4]; 4],
     ) -> Result<(), String> {
-        let obj = self
-            .draw
-            .objects
-            .get_mut(draw_idx)
-            .ok_or_else(|| format!("set_chunk_model: draw object {} out of range", draw_idx))?;
-        obj.model = model;
-        Ok(())
+        crate::gfx::draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
     }
 }

@@ -968,7 +968,7 @@ impl VkContext {
         // joint palettes are borrowed straight out of this frame's slot instead of
         // being collected into a per-frame list.
         let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt_skinned_geometry
-            && !self.skinned.draw_objects.is_empty()
+            && !self.skinned.slots.draw_objects.is_empty()
             && !self.skinned.vertex_buffer.is_null()
             && !self.skinned.index_buffer.is_null()
         {
@@ -995,7 +995,7 @@ impl VkContext {
                 .map(|b| b.as_slice())
                 .unwrap_or(&[]);
             let skinned = skinned_inputs.map(|(vb, ib)| super::super::raytrace::SkinnedRtInputs {
-                objects: &self.skinned.draw_objects,
+                objects: &self.skinned.slots.draw_objects,
                 vertex_buffer: vb,
                 index_buffer: ib,
                 joint_buffers,

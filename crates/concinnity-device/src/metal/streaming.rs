@@ -167,58 +167,40 @@ impl MtlContext {
     //
     // `retire_frame` is `current_frame + frames_in_flight` so an in-flight
     // command buffer never has the freed region overwritten by a later
-    // `add_chunk_mesh`. The slot stays in `draw.objects` but is marked
-    // non-resident and invisible, so every pass skips it.
+    // `add_chunk_mesh`.
     pub(crate) fn remove_chunk_mesh(
         &mut self,
         draw_idx: usize,
         retire_frame: u64,
     ) -> Result<(), String> {
-        let obj =
-            self.draw.objects.get_mut(draw_idx).ok_or_else(|| {
-                format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
-            })?;
-        let v_off = obj.vertex_offset;
-        let v_len = obj.vertex_count * std::mem::size_of::<Vertex>();
-        let i_off = obj.index_offset * std::mem::size_of::<u32>();
-        let i_len = obj.index_count * std::mem::size_of::<u32>();
-        obj.visible = false;
-        obj.resident = false;
-        zero_buffer_region(&self.vertex_buffer, v_off, v_len)?;
-        zero_buffer_region(&self.index_buffer, i_off, i_len)?;
+        let region = crate::gfx::draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+        zero_buffer_region(
+            &self.vertex_buffer,
+            region.vertex_offset as usize,
+            region.vertex_bytes as usize,
+        )?;
+        zero_buffer_region(
+            &self.index_buffer,
+            region.index_offset as usize,
+            region.index_bytes as usize,
+        )?;
         self.geometry_alloc
             .chunk_vtx
-            .free(v_off as u64, v_len as u64, retire_frame);
+            .free(region.vertex_offset, region.vertex_bytes, retire_frame);
         self.geometry_alloc
             .chunk_idx
-            .free(i_off as u64, i_len as u64, retire_frame);
+            .free(region.index_offset, region.index_bytes, retire_frame);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
         self.rt.topology_dirty = true;
         Ok(())
     }
 
-    // Rewrite a resident chunk's model matrix.
-    //
-    // Used by camera-relative rendering: when the camera crosses into a new
-    // chunk the render origin follows it, so every resident chunk is rebased
-    // onto the new origin. Only the model
-    // matrix changes -- the geometry stays where it was uploaded. The
-    // previous-frame model (`prev_draw_models`) is left untouched so the TAA
-    // velocity pre-pass still diffs against the origin the chunk was last
-    // rendered with: the rebase is exact, so a stationary chunk shows zero
-    // motion across an origin shift.
     pub(crate) fn set_chunk_model(
         &mut self,
         draw_idx: usize,
         model: [[f32; 4]; 4],
     ) -> Result<(), String> {
-        let obj = self
-            .draw
-            .objects
-            .get_mut(draw_idx)
-            .ok_or_else(|| format!("set_chunk_model: draw object {} out of range", draw_idx))?;
-        obj.model = model;
-        Ok(())
+        crate::gfx::draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
     }
 }

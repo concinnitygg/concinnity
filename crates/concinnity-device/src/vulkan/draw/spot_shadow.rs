@@ -422,7 +422,7 @@ impl VkContext {
             if let (Some(sk_pipeline), Some(sk_pl)) = (
                 self.shadow.skinned_pipeline.as_ref(),
                 self.shadow.skinned_pipeline_layout.as_ref(),
-            ) && !self.skinned.draw_objects.is_empty()
+            ) && !self.skinned.slots.draw_objects.is_empty()
             {
                 let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
                 device.cmd_bind_pipeline(
@@ -440,7 +440,7 @@ impl VkContext {
                 );
                 device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
                 device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT32);
-                for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+                for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
                     if !obj.visible {
                         continue;
                     }

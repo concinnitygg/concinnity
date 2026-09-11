@@ -96,13 +96,15 @@ impl MtlContext {
             .map(|c| c.instances.len())
             .sum();
         self.diagnostics.frame_stats.objects =
-            (self.draw.objects.len() + instanced_total + self.skinned.draw_objects.len()) as u32;
+            (self.draw.objects.len() + instanced_total + self.skinned.slots.draw_objects.len())
+                as u32;
         // Live skinned count: authored meshes plus runtime-spawned instances,
         // excluding the hidden pre-reserved pool slots. `objects` above counts
         // the whole pool and so stays flat across skinned spawn/despawn; this
         // tracks the visible count, so a spawn bumps it and a despawn drops it.
         self.diagnostics.frame_stats.skinned_visible = self
             .skinned
+            .slots
             .draw_objects
             .iter()
             .filter(|o| o.visible)
@@ -1133,7 +1135,7 @@ impl MtlContext {
         // first frame after `upload_skinned` (the init build is static-only) or
         // when the `Rebuild` diagnostic forces a from-scratch build every frame.
         let has_skinned = self.rt.skinned_geometry
-            && !self.skinned.draw_objects.is_empty()
+            && !self.skinned.slots.draw_objects.is_empty()
             && self.rt.skin_pipeline.is_some();
         if has_skinned {
             if self.rt.accel.is_none() || self.rt.dynamic_mode == RtDynamicMode::Rebuild {
@@ -1261,13 +1263,13 @@ impl MtlContext {
             &self.rt.skin_pipeline,
         ) {
             (Some(svb), Some(sib), Some(pipe))
-                if !self.skinned.draw_objects.is_empty() && self.rt.skinned_geometry =>
+                if !self.skinned.slots.draw_objects.is_empty() && self.rt.skinned_geometry =>
             {
                 Some(SkinnedRtInputs {
-                    objects: &self.skinned.draw_objects,
+                    objects: &self.skinned.slots.draw_objects,
                     vertex_buffer: svb,
                     index_buffer: sib,
-                    joint_matrices: &self.skinned.joint_matrices,
+                    joint_matrices: &self.skinned.slots.joint_matrices,
                     skin_pipeline: pipe.as_ref(),
                 })
             }
@@ -1323,10 +1325,10 @@ impl MtlContext {
         };
         let draw_objects = std::mem::take(&mut self.draw.objects);
         let skinned = SkinnedRtInputs {
-            objects: &self.skinned.draw_objects,
+            objects: &self.skinned.slots.draw_objects,
             vertex_buffer: &svb,
             index_buffer: &sib,
-            joint_matrices: &self.skinned.joint_matrices,
+            joint_matrices: &self.skinned.slots.joint_matrices,
             skin_pipeline: pipe.as_ref(),
         };
         let res = self

@@ -457,13 +457,13 @@ impl DxContext {
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
         let mut new_indices: Vec<u32> = Vec::new();
         let mut layouts: Vec<crate::gfx::backend::SkinnedSlotLayout> =
-            Vec::with_capacity(self.skinned.draw_objects.len());
+            Vec::with_capacity(self.skinned.slots.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
         let mut new_per_slot: Vec<(usize, u32, usize, usize, usize)> =
-            Vec::with_capacity(self.skinned.draw_objects.len());
+            Vec::with_capacity(self.skinned.slots.draw_objects.len());
 
-        for (skinned_index, obj) in self.skinned.draw_objects.iter().enumerate() {
+        for (skinned_index, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
             let new_v_base = new_vertices.len() as u32;
             let new_i_off = new_indices.len();
 
@@ -613,7 +613,7 @@ impl DxContext {
         // Commit: rewrite per-slot layouts, repoint the live views at the
         // new buffers, and drop the old buffer COM references.
         for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
-            let obj = &mut self.skinned.draw_objects[skinned_index];
+            let obj = &mut self.skinned.slots.draw_objects[skinned_index];
             obj.vertex_base = v_base;
             obj.vertex_count = v_count;
             obj.index_offset = i_off;

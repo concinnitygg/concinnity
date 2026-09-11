@@ -388,7 +388,7 @@ impl DxContext {
         ) else {
             return;
         };
-        if self.skinned.draw_objects.is_empty() {
+        if self.skinned.slots.draw_objects.is_empty() {
             return;
         }
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
@@ -403,7 +403,7 @@ impl DxContext {
             cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
             cmd.SetGraphicsRootConstantBufferView(1, ubo_gva);
 
-            for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+            for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
                 if !obj.visible {
                     continue;
                 }

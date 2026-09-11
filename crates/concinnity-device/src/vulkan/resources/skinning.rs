@@ -159,7 +159,7 @@ impl VkContext {
             joint_sets.push(sets);
         }
 
-        self.skinned.joint_matrices = draw_objects
+        self.skinned.slots.joint_matrices = draw_objects
             .iter()
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
@@ -174,7 +174,7 @@ impl VkContext {
         self.skinned.index_buffer_bytes = idx_bytes.len() as u64;
         self.skinned.joint_buffers = joint_buffers;
         self.skinned.joint_sets = joint_sets;
-        self.skinned.draw_objects = draw_objects;
+        self.skinned.slots.draw_objects = draw_objects;
         // A whole new skinned set: nothing in the model-history ring was written
         // for these records.
         self.model_history.borrow_mut().reset(self.cull_count());
@@ -184,7 +184,7 @@ impl VkContext {
         self.skinned.morph_delta_unique = Vec::new();
         self.skinned.morph_delta_buffers = vec![vk::Buffer::null(); n];
         self.skinned.morph_target_counts = vec![0; n];
-        self.skinned.morph_weights = vec![Vec::new(); n];
+        self.skinned.slots.morph_weights = vec![Vec::new(); n];
         self.skinned.morph_weight_buffers = Vec::new();
 
         // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline +
@@ -217,6 +217,7 @@ impl VkContext {
     ) -> Result<(), String> {
         let obj = self
             .skinned
+            .slots
             .draw_objects
             .get(skinned_index)
             .ok_or_else(|| {
@@ -274,93 +275,35 @@ impl VkContext {
         Ok(())
     }
 
-    // Update a skinned slot's joint count to match a re-imported `.glb`
-    // skeleton. The per-(frame, object) joint storage buffers were sized
-    // for `MAX_JOINTS` matrices at init, so no GPU resource needs to grow:
-    // only the CPU-side `SkinnedDrawObject::joint_count` and the parallel
-    // `skinned_joint_matrices` slot are touched. Shrinking truncates the
-    // matrix slot; growing seeds the new entries to identity so the
-    // shader sees a valid pose until the next `update_skinned_pose` runs.
-    // Counts above `MAX_JOINTS` are clamped (the storage buffer is fixed
-    // at that size). Driven by asset hot-reload. Mirrors
-    // `DxContext::update_skinned_skeleton`. Reached only through the bin's
-    // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
+    // The CPU-side skinned entry points the `RenderBackend` impl forwards to.
+    // Each is the `SkinnedSlots` operation of the same name; the behavior and
+    // its contract are documented there, once for all three backends.
     pub(crate) fn update_skinned_skeleton(
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
     ) -> Result<(), String> {
-        let obj = self
-            .skinned
-            .draw_objects
-            .get_mut(skinned_index)
-            .ok_or_else(|| {
-                format!(
-                    "update_skinned_skeleton: skinned object {} out of range",
-                    skinned_index
-                )
-            })?;
-        let capped = new_joint_count.min(MAX_JOINTS);
-        obj.joint_count = capped;
-        let size = capped.max(1);
-        if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
-            slot.resize(size, IDENTITY);
-        }
-        Ok(())
+        self.skinned
+            .slots
+            .update_skeleton(skinned_index, new_joint_count)
     }
 
-    // Replace the skinning matrices for one skinned object.
     pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
-        if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
-            slot.clear();
-            slot.extend_from_slice(matrices);
-            if slot.is_empty() {
-                slot.push(IDENTITY);
-            }
-        }
+        self.skinned.slots.update_pose(skinned_index, matrices);
     }
 
-    // Reveal the pre-reserved skinned instance at `instance_index` (the
-    // engine's instance pool decided which): show it at `model` and reset its
-    // joint palette to the bind pose so it does not flash its previous
-    // occupant's last frame (the owning `SkeletonPose`'s first pose push
-    // replaces it next frame). The copy's deformed region is already valid
-    // because `encode_skin` folds every pre-reserved copy each frame. A no-op
-    // if the index is out of range. Mirrors the Metal path.
     pub(crate) fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
-        let Some(obj) = self.skinned.draw_objects.get_mut(instance_index) else {
-            return;
-        };
-        obj.model = model;
-        obj.visible = true;
-        // The slot's model-history entry belongs to the previous occupant, so
-        // the next pre-pass must reproject through the revealed model instead.
-        self.model_history
-            .borrow_mut()
-            .reoccupy_skinned(instance_index);
-        if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
-            palette.iter_mut().for_each(|m| *m = IDENTITY);
-        }
+        self.skinned
+            .slots
+            .reveal(instance_index, model, &mut self.model_history.borrow_mut());
     }
 
-    // Hide a skinned object; the engine's instance pool recycles the slot. A
-    // no-op if the index is out of range. Mirrors the Metal path.
     pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
-        if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index) {
-            obj.visible = false;
-        }
+        self.skinned.slots.retire(skinned_index);
     }
 
-    // Push the model-to-world matrices of the given skinned objects, one
-    // `(skinned index, matrix)` entry per moved instance. The per-frame cull
-    // records read `obj.model` directly, so this only writes the fields.
-    // Out-of-range indices have no effect.
     pub(crate) fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
-        for &(skinned_index, model) in updates {
-            if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index as usize) {
-                obj.model = model;
-            }
-        }
+        self.skinned.slots.update_models(updates);
     }
 
     // Copy this frame's skinning matrices into the per-frame joint buffers.
@@ -368,7 +311,7 @@ impl VkContext {
         let Some(frame_bufs) = self.skinned.joint_buffers.get(frame_idx) else {
             return;
         };
-        for (i, mats) in self.skinned.joint_matrices.iter().enumerate() {
+        for (i, mats) in self.skinned.slots.joint_matrices.iter().enumerate() {
             let Some(dst) = frame_bufs.get(i) else {
                 continue;
             };
@@ -389,7 +332,7 @@ impl VkContext {
     ) -> Result<(), String> {
         use std::collections::HashMap;
 
-        let n = self.skinned.draw_objects.len();
+        let n = self.skinned.slots.draw_objects.len();
         let device = self.device.clone();
         let frames = self.frames_in_flight.max(1);
 
@@ -492,19 +435,15 @@ impl VkContext {
         self.skinned.morph_delta_unique = delta_unique;
         self.skinned.morph_delta_buffers = delta_buffers;
         self.skinned.morph_target_counts = target_counts;
-        self.skinned.morph_weights = weights;
+        self.skinned.slots.morph_weights = weights;
         self.skinned.morph_weight_buffers = weight_buffers;
         Ok(())
     }
 
-    // Replace one skinned object's morph weights. Out-of-range indices and
-    // objects without morph targets are ignored; extra weights are dropped.
     pub(crate) fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
-        if let Some(slot) = self.skinned.morph_weights.get_mut(skinned_index) {
-            for (i, w) in slot.iter_mut().enumerate() {
-                *w = weights.get(i).copied().unwrap_or(0.0);
-            }
-        }
+        self.skinned
+            .slots
+            .update_morph_weights(skinned_index, weights);
     }
 
     // Copy this frame's morph weights into the per-frame weight buffers the skin
@@ -514,7 +453,7 @@ impl VkContext {
         let Some(frame_bufs) = self.skinned.morph_weight_buffers.get(frame_idx) else {
             return;
         };
-        for (i, w) in self.skinned.morph_weights.iter().enumerate() {
+        for (i, w) in self.skinned.slots.morph_weights.iter().enumerate() {
             let (Some(dst), false) = (frame_bufs.get(i), w.is_empty()) else {
                 continue;
             };

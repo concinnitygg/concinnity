@@ -2904,7 +2904,7 @@ impl super::context::VkContext {
     pub(in crate::vulkan) fn build_main_skin(&mut self, vertex_total: usize) -> Result<(), String> {
         let device = self.device.clone();
         let frames = self.frames_in_flight.max(1);
-        let n = self.skinned.draw_objects.len();
+        let n = self.skinned.slots.draw_objects.len();
         if n == 0 {
             return Ok(());
         }
@@ -2990,7 +2990,7 @@ impl super::context::VkContext {
         vertex_total: usize,
     ) -> Result<Vec<DeviceBuffer>, String> {
         let frames = self.frames_in_flight.max(1);
-        let n = self.skinned.draw_objects.len();
+        let n = self.skinned.slots.draw_objects.len();
 
         let deformed_bytes = (vertex_total as u64 * VERTEX_STRIDE).max(VERTEX_STRIDE);
         let mut deformed: Vec<DeviceBuffer> = Vec::with_capacity(frames);
@@ -3056,6 +3056,7 @@ impl super::context::VkContext {
         }
         for (o, obj) in self
             .skinned
+            .slots
             .draw_objects
             .iter()
             .take(self.draw.n_skinned)

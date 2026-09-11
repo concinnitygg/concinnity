@@ -275,7 +275,7 @@ impl MtlContext {
         ) else {
             return draw_calls;
         };
-        if self.skinned.draw_objects.is_empty() {
+        if self.skinned.slots.draw_objects.is_empty() {
             return draw_calls;
         }
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("spot shadow skinned"));
@@ -290,7 +290,7 @@ impl MtlContext {
             },
         );
         enc.set_vertex_buffer(svb, 0, 1);
-        for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
             if !obj.visible {
                 continue;
             }

@@ -2063,7 +2063,7 @@ impl super::context::DxContext {
         ) else {
             return;
         };
-        if self.skinned.draw_objects.is_empty() {
+        if self.skinned.slots.draw_objects.is_empty() {
             return;
         }
         let src_gva = com::gpu_va(vb);
@@ -2080,7 +2080,7 @@ impl super::context::DxContext {
             cmd.SetComputeRootSignature(&skin.root_sig);
             cmd.SetPipelineState(&skin.pso);
         }
-        for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
+        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
             let joint_gva = self.skinned_joint_gva(frame_idx, i);
             let target_count = self
                 .skinned
@@ -2176,7 +2176,7 @@ impl super::context::DxContext {
             self.skinned.index_buffer.as_ref(),
         ) {
             (Some(vb), Some(ib))
-                if self.rt_skinned_geometry && !self.skinned.draw_objects.is_empty() =>
+                if self.rt_skinned_geometry && !self.skinned.slots.draw_objects.is_empty() =>
             {
                 let vertex_gva = com::gpu_va(vb);
                 let index_gva = com::gpu_va(ib);
@@ -2198,7 +2198,7 @@ impl super::context::DxContext {
             return;
         };
         let skinned = skinned_inputs.map(|(v, i)| SkinnedRtInputs {
-            objects: &self.skinned.draw_objects,
+            objects: &self.skinned.slots.draw_objects,
             vertex_gva: v,
             index_gva: i,
             joint_buffers,

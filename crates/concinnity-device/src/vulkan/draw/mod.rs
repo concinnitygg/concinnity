@@ -120,6 +120,7 @@ impl VkContext {
         let skinned_base = self.skinned_record_base();
         for (k, obj) in self
             .skinned
+            .slots
             .draw_objects
             .iter()
             .take(self.draw.n_skinned)
@@ -283,6 +284,7 @@ impl VkContext {
         let skinned_base = self.skinned_record_base();
         for (k, obj) in self
             .skinned
+            .slots
             .draw_objects
             .iter()
             .take(self.draw.n_skinned)
