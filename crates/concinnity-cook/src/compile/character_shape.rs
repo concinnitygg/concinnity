@@ -4,9 +4,10 @@
 // Runs after the mesh import passes so imported targets and skeletons are
 // inline in the args.
 
+use concinnity_core::components::CharacterShape;
+use concinnity_core::ecs::Component;
+
 use crate::authoring::world::WorldJsonlAsset;
-use crate::components::CharacterShape;
-use crate::ecs::Component;
 
 // The unresolved slider and joint names of one shape, given its target mesh's
 // args (`morph_target_names` and `skeleton`).
@@ -92,7 +93,7 @@ pub(crate) fn warn_unresolved(assets: &[WorldJsonlAsset]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{JointProportion, ShapeSlider};
+    use concinnity_core::components::{JointProportion, ShapeSlider};
 
     #[test]
     fn names_resolve_against_the_inline_mesh_args() {

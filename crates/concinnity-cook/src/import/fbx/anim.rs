@@ -12,15 +12,15 @@
 // pivots / offsets / PostRotation are outside the supported envelope and log
 // a warning instead of silently mis-posing.
 
-use std::collections::{BTreeMap, HashMap};
-
+use concinnity_core::gfx::skeleton;
+use concinnity_core::gfx::transform::{decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::tree::v7400::NodeHandle;
+use std::collections::{BTreeMap, HashMap};
 
 use super::{
     arr_f32, arr_i64, attr_i64, attr_str, object_id, object_name, prop_scalar, prop_vec3,
     rot_ordered, rot_ordered_xyz,
 };
-use crate::gfx::transform::{decompose, euler_yxz_from_quat, mat4_mul};
 use crate::import::glb::{ImportedAnimation, ImportedAnimationTrack, ImportedKeyframe};
 
 // FBX time unit: one second is 46,186,158,000 KTime ticks.
@@ -256,7 +256,7 @@ pub fn import_fbx_animation(
         for s in 0..samples {
             let time = (s as f32 / rate).min(duration);
             let kt = start_kt + (time as f64) * KTIME_PER_SEC;
-            let mut pose = crate::gfx::skeleton::JointPose {
+            let mut pose = skeleton::JointPose {
                 translation: bind.translation,
                 rotation_deg: bind.rotation_deg,
                 scale: bind.scale,

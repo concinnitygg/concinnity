@@ -32,14 +32,14 @@
 //!
 //! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
-use serde::Deserialize;
-
-use crate::codec::hdr::HdrImage;
 use concinnity_core::bake::environment_map::source::generate_sky_equirect;
 use concinnity_core::bake::environment_map::stars::generate_stars_equirect;
 use concinnity_core::components::EnvironmentMap;
 use concinnity_host::thread::jobs;
+use serde::Deserialize;
 use std::path::Path;
+
+use crate::codec::hdr::HdrImage;
 
 // Validation + entry point
 //

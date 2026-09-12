@@ -2,10 +2,11 @@
 //!
 //! This module is the single place where "type name + JSON args → BlobAssetDef"
 //! is implemented.
-use crate::ecs::{AssetOrigin, BlobAssetDef};
-use crate::error::CnError;
-use crate::registry::RegisteredType;
-use crate::registry::Registration;
+use concinnity_core::ecs::{AssetOrigin, BlobAssetDef};
+use concinnity_core::error::CnError;
+
+use crate::authoring::registry::RegisteredType;
+use crate::authoring::registry::Registration;
 
 /// Incoming request to construct an asset from an external caller
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -41,7 +42,7 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnError> {
         // Every record is baked. For a pass-through type the baked component is
         // its reserialized args (the component IS its args); a divergent type
         // (`Args != Self`) bakes the translated component instead.
-        let args_bytes = match crate::registry::bake_divergent(ct, &args)? {
+        let args_bytes = match crate::authoring::registry::bake_divergent(ct, &args)? {
             Some(bytes) => bytes,
             None => ct.reserialize_args(&args)?,
         };
@@ -84,12 +85,14 @@ fn resolve_args(reg: &Registration, supplied: &Option<serde_json::Value>) -> ser
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::ProceduralMesh;
+    use concinnity_core::ecs::AssetPayload;
 
     fn shader_reg() -> Registration {
         Registration {
             type_name: "VertexStage",
             origin: AssetOrigin::External,
-            payload: crate::ecs::AssetPayload::Compiled,
+            payload: AssetPayload::Compiled,
             default_args: Some(serde_json::json!({ "source": "user.metal" })),
         }
     }
@@ -122,7 +125,7 @@ mod tests {
         let reg = Registration {
             type_name: "Fake",
             origin: AssetOrigin::External,
-            payload: crate::ecs::AssetPayload::None,
+            payload: AssetPayload::None,
             default_args: Some(serde_json::json!({ "a": 1, "b": 2 })),
         };
         let supplied = Some(serde_json::json!({ "b": 99 }));
@@ -146,7 +149,7 @@ mod tests {
         let reg = Registration {
             type_name: "Fake",
             origin: AssetOrigin::External,
-            payload: crate::ecs::AssetPayload::None,
+            payload: AssetPayload::None,
             default_args: Some(serde_json::json!([1, 2, 3])),
         };
         let supplied = Some(serde_json::json!({ "a": 1 }));
@@ -194,7 +197,7 @@ mod tests {
         assert!(def.name.is_none());
         assert!(def.payload.is_none());
         // The baked bytes decode as the component (postcard).
-        postcard::from_bytes::<crate::components::ProceduralMesh>(&def.args_bytes).unwrap();
+        postcard::from_bytes::<ProceduralMesh>(&def.args_bytes).unwrap();
     }
 
     // Every addable component type builds a baked def from its default args: the
@@ -220,11 +223,10 @@ mod tests {
             args: Some(serde_json::json!({ "generator": "box" })),
         };
         let def = create_asset_def(&req).unwrap();
-        let baked: crate::components::ProceduralMesh =
-            postcard::from_bytes(&def.args_bytes).unwrap();
+        let baked: ProceduralMesh = postcard::from_bytes(&def.args_bytes).unwrap();
         assert_eq!(baked.generator, "box");
         // Defaults fill the fields the caller omitted.
-        let defaults = crate::components::ProceduralMesh::default();
+        let defaults = ProceduralMesh::default();
         assert_eq!(baked.half_width, defaults.half_width);
         assert_eq!(baked.ceiling_height, defaults.ceiling_height);
     }

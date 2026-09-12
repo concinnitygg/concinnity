@@ -2,13 +2,10 @@
 //! payload cache, desugar source-backed assets, intern names, resolve scene
 //! references, then compile and pack.
 
-use std::path::Path;
-
+use concinnity_core::ecs::BlobAssetDef;
 use concinnity_core::platform::Platform;
-
-use crate::asset_api::{self, AssetRequest};
-use crate::authoring::world::WorldJsonlAsset;
-use crate::ecs::{BlobAssetDef, asset_id};
+use concinnity_host::thread::asset_id;
+use std::path::Path;
 
 use super::desugar::{
     desugar_animation_imports, desugar_fbx_meshes, desugar_fbx_skinned_meshes, desugar_gltf_meshes,
@@ -18,6 +15,8 @@ use super::errors_to_io;
 use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cache};
 use super::result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};
 use super::scene_refs::resolve_scene_refs;
+use crate::asset_api::{self, AssetRequest};
+use crate::authoring::world::WorldJsonlAsset;
 
 /// Build the world at `json_path` for `platform` into `tree` and write its
 /// blobs to disk: sources resolve under the tree's `assets/` and the blobs land
@@ -255,7 +254,7 @@ pub fn build_compiled_with_progress(
     // `create_asset_def`; it is compiled + packed as a resource below. `named` is
     // therefore no longer 1:1 with `assets`, so `named_src[i]` records the source
     // asset index of each component def.
-    use crate::registry::RegisteredType;
+    use crate::authoring::registry::RegisteredType;
     let mut named: Vec<(String, BlobAssetDef)> = Vec::new();
     let mut named_src: Vec<usize> = Vec::new();
     let mut resource_jobs: Vec<(usize, RegisteredType, u32)> = Vec::new();
@@ -470,6 +469,9 @@ mod tests {
     use super::*;
     use crate::pipeline::MESH_TYPE;
     use crate::pipeline::fixtures::{wja, write_fixture};
+    use concinnity_core::components::Material;
+    use concinnity_core::components::Prop;
+    use concinnity_core::ecs::MeshHandle;
 
     #[test]
     fn build_pipeline_interns_names_and_resolves_refs() {
@@ -489,14 +491,14 @@ mod tests {
         let prop = result
             .defs
             .iter()
-            .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(2)))
+            .find(|d| d.name == Some(asset_id::AssetId(2)))
             .expect("day_crate def present with interned id 2");
 
-        let baked: crate::components::Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
+        let baked: Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
         // The `mesh` reference resolved to box's handle (0).
-        assert_eq!(baked.mesh, Some(crate::ecs::MeshHandle(0)));
+        assert_eq!(baked.mesh, Some(MeshHandle(0)));
         // The `day_` name prefix resolved to Scene `day`'s id (1).
-        assert_eq!(baked.scene, Some(crate::ecs::asset_id::AssetId(1)));
+        assert_eq!(baked.scene, Some(asset_id::AssetId(1)));
     }
 
     // A world with physics content but no PhysicsConfig receives one at world
@@ -862,7 +864,7 @@ mod tests {
         let material = &result.resources[0];
         assert!(material.payload.is_none(), "a Material rides inline");
         assert!(!material.data_bytes.is_empty());
-        postcard::from_bytes::<crate::components::Material>(&material.data_bytes)
+        postcard::from_bytes::<Material>(&material.data_bytes)
             .expect("the inline bytes decode as a Material");
         assert_eq!(result.resource_locks[0].name, "wood");
         assert_eq!(result.resource_locks[0].payload_blob, None);

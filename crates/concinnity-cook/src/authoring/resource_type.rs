@@ -12,6 +12,7 @@
 // blob format; re-exported here for the classifiers and the cook-side handle
 // assigner so both sides agree on the kind and its tag. `MeshBlock` comes from
 // the same crate, with the handle-assignment rules it orders.
+use concinnity_core::components::FileKind;
 pub use concinnity_core::ecs::ResourceKind;
 pub(crate) use concinnity_core::resource::MeshBlock;
 
@@ -34,7 +35,7 @@ fn norm_type(t: &str) -> String {
 fn file_is_mesh(args: &serde_json::Value) -> bool {
     args.get("kind")
         .and_then(|k| k.as_str())
-        .and_then(crate::components::FileKind::from_ext)
+        .and_then(FileKind::from_ext)
         .map(|fk| fk.is_mesh())
         .unwrap_or(false)
 }

@@ -3,7 +3,7 @@
 // runtime samples the finished curve (`gfx::root_motion::RootTrack`), it
 // never re-derives it.
 
-use crate::components::Animation;
+use concinnity_core::components::Animation;
 use concinnity_core::gfx::root_motion::RootKey;
 
 // Strip the root joint's travel out of `tracks` and bake it into
@@ -33,10 +33,11 @@ pub(crate) fn bake_root_motion(anim: &mut Animation) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_host::thread::asset_id;
 
     // A 1s clip whose root (joint 0) walks +2 X while bobbing 1.0 -> 1.2 Y.
     fn walking_clip() -> Animation {
-        crate::ecs::asset_id::reset_interner();
+        asset_id::reset_interner();
         serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": 1.0,

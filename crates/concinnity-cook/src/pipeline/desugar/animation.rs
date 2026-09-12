@@ -1,14 +1,13 @@
 //! Animation clips imported from a source file, and the root-motion bake that
 //! lifts a clip's root track into the asset's args.
 
-use std::path::Path;
-
+use concinnity_host::thread::asset_id;
 use serde::Deserialize;
-
-use crate::authoring::world::WorldJsonlAsset;
+use std::path::Path;
 
 use super::super::SKINNED_MESH_TYPE;
 use super::skin_index_arg;
+use crate::authoring::world::WorldJsonlAsset;
 
 // Skin selector per SkinnedMesh asset name. An Animation resolves its channels
 // against its target's skeleton, so it inherits the target's selector rather
@@ -34,8 +33,8 @@ pub(in crate::pipeline) fn desugar_animation_imports(
     assets: &mut [WorldJsonlAsset],
     assets_dir: Option<&Path>,
 ) -> std::io::Result<()> {
-    use crate::components::Animation;
-    use crate::ecs::Component;
+    use concinnity_core::components::Animation;
+    use concinnity_core::ecs::Component;
 
     let skin_by_target = skin_index_by_target(assets);
 
@@ -197,14 +196,14 @@ pub(in crate::pipeline) fn desugar_animation_imports(
 pub(in crate::pipeline) fn desugar_root_motion(
     assets: &mut [WorldJsonlAsset],
 ) -> std::io::Result<()> {
-    use crate::components::Animation;
-    use crate::ecs::Component;
+    use concinnity_core::components::Animation;
+    use concinnity_core::ecs::Component;
 
     // This deserializes each flagged clip (whose `target` is a name reference),
     // so the name resolver must be installed. The full pipeline resets the
     // interner before reaching here; installing it again is a cheap no-op and
     // keeps this pass correct when called on its own.
-    crate::ecs::asset_id::ensure_name_resolver();
+    asset_id::ensure_name_resolver();
 
     for asset in assets.iter_mut() {
         if asset.asset_type != Animation::NAME

@@ -5,22 +5,18 @@
 //! (payload distribution across overflow blobs, the size ceiling), the lock, and
 //! the writes themselves.
 
-use std::fs;
-use std::path::Path;
-
-use sha2::{Digest, Sha256};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
-
 use concinnity_core::blob::{
     MeshBoundsRecord, PhysicsBudgetRecord, SceneGroup, WorldManifest, encode_cnb, payload_section,
 };
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
-
 #[cfg(test)]
 pub(crate) use concinnity_host::store::blob::read_cnb;
-
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::Path;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// Per-blob entry in the lock file
 #[derive(Debug, Serialize, Deserialize)]
@@ -337,7 +333,7 @@ pub(crate) fn write_lock(
         .map(|(name, def)| LockedAsset {
             name: name.to_string(),
             id: def.name.map(|n| n.0),
-            kind: crate::registry::RegisteredType::from_discriminant(def.discriminant)
+            kind: crate::authoring::registry::RegisteredType::from_discriminant(def.discriminant)
                 .map(|ty| ty.as_str().to_string())
                 .unwrap_or_default(),
             discriminant: def.discriminant,
@@ -443,7 +439,7 @@ pub(crate) mod test_output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
+    use concinnity_host::thread::asset_id::AssetId;
     use test_output::Output;
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
@@ -687,7 +683,7 @@ mod tests {
         assert_eq!(lock.assets[0].discriminant, 3);
         assert_eq!(
             lock.assets[0].kind,
-            crate::registry::RegisteredType::from_discriminant(3)
+            crate::authoring::registry::RegisteredType::from_discriminant(3)
                 .expect("discriminant 3 is registered")
                 .as_str(),
             "the lock names the registry type, not a constant"

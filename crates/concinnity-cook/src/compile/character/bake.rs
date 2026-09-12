@@ -4,13 +4,16 @@
 // capsule follows, and the shape asset is consumed. The mesh that comes out
 // is a plain SkinnedMesh with no shape work left for the runtime.
 
-use crate::authoring::world::WorldJsonlAsset;
-use crate::components::{CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh};
-use crate::ecs::Component;
-use concinnity_core::components::build_skeleton_from_joint_defs;
+use concinnity_core::components::{
+    CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
+    build_skeleton_from_joint_defs,
+};
+use concinnity_core::ecs::Component;
 use concinnity_core::gfx::proportions::ProportionLayer;
 use concinnity_core::gfx::transform::{self, Mat4};
 use concinnity_core::math::vec3;
+
+use crate::authoring::world::WorldJsonlAsset;
 
 // What a bake changed, for the build log.
 #[derive(Debug, Clone, PartialEq)]
@@ -180,7 +183,7 @@ pub(crate) fn bake(
     }
 }
 
-fn scale_capsule(capsule: &mut crate::components::CharacterCapsule, scale: CapsuleScale) {
+fn scale_capsule(capsule: &mut CharacterCapsule, scale: CapsuleScale) {
     capsule.half_height *= scale.height;
     capsule.radius *= scale.radius;
 }
@@ -307,7 +310,9 @@ pub(crate) fn bake_shapes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{CharacterCapsule, JointProportion, ShapeSlider, SkinnedVertexData};
+    use concinnity_core::components::{
+        CharacterCapsule, JointProportion, ShapeSlider, SkinnedVertexData,
+    };
 
     fn joint(name: &str, parent: i32, y: f32) -> SkeletonJoint {
         SkeletonJoint {

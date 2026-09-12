@@ -11,15 +11,15 @@
 //! wrappers (`import_skinned_glb`, `import_glb_animation`, ...) live in
 //! `crate::import::gltf` and call into here.
 
+use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_core::gfx::skeleton::JointPose;
+use concinnity_core::gfx::transform::euler_yxz_from_quat;
+use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::components::{SkeletonJoint, SkinnedVertexData, VertexData};
-use crate::gfx::skeleton::JointPose;
-use crate::gfx::transform::euler_yxz_from_quat;
-use crate::import::gltf_source::GltfDoc;
-
 use crate::import::NEUTRAL_COLOR;
+use crate::import::gltf_source::GltfDoc;
 
 // The inline `SkinnedMesh` fields produced from a glTF file.
 pub(crate) struct ImportedSkinnedMesh {
@@ -29,7 +29,7 @@ pub(crate) struct ImportedSkinnedMesh {
     // Morph-target names, one per target; empty when the mesh has none.
     pub(crate) morph_target_names: Vec<String>,
     // Dense target-major deltas: entry `t * vertices.len() + v`.
-    pub(crate) morph_deltas: Vec<crate::components::MorphDelta>,
+    pub(crate) morph_deltas: Vec<MorphDelta>,
 }
 
 // Same as [`import_skinned_glb`] but takes a pre-parsed glTF document. The
@@ -293,7 +293,7 @@ pub(crate) fn split_into_u16_chunks(
 // while a path with a directory component is taken as-is, so a relative or
 // absolute path still works for local test worlds.
 pub(crate) fn resolve_source(source: &str, assets_dir: Option<&Path>) -> String {
-    crate::source::resolve_source_path(source, assets_dir)
+    resolve_source_path(source, assets_dir)
 }
 
 // A skeleton reordered into parents-before-children order, plus the lookup
@@ -409,11 +409,7 @@ fn topological_order(parents: &[Option<usize>]) -> (Vec<usize>, Vec<usize>) {
 
 // Concatenated skinned geometry of one glTF mesh: vertices, u16 indices, and
 // dense target-major morph deltas.
-type SkinnedGeometry = (
-    Vec<SkinnedVertexData>,
-    Vec<u16>,
-    Vec<crate::components::MorphDelta>,
-);
+type SkinnedGeometry = (Vec<SkinnedVertexData>, Vec<u16>, Vec<MorphDelta>);
 
 // One primitive's morph targets: per-vertex position and normal deltas.
 type PrimTargetDeltas = (Vec<[f32; 3]>, Vec<[f32; 3]>);
@@ -423,7 +419,7 @@ fn import_geometry(
     doc: &GltfDoc,
     remap: &[usize],
 ) -> Result<SkinnedGeometry, String> {
-    use crate::components::MorphDelta;
+    use concinnity_core::components::MorphDelta;
 
     let mut vertices: Vec<SkinnedVertexData> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
@@ -544,7 +540,7 @@ fn import_geometry(
     let total = vertices.len();
     let mut morph_deltas = Vec::with_capacity(targets.len() * total);
     for mut t in targets {
-        t.resize(total, crate::components::MorphDelta::default());
+        t.resize(total, MorphDelta::default());
         morph_deltas.extend(t);
     }
     Ok((vertices, indices, morph_deltas))

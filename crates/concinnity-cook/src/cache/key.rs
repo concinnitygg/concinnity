@@ -10,12 +10,14 @@
 // binary, which the segment's header carries once for every entry it holds
 // (see `identity`), so a key covers the inputs and the header covers the code.
 
-use crate::asset::{BuildCtx, CacheInputs, SourceFiles};
-use crate::file_stamp::FileStamp;
+use concinnity_host::store::source::find_in;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+
+use crate::asset::{BuildCtx, CacheInputs, SourceFiles};
+use crate::file_stamp::FileStamp;
 
 // SHA-256 a source file's contents, memoized by path within the process. A
 // single build can reference one large source file from hundreds of assets
@@ -214,10 +216,7 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
         return Some(s.to_string());
     }
     // Bare filename searched recursively under the asset search root.
-    if let Some(p) = ctx
-        .assets_dir
-        .and_then(|dir| crate::source::find_in(dir, s))
-    {
+    if let Some(p) = ctx.assets_dir.and_then(|dir| find_in(dir, s)) {
         return Some(p);
     }
     // Account artifact directory, when the build supplied one.

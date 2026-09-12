@@ -1,8 +1,9 @@
 // src/asset_impls/sdf_volume.rs
 
+use concinnity_core::components::SdfVolume;
+
 use crate::asset::BuildCtx;
 use crate::authoring::source_args::sdf_volume_source_path;
-use concinnity_core::components::SdfVolume;
 
 // Resolve a raw `fragment_shader` arg to an on-disk path, picking the first
 // candidate that exists. `<assets>` is the build's asset search root.

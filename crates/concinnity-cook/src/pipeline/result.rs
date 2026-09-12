@@ -2,8 +2,7 @@
 //! dev-only source catalogs a `cn debug` build reads back by handle.
 
 use concinnity_core::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
-
-use crate::ecs::{BlobAssetDef, ResourceRecord};
+use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
 
 /// A texture's identity + on-disk source, in `TextureHandle` order. Now that
 /// Texture is a resource (no `source`/`asset_id` on a component the renderer

@@ -14,9 +14,10 @@
 // (`validate_registry_refs`); the rules here judge relationships between
 // assets that already resolve.
 
+use std::collections::HashSet;
+
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
-use std::collections::HashSet;
 
 fn norm(t: &str) -> String {
     t.to_lowercase().replace('_', "")

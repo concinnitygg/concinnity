@@ -7,6 +7,7 @@
 mod find;
 mod io;
 
+use concinnity_core::ecs::AssetOrigin;
 pub use find::{WORLD_JSONL, find_world_jsonl};
 pub use io::{
     WorldJsonlAsset, known_names, parse_world_jsonl, patch_world_jsonl, patch_world_jsonl_to,
@@ -14,7 +15,6 @@ pub use io::{
 };
 
 use crate::authoring::registry::RegisteredType;
-use crate::ecs::AssetOrigin;
 
 /// Asset name derived from a file path: the file stem with dots replaced by
 /// underscores. Companion injection and `cn add` share this so a generated asset

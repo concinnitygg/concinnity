@@ -2,12 +2,12 @@
 // the generated targets to its morph set. Targets run in schema order, so a
 // `mirror` or `blend_mask` may name a target synthesized just before it.
 
+use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData};
+
 use super::frame::{bone_frames, region_joints};
 use super::synth::{self, SynthInput};
 use crate::authoring::registry::build_only::CharacterSchema;
 use crate::authoring::registry::build_only::KeyPolarity;
-
-use crate::components::{MorphDelta, SkeletonJoint, SkinnedVertexData};
 
 // A source's morph set: names and dense target-major deltas.
 pub(crate) struct MorphSet {

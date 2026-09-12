@@ -2,11 +2,11 @@
 // present under the right parent and every bipolar key has both targets,
 // plus the model's own args. Every problem is reported, in one pass.
 
+use concinnity_core::components::SkeletonJoint;
+
 use crate::authoring::registry::build_only::CharacterModel;
 use crate::authoring::registry::build_only::CharacterSchema;
 use crate::authoring::registry::build_only::KeyPolarity;
-
-use crate::components::SkeletonJoint;
 
 // Problems with `skeleton` and `target_names` against `schema`; empty when
 // the source conforms.

@@ -13,7 +13,8 @@ pub(crate) use concinnity_core::components::validate::{
 
 #[cfg(test)]
 mod tests {
-    use crate::components::*;
+    use concinnity_core::components::*;
+    use concinnity_host::thread::asset_id;
 
     mod material {
         use super::*;
@@ -66,7 +67,7 @@ mod tests {
 
         #[test]
         fn deserializes_with_all_fields() {
-            crate::ecs::asset_id::reset_interner();
+            asset_id::reset_interner();
             let json = r#"{
                 "texture":"tex_bullet",
                 "position":[1.0,2.0,3.0],
@@ -152,7 +153,7 @@ mod tests {
 
         #[test]
         fn deserializes_all_fields() {
-            crate::ecs::asset_id::reset_interner();
+            asset_id::reset_interner();
             let json = r#"{
                 "kind":"revolute",
                 "body_a":"door",
@@ -225,7 +226,7 @@ mod tests {
 
         #[test]
         fn deserializes_with_all_fields() {
-            crate::ecs::asset_id::reset_interner();
+            asset_id::reset_interner();
             let json = r#"{
                 "texture":"tex_spark","position":[1,2,3],"direction":[0,1,0],
                 "spread_deg":30,"speed_min":1.5,"speed_max":4.0,
@@ -347,8 +348,8 @@ mod tests {
 
     mod instanced_prop {
         use super::*;
-        use crate::components::{InstanceTransform, InstancedPropGeometry};
-        use crate::ecs::asset_id::AssetId;
+        use concinnity_core::components::{InstanceTransform, InstancedPropGeometry};
+        use concinnity_host::thread::asset_id::AssetId;
 
         fn empty() -> InstancedProp {
             InstancedProp {
@@ -415,7 +416,7 @@ mod tests {
 
     mod sdf_volume {
         use super::*;
-        use crate::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+        use concinnity_core::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
 
         #[test]
         fn clamps_steps() {

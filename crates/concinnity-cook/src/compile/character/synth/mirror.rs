@@ -3,9 +3,10 @@
 // nearest its reflection, with the delta's X negated. Lets a generator
 // author one side of an asymmetric key.
 
-use super::SynthInput;
-use crate::components::MorphDelta;
+use concinnity_core::components::MorphDelta;
 use std::collections::HashMap;
+
+use super::SynthInput;
 
 // Uniform grid over the positions, `cell` wide.
 struct Grid {

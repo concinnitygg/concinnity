@@ -47,14 +47,12 @@ mod key;
 mod segment;
 pub mod thumbnails;
 
+pub(crate) use concinnity_core::blob::CacheEntryKind;
+pub(crate) use key::{bake_key, expand_key, payload_key};
+use segment::Index;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-
-pub(crate) use concinnity_core::blob::CacheEntryKind;
-pub(crate) use key::{bake_key, expand_key, payload_key};
-
-use segment::Index;
 
 /// Read the entry `kind` stored under `key`, if the segment holds one.
 pub(crate) fn load(kind: CacheEntryKind, key: &str) -> Option<Vec<u8>> {

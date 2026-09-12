@@ -1,11 +1,10 @@
 //! FBX-sourced Mesh and SkinnedMesh assets: the counterpart to the glTF passes,
 //! reading the same geometry and skeleton out of a `.fbx` document.
 
-use crate::authoring::world::WorldJsonlAsset;
-
 use super::super::pack::MeshCacheEntry;
 use super::super::{MESH_TYPE, SKINNED_MESH_TYPE};
 use super::skin_index_arg;
+use crate::authoring::world::WorldJsonlAsset;
 
 // Expand FBX-sourced SkinnedMesh assets in place, mirroring the glTF pass:
 // the file's first skinned geometry lands in the asset's inline `vertices` /
@@ -94,8 +93,8 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
-    use crate::components::VertexData;
     use crate::import::fbx::FbxScene;
+    use concinnity_core::components::VertexData;
     use std::collections::HashMap;
 
     type Chunk = (Vec<VertexData>, Vec<u16>);

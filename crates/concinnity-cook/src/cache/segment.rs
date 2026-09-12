@@ -22,16 +22,15 @@
 // so the machinery is exercised without the process-global state root and no
 // name a state tree chose appears in this module.
 
+use concinnity_core::blob::{
+    CacheEntry, CacheEntryKind, CacheMeta, HEADER_SIZE, encode_cnb_prefix, parse_cnb,
+    parse_payload_section_start,
+};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-
-use concinnity_core::blob::{
-    CacheEntry, CacheEntryKind, CacheMeta, HEADER_SIZE, encode_cnb_prefix, parse_cnb,
-    parse_payload_section_start,
-};
 
 // Where one entry's bytes sit, relative to the payload section.
 #[derive(Clone, Copy)]

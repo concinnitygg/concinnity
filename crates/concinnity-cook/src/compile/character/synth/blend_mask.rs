@@ -2,10 +2,11 @@
 // skin weight to the region's joints, so one sculpted whole-body key yields
 // a regional slider with a smooth boundary.
 
+use concinnity_core::components::MorphDelta;
+use concinnity_core::math::vec3;
+
 use super::SynthInput;
 use crate::compile::character::frame::region_weight;
-use crate::components::MorphDelta;
-use concinnity_core::math::vec3;
 
 pub(crate) fn displace(input: &SynthInput, source: &[MorphDelta]) -> Vec<[f32; 3]> {
     input

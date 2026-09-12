@@ -11,8 +11,9 @@
 // An `EngineDefaults` entry turns either one off. It is read rather than
 // consumed: it is a stored component now, and the runtime pass drains it.
 
-use super::expand::{ExpandReport, asset_name, type_norm};
 use concinnity_core::components::EngineDefaults;
+
+use super::expand::{ExpandReport, asset_name, type_norm};
 
 // Complete a world with the two defaults stated in build-only terms. Runs
 // before menu expansion, so an injected MainMenu expands like an authored one,

@@ -15,10 +15,18 @@
 
 pub mod build_only;
 
-use crate::error::CnError;
-
 pub use build_only::BuildOnlyAsset;
+use concinnity_core::components::AppConfig;
+use concinnity_core::components::Camera3D;
+use concinnity_core::components::CameraTrack;
+use concinnity_core::components::File;
+use concinnity_core::components::Room;
+use concinnity_core::components::Spawner;
+use concinnity_core::ecs::ComponentTag;
+use concinnity_core::ecs::ResourceKind;
 pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
+use concinnity_core::error::CnError;
+use concinnity_host::thread::asset_id;
 
 /// Static authoring metadata for an asset type: how it is declared, whether it
 /// compiles a payload, and its default args JSON. Derived from the registry
@@ -217,7 +225,7 @@ macro_rules! __group_surviving {
 // handle into the resource stream, so neither carries a component tag.
 macro_rules! __group_discriminant {
     (stored; $variant:ident) => {
-        Some(crate::ecs::ComponentTag::$variant as u8)
+        Some(ComponentTag::$variant as u8)
     };
     (build_only; $variant:ident) => {
         None
@@ -248,7 +256,7 @@ macro_rules! __group_payload {
 // `resource: <ResourceKind>` flag; `None` for anything outside that group.
 macro_rules! __meta_resource_kind {
     () => { None };
-    (resource: $kind:ident $($r:tt)*) => { Some(crate::ecs::ResourceKind::$kind) };
+    (resource: $kind:ident $($r:tt)*) => { Some(ResourceKind::$kind) };
     ($t:tt $($r:tt)*) => { __meta_resource_kind!($($r)*) };
 }
 
@@ -397,7 +405,7 @@ macro_rules! define_registered_type {
                 // resets the interner before it gets here; installing it again is
                 // a cheap no-op and lets standalone callers (e.g. `cn check`
                 // validation) deserialize without doing their own setup.
-                crate::ecs::asset_id::ensure_name_resolver();
+                asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {
@@ -421,7 +429,7 @@ macro_rules! define_registered_type {
                 self,
                 args: &serde_json::Value,
             ) -> Result<serde_json::Value, CnError> {
-                crate::ecs::asset_id::ensure_name_resolver();
+                asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {
@@ -472,7 +480,7 @@ macro_rules! define_registered_type {
             /// The dense per-kind handle space this asset is assigned into, or
             /// `None` if it is not a resource asset. Cook assigns the handle;
             /// the runtime addresses the resource by it.
-            pub(crate) fn resource_kind(self) -> Option<crate::ecs::ResourceKind> {
+            pub(crate) fn resource_kind(self) -> Option<ResourceKind> {
                 match self {
                     $( Self::$variant => __meta_resource_kind!($($meta)*) ),+
                 }
@@ -635,11 +643,11 @@ pub fn set_reference(line: &str, field: &str, target: &str) -> std::io::Result<S
 #[cfg(test)]
 mod authored_tests {
     use super::*;
+    use concinnity_core::components::{CharacterShape, DirectionalLight, EnvironmentMap, Texture};
 
     #[test]
     fn set_reference_names_a_field_the_typed_value_cannot_carry() {
-        let line = asset_line("hero_shape", &crate::components::CharacterShape::default())
-            .expect("serializes");
+        let line = asset_line("hero_shape", &CharacterShape::default()).expect("serializes");
         let patched = set_reference(&line, "target", "hero").expect("patched");
         assert!(patched.ends_with('\n'));
         let value: serde_json::Value = serde_json::from_str(&patched).expect("parses");
@@ -661,15 +669,9 @@ mod authored_tests {
             <concinnity_core::components::cook::Room as Authored>::TYPE,
             "Room"
         );
-        assert_eq!(
-            <crate::components::DirectionalLight as Authored>::TYPE,
-            "DirectionalLight"
-        );
-        assert_eq!(<crate::components::Texture as Authored>::TYPE, "Texture");
-        assert_eq!(
-            <crate::components::EnvironmentMap as Authored>::TYPE,
-            "EnvironmentMap"
-        );
+        assert_eq!(<DirectionalLight as Authored>::TYPE, "DirectionalLight");
+        assert_eq!(<Texture as Authored>::TYPE, "Texture");
+        assert_eq!(<EnvironmentMap as Authored>::TYPE, "EnvironmentMap");
     }
 
     // Every Authored type names a type the registry can actually parse, so a
@@ -679,7 +681,7 @@ mod authored_tests {
         for name in [
             <concinnity_core::components::cook::Room as Authored>::TYPE,
             <concinnity_core::components::cook::Camera3D as Authored>::TYPE,
-            <crate::components::DirectionalLight as Authored>::TYPE,
+            <DirectionalLight as Authored>::TYPE,
         ] {
             assert!(
                 RegisteredType::parse(name).is_some(),
@@ -708,7 +710,7 @@ pub fn bake_divergent(
 ) -> Result<Option<Vec<u8>>, CnError> {
     // Deserializing the args interns name-string cross-references, exactly as
     // `reserialize_args` does.
-    crate::ecs::asset_id::ensure_name_resolver();
+    asset_id::ensure_name_resolver();
     macro_rules! bake {
         ($ty:ty, $args_ty:ty) => {{
             let typed = serde_json::from_value::<$args_ty>(args.clone()).map_err(json_args_err)?;
@@ -717,36 +719,18 @@ pub fn bake_divergent(
     }
     match ct {
         RegisteredType::Camera3D => {
-            bake!(
-                crate::components::Camera3D,
-                concinnity_core::components::cook::Camera3D
-            )
+            bake!(Camera3D, concinnity_core::components::cook::Camera3D)
         }
         RegisteredType::CameraTrack => {
-            bake!(
-                crate::components::CameraTrack,
-                concinnity_core::components::cook::CameraTrack
-            )
+            bake!(CameraTrack, concinnity_core::components::cook::CameraTrack)
         }
-        RegisteredType::Room => bake!(
-            crate::components::Room,
-            concinnity_core::components::cook::Room
-        ),
-        RegisteredType::File => bake!(
-            crate::components::File,
-            concinnity_core::components::cook::File
-        ),
+        RegisteredType::Room => bake!(Room, concinnity_core::components::cook::Room),
+        RegisteredType::File => bake!(File, concinnity_core::components::cook::File),
         RegisteredType::Spawner => {
-            bake!(
-                crate::components::Spawner,
-                concinnity_core::components::cook::Spawner
-            )
+            bake!(Spawner, concinnity_core::components::cook::Spawner)
         }
         RegisteredType::AppConfig => {
-            bake!(
-                crate::components::AppConfig,
-                concinnity_core::components::cook::AppConfig
-            )
+            bake!(AppConfig, concinnity_core::components::cook::AppConfig)
         }
         _ => Ok(None),
     }
@@ -767,6 +751,7 @@ pub fn type_renders(asset_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::ProceduralMesh;
 
     #[test]
     fn registration_predicates_follow_origin_and_payload() {
@@ -794,14 +779,14 @@ mod tests {
     // the authored path converge on identical components.
     #[test]
     fn bake_divergent_round_trips_through_from_baked() {
-        use crate::ecs::Component;
-        use crate::ecs::asset_id;
+        use concinnity_core::ecs::Component;
+        use concinnity_host::thread::asset_id;
 
         let args = serde_json::json!({"size": [16.0, 20.0, 3.5]});
         let bytes = bake_divergent(RegisteredType::Room, &args)
             .unwrap()
             .expect("Room bakes divergently");
-        let baked = crate::components::Room::from_baked(&bytes).unwrap();
+        let baked = Room::from_baked(&bytes).unwrap();
         // The size shorthand resolved at bake time.
         assert_eq!(baked.half_width, 8.0);
         assert_eq!(baked.half_depth, 10.0);
@@ -811,10 +796,10 @@ mod tests {
         let bytes = bake_divergent(RegisteredType::Camera3D, &args)
             .unwrap()
             .expect("Camera3D bakes divergently");
-        let baked = crate::components::Camera3D::from_baked(&bytes).unwrap();
+        let baked = Camera3D::from_baked(&bytes).unwrap();
         assert_eq!(baked.position, [1.0, 2.0, 3.0]);
         // The view matrix composed at bake time.
-        let expected = crate::components::Camera3D::bake(
+        let expected = Camera3D::bake(
             serde_json::from_value(serde_json::json!({"position": [1.0, 2.0, 3.0], "yaw": 0.5}))
                 .unwrap(),
         );
@@ -824,7 +809,7 @@ mod tests {
         let bytes = bake_divergent(RegisteredType::File, &args)
             .unwrap()
             .expect("File bakes divergently");
-        let baked = crate::components::File::from_baked(&bytes).unwrap();
+        let baked = File::from_baked(&bytes).unwrap();
         // The kind derived from the extension at bake time.
         assert!(baked.kind.is_some());
 
@@ -833,7 +818,7 @@ mod tests {
         let bytes = bake_divergent(RegisteredType::Spawner, &args)
             .unwrap()
             .expect("Spawner bakes divergently");
-        let baked = crate::components::Spawner::from_baked(&bytes).unwrap();
+        let baked = Spawner::from_baked(&bytes).unwrap();
         // The interval clamped and the runtime counters zeroed at bake time.
         assert_eq!(baked.interval, 0.0);
         assert_eq!(baked.elapsed, 0.0);
@@ -929,7 +914,7 @@ mod tests {
         let bytes = ty
             .reserialize_args(&serde_json::json!({ "source": "a.glb" }))
             .unwrap();
-        let back: crate::components::ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
+        let back: ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.source.as_deref(), Some("a.glb"));
         assert_eq!(
             ty.reserialize_args(&serde_json::json!({ "source": 42 }))

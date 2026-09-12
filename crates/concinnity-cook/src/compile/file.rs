@@ -1,4 +1,4 @@
-use crate::components::FileKind;
+use concinnity_core::components::FileKind;
 
 // Compile a File asset's source into a binary payload.
 //

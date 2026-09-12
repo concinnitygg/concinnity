@@ -2,8 +2,9 @@
 // the joint to the full amplitude at its child (or the reverse), so the
 // distal end of a limb thickens or thins on its own.
 
-use super::{SynthInput, unit};
 use concinnity_core::math::vec3;
+
+use super::{SynthInput, unit};
 
 pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
     input

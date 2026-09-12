@@ -3,9 +3,8 @@
 // build decodes the file once and discards the result, so a clip the engine
 // cannot read fails the build instead of the render loop.
 
-use std::io::Cursor;
-
 use kira::sound::static_sound::StaticSoundData;
+use std::io::Cursor;
 
 // Read and validate the audio file named by `args["source"]`, returning its
 // bytes for the world blob.

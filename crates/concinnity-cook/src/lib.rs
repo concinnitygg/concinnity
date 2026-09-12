@@ -32,23 +32,6 @@
     )
 )]
 
-pub(crate) use concinnity_core::gfx;
-pub(crate) use concinnity_core::{components, error};
-
-// The vocabulary's ECS surface, with the build-time name interner shadowing its
-// `asset_id`: the interner keeps a per-thread table, so it lives in
-// `concinnity_host::thread` and re-exports the vocabulary's `AssetId` /
-// `AssetRef`.
-pub(crate) mod ecs {
-    pub(crate) use concinnity_core::ecs::*;
-    pub(crate) use concinnity_host::thread::asset_id;
-}
-// The source-asset lookup lives in `concinnity_host::store`, re-exported so
-// cook code keeps naming it under `crate::source`. It resolves against a
-// directory its caller supplies; every build threads that root down from its
-// entry point rather than reading one for itself.
-pub(crate) use concinnity_host::store::source;
-
 // Build-host API, re-exported deliberately: a host driving the pipeline (the
 // CLI, an example harness) works against cook alone, the way a runtime host
 // works against concinnity-engine. `paths` is the state tree cook builds into
@@ -57,11 +40,6 @@ pub(crate) use concinnity_host::store::source;
 // names the backend it cooks for with.
 pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
-
-// The authoring type vocabulary, bound at the root so the compile path keeps
-// resolving `crate::registry` without naming the namespace it belongs to.
-pub(crate) use authoring::registry;
-
 pub(crate) mod asset;
 pub mod asset_api;
 pub(crate) mod asset_impls;

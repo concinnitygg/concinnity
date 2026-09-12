@@ -3,9 +3,10 @@
 // `falloff`-wide ramps), and limited to the side facing `direction` when one
 // is given. Brow ridges, cheekbones, skin thickness.
 
+use concinnity_core::math::vec3;
+
 use super::{SynthInput, unit};
 use crate::compile::character::frame::region_weight;
-use concinnity_core::math::vec3;
 
 // Smooth window weight of `t` inside `span`: 1 inside, ramping to 0 over
 // `falloff` at each end.

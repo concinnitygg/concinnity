@@ -1,21 +1,19 @@
 //! The payload cache probe that runs ahead of desugar, and the compile + pack
 //! pass that turns the resolved defs into blob sections.
 
-use std::path::Path;
-
 use concinnity_core::blob::{MeshBoundsRecord, SceneGroup};
-
-use crate::authoring::world::WorldJsonlAsset;
-use crate::blob::PayloadPacker;
-use crate::components::FileKind;
-use crate::ecs::asset_id;
-use crate::ecs::{BlobAssetDef, ResourceRecord};
-use crate::registry::RegisteredType;
-use crate::resource_handles::ResourceAssetCompile;
+use concinnity_core::components::FileKind;
+use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
+use concinnity_host::thread::asset_id;
+use std::path::Path;
 
 use super::dispatch::{cache_inputs_by_type, compile_by_type};
 use super::entry::BuildProgress;
 use super::{MESH_TYPE, SKINNED_MESH_TYPE};
+use crate::authoring::registry::RegisteredType;
+use crate::authoring::world::WorldJsonlAsset;
+use crate::blob::PayloadPacker;
+use crate::resource_handles::ResourceAssetCompile;
 
 // Every entry this stage stores is a compiled payload; the scene expansion that
 // shares the segment stores its own kind upstream.
@@ -23,7 +21,9 @@ const PAYLOAD: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Payl
 
 // The resource kind of a job selected by `collect_resource_jobs`. Every entry
 // there was chosen by having one, so the lookup cannot fail.
-fn job_resource_kind(rt: crate::registry::RegisteredType) -> crate::resource_handles::ResourceKind {
+fn job_resource_kind(
+    rt: crate::authoring::registry::RegisteredType,
+) -> crate::resource_handles::ResourceKind {
     rt.resource_kind()
         .expect("a resource job carries a resource type")
 }
@@ -178,7 +178,8 @@ fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
 #[derive(Clone, Copy)]
 pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) assets: &'a [WorldJsonlAsset],
-    pub(in crate::pipeline) resource_jobs: &'a [(usize, crate::registry::RegisteredType, u32)],
+    pub(in crate::pipeline) resource_jobs:
+        &'a [(usize, crate::authoring::registry::RegisteredType, u32)],
     pub(in crate::pipeline) partition: &'a crate::compile::scene_partition::ScenePartition,
     pub(in crate::pipeline) mesh_source_handles: &'a crate::resource_handles::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
@@ -401,7 +402,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     // compiled mesh-source components, sorted by handle for determinism.
     let mut mesh_bounds: Vec<MeshBoundsRecord> = Vec::new();
     for ((_, rt, handle), res) in resource_jobs.iter().zip(&resource_pending) {
-        if *rt == crate::registry::RegisteredType::Mesh
+        if *rt == crate::authoring::registry::RegisteredType::Mesh
             && let Some(record) = mesh_bounds_record(*handle, &res.bytes)
         {
             mesh_bounds.push(record);

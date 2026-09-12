@@ -14,17 +14,16 @@ mod settings_tab;
 #[cfg(test)]
 mod tests;
 
+use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use rows::settings_tabs;
+use screen::{MenuMetrics, emit_menu_screen};
+use settings_tab::emit_settings_tab;
 use std::collections::HashSet;
 
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::font_sizes;
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::spec::{asset, spec_to_value};
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
-
-use rows::settings_tabs;
-use screen::{MenuMetrics, emit_menu_screen};
-use settings_tab::emit_settings_tab;
 
 // Top margin of a centered menu as a fraction of the reference height. The menu
 // is top-aligned (not vertically centered) so the heading and tab bar hold a

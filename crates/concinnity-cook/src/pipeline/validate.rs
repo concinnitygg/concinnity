@@ -1,12 +1,11 @@
 //! The compile-free half of the pipeline: resolve every asset's type and args
 //! and run the structural checks, without producing a payload.
 
+use concinnity_host::thread::asset_id;
 use std::path::Path;
 
-use crate::asset_api::{self, AssetRequest};
-use crate::ecs::asset_id;
-
 use super::errors_to_io;
+use crate::asset_api::{self, AssetRequest};
 
 /// Validate a single asset's type and generator without running the full build
 /// pipeline. Called by the server on each world_add so the LLM gets per-asset
@@ -50,7 +49,9 @@ pub fn validate_asset(
 
     // A resource asset never builds a component def; validate it as a known type
     // with a structural check instead of routing through `create_asset_def`.
-    if crate::registry::RegisteredType::parse(asset_type).is_some_and(|t| t.is_resource()) {
+    if crate::authoring::registry::RegisteredType::parse(asset_type)
+        .is_some_and(|t| t.is_resource())
+    {
         crate::check::check_asset(&type_norm, name, args)?;
         return Ok(());
     }
@@ -80,7 +81,7 @@ pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io
     for asset in &loaded.assets {
         // A resource asset does not build a component def, so skip the component
         // resolution for it.
-        if crate::registry::RegisteredType::parse(&asset.asset_type)
+        if crate::authoring::registry::RegisteredType::parse(&asset.asset_type)
             .is_some_and(|t| t.is_resource())
         {
             continue;

@@ -5,8 +5,9 @@
 // the shared `asset::` builders, and authoring consumers turn a spec into a
 // world-line value.
 
-use super::{ArgValue, AssetSpec};
 use serde_json::{Map, Number, Value};
+
+use super::{ArgValue, AssetSpec};
 
 /// One `ArgValue` as a `serde_json::Value`.
 pub fn arg_value_to_json(v: &ArgValue) -> Value {

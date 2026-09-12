@@ -4,8 +4,7 @@
 // publish and read to coordinate a tick, plus the world's cook-counted physics
 // reservation, published once at blob load. They name no graphics backend,
 // windowing, physics, or audio type, so they live in core where every subsystem
-// crate can reach them without depending on the renderer. The client `ecs`
-// module re-exports them under the historical `crate::ecs::*` paths.
+// crate can reach them without depending on the renderer.
 
 use alloc::string::String;
 use alloc::vec::Vec;

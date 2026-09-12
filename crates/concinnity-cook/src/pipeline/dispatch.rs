@@ -1,7 +1,7 @@
 //! Per-type dispatch for the compile pass: which `BuildAsset` impl compiles a
 //! payload, and which inputs that compile reads.
 
-use crate::registry::RegisteredType;
+use crate::authoring::registry::RegisteredType;
 
 // Dispatch payload compilation by RegisteredType. Every variant listed below
 // has a `BuildAsset` impl in its asset file; the body of each call here is a
@@ -16,7 +16,7 @@ pub(super) fn compile_by_type(
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> std::io::Result<Vec<u8>> {
     use crate::asset::BuildAsset;
-    use crate::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
+    use concinnity_core::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
     match ct {
         RegisteredType::ProceduralMesh => {
             <ProceduralMesh as BuildAsset>::compile_payload(args, ctx)
@@ -50,7 +50,7 @@ pub(super) fn cache_inputs_by_type(
     ctx: &crate::asset::BuildCtx<'_>,
 ) -> crate::asset::CacheInputs {
     use crate::asset::{BuildAsset, CacheInputs};
-    use crate::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
+    use concinnity_core::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
     macro_rules! inputs {
         ($t:ty) => {
             CacheInputs {
@@ -75,6 +75,8 @@ mod tests {
     use super::*;
     use crate::pipeline::fixtures::wja;
     use crate::resource_handles::ResourceAssetCompile;
+    use concinnity_core::components::SkinnedMesh;
+    use concinnity_host::thread::asset_id;
 
     #[test]
     fn voxel_chunk_payload_compiles_end_to_end() {
@@ -156,7 +158,7 @@ mod tests {
     // its source file is folded into the payload cache key.
     #[test]
     fn resource_asset_types_compile_audio_clip_texture_cubemap_env_lut_and_font() {
-        use crate::registry::RegisteredType;
+        use crate::authoring::registry::RegisteredType;
         let rt = RegisteredType::parse("AudioClip").expect("AudioClip is a resource asset");
         let err = rt
             .compile_payload(&serde_json::json!({}), None)
@@ -254,7 +256,7 @@ mod tests {
     // image busts the payload cache.
     #[test]
     fn gltf_sources_fold_referenced_sibling_files_into_source_files() {
-        use crate::registry::RegisteredType;
+        use crate::authoring::registry::RegisteredType;
 
         let dir = tempfile::tempdir().unwrap();
         let json = serde_json::json!({
@@ -294,7 +296,7 @@ mod tests {
     fn compile_by_type_dispatches_deterministic_arms() {
         // Mesh is a resource asset now: it compiles through
         // `RegisteredType::compile_payload`, not the RegisteredType dispatch.
-        let mesh_bytes = crate::registry::RegisteredType::Mesh
+        let mesh_bytes = crate::authoring::registry::RegisteredType::Mesh
             .compile_payload(
                 &serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
                 None,
@@ -349,7 +351,7 @@ mod tests {
     // data form carries the interned name id and drops the geometry.
     #[test]
     fn skinned_mesh_resource_compile_paths() {
-        use crate::registry::RegisteredType;
+        use crate::authoring::registry::RegisteredType;
         let rt = RegisteredType::SkinnedMesh;
 
         let ok = serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "indices": []});
@@ -377,8 +379,8 @@ mod tests {
 
         // The baked data tuple: name id first, then the clamped mesh with its
         // geometry cleared.
-        crate::ecs::asset_id::reset_interner();
-        let name_id = crate::ecs::asset_id::intern("hero");
+        asset_id::reset_interner();
+        let name_id = asset_id::intern("hero");
         let data = rt
             .compile_data(
                 "hero",
@@ -391,8 +393,7 @@ mod tests {
             )
             .expect("data bakes")
             .expect("skinned mesh carries baked data");
-        let (baked_name, sm): (u32, crate::components::SkinnedMesh) =
-            postcard::from_bytes(&data).unwrap();
+        let (baked_name, sm): (u32, SkinnedMesh) = postcard::from_bytes(&data).unwrap();
         assert_eq!(baked_name, name_id.0);
         assert_eq!(sm.scale, [1.0, 1.0, 1.0], "zero scale clamps to unit");
         assert_eq!(sm.max_instances, 4096, "reserve caps at 4096");

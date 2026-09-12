@@ -15,9 +15,10 @@
 // baked into the binary, so a world that wants no particular face compiles no
 // atlas for one.
 
+use std::collections::HashSet;
+
 use super::companion_specs::{CompanionSpec, companions_for};
 use super::expand::ExpandReport;
-use std::collections::HashSet;
 
 // Same normalization the rest of the codebase uses for type-name dedup:
 // lowercase + strip underscores. Keeps "Camera3DSystem" / "camera3d_system"

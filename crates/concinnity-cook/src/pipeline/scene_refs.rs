@@ -1,8 +1,9 @@
 //! The naming-convention pass, run after the declaration-order interning and
 //! before the payload compile.
 
+use concinnity_host::thread::asset_id;
+
 use crate::authoring::world::WorldJsonlAsset;
-use crate::ecs::asset_id;
 
 // Resolve scene + screen associations that the runtime can no longer derive
 // from name strings, baking them into the asset args so they survive as
@@ -96,6 +97,8 @@ pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
 mod tests {
     use crate::pipeline::build_pipeline_from_str;
     use crate::pipeline::fixtures::wja;
+    use concinnity_core::components::{HitRegion, KeyBinding, Sprite, TextLabel};
+    use concinnity_host::thread::asset_id;
 
     // `screen:show:<name>` / `screen:toggle:<name>` action targets are
     // rewritten to interned ids at build time, like `scene:<name>`.
@@ -120,17 +123,17 @@ mod tests {
         let btn = result
             .defs
             .iter()
-            .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(1)))
+            .find(|d| d.name == Some(asset_id::AssetId(1)))
             .expect("HitRegion def");
-        let baked: crate::components::HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
+        let baked: HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
         assert_eq!(baked.action, "screen:toggle:0");
 
         let esc = result
             .defs
             .iter()
-            .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(2)))
+            .find(|d| d.name == Some(asset_id::AssetId(2)))
             .expect("KeyBinding def");
-        let baked: crate::components::KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
+        let baked: KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
         assert_eq!(baked.action, "screen:toggle:0");
     }
 
@@ -162,23 +165,24 @@ mod tests {
             let def = result
                 .defs
                 .iter()
-                .find(|d| d.name == Some(crate::ecs::asset_id::AssetId(id)))
+                .find(|d| d.name == Some(asset_id::AssetId(id)))
                 .unwrap_or_else(|| panic!("expected a def for {expect}"));
-            let ct = crate::registry::RegisteredType::from_discriminant(def.discriminant)
-                .unwrap_or_else(|| panic!("{expect}: unknown discriminant"));
+            let ct =
+                crate::authoring::registry::RegisteredType::from_discriminant(def.discriminant)
+                    .unwrap_or_else(|| panic!("{expect}: unknown discriminant"));
             match ct {
-                crate::registry::RegisteredType::Sprite => {
-                    postcard::from_bytes::<crate::components::Sprite>(&def.args_bytes)
+                crate::authoring::registry::RegisteredType::Sprite => {
+                    postcard::from_bytes::<Sprite>(&def.args_bytes)
                         .unwrap()
                         .screen
                 }
-                crate::registry::RegisteredType::TextLabel => {
-                    postcard::from_bytes::<crate::components::TextLabel>(&def.args_bytes)
+                crate::authoring::registry::RegisteredType::TextLabel => {
+                    postcard::from_bytes::<TextLabel>(&def.args_bytes)
                         .unwrap()
                         .screen
                 }
-                crate::registry::RegisteredType::HitRegion => {
-                    postcard::from_bytes::<crate::components::HitRegion>(&def.args_bytes)
+                crate::authoring::registry::RegisteredType::HitRegion => {
+                    postcard::from_bytes::<HitRegion>(&def.args_bytes)
                         .unwrap()
                         .screen
                 }
@@ -192,7 +196,7 @@ mod tests {
         ] {
             assert_eq!(
                 baked_view(id, name),
-                Some(crate::ecs::asset_id::AssetId(0)),
+                Some(asset_id::AssetId(0)),
                 "expected {name} to have screen=0"
             );
         }
@@ -269,7 +273,7 @@ mod tests {
 
     #[test]
     fn resolve_scene_refs_rewrites_action_names_to_interned_ids() {
-        crate::ecs::asset_id::reset_interner();
+        asset_id::reset_interner();
         let mut assets = vec![
             wja(
                 "btn",

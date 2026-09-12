@@ -2,9 +2,10 @@
 //! reserved name `builtin:humanoid`, and schema lookup by name against a
 //! world's CharacterSchema assets.
 
+use std::sync::OnceLock;
+
 use crate::authoring::registry::build_only::CharacterSchema;
 use crate::authoring::world::WorldJsonlAsset;
-use std::sync::OnceLock;
 
 /// `CharacterModel.schema` value of the bundled humanoid schema.
 pub const HUMANOID_SCHEMA: &str = "builtin:humanoid";

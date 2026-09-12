@@ -4,8 +4,9 @@
 // scene-membership resolution, walking the generic reference graph
 // (crate::authoring::refs) from every component root.
 
-use crate::authoring::world::WorldJsonlAsset;
 use std::collections::HashMap;
+
+use crate::authoring::world::WorldJsonlAsset;
 
 // Where an asset's payload packs: the global set loaded with the world, or one
 // scene's group. Derived, never authored.

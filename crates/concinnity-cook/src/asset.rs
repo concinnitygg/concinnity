@@ -10,12 +10,11 @@
 //! concinnity-core, since the engine selects a Shader stage's source with it at
 //! runtime.
 
+use concinnity_core::ecs::Component;
+use concinnity_core::platform::Platform;
 use std::path::Path;
 
-use concinnity_core::platform::Platform;
-
 use crate::authoring::world::WorldJsonlAsset;
-use crate::ecs::Component;
 
 // The on-disk inputs an asset's `compile_payload` reads, and how they relate to
 // the payload cache's generic walk of the args JSON.

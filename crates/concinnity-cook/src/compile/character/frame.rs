@@ -4,7 +4,7 @@
 // the bone length. A vertex's region weight is the skin weight it gives the
 // region's joints, so a region boundary is exactly as smooth as the skinning.
 
-use crate::components::{SkeletonJoint, SkinnedVertexData};
+use concinnity_core::components::{SkeletonJoint, SkinnedVertexData};
 use concinnity_core::gfx::transform::Mat4;
 use concinnity_core::math::vec3;
 

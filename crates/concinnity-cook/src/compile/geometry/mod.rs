@@ -18,9 +18,14 @@ mod skybox;
 mod terrain;
 
 use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
+use concinnity_core::components::MorphDelta;
+use concinnity_core::components::SkeletonJoint;
+use concinnity_core::components::SkinnedVertexData;
+use concinnity_core::components::VertexData;
 use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
+use concinnity_core::gfx::lod;
+use concinnity_core::gfx::mesh_payload;
 use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
-
 // Re-exported so cook code that also needs the runtime-side joint conversion
 // (mesh_reimport) can reach it through `crate::compile::geometry`.
 pub(crate) use concinnity_core::geometry::payload_joints_to_defs;
@@ -30,10 +35,8 @@ pub(crate) use concinnity_core::geometry::payload_joints_to_defs;
 type RawVert = ([f32; 3], [f32; 3], [f32; 2]);
 
 // Convert an args-form `SkeletonJoint` into the payload joint form.
-fn joint_def_to_payload(
-    j: &crate::components::SkeletonJoint,
-) -> crate::gfx::mesh_payload::PayloadJoint {
-    crate::gfx::mesh_payload::PayloadJoint {
+fn joint_def_to_payload(j: &SkeletonJoint) -> mesh_payload::PayloadJoint {
+    mesh_payload::PayloadJoint {
         name: j.name.clone(),
         parent: j.parent,
         translation: j.translation,
@@ -111,9 +114,7 @@ pub(crate) fn compile_heightfield_payload(
     // tail consumes the vertices.
     let (n, heights) = heightfield_collider_grid(&vertices)?;
     let mut payload = finish_mesh_payload(vertices, indices, args)?;
-    payload.extend_from_slice(&crate::gfx::mesh_payload::serialize_heightfield_trailer(
-        n, n, &heights,
-    ));
+    payload.extend_from_slice(&mesh_payload::serialize_heightfield_trailer(n, n, &heights));
     Ok(payload)
 }
 
@@ -165,7 +166,7 @@ fn heightfield_collider_grid(verts: &[Vert]) -> Result<(usize, Vec<f32>), String
 // Normals are computed from triangle geometry; tangents from UV gradients.
 // Shared by file-backed mesh formats (e.g. OBJ).
 pub(crate) fn compile_mesh_from_vertex_data(
-    vertex_data: &[crate::components::VertexData],
+    vertex_data: &[VertexData],
     indices: &[u16],
 ) -> Result<Vec<u8>, String> {
     let vertices = vertices_from_data(vertex_data, indices)?;
@@ -175,7 +176,7 @@ pub(crate) fn compile_mesh_from_vertex_data(
         .zip(tangents)
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
-    Ok(crate::gfx::mesh_payload::serialize(&verts5, indices))
+    Ok(mesh_payload::serialize(&verts5, indices))
 }
 
 // The level-of-detail request of a skinned mesh: `levels` includes LOD0 (so
@@ -191,11 +192,11 @@ pub(crate) struct SkinnedLods<'a> {
 // QEM half-edge collapse against the LOD0 vertex set, mirroring the static
 // [`build_lod_alternates`] path.
 pub(crate) fn compile_skinned_mesh_payload_with_lods(
-    vertex_data: &[crate::components::SkinnedVertexData],
+    vertex_data: &[SkinnedVertexData],
     indices: &[u16],
-    skeleton: &[crate::components::SkeletonJoint],
+    skeleton: &[SkeletonJoint],
     morph_target_names: &[String],
-    morph_deltas: &[crate::components::MorphDelta],
+    morph_deltas: &[MorphDelta],
     lods: &SkinnedLods,
 ) -> Result<Vec<u8>, String> {
     let lod_levels = lods.levels.clamp(1, 8);
@@ -233,7 +234,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         .collect();
     let tangents = compute_tangents(&pnt, indices);
 
-    let skinned: Vec<crate::gfx::mesh_payload::SkinnedVertex> = vertex_data
+    let skinned: Vec<mesh_payload::SkinnedVertex> = vertex_data
         .iter()
         .zip(pnt.iter())
         .zip(tangents)
@@ -250,7 +251,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
                 // No weights authored: bind fully to the first joint.
                 [1.0, 0.0, 0.0, 0.0]
             };
-            crate::gfx::mesh_payload::SkinnedVertex {
+            mesh_payload::SkinnedVertex {
                 pos: *pos,
                 normal: *normal,
                 tangent,
@@ -267,7 +268,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         })
         .collect();
 
-    let payload_joints: Vec<crate::gfx::mesh_payload::PayloadJoint> =
+    let payload_joints: Vec<mesh_payload::PayloadJoint> =
         skeleton.iter().map(joint_def_to_payload).collect();
 
     // Bake LOD alternates against the skinned vertex set. Half-edge QEM
@@ -289,13 +290,13 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         let lod0_tris = indices.len() / 3;
         let mut out: Vec<(f32, Vec<u16>)> = Vec::with_capacity(alt_count);
         for level in 1..lod_levels {
-            let target = crate::gfx::lod::target_tri_count_for_level(lod0_tris, level);
-            let idx = crate::gfx::lod::decimate_by_qem(&positions, indices, target);
+            let target = lod::target_tri_count_for_level(lod0_tris, level);
+            let idx = lod::decimate_by_qem(&positions, indices, target);
             if idx.is_empty() {
                 break;
             }
             let distance = if lod_distances.is_empty() {
-                crate::gfx::lod::default_distance_for_level(radius, level)
+                lod::default_distance_for_level(radius, level)
             } else {
                 lod_distances[(level - 1) as usize]
             };
@@ -306,21 +307,21 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         Vec::new()
     };
 
-    let dense: Vec<crate::gfx::mesh_payload::MorphDelta> = morph_deltas
+    let dense: Vec<mesh_payload::MorphDelta> = morph_deltas
         .iter()
-        .map(|d| crate::gfx::mesh_payload::MorphDelta {
+        .map(|d| mesh_payload::MorphDelta {
             position: d.position,
             normal: d.normal,
         })
         .collect();
-    let morphs = crate::gfx::mesh_payload::PayloadMorphs::from_dense(
+    let morphs = mesh_payload::PayloadMorphs::from_dense(
         morph_target_names.to_vec(),
         vertex_data.len(),
         &dense,
     )
     .map_err(|e| format!("SkinnedMesh {e}"))?;
 
-    Ok(crate::gfx::mesh_payload::serialize_skinned_with_lods(
+    Ok(mesh_payload::serialize_skinned_with_lods(
         &skinned,
         indices,
         &payload_joints,
@@ -500,9 +501,9 @@ fn build_inline(args: &serde_json::Value) -> Result<(Vec<Vert>, Vec<u16>), Strin
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let data: Vec<crate::components::VertexData> = parsed
+    let data: Vec<VertexData> = parsed
         .into_iter()
-        .map(|(pos, color, uv)| crate::components::VertexData { pos, color, uv })
+        .map(|(pos, color, uv)| VertexData { pos, color, uv })
         .collect();
     let vertices = vertices_from_data(&data, &indices)?;
     Ok((vertices, indices))
@@ -560,8 +561,8 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
-    use crate::gfx::mesh_payload::{
+    use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+    use concinnity_core::gfx::mesh_payload::{
         Vertex, deserialize_heightfield, deserialize_skinned_with_lods, deserialize_with_lods,
     };
 

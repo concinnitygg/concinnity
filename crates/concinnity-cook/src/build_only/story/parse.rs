@@ -1,7 +1,6 @@
+use pulldown_cmark::{Event, HeadingLevel, MetadataBlockKind, Options, Parser, Tag, TagEnd};
 use std::collections::HashSet;
 use std::ops::Range;
-
-use pulldown_cmark::{Event, HeadingLevel, MetadataBlockKind, Options, Parser, Tag, TagEnd};
 
 use super::helpers::{
     AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, file_extension, parse_flag, parse_int, slug,

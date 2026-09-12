@@ -1,9 +1,10 @@
 // src/asset_impls/shader.rs
 
-use crate::asset::BuildCtx;
-use crate::compile::shader::{compile_world_shader, read_shader_source};
 use concinnity_core::components::{Shader, ShaderPrograms, ShaderStage};
 use concinnity_core::render::slang_programs::surface::Sources;
+
+use crate::asset::BuildCtx;
+use crate::compile::shader::{compile_world_shader, read_shader_source};
 
 // Resolve a declared source path to the on-disk path the build will read. A
 // bare filename is looked up recursively under the build's asset search root

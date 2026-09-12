@@ -2,9 +2,8 @@
 //! disk, or the bundled default face) and hands them to the shared rasterizer in
 //! `concinnity_core::bake::font`, which packs the glyphs into an SDF atlas payload.
 
-use serde::Deserialize;
-
 use concinnity_core::components::Font;
+use serde::Deserialize;
 
 // Compile a Font asset's arguments into the binary blob payload format.
 //

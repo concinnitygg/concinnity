@@ -2,8 +2,9 @@
 // wide, pushing in `direction` (model space) on the side of the bone that
 // faces it, or radially when no direction is given.
 
-use super::{SynthInput, unit};
 use concinnity_core::math::vec3;
+
+use super::{SynthInput, unit};
 
 pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
     let p = input.params;

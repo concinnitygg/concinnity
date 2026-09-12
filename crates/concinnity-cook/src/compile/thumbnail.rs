@@ -10,13 +10,16 @@
 //! the thin half that puts the result into the build cache
 //! (`crate::cache::thumbnails`).
 
-use crate::pipeline::PipelineResult;
 use concinnity_core::bake::texture as texture_payload;
 use concinnity_core::bake::texture::{TextureFormat, downscale_rgba};
 use concinnity_core::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
+use concinnity_core::components::Material;
+use concinnity_core::components::Model;
 use concinnity_core::gfx::raster;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+
+use crate::pipeline::PipelineResult;
 
 // Folded into every key: bump when the rendering itself changes so stale
 // images re-bake. Version history:
@@ -87,8 +90,7 @@ pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> T
     // Surface colors by material handle, feeding model sub-mesh shading.
     let mut material_colors: HashMap<u32, [f32; 3]> = HashMap::new();
     for (record, name) in records_of(result, ResourceKind::Material) {
-        let Ok(mat) = postcard::from_bytes::<crate::components::Material>(&record.data_bytes)
-        else {
+        let Ok(mat) = postcard::from_bytes::<Material>(&record.data_bytes) else {
             out.skip();
             continue;
         };
@@ -208,7 +210,7 @@ fn collect_models(
         }
     }
     let Some(model_disc) =
-        crate::registry::RegisteredType::parse("Model").and_then(|t| t.discriminant())
+        crate::authoring::registry::RegisteredType::parse("Model").and_then(|t| t.discriminant())
     else {
         return;
     };
@@ -216,7 +218,7 @@ fn collect_models(
         if def.discriminant != model_disc {
             continue;
         }
-        let Ok(model) = postcard::from_bytes::<crate::components::Model>(&def.args_bytes) else {
+        let Ok(model) = postcard::from_bytes::<Model>(&def.args_bytes) else {
             out.skip();
             continue;
         };
@@ -389,6 +391,9 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::SubMeshRef;
+    use concinnity_core::ecs::MaterialHandle;
+    use concinnity_core::ecs::MeshHandle;
 
     fn record(kind: ResourceKind, handle: u32, blob: u32, offset: u64, len: u64) -> ResourceRecord {
         ResourceRecord {
@@ -524,7 +529,7 @@ mod tests {
     #[test]
     fn material_swatch_keys_on_record_and_albedo_average() {
         let mut result = textured_meshed_result();
-        let mat = crate::components::Material {
+        let mat = Material {
             roughness: 0.4,
             metallic: 0.1,
             ..Default::default()
@@ -553,7 +558,7 @@ mod tests {
         let ball_off = result.payloads[0].len() as u64;
         let ball_len = ball.len() as u64;
         result.payloads[0].extend_from_slice(&ball);
-        let mat = crate::components::Material {
+        let mat = Material {
             tint: [0.2, 0.9, 0.2],
             ..Default::default()
         };
@@ -565,18 +570,18 @@ mod tests {
         });
         result.resource_locks.push(lock("green", "Material"));
 
-        let model_disc = crate::registry::RegisteredType::parse("Model")
+        let model_disc = crate::authoring::registry::RegisteredType::parse("Model")
             .unwrap()
             .discriminant()
             .unwrap();
-        let model = crate::components::Model {
+        let model = Model {
             meshes: vec![
-                crate::components::SubMeshRef {
-                    mesh: Some(crate::ecs::MeshHandle(0)),
-                    material: Some(crate::ecs::MaterialHandle(0)),
+                SubMeshRef {
+                    mesh: Some(MeshHandle(0)),
+                    material: Some(MaterialHandle(0)),
                 },
-                crate::components::SubMeshRef {
-                    mesh: Some(crate::ecs::MeshHandle(1)),
+                SubMeshRef {
+                    mesh: Some(MeshHandle(1)),
                     material: None,
                 },
             ],
@@ -611,9 +616,9 @@ mod tests {
 
         // A model whose sub-meshes all fail to resolve is skipped, not fatal.
         let mut broken = result;
-        let orphan = crate::components::Model {
-            meshes: vec![crate::components::SubMeshRef {
-                mesh: Some(crate::ecs::MeshHandle(99)),
+        let orphan = Model {
+            meshes: vec![SubMeshRef {
+                mesh: Some(MeshHandle(99)),
                 material: None,
             }],
             ..Default::default()

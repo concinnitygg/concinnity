@@ -1,6 +1,8 @@
 // Entry point for all build-time JSON-level world expansion.
 // Operates purely on serde_json::Value; no type registry or blob compilation.
 
+use std::path::Path;
+
 use super::app_config::apply_app_config;
 use super::camera_shot::expand_camera_shots;
 use super::character_model::expand_character_models;
@@ -16,10 +18,7 @@ use super::room::expand_room_textures;
 use super::scene_import::expand_scene_imports;
 use super::slider::expand_sliders;
 use super::story::expand_stories;
-
 use crate::authoring::world::load_world;
-
-use std::path::Path;
 
 // Shared helpers used across expansion submodules.
 

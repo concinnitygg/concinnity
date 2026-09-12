@@ -14,12 +14,11 @@
 //! entry and nothing else. Stamping on the file itself would be wrong: the
 //! payload cache shares this segment, so every build would bump it.
 
+use concinnity_core::blob::CacheEntryKind;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
-use sha2::{Digest, Sha256};
-
 use super::segment::Index;
-use concinnity_core::blob::CacheEntryKind;
 
 const THUMBNAIL: CacheEntryKind = CacheEntryKind::Thumbnail;
 

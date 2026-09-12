@@ -2,8 +2,9 @@
 // it is skinned to, each influence weighted by its skin weight. A positive
 // amplitude thickens the limb; the bipolar pair gives thin as well.
 
-use super::{SynthInput, unit};
 use concinnity_core::math::vec3;
+
+use super::{SynthInput, unit};
 
 pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
     input

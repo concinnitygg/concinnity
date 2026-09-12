@@ -3,8 +3,9 @@
 //! Also the authored shape the build sizes a world's spawn reservation from:
 //! which of its assets can create collider-bearing props while it runs.
 
-use crate::authoring::world::WorldJsonlAsset;
 use concinnity_core::components::PropColliderShape;
+
+use crate::authoring::world::WorldJsonlAsset;
 
 const BUILTIN_LAYERS: [&str; 4] = ["world", "prop", "character", "trigger"];
 // An interaction group is 32 bits: the built-ins plus at most 28 more.

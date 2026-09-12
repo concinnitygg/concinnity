@@ -9,11 +9,11 @@ mod gltf;
 #[cfg(test)]
 mod fixtures;
 
-use crate::authoring::world::WorldJsonlAsset;
-
 pub(in crate::pipeline) use animation::{desugar_animation_imports, desugar_root_motion};
 pub(in crate::pipeline) use fbx::{desugar_fbx_meshes, desugar_fbx_skinned_meshes};
 pub(in crate::pipeline) use gltf::{desugar_gltf_meshes, desugar_gltf_skinned_meshes};
+
+use crate::authoring::world::WorldJsonlAsset;
 
 // Which skinned mesh of the asset's source file it selects; absent means the
 // file's first.

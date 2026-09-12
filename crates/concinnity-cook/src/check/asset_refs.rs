@@ -13,7 +13,7 @@
 // on, and their runtime `Component` impls, live in
 // concinnity-core.
 
-use crate::components::{
+use concinnity_core::components::{
     AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, PhysicsJointKind, Prop,
     VoxelChunk, VoxelWorld,
 };

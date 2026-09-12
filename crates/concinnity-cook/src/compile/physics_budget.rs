@@ -7,12 +7,11 @@
 // capsule. Where the two sides disagree the runtime's debug assert trips, so
 // this module tracks the driver, not the authoring schema.
 
+use concinnity_core::blob::PhysicsBudgetRecord;
+use concinnity_core::physics::{PhysicsBudget, PhysicsCounts};
 use std::collections::HashSet;
 
 use crate::authoring::world::WorldJsonlAsset;
-use concinnity_core::blob::PhysicsBudgetRecord;
-use concinnity_core::physics::{PhysicsBudget, PhysicsCounts};
-
 use crate::compile::spawn_population::SpawnPopulation;
 
 fn norm(asset_type: &str) -> String {

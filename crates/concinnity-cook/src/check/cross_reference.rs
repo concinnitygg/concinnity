@@ -13,9 +13,10 @@
 //! required-ness) and `cross_refs_for` dispatches to it by type. A hand impl
 //! must not re-check a registry-declared field, or the problem reports twice.
 
+use std::collections::{HashMap, HashSet};
+
 use super::asset_refs::{CrossRef, CrossReferenced, RefKind};
 use crate::authoring::world::WorldJsonlAsset;
-use std::collections::{HashMap, HashSet};
 
 // Dispatch reference extraction by normalized asset type. Every arm delegates
 // to a `CrossReferenced` impl in the named asset's file.
@@ -24,7 +25,7 @@ pub(crate) fn cross_refs_for(
     name: &str,
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
-    use crate::components::{
+    use concinnity_core::components::{
         AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, Prop, VoxelChunk,
         VoxelWorld,
     };

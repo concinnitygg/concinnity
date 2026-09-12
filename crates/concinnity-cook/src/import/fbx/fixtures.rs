@@ -2,12 +2,11 @@
 // described in memory and written out with the fbxcel binary writer, so each
 // test declares only the scene shape it needs.
 
-use std::io::{BufWriter, Seek, Write};
-use std::path::Path;
-
 use fbxcel::low::FbxVersion;
 use fbxcel::tree::v7400::Tree;
 use fbxcel::writer::v7400::binary::{FbxFooter, Writer};
+use std::io::{BufWriter, Seek, Write};
+use std::path::Path;
 
 pub(super) enum Attr {
     I32(i32),

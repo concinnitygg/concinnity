@@ -8,11 +8,11 @@
 // `serde_json::Value` with the core bridge, so the element shapes are
 // single-sourced and match the specs the editor and world templates use.
 
+use concinnity_core::components::Font;
 use std::collections::HashMap;
 
 use super::expand::{asset_name, type_norm};
 use crate::authoring::spec::{asset, spec_to_value};
-use crate::components::Font;
 
 // A settings/menu TextLabel value with `centered` pinned false: the default-font
 // pass would otherwise recenter a font-carrying label onto the viewport center,

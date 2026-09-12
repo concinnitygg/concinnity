@@ -1,9 +1,9 @@
-use crate::authoring::spec::{AssetSpec, asset, spec_to_value};
-use crate::build_only::ui_spec::sprite;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::helpers::wrap_text;
 use super::model::{FlagOp, Gate, ImageDims, Stage, Story};
+use crate::authoring::spec::{AssetSpec, asset, spec_to_value};
+use crate::build_only::ui_spec::sprite;
 
 // Dialog paragraphs wrap at a fixed column because TextLabel only honors
 // explicit newlines and font metrics are not available at this stage. The

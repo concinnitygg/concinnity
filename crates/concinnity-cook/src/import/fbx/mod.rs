@@ -21,16 +21,14 @@ mod skin;
 
 pub(crate) use anim::fbx_animation_names;
 pub use anim::import_fbx_animation;
-pub(crate) use skin::import_skinned_fbx;
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-
+use concinnity_core::components::VertexData;
+use concinnity_core::gfx::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::low::v7400::AttributeValue;
 use fbxcel::tree::any::AnyTree;
 use fbxcel::tree::v7400::NodeHandle;
-
-use crate::components::VertexData;
-use crate::gfx::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+pub(crate) use skin::import_skinned_fbx;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::import::NEUTRAL_COLOR;
 

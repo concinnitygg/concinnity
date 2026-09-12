@@ -16,9 +16,7 @@
 //! `concinnity_cook::authoring::registry::build_only`.
 //!
 //! Systems are not components: every system is internal code (see
-//! `World::start`), driven by the presence of the components defined here. The
-//! client re-exports this module under the historical `crate::components::*`
-//! paths.
+//! `World::start`), driven by the presence of the components defined here.
 
 // Component data types.
 mod animation;

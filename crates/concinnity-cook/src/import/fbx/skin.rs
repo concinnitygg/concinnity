@@ -8,17 +8,16 @@
 // a cluster (unweighted parents in the chain) extend the chain with their
 // scene-pose transform instead.
 
-use std::collections::{HashMap, HashSet};
-
+use concinnity_core::components::{SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_core::gfx::transform::{
+    IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
+};
 use fbxcel::tree::v7400::NodeHandle;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     arr_f64, arr_i32, attr_i64, attr_str, local_matrices, node_scene_local, object_id, object_name,
     transform_point,
-};
-use crate::components::{SkeletonJoint, SkinnedVertexData, VertexData};
-use crate::gfx::transform::{
-    IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
 };
 use crate::import::glb::ImportedSkinnedMesh;
 

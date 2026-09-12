@@ -46,7 +46,7 @@ fn graphics_config_companions() -> Vec<CompanionSpec> {
 pub(crate) fn companions_for(type_norm: &str) -> Vec<CompanionSpec> {
     if type_norm == "graphicsconfig" {
         graphics_config_companions()
-    } else if crate::registry::type_renders(type_norm) {
+    } else if crate::authoring::registry::type_renders(type_norm) {
         graphics_config_marker()
     } else {
         Vec::new()

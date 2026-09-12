@@ -22,14 +22,12 @@
 // `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
-use std::path::Path;
-
-use serde::Deserialize;
-
 use concinnity_core::bake::texture::{
     TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
 };
 use concinnity_core::components::Texture;
+use serde::Deserialize;
+use std::path::Path;
 
 // Validate the texture generator name in args without generating pixel data.
 pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String> {

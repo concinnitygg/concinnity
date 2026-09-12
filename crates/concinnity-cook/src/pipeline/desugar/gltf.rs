@@ -4,11 +4,10 @@
 
 use std::path::Path;
 
-use crate::authoring::world::WorldJsonlAsset;
-
 use super::super::pack::MeshCacheEntry;
 use super::super::{MESH_TYPE, SKINNED_MESH_TYPE};
 use super::skin_index_arg;
+use crate::authoring::world::WorldJsonlAsset;
 
 // Expand glTF-sourced SkinnedMesh assets in place: parse the referenced .glb
 // and write the imported geometry + skeleton into the asset's inline
@@ -143,7 +142,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
     assets_dir: Option<&Path>,
 ) -> std::io::Result<()> {
-    use crate::components::VertexData;
+    use concinnity_core::components::VertexData;
     use std::collections::HashMap;
 
     // One split chunk: its vertices and index buffer.

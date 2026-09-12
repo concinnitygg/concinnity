@@ -4,9 +4,7 @@
 // The pass itself (`decompose::run`) lives in the client crate, but the index it
 // produces is renderer-free, so it lives here where the physics / audio subsystem
 // crates can resolve a name reference (a Prop parent, a PropBody owner, an audio
-// emitter target) to an Entity without depending on the renderer. The client
-// `ecs::decompose` module re-exports it under the historical
-// `crate::ecs::decompose::EntityByName` path.
+// emitter target) to an Entity without depending on the renderer.
 
 use crate::ecs::Entity;
 use crate::ecs::asset_id::AssetId;

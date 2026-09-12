@@ -4,11 +4,12 @@
 //! name; the cook pipeline inlines it at build time. Build-only, so it lives
 //! here rather than in the runtime foundation.
 
+use concinnity_host::store::source::find_in;
 use std::path::Path;
 
 fn find_preset_path(filename: &str, subdir: &str, assets_dir: Option<&Path>) -> Option<String> {
     let assets = assets_dir?;
-    if let Some(p) = crate::source::find_in(assets, filename) {
+    if let Some(p) = find_in(assets, filename) {
         return Some(p);
     }
     preset_path_in(assets, filename, subdir)
