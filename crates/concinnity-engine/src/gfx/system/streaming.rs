@@ -1,13 +1,23 @@
 // GraphicsSystem asset-streaming setup: wires the texture, normal-map, mesh,
 // and voxel-world streaming pools onto the backend, plus the stats accessor.
 
-use crate::components::{BlockType, StreamingConfig, VoxelWorld};
-use crate::ecs::asset_id::AssetId;
-use crate::gfx::material_entry::MaterialEntry;
-use crate::gfx::mesh_payload::Vertex;
+use concinnity_core::components::{
+    BlockType, RenderHandle, Scene, SceneMember, StreamingConfig, VoxelWorld,
+};
+use concinnity_core::ecs::MaterialHandle;
+use concinnity_core::ecs::PayloadLocator;
+use concinnity_core::ecs::PipelineContext;
+use concinnity_core::geometry::ChunkBlockType;
+use concinnity_core::gfx::chunk_coord;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::mesh_seed;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::scene_residency;
+use concinnity_host::thread::asset_id::AssetId;
 
 use super::helpers::*;
 use super::*;
+use crate::gfx::material_entry::MaterialEntry;
 
 // Default fractions of the GPU's reported memory each streaming pool may hold
 // resident when a world sets no explicit byte budget. The remainder is left for
@@ -57,7 +67,7 @@ pub(super) fn chunk_reserve_count(vw: &VoxelWorld) -> usize {
 // payload -- and any scene blob holding only skipped payloads -- is never read
 // at init. Empty when streaming is off or the world declares no scenes.
 pub(super) fn deferred_texture_slots(
-    ctx: &crate::ecs::PipelineContext,
+    ctx: &PipelineContext,
     streaming: bool,
     slot_count: usize,
 ) -> std::collections::HashSet<usize> {
@@ -67,11 +77,7 @@ pub(super) fn deferred_texture_slots(
     }
     // Scenes are still undrained at this point; the first declared is the
     // start scene (the one setup_scene_flow pins).
-    let Some(start) = ctx
-        .query::<crate::components::Scene>()
-        .next()
-        .map(|s| s.asset_id)
-    else {
+    let Some(start) = ctx.query::<Scene>().next().map(|s| s.asset_id) else {
         return deferred;
     };
     let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
@@ -95,18 +101,14 @@ pub(super) fn deferred_texture_slots(
 // other than the start scene, gated behind streaming like the texture path.
 // Members without a baked bounds record fall out (they decode eagerly).
 pub(super) fn deferred_mesh_sources(
-    ctx: &crate::ecs::PipelineContext,
+    ctx: &PipelineContext,
     streaming: bool,
 ) -> crate::gfx::draw_list::DeferredMeshSources {
     let mut out = crate::gfx::draw_list::DeferredMeshSources::default();
     if !streaming {
         return out;
     }
-    let Some(start) = ctx
-        .query::<crate::components::Scene>()
-        .next()
-        .map(|s| s.asset_id)
-    else {
+    let Some(start) = ctx.query::<Scene>().next().map(|s| s.asset_id) else {
         return out;
     };
     let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
@@ -144,7 +146,7 @@ pub(super) fn deferred_mesh_sources(
 // baked ShaderHandle space). Bucket 0 is the world default program and is
 // never deferred.
 pub(super) fn deferred_shader_buckets(
-    ctx: &crate::ecs::PipelineContext,
+    ctx: &PipelineContext,
     streaming: bool,
     shader_ids: &[AssetId],
 ) -> Vec<(usize, AssetId)> {
@@ -152,11 +154,7 @@ pub(super) fn deferred_shader_buckets(
     if !streaming {
         return deferred;
     }
-    let Some(start) = ctx
-        .query::<crate::components::Scene>()
-        .next()
-        .map(|s| s.asset_id)
-    else {
+    let Some(start) = ctx.query::<Scene>().next().map(|s| s.asset_id) else {
         return deferred;
     };
     let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
@@ -186,7 +184,7 @@ pub(super) struct MeshStreamSetup {
     pub centers: Vec<Vec<[f32; 3]>>,
     pub draw_indices: Vec<usize>,
     pub(crate) disk_backed: bool,
-    pub(crate) seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion>,
+    pub(crate) seed_region: Option<mesh_seed::MeshSeedRegion>,
     pub(crate) deferred_payloads:
         std::collections::HashMap<usize, crate::gfx::streaming::mesh::DeferredMeshPayload>,
 }
@@ -201,9 +199,9 @@ impl GraphicsSystem {
     // global set stream.
     pub(super) fn build_scene_residency(
         &mut self,
-        ctx: &crate::ecs::PipelineContext,
-    ) -> Option<crate::gfx::scene_residency::SceneResidency> {
-        use crate::gfx::scene_residency::{
+        ctx: &PipelineContext,
+    ) -> Option<scene_residency::SceneResidency> {
+        use concinnity_core::render::scene_residency::{
             CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency,
         };
 
@@ -240,9 +238,7 @@ impl GraphicsSystem {
 
         if self.mesh_streamer.is_some() {
             let mut scene_of_draw = std::collections::HashMap::new();
-            for (_, member, handle) in
-                ctx.join2::<crate::components::SceneMember, crate::components::RenderHandle>()
-            {
+            for (_, member, handle) in ctx.join2::<SceneMember, RenderHandle>() {
                 for &slot in &handle.draws {
                     scene_of_draw.insert(slot as usize, member.0);
                 }
@@ -281,7 +277,9 @@ impl GraphicsSystem {
     }
 
     fn set_stream_blocked(&mut self, channel: u8, id: u32, blocked: bool) {
-        use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE};
+        use concinnity_core::render::scene_residency::{
+            CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE,
+        };
         match channel {
             CHANNEL_TEXTURE => {
                 if let Some(s) = &mut self.texture_streamer {
@@ -306,7 +304,7 @@ impl GraphicsSystem {
         &mut self,
         config: Option<StreamingConfig>,
         texture_payloads: Vec<Vec<u8>>,
-        texture_locators: &[crate::ecs::PayloadLocator],
+        texture_locators: &[PayloadLocator],
         disk_backed: bool,
         texture_centers: Vec<Vec<[f32; 3]>>,
     ) {
@@ -490,13 +488,13 @@ impl GraphicsSystem {
         &mut self,
         voxel_world: Option<VoxelWorld>,
         block_types: &std::collections::HashMap<AssetId, BlockType>,
-        material_map: &std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>,
+        material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
     ) {
         let Some(vw) = voxel_world else { return };
 
         // Resolve the palette: each id is a BlockType; index 0 is air. A
         // missing entry degrades to air rather than failing the world.
-        let palette: Vec<crate::geometry::ChunkBlockType> = vw
+        let palette: Vec<ChunkBlockType> = vw
             .palette
             .iter()
             .map(|id| match block_types.get(id) {
@@ -506,7 +504,7 @@ impl GraphicsSystem {
                         "GraphicsSystem: VoxelWorld palette entry {} is not a known BlockType",
                         id
                     );
-                    crate::geometry::ChunkBlockType {
+                    ChunkBlockType {
                         solid: false,
                         uv_top: [0.0; 4],
                         uv_bottom: [0.0; 4],
@@ -522,8 +520,8 @@ impl GraphicsSystem {
             Some(entry) => (entry.albedo_slot, entry.normal_map_slot, entry.uniforms),
             None => (
                 0,
-                crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-                crate::gfx::render_types::MaterialUniforms::DEFAULT,
+                render_types::NO_NORMAL_MAP_SLOT,
+                render_types::MaterialUniforms::DEFAULT,
             ),
         };
 
@@ -639,7 +637,7 @@ impl GraphicsSystem {
             // Seeded at the world origin; the first `step` rebases onto the
             // camera's actual chunk before any chunk is resident, so the
             // seed value never places geometry.
-            origin_chunk: crate::gfx::chunk_coord::ChunkCoord::new(0, 0),
+            origin_chunk: chunk_coord::ChunkCoord::new(0, 0),
             texture_slot,
             normal_map_slot,
             material,
@@ -653,7 +651,15 @@ mod tests {
 
     use super::*;
     use crate::gfx::mock_backend::{Call, MockState, recording_backend};
-    use crate::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::ComponentStorage;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::MeshBoundsRecord;
+    use concinnity_core::ecs::Resources;
+    use concinnity_core::ecs::SceneGroup;
+    use concinnity_core::gfx::profile;
+    use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_host::store::blob::BlobData;
 
     const MIB: u64 = 1024 * 1024;
 
@@ -661,72 +667,64 @@ mod tests {
     // deferral tests: the declared Scenes plus the blob's baked scene groups
     // and mesh-bounds records.
     struct ResidencyWorld {
-        components: crate::ecs::ComponentStorage,
-        blob: crate::blob::BlobData,
-        profile: crate::gfx::profile::FrameProfile,
-        resources: crate::ecs::Resources,
-        scratch: crate::ecs::Arena,
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: profile::FrameProfile,
+        resources: Resources,
+        scratch: Arena,
     }
 
     impl ResidencyWorld {
         // `scenes` are pushed in declaration order, so the first is the start
         // scene the deferral spares.
         fn new(scenes: &[AssetId]) -> Self {
-            let mut components = crate::ecs::ComponentStorage::default();
+            let mut components = ComponentStorage::default();
             for &asset_id in scenes {
-                components.push_typed(crate::components::Scene {
+                components.push_typed(Scene {
                     asset_id,
                     camera_shot: None,
                 });
             }
             Self {
                 components,
-                blob: crate::blob::BlobData::empty(),
+                blob: BlobData::empty(),
                 profile: Default::default(),
-                resources: crate::ecs::Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                resources: Resources::new(),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
-        fn with_groups(mut self, groups: Vec<crate::ecs::SceneGroup>) -> Self {
+        fn with_groups(mut self, groups: Vec<SceneGroup>) -> Self {
             self.resources.insert(crate::ecs::BlobSceneGroups(groups));
             self
         }
 
-        fn with_mesh_bounds(mut self, records: Vec<crate::ecs::MeshBoundsRecord>) -> Self {
+        fn with_mesh_bounds(mut self, records: Vec<MeshBoundsRecord>) -> Self {
             self.resources.insert(crate::ecs::BlobMeshBounds(records));
             self
         }
 
-        fn ctx(&mut self) -> crate::ecs::PipelineContext<'_> {
-            crate::ecs::PipelineContext {
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
                 components: &mut self.components,
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
     }
 
-    fn group(
-        scene: AssetId,
-        resources: Vec<(u8, u32)>,
-        defs: Vec<AssetId>,
-    ) -> crate::ecs::SceneGroup {
-        crate::ecs::SceneGroup {
+    fn group(scene: AssetId, resources: Vec<(u8, u32)>, defs: Vec<AssetId>) -> SceneGroup {
+        SceneGroup {
             scene,
             resources,
             defs,
         }
     }
 
-    fn bounds_record(
-        handle: u32,
-        vertex_count: u32,
-        index_count: u32,
-    ) -> crate::ecs::MeshBoundsRecord {
-        crate::ecs::MeshBoundsRecord {
+    fn bounds_record(handle: u32, vertex_count: u32, index_count: u32) -> MeshBoundsRecord {
+        MeshBoundsRecord {
             handle,
             min: [-1.0; 3],
             max: [1.0; 3],
@@ -1008,12 +1006,12 @@ mod tests {
     fn disk_backed_texture_setup_counts_slots_from_the_locators() {
         let (recorded, mut gs) = system_with_backend();
         let locators = vec![
-            crate::ecs::PayloadLocator {
+            PayloadLocator {
                 blob_index: 0,
                 offset: 0,
                 len: 8,
             },
-            crate::ecs::PayloadLocator {
+            PayloadLocator {
                 blob_index: 0,
                 offset: 8,
                 len: 8,
@@ -1047,7 +1045,7 @@ mod tests {
                 centers: centers(2),
                 draw_indices: vec![4, 7],
                 disk_backed: false,
-                seed_region: Some(crate::gfx::mesh_seed::MeshSeedRegion {
+                seed_region: Some(mesh_seed::MeshSeedRegion {
                     vtx_offset: 0,
                     vtx_bytes: 1024,
                     idx_offset: 0,
@@ -1174,7 +1172,7 @@ mod tests {
         let (recorded, mut gs) = system_with_backend();
         let air = AssetId(1);
         let ground = AssetId(2);
-        let handle = crate::ecs::MaterialHandle(0);
+        let handle = MaterialHandle(0);
         let mut material = MaterialUniforms::DEFAULT;
         material.roughness = 0.25;
 
@@ -1237,10 +1235,7 @@ mod tests {
         let cs = gs.chunk_stream.as_ref().expect("chunk pool built");
         assert_eq!(cs.texture_slot, 0);
         assert_eq!(cs.normal_map_slot, NO_NORMAL_MAP_SLOT);
-        assert_eq!(
-            cs.origin_chunk,
-            crate::gfx::chunk_coord::ChunkCoord::new(0, 0)
-        );
+        assert_eq!(cs.origin_chunk, chunk_coord::ChunkCoord::new(0, 0));
     }
 
     // A palette naming an id that is not a BlockType degrades that entry to air:

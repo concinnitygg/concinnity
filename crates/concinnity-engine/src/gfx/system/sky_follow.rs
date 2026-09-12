@@ -3,8 +3,8 @@
 // centered on the camera is what makes that true anywhere in a world, rather
 // than only within one cube's reach of wherever it was placed.
 
-use crate::components::Transform;
-use crate::ecs::{Entity, PipelineContext};
+use concinnity_core::components::Transform;
+use concinnity_core::ecs::{Entity, PipelineContext};
 
 /// Move every sky prop onto the camera.
 ///
@@ -34,7 +34,7 @@ pub(crate) fn center_on_camera(ctx: &mut PipelineContext, props: &[Entity], cam_
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::World;
+    use concinnity_core::ecs::World;
 
     fn world_with_a_prop_at(position: [f32; 3]) -> (World, Entity) {
         let mut world = World::new();

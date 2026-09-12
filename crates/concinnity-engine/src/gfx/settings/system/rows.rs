@@ -2,9 +2,10 @@
 // GraphicsSystem's init-time row captures: label / sprite writers, the
 // action-string parsers, and the gray-out helpers for disabled rows.
 
-use crate::components::{HitRegion, Sprite, TextLabel};
-use crate::ecs::PipelineContext;
-use crate::ecs::asset_id::AssetId;
+use concinnity_core::components::{HitRegion, ScrollPanel, Sprite, TextLabel};
+use concinnity_core::ecs::PipelineContext;
+use concinnity_host::thread::asset_id::AssetId;
+
 use crate::gfx::setting_action;
 
 // Muted gray applied to the labels of a capability-disabled settings row, so it
@@ -77,7 +78,7 @@ pub(crate) fn capture_row_labels(
         return Vec::new();
     }
     let rows: Vec<Vec<AssetId>> = ctx
-        .query::<crate::components::ScrollPanel>()
+        .query::<ScrollPanel>()
         .flat_map(|p| p.rows.iter().map(|r| r.elements.clone()))
         .collect();
     let dim = expand_dim_set(&anchors, &rows);
@@ -117,6 +118,14 @@ pub(crate) fn set_sprite_x(ctx: &mut PipelineContext, id: AssetId, x: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::ScrollRow;
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::ComponentSlot;
+    use concinnity_core::ecs::ComponentStorage;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::Resources;
+    use concinnity_core::gfx::profile;
+    use concinnity_host::store::blob::BlobData;
     use std::collections::HashSet;
 
     // A gated value label pulls in every element of the scroll row that holds
@@ -151,25 +160,25 @@ mod tests {
     // Owns the storage a PipelineContext borrows from. The helpers under test
     // only touch components, so the blob / profile / resources stay empty.
     struct TestWorld {
-        components: crate::ecs::ComponentStorage,
-        blob: crate::blob::BlobData,
-        profile: crate::gfx::profile::FrameProfile,
-        resources: crate::ecs::Resources,
-        scratch: crate::ecs::Arena,
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: profile::FrameProfile,
+        resources: Resources,
+        scratch: Arena,
     }
 
     impl TestWorld {
         fn new() -> Self {
             Self {
-                components: crate::ecs::ComponentStorage::default(),
-                blob: crate::blob::BlobData::new(vec![Some(Vec::new())]),
-                profile: crate::gfx::profile::FrameProfile::default(),
-                resources: crate::ecs::Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                components: ComponentStorage::default(),
+                blob: BlobData::new(vec![Some(Vec::new())]),
+                profile: profile::FrameProfile::default(),
+                resources: Resources::new(),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
-        fn push<C: crate::ecs::ComponentSlot>(&mut self, c: C) {
+        fn push<C: ComponentSlot>(&mut self, c: C) {
             self.components.push_typed(c);
         }
 
@@ -179,7 +188,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
     }
@@ -294,13 +303,13 @@ mod tests {
         world.push(region("setting:other:next", Some(20)));
         world.push(region("quit", Some(1)));
         world.push(region("setting:shadows:prev", None));
-        world.push(crate::components::ScrollPanel {
+        world.push(ScrollPanel {
             rows: vec![
-                crate::components::ScrollRow {
+                ScrollRow {
                     elements: vec![AssetId(1), AssetId(2), AssetId(3), AssetId(4), AssetId(5)],
                     ..Default::default()
                 },
-                crate::components::ScrollRow {
+                ScrollRow {
                     elements: vec![AssetId(20)],
                     ..Default::default()
                 },

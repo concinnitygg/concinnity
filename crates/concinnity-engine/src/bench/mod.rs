@@ -23,11 +23,10 @@ pub(crate) mod alloc_budget;
 pub(crate) mod extraction;
 pub(crate) mod transforms;
 
+use concinnity_core::ecs::{Arena, ComponentStorage, FrameContext, PipelineContext, Resources};
+use concinnity_core::gfx::profile::FrameProfile;
+use concinnity_host::store::blob::BlobData;
 use std::time::Instant;
-
-use crate::blob::BlobData;
-use crate::ecs::{Arena, ComponentStorage, FrameContext, PipelineContext, Resources};
-use crate::gfx::profile::FrameProfile;
 
 // One measured pass runs at least this long before its time is trusted.
 const TARGET_NS: u128 = 200_000_000;

@@ -7,9 +7,10 @@
 // is joined on Drop, after draining the queue, so the final change is always
 // flushed before shutdown.
 
-use crate::config::Settings;
 use concinnity_host::store::paths::StateTree;
 use std::sync::mpsc;
+
+use crate::config::Settings;
 
 pub(crate) struct SettingsWriter {
     tx: Option<mpsc::Sender<Settings>>,

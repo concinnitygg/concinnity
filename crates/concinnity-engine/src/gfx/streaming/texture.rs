@@ -15,11 +15,12 @@
 // (used by `cn run`, so the bytes never stay RAM-resident). Both plug into the
 // same planner and renderer.
 
+use concinnity_core::bake::texture;
+use concinnity_core::bake::texture::TextureImage;
+use concinnity_core::render::streaming::StreamPlanner;
+use concinnity_core::render::streaming::StreamState;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
-
-use super::{StreamPlanner, StreamState};
-use crate::bake::texture::TextureImage;
 
 // A texture payload decoded to a GPU-ready image (RGBA8 or block-compressed
 // with its mip chain).
@@ -61,7 +62,7 @@ impl PayloadSource for MemPayloadSource {
             .payloads
             .get(id)
             .ok_or_else(|| format!("no payload for streamed texture {}", id))?;
-        let image = crate::bake::texture::deserialize(bytes)?;
+        let image = texture::deserialize(bytes)?;
         Ok(DecodedTexture { image })
     }
 }
@@ -104,7 +105,7 @@ impl PayloadSource for DiskPayloadSource {
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed texture {}", id))?;
         let bytes = super::file_range::read_at(&loc.path, loc.file_offset, loc.len)?;
-        let image = crate::bake::texture::deserialize(&bytes)?;
+        let image = texture::deserialize(&bytes)?;
         Ok(DecodedTexture { image })
     }
 }
@@ -313,7 +314,7 @@ mod tests {
     // Build a minimal compiled RGBA8 texture payload via the shared serializer.
     fn make_payload(w: u32, h: u32, fill: u8) -> Vec<u8> {
         let pixels = std::iter::repeat_n(fill, (w * h * 4) as usize).collect();
-        crate::bake::texture::serialize(&TextureImage::rgba8(w, h, pixels))
+        texture::serialize(&TextureImage::rgba8(w, h, pixels))
     }
 
     #[test]

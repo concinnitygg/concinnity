@@ -14,15 +14,16 @@ pub(crate) mod system;
 // How a chosen option is applied (which backend call, which persisted field)
 // lives in GraphicsSystem's drain, keyed by the same string.
 
-use crate::components::{
+use concinnity_core::components::{
     AaMode, ReflectionBlurResolution, SettingOp, ShadowUpdate, SsgiResolution, UpscaleQuality,
     UpscalerBackend, WindowMode,
 };
-use crate::gfx::backend::GpuVendor;
-
-// The shared option-label registry (labels + classification) lives in core so
-// the cook and the client agree on every setting's option count. Re-exported
-// under the historical `settings::*` paths the rest of the client uses.
+use concinnity_core::render::backend;
+use concinnity_core::render::backend::GpuVendor;
+// This module presents one settings vocabulary. The option-label registry half
+// (labels + classification) lives in core so the cook and the client agree on
+// every setting's option count, and is re-exported here alongside the
+// client-only half below.
 pub(crate) use concinnity_core::gfx::settings::{QUALITY_TOGGLE_KEYS, is_quality_toggle, options};
 
 // Whether setting `key` can be changed on a device with the given capabilities.
@@ -31,7 +32,7 @@ pub(crate) use concinnity_core::gfx::settings::{QUALITY_TOGGLE_KEYS, is_quality_
 // every other setting is always available. The settings menu grays out and
 // disables an unavailable row. This is the one place to gate a future
 // capability-dependent toggle.
-pub(crate) fn setting_available(key: &str, caps: &crate::gfx::backend::DeviceCapabilities) -> bool {
+pub(crate) fn setting_available(key: &str, caps: &backend::DeviceCapabilities) -> bool {
     match key {
         "ray_traced_reflections" => caps.ray_tracing,
         // The upscaler selector (FSR3 / DLSS / XeSS) grays out on a device whose
@@ -623,9 +624,9 @@ mod tests {
         for key in ["perf_stats", "show_fps", "show_vram"] {
             assert_eq!(options(key), Some(&["Off", "On"][..]), "{key}");
             // Both are available regardless of GPU capability (not gated).
-            let caps = crate::gfx::backend::DeviceCapabilities {
+            let caps = backend::DeviceCapabilities {
                 ray_tracing: false,
-                ..crate::gfx::backend::DeviceCapabilities::ALL
+                ..backend::DeviceCapabilities::ALL
             };
             assert!(setting_available(key, &caps), "{key}");
         }
@@ -665,7 +666,7 @@ mod tests {
 
     #[test]
     fn rebind_keys_are_a_distinct_category() {
-        use crate::gfx::keymap::Bindable;
+        use concinnity_core::render::keymap::Bindable;
         // A rebind key is neither a cycle row nor a slider, so the three setting
         // categories never collide on one key.
         for b in Bindable::ALL {
@@ -677,7 +678,7 @@ mod tests {
 
     #[test]
     fn rt_toggle_gated_on_ray_tracing_capability() {
-        use crate::gfx::backend::DeviceCapabilities;
+        use concinnity_core::render::backend::DeviceCapabilities;
         let capable = DeviceCapabilities {
             ray_tracing: true,
             ..DeviceCapabilities::ALL
@@ -1079,13 +1080,13 @@ mod tests {
         // upscaler keeps it, one with a fixed upscaler grays it out.
         assert!(setting_available(
             "upscale_backend",
-            &crate::gfx::backend::DeviceCapabilities::ALL
+            &backend::DeviceCapabilities::ALL
         ));
         assert!(!setting_available(
             "upscale_backend",
-            &crate::gfx::backend::DeviceCapabilities {
+            &backend::DeviceCapabilities {
                 selectable_upscaler: false,
-                ..crate::gfx::backend::DeviceCapabilities::ALL
+                ..backend::DeviceCapabilities::ALL
             }
         ));
     }

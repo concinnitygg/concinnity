@@ -15,10 +15,22 @@
 // the HUD systems wrote last tick (they run after the build), so what is
 // measured is exactly what is drawn.
 
-use crate::components::{Sprite, TextInput, TextLabel};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
-use crate::gfx::{sprite as gfx_sprite, text};
+use concinnity_core::components::FrameInput;
+use concinnity_core::components::LayoutContainer;
+use concinnity_core::components::Sprite;
+use concinnity_core::components::TextInput;
+use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::{
+    Access, CursorState, DesiredCursor, HudLayers, MenuActive, MenuOverride, OpenDropdown,
+    PipelineContext, ScreenStack, StepResult, System,
+};
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::call_buffer;
+use concinnity_core::render::cursor;
+use concinnity_core::render::overlay_maps;
+use concinnity_core::render::sprite as gfx_sprite;
+use concinnity_core::render::text;
+use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 mod hud_layout;
@@ -42,10 +54,10 @@ const DROPDOWN_LAYER: i32 = i32::MAX - 1;
 #[derive(Default)]
 pub(crate) struct OverlayAssets {
     pub fonts: text::FontSet,
-    pub(crate) sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots,
+    pub(crate) sprite_texture_slots: overlay_maps::TextureSlots,
     pub(crate) debug_hud_chips: Vec<AssetId>,
     pub(crate) stat_hud_chips: Vec<AssetId>,
-    pub(crate) clip_rects: crate::gfx::overlay_maps::ClipRects,
+    pub(crate) clip_rects: overlay_maps::ClipRects,
     // The backend's logical size at init, the viewport used until the first
     // input poll publishes a live one (`FrameInput.viewport`).
     pub(crate) initial_viewport: (f32, f32),
@@ -58,7 +70,7 @@ pub(crate) struct OverlayAssets {
 // full-canvas backdrop lets the world render be skipped entirely.
 #[derive(Default)]
 pub(crate) struct OverlayFrame {
-    pub calls: Vec<crate::gfx::render_types::TextDrawCall>,
+    pub calls: Vec<render_types::TextDrawCall>,
     pub want_ui_cursor: bool,
     pub(crate) menu_active: bool,
     pub(crate) world_hidden: bool,
@@ -68,14 +80,14 @@ pub(crate) struct OverlayFrame {
 // it adopts the new one. The next build recycles it whole (the list and every
 // call's geometry buffers), so a steady-state frame allocates nothing.
 #[derive(Default)]
-pub(crate) struct OverlayRecycle(pub Vec<crate::gfx::render_types::TextDrawCall>);
+pub(crate) struct OverlayRecycle(pub Vec<render_types::TextDrawCall>);
 
 #[derive(Debug, Default)]
 pub(crate) struct OverlaySystem {
     // Base for the caret-blink clock, set on the first step.
     start_time: Option<Instant>,
     // Scratch for the per-element draw-layer merge, reused across frames.
-    layers: crate::gfx::overlay_maps::OverlayLayers,
+    layers: overlay_maps::OverlayLayers,
     // Scratch for the LayoutContainer label reflow, reused across frames.
     hud_scratch: hud_layout::LabelLayoutScratch,
     // Buffers the synthesized dropdown / text-input elements are built into,
@@ -83,7 +95,7 @@ pub(crate) struct OverlaySystem {
     widget_scratch: widgets::WidgetScratch,
     // The draw list under construction plus the pooled geometry of recycled
     // frames; the finished list moves out through `OverlayFrame` each tick.
-    buffer: crate::gfx::call_buffer::TextCallBuffer,
+    buffer: call_buffer::TextCallBuffer,
 }
 
 impl OverlaySystem {
@@ -93,28 +105,24 @@ impl OverlaySystem {
 }
 
 impl System for OverlaySystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .reads_components(crate::component_mask![
-                crate::components::Sprite,
-                crate::components::TextInput,
-                crate::components::LayoutContainer,
-            ])
-            .writes_components(crate::component_mask![crate::components::TextLabel])
+    fn access(&self) -> Access {
+        Access::new()
+            .reads_components(crate::component_mask![Sprite, TextInput, LayoutContainer])
+            .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
-                crate::components::FrameInput,
-                crate::ecs::CursorState,
-                crate::ecs::ScreenStack,
-                crate::ecs::HudLayers,
-                crate::ecs::OpenDropdown,
-                crate::ecs::DesiredCursor,
-                crate::ecs::MenuOverride,
+                FrameInput,
+                CursorState,
+                ScreenStack,
+                HudLayers,
+                OpenDropdown,
+                DesiredCursor,
+                MenuOverride,
             ])
             .writes_resources(crate::resource_mask![
                 crate::gfx::overlay::OverlayAssets,
                 crate::gfx::overlay::OverlayFrame,
                 crate::gfx::overlay::OverlayRecycle,
-                crate::ecs::MenuActive,
+                MenuActive,
             ])
     }
 
@@ -139,14 +147,14 @@ impl System for OverlaySystem {
         // `menu_active` for every consumer (capture, the freeze resource, the
         // gameplay-input gate), but not `world_hidden`: the editor keeps the
         // world visible.
-        if let Some(forced) = ctx.resource::<crate::ecs::MenuOverride>().and_then(|m| m.0) {
+        if let Some(forced) = ctx.resource::<MenuOverride>().and_then(|m| m.0) {
             frame.menu_active = forced;
         }
         // Publish the menu state for every later system this tick: physics +
         // animation freeze while it is set, so a paused world stops consuming
         // CPU/GPU behind the menu. The App-level pacer reads it before the
         // next step to clamp the frame rate while a menu is open.
-        ctx.insert_resource(crate::ecs::MenuActive(frame.menu_active));
+        ctx.insert_resource(MenuActive(frame.menu_active));
         ctx.insert_resource(frame);
         StepResult::Continue
     }
@@ -173,16 +181,13 @@ impl OverlaySystem {
         // the init-time size before the first poll. A live resize is picked up
         // one frame later, which is invisible mid-drag.
         let (win_w, win_h) = ctx
-            .resource::<crate::components::FrameInput>()
+            .resource::<FrameInput>()
             .map(|i| (i.viewport[0], i.viewport[1]))
             .unwrap_or(assets.initial_viewport);
         // The cursor state InputSystem sampled at the end of the previous tick
         // (`follow_cursor` sprites are positioned a frame after the input that
         // moved them).
-        let cursor = ctx
-            .resource::<crate::ecs::CursorState>()
-            .copied()
-            .unwrap_or_default();
+        let cursor = ctx.resource::<CursorState>().copied().unwrap_or_default();
         // Reposition LayoutContainer-managed labels before measuring them
         // for draw, so a HUD reflows to its live text each frame.
         hud_layout::apply_label_layout(ctx, &assets.fonts, &mut self.hud_scratch);
@@ -207,8 +212,8 @@ impl OverlaySystem {
         // An id absent from the map is layer 0. When the map ends up empty (no
         // active screen, no editor), the sort below is skipped and draw order is
         // pure insertion order, as before.
-        let empty_layers = crate::gfx::overlay_maps::OverlayLayers::new();
-        let screen_layers = ctx.resource::<crate::ecs::ScreenStack>().map(|s| &s.layers);
+        let empty_layers = overlay_maps::OverlayLayers::new();
+        let screen_layers = ctx.resource::<ScreenStack>().map(|s| &s.layers);
         self.layers.clear();
         if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
             for s in ctx.query::<Sprite>() {
@@ -227,7 +232,7 @@ impl OverlaySystem {
                 }
             }
         }
-        if let Some(overrides) = ctx.resource::<crate::ecs::HudLayers>() {
+        if let Some(overrides) = ctx.resource::<HudLayers>() {
             for (id, layer) in &overrides.0 {
                 self.layers.insert(*id, HUD_OVERRIDE_LAYER_BASE + layer);
             }
@@ -257,11 +262,8 @@ impl OverlaySystem {
         // clipped row text, before the cursor) and unclipped, so it escapes
         // the scroll band's scissor. Built as transient overlay Sprites +
         // TextLabels fed through the same shapers (with no clip bands).
-        if let Some(view) = ctx
-            .resource::<crate::ecs::OpenDropdown>()
-            .and_then(|d| d.0.as_ref())
-        {
-            let no_clips = crate::gfx::overlay_maps::ClipRects::new();
+        if let Some(view) = ctx.resource::<OpenDropdown>().and_then(|d| d.0.as_ref()) {
+            let no_clips = overlay_maps::ClipRects::new();
             widgets::build_dropdown_overlay(view, &assets.fonts, &mut self.widget_scratch);
             let dd_start = self.buffer.calls.len();
             gfx_sprite::build_sprite_calls_into(
@@ -351,10 +353,10 @@ impl OverlaySystem {
             // The `cn editor` HUD switches the silhouette to a resize cursor over a
             // panel edge; every other cursor stays the arrow (the default absence).
             let cursor_shape = ctx
-                .resource::<crate::ecs::DesiredCursor>()
+                .resource::<DesiredCursor>()
                 .map(|c| c.0)
                 .unwrap_or_default();
-            crate::gfx::cursor::build_cursor_calls_into(
+            cursor::build_cursor_calls_into(
                 &mut self.buffer,
                 sprites,
                 cursor.pos,
@@ -368,7 +370,7 @@ impl OverlaySystem {
         // freeze gameplay input + simulation. A screen with `pauses_world` off
         // (a passthrough overlay, a live console) shows without pausing.
         let menu_active = ctx
-            .resource::<crate::ecs::ScreenStack>()
+            .resource::<ScreenStack>()
             .is_some_and(|s| s.pauses_world);
         // The whole world render can be skipped when an opaque full-canvas
         // backdrop covers the scene (a menu authored with its dim alpha at
@@ -398,13 +400,16 @@ impl OverlaySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::BlobData;
-    use crate::components::{SpriteFit, TextAlign};
-    use crate::ecs::{
+    use concinnity_core::components::{SpriteFit, TextAlign};
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::{
         ComponentSlot, ComponentStorage, CursorState, DropdownView, FontHandle, HudLayers,
         MenuOverride, OpenDropdown, Resources, ScreenStack,
     };
-    use crate::gfx::profile::FrameProfile;
+    use concinnity_core::gfx::font;
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_host::store::blob::BlobData;
 
     const FONT: FontHandle = FontHandle(0);
     const SCREEN: AssetId = AssetId(50);
@@ -413,8 +418,8 @@ mod tests {
     const REF_W: f32 = 1280.0;
     const REF_H: f32 = 720.0;
 
-    fn make_glyph(advance_px: f32) -> crate::gfx::font::GlyphMetrics {
-        crate::gfx::font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> font::GlyphMetrics {
+        font::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,
@@ -429,7 +434,7 @@ mod tests {
     // A fixed-width synthetic font (every glyph 10px in a 16px em) so the built
     // geometry is exact.
     fn loaded_fonts() -> text::FontSet {
-        let metrics: crate::gfx::text::FontMetrics = ('a'..='z')
+        let metrics: text::FontMetrics = ('a'..='z')
             .chain('A'..='Z')
             .map(|c| (c as u32, make_glyph(10.0)))
             .collect();
@@ -453,10 +458,10 @@ mod tests {
     fn assets() -> OverlayAssets {
         OverlayAssets {
             fonts: loaded_fonts(),
-            sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots::new(),
+            sprite_texture_slots: overlay_maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
-            clip_rects: crate::gfx::overlay_maps::ClipRects::new(),
+            clip_rects: overlay_maps::ClipRects::new(),
             initial_viewport: (REF_W, REF_H),
         }
     }
@@ -553,7 +558,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
-        scratch: crate::ecs::Arena,
+        scratch: Arena,
     }
 
     impl TestWorld {
@@ -563,7 +568,7 @@ mod tests {
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -577,7 +582,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
 
@@ -590,7 +595,7 @@ mod tests {
     }
 
     // The x span of a call's quad, for reading a backdrop's mapped rect back out.
-    fn x_span(call: &crate::gfx::render_types::TextDrawCall) -> (f32, f32) {
+    fn x_span(call: &render_types::TextDrawCall) -> (f32, f32) {
         let xs: Vec<f32> = call.vertices.iter().map(|v| v.pos[0]).collect();
         (
             xs.iter().copied().fold(f32::INFINITY, f32::min),
@@ -607,7 +612,7 @@ mod tests {
         let mut sys = OverlaySystem::new();
         sys.step(&mut w.ctx());
         assert!(w.resources.get::<OverlayFrame>().is_none());
-        assert!(w.resources.get::<crate::ecs::MenuActive>().is_none());
+        assert!(w.resources.get::<MenuActive>().is_none());
     }
 
     // A step publishes the frame plus the menu state for the systems behind it,
@@ -620,7 +625,7 @@ mod tests {
         let mut sys = OverlaySystem::new();
         sys.step(&mut w.ctx());
         assert_eq!(w.resources.get::<OverlayFrame>().unwrap().calls.len(), 1);
-        assert!(!w.resources.get::<crate::ecs::MenuActive>().unwrap().0);
+        assert!(!w.resources.get::<MenuActive>().unwrap().0);
         assert!(
             w.resources.get::<OverlayAssets>().is_some(),
             "the assets go back for the next build"
@@ -638,7 +643,7 @@ mod tests {
         let mut sys = OverlaySystem::new();
         sys.step(&mut w.ctx());
         assert!(w.resources.get::<OverlayFrame>().unwrap().menu_active);
-        assert!(w.resources.get::<crate::ecs::MenuActive>().unwrap().0);
+        assert!(w.resources.get::<MenuActive>().unwrap().0);
 
         // A world whose own menu pauses and fully covers the scene, forced off:
         // the menu state follows the override while world_hidden keeps tracking
@@ -677,7 +682,7 @@ mod tests {
         let frame = w.build(0.0);
         assert_eq!(x_span(&frame.calls[0]), (0.0, REF_W));
 
-        w.resources.insert(crate::components::FrameInput {
+        w.resources.insert(FrameInput {
             viewport: [800.0, 600.0],
             ..Default::default()
         });

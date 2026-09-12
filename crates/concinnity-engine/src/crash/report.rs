@@ -4,8 +4,9 @@
 // section-based: the writer emits sections in order of forensic value and
 // flushes between them, so a partial report still leads with what matters.
 
-use super::memory::MemorySnapshot;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use super::memory::MemorySnapshot;
 
 // Caps keep the hook's allocations bounded no matter what panicked.
 pub(crate) const MAX_MESSAGE_BYTES: usize = 4 * 1024;

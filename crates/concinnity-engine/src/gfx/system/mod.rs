@@ -14,13 +14,19 @@
 //!   scene.rs     scene-flow wiring + scene visibility
 //!   helpers.rs   shared free functions
 
+use concinnity_core::components::{
+    GamepadAction, GamepadMap, GraphicsConfig, IndirectLighting, PostProcessConfig,
+    PostProcessResolve, ShadowUpdate, UpscaleQuality, UpscalerBackend, Window,
+};
+use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::transform_propagation;
+use concinnity_core::render::backend::RenderBackend;
+use concinnity_core::render::{
+    backend, display_mode, keymap, overlay_maps, scene_flow, snapshot, text, volumetric_fog,
+};
 use concinnity_host::store::paths::StateTree;
-
-use crate::components::{PostProcessResolve, Window};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
-use crate::gfx::backend::RenderBackend;
-use crate::gfx::{scene_flow, text};
+use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
@@ -57,7 +63,7 @@ const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 // entity (the live GlobalTransform source), and its local-space bounds.
 struct PickCandidate {
     asset_id: AssetId,
-    entity: crate::ecs::Entity,
+    entity: Entity,
     local_min: [f32; 3],
     local_max: [f32; 3],
 }
@@ -80,16 +86,16 @@ pub struct GraphicsSystem {
     // The display modes the Resolution row offers, shaped at init from the
     // backend's enumeration (or the static fallback when it cannot enumerate)
     // and published once as the `DisplayModes` resource for the dropdown list.
-    display_modes: Vec<crate::gfx::display_mode::DisplayMode>,
+    display_modes: Vec<display_mode::DisplayMode>,
     // The user's chosen fullscreen display mode, persisted as `resolution`.
     // `None` = never chosen: the display keeps its own mode and the row shows
     // `current_mode`. Fullscreen-only: windowed sizes come from the window
     // (authored / dragged) and borderless covers the display, so the row is
     // grayed + inert outside Fullscreen and never resizes the window.
-    resolution: Option<crate::gfx::display_mode::DisplayMode>,
+    resolution: Option<display_mode::DisplayMode>,
     // The mode the display was running at init (the row's display value until
     // the user chooses one). `None` when the backend cannot read it.
-    current_mode: Option<crate::gfx::display_mode::DisplayMode>,
+    current_mode: Option<display_mode::DisplayMode>,
     // The Resolution row's labels with their authored colors, captured at init
     // so window-mode changes can gray the row out and restore it (mirrors
     // `perf_sub_row_labels`).
@@ -111,7 +117,7 @@ pub struct GraphicsSystem {
     perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
     max_frames: Option<u64>,
     shadow_map_size: u32,
-    shadow_update: crate::components::ShadowUpdate,
+    shadow_update: ShadowUpdate,
     // Shadow distance in world units (GraphicsConfig.shadow_distance). Applied
     // live via set_shadow_distance (the per-frame cascade-split math reads it);
     // preset-governed (a manual change flips the master preset to Custom).
@@ -138,12 +144,12 @@ pub struct GraphicsSystem {
     // PostProcessConfig overridden by any persisted choice. The settings row
     // cycles + persists it; it is restart-required, so this is display/persist
     // state only (the upscaler is sized once at init).
-    render_scale: crate::components::UpscaleQuality,
+    render_scale: UpscaleQuality,
     // Current upscaler backend (Auto / FSR3 / DLSS / XeSS), seeded at init from
     // the world's PostProcessConfig overridden by any persisted choice. Like
     // render_scale this is restart-required display/persist state (the upscaler
     // is selected + built once at init); DirectX / Vulkan only.
-    upscale_backend: crate::components::UpscalerBackend,
+    upscale_backend: UpscalerBackend,
     // The render backend while init constructs and wires it. Boxed
     // `dyn RenderBackend` so the setup logic in init.rs / streaming.rs /
     // scene.rs runs as one cfg-free path across Metal, DirectX, and Vulkan.
@@ -165,7 +171,7 @@ pub struct GraphicsSystem {
     // texture into the text-atlas pool (appended after the font atlases); the
     // chip id lists and scroll clip bands drive the per-frame HUD layout.
     loaded_fonts: text::FontSet,
-    sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots,
+    sprite_texture_slots: overlay_maps::TextureSlots,
     debug_hud_chips: Vec<AssetId>,
     stat_hud_chips: Vec<AssetId>,
     // Viewport-pick candidates captured at init, one per prop entity, only
@@ -176,7 +182,7 @@ pub struct GraphicsSystem {
     // Prop entities drawing a skybox-generated mesh, captured at init. The
     // frame step moves them onto the camera so the sky encloses it wherever it
     // goes; empty in a world with no sky.
-    sky_props: Vec<crate::ecs::Entity>,
+    sky_props: Vec<Entity>,
     // Streaming pools built during init (shared albedo+normal texture pool,
     // mesh geometry, and voxel-world chunks), each `Some` only when a
     // `StreamingConfig` / `VoxelWorld` was declared and the backend supports it
@@ -220,13 +226,13 @@ pub struct GraphicsSystem {
     // already live, the reload skips the trait call and the log entry. Tracks
     // both `None` (no fog / disabled) and `Some(settings)`. Initialized by
     // `run_init` to whatever was passed into the backend constructor.
-    last_fog_settings: Option<crate::gfx::volumetric_fog::FogSettings>,
+    last_fog_settings: Option<volumetric_fog::FogSettings>,
     // Live post-process parameters (bloom / exposure / vignette / LUT blend),
     // the source of truth for slider settings. Seeded at init from the world's
     // resolved PostProcessConfig (with any persisted overrides applied); a
     // slider drag mutates a field here and pushes the whole struct to the
     // backend via `update_post_process`.
-    post_process: crate::gfx::render_types::PostProcessTunables,
+    post_process: render_types::PostProcessTunables,
     // Live ambient (IBL) light scale, the source of truth for the Ambient
     // slider. Lives in the backend's `LightUniforms` (not `PostProcessParams`),
     // so it is held + pushed separately via `set_ambient_intensity`. Seeded at
@@ -241,7 +247,7 @@ pub struct GraphicsSystem {
     // to the backend's live rebuild. The non-toggle fields (exposure, bloom,
     // ambient) keep their authored values here; the sliders own those via
     // `post_process` / `ambient_intensity` instead.
-    post_config: crate::components::PostProcessConfig,
+    post_config: PostProcessConfig,
     // Slider rows in the world, captured at init from their drag HitRegions +
     // handle Sprites. Drives the handle position + value-label update when a
     // slider changes, and the one-time sync of both to the live value at init.
@@ -257,12 +263,12 @@ pub struct GraphicsSystem {
     // band, so the draw path scissors it and off-band rows do not bleed over the
     // panel chrome. Empty when no ScrollPanel was declared; handed to
     // OverlaySystem (inside `OverlayAssets`) at the end of init.
-    clip_rects: crate::gfx::overlay_maps::ClipRects,
+    clip_rects: overlay_maps::ClipRects,
     // Live gameplay movement key map (the source of truth for the Controls-tab
     // rebind rows). Seeded at init from the persisted `ControlsSettings.keymap`
     // or the engine default, pushed to the backend once after it is built, and
     // updated (with a swap) + re-pushed + persisted on each rebind.
-    keymap: crate::gfx::keymap::KeyMap,
+    keymap: keymap::KeyMap,
     // Rebind rows in the world, captured at init from their `setting:key_*:rebind`
     // HitRegions. Maps each rebindable action to its value `TextLabel`, so a
     // rebind (and the swap it may trigger) can refresh both affected row labels.
@@ -270,7 +276,7 @@ pub struct GraphicsSystem {
     // Live gamepad action -> button map. Seeded at init from the persisted
     // `ControlsSettings.gamepad_map` or the engine default; InputSystem applies
     // it (the gamepad is polled engine-side, so no backend push).
-    gamepad_map: crate::components::GamepadMap,
+    gamepad_map: GamepadMap,
     // Gamepad rebind rows in the world, captured at init from their
     // `setting:pad_*:rebind` HitRegions, like `rebind_rows`.
     pad_rebind_rows: Vec<PadRebindViz>,
@@ -278,11 +284,11 @@ pub struct GraphicsSystem {
     // the capability gating at init: a settings row whose feature the device
     // cannot provide (e.g. ray-traced reflections without hardware ray tracing)
     // is grayed out and made inert. Held in memory only, never persisted.
-    caps: crate::gfx::backend::DeviceCapabilities,
+    caps: backend::DeviceCapabilities,
     // Coarse GPU performance profile, probed before the backend is built so the
     // auto-config quality ceiling can influence the render targets / effect
     // pipelines sized at backend init. Held in memory only, never persisted.
-    gpu_profile: crate::gfx::backend::GpuProfile,
+    gpu_profile: backend::GpuProfile,
     // The live master "Graphics Quality" preset the settings-menu row cycles.
     // Seeded at init from the persisted choice (or `Auto` on first launch);
     // changing a preset re-derives the quality toggles + render scale under its
@@ -292,7 +298,7 @@ pub struct GraphicsSystem {
     // ceiling are applied (defaulted when the world declares none). The pristine
     // baseline a live preset change re-clamps from, so up-shifting a preset
     // restores the world's features and down-shifting clamps them off.
-    authored_post_config: crate::components::PostProcessConfig,
+    authored_post_config: PostProcessConfig,
     // Display-output / upscaling preferences (the Display settings rows). Resolved
     // at init from the world's `PostProcessConfig` overridden by any persisted
     // choice, passed to the backend ctor, and held here so the rows display +
@@ -307,7 +313,7 @@ pub struct GraphicsSystem {
     // a live preset change re-clamps from, like `authored_post_config`. The live
     // values are `shadow_map_size` / `shadow_update` above.
     authored_shadow_map_size: u32,
-    authored_shadow_update: crate::components::ShadowUpdate,
+    authored_shadow_update: ShadowUpdate,
     // The world's authored shadow distance, the baseline a live preset change
     // re-clamps from. The live value is `shadow_distance` above.
     authored_shadow_distance: u32,
@@ -329,7 +335,7 @@ pub struct GraphicsSystem {
     // Reused scratch + change-tracking for the per-frame transform propagation
     // (`transform_propagation::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
-    transform_cache: crate::gfx::transform_propagation::TransformCache,
+    transform_cache: transform_propagation::TransformCache,
     // The sky angle the directional-light set was last carried at. `None` until
     // the first frame, so a world whose sky never turns carries it exactly once.
     pushed_sky_angle: Option<f32>,
@@ -342,7 +348,7 @@ pub struct GraphicsSystem {
     // `submit` replays onto the backend. Held here so its buffers keep their
     // capacity across frames; taken out of `self` for the duration of one
     // step.
-    snapshot: crate::gfx::snapshot::RenderSnapshot,
+    snapshot: snapshot::RenderSnapshot,
     // Logical viewport size the line builder maps ribbon widths with. Seeded
     // from the backend at init, refreshed each frame from `FrameInput`.
     viewport: (f32, f32),
@@ -358,7 +364,7 @@ pub struct GraphicsSystem {
 // row's `setting:key_*:rebind` HitRegion (`action` -> `Bindable`, `label`) and
 // handed to SettingsState, which drives the live rebind drain.
 pub(crate) struct RebindViz {
-    pub(crate) action: crate::gfx::keymap::Bindable,
+    pub(crate) action: keymap::Bindable,
     pub(crate) value_id: AssetId,
 }
 
@@ -366,7 +372,7 @@ pub(crate) struct RebindViz {
 // init (`init_pad_rebind_rows`) from the row's `setting:pad_*:rebind` HitRegion
 // and handed to SettingsState for the button-rebind drain.
 pub(crate) struct PadRebindViz {
-    pub(crate) action: crate::components::GamepadAction,
+    pub(crate) action: GamepadAction,
     pub(crate) value_id: AssetId,
 }
 
@@ -415,7 +421,7 @@ pub struct HotReloadApplyParts<'a> {
     /// The in-flight world reload, when one is running.
     pub world_reload: &'a Option<WorldReloadState>,
     /// The fog settings last pushed, so a reload can detect a change.
-    pub last_fog_settings: &'a mut Option<crate::gfx::volumetric_fog::FogSettings>,
+    pub last_fog_settings: &'a mut Option<volumetric_fog::FogSettings>,
 }
 
 impl std::fmt::Debug for GraphicsSystem {
@@ -434,7 +440,7 @@ impl GraphicsSystem {
     pub fn new(tree: Option<&StateTree>) -> Self {
         // The schema's own defaults, so a world with no GraphicsConfig sees the
         // same values as one that declares an all-default component.
-        let gfx = crate::components::GraphicsConfig::default();
+        let gfx = GraphicsConfig::default();
         Self {
             state: tree.cloned(),
             window_args: Default::default(),
@@ -461,13 +467,13 @@ impl GraphicsSystem {
             frame_count: 0,
             frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,
-            render_scale: crate::components::UpscaleQuality::default(),
-            upscale_backend: crate::components::UpscalerBackend::default(),
+            render_scale: UpscaleQuality::default(),
+            upscale_backend: UpscalerBackend::default(),
             backend: None,
             scene_flow: None,
             scene_visibility: Default::default(),
             loaded_fonts: text::FontSet::default(),
-            sprite_texture_slots: crate::gfx::overlay_maps::TextureSlots::new(),
+            sprite_texture_slots: overlay_maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             pick_candidates: Vec::new(),
@@ -483,27 +489,27 @@ impl GraphicsSystem {
             persisted_graphics: crate::config::GraphicsSettings::default(),
             fog_built: false,
             last_fog_settings: None,
-            post_process: crate::gfx::render_types::PostProcessTunables::DEFAULT,
+            post_process: render_types::PostProcessTunables::DEFAULT,
             // Matches PostProcessConfig's ambient_intensity default; overwritten
             // at init from the world / persisted store.
             ambient_intensity: 1.0,
             // Default until init resolves the world's config + persisted toggles.
-            post_config: crate::components::PostProcessConfig::default(),
+            post_config: PostProcessConfig::default(),
             sliders: Vec::new(),
             cycle_value_labels: std::collections::HashMap::new(),
-            clip_rects: crate::gfx::overlay_maps::ClipRects::new(),
-            keymap: crate::gfx::keymap::KeyMap::default(),
+            clip_rects: overlay_maps::ClipRects::new(),
+            keymap: keymap::KeyMap::default(),
             rebind_rows: Vec::new(),
-            gamepad_map: crate::components::GamepadMap::default(),
+            gamepad_map: GamepadMap::default(),
             pad_rebind_rows: Vec::new(),
             // All-capable until the backend reports otherwise at init.
-            caps: crate::gfx::backend::DeviceCapabilities::ALL,
+            caps: backend::DeviceCapabilities::ALL,
             // Conservative until probed at init.
-            gpu_profile: crate::gfx::backend::GpuProfile::UNKNOWN,
+            gpu_profile: backend::GpuProfile::UNKNOWN,
             // Seeded at init from the persisted preset (Auto on first launch).
             quality_preset: crate::gfx::quality_preset::QualityPreset::Auto,
             // Defaulted until init captures the world's authored config.
-            authored_post_config: crate::components::PostProcessConfig::default(),
+            authored_post_config: PostProcessConfig::default(),
             // Resolved at init from the world's config + persisted overrides.
             temporal_upscaling: false,
             hdr_display: false,
@@ -513,14 +519,14 @@ impl GraphicsSystem {
             authored_shadow_distance: gfx.shadow_distance,
             authored_shadow_cascades: gfx.shadow_cascades,
             authored_anisotropy: gfx.anisotropy,
-            occlusion_two_pass: crate::components::PostProcessConfig::default().occlusion_two_pass,
+            occlusion_two_pass: PostProcessConfig::default().occlusion_two_pass,
             texture_cap: 96,
             texture_budget: 4,
-            transform_cache: crate::gfx::transform_propagation::TransformCache::default(),
+            transform_cache: transform_propagation::TransformCache::default(),
             pushed_sky_angle: None,
             model_push: model_push::ModelPushCache::default(),
             skinned_model_push: model_push::ModelPushCache::default(),
-            snapshot: crate::gfx::snapshot::RenderSnapshot::default(),
+            snapshot: snapshot::RenderSnapshot::default(),
             viewport: (0.0, 0.0),
             #[cfg(test)]
             test_hooks: None,
@@ -548,7 +554,7 @@ impl GraphicsSystem {
     // Detect the GPU performance profile for quality auto-config. Probes the
     // real device in production; a test-injected profile takes its place so
     // unit tests never create a GPU handle.
-    fn detect_gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
+    fn detect_gpu_profile(&self) -> backend::GpuProfile {
         #[cfg(test)]
         if let Some(hooks) = &self.test_hooks {
             return hooks.gpu_profile;
@@ -573,10 +579,10 @@ impl GraphicsSystem {
     // The mode the Resolution row displays and cycles from: the user's choice,
     // else the display's own mode, else the authored window size (a backend
     // that cannot read the display; snaps to the nearest listed mode).
-    fn effective_resolution(&self) -> crate::gfx::display_mode::DisplayMode {
+    fn effective_resolution(&self) -> display_mode::DisplayMode {
         self.resolution
             .or(self.current_mode)
-            .unwrap_or(crate::gfx::display_mode::DisplayMode {
+            .unwrap_or(display_mode::DisplayMode {
                 width: self.window_args.width,
                 height: self.window_args.height,
                 refresh_hz: 0,
@@ -637,35 +643,28 @@ impl GraphicsSystem {
 
 // The current on/off state of quality toggle `key` in `cfg`, or `None` for a
 // key that is not a quality toggle.
-pub(crate) fn quality_toggle_on(
-    cfg: &crate::components::PostProcessConfig,
-    key: &str,
-) -> Option<bool> {
+pub(crate) fn quality_toggle_on(cfg: &PostProcessConfig, key: &str) -> Option<bool> {
     match key {
         "ssao" => Some(cfg.ssao),
         "ssr" => Some(cfg.ssr),
         "ray_traced_reflections" => Some(cfg.ray_traced_reflections),
-        "ssgi" => Some(cfg.indirect_lighting == crate::components::IndirectLighting::Ssgi),
+        "ssgi" => Some(cfg.indirect_lighting == IndirectLighting::Ssgi),
         "auto_exposure" => Some(cfg.auto_exposure),
         _ => None,
     }
 }
 
 // Flip quality toggle `key` to `on` in `cfg`. Unknown keys are ignored.
-pub(crate) fn set_quality_toggle(
-    cfg: &mut crate::components::PostProcessConfig,
-    key: &str,
-    on: bool,
-) {
+pub(crate) fn set_quality_toggle(cfg: &mut PostProcessConfig, key: &str, on: bool) {
     match key {
         "ssao" => cfg.ssao = on,
         "ssr" => cfg.ssr = on,
         "ray_traced_reflections" => cfg.ray_traced_reflections = on,
         "ssgi" => {
             cfg.indirect_lighting = if on {
-                crate::components::IndirectLighting::Ssgi
+                IndirectLighting::Ssgi
             } else {
-                crate::components::IndirectLighting::Ibl
+                IndirectLighting::Ibl
             }
         }
         "auto_exposure" => cfg.auto_exposure = on,
@@ -682,10 +681,7 @@ pub(crate) fn is_quality_cycle(key: &str) -> bool {
 
 // The current menu option index of cycle quality knob `key` in `cfg`, or `None`
 // for a key that is not a cycle quality knob.
-pub(crate) fn quality_cycle_index(
-    cfg: &crate::components::PostProcessConfig,
-    key: &str,
-) -> Option<usize> {
+pub(crate) fn quality_cycle_index(cfg: &PostProcessConfig, key: &str) -> Option<usize> {
     use crate::gfx::settings;
     match key {
         "aa_mode" => Some(settings::aa_mode_index(cfg.aa_mode)),
@@ -701,11 +697,7 @@ pub(crate) fn quality_cycle_index(
 
 // Set cycle quality knob `key` in `cfg` from a menu option index. Unknown keys
 // are ignored.
-pub(crate) fn set_quality_cycle(
-    cfg: &mut crate::components::PostProcessConfig,
-    key: &str,
-    index: usize,
-) {
+pub(crate) fn set_quality_cycle(cfg: &mut PostProcessConfig, key: &str, index: usize) {
     use crate::gfx::settings;
     match key {
         "aa_mode" => cfg.aa_mode = settings::aa_mode_at(index),
@@ -724,7 +716,7 @@ pub(crate) fn set_quality_cycle(
 // overrode it. Shared by the init clamp and the live preset re-derive so both
 // produce the same result.
 pub(crate) fn clamp_quality_cycle(
-    cfg: &mut crate::components::PostProcessConfig,
+    cfg: &mut PostProcessConfig,
     key: &str,
     ceiling: &crate::gfx::quality_preset::QualityCeiling,
     overridden: bool,
@@ -756,10 +748,8 @@ pub(crate) fn clamp_quality_cycle(
 // Derive the backend's per-feature `QualitySettings` from a resolved config.
 // Mirrors the init-time derivation (the same `*_settings()` methods), so a
 // live rebuild reproduces exactly what a launch with this config would build.
-pub(crate) fn derive_quality_settings(
-    cfg: &crate::components::PostProcessConfig,
-) -> crate::gfx::backend::QualitySettings {
-    crate::gfx::backend::QualitySettings {
+pub(crate) fn derive_quality_settings(cfg: &PostProcessConfig) -> backend::QualitySettings {
+    backend::QualitySettings {
         taa: cfg.aa_mode.taa_enabled(),
         ssao: cfg.ssao_settings(),
         ssr: cfg.ssr_settings(),

@@ -16,14 +16,15 @@
 // `write_mesh_scratch` (used by `cn run`, so the geometry never stays a second
 // RAM copy past GPU upload). Both plug into the same planner and renderer.
 
+use concinnity_core::decode::ByteReader;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::streaming::StreamPlanner;
+use concinnity_core::render::streaming::StreamState;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
-
-use super::{StreamPlanner, StreamState};
-use crate::gfx::mesh_payload::Vertex;
-use concinnity_core::decode::ByteReader;
 
 // A mesh payload decoded to GPU-ready vertex and index data.
 //
@@ -157,7 +158,7 @@ impl MeshPayloadSource for SceneDeferredMeshSource {
 // Decode a compiled mesh payload into LOD0 geometry (streamed draws strip
 // their LOD alternates, so only LOD0 is ever uploaded).
 fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
-    let (vertices, indices, _) = crate::gfx::mesh_payload::deserialize_with_lods(bytes)?;
+    let (vertices, indices, _) = mesh_payload::deserialize_with_lods(bytes)?;
     Ok(DecodedMesh { vertices, indices })
 }
 

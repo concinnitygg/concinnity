@@ -1,12 +1,15 @@
-//! Blob file reading and lazy payload residency live in `concinnity_host::store`;
-//! re-export them under the historical crate::blob::* paths. `pub` so the editor
-//! crate's in-memory build path can construct `BlobData`.
-pub use concinnity_host::store::blob::*;
+//! Where the blob file format meets a world: the reader and the lazy payload
+//! residency are `concinnity_host::store::blob`'s, and this turns what it
+//! returns into a `World`.
 
-use crate::ecs::ComponentAsset;
-use crate::ecs::World;
-use crate::ecs::asset_id::AssetId;
-use crate::error::CnError;
+use concinnity_core::ecs::ComponentAsset;
+use concinnity_core::ecs::World;
+use concinnity_core::error::CnError;
+use concinnity_host::store::blob::BlobData;
+use concinnity_host::store::blob::BlobMeta;
+use concinnity_host::store::blob::ResourceRecord;
+use concinnity_host::store::blob::WorldManifest;
+use concinnity_host::thread::asset_id::AssetId;
 
 /// A world that reads its compiled payloads from `blob`. The world names the
 /// payload store only through its access seam, so this is where the blob file

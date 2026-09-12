@@ -8,8 +8,7 @@
 // buffer (see [`TextUploadRing`]) and binds sub-views into it, so no per-frame
 // GPU buffers are allocated.
 
-use concinnity_core::gfx::render_types::TextUniforms;
-use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
+use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms, TextVertex};
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 use windows::Win32::Foundation::RECT;

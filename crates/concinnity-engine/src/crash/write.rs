@@ -5,10 +5,11 @@
 // interrupted mid-write still carries its most valuable sections. The
 // directory is pruned to the newest reports, minidump siblings included.
 
-use super::report::CrashReport;
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+use super::report::CrashReport;
 
 pub(crate) const RETAINED_REPORTS: usize = 20;
 

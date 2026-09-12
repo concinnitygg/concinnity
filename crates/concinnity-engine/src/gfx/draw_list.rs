@@ -3,20 +3,22 @@
 // Render-prep helpers that consume asset components and produce GPU-ready data.
 // None of these functions hold or borrow a backend handle.
 
-use crate::components::{
-    File, FileKind, InstancedProp, InstancedPropGeometry, ProceduralMesh, Room, SubMeshRef,
-    VoxelChunk,
+use concinnity_core::components::InstancedProp;
+use concinnity_core::components::{
+    File, FileKind, InstancedPropGeometry, ProceduralMesh, Room, SubMeshRef, VoxelChunk,
 };
-use crate::ecs::PipelineContext;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{MaterialHandle, MeshHandle};
-use crate::gfx::material_entry::{MaterialEntry, resolve_material_slots};
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{
+use concinnity_core::ecs::{Entity, MaterialHandle, MeshHandle, PayloadLocator, PipelineContext};
+use concinnity_core::gfx::frustum;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
+pub(crate) use concinnity_core::gfx::transform::IDENTITY as IDENTITY4;
+use concinnity_core::resource::MeshTable;
+use concinnity_host::thread::asset_id::AssetId;
 
-pub(crate) use crate::gfx::transform::IDENTITY as IDENTITY4;
+use crate::gfx::material_entry::{MaterialEntry, resolve_material_slots};
 
 // Geometry decoded for one Room: the asset, its vertices, LOD0 indices, and
 // LOD alternates (switch_distance, indices).
@@ -47,7 +49,7 @@ pub(crate) struct MeshGeometry {
 // world may release its payload sections after init, so the bytes are copied
 // out now; a disk-backed world re-reads the blob file range instead).
 pub(crate) struct DeferredMeshSeed {
-    pub locator: crate::ecs::PayloadLocator,
+    pub locator: PayloadLocator,
     pub bytes: Option<Vec<u8>>,
 }
 
@@ -156,11 +158,13 @@ pub(crate) struct RenderableItem {
 // Interactable / Parent / Collider tags. asset_id is for error logging only
 // (resolved from the name index by the caller).
 pub(crate) fn decomposed_renderable_item(
-    ctx: &crate::ecs::PipelineContext,
-    entity: crate::ecs::Entity,
+    ctx: &PipelineContext,
+    entity: Entity,
     asset_id: AssetId,
 ) -> RenderableItem {
-    use crate::components::{Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup};
+    use concinnity_core::components::{
+        Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup,
+    };
 
     let (model, mesh, material, cull_distance) = if let Some(m) = ctx.get::<ModelRenderer>(entity) {
         (Some(m.model), None, None, m.cull_distance)
@@ -257,10 +261,7 @@ pub(crate) fn load_mesh_geometry(
 ) -> Option<MeshGeometry> {
     let mut deferred_payloads: std::collections::HashMap<usize, DeferredMeshSeed> =
         std::collections::HashMap::new();
-    let mesh_table = ctx
-        .resource::<crate::resource::MeshTable>()
-        .cloned()
-        .unwrap_or_default();
+    let mesh_table = ctx.resource::<MeshTable>().cloned().unwrap_or_default();
     // Dev-only source catalog (present under `cn debug`) so the hot-reload
     // watcher can map a mesh handle back to the file that backs it. Mesh is a
     // resource now, so there is no drained component `source` to capture.
@@ -384,7 +385,7 @@ pub(crate) fn load_mesh_geometry(
         // `deserialize_with_lods` parses the optional LOD trailer when the
         // build emitted one and falls back to an empty alternates vec for
         // legacy single-LOD payloads.
-        match crate::gfx::mesh_payload::deserialize_with_lods(&bytes) {
+        match mesh_payload::deserialize_with_lods(&bytes) {
             Ok((verts, idxs, alternates)) => geometry.push(LoadedMesh {
                 vertices: verts,
                 indices: idxs,
@@ -459,7 +460,7 @@ pub(crate) fn load_mesh_geometry(
                         return None;
                     }
                 };
-                match crate::gfx::mesh_payload::deserialize_with_lods(&bytes) {
+                match mesh_payload::deserialize_with_lods(&bytes) {
                     Ok((verts, idxs, alternates)) => {
                         // This source's handle is its push position: the blocks
                         // are loaded in cook's block order and each iterates in
@@ -488,7 +489,7 @@ pub(crate) fn load_mesh_geometry(
     // The world's own block: geometry baked at start, whose payload bytes are
     // already in memory rather than behind a locator, in install order.
     for (id, bytes) in baked_payloads.iter() {
-        match crate::gfx::mesh_payload::deserialize_with_lods(bytes) {
+        match mesh_payload::deserialize_with_lods(bytes) {
             Ok((verts, idxs, alternates)) => {
                 component_mesh_handles.insert(id, geometry.len());
                 geometry.push(LoadedMesh {
@@ -558,7 +559,7 @@ pub(crate) fn load_room_geometry(
                 return None;
             }
         };
-        match crate::gfx::mesh_payload::deserialize_with_lods(&bytes) {
+        match mesh_payload::deserialize_with_lods(&bytes) {
             Ok((verts, idxs, alternates)) => room_geometry.push((room, verts, idxs, alternates)),
             Err(e) => {
                 tracing::error!("GraphicsSystem: malformed Room payload: {}", e);
@@ -751,7 +752,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     if item.is_dynamic || always_resident_meshes.contains(&sub_mesh) {
                         UNCULLED_BB
                     } else {
-                        crate::gfx::frustum::transform_aabb(local_min, local_max, model_mat)
+                        frustum::transform_aabb(local_min, local_max, model_mat)
                     };
                 union_local(local_min, local_max);
                 prop_idxs.push(draw_objects.len());
@@ -827,7 +828,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 if item.is_dynamic || always_resident_meshes.contains(&mesh_handle) {
                     UNCULLED_BB
                 } else {
-                    crate::gfx::frustum::transform_aabb(local_min, local_max, model_mat)
+                    frustum::transform_aabb(local_min, local_max, model_mat)
                 };
             union_local(local_min, local_max);
             prop_idxs.push(draw_objects.len());
@@ -923,8 +924,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             let Some(model_mat) = inst.instance_model_matrix(i) else {
                 continue;
             };
-            let (bb_min, bb_max) =
-                crate::gfx::frustum::transform_aabb(local_min, local_max, model_mat);
+            let (bb_min, bb_max) = frustum::transform_aabb(local_min, local_max, model_mat);
             for k in 0..3 {
                 cluster_min[k] = cluster_min[k].min(bb_min[k]);
                 cluster_max[k] = cluster_max[k].max(bb_max[k]);
@@ -1002,7 +1002,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 
     // Room components placed at the world origin with optional texture.
     // Rooms also opt out of culling (they enclose the camera). LOD picks
-    // come from camera-to-origin distance per [`crate::gfx::lod::camera_distance`]'s
+    // come from camera-to-origin distance per [`concinnity_core::gfx::lod::camera_distance`]'s
     // sentinel-AABB fallback, so practical swaps only fire if the camera
     // wanders far from the world origin.
     for (room, verts, idxs, room_lods) in room_geometry {
@@ -1057,9 +1057,18 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::Prop;
-    use crate::ecs::TextureHandle;
-    use crate::gfx::render_types::NO_ALBEDO_SLOT;
+    use concinnity_core::components::InstanceTransform;
+    use concinnity_core::components::Prop;
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::ComponentSlot;
+    use concinnity_core::ecs::ComponentStorage;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::Resources;
+    use concinnity_core::ecs::TextureHandle;
+    use concinnity_core::gfx::profile;
+    use concinnity_core::gfx::render_types::NO_ALBEDO_SLOT;
+    use concinnity_core::resource::ResourceEntry;
+    use concinnity_host::store::blob::BlobData;
 
     fn make_prop(position: [f32; 3]) -> Prop {
         Prop {
@@ -1110,23 +1119,23 @@ mod tests {
     fn build_draw_list_emits_one_cluster_for_instanced_prop() {
         let mesh_geometry = vec![unit_quad_mesh()];
 
-        let inst = crate::components::InstancedProp {
+        let inst = InstancedProp {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
             cull_distance: 0.0,
             instances: vec![
-                crate::components::InstanceTransform {
+                InstanceTransform {
                     position: [0.0, 0.0, 0.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
                 },
-                crate::components::InstanceTransform {
+                InstanceTransform {
                     position: [5.0, 0.0, 0.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
                 },
-                crate::components::InstanceTransform {
+                InstanceTransform {
                     position: [-3.0, 0.0, 2.0],
                     rotation_deg: [0.0; 3],
                     scale: [1.0; 3],
@@ -1188,7 +1197,7 @@ mod tests {
     fn build_draw_list_skips_empty_instanced_prop() {
         let mesh_geometry = vec![unit_quad_mesh()];
 
-        let inst = crate::components::InstancedProp {
+        let inst = InstancedProp {
             asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
@@ -1268,10 +1277,10 @@ mod tests {
     // tags.
     #[test]
     fn decomposed_renderable_item_matches_a_mesh_prop() {
-        use crate::blob::BlobData;
-        use crate::components::{Collider, MeshRenderer, Pickup, PropCollider};
-        use crate::ecs::{ComponentStorage, PipelineContext, Resources};
-        use crate::gfx::profile::FrameProfile;
+        use concinnity_core::components::{Collider, MeshRenderer, Pickup, PropCollider};
+        use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
+        use concinnity_core::gfx::profile::FrameProfile;
+        use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);
         prop.asset_id = AssetId(7);
@@ -1285,13 +1294,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
-        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
+        let scratch = Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
-            frame: crate::ecs::FrameContext::new(&scratch),
+            frame: FrameContext::new(&scratch),
         };
 
         let e = ctx.components.spawn();
@@ -1676,7 +1685,7 @@ mod tests {
             mesh: Some(MeshHandle(999)),
             material: None,
             cull_distance: 0.0,
-            instances: vec![crate::components::InstanceTransform::default()],
+            instances: vec![InstanceTransform::default()],
         };
         assert!(none(DrawListInputs {
             items: &[],
@@ -1696,7 +1705,7 @@ mod tests {
             mesh: Some(MeshHandle(0)),
             material: Some(MaterialHandle(404)),
             cull_distance: 0.0,
-            instances: vec![crate::components::InstanceTransform::default()],
+            instances: vec![InstanceTransform::default()],
         };
         assert!(none(DrawListInputs {
             items: &[],
@@ -1715,76 +1724,73 @@ mod tests {
     // load_room_geometry can decode in-memory payloads, mirroring the
     // GraphicsSystem WorldBuilder precedent.
     struct BlobWorld {
-        components: crate::ecs::ComponentStorage,
+        components: ComponentStorage,
         section: Vec<u8>,
     }
 
     struct SealedWorld {
-        components: crate::ecs::ComponentStorage,
-        blob: crate::blob::BlobData,
-        profile: crate::gfx::profile::FrameProfile,
-        resources: crate::ecs::Resources,
-        scratch: crate::ecs::Arena,
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: profile::FrameProfile,
+        resources: Resources,
+        scratch: Arena,
     }
 
     impl BlobWorld {
         fn new() -> Self {
             Self {
-                components: crate::ecs::ComponentStorage::default(),
+                components: ComponentStorage::default(),
                 section: Vec::new(),
             }
         }
 
-        fn payload(&mut self, bytes: &[u8]) -> crate::ecs::PayloadLocator {
+        fn payload(&mut self, bytes: &[u8]) -> PayloadLocator {
             let offset = self.section.len() as u64;
             self.section.extend_from_slice(bytes);
-            crate::ecs::PayloadLocator {
+            PayloadLocator {
                 blob_index: 0,
                 offset,
                 len: bytes.len() as u64,
             }
         }
 
-        fn push<C: crate::ecs::ComponentSlot>(&mut self, c: C) {
+        fn push<C: ComponentSlot>(&mut self, c: C) {
             self.components.push_typed(c);
         }
 
         fn seal(self) -> SealedWorld {
             SealedWorld {
                 components: self.components,
-                blob: crate::blob::BlobData::new(vec![Some(self.section)]),
-                profile: crate::gfx::profile::FrameProfile::default(),
-                resources: crate::ecs::Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                blob: BlobData::new(vec![Some(self.section)]),
+                profile: profile::FrameProfile::default(),
+                resources: Resources::new(),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
     }
 
     impl SealedWorld {
-        fn ctx(&mut self) -> crate::ecs::PipelineContext<'_> {
-            crate::ecs::PipelineContext {
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
                 components: &mut self.components,
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
 
         // Install a `MeshTable` with one entry per locator (handle == index),
         // standing in for the blob resource stream a real build provides.
-        fn with_mesh_table(
-            mut self,
-            locators: Vec<Option<crate::ecs::PayloadLocator>>,
-        ) -> SealedWorld {
+        fn with_mesh_table(mut self, locators: Vec<Option<PayloadLocator>>) -> SealedWorld {
             let entries = locators
                 .into_iter()
-                .map(|payload| crate::resource::ResourceEntry {
+                .map(|payload| ResourceEntry {
                     payload,
                     data_bytes: Vec::new(),
                 })
                 .collect();
-            self.resources.insert(crate::resource::MeshTable(entries));
+            self.resources.insert(MeshTable(entries));
             self
         }
     }
@@ -1800,7 +1806,7 @@ mod tests {
                 [0.0, 0.0],
             )
         };
-        crate::gfx::mesh_payload::serialize(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], &[0u16, 1, 2])
+        mesh_payload::serialize(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], &[0u16, 1, 2])
     }
 
     // load_mesh_geometry decodes a MeshTable entry's in-memory payload into the
@@ -2007,7 +2013,7 @@ mod tests {
         assert!(component_handles.is_empty());
     }
 
-    fn test_room(locator: Option<crate::ecs::PayloadLocator>) -> Room {
+    fn test_room(locator: Option<PayloadLocator>) -> Room {
         Room {
             asset_id: AssetId(50),
             half_width: 8.0,
@@ -2052,10 +2058,10 @@ mod tests {
     // item is static.
     #[test]
     fn decomposed_renderable_item_matches_a_model_prop() {
-        use crate::blob::BlobData;
-        use crate::components::ModelRenderer;
-        use crate::ecs::{ComponentStorage, PipelineContext, Resources};
-        use crate::gfx::profile::FrameProfile;
+        use concinnity_core::components::ModelRenderer;
+        use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
+        use concinnity_core::gfx::profile::FrameProfile;
+        use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);
         prop.asset_id = AssetId(8);
@@ -2066,13 +2072,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
-        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
+        let scratch = Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
-            frame: crate::ecs::FrameContext::new(&scratch),
+            frame: FrameContext::new(&scratch),
         };
 
         let e = ctx.components.spawn();

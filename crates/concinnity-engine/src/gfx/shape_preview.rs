@@ -5,9 +5,10 @@
 //! exposes to a shape (its morph-target and joint names) and a re-seed of its
 //! pose through an edited shape.
 
-use crate::components::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{SkinnedMeshHandle, World};
+use concinnity_core::components::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
+use concinnity_core::ecs::{SkinnedMeshHandle, World};
+use concinnity_host::thread::asset_id::AssetId;
+
 use crate::gfx::system::character_shape;
 
 /// Each skinned mesh's morph-target names, indexed by handle. Published by
@@ -105,8 +106,8 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{JointProportion, ShapeSlider};
-    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
+    use concinnity_core::components::{JointProportion, ShapeSlider};
+    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     fn chain() -> Skeleton {
         let joint = |name: &str, parent: Option<usize>, y: f32| Joint {

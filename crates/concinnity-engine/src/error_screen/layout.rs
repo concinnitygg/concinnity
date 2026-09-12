@@ -6,9 +6,9 @@
 // not screen-owned: a `Screen` maps through the reference-canvas overlay
 // transform, and this path has no world to own one.
 
-use crate::components::{TextAlign, TextLabel};
-use crate::ecs::FontHandle;
-use crate::gfx::text::{FontSet, measure_label_box};
+use concinnity_core::components::{TextAlign, TextLabel};
+use concinnity_core::ecs::FontHandle;
+use concinnity_core::render::text::{FontSet, measure_label_box};
 
 // On-screen heights, in window pixels. The header leads, the Quit line matches
 // the menu options' size, and the message draws a step smaller than Quit.

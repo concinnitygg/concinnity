@@ -4,27 +4,36 @@
 // never read or written: the state is seeded with an in-memory settings cache
 // and a writer whose sink captures the persisted snapshots instead.
 
-use std::sync::{Arc, Mutex};
-
-use crate::blob::BlobData;
-use crate::components::{
+use concinnity_core::components::AaMode;
+use concinnity_core::components::GamepadAction;
+use concinnity_core::components::GamepadButton;
+use concinnity_core::components::GamepadMap;
+use concinnity_core::components::UpscalerBackend;
+use concinnity_core::components::{
     AudioCommand, ControlsCommand, IndirectLighting, InputKey, SettingCommand, SettingOp,
     ShadowUpdate, Sprite, TextLabel, WindowMode,
 };
-use crate::config::Settings;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ComponentStorage, PipelineContext, Resources, System};
-use crate::gfx::backend::{GpuProfile, GpuVendor};
-use crate::gfx::display_mode::DisplayMode;
-use crate::gfx::keymap::{Bindable, KeyMap};
-use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
-use crate::gfx::profile::FrameProfile;
-use crate::gfx::quality_preset::QualityPreset;
-use crate::gfx::settings;
-use crate::gfx::system::{RebindViz, SliderViz};
+use concinnity_core::ecs::{
+    Arena, ComponentStorage, FrameContext, FrameRateCap, HudPrefs, PipelineContext, Resources,
+    StepResult, System,
+};
+use concinnity_core::gfx::profile::FrameProfile;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::backend::{GpuProfile, GpuVendor};
+use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::keymap::{Bindable, KeyMap};
+use concinnity_core::render::ops;
+use concinnity_host::store::blob::BlobData;
+use concinnity_host::thread::asset_id::AssetId;
+use std::sync::{Arc, Mutex};
 
 use super::SettingsState;
 use super::writer::SettingsWriter;
+use crate::config::Settings;
+use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
+use crate::gfx::quality_preset::QualityPreset;
+use crate::gfx::settings;
+use crate::gfx::system::{RebindViz, SliderViz};
 
 // The value label ids the fixture wires up, so a test can assert a row relabeled
 // without standing up a whole menu.
@@ -50,7 +59,7 @@ struct World {
     blob: BlobData,
     profile: FrameProfile,
     resources: Resources,
-    scratch: crate::ecs::Arena,
+    scratch: Arena,
 }
 
 impl World {
@@ -60,7 +69,7 @@ impl World {
             blob: &mut self.blob,
             profile: &mut self.profile,
             resources: &mut self.resources,
-            frame: crate::ecs::FrameContext::new(&self.scratch),
+            frame: FrameContext::new(&self.scratch),
         }
     }
 }
@@ -134,14 +143,14 @@ impl Fixture {
                     value_id: VICTIM_LABEL,
                 },
             ],
-            gamepad_map: crate::components::GamepadMap::default(),
+            gamepad_map: GamepadMap::default(),
             pad_rebind_rows: vec![
                 crate::gfx::system::PadRebindViz {
-                    action: crate::components::GamepadAction::Jump,
+                    action: GamepadAction::Jump,
                     value_id: PAD_REBIND_LABEL,
                 },
                 crate::gfx::system::PadRebindViz {
-                    action: crate::components::GamepadAction::Sprint,
+                    action: GamepadAction::Sprint,
                     value_id: PAD_VICTIM_LABEL,
                 },
             ],
@@ -154,7 +163,7 @@ impl Fixture {
                 value_id: VALUE_LABEL,
             }],
             cycle_value_labels,
-            post_process: crate::gfx::render_types::PostProcessTunables::DEFAULT,
+            post_process: render_types::PostProcessTunables::DEFAULT,
             post_config: Default::default(),
             authored_post_config: Default::default(),
             ambient_intensity: 1.0,
@@ -206,7 +215,7 @@ impl Fixture {
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                scratch: Arena::with_capacity(64 * 1024),
             },
             state,
             backend,
@@ -226,7 +235,7 @@ impl Fixture {
             }
         }
         let mut ctx = self.world.ctx();
-        let mut ops = crate::gfx::ops::RenderOps::default();
+        let mut ops = ops::RenderOps::default();
         self.state.apply_setting_commands(&mut ctx, &mut ops);
         ops.replay(&mut self.backend);
     }
@@ -609,7 +618,7 @@ fn fov_slider_sends_a_controls_command() {
 // rebound row and the action it took the button from.
 #[test]
 fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
-    use crate::components::GamepadAction;
+    use concinnity_core::components::GamepadAction;
     let mut f = Fixture::new();
     let jump_button = f.state.gamepad_map.get(GamepadAction::Jump);
     let sprint_button = f.state.gamepad_map.get(GamepadAction::Sprint);
@@ -648,15 +657,12 @@ fn pad_rebind_of_a_non_gamepad_action_is_ignored() {
     let mut f = Fixture::new();
     f.apply(vec![SettingCommand {
         setting: Bindable::Forward.setting_key().to_string(),
-        op: SettingOp::RebindButton(crate::components::GamepadButton::North),
+        op: SettingOp::RebindButton(GamepadButton::North),
         value_label: None,
         persist: true,
     }]);
 
-    assert_eq!(
-        f.state.gamepad_map,
-        crate::components::GamepadMap::default()
-    );
+    assert_eq!(f.state.gamepad_map, GamepadMap::default());
     assert!(f.saved.lock().unwrap().is_empty(), "nothing persisted");
 }
 
@@ -702,7 +708,7 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
     let published = f
         .world
         .ctx()
-        .resource::<crate::ecs::FrameRateCap>()
+        .resource::<FrameRateCap>()
         .map(|c| c.0)
         .expect("cap published");
     assert_eq!(published, f.state.fps_cap);
@@ -888,16 +894,16 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(
         "aa_mode",
-        SettingOp::SetIndex(settings::aa_mode_index(crate::components::AaMode::Fxaa)),
+        SettingOp::SetIndex(settings::aa_mode_index(AaMode::Fxaa)),
     )]);
 
-    assert_eq!(f.state.post_config.aa_mode, crate::components::AaMode::Fxaa);
+    assert_eq!(f.state.post_config.aa_mode, AaMode::Fxaa);
     assert_eq!(f.state.post_process.fxaa, 1.0);
     assert!(f.saw(&Call::UpdatePostProcess));
 
     f.apply(vec![cycle(
         "aa_mode",
-        SettingOp::SetIndex(settings::aa_mode_index(crate::components::AaMode::Off)),
+        SettingOp::SetIndex(settings::aa_mode_index(AaMode::Off)),
     )]);
     assert_eq!(f.state.post_process.fxaa, 0.0);
 }
@@ -1002,7 +1008,7 @@ fn upscale_backend_cycle_reaches_dlss_on_nvidia() {
     let mut seen = false;
     for _ in 0..settings::options("upscale_backend").unwrap().len() {
         f.next("upscale_backend");
-        seen |= f.state.upscale_backend == crate::components::UpscalerBackend::Dlss;
+        seen |= f.state.upscale_backend == UpscalerBackend::Dlss;
     }
     assert!(seen, "DLSS is reachable on an NVIDIA device");
 }
@@ -1133,13 +1139,13 @@ fn hud_prefs_publish_under_the_master_toggle() {
     f.state.show_vram = true;
 
     f.state.publish_hud_state(&mut f.world.ctx());
-    let prefs = *f.world.ctx().resource::<crate::ecs::HudPrefs>().unwrap();
+    let prefs = *f.world.ctx().resource::<HudPrefs>().unwrap();
     assert!(prefs.show_fps);
     assert!(prefs.show_vram);
 
     f.state.perf_stats = false;
     f.state.publish_hud_state(&mut f.world.ctx());
-    let prefs = *f.world.ctx().resource::<crate::ecs::HudPrefs>().unwrap();
+    let prefs = *f.world.ctx().resource::<HudPrefs>().unwrap();
     assert!(!prefs.show_fps, "the master gates the sub-readout");
     assert!(!prefs.show_vram);
 }
@@ -1181,12 +1187,9 @@ fn step_without_a_parked_state_is_a_noop() {
     let mut f = Fixture::new();
     let mut sys = super::SettingsSystem::new();
 
-    assert_eq!(
-        sys.step(&mut f.world.ctx()),
-        crate::ecs::StepResult::Continue
-    );
+    assert_eq!(sys.step(&mut f.world.ctx()), StepResult::Continue);
     assert!(
-        f.world.ctx().resource::<crate::ecs::HudPrefs>().is_none(),
+        f.world.ctx().resource::<HudPrefs>().is_none(),
         "nothing published without a state"
     );
 }
@@ -1199,10 +1202,7 @@ fn step_without_a_backend_puts_the_state_back() {
     let mut sys = super::SettingsSystem::new();
     f.world.resources.insert(super::SettingsSlot(Some(f.state)));
 
-    assert_eq!(
-        sys.step(&mut f.world.ctx()),
-        crate::ecs::StepResult::Continue
-    );
+    assert_eq!(sys.step(&mut f.world.ctx()), StepResult::Continue);
     assert!(
         f.world
             .ctx()
@@ -1235,12 +1235,9 @@ fn step_drains_into_the_op_queue_and_reparks() {
         )));
     f.world.resources.insert(super::SettingsSlot(Some(f.state)));
 
-    assert_eq!(
-        sys.step(&mut f.world.ctx()),
-        crate::ecs::StepResult::Continue
-    );
+    assert_eq!(sys.step(&mut f.world.ctx()), StepResult::Continue);
 
-    assert!(f.world.ctx().resource::<crate::ecs::HudPrefs>().is_some());
+    assert!(f.world.ctx().resource::<HudPrefs>().is_some());
     assert!(
         f.world
             .ctx()

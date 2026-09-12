@@ -9,8 +9,7 @@
 // code path with one worker rather than a different path with none.
 
 use concinnity_core::ecs::ScheduleMode;
-use concinnity_core::physics::PhysicsFanout;
-use concinnity_core::physics::{Fanout, Simulation};
+use concinnity_core::physics::{Fanout, PhysicsFanout, Simulation};
 use concinnity_host::thread::jobs::{self, JobPool};
 
 /// Lends the engine's job pool to a stepping simulation.

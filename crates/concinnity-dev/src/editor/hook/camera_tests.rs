@@ -8,8 +8,7 @@
 // drives own -- when a drag or glide starts, what it writes to the live camera,
 // and what hands control back.
 
-use concinnity_core::components::Transform;
-use concinnity_core::components::{Camera3D, InputKey};
+use concinnity_core::components::{Camera3D, InputKey, Transform};
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
 use concinnity_host::thread::asset_id;

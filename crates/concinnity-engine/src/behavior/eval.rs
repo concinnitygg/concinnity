@@ -3,16 +3,17 @@
 // they go straight to `parallel_for` and join before the tick continues.
 
 use concinnity_core::behavior::{EvalBucket, EvalScheduler};
+use concinnity_host::thread::jobs::pool;
 
 #[derive(Debug)]
 pub(crate) struct Pool;
 
 impl EvalScheduler for Pool {
     fn workers(&self) -> usize {
-        crate::jobs::pool().thread_count().max(1)
+        pool().thread_count().max(1)
     }
 
     fn run(&self, buckets: &mut [EvalBucket], eval: &(dyn Fn(&mut EvalBucket) + Send + Sync)) {
-        crate::jobs::pool().parallel_for(buckets, eval);
+        pool().parallel_for(buckets, eval);
     }
 }

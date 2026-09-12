@@ -8,10 +8,12 @@
 // copy extraction added over the old borrow-through path (joint matrices
 // into the snapshot's span buffer).
 
+use concinnity_core::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
+use concinnity_core::ecs::{Entity, SkinnedMeshHandle};
+use concinnity_core::gfx::skeleton;
+use concinnity_core::render::snapshot::RenderSnapshot;
+
 use super::{BenchWorld, bench};
-use crate::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
-use crate::ecs::{Entity, SkinnedMeshHandle};
-use crate::gfx::snapshot::RenderSnapshot;
 use crate::gfx::system::GraphicsSystem;
 
 const SMALL: usize = 100;
@@ -60,7 +62,7 @@ fn pose_world(count: usize) -> BenchWorld {
             SkeletonPose {
                 mesh_id: SkinnedMeshHandle(i as u32),
                 skinned_index: i,
-                skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
+                skeleton: skeleton::Skeleton::new(Vec::new()),
                 joint_matrices: vec![model_at(i); JOINTS],
                 morph_weights: Vec::new(),
                 morph_base: Vec::new(),

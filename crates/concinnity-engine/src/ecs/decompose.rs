@@ -15,19 +15,14 @@
 // parent) resolve through a name -> Entity index this pass also publishes as a
 // resource.
 
-use std::collections::{BTreeMap, HashMap};
-
-use crate::components::{
+use concinnity_core::components::PropBody;
+use concinnity_core::components::{
     BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
-    Pickup, Prop, PropBody, PropInstance, SceneMember, SkyRotation, Transform,
+    Pickup, Prop, PropInstance, SceneMember, SkyRotation, Transform,
 };
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, PipelineContext};
-
-// The index this pass publishes is renderer-free and lives in concinnity-core so
-// the physics / audio subsystem crates can name it; re-export it under the
-// historical `crate::ecs::decompose::EntityByName` path for every reader.
-pub(crate) use concinnity_core::ecs::EntityByName;
+use concinnity_core::ecs::{Entity, EntityByName, PipelineContext};
+use concinnity_host::thread::asset_id::AssetId;
+use std::collections::{BTreeMap, HashMap};
 
 // Decompose every loaded Prop into per-instance components on its own entity,
 // then drain the Prop column.
@@ -164,9 +159,9 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Prop, PropCollider};
     use crate::ecs::SYSTEMS;
-    use crate::ecs::{MaterialHandle, MeshHandle, World};
+    use concinnity_core::components::{Prop, PropCollider};
+    use concinnity_core::ecs::{MaterialHandle, MeshHandle, World};
 
     fn prop(id: u32) -> Prop {
         Prop {
@@ -179,7 +174,7 @@ mod tests {
     // the name index has to carry it for the parent edge to resolve.
     #[test]
     fn a_prop_parents_onto_the_sky_rotation_pivot() {
-        use crate::components::{Parent, SkyRotation};
+        use concinnity_core::components::{Parent, SkyRotation};
 
         let mut world = World::new();
         world.add_component(SkyRotation {
@@ -343,7 +338,7 @@ mod tests {
         wall.mesh = Some(MeshHandle(11));
         wall.collider = Some(PropCollider::default());
         world.add_component(wall);
-        world.add_component(crate::components::PropBody {
+        world.add_component(PropBody {
             prop_name: Some(AssetId(1)),
             mass: 4.0,
             ..Default::default()
@@ -351,7 +346,7 @@ mod tests {
 
         world.start(SYSTEMS).expect("start");
 
-        assert_eq!(world.query::<crate::components::PropBody>().count(), 0);
+        assert_eq!(world.query::<PropBody>().count(), 0);
         let dynamics: Vec<_> = world
             .join2::<BodyDynamics, MeshRenderer>()
             .map(|(_, b, m)| (m.mesh, b.mass))
@@ -364,7 +359,7 @@ mod tests {
     // authored Prop into per-entity components, and the despawn takes them all.
     #[test]
     fn despawn_removes_an_entitys_components() {
-        use crate::components::MeshRenderer;
+        use concinnity_core::components::MeshRenderer;
 
         let mut world = World::new();
         world.add_component(Prop::default());

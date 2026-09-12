@@ -1,38 +1,13 @@
-//! The client's render layer. Everything below the client sits in
-//! concinnity-core and is re-exported here under the historical
-//! `crate::gfx::<module>` paths: the GPU data layouts and render math (camera,
-//! frustum, post-process settings) plus the CPU kernels over them from
-//! `concinnity_core::gfx`, and the backend-agnostic render-prep (record
-//! builders, render graph, trait seam, and the GPU-free cursor / sprite / text /
-//! lights / streaming layout helpers) from `concinnity_core::render`.
+//! The client's render layer: the runtime render systems (the renderer driver,
+//! animation, camera controllers, draw list) and the client-only settings /
+//! quality-preset resolution.
 //!
-//! What remains declared here are the runtime render systems (the renderer
-//! driver, animation, camera controllers, draw list) and the client-only
-//! settings/quality-preset resolution. The re-exports are `pub` so the editor
-//! crate can reach them through `concinnity_engine::gfx::*` (e.g. shader-layout
-//! reflection); `chunk_coord` is named only by the chunk-streaming drive, so it
-//! stays crate-private.
-pub(crate) use concinnity_core::gfx::chunk_coord;
-pub use concinnity_core::gfx::{
-    anim_graph, auto_exposure, camera, font, frustum, ik, lines, lod, mesh_payload, mesh_seed,
-    morph_weights, pose_blend, pose_scratch, profile, proportions, render_types, root_motion,
-    rt_reflections, skeleton, ssao, ssgi, ssr, transform, transform_propagation, view_modes,
-};
-
-// Render-prep from `concinnity_core::render` that the client's own systems consume (the
-// device backends reach the rest through concinnity-device's own bridge, not
-// this crate). `pub` for the pieces the editor / app crates name, `pub(crate)`
-// for the rest.
-pub use concinnity_core::render::{
-    backend, backend_init, decal, error, feedback, input, ops, particles, scene_flow,
-    scene_residency, snapshot, volumetric_fog,
-};
-pub(crate) use concinnity_core::render::{
-    call_buffer, chunk_window, cursor, display_mode, keymap, lights, overlay_maps, sprite, text,
-};
-// Seeded / driven by the client's GraphicsSystem.
-pub use concinnity_core::render::draw_slot;
-pub(crate) use concinnity_core::render::{planar_reflection, reflection_probe};
+//! What these drive lives below the client, in concinnity-core: the GPU data
+//! layouts and render math in `concinnity_core::gfx`, and the
+//! backend-agnostic render-prep (record builders, render graph, the
+//! `RenderBackend` trait seam, and the GPU-free cursor / sprite / text /
+//! lights / streaming layout helpers) in `concinnity_core::render`. Each is
+//! named where it is used, by its owning crate.
 
 // The bundled glyph atlas baked into the binary: the face the startup error
 // screen draws with, and the fallback for a world whose labels name no Font.

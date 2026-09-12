@@ -1,5 +1,5 @@
 //! Whole-frame measurement: what a world's
-//! [`FrameReport`](crate::components::FrameReport) gates in.
+//! [`FrameReport`](concinnity_core::components::FrameReport) gates in.
 //!
 //! One row is recorded per frame, holding its wall time beside the render
 //! stats and system timings for it. When the run ends the rows reduce to a

@@ -6,8 +6,9 @@
 // the renderer's fallback for any TextLabel or TextInput naming no Font, which
 // is the engine's one answer to that whichever way the world was assembled.
 
-use crate::ecs::FontHandle;
-use crate::gfx::text::{LoadedFont, derive_cap_px};
+use concinnity_core::ecs::FontHandle;
+use concinnity_core::render::text;
+use concinnity_core::render::text::{LoadedFont, derive_cap_px};
 
 const BAKED_ATLAS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_font.bin"));
 
@@ -32,8 +33,7 @@ pub(crate) fn load(handle: FontHandle) -> Option<BuiltinFont> {
             }
         };
 
-    let metrics: crate::gfx::text::FontMetrics =
-        metrics.into_iter().map(|m| (m.char_code, m)).collect();
+    let metrics: text::FontMetrics = metrics.into_iter().map(|m| (m.char_code, m)).collect();
     let size_px = size_px as f32;
     Some(BuiltinFont {
         loaded: LoadedFont {

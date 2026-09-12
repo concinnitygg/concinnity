@@ -1,10 +1,11 @@
-//! Client-side ecs runtime. The renderer-free metadata, asset registry,
-//! registration macros, asset-construction API, `PipelineContext`, the `System`
-//! behavior trait, and the `World` that runs systems over its data all live in
-//! concinnity-core; this module re-exports them under the historical
-//! `crate::ecs::*` paths and adds what only a renderer-bearing runtime has: the
+//! Client-side ecs runtime: what only a renderer-bearing runtime has. The
 //! system table itself, its gates, the load-time decomposition pass, and the
 //! resources the render band parks in a world.
+//!
+//! The renderer-free half is concinnity-core's `ecs` and is named there: the
+//! metadata, asset registry, registration macros, asset-construction API,
+//! `PipelineContext`, the `System` behavior trait, and the `World` that runs
+//! systems over its data.
 //!
 //! TO ADD A NEW COMPONENT: register it in concinnity-core's `ecs::registry`
 //! (`define_components!`). TO ADD A NEW ENGINE SYSTEM: implement the `System`
@@ -35,55 +36,24 @@ mod registry;
 pub mod schedule;
 mod world_queries;
 
-// Renderer-free metadata, registry types, the asset-construction API, and the
-// `PipelineContext`, re-exported from concinnity-core so the rest of the client
-// keeps its historical `crate::ecs::*` import paths.
-pub use concinnity_core::ecs::{
-    Access, Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset,
-    ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity, EventCursor, EventStore,
-    Events, FontHandle, FrameContext, FrameVec, MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord,
-    MeshHandle, PayloadLocator, PipelineContext, Resources, RuntimeComponent, SceneGroup,
-    ScratchStats, SkinnedMeshHandle, TextureHandle, Tick,
-};
-
-// The name interner keeps a per-thread table, so it lives in
-// `concinnity_host::thread`, whose module re-exports the vocabulary's
-// `AssetId` / `AssetRef` alongside.
-pub use concinnity_host::thread::asset_id;
-
-// Renderer-free per-frame protocol resources, moved to concinnity-core so the
-// physics / audio subsystem crates can reach them without a renderer dependency.
-// Re-exported here to keep the historical `crate::ecs::*` paths for every reader
-// (engine systems and the editor's hook drive).
-pub use concinnity_core::ecs::{
-    CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
-    GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown,
-    OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode, ScreenStack, SimTiming,
-    TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal, TransientSaves,
-    ViewOverrides, WorldLines,
-};
-
+use concinnity_core::ecs::MeshBoundsRecord;
+use concinnity_core::ecs::Resources;
+use concinnity_core::ecs::SceneGroup;
+use concinnity_core::render::backend;
+use concinnity_core::render::display_mode;
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::scene_residency;
+use concinnity_host::thread::asset_id;
 // The `SYSTEMS` table is written client-side, since its gates name the client's
 // own system types (see `registry`); a gate builds one `BuiltSystem` per
 // present entry. Everything that runs it is in concinnity-core.
-pub use concinnity_core::ecs::{BuiltSystem, Phase, SystemEntry, SystemTable};
 pub use registry::SYSTEMS;
-
-// The world itself, its data and the systems that run over it, is
-// concinnity-core's; re-exported here under its historical path. What stays
-// client-side is the content only a renderer-bearing runtime has: the resources
-// below, and the queries over them in `world_queries`.
-pub use concinnity_core::ecs::World;
+// What stays client-side is the content only a renderer-bearing runtime has:
+// the resources below, and the queries over them in `world_queries`.
 pub use world_queries::{
     gpu_profile, memory_budget, memory_drift, renders, state_tree, streaming_pressure,
     streaming_stats, systems_and_render_backend, take_render_backend, thread_budget,
 };
-
-// The `System` behavior trait + its `StepResult` control signal are renderer-free
-// (they name only `PipelineContext`), so they live in concinnity-core; re-export
-// them under the historical `crate::ecs::*` paths for every reader (engine
-// systems, the `define_systems!` table, and the editor's hook drive).
-pub use concinnity_core::ecs::{Clock, StepResult, System};
 
 /// A render backend transplanted out of a previous world, carried into a freshly
 /// built world so its GraphicsSystem reuses the live GPU device + window instead
@@ -92,7 +62,7 @@ pub use concinnity_core::ecs::{Clock, StepResult, System};
 /// it and calls `RenderBackend::reload_world` (reusing the window) instead of
 /// `init_backend`, so a save applies without recreating the OS window. A shipped
 /// runtime never publishes it; it exists only on the editor's live-update path.
-pub struct PendingBackend(pub Box<dyn crate::gfx::backend::RenderBackend>);
+pub struct PendingBackend(pub Box<dyn backend::RenderBackend>);
 
 // The frame's sampled window input, deposited beside the backend right after
 // the draw (whose event pump produced it) and taken by InputSystem later the
@@ -196,21 +166,16 @@ impl PipelinedFrames {
 /// top of its step and puts it back before returning, so the backend and the
 /// `PipelineContext` are never borrowed together. `None` while a step has it
 /// taken, or once the editor's live SAVE transplanted it out.
-pub struct ActiveRenderBackend(pub Option<Box<dyn crate::gfx::backend::RenderBackend>>);
+pub struct ActiveRenderBackend(pub Option<Box<dyn backend::RenderBackend>>);
 
 impl ActiveRenderBackend {
     // Take the parked backend for the duration of one system step.
-    pub(crate) fn take(
-        resources: &mut Resources,
-    ) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
+    pub(crate) fn take(resources: &mut Resources) -> Option<Box<dyn backend::RenderBackend>> {
         resources.get_mut::<Self>()?.0.take()
     }
 
     // Park the backend again at the end of the step that took it.
-    pub(crate) fn put(
-        resources: &mut Resources,
-        backend: Box<dyn crate::gfx::backend::RenderBackend>,
-    ) {
+    pub(crate) fn put(resources: &mut Resources, backend: Box<dyn backend::RenderBackend>) {
         match resources.get_mut::<Self>() {
             Some(slot) => slot.0 = Some(backend),
             None => {
@@ -228,13 +193,13 @@ impl ActiveRenderBackend {
 // shared clock both derive their `elapsed` from, set to GraphicsSystem's own
 // `start_time` so fade timing matches the render clock.
 pub(crate) struct ActiveSceneFlow {
-    pub flow: Option<crate::gfx::scene_flow::SceneFlow>,
+    pub flow: Option<scene_flow::SceneFlow>,
     pub(crate) epoch: std::time::Instant,
 }
 
 /// The blob's baked per-scene exclusive content groups, published at blob load
 /// for the streaming/residency wiring to consume at graphics init.
-pub struct BlobSceneGroups(pub Vec<crate::ecs::SceneGroup>);
+pub struct BlobSceneGroups(pub Vec<SceneGroup>);
 
 /// The blob's baked per-mesh geometry summaries (AABB + counts by mesh-source
 /// handle), published at blob load so graphics init can build draw records for
@@ -245,11 +210,7 @@ pub struct BlobMeshBounds(pub Vec<MeshBoundsRecord>);
 // whenever it changes: `(scene, state, fraction of members resident)` in
 // declaration order. Consumers (menus, loading screens) read, never write.
 pub(crate) struct SceneResidencyStatus {
-    pub scenes: Vec<(
-        asset_id::AssetId,
-        crate::gfx::scene_residency::SceneLoadState,
-        f32,
-    )>,
+    pub scenes: Vec<(asset_id::AssetId, scene_residency::SceneLoadState, f32)>,
 }
 
 // Setting rows the engine has disabled at runtime (their keys, e.g. `show_fps`
@@ -266,7 +227,7 @@ pub(crate) struct DisabledSettingRows(pub std::collections::HashSet<String>);
 // fallback when it cannot enumerate) and read by `UiInputSystem` to seed the
 // row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct DisplayModes(pub Vec<crate::gfx::display_mode::DisplayMode>);
+pub(crate) struct DisplayModes(pub Vec<display_mode::DisplayMode>);
 
 /// The system table. Generates the `SYSTEMS` table a world starts from; table
 /// order is run order.
@@ -303,21 +264,21 @@ macro_rules! define_systems {
         /// The system table: one entry per system, in run order, plus the
         /// load-time passes that bracket them. `World::start` runs each gate
         /// against the world's content and builds the systems they return.
-        pub const SYSTEMS: &$crate::ecs::SystemTable = &$crate::ecs::SystemTable {
+        pub const SYSTEMS: &::concinnity_core::ecs::SystemTable = &::concinnity_core::ecs::SystemTable {
             entries: &[
-                $( $crate::ecs::SystemEntry {
+                $( ::concinnity_core::ecs::SystemEntry {
                     name: stringify!($name),
                     present_when: $present_when,
-                    phase: $crate::ecs::Phase::$phase,
+                    phase: ::concinnity_core::ecs::Phase::$phase,
                     // Boxing happens here rather than in the gates, so each
                     // gate returns its own system type and the entry's behavior
                     // path has to name it.
                     gate: {
                         fn build(
-                            world: &$crate::ecs::World,
-                        ) -> Option<::std::boxed::Box<dyn $crate::ecs::System>> {
+                            world: &::concinnity_core::ecs::World,
+                        ) -> Option<::std::boxed::Box<dyn ::concinnity_core::ecs::System>> {
                             let built: Option<$behavior> = $gate(world);
-                            built.map(|s| -> ::std::boxed::Box<dyn $crate::ecs::System> {
+                            built.map(|s| -> ::std::boxed::Box<dyn ::concinnity_core::ecs::System> {
                                 ::std::boxed::Box::new(s)
                             })
                         }

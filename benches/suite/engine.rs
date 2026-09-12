@@ -10,8 +10,8 @@
 //! sets diverge most. That measurement belongs to an in-crate bench.
 
 use crate::support::{Bench, Rng};
-use concinnity_engine::components::Prop;
-use concinnity_engine::ecs::{ComponentSlot, Entity, World};
+use concinnity_core::components::Prop;
+use concinnity_core::ecs::{ComponentSlot, Entity, World};
 
 const SIZES: [(usize, &str); 2] = [(10_000, "10k"), (100_000, "100k")];
 const LOOKUPS: usize = 4_096;

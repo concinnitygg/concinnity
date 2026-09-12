@@ -5,7 +5,7 @@
 // menu focus movement. No OS or clock access -- the caller feeds held state
 // and a frame dt, so the fold is driven synthetically in tests.
 
-use crate::components::NavDirection;
+use concinnity_core::components::NavDirection;
 
 // Seconds a direction must stay held before it starts repeating.
 const REPEAT_DELAY: f32 = 0.4;

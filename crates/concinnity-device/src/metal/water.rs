@@ -34,8 +34,9 @@ use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::transparent;
-use concinnity_core::render::uniforms::TransparentView;
-use concinnity_core::render::uniforms::{WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
+use concinnity_core::render::uniforms::{
+    TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};

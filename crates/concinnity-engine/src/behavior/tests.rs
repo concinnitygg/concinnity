@@ -3,10 +3,14 @@
 // the wiring: that a scope survives the load-time decomposition pass, and that
 // the state a `save` node writes reaches the file store and comes back.
 
-use crate::components::{Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, PropInstance};
-use crate::components::{BehaviorQuery, Camera3D, Transform, Variables};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{MeshHandle, SYSTEMS, World};
+use concinnity_core::components::{
+    Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, PropInstance,
+};
+use concinnity_core::components::{BehaviorQuery, Camera3D, Transform, Variables};
+use concinnity_core::ecs::{MeshHandle, World};
+use concinnity_host::thread::asset_id::AssetId;
+
+use crate::ecs::SYSTEMS;
 
 // The core tests drive a bare component storage, where decomposition never
 // runs, so they cannot show that a scope survives it. This goes through
@@ -68,7 +72,7 @@ fn a_prop_scoped_behavior_fires_once_started() {
 // left and simulates on from there.
 #[test]
 fn a_behavior_moves_a_prop_the_simulation_owns() {
-    use crate::components::{PropBody, PropCollider};
+    use concinnity_core::components::{PropBody, PropCollider};
 
     let mut world = World::new();
     world.add_component(Prop {
@@ -124,9 +128,9 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
 #[test]
 fn a_saving_world_restores_its_variable_through_the_file_store() {
     use super::save::FileStore;
-    use crate::components::{BehaviorLiteral, VariableDecl};
-    use crate::ecs::System;
     use concinnity_core::behavior::{BehaviorStore, BehaviorSystem};
+    use concinnity_core::components::{BehaviorLiteral, VariableDecl};
+    use concinnity_core::ecs::System;
 
     let tree = concinnity_testing::TempTree::new();
     let dir = tree.join("state");
@@ -182,7 +186,7 @@ fn a_saving_world_restores_its_variable_through_the_file_store() {
 // no Transform, so the gate answers only if a camera says where it is.
 #[test]
 fn a_distance_gate_on_the_queried_camera_decides_by_where_the_camera_is() {
-    use crate::components::cook::Camera3D as Camera3DArgs;
+    use concinnity_core::components::cook::Camera3D as Camera3DArgs;
 
     let mut world = World::new();
     world.add_component(Prop {

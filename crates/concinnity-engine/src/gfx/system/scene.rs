@@ -1,9 +1,10 @@
 // GraphicsSystem scene-flow wiring and per-frame scene visibility application.
 
-use crate::components::{RenderHandle, Scene, SceneMember};
-use crate::ecs::PipelineContext;
-use crate::ecs::asset_id::AssetId;
-use crate::gfx::scene_flow;
+use concinnity_core::components::{Hidden, RenderHandle, Scene, SceneMember};
+use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::PipelineContext;
+use concinnity_core::render::scene_flow;
+use concinnity_host::thread::asset_id::AssetId;
 
 use super::*;
 
@@ -13,7 +14,7 @@ use super::*;
 #[derive(Default)]
 pub(crate) struct SceneVisibilityScratch {
     pub(crate) visibility: scene_flow::SceneVisibility,
-    scene_of: std::collections::HashMap<crate::ecs::Entity, AssetId>,
+    scene_of: std::collections::HashMap<Entity, AssetId>,
 }
 
 // Rebuild the (draw-slots, scene) visibility pairs from the per-entity
@@ -36,7 +37,7 @@ pub(crate) fn refresh_visibility_snapshot(
             .begin_prop(scratch.scene_of.get(&entity).copied());
         // A Hidden entity contributes no slots: its draws were switched off
         // by a hide request, and a scene switch must not relight them.
-        if ctx.get::<crate::components::Hidden>(entity).is_none() {
+        if ctx.get::<Hidden>(entity).is_none() {
             for &slot in handle.draws.iter() {
                 scratch.visibility.push_draw(slot as usize);
             }
@@ -84,9 +85,11 @@ impl GraphicsSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::BlobData;
-    use crate::ecs::{ComponentStorage, Resources};
-    use crate::gfx::profile::FrameProfile;
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::{ComponentStorage, Resources};
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_host::store::blob::BlobData;
 
     // Collect the snapshot's pairs for assertions.
     fn snapshot_pairs(ctx: &PipelineContext) -> (Vec<Vec<usize>>, Vec<Option<AssetId>>) {
@@ -109,13 +112,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
-        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
+        let scratch = Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
-            frame: crate::ecs::FrameContext::new(&scratch),
+            frame: FrameContext::new(&scratch),
         };
 
         // Entity in scene 7 with two draw slots.
@@ -150,20 +153,20 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
-        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
+        let scratch = Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
-            frame: crate::ecs::FrameContext::new(&scratch),
+            frame: FrameContext::new(&scratch),
         };
 
         let a = ctx.components.spawn();
         ctx.insert(a, RenderHandle { draws: [10].into() });
         let b = ctx.components.spawn();
         ctx.insert(b, RenderHandle { draws: [20].into() });
-        ctx.insert(b, crate::components::Hidden);
+        ctx.insert(b, Hidden);
 
         let (draws, scenes) = snapshot_pairs(&ctx);
         assert_eq!(draws, vec![vec![10usize], vec![]]);
@@ -178,13 +181,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
-        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
+        let scratch = Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
-            frame: crate::ecs::FrameContext::new(&scratch),
+            frame: FrameContext::new(&scratch),
         };
 
         let only_scene = ctx.components.spawn();

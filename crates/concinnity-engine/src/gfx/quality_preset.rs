@@ -12,12 +12,12 @@
 // reached by clamping, not by opting in. This keeps the per-field `None = use the world's value` contract: the
 // only thing persisted is the one preset marker, not a bake of every field.
 
-use serde::{Deserialize, Serialize};
-
-use crate::components::{
+use concinnity_core::components::{
     AaMode, ReflectionBlurResolution, ShadowUpdate, SsgiResolution, UpscaleQuality,
 };
-use crate::gfx::backend::{GpuProfile, GpuTier};
+use concinnity_core::render::backend::{GpuProfile, GpuTier};
+use concinnity_core::render::planar_reflection;
+use serde::{Deserialize, Serialize};
 
 /// Persisted master graphics-quality choice. `Auto` resolves from the detected
 /// GPU tier each launch; a named tier (Low..Ultra) is a fixed ceiling; `Custom`
@@ -175,7 +175,7 @@ const SHADOW_CASCADES_MAX: u32 = 4;
 // The no-cap planar reflection plane budget: the engine capacity ceiling every
 // backend sizes its mirror allocations to. Sourced from the single
 // `gfx::planar_reflection` constant so a capacity bump flows here automatically.
-const PLANAR_PLANES_MAX: u32 = crate::gfx::planar_reflection::MAX_PLANAR_PLANES as u32;
+const PLANAR_PLANES_MAX: u32 = planar_reflection::MAX_PLANAR_PLANES as u32;
 
 // The world's shadow re-render cadence clamped under the ceiling: a tier that
 // disallows `EveryFrame` forces the cheaper `Hybrid`; otherwise the authored
@@ -545,7 +545,7 @@ mod tests {
     // actually promises is the cap value itself.
     #[test]
     fn tier_caps_bound_the_shadow_and_texture_knobs() {
-        use crate::components::ShadowUpdate;
+        use concinnity_core::components::ShadowUpdate;
         // No ceiling (Custom / Ultra) leaves a world's authored values alone.
         let none = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
         assert_eq!(none.shadow_map_size, SHADOW_SIZE_MAX);

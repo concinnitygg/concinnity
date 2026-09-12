@@ -1,8 +1,8 @@
 // Per-frame morph weights for a flat bucket: the clips' morph tracks blended
 // by the bucket's live weights, then added onto the pose's static base layer.
 
-use crate::gfx::morph_weights::compose_morph_weights;
-use crate::gfx::pose_scratch::PoseScratch;
+use concinnity_core::gfx::morph_weights::compose_morph_weights;
+use concinnity_core::gfx::pose_scratch::PoseScratch;
 
 use super::flat::{ClipEntry, FlatState};
 

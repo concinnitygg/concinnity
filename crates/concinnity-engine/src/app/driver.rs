@@ -3,9 +3,9 @@
 
 use concinnity_core::Driver;
 use concinnity_core::ecs::World;
+use concinnity_core::error::CnError;
 
 use crate::app::state::App;
-use crate::error::CnError;
 
 impl Driver for App {
     fn start(&mut self) -> Result<(), CnError> {
@@ -28,7 +28,7 @@ impl Driver for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::AppConfig;
+    use concinnity_core::components::AppConfig;
 
     // Starting through the trait reaches the windowed loop's own start, budgets
     // and all, and the second call is refused the same way the inherent one is.

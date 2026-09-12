@@ -24,8 +24,7 @@ use concinnity_core::components::{
     CharacterCapsule, CharacterShape, DirectionalLight, GraphicsConfig, PostProcessConfig,
     Transform, VolumetricFog,
 };
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_core::ecs::{Entity, World};
+use concinnity_core::ecs::{ComponentAsset, Entity, World};
 use concinnity_engine::gfx::shape_preview;
 pub(crate) use diff::{args_changes, same_assets};
 use serde_json::Value;

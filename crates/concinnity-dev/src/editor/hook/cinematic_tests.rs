@@ -6,9 +6,9 @@
 // takes the preview's camera, what it refuses to take, when it hands the pose
 // back, and that a shot never reaches the authored world.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::components::TextLabel;
-use concinnity_core::components::{Camera3D, CameraController, FollowController};
+use concinnity_core::components::{
+    Camera3D, CameraController, FollowController, Sprite, TextLabel,
+};
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
 use concinnity_host::thread::asset_id;

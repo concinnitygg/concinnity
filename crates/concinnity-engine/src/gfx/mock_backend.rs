@@ -8,15 +8,28 @@
 // snapshot of the `BackendInit` the system assembled so tests can assert on
 // the built draw lists and resolved settings without any GPU.
 
+use concinnity_core::bake::texture;
+use concinnity_core::components::DirectionalLight;
+use concinnity_core::components::ShadowUpdate;
+use concinnity_core::components::WindowMode;
+use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
+use concinnity_core::gfx::view_modes;
+use concinnity_core::render::backend;
+use concinnity_core::render::backend::{
+    ChunkMesh, DeviceCapabilities, FrameParams, GpuProfile, RenderBackend,
+};
+use concinnity_core::render::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
+use concinnity_core::render::display_mode;
+use concinnity_core::render::draw_slot;
+use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::keymap;
+use concinnity_core::render::reflection_probe;
+use concinnity_core::render::scene_flow::SceneControl;
+use concinnity_core::render::volumetric_fog;
 use std::sync::{Arc, Mutex};
-
-use crate::gfx::backend::{ChunkMesh, DeviceCapabilities, FrameParams, GpuProfile, RenderBackend};
-use crate::gfx::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
-use crate::gfx::error::{RenderError, RenderResult};
-use crate::gfx::input::RenderInput;
-use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
-use crate::gfx::scene_flow::SceneControl;
 
 // Everything a test injects into GraphicsSystem before init: the settings
 // store contents (so the on-disk file is never read or written), the GPU
@@ -76,8 +89,8 @@ pub(crate) enum Call {
         world_hidden: bool,
         text_calls: usize,
         cam_pos: [f32; 3],
-        view_mode: crate::gfx::view_modes::ViewMode,
-        show: crate::gfx::view_modes::ShowFlags,
+        view_mode: view_modes::ViewMode,
+        show: view_modes::ShowFlags,
     },
     UpdateView([[f32; 4]; 4]),
     UpdateModel(usize),
@@ -111,13 +124,13 @@ pub(crate) enum Call {
     SetCameraCapture(bool),
     SetReflectionProbes(usize),
     SetVsync(bool),
-    SetWindowMode(crate::components::WindowMode),
+    SetWindowMode(WindowMode),
     SetWindowSize(u32, u32),
-    SetDisplayMode(crate::gfx::display_mode::DisplayMode),
+    SetDisplayMode(display_mode::DisplayMode),
     SetAmbientIntensity(f32),
     // The directional lights pushed, as (direction, color, intensity) per light.
     UpdateDirectionalLights(Vec<([f32; 3], [f32; 3], f32)>),
-    UpdateFogSettings(Option<crate::gfx::volumetric_fog::FogSettings>),
+    UpdateFogSettings(Option<volumetric_fog::FogSettings>),
     SetKeymap,
     SetShadowUpdate,
     SetShadowDistance(u32),
@@ -443,7 +456,7 @@ impl RenderBackend for MockBackend {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &crate::bake::texture::TextureImage,
+        image: &texture::TextureImage,
     ) -> RenderResult<()> {
         self.record(Call::UpdateTextureSlot {
             slot,
@@ -495,7 +508,7 @@ impl RenderBackend for MockBackend {
     fn add_chunk_mesh(
         &mut self,
         _mesh: ChunkMesh<'_>,
-        _dst: crate::gfx::draw_slot::SlotAlloc,
+        _dst: draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
         self.record(Call::AddChunkMesh);
         Ok(())
@@ -535,7 +548,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetCameraCapture(capture));
     }
 
-    fn set_reflection_probes(&mut self, probes: &[crate::gfx::reflection_probe::ProbePlacement]) {
+    fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]) {
         self.record(Call::SetReflectionProbes(probes.len()));
     }
 
@@ -543,7 +556,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetVsync(on));
     }
 
-    fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
+    fn set_window_mode(&mut self, mode: WindowMode) {
         self.record(Call::SetWindowMode(mode));
     }
 
@@ -551,7 +564,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetWindowSize(width, height));
     }
 
-    fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
+    fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
         self.record(Call::SetDisplayMode(mode));
     }
 
@@ -559,7 +572,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetAmbientIntensity(value));
     }
 
-    fn update_directional_lights(&mut self, lights: &[crate::components::DirectionalLight]) {
+    fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
         self.record(Call::UpdateDirectionalLights(
             lights
                 .iter()
@@ -568,15 +581,15 @@ impl RenderBackend for MockBackend {
         ));
     }
 
-    fn update_fog_settings(&mut self, settings: Option<crate::gfx::volumetric_fog::FogSettings>) {
+    fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
         self.record(Call::UpdateFogSettings(settings));
     }
 
-    fn set_keymap(&mut self, _keymap: &crate::gfx::keymap::KeyMap) {
+    fn set_keymap(&mut self, _keymap: &keymap::KeyMap) {
         self.record(Call::SetKeymap);
     }
 
-    fn set_shadow_update(&mut self, _update: crate::components::ShadowUpdate) {
+    fn set_shadow_update(&mut self, _update: ShadowUpdate) {
         self.record(Call::SetShadowUpdate);
     }
 
@@ -588,15 +601,15 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetShadowCascades(count));
     }
 
-    fn update_post_process(&mut self, _tunables: crate::gfx::render_types::PostProcessTunables) {
+    fn update_post_process(&mut self, _tunables: render_types::PostProcessTunables) {
         self.record(Call::UpdatePostProcess);
     }
 
-    fn apply_quality_settings(&mut self, _settings: crate::gfx::backend::QualitySettings) {
+    fn apply_quality_settings(&mut self, _settings: backend::QualitySettings) {
         self.record(Call::ApplyQualitySettings);
     }
 
-    fn update_quality_params(&mut self, _settings: crate::gfx::backend::QualitySettings) {
+    fn update_quality_params(&mut self, _settings: backend::QualitySettings) {
         self.record(Call::UpdateQualityParams);
     }
 
@@ -604,9 +617,9 @@ impl RenderBackend for MockBackend {
         &mut self,
         src_draw_idx: usize,
         _model: [[f32; 4]; 4],
-        dst: crate::gfx::draw_slot::SlotAlloc,
+        dst: draw_slot::SlotAlloc,
     ) -> Result<(), String> {
-        use crate::gfx::draw_slot::SlotAlloc;
+        use concinnity_core::render::draw_slot::SlotAlloc;
         let new_idx = match dst {
             SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
         };

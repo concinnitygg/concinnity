@@ -6,11 +6,12 @@
 // catch_unwind keep a fault inside the reporting path from recursing; its
 // allocations are bounded by the report caps.
 
-use super::report::{CrashReport, MAX_MESSAGE_BYTES, ReportKind};
-use super::write;
 use std::panic::PanicHookInfo;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::report::{CrashReport, MAX_MESSAGE_BYTES, ReportKind};
+use super::write;
 
 static INSTALL: Once = Once::new();
 static IN_HOOK: AtomicBool = AtomicBool::new(false);

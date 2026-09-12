@@ -8,7 +8,9 @@
 // `MenuActive` resource, which is exactly the one-frame-lagged view the
 // in-step pacer used to read from its own field.
 
-use crate::ecs::World;
+use concinnity_core::ecs::FrameRateCap;
+use concinnity_core::ecs::MenuActive;
+use concinnity_core::ecs::World;
 use std::time::{Duration, Instant};
 
 // Frame-rate ceiling while a menu view is open. A paused menu does not benefit
@@ -58,20 +60,14 @@ impl FramePacer {
     // Pace the upcoming world step from the world's published pacing state.
     // No-op (and deadline cleared) while no cap is published or the cap is 0.
     pub(crate) fn pace(&mut self, world: &World) {
-        let user_cap = world
-            .resource::<crate::ecs::FrameRateCap>()
-            .map(|c| c.0)
-            .unwrap_or(0);
+        let user_cap = world.resource::<FrameRateCap>().map(|c| c.0).unwrap_or(0);
         if user_cap != self.last_cap {
             self.deadline = None;
             self.last_cap = user_cap;
         }
         // The menu state published on the previous step; a menu opening this
         // step is clamped one frame later, which is imperceptible.
-        let menu_active = world
-            .resource::<crate::ecs::MenuActive>()
-            .map(|m| m.0)
-            .unwrap_or(false);
+        let menu_active = world.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
         let cap = effective_cap(user_cap, menu_active);
         if cap == 0 {
             self.deadline = None;
@@ -148,14 +144,14 @@ mod tests {
     #[test]
     fn cap_change_rebases_the_deadline() {
         let mut world = World::new();
-        world.insert_resource(crate::ecs::FrameRateCap(1000));
+        world.insert_resource(FrameRateCap(1000));
         let mut pacer = FramePacer::default();
         pacer.pace(&world);
         assert!(
             pacer.deadline.is_some(),
             "a positive cap schedules a deadline"
         );
-        world.insert_resource(crate::ecs::FrameRateCap(0));
+        world.insert_resource(FrameRateCap(0));
         pacer.pace(&world);
         assert!(pacer.deadline.is_none(), "cap 0 clears the schedule");
     }

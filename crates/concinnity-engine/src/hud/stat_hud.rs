@@ -9,9 +9,10 @@
 // resource); the exposure and HDR chips show whenever their feature is active.
 // Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
-use crate::components::{StatHud, TextLabel};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{HudPrefs, PipelineContext, StepResult, System};
+use concinnity_core::components::StatHud;
+use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::{Access, HudPrefs, PipelineContext, StepResult, System};
+use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 // How often the chip text is rebuilt, in seconds. The frame rate is averaged
@@ -180,11 +181,11 @@ impl StatHudSystem {
 }
 
 impl System for StatHudSystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .writes_components(crate::component_mask![crate::components::TextLabel])
+    fn access(&self) -> Access {
+        Access::new()
+            .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
-                crate::ecs::HudPrefs,
+                HudPrefs,
                 crate::app::budget::MemoryBudget,
             ])
     }
@@ -258,6 +259,7 @@ impl System for StatHudSystem {
 mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
+    use concinnity_core::ecs::World;
 
     #[test]
     fn fps_text_averages_frames_over_window() {
@@ -358,8 +360,8 @@ mod tests {
     // A StatHud component spawns the internal HUD system.
     #[test]
     fn stat_hud_component_spawns_internal_system() {
-        use crate::components::StatHud;
-        use crate::ecs::World;
+        use concinnity_core::components::StatHud;
+        use concinnity_core::ecs::World;
 
         let mut world = World::new();
         world.add_component(StatHud::default());
@@ -370,7 +372,7 @@ mod tests {
 
     #[test]
     fn no_stat_hud_no_system() {
-        use crate::ecs::World;
+        use concinnity_core::ecs::World;
 
         let mut world = World::new();
         world.start(SYSTEMS).unwrap();
@@ -379,8 +381,8 @@ mod tests {
 
     // A world carrying a StatHud wired to fps + vram + ram chips and their
     // labels.
-    fn hud_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new();
+    fn hud_world() -> World {
+        let mut world = World::new();
         world.add_component(StatHud {
             fps_label: Some(AssetId(1)),
             vram_label: Some(AssetId(2)),
@@ -399,7 +401,7 @@ mod tests {
 
     // Backdate the emit window so the next step crosses EMIT_INTERVAL_SECS
     // without a real sleep (the field is injectable in-file).
-    fn force_emit_due(world: &mut crate::ecs::World) {
+    fn force_emit_due(world: &mut World) {
         use std::time::Duration;
         for system in world.systems_mut() {
             if let Some(s) = system.downcast_mut::<StatHudSystem>() {
@@ -408,7 +410,7 @@ mod tests {
         }
     }
 
-    fn chip(world: &crate::ecs::World, id: u32) -> String {
+    fn chip(world: &World, id: u32) -> String {
         world
             .query::<TextLabel>()
             .find(|l| l.asset_id == AssetId(id))
@@ -463,7 +465,7 @@ mod tests {
     // both off, the fps and vram chips blank on the next emit.
     #[test]
     fn hud_prefs_hide_fps_and_vram_chips() {
-        use crate::ecs::HudPrefs;
+        use concinnity_core::ecs::HudPrefs;
 
         let mut world = hud_world();
         world.start(SYSTEMS).unwrap();

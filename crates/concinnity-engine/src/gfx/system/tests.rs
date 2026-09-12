@@ -5,29 +5,71 @@
 // (GraphicsSystem::test_hooks) supplies the settings, the GPU profile, and
 // the backend factory.
 
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
-use crate::blob::BlobData;
-use crate::components::{
-    Camera3D, DespawnRequest, FrameInput, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
+use concinnity_core::bake::texture;
+use concinnity_core::components::AaMode;
+use concinnity_core::components::CharacterRig;
+use concinnity_core::components::Children;
+use concinnity_core::components::FrameInput;
+use concinnity_core::components::GlobalTransform;
+use concinnity_core::components::IndirectLighting;
+use concinnity_core::components::Lifetime;
+use concinnity_core::components::Parent;
+use concinnity_core::components::PostProcessConfig;
+use concinnity_core::components::ShaderPrograms;
+use concinnity_core::components::SkeletonPose;
+use concinnity_core::components::SkinnedMesh;
+use concinnity_core::components::Spawner;
+use concinnity_core::components::Transform;
+use concinnity_core::components::compiled_programs;
+use concinnity_core::components::{
+    Camera3D, DespawnRequest, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
     ReparentRequest, Scene, SceneCommand, Shader, SpawnRequest, Sprite, StreamingConfig, TextLabel,
-    Transform, Window,
+    Window,
 };
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
+use concinnity_core::ecs::Arena;
+use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::FontHandle;
+use concinnity_core::ecs::FrameContext;
+use concinnity_core::ecs::FrameRateCap;
+use concinnity_core::ecs::GpuMemoryPressure;
+use concinnity_core::ecs::HiddenAssets;
+use concinnity_core::ecs::MaterialHandle;
+use concinnity_core::ecs::MenuActive;
+use concinnity_core::ecs::MenuOverride;
+use concinnity_core::ecs::MeshHandle;
+use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::ScreenStack;
+use concinnity_core::ecs::{
     ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources, StepResult,
     TextureHandle,
 };
-use crate::gfx::backend::{GpuProfile, GpuTier, GpuVendor};
-use crate::gfx::backend_init::SwapchainConfig;
+use concinnity_core::gfx::chunk_coord;
+use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::profile::FrameProfile;
+use concinnity_core::gfx::transform_propagation;
+use concinnity_core::render::backend;
+use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
+use concinnity_core::render::backend_init::SwapchainConfig;
+use concinnity_core::render::error;
+use concinnity_core::render::overlay_maps;
+use concinnity_core::render::text;
+use concinnity_core::resource::ColorLutTable;
+use concinnity_core::resource::EnvironmentMapTable;
+use concinnity_core::resource::FontTable;
+use concinnity_core::resource::MaterialTable;
+use concinnity_core::resource::MeshTable;
+use concinnity_core::resource::SkinnedMeshTable;
+use concinnity_core::resource::TextureTable;
+use concinnity_host::store::blob::BlobData;
+use concinnity_host::thread::asset_id::AssetId;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use super::GraphicsSystem;
 use crate::gfx::mock_backend::{
     Call, MockBackend, MockState, TestHooks, recording_hooks, recording_hooks_with,
 };
-use crate::gfx::profile::FrameProfile;
 use crate::gfx::quality_preset::QualityPreset;
-
-use super::GraphicsSystem;
 
 const MESH: AssetId = AssetId(1);
 const TEX: AssetId = AssetId(2);
@@ -41,7 +83,7 @@ struct TestWorld {
     blob: BlobData,
     profile: FrameProfile,
     resources: Resources,
-    scratch: crate::ecs::Arena,
+    scratch: Arena,
 }
 
 impl TestWorld {
@@ -51,7 +93,7 @@ impl TestWorld {
             blob: &mut self.blob,
             profile: &mut self.profile,
             resources: &mut self.resources,
-            frame: crate::ecs::FrameContext::new(&self.scratch),
+            frame: FrameContext::new(&self.scratch),
         }
     }
 }
@@ -109,13 +151,13 @@ impl WorldBuilder {
     // One Shader whose payload carries the given compiled programs, one per
     // entry. The artifact bytes are opaque to the mock, so any bytes serve.
     fn push_shader(&mut self, entries: &[&str]) {
-        let container = crate::components::ShaderPrograms {
+        let container = ShaderPrograms {
             name: "shader".into(),
             vertex: None,
             fragment: "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }".into(),
             programs: entries
                 .iter()
-                .map(|e| crate::components::compiled_programs::CompiledProgram {
+                .map(|e| compiled_programs::CompiledProgram {
                     entries: vec![e.to_string()],
                     source_digest: 1,
                     artifact: b"program-bytes".to_vec(),
@@ -141,7 +183,7 @@ impl WorldBuilder {
         // next mesh handle; the Prop below references it by that handle, as cook
         // resolves a `.mesh` name. `mesh`'s asset id is unused.
         let _ = mesh;
-        let mesh_handle = crate::ecs::MeshHandle(self.mesh_records.len() as u32);
+        let mesh_handle = MeshHandle(self.mesh_records.len() as u32);
         self.mesh_records
             .push(concinnity_core::ecs::ResourceRecord {
                 resource_kind: concinnity_core::ecs::ResourceKind::Mesh as u8,
@@ -181,7 +223,7 @@ impl WorldBuilder {
         self.push(Prop {
             asset_id: prop,
             mesh: Some(mesh_handle),
-            material: Some(crate::ecs::MaterialHandle(mat_handle)),
+            material: Some(MaterialHandle(mat_handle)),
             position: [1.0, 2.0, 3.0],
             ..Default::default()
         });
@@ -191,33 +233,19 @@ impl WorldBuilder {
         let mut resources = Resources::new();
         // The renderer reads the shared texture pool from this table, exactly as
         // the runtime does after loading the blob's resource stream.
-        resources.insert(crate::resource::TextureTable::from_records(
-            &mut self.texture_records,
-        ));
-        resources.insert(crate::resource::MaterialTable::from_records(
-            &mut self.material_records,
-        ));
-        resources.insert(crate::resource::MeshTable::from_records(
-            &mut self.mesh_records,
-        ));
-        resources.insert(crate::resource::FontTable::from_records(
-            &mut self.font_records,
-        ));
-        resources.insert(crate::resource::ColorLutTable::from_records(
-            &mut self.color_lut_records,
-        ));
-        resources.insert(crate::resource::EnvironmentMapTable::from_records(
-            &mut self.env_map_records,
-        ));
-        resources.insert(crate::resource::SkinnedMeshTable::from_records(
-            &mut self.skinned_records,
-        ));
+        resources.insert(TextureTable::from_records(&mut self.texture_records));
+        resources.insert(MaterialTable::from_records(&mut self.material_records));
+        resources.insert(MeshTable::from_records(&mut self.mesh_records));
+        resources.insert(FontTable::from_records(&mut self.font_records));
+        resources.insert(ColorLutTable::from_records(&mut self.color_lut_records));
+        resources.insert(EnvironmentMapTable::from_records(&mut self.env_map_records));
+        resources.insert(SkinnedMeshTable::from_records(&mut self.skinned_records));
         TestWorld {
             components: self.components,
             blob: BlobData::new(vec![Some(self.section)]),
             profile: FrameProfile::default(),
             resources,
-            scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+            scratch: Arena::with_capacity(64 * 1024),
         }
     }
 }
@@ -239,12 +267,12 @@ fn quad_mesh_payload() -> Vec<u8> {
         v([1.0, 0.0, 1.0], [1.0, 1.0]),
         v([0.0, 0.0, 1.0], [0.0, 1.0]),
     ];
-    crate::gfx::mesh_payload::serialize(&vertices, &[0, 1, 2, 0, 2, 3])
+    mesh_payload::serialize(&vertices, &[0, 1, 2, 0, 2, 3])
 }
 
 // A w x h mid-gray RGBA image in the compiled texture payload format.
 fn texture_payload(w: u32, h: u32) -> Vec<u8> {
-    crate::bake::texture::serialize(&crate::bake::texture::TextureImage::rgba8(
+    texture::serialize(&texture::TextureImage::rgba8(
         w,
         h,
         vec![0x7Fu8; (w * h * 4) as usize],
@@ -323,7 +351,7 @@ fn backend_parked(world: &TestWorld) -> bool {
 // its persistent state / cursors from parked resources, and these tests never
 // leave a drained event in retention across a second step.
 fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
-    use crate::ecs::System;
+    use concinnity_core::ecs::System;
     let mut ctx = world.ctx();
     crate::gfx::overlay::OverlaySystem::new().step(&mut ctx);
     crate::spawn::SpawnSystem::new().step(&mut ctx);
@@ -334,12 +362,8 @@ fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
         // InputSystem's init seeds the one FrameInput row; the fresh
         // per-step instance here needs the same seed without the init's
         // settings-file read.
-        if ctx
-            .query::<crate::components::FrameInput>()
-            .next()
-            .is_none()
-        {
-            ctx.push(crate::components::FrameInput::default());
+        if ctx.query::<FrameInput>().next().is_none() {
+            ctx.push(FrameInput::default());
         }
         crate::input::system::InputSystem::new().step(&mut ctx);
     }
@@ -393,10 +417,7 @@ fn init_builds_draw_list_and_render_handles() {
         .map(|h| h.draws.to_vec())
         .collect();
     assert_eq!(handles, vec![vec![0]]);
-    let globals: Vec<[[f32; 4]; 4]> = ctx
-        .query::<crate::components::GlobalTransform>()
-        .map(|g| g.0)
-        .collect();
+    let globals: Vec<[[f32; 4]; 4]> = ctx.query::<GlobalTransform>().map(|g| g.0).collect();
     assert_eq!(globals.len(), 1);
     assert_eq!(globals[0][3][0], 1.0);
 }
@@ -408,8 +429,8 @@ fn init_builds_draw_list_and_render_handles() {
 // nothing. The chips surviving to the parked resource guards that.
 #[test]
 fn init_parks_overlay_assets_with_the_hud_chips() {
-    use crate::components::{DebugHud, StatHud};
     use crate::gfx::overlay::OverlayAssets;
+    use concinnity_core::components::{DebugHud, StatHud};
 
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -632,7 +653,7 @@ fn menu_driven_init_skips_the_first_person_cursor_grab() {
     // A plain first-person world (Camera3D, no HitRegion / KeyBinding) -- the same
     // world that grabs at startup above -- but with a driver already in control.
     let mut world = scene_builder().build();
-    world.resources.insert(crate::ecs::MenuOverride(Some(true)));
+    world.resources.insert(MenuOverride(Some(true)));
     let _gs = init_graphics(&mut world, hooks);
 
     let s = lock(&state);
@@ -880,7 +901,7 @@ fn frame_steps_draw_and_publish_input() {
     assert_eq!(res.mouse_x, 33.0);
     assert_eq!(res.viewport, [1280.0, 720.0]);
     assert!(
-        ctx.resource::<crate::ecs::MenuActive>().is_some(),
+        ctx.resource::<MenuActive>().is_some(),
         "menu state published every frame"
     );
 }
@@ -1016,7 +1037,7 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     let mut world = b.build();
     // The active-screen state UiInputSystem publishes when a world-pausing
     // screen (id 41) is open; the overlay derives menu_active from it.
-    world.ctx().insert_resource(crate::ecs::ScreenStack {
+    world.ctx().insert_resource(ScreenStack {
         layers: [(AssetId(41), 1)].into_iter().collect(),
         pauses_world: true,
         captures_input: true,
@@ -1041,7 +1062,7 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     {
         let ctx = world.ctx();
         // The App-level pacer clamps from this same resource next step.
-        assert!(ctx.resource::<crate::ecs::MenuActive>().unwrap().0);
+        assert!(ctx.resource::<MenuActive>().unwrap().0);
         let input = ctx.resource::<FrameInput>().unwrap();
         assert!(!input.forward, "gameplay input frozen behind the menu");
     }
@@ -1075,7 +1096,7 @@ fn menu_override_true_forces_cursor_free_and_freezes_input() {
     // A plain camera world starts in first-person capture, menu mode off.
     assert!(lock(&state).saw(&Call::SetMenuMode(false)));
 
-    world.resources.insert(crate::ecs::MenuOverride(Some(true)));
+    world.resources.insert(MenuOverride(Some(true)));
     lock(&state).next_input.forward = true;
     step(&mut gs, &mut world);
 
@@ -1091,7 +1112,7 @@ fn menu_override_true_forces_cursor_free_and_freezes_input() {
     drop(s);
     let ctx = world.ctx();
     assert!(
-        ctx.resource::<crate::ecs::MenuActive>().unwrap().0,
+        ctx.resource::<MenuActive>().unwrap().0,
         "freeze resource set"
     );
     assert!(
@@ -1109,9 +1130,7 @@ fn menu_override_false_captures_cursor_and_runs_input() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    world
-        .resources
-        .insert(crate::ecs::MenuOverride(Some(false)));
+    world.resources.insert(MenuOverride(Some(false)));
     lock(&state).next_input.forward = true;
     step(&mut gs, &mut world);
 
@@ -1122,10 +1141,7 @@ fn menu_override_false_captures_cursor_and_runs_input() {
     );
     drop(s);
     let ctx = world.ctx();
-    assert!(
-        !ctx.resource::<crate::ecs::MenuActive>().unwrap().0,
-        "not frozen"
-    );
+    assert!(!ctx.resource::<MenuActive>().unwrap().0, "not frozen");
     assert!(
         ctx.resource::<FrameInput>().unwrap().forward,
         "gameplay input runs in play mode"
@@ -1153,7 +1169,7 @@ fn unclassified_draw_error_skips_bounded_then_stops() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::Other("boom".to_string()));
+    lock(&state).fail_draw = Some(error::RenderError::Other("boom".to_string()));
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
@@ -1169,7 +1185,7 @@ fn successful_frame_resets_the_failure_streak() {
     let mut gs = init_graphics(&mut world, hooks);
 
     for _ in 0..3 {
-        lock(&state).fail_draw = Some(crate::gfx::error::RenderError::Other("boom".to_string()));
+        lock(&state).fail_draw = Some(error::RenderError::Other("boom".to_string()));
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
         lock(&state).fail_draw = None;
@@ -1185,8 +1201,8 @@ fn device_lost_stops_immediately_without_gpu_drain() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::DeviceLost {
-        reason: crate::gfx::error::DeviceLostReason::Removed,
+    lock(&state).fail_draw = Some(error::RenderError::DeviceLost {
+        reason: error::DeviceLostReason::Removed,
         detail: "test".to_string(),
     });
     assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
@@ -1204,7 +1220,7 @@ fn swapchain_out_of_date_skips_the_frame() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::SwapchainOutOfDate);
+    lock(&state).fail_draw = Some(error::RenderError::SwapchainOutOfDate);
     for _ in 0..5 {
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     }
@@ -1218,14 +1234,12 @@ fn out_of_device_memory_publishes_pressure_and_continues() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::OutOfDeviceMemory(
-        "test".to_string(),
-    ));
+    lock(&state).fail_draw = Some(error::RenderError::OutOfDeviceMemory("test".to_string()));
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     let pressure = *world
         .ctx()
-        .resource::<crate::ecs::GpuMemoryPressure>()
+        .resource::<GpuMemoryPressure>()
         .expect("pressure resource published");
     assert_eq!(pressure.events, 2);
 }
@@ -1330,7 +1344,7 @@ fn spawn_request_clones_template_draw_slot() {
 
 #[test]
 fn visibility_request_switches_slots_and_hidden_tag() {
-    use crate::components::{Hidden, VisibilityRequest};
+    use concinnity_core::components::{Hidden, VisibilityRequest};
 
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
@@ -1512,7 +1526,7 @@ fn mesh_streaming_reuploads_evicted_geometry() {
 // the rebase is a function of the camera position alone.
 #[test]
 fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
-    use crate::components::VoxelWorld;
+    use concinnity_core::components::VoxelWorld;
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
     // Default chunk is 16x16 world units; a small view radius keeps the chunk
@@ -1551,7 +1565,7 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
     // Render origin = chunk (2, -3) -> world (32, -48).
     let origin = [32.0, 0.0, -48.0];
     let expected_cam = [8.0, 5.0, 8.0];
-    let expected_view = crate::gfx::chunk_coord::camera_relative_view(view, cam_pos, origin);
+    let expected_view = chunk_coord::camera_relative_view(view, cam_pos, origin);
 
     let s = lock(&state);
     match s.last_draw_frame() {
@@ -1581,7 +1595,7 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
 // One SpawnSystem step followed by a replay of its recorded ops onto the
 // parked backend, so the mock's call log reflects what submission would apply.
 fn spawn_step(spawn: &mut crate::spawn::SpawnSystem, world: &mut TestWorld) {
-    use crate::ecs::System;
+    use concinnity_core::ecs::System;
     {
         let mut ctx = world.ctx();
         spawn.step(&mut ctx);
@@ -1603,10 +1617,10 @@ fn replay_pending_ops(world: &mut TestWorld) {
 }
 
 // The entity a name resolves to through the decomposition's name index.
-fn entity_named(world: &mut TestWorld, name: AssetId) -> crate::ecs::Entity {
+fn entity_named(world: &mut TestWorld, name: AssetId) -> Entity {
     *world
         .ctx()
-        .resource::<crate::ecs::decompose::EntityByName>()
+        .resource::<concinnity_core::ecs::EntityByName>()
         .expect("name index published at load")
         .0
         .get(&name)
@@ -1665,14 +1679,14 @@ fn reparent_request_repoints_the_child_under_the_named_parent() {
 
     let ctx = world.ctx();
     assert_eq!(
-        ctx.get::<crate::components::Parent>(child).map(|p| p.0),
+        ctx.get::<Parent>(child).map(|p| p.0),
         Some(parent),
         "the child hangs off the named parent"
     );
     // Both quads are placed at (1, 2, 3), so the child's world position is now
     // the parent's translation applied twice.
     let global = ctx
-        .get::<crate::components::GlobalTransform>(child)
+        .get::<GlobalTransform>(child)
         .expect("child keeps a world matrix");
     assert_eq!(
         [global.0[3][0], global.0[3][1], global.0[3][2]],
@@ -1700,7 +1714,7 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
     // Park the child under a real parent first, so a wrongful detach shows.
     {
         let mut ctx = world.ctx();
-        crate::gfx::transform_propagation::reparent(&mut ctx, child, Some(parent));
+        transform_propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
             parent: Some(GHOST.into()),
@@ -1710,10 +1724,7 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
     spawn_step(&mut spawn, &mut world);
 
     assert_eq!(
-        world
-            .ctx()
-            .get::<crate::components::Parent>(child)
-            .map(|p| p.0),
+        world.ctx().get::<Parent>(child).map(|p| p.0),
         Some(parent),
         "an unresolved parent name never detaches the child to a root"
     );
@@ -1734,7 +1745,7 @@ fn reparent_request_without_a_parent_detaches_the_child() {
 
     {
         let mut ctx = world.ctx();
-        crate::gfx::transform_propagation::reparent(&mut ctx, child, Some(parent));
+        transform_propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
             parent: None,
@@ -1745,12 +1756,10 @@ fn reparent_request_without_a_parent_detaches_the_child() {
 
     let ctx = world.ctx();
     assert!(
-        ctx.get::<crate::components::Parent>(child).is_none(),
+        ctx.get::<Parent>(child).is_none(),
         "an unnamed parent detaches the child"
     );
-    let global = ctx
-        .get::<crate::components::GlobalTransform>(child)
-        .unwrap();
+    let global = ctx.get::<GlobalTransform>(child).unwrap();
     assert_eq!(
         [global.0[3][0], global.0[3][1], global.0[3][2]],
         [1.0, 2.0, 3.0],
@@ -1767,9 +1776,7 @@ fn expired_lifetime_despawns_the_entity_and_retires_its_slot() {
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
     let entity = entity_named(&mut world, PROP);
-    world
-        .ctx()
-        .insert(entity, crate::components::Lifetime { remaining: 0.0 });
+    world.ctx().insert(entity, Lifetime { remaining: 0.0 });
 
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
@@ -1795,7 +1802,7 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::components::Spawner {
+            Spawner {
                 template: PROP,
                 interval: 1.0,
                 lifetime: 5.0,
@@ -1820,16 +1827,13 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
     assert!(lock(&state).saw(&Call::CloneStaticDrawObject { src: 0, new_idx: 1 }));
     let ctx = world.ctx();
     assert_eq!(
-        ctx.query::<crate::components::Lifetime>()
+        ctx.query::<Lifetime>()
             .map(|l| l.remaining)
             .collect::<Vec<_>>(),
         vec![5.0],
         "the cadence copy carries the spawner's lifetime"
     );
-    let spawner_count = ctx
-        .query::<crate::components::Spawner>()
-        .map(|s| s.count)
-        .next();
+    let spawner_count = ctx.query::<Spawner>().map(|s| s.count).next();
     assert_eq!(spawner_count, Some(1), "the spawner counted the copy");
 }
 
@@ -1844,11 +1848,11 @@ fn menu_active_freezes_lifetimes_and_spawners() {
     let entity = entity_named(&mut world, PROP);
     {
         let mut ctx = world.ctx();
-        ctx.insert(entity, crate::components::Lifetime { remaining: 0.0 });
+        ctx.insert(entity, Lifetime { remaining: 0.0 });
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::components::Spawner {
+            Spawner {
                 template: PROP,
                 interval: 1.0,
                 lifetime: 0.0,
@@ -1857,7 +1861,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
             },
         );
     }
-    world.resources.insert(crate::ecs::MenuActive(true));
+    world.resources.insert(MenuActive(true));
 
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
@@ -1876,17 +1880,13 @@ fn menu_active_freezes_lifetimes_and_spawners() {
         );
     }
     assert_eq!(
-        world
-            .ctx()
-            .query::<crate::components::Spawner>()
-            .map(|s| s.count)
-            .next(),
+        world.ctx().query::<Spawner>().map(|s| s.count).next(),
         Some(0),
         "the spawner's clock never advanced"
     );
 
     // Closing the menu resumes the same world clock.
-    world.resources.insert(crate::ecs::MenuActive(false));
+    world.resources.insert(MenuActive(false));
     spawn_step(&mut spawn, &mut world);
     assert!(
         lock(&state).saw(&Call::RetireDrawObject(0)),
@@ -1898,7 +1898,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
 // entry point `World::start` and the schedule actually use.
 #[test]
 fn system_trait_delegates_to_init_and_step() {
-    use crate::ecs::System;
+    use concinnity_core::ecs::System;
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let mut gs = GraphicsSystem {
@@ -1933,10 +1933,10 @@ fn system_trait_delegates_to_init_and_step() {
 // desync the settings menu from the backend.
 #[test]
 fn quality_toggle_and_cycle_helpers_round_trip() {
-    use crate::components::{AaMode, ReflectionBlurResolution, SsgiResolution};
     use crate::gfx::settings::QUALITY_CYCLE_KEYS;
+    use concinnity_core::components::{AaMode, ReflectionBlurResolution, SsgiResolution};
 
-    let mut cfg = crate::components::PostProcessConfig::default();
+    let mut cfg = PostProcessConfig::default();
     for key in [
         "ssao",
         "ssr",
@@ -1992,7 +1992,7 @@ fn quality_toggle_and_cycle_helpers_round_trip() {
     assert_eq!(cfg.ssgi_resolution, ceiling.ssgi_resolution);
 
     // An explicitly overridden knob is left alone by the same clamp.
-    let mut kept = crate::components::PostProcessConfig {
+    let mut kept = PostProcessConfig {
         ssgi_rays: 32,
         ..Default::default()
     };
@@ -2008,7 +2008,7 @@ fn quality_toggle_and_cycle_helpers_round_trip() {
 // overlay and the upscaler are deliberately gated on the world declaring one
 // (overriding a feature is meaningless without its tunables), so any test of
 // those paths must author a config rather than lean on the defaults.
-fn post_config_scene(cfg: crate::components::PostProcessConfig) -> WorldBuilder {
+fn post_config_scene(cfg: PostProcessConfig) -> WorldBuilder {
     let mut b = scene_builder();
     b.push(cfg);
     b
@@ -2043,7 +2043,9 @@ fn profile_at(tier: GpuTier) -> GpuProfile {
 // is no ceiling, so each override stands exactly as stored.
 #[test]
 fn persisted_post_process_overrides_win_over_authored_config() {
-    use crate::components::{AaMode, IndirectLighting, ReflectionBlurResolution, SsgiResolution};
+    use concinnity_core::components::{
+        AaMode, IndirectLighting, ReflectionBlurResolution, SsgiResolution,
+    };
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
@@ -2080,7 +2082,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     settings.graphics.auto_exposure_speed = Some(3.0);
 
     let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
-    let mut world = post_config_scene(crate::components::PostProcessConfig {
+    let mut world = post_config_scene(PostProcessConfig {
         // Deliberately the opposite of every override above, so a value that
         // survives to the backend can only have come from the store.
         aa_mode: AaMode::Off,
@@ -2155,12 +2157,12 @@ fn persisted_post_process_overrides_win_over_authored_config() {
 // later preset up-shift can restore exactly what the world asked for.
 #[test]
 fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
-    use crate::components::{AaMode, IndirectLighting};
+    use concinnity_core::components::{AaMode, IndirectLighting};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     let (state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
-    let mut world = post_config_scene(crate::components::PostProcessConfig {
+    let mut world = post_config_scene(PostProcessConfig {
         ssao: true,
         ssr: true,
         ray_traced_reflections: true,
@@ -2203,14 +2205,14 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
 // Rows the user never touched still clamp.
 #[test]
 fn an_explicit_override_survives_the_preset_ceiling() {
-    use crate::components::AaMode;
+    use concinnity_core::components::AaMode;
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     settings.graphics.ssao = Some(true);
     settings.graphics.aa_mode = Some(AaMode::Taa);
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
-    let mut world = post_config_scene(crate::components::PostProcessConfig {
+    let mut world = post_config_scene(PostProcessConfig {
         ssao: true,
         ssr: true,
         aa_mode: AaMode::Taa,
@@ -2240,7 +2242,7 @@ fn an_explicit_override_survives_the_preset_ceiling() {
 // result. Both halves are asserted on the same GPU and the same authored world.
 #[test]
 fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
-    let authored = crate::components::PostProcessConfig {
+    let authored = PostProcessConfig {
         ray_traced_reflections: true,
         ..Default::default()
     };
@@ -2315,7 +2317,7 @@ fn a_high_ceiling_never_enables_what_the_world_turned_off() {
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Ultra);
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::HighDiscrete));
-    let mut world = post_config_scene(crate::components::PostProcessConfig {
+    let mut world = post_config_scene(PostProcessConfig {
         ssao: false,
         ssr: false,
         ray_traced_reflections: false,
@@ -2345,7 +2347,7 @@ fn the_top_tier_runs_the_default_stack_for_a_world_that_authors_nothing() {
     assert!(live.post_config.ssao);
     assert!(live.post_config.ssr);
     assert!(live.post_config.ray_traced_reflections);
-    assert_eq!(live.post_config.aa_mode, crate::components::AaMode::Taa);
+    assert_eq!(live.post_config.aa_mode, AaMode::Taa);
 }
 
 // And the tier below it clamps that same default stack down, which is how a
@@ -2362,11 +2364,8 @@ fn a_low_tier_clamps_the_default_stack_off() {
     assert!(!live.post_config.ssao);
     assert!(!live.post_config.ssr);
     assert!(!live.post_config.ray_traced_reflections);
-    assert_eq!(
-        live.post_config.indirect_lighting,
-        crate::components::IndirectLighting::Ibl
-    );
-    assert_eq!(live.post_config.aa_mode, crate::components::AaMode::Fxaa);
+    assert_eq!(live.post_config.indirect_lighting, IndirectLighting::Ibl);
+    assert_eq!(live.post_config.aa_mode, AaMode::Fxaa);
 }
 
 // Under `Auto` the ceiling re-resolves from the detected tier each launch: a
@@ -2409,8 +2408,8 @@ fn auto_preset_shadow_ceiling_tracks_the_detected_tier() {
 // window is always created windowed.
 #[test]
 fn persisted_display_and_system_overrides_reach_the_backend() {
-    use crate::components::{UpscaleQuality, UpscalerBackend, WindowMode};
-    use crate::gfx::display_mode::DisplayMode;
+    use concinnity_core::components::{UpscaleQuality, UpscalerBackend, WindowMode};
+    use concinnity_core::render::display_mode::DisplayMode;
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
@@ -2483,7 +2482,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
             .is_empty()
     );
     // The resolved cap reaches the App-level pacer through its own resource.
-    assert!(world.resources.get::<crate::ecs::FrameRateCap>().is_some());
+    assert!(world.resources.get::<FrameRateCap>().is_some());
 }
 
 // One settings row: the `setting:<key>:<verb>` HitRegion the menu builds plus
@@ -2534,7 +2533,7 @@ fn label_color(world: &mut TestWorld, id: AssetId) -> [f32; 3] {
 // which the static option table cannot express.
 #[test]
 fn settings_rows_show_their_live_values_at_init() {
-    use crate::components::ShadowUpdate;
+    use concinnity_core::components::ShadowUpdate;
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.vsync = Some(true);
@@ -2785,8 +2784,8 @@ fn every_owned_slider_key_recovers_a_live_value() {
 // the live rebind drain.
 #[test]
 fn rebind_rows_show_their_bound_keys_at_init() {
-    use crate::components::InputKey;
-    use crate::gfx::keymap::{Bindable, KeyMap};
+    use concinnity_core::components::InputKey;
+    use concinnity_core::render::keymap::{Bindable, KeyMap};
 
     let mut settings = crate::config::Settings::default();
     settings.controls.keymap = Some(KeyMap {
@@ -2855,7 +2854,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
 // not bleed over the chrome. The bands are handed to OverlaySystem at init.
 #[test]
 fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
-    use crate::components::{ScrollPanel, ScrollRow};
+    use concinnity_core::components::{ScrollPanel, ScrollRow};
 
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -2906,12 +2905,12 @@ fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
 // upscaler-selector row.
 #[test]
 fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
-    use crate::components::{ScrollPanel, ScrollRow};
+    use concinnity_core::components::{ScrollPanel, ScrollRow};
 
     let (state, hooks) = recording_hooks();
-    state.lock().unwrap().caps = crate::gfx::backend::DeviceCapabilities {
+    state.lock().unwrap().caps = backend::DeviceCapabilities {
         selectable_upscaler: false,
-        ..crate::gfx::backend::DeviceCapabilities::ALL
+        ..backend::DeviceCapabilities::ALL
     };
     let mut b = post_config_scene(Default::default());
     // The gated row: name + value labels, both listed in one scroll row.
@@ -2974,7 +2973,7 @@ const DISABLED: [f32; 3] = crate::gfx::settings::system::rows::DISABLED_ROW_COLO
 // from the window itself, so the row does not apply).
 #[test]
 fn master_toggles_gray_the_rows_they_govern() {
-    use crate::components::{ScrollPanel, ScrollRow};
+    use concinnity_core::components::{ScrollPanel, ScrollRow};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.perf_stats = Some(false);
@@ -3105,13 +3104,13 @@ fn text_naming_no_font_falls_back_to_the_built_in_face() {
 
     // The whole point: the label shapes into real glyph geometry rather than
     // being dropped for want of a font.
-    let calls = crate::gfx::text::build_text_calls(
+    let calls = text::build_text_calls(
         &labels,
         &overlay.fonts,
         640.0,
         360.0,
-        &crate::gfx::overlay_maps::ClipRects::new(),
-        &crate::gfx::overlay_maps::OverlayLayers::new(),
+        &overlay_maps::ClipRects::new(),
+        &overlay_maps::OverlayLayers::new(),
     );
     assert_eq!(calls.len(), 1, "one draw call for the one label");
     // The space carries no quad of its own; every other character draws one.
@@ -3148,7 +3147,7 @@ fn a_world_whose_text_names_its_fonts_registers_no_fallback() {
     b.push(TextLabel {
         asset_id: AssetId(800),
         content: "Hello, world!".to_string(),
-        font: Some(crate::ecs::FontHandle(font)),
+        font: Some(FontHandle(font)),
         visible: true,
         ..Default::default()
     });
@@ -3212,12 +3211,7 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
     // A font's handle IS its atlas slot, so the pool's leading slots are the
     // fonts in handle order.
     assert_eq!(overlay.fonts.len(), 2);
-    let face = |h| {
-        overlay
-            .fonts
-            .get(crate::ecs::FontHandle(h))
-            .expect("loaded")
-    };
+    let face = |h| overlay.fonts.get(FontHandle(h)).expect("loaded");
     assert_eq!(face(0).atlas_slot, 0, "font handle 0 owns atlas slot 0");
     assert_eq!(face(1).atlas_slot, 1);
     assert_eq!(face(1).atlas_w, 64);
@@ -3329,7 +3323,7 @@ fn an_unreadable_environment_map_payload_fails_init() {
 // declared instance wins (one homogeneous medium is all the pass models).
 #[test]
 fn volumetric_fog_resolves_into_the_backend_init() {
-    use crate::components::VolumetricFog;
+    use concinnity_core::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3356,7 +3350,7 @@ fn volumetric_fog_resolves_into_the_backend_init() {
 // density.
 #[test]
 fn disabled_volumetric_fog_skips_the_fog_pass() {
-    use crate::components::VolumetricFog;
+    use concinnity_core::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3376,7 +3370,7 @@ fn disabled_volumetric_fog_skips_the_fog_pass() {
 // replacing the auto-seed a probe-less world falls back to.
 #[test]
 fn declared_reflection_probes_replace_the_auto_seed() {
-    use crate::components::ReflectionProbe;
+    use concinnity_core::components::ReflectionProbe;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3407,14 +3401,14 @@ fn declared_reflection_probes_replace_the_auto_seed() {
 // object each, and the component is drained (there is no per-frame update path).
 #[test]
 fn instanced_prop_bakes_its_instances_into_one_cluster() {
-    use crate::components::{InstanceTransform, InstancedProp};
+    use concinnity_core::components::{InstanceTransform, InstancedProp};
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
     b.push(InstancedProp {
         asset_id: AssetId(820),
-        mesh: Some(crate::ecs::MeshHandle(0)),
-        material: Some(crate::ecs::MaterialHandle(0)),
+        mesh: Some(MeshHandle(0)),
+        material: Some(MaterialHandle(0)),
         instances: (0..3)
             .map(|i| InstanceTransform {
                 position: [i as f32 * 2.0, 0.0, 0.0],
@@ -3446,7 +3440,9 @@ fn instanced_prop_bakes_its_instances_into_one_cluster() {
 // behind would only invite a second, stale build.
 #[test]
 fn one_shot_world_fx_are_resolved_and_drained_at_init() {
-    use crate::components::{Decal, GlassPanel, ParticleEmitter, SdfVolume, WaterSurface};
+    use concinnity_core::components::{
+        Decal, GlassPanel, ParticleEmitter, SdfVolume, WaterSurface,
+    };
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3519,7 +3515,9 @@ fn a_backend_that_fails_to_build_marks_graphics_failed() {
 // skinned-payload format. `n` vertices span x = 0..n-1, each fully weighted to
 // joint 0, so the bind-pose AABB is predictable.
 fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
-    use crate::gfx::mesh_payload::{PayloadJoint, SkinnedVertex, serialize_skinned_with_lods};
+    use concinnity_core::gfx::mesh_payload::{
+        PayloadJoint, SkinnedVertex, serialize_skinned_with_lods,
+    };
     let vertices: Vec<SkinnedVertex> = (0..n)
         .map(|i| SkinnedVertex {
             pos: [i as f32, 0.0, 0.0],
@@ -3542,7 +3540,7 @@ fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
         &vertices,
         &[0, 1, 2],
         &[joint("root", -1), joint("child", 0)],
-        &crate::gfx::mesh_payload::PayloadMorphs::default(),
+        &mesh_payload::PayloadMorphs::default(),
         lods,
     )
 }
@@ -3550,12 +3548,7 @@ fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
 // Register a SkinnedMesh resource: the placement / material / spawn reserve ride
 // the baked `data_bytes`, the geometry + skeleton ride the compiled payload, and
 // the table index IS the mesh's `SkinnedMeshHandle`.
-fn push_skinned_mesh(
-    b: &mut WorldBuilder,
-    name: AssetId,
-    sm: crate::components::SkinnedMesh,
-    n: u16,
-) {
+fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, n: u16) {
     let locator = b.payload(&skinned_payload(n, &[]));
     let handle = b.skinned_records.len() as u32;
     let data = postcard::to_allocvec(&(name.0, sm)).unwrap();
@@ -3574,7 +3567,7 @@ fn push_skinned_mesh(
 // with a capsule additionally gets a CharacterRig for PhysicsSystem.
 #[test]
 fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
-    use crate::components::{CharacterCapsule, SkinnedMesh};
+    use concinnity_core::components::{CharacterCapsule, SkinnedMesh};
 
     const RIGGED: AssetId = AssetId(840);
     const PLAIN: AssetId = AssetId(841);
@@ -3586,7 +3579,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
         RIGGED,
         SkinnedMesh {
             asset_id: RIGGED,
-            material: Some(crate::ecs::MaterialHandle(0)),
+            material: Some(MaterialHandle(0)),
             position: [5.0, 0.0, 0.0],
             capsule: Some(CharacterCapsule {
                 half_height: 0.9,
@@ -3628,16 +3621,13 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
     let ctx = world.ctx();
     // One SkeletonPose per mesh, each keyed to its handle and template draw.
     let mut poses: Vec<(u32, usize)> = ctx
-        .query::<crate::components::SkeletonPose>()
+        .query::<SkeletonPose>()
         .map(|p| (p.mesh_id.0, p.skinned_index))
         .collect();
     poses.sort();
     assert_eq!(poses, vec![(0, 0), (1, 1)]);
     // Only the capsule-carrying mesh gets a rig.
-    let rigs: Vec<u32> = ctx
-        .query::<crate::components::CharacterRig>()
-        .map(|r| r.target.0)
-        .collect();
+    let rigs: Vec<u32> = ctx.query::<CharacterRig>().map(|r| r.target.0).collect();
     assert_eq!(rigs, vec![0], "only the capsule mesh gets a character rig");
     // The name index the debug animation commands address a mesh by.
     let names = ctx
@@ -3648,7 +3638,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
     // Each template is registered under its mesh name, so a runtime SpawnRequest
     // resolves it the same way a static placement resolves.
     let by_name = ctx
-        .resource::<crate::ecs::decompose::EntityByName>()
+        .resource::<concinnity_core::ecs::EntityByName>()
         .unwrap();
     assert!(by_name.0.contains_key(&RIGGED));
     assert!(by_name.0.contains_key(&PLAIN));
@@ -3661,7 +3651,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
 // without growing any GPU buffer.
 #[test]
 fn skinned_instance_reserves_get_their_own_vertex_regions() {
-    use crate::components::SkinnedMesh;
+    use concinnity_core::components::SkinnedMesh;
 
     const HERO: AssetId = AssetId(842);
     let (state, hooks) = recording_hooks();
@@ -3708,7 +3698,7 @@ fn skinned_instance_reserves_get_their_own_vertex_regions() {
 // build: a silent fallback would render the character with the wrong surface.
 #[test]
 fn a_skinned_mesh_with_an_unknown_material_fails_init() {
-    use crate::components::SkinnedMesh;
+    use concinnity_core::components::SkinnedMesh;
 
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3717,7 +3707,7 @@ fn a_skinned_mesh_with_an_unknown_material_fails_init() {
         AssetId(843),
         SkinnedMesh {
             asset_id: AssetId(843),
-            material: Some(crate::ecs::MaterialHandle(99)),
+            material: Some(MaterialHandle(99)),
             ..Default::default()
         },
         3,
@@ -3733,7 +3723,7 @@ fn a_skinned_mesh_with_an_unknown_material_fails_init() {
 // payload at all, each fail the world build rather than dropping the character.
 #[test]
 fn a_skinned_mesh_without_usable_geometry_fails_init() {
-    use crate::components::SkinnedMesh;
+    use concinnity_core::components::SkinnedMesh;
     use concinnity_core::ecs::{ResourceKind, ResourceRecord};
 
     let record = |b: &mut WorldBuilder, payload: Option<PayloadLocator>| {
@@ -3787,7 +3777,7 @@ fn a_skinned_mesh_without_usable_geometry_fails_init() {
 // again, unless a menu is open (animation is frozen behind it).
 #[test]
 fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
-    use crate::components::SkinnedMesh;
+    use concinnity_core::components::SkinnedMesh;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3806,10 +3796,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
 
     let flag_pose = |world: &mut TestWorld| {
         let mut ctx = world.ctx();
-        let pose = ctx
-            .query_mut::<crate::components::SkeletonPose>()
-            .next()
-            .unwrap();
+        let pose = ctx.query_mut::<SkeletonPose>().next().unwrap();
         pose.updated = true;
     };
 
@@ -3839,7 +3826,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     // Behind a real menu (the overlay reports it active) even a flagged pose
     // waits: the skinned draw is skipped behind it anyway.
     flag_pose(&mut world);
-    world.resources.insert(crate::ecs::ScreenStack {
+    world.resources.insert(ScreenStack {
         pauses_world: true,
         ..Default::default()
     });
@@ -3852,7 +3839,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
 
     // The editor's freeze keeps the world drawn and reseeds poses live, so
     // its override lets the flagged pose through.
-    world.resources.insert(crate::ecs::MenuOverride(Some(true)));
+    world.resources.insert(MenuOverride(Some(true)));
     lock(&state).calls.clear();
     step(&mut gs, &mut world);
     assert!(
@@ -3865,7 +3852,7 @@ impl WorldBuilder {
     // Bake a Material into the resource stream at the next handle and return it,
     // the way cook does (Materials are a data resource; all their data lives in
     // the baked bytes).
-    fn push_material(&mut self, mat: Material) -> crate::ecs::MaterialHandle {
+    fn push_material(&mut self, mat: Material) -> MaterialHandle {
         let handle = self.material_records.len() as u32;
         self.material_records
             .push(concinnity_core::ecs::ResourceRecord {
@@ -3874,7 +3861,7 @@ impl WorldBuilder {
                 payload: None,
                 data_bytes: postcard::to_allocvec(&mat).unwrap(),
             });
-        crate::ecs::MaterialHandle(handle)
+        MaterialHandle(handle)
     }
 }
 
@@ -3903,7 +3890,7 @@ fn every_material_texture_reference_resolves_to_its_shared_pool_slot() {
     });
     b.push(Prop {
         asset_id: AssetId(850),
-        mesh: Some(crate::ecs::MeshHandle(0)),
+        mesh: Some(MeshHandle(0)),
         material: Some(mat),
         ..Default::default()
     });
@@ -4001,7 +3988,7 @@ fn an_undecodable_material_record_fails_init() {
 // the shader's container carries the stage.
 #[test]
 fn an_instanced_vertex_shader_payload_reaches_the_backend() {
-    use crate::components::{InstanceTransform, InstancedProp};
+    use concinnity_core::components::{InstanceTransform, InstancedProp};
 
     let (state, hooks) = recording_hooks();
     // scene_builder()'s shader carries no instanced stage, so build the same
@@ -4022,8 +4009,8 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     b.push(InstancedProp {
         asset_id: AssetId(851),
-        mesh: Some(crate::ecs::MeshHandle(0)),
-        material: Some(crate::ecs::MaterialHandle(0)),
+        mesh: Some(MeshHandle(0)),
+        material: Some(MaterialHandle(0)),
         instances: vec![InstanceTransform {
             position: [0.0; 3],
             rotation_deg: [0.0; 3],
@@ -4066,7 +4053,7 @@ fn a_shader_without_a_payload_fails_init() {
 // rebased set against its own region.
 #[test]
 fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
-    use crate::components::SkinnedMesh;
+    use concinnity_core::components::SkinnedMesh;
     use concinnity_core::ecs::{ResourceKind, ResourceRecord};
 
     let (state, hooks) = recording_hooks();
@@ -4167,7 +4154,7 @@ fn reparent_request_with_an_unresolved_child_is_skipped() {
     assert!(
         world
             .ctx()
-            .get::<crate::components::Children>(child)
+            .get::<Children>(child)
             .is_none_or(|c| c.0.is_empty()),
         "nothing was parented under the named parent"
     );
@@ -4191,7 +4178,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::components::Spawner {
+            Spawner {
                 template: AssetId(904),
                 interval: 1.0,
                 lifetime: 0.0,
@@ -4223,7 +4210,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
 // none reserved) the spawn yields nothing rather than growing a GPU buffer.
 #[test]
 fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
-    use crate::components::SkinnedMesh;
+    use concinnity_core::components::SkinnedMesh;
 
     const HERO: AssetId = AssetId(853);
     let (state, hooks) = recording_hooks();
@@ -4241,10 +4228,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
     );
     let mut world = b.build();
     let _gs = init_graphics(&mut world, hooks);
-    let poses_before = world
-        .ctx()
-        .query::<crate::components::SkeletonPose>()
-        .count();
+    let poses_before = world.ctx().query::<SkeletonPose>().count();
 
     {
         let mut ctx = world.ctx();
@@ -4258,7 +4242,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
-            crate::components::Spawner {
+            Spawner {
                 template: HERO,
                 interval: 1.0,
                 lifetime: 2.0,
@@ -4278,10 +4262,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
         "a skinned template never clones a static draw slot"
     );
     assert_eq!(
-        world
-            .ctx()
-            .query::<crate::components::SkeletonPose>()
-            .count(),
+        world.ctx().query::<SkeletonPose>().count(),
         poses_before,
         "an exhausted instance pool spawns nothing rather than growing a buffer"
     );
@@ -4293,7 +4274,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
 // apply parts hand out a disjoint mutable screen of the backend + bookkeeping.
 #[test]
 fn hot_reload_seams_hand_out_the_backend_and_the_captured_sources() {
-    use crate::components::VolumetricFog;
+    use concinnity_core::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -4374,7 +4355,7 @@ fn a_residency_cap_below_the_streamed_set_reserves_a_smaller_seed() {
 // gathered into the text-atlas pool alongside the sprite textures.
 #[test]
 fn story_stage_images_are_resident_before_any_sprite_references_them() {
-    use crate::components::{Story, StoryImage, StoryNode, StoryPage, StoryStage};
+    use concinnity_core::components::{Story, StoryImage, StoryNode, StoryPage, StoryStage};
     use concinnity_core::ecs::ResourceKind;
 
     let (state, hooks) = recording_hooks();
@@ -4442,7 +4423,7 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
     // Opted in: the quad prop at [1,2,3] indexes with its translated bounds.
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.resources.insert(crate::ecs::PickIndex::default());
+    world.resources.insert(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     assert_eq!(gs.pick_candidates.len(), 1, "one candidate per prop");
@@ -4450,7 +4431,7 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
 
     let index = world
         .resources
-        .get::<crate::ecs::PickIndex>()
+        .get::<PickIndex>()
         .expect("step publishes the index");
     assert_eq!(index.entries.len(), 1);
     let e = &index.entries[0];
@@ -4466,7 +4447,7 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
     assert!(!gs.failed);
     assert!(gs.pick_candidates.is_empty());
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-    assert!(world.resources.get::<crate::ecs::PickIndex>().is_none());
+    assert!(world.resources.get::<PickIndex>().is_none());
 }
 
 // The editor's per-frame HiddenAssets set collapses a hidden prop's draw slots
@@ -4477,25 +4458,25 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
     const COLLAPSED: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.0, 1.0]];
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.resources.insert(crate::ecs::PickIndex::default());
+    world.resources.insert(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
     world
         .resources
-        .insert(crate::ecs::HiddenAssets([PROP].into_iter().collect()));
+        .insert(HiddenAssets([PROP].into_iter().collect()));
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     {
-        let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
+        let index = world.resources.get::<PickIndex>().unwrap();
         assert!(index.entries.is_empty(), "a hidden prop is not pickable");
         let s = lock(&state);
         let model = s.models.get(&0).expect("slot 0 model pushed");
         assert_eq!(*model, COLLAPSED, "the hidden prop's slot is degenerate");
     }
 
-    world.resources.insert(crate::ecs::HiddenAssets::default());
+    world.resources.insert(HiddenAssets::default());
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-    let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
+    let index = world.resources.get::<PickIndex>().unwrap();
     assert_eq!(index.entries.len(), 1, "clearing the set restores the prop");
     let s = lock(&state);
     let model = s.models.get(&0).unwrap();
@@ -4508,7 +4489,7 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
 // skinned model update the next step.
 #[test]
 fn skinned_mesh_joins_the_pick_index_when_opted_in() {
-    use crate::components::SkinnedMesh;
+    use concinnity_core::components::SkinnedMesh;
 
     const BODY: AssetId = AssetId(842);
     let (state, hooks) = recording_hooks();
@@ -4518,21 +4499,21 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
         BODY,
         SkinnedMesh {
             asset_id: BODY,
-            material: Some(crate::ecs::MaterialHandle(0)),
+            material: Some(MaterialHandle(0)),
             position: [5.0, 0.0, 0.0],
             ..Default::default()
         },
         4,
     );
     let mut world = b.build();
-    world.resources.insert(crate::ecs::PickIndex::default());
+    world.resources.insert(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     assert_eq!(gs.pick_candidates.len(), 2, "the prop and the skinned mesh");
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     let index = world
         .resources
-        .get::<crate::ecs::PickIndex>()
+        .get::<PickIndex>()
         .expect("step publishes the index");
     let body = index
         .entries
@@ -4544,15 +4525,11 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     // Move the template: the live Transform drives the skinned model push.
     let entity = world
         .ctx()
-        .join2::<crate::components::SkeletonPose, crate::components::Transform>()
+        .join2::<SkeletonPose, Transform>()
         .map(|(e, _, _)| e)
         .next()
         .expect("the template pose carries a Transform");
-    world
-        .ctx()
-        .get_mut::<crate::components::Transform>(entity)
-        .unwrap()
-        .position = [7.0, 0.0, 0.0];
+    world.ctx().get_mut::<Transform>(entity).unwrap().position = [7.0, 0.0, 0.0];
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert!(
         lock(&state)
@@ -4561,7 +4538,7 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
             .any(|c| matches!(c, Call::UpdateSkinnedModel(0))),
         "the moved template reaches the backend"
     );
-    let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
+    let index = world.resources.get::<PickIndex>().unwrap();
     let body = index.entries.iter().find(|e| e.asset_id == BODY).unwrap();
     assert!(body.bb_min[0] >= 7.0, "the index follows the move");
 
@@ -4581,11 +4558,5 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     assert!(gs.pick_candidates.is_empty());
-    assert_eq!(
-        world
-            .ctx()
-            .join2::<crate::components::SkeletonPose, crate::components::Transform>()
-            .count(),
-        0
-    );
+    assert_eq!(world.ctx().join2::<SkeletonPose, Transform>().count(), 0);
 }

@@ -7,13 +7,13 @@
 // editor's per-frame `DebugHook::tick` (not from `step`) so a WS client
 // blocked on a reply is never starved while a menu pauses playback.
 
-use crate::app::anim_runtime::{AnimCommand, GraphStateReport};
-use crate::ecs::SkinnedMeshHandle;
-use crate::gfx::anim_graph::normalized_time;
+use concinnity_core::ecs::SkinnedMeshHandle;
+use concinnity_core::gfx::anim_graph::normalized_time;
 
 use super::flat::Transition;
 use super::graph::GraphTarget;
 use super::{AnimationSystem, TargetMode};
+use crate::app::anim_runtime::{AnimCommand, GraphStateReport};
 
 impl AnimationSystem {
     /// Drain pending runtime commands against the system's own clock. Uses the
@@ -171,11 +171,12 @@ mod tests {
     use super::super::flat::{ClipEntry, FlatState};
     use super::*;
     use crate::app::anim_runtime::{CrossfadeRequest, SetParamRequest};
-    use crate::components::AnimationGraph;
-    use crate::ecs::asset_id::AssetId;
-    use crate::gfx::anim_graph::GraphCursor;
-    use crate::gfx::skeleton::AnimationClip;
     use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;
+    use concinnity_core::components::AnimationGraph;
+    use concinnity_core::gfx::anim_graph::GraphCursor;
+    use concinnity_core::gfx::skeleton::AnimationClip;
+    use concinnity_host::thread::asset_id;
+    use concinnity_host::thread::asset_id::AssetId;
 
     const TARGET: SkinnedMeshHandle = SkinnedMeshHandle(1);
     const MISSING: SkinnedMeshHandle = SkinnedMeshHandle(9);
@@ -218,7 +219,7 @@ mod tests {
     // passes 0.5. Every state resolves onto the bucket's single clip: the
     // command surface reports the machine, it never samples a pose.
     fn graph_system(fade_secs: f32) -> AnimationSystem {
-        crate::ecs::asset_id::ensure_name_resolver();
+        asset_id::ensure_name_resolver();
         let g: AnimationGraph = serde_json::from_value(serde_json::json!({
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",

@@ -3,14 +3,27 @@
 // to the backend (see `submit`). Asset streaming + the camera-relative screen
 // rebase run in StreamingSystem, scheduled just before this system.
 
-use super::*;
-use crate::components::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult};
-use crate::gfx::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
-use crate::gfx::{scene_flow, setting_action, settings, transform_propagation};
+use concinnity_core::components::{
+    Camera3D, CharacterRig, DirectionalLight, FrameInput, GamepadAction, GlobalTransform,
+    HitRegion, RenderHandle, ScrollPanel, SkeletonPose, Sprite, TextLabel, Transform, WindowMode,
+};
+use concinnity_core::ecs::{
+    FlyCam, HiddenAssets, MenuOverride, PickEntry, PickIndex, PipelineContext, StepResult,
+    ViewOverrides,
+};
+use concinnity_core::gfx::frustum;
+use concinnity_core::gfx::profile;
+use concinnity_core::gfx::transform_propagation;
+use concinnity_core::render::input;
+use concinnity_core::render::keymap;
+use concinnity_core::render::overlay_maps;
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
+use concinnity_host::thread::asset_id::AssetId;
 
 use super::sky_follow;
+use super::*;
+use crate::gfx::{setting_action, settings};
 // The settings-row helpers this system's init-time captures share with the
 // SettingCommand drain (which now lives in `gfx::settings::system`).
 use crate::gfx::settings::system::rows::{
@@ -25,7 +38,7 @@ const HIDDEN_MODEL: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.
 
 // Deposit a sampled input packet for InputSystem (scheduled right after
 // GraphicsSystem), merging onto an unconsumed one so no edge is lost.
-fn deposit_input(ctx: &mut PipelineContext, packet: crate::gfx::input::InputPacket) {
+fn deposit_input(ctx: &mut PipelineContext, packet: input::InputPacket) {
     match ctx.resource_mut::<crate::ecs::InputMailbox>() {
         Some(mailbox) => mailbox.deposit(packet),
         None => {
@@ -55,7 +68,7 @@ fn apply_frame_outcome(
     frame: u64,
     memory_pressure: bool,
     failures: Vec<concinnity_core::render::ops::OpFailure>,
-    stats: Option<crate::gfx::profile::RenderStats>,
+    stats: Option<profile::RenderStats>,
 ) {
     if memory_pressure {
         publish_memory_pressure(ctx, frame);
@@ -77,7 +90,7 @@ fn apply_frame_outcome(
 // Record a device-memory failure in the shared [`GpuMemoryPressure`] resource,
 // where the streaming valve can observe it.
 fn publish_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
-    use crate::ecs::GpuMemoryPressure;
+    use concinnity_core::ecs::GpuMemoryPressure;
     match ctx.resource_mut::<GpuMemoryPressure>() {
         Some(pressure) => {
             pressure.events += 1;
@@ -150,10 +163,7 @@ impl GraphicsSystem {
         // sampling keeps the freshness it had when InputSystem polled the
         // backend itself.
         if result == StepResult::Continue {
-            deposit_input(
-                ctx,
-                crate::gfx::input::InputPacket::sample(backend.as_mut()),
-            );
+            deposit_input(ctx, input::InputPacket::sample(backend.as_mut()));
         }
 
         crate::ecs::ActiveRenderBackend::put(ctx.resources, backend);
@@ -276,7 +286,7 @@ impl GraphicsSystem {
         let menu_active = overlay.menu_active;
         // The editor's menu-state override also drives the backend's menu mode
         // (OverlaySystem already folded it into `menu_active`).
-        let menu_override = ctx.resource::<crate::ecs::MenuOverride>().and_then(|m| m.0);
+        let menu_override = ctx.resource::<MenuOverride>().and_then(|m| m.0);
 
         // Hide the system cursor while an in-engine cursor sprite is shown
         // (edge-triggered in the backend, so this is cheap every frame).
@@ -296,7 +306,7 @@ impl GraphicsSystem {
         // captured deltas. Edge-triggered in the backend, so this is cheap
         // every frame and a no-op in a plain first-person world.
         snap.ui.camera_capture = if self.menu_mode || menu_override.is_some() {
-            let fly = ctx.resource::<crate::ecs::FlyCam>().is_some_and(|f| f.0);
+            let fly = ctx.resource::<FlyCam>().is_some_and(|f| f.0);
             Some(!menu_active || fly)
         } else {
             None
@@ -324,9 +334,7 @@ impl GraphicsSystem {
         // entirely when no Transform / Parent changed; the push gate drops
         // slots whose matrix is unchanged, so a static scene sends nothing.
         transform_propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
-        for (_entity, global, handle) in
-            ctx.join2::<crate::components::GlobalTransform, crate::components::RenderHandle>()
-        {
+        for (_entity, global, handle) in ctx.join2::<GlobalTransform, RenderHandle>() {
             for &slot in &handle.draws {
                 self.model_push
                     .push_changed(&mut snap.models, slot as usize, global.0);
@@ -339,7 +347,7 @@ impl GraphicsSystem {
         // runtime skips this entirely. A despawned entity simply drops
         // out of the index.
         if !self.pick_candidates.is_empty() {
-            let entries: Vec<crate::ecs::PickEntry> = {
+            let entries: Vec<PickEntry> = {
                 // Editor-session hidden objects: overwrite their just-queued
                 // model matrices with the degenerate one (nothing draws) and
                 // keep them out of the pick index. Re-derived every frame, so
@@ -348,7 +356,7 @@ impl GraphicsSystem {
                 // changed matrix and is re-sent.
                 let empty = std::collections::BTreeSet::new();
                 let hidden = ctx
-                    .resource::<crate::ecs::HiddenAssets>()
+                    .resource::<HiddenAssets>()
                     .map(|h| &h.0)
                     .unwrap_or(&empty);
                 for c in self
@@ -356,7 +364,7 @@ impl GraphicsSystem {
                     .iter()
                     .filter(|c| hidden.contains(&c.asset_id))
                 {
-                    if let Some(handle) = ctx.get::<crate::components::RenderHandle>(c.entity) {
+                    if let Some(handle) = ctx.get::<RenderHandle>(c.entity) {
                         for &slot in &handle.draws {
                             self.model_push.push_changed(
                                 &mut snap.models,
@@ -370,10 +378,10 @@ impl GraphicsSystem {
                     .iter()
                     .filter(|c| !hidden.contains(&c.asset_id))
                     .filter_map(|c| {
-                        let global = ctx.get::<crate::components::GlobalTransform>(c.entity)?;
+                        let global = ctx.get::<GlobalTransform>(c.entity)?;
                         let (bb_min, bb_max) =
-                            crate::gfx::frustum::transform_aabb(c.local_min, c.local_max, global.0);
-                        Some(crate::ecs::PickEntry {
+                            frustum::transform_aabb(c.local_min, c.local_max, global.0);
+                        Some(PickEntry {
                             asset_id: c.asset_id,
                             bb_min,
                             bb_max,
@@ -381,7 +389,7 @@ impl GraphicsSystem {
                     })
                     .collect()
             };
-            ctx.insert_resource(crate::ecs::PickIndex { entries });
+            ctx.insert_resource(PickIndex { entries });
         }
 
         // Copy out the latest skinned poses. AnimationSystem wrote them into
@@ -394,7 +402,7 @@ impl GraphicsSystem {
         // the world drawn, and its edits reseed poses and move templates, so
         // the push runs there.
         if !menu_active || menu_override.is_some() {
-            for pose in ctx.query_mut::<crate::components::SkeletonPose>() {
+            for pose in ctx.query_mut::<SkeletonPose>() {
                 if !pose.updated {
                     continue;
                 }
@@ -408,9 +416,7 @@ impl GraphicsSystem {
             // Transform (the runtime-spawned ones), so a moved instance
             // follows it. The authored templates have no Transform and keep
             // the model baked into their draw object at load.
-            for (_entity, pose, transform) in
-                ctx.join2::<crate::components::SkeletonPose, crate::components::Transform>()
-            {
+            for (_entity, pose, transform) in ctx.join2::<SkeletonPose, Transform>() {
                 self.skinned_model_push.push_changed(
                     &mut snap.skinned_models,
                     pose.skinned_index,
@@ -421,7 +427,7 @@ impl GraphicsSystem {
             // (PhysicsSystem wrote it on the previous tick; `moved` persists
             // across a menu pause, so no motion is lost while uploads are
             // skipped).
-            for rig in ctx.query_mut::<crate::components::CharacterRig>() {
+            for rig in ctx.query_mut::<CharacterRig>() {
                 if rig.moved {
                     self.skinned_model_push.push(
                         &mut snap.skinned_models,
@@ -467,7 +473,7 @@ impl GraphicsSystem {
         // refreshed from the FrameInput InputSystem published after the last
         // draw (the same source all overlay layout uses), seeded from the
         // backend at init. `[0, 0]` (backend not ready yet) keeps the seed.
-        if let Some(input) = ctx.query::<crate::components::FrameInput>().next()
+        if let Some(input) = ctx.query::<FrameInput>().next()
             && input.viewport != [0.0, 0.0]
         {
             self.viewport = (input.viewport[0], input.viewport[1]);
@@ -499,10 +505,7 @@ impl GraphicsSystem {
 
         // The editor's view mode + show flags, when published; a shipped
         // runtime has no resource and renders the lit default.
-        let view = ctx
-            .resource::<crate::ecs::ViewOverrides>()
-            .copied()
-            .unwrap_or_default();
+        let view = ctx.resource::<ViewOverrides>().copied().unwrap_or_default();
 
         // The sky's rotation this tick, published by SkyRotationSystem earlier in
         // the schedule. It reaches the GPU twice: as the rows every cubemap
@@ -519,7 +522,7 @@ impl GraphicsSystem {
         {
             self.pushed_sky_angle = Some(sky.angle_deg);
             directional = Some(crate::gfx::lighting_preview::lights_under_sky(
-                ctx.query::<crate::components::DirectionalLight>(),
+                ctx.query::<DirectionalLight>(),
                 &sky,
             ));
         }
@@ -608,9 +611,9 @@ impl GraphicsSystem {
             };
             // A `key_*` setting is a keyboard rebind row; a `pad_*` setting is
             // a gamepad rebind row.
-            if let Some(action) = crate::gfx::keymap::Bindable::from_setting_key(key) {
+            if let Some(action) = keymap::Bindable::from_setting_key(key) {
                 rows.push(RebindViz { action, value_id });
-            } else if let Some(action) = crate::components::GamepadAction::from_setting_key(key) {
+            } else if let Some(action) = GamepadAction::from_setting_key(key) {
                 pad_rows.push(super::PadRebindViz { action, value_id });
             }
         }
@@ -649,8 +652,8 @@ impl GraphicsSystem {
     // still queryable here. Every element listed in any row maps to its panel's
     // content band.
     pub(super) fn init_clip_rects(&mut self, ctx: &mut PipelineContext) {
-        let mut clips = crate::gfx::overlay_maps::ClipRects::new();
-        for panel in ctx.query::<crate::components::ScrollPanel>() {
+        let mut clips = overlay_maps::ClipRects::new();
+        for panel in ctx.query::<ScrollPanel>() {
             let band = [panel.x, panel.y, panel.width, panel.height];
             for row in &panel.rows {
                 for &id in &row.elements {
@@ -697,7 +700,7 @@ impl GraphicsSystem {
         // borrow ends before the TextLabel write below), then expand the gated
         // value labels to every element of the rows that contain them.
         let rows: Vec<Vec<AssetId>> = ctx
-            .query::<crate::components::ScrollPanel>()
+            .query::<ScrollPanel>()
             .flat_map(|p| p.rows.iter().map(|r| r.elements.clone()))
             .collect();
         let dim = expand_dim_set(&gated_value_labels, &rows);
@@ -782,14 +785,18 @@ impl GraphicsSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::gfx::skeleton;
+    use concinnity_core::render::feedback;
     use std::collections::HashSet;
 
-    use crate::blob::BlobData;
-    use crate::components::{GlobalTransform, RenderHandle, SkeletonPose};
-    use crate::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
     use crate::gfx::overlay::OverlayFrame;
-    use crate::gfx::profile::FrameProfile;
-    use crate::gfx::snapshot::SceneOp;
+    use concinnity_core::components::{GlobalTransform, RenderHandle, SkeletonPose};
+    use concinnity_core::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::render::snapshot::SceneOp;
+    use concinnity_host::store::blob::BlobData;
 
     // Owns the storage a PipelineContext borrows from; extraction never reads
     // the blob, so it stays empty.
@@ -798,7 +805,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
-        scratch: crate::ecs::Arena,
+        scratch: Arena,
     }
 
     impl ExtractWorld {
@@ -808,7 +815,7 @@ mod tests {
                 blob: BlobData::empty(),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -818,7 +825,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
     }
@@ -839,7 +846,7 @@ mod tests {
         {
             let mut ctx = world.ctx();
             ctx.components.push(
-                crate::components::DirectionalLight {
+                DirectionalLight {
                     direction: [0.0, 0.0, 1.0],
                     ..Default::default()
                 }
@@ -877,7 +884,7 @@ mod tests {
         SkeletonPose {
             mesh_id: SkinnedMeshHandle(0),
             skinned_index,
-            skeleton: crate::gfx::skeleton::Skeleton::new(Vec::new()),
+            skeleton: skeleton::Skeleton::new(Vec::new()),
             joint_matrices: vec![translated(1.0); joints],
             morph_weights: Vec::new(),
             morph_base: Vec::new(),
@@ -989,7 +996,7 @@ mod tests {
             let e = ctx.components.spawn();
             ctx.insert(
                 e,
-                crate::components::Camera3D {
+                Camera3D {
                     fov_y_degrees: 90.0,
                     near: 0.1,
                     far: 500.0,
@@ -1061,9 +1068,7 @@ mod tests {
         assert_eq!(snap.ui.menu_mode, None);
         assert_eq!(snap.ui.camera_capture, None);
 
-        world
-            .resources
-            .insert(crate::ecs::MenuOverride(Some(false)));
+        world.resources.insert(MenuOverride(Some(false)));
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.ui.menu_mode, Some(true));
         assert_eq!(
@@ -1090,7 +1095,7 @@ mod tests {
         let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.models, vec![(9, translated(2.0))]);
-        assert!(world.resources.get::<crate::ecs::PickIndex>().is_none());
+        assert!(world.resources.get::<PickIndex>().is_none());
 
         // The editor opted in and hid the asset: the queued model is
         // overwritten in order and the index excludes it.
@@ -1100,9 +1105,9 @@ mod tests {
             local_min: [-1.0; 3],
             local_max: [1.0; 3],
         });
-        world.resources.insert(crate::ecs::HiddenAssets(
-            [AssetId(42)].into_iter().collect(),
-        ));
+        world
+            .resources
+            .insert(HiddenAssets([AssetId(42)].into_iter().collect()));
         {
             let mut ctx = world.ctx();
             if let Some(g) = ctx.get_mut::<GlobalTransform>(entity) {
@@ -1115,7 +1120,7 @@ mod tests {
             vec![(9, translated(3.0)), (9, HIDDEN_MODEL)],
             "the hide overwrite follows the move so it wins on the backend"
         );
-        let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
+        let index = world.resources.get::<PickIndex>().unwrap();
         assert!(index.entries.is_empty(), "a hidden asset is not pickable");
     }
 
@@ -1144,14 +1149,14 @@ mod tests {
         let consumer = std::thread::spawn(move || {
             for stop in [false, true] {
                 let snapshot = snapshot_rx.recv().expect("a snapshot arrives");
-                let mut input = crate::gfx::input::InputPacket::default();
+                let mut input = input::InputPacket::default();
                 input.raw.jump = true;
-                let render_stats = crate::gfx::profile::RenderStats {
+                let render_stats = profile::RenderStats {
                     draw_calls: 7,
                     ..Default::default()
                 };
                 feedback_tx
-                    .send(crate::gfx::feedback::FrameFeedback {
+                    .send(feedback::FrameFeedback {
                         input,
                         render_stats,
                         replay: Default::default(),

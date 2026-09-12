@@ -4,7 +4,7 @@
 //
 // This is the chunk counterpart of `super::mesh`: it owns a
 // background generation thread and the channels that carry work to it, and
-// wraps the `no_std` policy core in `crate::gfx::chunk_window`. The split is
+// wraps the `no_std` policy core in `concinnity_core::render::chunk_window`. The split is
 // the same one the rest of the streaming subsystem uses: `ChunkWindow` decides
 // *which* chunks to stream using only `core` + `alloc`; everything OS-coupled
 // -- the thread, the channels -- lives here so a future `no_std` client
@@ -14,16 +14,16 @@
 // chunk's geometry from a seed on demand, so chunks are never RAM- or
 // disk-resident: an evicted chunk is simply regenerated if the camera returns.
 
+use concinnity_core::geometry::{
+    ChunkBlockType, ChunkGenerator, build_chunk_impostor_mesh, build_chunk_mesh,
+};
+use concinnity_core::gfx::chunk_coord::ChunkCoord;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::chunk_window::{ChunkDetail, ChunkWindow};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
 use super::mesh::DecodedMesh;
-use crate::geometry::{
-    ChunkBlockType, ChunkGenerator, build_chunk_impostor_mesh, build_chunk_mesh,
-};
-use crate::gfx::chunk_coord::ChunkCoord;
-use crate::gfx::chunk_window::{ChunkDetail, ChunkWindow};
-use crate::gfx::mesh_payload::Vertex;
 
 // Generates a streamable chunk's geometry by coordinate and detail.
 //

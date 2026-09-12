@@ -31,9 +31,8 @@ mod system;
 mod voices;
 
 // The audio system the engine registry wraps.
-pub(crate) use system::AudioSystem;
-
 pub(crate) use engine::{AudioEngine, EmitterId, EmitterParams};
+pub(crate) use system::AudioSystem;
 
 // Persisted mix volumes handed to `AudioSystem::new` (linear gains; `None`
 // leaves a stage at unity). Resolved from the settings store by the engine's

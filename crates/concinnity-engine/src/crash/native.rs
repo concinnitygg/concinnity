@@ -7,10 +7,11 @@
 // text report with nonblocking snapshots. The fault is reported as unhandled
 // so the OS default crash behavior still runs.
 
-use super::report::{CrashReport, ReportKind, UtcTime, file_stem_at};
-use super::write;
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
 use std::sync::OnceLock;
+
+use super::report::{CrashReport, ReportKind, UtcTime, file_stem_at};
+use super::write;
 
 // Keeps the handler (and its exception thread on macOS) alive for the
 // process lifetime.

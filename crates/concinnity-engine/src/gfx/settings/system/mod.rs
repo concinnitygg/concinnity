@@ -20,11 +20,23 @@
 // resource; each step takes it and puts it back, so the state and the
 // `PipelineContext` are never borrowed together.
 
-use crate::components::SceneCommand;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
-use crate::gfx::ops::RenderOps;
-use crate::gfx::scene_flow;
+use concinnity_core::components::GamepadMap;
+use concinnity_core::components::PostProcessConfig;
+use concinnity_core::components::SceneCommand;
+use concinnity_core::components::ShadowUpdate;
+use concinnity_core::components::UpscaleQuality;
+use concinnity_core::components::UpscalerBackend;
+use concinnity_core::components::Window;
+use concinnity_core::components::WindowMode;
+use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, StepResult, System};
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::backend;
+use concinnity_core::render::display_mode;
+use concinnity_core::render::keymap;
+use concinnity_core::render::ops::RenderOps;
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::snapshot;
+use concinnity_host::thread::asset_id::AssetId;
 
 mod apply;
 pub(crate) mod rows;
@@ -39,11 +51,11 @@ pub(crate) mod writer;
 pub(crate) struct SettingsState {
     // Live gameplay movement key map (the source of truth for the Controls-tab
     // rebind rows), pushed to the backend on each rebind (with a swap).
-    pub(crate) keymap: crate::gfx::keymap::KeyMap,
+    pub(crate) keymap: keymap::KeyMap,
     pub(crate) rebind_rows: Vec<crate::gfx::system::RebindViz>,
     // Live gamepad action -> button map (the source of truth for the gamepad
     // rebind rows), carried to InputSystem via ControlsCommand on each rebind.
-    pub(crate) gamepad_map: crate::components::GamepadMap,
+    pub(crate) gamepad_map: GamepadMap,
     pub(crate) pad_rebind_rows: Vec<crate::gfx::system::PadRebindViz>,
     pub(crate) sliders: Vec<crate::gfx::system::SliderViz>,
     // Cycle rows' setting key -> value-label id, captured at init, so a change
@@ -51,34 +63,34 @@ pub(crate) struct SettingsState {
     pub(crate) cycle_value_labels: std::collections::HashMap<String, AssetId>,
     // Live post-process parameters (bloom / exposure / vignette / LUT blend),
     // the source of truth for slider settings.
-    pub(crate) post_process: crate::gfx::render_types::PostProcessTunables,
+    pub(crate) post_process: render_types::PostProcessTunables,
     // The world's resolved PostProcessConfig with the user's persisted
     // quality-toggle overrides applied: the source of truth for the
     // Quality-group toggles and cycle knobs.
-    pub(crate) post_config: crate::components::PostProcessConfig,
+    pub(crate) post_config: PostProcessConfig,
     // The authored baseline a live preset change re-clamps from.
-    pub(crate) authored_post_config: crate::components::PostProcessConfig,
+    pub(crate) authored_post_config: PostProcessConfig,
     // Live ambient (IBL) light scale (lives in the backend's LightUniforms,
     // so it takes a dedicated setter).
     pub(crate) ambient_intensity: f32,
     // The live master "Graphics Quality" preset; an explicit per-row change
     // flips it to Custom.
     pub(crate) quality_preset: crate::gfx::quality_preset::QualityPreset,
-    pub(crate) gpu_profile: crate::gfx::backend::GpuProfile,
+    pub(crate) gpu_profile: backend::GpuProfile,
     // Restart-required display state (persist + relabel only).
-    pub(crate) render_scale: crate::components::UpscaleQuality,
-    pub(crate) upscale_backend: crate::components::UpscalerBackend,
+    pub(crate) render_scale: UpscaleQuality,
+    pub(crate) upscale_backend: UpscalerBackend,
     pub(crate) temporal_upscaling: bool,
     pub(crate) hdr_display: bool,
     pub(crate) hdr_pq: bool,
     // Shadow knobs (live) and their authored baselines.
     pub(crate) shadow_map_size: u32,
-    pub(crate) shadow_update: crate::components::ShadowUpdate,
+    pub(crate) shadow_update: ShadowUpdate,
     pub(crate) shadow_distance: u32,
     pub(crate) shadow_cascades: u32,
     pub(crate) anisotropy: u32,
     pub(crate) authored_shadow_map_size: u32,
-    pub(crate) authored_shadow_update: crate::components::ShadowUpdate,
+    pub(crate) authored_shadow_update: ShadowUpdate,
     pub(crate) authored_shadow_distance: u32,
     pub(crate) authored_shadow_cascades: u32,
     pub(crate) authored_anisotropy: u32,
@@ -93,13 +105,13 @@ pub(crate) struct SettingsState {
     pub(crate) show_vram: bool,
     pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
     // Window mode + authored size (the windowed size restored on mode return).
-    pub(crate) window_args: crate::components::Window,
+    pub(crate) window_args: Window,
     // The Resolution row's mode list, the user's chosen fullscreen mode, the
     // display's own mode at init, and the row labels grayed outside
     // fullscreen.
-    pub(crate) display_modes: Vec<crate::gfx::display_mode::DisplayMode>,
-    pub(crate) resolution: Option<crate::gfx::display_mode::DisplayMode>,
-    pub(crate) current_mode: Option<crate::gfx::display_mode::DisplayMode>,
+    pub(crate) display_modes: Vec<display_mode::DisplayMode>,
+    pub(crate) resolution: Option<display_mode::DisplayMode>,
+    pub(crate) current_mode: Option<display_mode::DisplayMode>,
     pub(crate) resolution_row_labels: Vec<(AssetId, [f32; 3])>,
     // System / streaming restart rows (persist + display only).
     pub(crate) frames_in_flight: usize,
@@ -120,12 +132,12 @@ pub(crate) struct SettingsState {
     // persisted change so an unchanged session never starts the thread.
     pub(crate) settings_writer: Option<writer::SettingsWriter>,
     // Cursors into the SceneCommand / SettingCommand queues.
-    pub(crate) scene_cmd_cursor: crate::ecs::EventCursor,
-    pub(crate) setting_cmd_cursor: crate::ecs::EventCursor,
+    pub(crate) scene_cmd_cursor: EventCursor,
+    pub(crate) setting_cmd_cursor: EventCursor,
     // Last-published HUD state, so `publish_hud_state` only re-inserts the
     // resources (rebuilding the disabled-rows set) when the inputs actually
     // change rather than every frame. `None` until the first publish.
-    pub(crate) published_hud_prefs: Option<crate::ecs::HudPrefs>,
+    pub(crate) published_hud_prefs: Option<HudPrefs>,
     pub(crate) published_disabled_inputs: Option<(bool, bool)>,
 }
 
@@ -191,20 +203,20 @@ impl SettingsState {
     // they exercise.
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
-        use crate::components::PostProcessConfig;
+        use concinnity_core::components::PostProcessConfig;
         Self {
-            keymap: crate::gfx::keymap::KeyMap::default(),
+            keymap: keymap::KeyMap::default(),
             rebind_rows: Vec::new(),
-            gamepad_map: crate::components::GamepadMap::default(),
+            gamepad_map: GamepadMap::default(),
             pad_rebind_rows: Vec::new(),
             sliders: Vec::new(),
             cycle_value_labels: std::collections::HashMap::new(),
-            post_process: crate::gfx::render_types::PostProcessTunables::DEFAULT,
+            post_process: render_types::PostProcessTunables::DEFAULT,
             post_config: PostProcessConfig::default(),
             authored_post_config: PostProcessConfig::default(),
             ambient_intensity: 1.0,
             quality_preset: crate::gfx::quality_preset::QualityPreset::Custom,
-            gpu_profile: crate::gfx::backend::GpuProfile::UNKNOWN,
+            gpu_profile: backend::GpuProfile::UNKNOWN,
             render_scale: Default::default(),
             upscale_backend: Default::default(),
             temporal_upscaling: false,
@@ -226,7 +238,7 @@ impl SettingsState {
             show_fps: true,
             show_vram: true,
             perf_sub_row_labels: Vec::new(),
-            window_args: crate::components::Window::default(),
+            window_args: Window::default(),
             display_modes: Vec::new(),
             resolution: None,
             current_mode: None,
@@ -283,9 +295,9 @@ impl SettingsState {
             return;
         };
         let elapsed = slot.epoch.elapsed().as_secs_f32();
-        let mut scene_ops: Vec<crate::gfx::snapshot::SceneOp> = Vec::new();
+        let mut scene_ops: Vec<snapshot::SceneOp> = Vec::new();
         for cmd in scene_cmds {
-            let mut recorder = crate::gfx::snapshot::SceneOpRecorder(&mut scene_ops);
+            let mut recorder = snapshot::SceneOpRecorder(&mut scene_ops);
             scene_flow::jump_to_scene(
                 &mut slot.flow,
                 &scratch.visibility,
@@ -299,8 +311,8 @@ impl SettingsState {
             ops.record(move |backend| {
                 for op in scene_ops {
                     match op {
-                        crate::gfx::snapshot::SceneOp::SetFade(fade) => backend.set_fade(fade),
-                        crate::gfx::snapshot::SceneOp::Visibility { draw_idx, visible } => {
+                        snapshot::SceneOp::SetFade(fade) => backend.set_fade(fade),
+                        snapshot::SceneOp::Visibility { draw_idx, visible } => {
                             backend.update_visibility(draw_idx, visible)
                         }
                     }
@@ -320,7 +332,7 @@ impl SettingsState {
         // in the resource map once inserted, so republish only when the inputs
         // change -- steady-state frames skip the HashSet + String allocations the
         // disabled-rows set would otherwise churn every frame.
-        let prefs = crate::ecs::HudPrefs {
+        let prefs = HudPrefs {
             show_fps: self.perf_stats && self.show_fps,
             show_vram: self.perf_stats && self.show_vram,
         };
@@ -332,7 +344,7 @@ impl SettingsState {
         // The Resolution row only applies in fullscreen (windowed sizes come from
         // the window, borderless covers the display), so it is inert in the other
         // modes. The disabled-rows set is fully determined by these two inputs.
-        let is_fullscreen = self.window_args.mode == crate::components::WindowMode::Fullscreen;
+        let is_fullscreen = self.window_args.mode == WindowMode::Fullscreen;
         let inputs = (self.perf_stats, is_fullscreen);
         if self.published_disabled_inputs != Some(inputs) {
             let mut disabled_rows: std::collections::HashSet<String> = if self.perf_stats {

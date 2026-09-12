@@ -86,7 +86,7 @@ pub fn mesh(mesh: &Mesh) -> Result<Vec<u8>, String> {
 /// engine's job pool; without it they run on the calling thread.
 #[cfg(feature = "std")]
 pub fn environment_map(map: &EnvironmentMap) -> Result<Vec<u8>, String> {
-    concinnity_core::bake::payload::environment_map(map, &concinnity_engine::jobs::PoolRows)
+    concinnity_core::bake::payload::environment_map(map, &concinnity_host::thread::jobs::PoolRows)
 }
 
 /// Convolve an [`EnvironmentMap`]'s generator into its image-based-lighting

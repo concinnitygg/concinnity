@@ -19,14 +19,25 @@
 //! `crate::gfx::streaming::{texture, mesh, chunk}`; this module only
 //! scores, dispatches, and applies their results each frame.
 
-use crate::components::Camera3D;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, RenderOpFailures, StepResult, System};
-use crate::gfx::backend::ChunkMesh;
-use crate::gfx::ops::{OpFailure, RenderOps};
+use concinnity_core::components::Camera3D;
+use concinnity_core::ecs::{PipelineContext, StepResult, System};
+use concinnity_core::gfx::chunk_coord;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::backend::ChunkMesh;
+use concinnity_core::render::backend_init;
+use concinnity_core::render::draw_slot;
+use concinnity_core::render::error;
+use concinnity_core::render::ops::{OpFailure, RenderOps};
+use concinnity_core::render::scene_flow;
+use concinnity_core::render::scene_residency;
+use concinnity_core::render::scene_residency::{
+    CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency,
+};
+use concinnity_host::thread::asset_id::AssetId;
+
+use crate::ecs::RenderOpFailures;
 use crate::gfx::overlay::OverlayFrame;
 use crate::gfx::render_slots::RenderSlots;
-use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency};
 
 pub(crate) mod accounting;
 pub(crate) mod pressure;
@@ -59,17 +70,17 @@ pub(crate) struct CameraRelativeView {
 pub(crate) struct ChunkStreamState {
     pub(crate) streamer: crate::gfx::streaming::chunk::ChunkStreamer,
     // Maps a resident chunk's coordinate to its `DrawObject` index.
-    pub(crate) draws: std::collections::BTreeMap<crate::gfx::chunk_coord::ChunkCoord, usize>,
+    pub(crate) draws: std::collections::BTreeMap<chunk_coord::ChunkCoord, usize>,
     pub(crate) chunk_w: f32,
     pub(crate) chunk_d: f32,
     // Render origin for camera-relative rendering: the chunk every resident
     // chunk's model matrix is currently placed relative to. It follows the
     // camera's chunk; when it changes the resident chunks are rebased onto the
     // new origin.
-    pub(crate) origin_chunk: crate::gfx::chunk_coord::ChunkCoord,
+    pub(crate) origin_chunk: chunk_coord::ChunkCoord,
     pub(crate) texture_slot: usize,
     pub(crate) normal_map_slot: usize,
-    pub(crate) material: crate::gfx::render_types::MaterialUniforms,
+    pub(crate) material: render_types::MaterialUniforms,
 }
 
 /// `(resident, pending, unloaded)` counts for each streaming pool, or `None`
@@ -183,7 +194,7 @@ impl std::fmt::Debug for StreamingState {
 pub struct StreamingSystem {
     // Scene-status scratch reused across frames, compared against the
     // published `SceneResidencyStatus` before republishing.
-    scene_status_scratch: Vec<(AssetId, crate::gfx::scene_residency::SceneLoadState, f32)>,
+    scene_status_scratch: Vec<(AssetId, scene_residency::SceneLoadState, f32)>,
 }
 
 impl StreamingSystem {
@@ -233,7 +244,7 @@ impl System for StreamingSystem {
             .map(|flow| {
                 let mut pins = [flow.current; 2];
                 let mut len = 1;
-                if let crate::gfx::scene_flow::FadePhase::ToBlack { next, .. } = flow.fade
+                if let scene_flow::FadePhase::ToBlack { next, .. } = flow.fade
                     && next != flow.current
                 {
                     pins[1] = next;
@@ -364,7 +375,7 @@ impl StreamingState {
                     // ends the deferral. Pipeline creation is device work, so
                     // it runs (and is timed) at replay beside the draw.
                     ops.record(move |backend| {
-                        let shader = crate::gfx::backend_init::WorldShader {
+                        let shader = backend_init::WorldShader {
                             programs: Some(&programs),
                             deferred: false,
                         };
@@ -592,7 +603,7 @@ impl StreamingState {
                                 e
                             );
                             out.memory_pressure |=
-                                matches!(e, crate::gfx::error::RenderError::OutOfDeviceMemory(_));
+                                matches!(e, error::RenderError::OutOfDeviceMemory(_));
                             out.failures.push(OpFailure::MeshUpload { stream_id });
                         }
                     });
@@ -676,7 +687,7 @@ impl StreamingState {
             let frame = self.frame_count;
             let (chunk_w, chunk_d) = (cs.chunk_w, cs.chunk_d);
             let (tex, nm, mat) = (cs.texture_slot, cs.normal_map_slot, cs.material);
-            let mut added: Vec<(crate::gfx::chunk_coord::ChunkCoord, usize)> = Vec::new();
+            let mut added: Vec<(chunk_coord::ChunkCoord, usize)> = Vec::new();
             cs.streamer.drain_completed(|coord, verts, idxs| {
                 if verts.is_empty() || idxs.is_empty() {
                     tracing::warn!(
@@ -689,8 +700,7 @@ impl StreamingState {
                 let model = chunk_model_matrix(coord, camera_chunk, chunk_w, chunk_d);
                 let dst = slots.allocate_draw();
                 let draw_idx = match dst {
-                    crate::gfx::draw_slot::SlotAlloc::Reuse(i)
-                    | crate::gfx::draw_slot::SlotAlloc::Append(i) => i,
+                    draw_slot::SlotAlloc::Reuse(i) | draw_slot::SlotAlloc::Append(i) => i,
                 };
                 added.push((coord, draw_idx));
                 // A failed add comes back as an op failure; the rollback drops
@@ -713,7 +723,7 @@ impl StreamingState {
                             e
                         );
                         out.memory_pressure |=
-                            matches!(e, crate::gfx::error::RenderError::OutOfDeviceMemory(_));
+                            matches!(e, error::RenderError::OutOfDeviceMemory(_));
                         out.failures.push(OpFailure::ChunkAdd { coord });
                     }
                 });
@@ -725,8 +735,7 @@ impl StreamingState {
             // origin-relative chunk geometry above transforms exactly.
             let (ox, oz) = camera_chunk.origin_world(cs.chunk_w, cs.chunk_d);
             let origin = [ox, 0.0, oz];
-            final_view =
-                crate::gfx::chunk_coord::camera_relative_view(view_matrix, cam_pos, origin);
+            final_view = chunk_coord::camera_relative_view(view_matrix, cam_pos, origin);
             final_cam_pos = [cam_pos[0] - ox, cam_pos[1], cam_pos[2] - oz];
             if let Some((resident, pending, near, far)) =
                 self.heartbeats.chunk.sample(self.frame_count, || {
@@ -916,8 +925,8 @@ impl StreamingState {
 // rebased onto the same origin by `camera_relative_view`, which keeps an
 // unbounded world's precision intact.
 pub(crate) fn chunk_model_matrix(
-    coord: crate::gfx::chunk_coord::ChunkCoord,
-    origin: crate::gfx::chunk_coord::ChunkCoord,
+    coord: chunk_coord::ChunkCoord,
+    origin: chunk_coord::ChunkCoord,
     chunk_w: f32,
     chunk_d: f32,
 ) -> [[f32; 4]; 4] {
@@ -934,16 +943,19 @@ pub(crate) fn chunk_model_matrix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::BlobData;
-    use crate::ecs::{ComponentStorage, Resources};
-    use crate::gfx::chunk_coord::ChunkCoord;
-    use crate::gfx::chunk_window::ChunkDetail;
-    use crate::gfx::mesh_payload::Vertex;
     use crate::gfx::mock_backend::{Call, MockBackend, recording_backend};
-    use crate::gfx::profile::FrameProfile;
     use crate::gfx::streaming::chunk::{ChunkSource, ChunkStreamer};
     use crate::gfx::streaming::mesh::{DecodedMesh, MeshPayloadSource, MeshStreamer};
     use crate::gfx::streaming::texture::{DecodedTexture, PayloadSource, TextureStreamer};
+    use concinnity_core::bake::texture;
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::{ComponentStorage, Resources};
+    use concinnity_core::gfx::chunk_coord::ChunkCoord;
+    use concinnity_core::gfx::mesh_payload::Vertex;
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::render::chunk_window::ChunkDetail;
+    use concinnity_host::store::blob::BlobData;
     use pressure::StreamPressureStage;
     use std::sync::Arc;
 
@@ -975,7 +987,7 @@ mod tests {
     impl PayloadSource for ConstTexture {
         fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
             Ok(DecodedTexture {
-                image: crate::bake::texture::TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]),
+                image: texture::TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]),
             })
         }
     }
@@ -1082,8 +1094,8 @@ mod tests {
             chunk_d: 16.0,
             origin_chunk: ChunkCoord::new(0, 0),
             texture_slot: 0,
-            normal_map_slot: crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-            material: crate::gfx::render_types::MaterialUniforms::DEFAULT,
+            normal_map_slot: render_types::NO_NORMAL_MAP_SLOT,
+            material: render_types::MaterialUniforms::DEFAULT,
         }
     }
 
@@ -1135,7 +1147,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
-        scratch: crate::ecs::Arena,
+        scratch: Arena,
     }
 
     impl StepWorld {
@@ -1145,7 +1157,7 @@ mod tests {
                 blob: BlobData::empty(),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -1176,7 +1188,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             };
             StreamingSystem::new().step(&mut ctx)
         }
@@ -1431,7 +1443,7 @@ mod tests {
     // switching the pin set drains the old scene and loads the new one.
     #[test]
     fn scene_residency_streams_only_the_pinned_scene_and_swaps_on_switch() {
-        use crate::gfx::scene_residency::SceneLoadState;
+        use concinnity_core::render::scene_residency::SceneLoadState;
 
         let (_recorded, mut backend) = recording_backend();
         let mut state = pooled_state(8);
@@ -1649,7 +1661,7 @@ mod tests {
         assert_eq!(out_cam, [8.0, 5.0, 8.0]);
         assert_eq!(
             out_view,
-            crate::gfx::chunk_coord::camera_relative_view(view, cam, origin)
+            chunk_coord::camera_relative_view(view, cam, origin)
         );
         assert_ne!(out_view, view, "the rebase actually rewrote the view");
         assert_eq!(

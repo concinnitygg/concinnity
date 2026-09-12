@@ -36,11 +36,10 @@
 // blobs are refreshed by an explicit build, not by editing.
 
 use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::FlyCam;
-use concinnity_core::ecs::HiddenAssets;
-use concinnity_core::ecs::ViewOverrides;
-use concinnity_core::ecs::WorldLines;
-use concinnity_core::ecs::{CursorShape, DesiredCursor, HudLayers, MenuOverride, World};
+use concinnity_core::ecs::{
+    CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
+    World, WorldLines,
+};
 use concinnity_engine::app::state::App;
 use concinnity_engine::ecs::PendingBackend;
 use concinnity_host::thread::asset_id::AssetId;

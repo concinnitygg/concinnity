@@ -11,11 +11,18 @@
 //! and a backend that bakes per-object material state at build time are all
 //! refused here rather than reported as applied.
 
-use crate::components::MeshRenderer;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ActiveRenderQueues, Entity, MaterialHandle, World};
-use crate::gfx::material_entry::{self, MaterialEntry};
+use concinnity_core::components::Material;
+use concinnity_core::components::MeshRenderer;
+use concinnity_core::components::ModelRenderer;
+use concinnity_core::components::RenderHandle;
+use concinnity_core::ecs::{Entity, MaterialHandle, World};
 use concinnity_core::render::ops::RenderOps;
+use concinnity_core::resource::MaterialTable;
+use concinnity_core::resource::TextureTable;
+use concinnity_host::thread::asset_id::AssetId;
+
+use crate::ecs::ActiveRenderQueues;
+use crate::gfx::material_entry::{self, MaterialEntry};
 
 /// One draw slot's material as the backend holds it: the GPU uniforms plus the
 /// texture-pool slots they sample, and the handle the entity records.
@@ -117,7 +124,7 @@ pub fn apply_cull_distance(world: &mut World, entity: Entity, cull_distance: f32
     }
     if let Some(renderer) = world.get_mut::<MeshRenderer>(entity) {
         renderer.cull_distance = cull_distance;
-    } else if let Some(renderer) = world.get_mut::<crate::components::ModelRenderer>(entity) {
+    } else if let Some(renderer) = world.get_mut::<ModelRenderer>(entity) {
         renderer.cull_distance = cull_distance;
     }
     with_ops(world, |ops| {
@@ -132,9 +139,9 @@ pub fn apply_cull_distance(world: &mut World, entity: Entity, cull_distance: f32
 // translation the draw list ran at init.
 fn by_handle(world: &World, handle: MaterialHandle) -> Option<DrawMaterial> {
     let bytes = world
-        .resource::<crate::resource::MaterialTable>()?
+        .resource::<MaterialTable>()?
         .data_bytes(handle.index())?;
-    let mat: crate::components::Material = postcard::from_bytes(bytes).ok()?;
+    let mat: Material = postcard::from_bytes(bytes).ok()?;
     Some(DrawMaterial {
         handle: Some(handle),
         entry: material_entry::of(&mat, texture_count(world)).ok()?,
@@ -143,16 +150,14 @@ fn by_handle(world: &World, handle: MaterialHandle) -> Option<DrawMaterial> {
 
 // The shared texture pool's size, which the material's references index into.
 fn texture_count(world: &World) -> usize {
-    world
-        .resource::<crate::resource::TextureTable>()
-        .map_or(0, |t| t.len())
+    world.resource::<TextureTable>().map_or(0, |t| t.len())
 }
 
 // The backend draw slots the entity owns; empty for an entity the renderer
 // never gave one (nothing drawable, or a world with no graphics).
 fn draws_of(world: &World, entity: Entity) -> Vec<u32> {
     world
-        .get::<crate::components::RenderHandle>(entity)
+        .get::<RenderHandle>(entity)
         .map(|h| h.draws.to_vec())
         .unwrap_or_default()
 }
@@ -175,12 +180,15 @@ fn with_ops<R>(world: &mut World, f: impl FnOnce(&mut RenderOps) -> R) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Material, RenderHandle};
-    use crate::ecs::{RenderQueues, TextureHandle};
-    use crate::gfx::backend::DeviceCapabilities;
+    use crate::ecs::RenderQueues;
     use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
-    use crate::resource::{MaterialNames, MaterialTable, ResourceEntry, TextureTable};
+    use crate::resource::MaterialNames;
+    use concinnity_core::components::{Material, RenderHandle};
     use concinnity_core::ecs::ShaderHandle;
+    use concinnity_core::ecs::TextureHandle;
+    use concinnity_core::gfx::render_types;
+    use concinnity_core::render::backend::DeviceCapabilities;
+    use concinnity_core::resource::{MaterialTable, ResourceEntry, TextureTable};
     use std::sync::{Arc, Mutex};
 
     struct Fixture {
@@ -253,7 +261,7 @@ mod tests {
 
         // A model-backed placement, whose sub-meshes are its two draw slots.
         fn model_prop(&mut self) -> Entity {
-            let entity = self.world.push(crate::components::ModelRenderer {
+            let entity = self.world.push(ModelRenderer {
                 cull_distance: 10.0,
                 ..Default::default()
             });
@@ -339,12 +347,12 @@ mod tests {
                 Call::SetDrawMaterial {
                     draw_idx: 3,
                     texture_slot: 1,
-                    normal_map_slot: crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+                    normal_map_slot: render_types::NO_NORMAL_MAP_SLOT,
                 },
                 Call::SetDrawMaterial {
                     draw_idx: 4,
                     texture_slot: 1,
-                    normal_map_slot: crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+                    normal_map_slot: render_types::NO_NORMAL_MAP_SLOT,
                 },
             ]
         );
@@ -388,7 +396,7 @@ mod tests {
         );
         assert_eq!(
             f.world
-                .get::<crate::components::ModelRenderer>(entity)
+                .get::<ModelRenderer>(entity)
                 .map(|r| r.cull_distance),
             Some(25.0)
         );
@@ -422,7 +430,7 @@ mod tests {
             drawn_material(&f.world, glassy).expect("glass").handle,
             Some(MaterialHandle(1))
         );
-        let model_backed = f.world.push(crate::components::ModelRenderer::default());
+        let model_backed = f.world.push(ModelRenderer::default());
         assert!(drawn_material(&f.world, model_backed).is_none());
     }
 

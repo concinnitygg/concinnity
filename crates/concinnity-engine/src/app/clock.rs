@@ -7,7 +7,7 @@
 // world paused the clock emits zero ticks and stops accumulating, so resuming
 // costs nothing -- no catch-up burst by construction.
 
-use crate::ecs::SimTiming;
+use concinnity_core::ecs::SimTiming;
 use std::sync::OnceLock;
 use std::time::Instant;
 

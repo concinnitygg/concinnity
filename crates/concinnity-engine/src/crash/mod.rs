@@ -20,7 +20,6 @@ mod minidump;
 mod native;
 
 pub use ring::RingLayer;
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 

@@ -2,10 +2,10 @@
 // StatHud chip anchoring. All of it needs the loaded font metrics, which is
 // why it runs in the overlay build rather than the HUD systems themselves.
 
-use crate::components::{LabelBox, LayoutContainer, TextLabel};
-use crate::ecs::PipelineContext;
-use crate::ecs::asset_id::AssetId;
-use crate::gfx::text;
+use concinnity_core::components::{LabelBox, LabelPlacement, LayoutContainer, TextLabel};
+use concinnity_core::ecs::PipelineContext;
+use concinnity_core::render::text;
+use concinnity_host::thread::asset_id::AssetId;
 
 // Scratch for the per-frame label layout, kept on the overlay system so the
 // pass reuses its capacity instead of reallocating each frame.
@@ -14,7 +14,7 @@ pub(super) struct LabelLayoutScratch {
     // Every measurable label's box this frame, keyed by id.
     boxes: std::collections::HashMap<AssetId, LabelBox>,
     // One container's resolved placements, reused per container.
-    placements: Vec<crate::components::LabelPlacement>,
+    placements: Vec<LabelPlacement>,
     // Every placed label's resolved text origin.
     placed: std::collections::HashMap<AssetId, (f32, f32)>,
 }
@@ -151,18 +151,21 @@ fn position_chip_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::BlobData;
-    use crate::components::{Justify, LayoutRow, SpriteFit, TextAlign};
-    use crate::ecs::{ComponentSlot, ComponentStorage, FontHandle, Resources};
-    use crate::gfx::profile::FrameProfile;
+    use concinnity_core::components::{Justify, LayoutRow, SpriteFit, TextAlign};
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::{ComponentSlot, ComponentStorage, FontHandle, Resources};
+    use concinnity_core::gfx::font;
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_host::store::blob::BlobData;
 
     const FONT: FontHandle = FontHandle(0);
     // An authored position no layout pass should ever produce, so an untouched
     // label is unmistakable.
     const SENTINEL: f32 = -999.0;
 
-    fn make_glyph(advance_px: f32) -> crate::gfx::font::GlyphMetrics {
-        crate::gfx::font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> font::GlyphMetrics {
+        font::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,
@@ -178,7 +181,7 @@ mod tests {
     // tall) makes the measured boxes exact: a 1-line unpadded chip measures
     // 10px per char wide, 12px tall, with a -2px top inset.
     fn loaded_fonts() -> text::FontSet {
-        let metrics: crate::gfx::text::FontMetrics = ('a'..='z')
+        let metrics: text::FontMetrics = ('a'..='z')
             .chain('A'..='Z')
             .map(|c| (c as u32, make_glyph(10.0)))
             .collect();
@@ -234,7 +237,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
-        scratch: crate::ecs::Arena,
+        scratch: Arena,
     }
 
     impl TestWorld {
@@ -244,7 +247,7 @@ mod tests {
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -258,7 +261,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
 

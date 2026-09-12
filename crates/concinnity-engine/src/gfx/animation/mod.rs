@@ -19,18 +19,24 @@ mod root;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
-
-use crate::components::{Animation, SkeletonPose};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, SkinnedMeshHandle, StepResult, System};
-use crate::gfx::pose_blend::PoseBlend;
-use crate::gfx::skeleton::AnimationClip;
-use crate::jobs;
-
+use concinnity_core::components::Animation;
+use concinnity_core::components::AnimationParams;
+use concinnity_core::components::CharacterRig;
+use concinnity_core::components::GroundProbes;
+use concinnity_core::components::RootMotionEvent;
+use concinnity_core::components::SkeletonPose;
+use concinnity_core::ecs::{
+    Access, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
+};
+use concinnity_core::gfx::anim_graph;
+use concinnity_core::gfx::pose_blend::PoseBlend;
+use concinnity_core::gfx::skeleton::AnimationClip;
+use concinnity_host::thread::asset_id::AssetId;
+use concinnity_host::thread::jobs;
 use flat::{ClipEntry, FlatState, Transition};
 use graph::GraphTarget;
+use std::collections::{BTreeMap, HashMap};
+use std::time::Instant;
 
 // Per-`SkinnedMesh` bucket: the clips targeting it plus the mode that drives
 // them. Clip storage is mode-independent so hot-reload can swap a clip in
@@ -199,16 +205,16 @@ fn resumed_origin(start: Instant, anchor: Instant, now: Instant) -> Instant {
 }
 
 impl System for AnimationSystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::components::CharacterRig])
+    fn access(&self) -> Access {
+        Access::new()
+            .reads_components(crate::component_mask![CharacterRig])
             .writes_components(crate::component_mask![
-                crate::components::SkeletonPose,
-                crate::components::AnimationParams,
-                crate::components::GroundProbes,
+                SkeletonPose,
+                AnimationParams,
+                GroundProbes,
             ])
-            .reads_resources(crate::resource_mask![crate::ecs::MenuActive])
-            .writes_resources(crate::resource_mask![crate::components::RootMotionEvent])
+            .reads_resources(crate::resource_mask![MenuActive])
+            .writes_resources(crate::resource_mask![RootMotionEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -323,9 +329,7 @@ impl System for AnimationSystem {
         // Freeze while a menu is open: skip all sampling so animation stops
         // consuming CPU/GPU behind the menu, recording when the pause began.
         // The flag is published by OverlaySystem, which runs first this tick.
-        let paused = ctx
-            .resource::<crate::ecs::MenuActive>()
-            .is_some_and(|m| m.0);
+        let paused = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
         if paused {
             self.pause_anchor.get_or_insert(now);
             return StepResult::Continue;
@@ -380,22 +384,16 @@ impl System for AnimationSystem {
                 TargetMode::Graph(g) => {
                     let before = g.cursor.clone();
                     graph::step_target(g, *target, ctx, dt);
-                    crate::gfx::anim_graph::cursor_root_delta(
-                        &g.graph,
-                        &before,
-                        &g.cursor,
-                        &g.params,
-                        &|i| &clips[i].clip,
-                    )
+                    anim_graph::cursor_root_delta(&g.graph, &before, &g.cursor, &g.params, &|i| {
+                        &clips[i].clip
+                    })
                 }
             };
             if delta != [0.0; 3] {
-                ctx.events_mut::<crate::components::RootMotionEvent>().send(
-                    crate::components::RootMotionEvent {
-                        target: *target,
-                        delta,
-                    },
-                );
+                ctx.events_mut::<RootMotionEvent>().send(RootMotionEvent {
+                    target: *target,
+                    delta,
+                });
             }
         }
 
@@ -415,7 +413,7 @@ impl System for AnimationSystem {
             };
             // Split borrows: the scratch buffers and outputs are written
             // while the skeleton is read.
-            let crate::components::SkeletonPose {
+            let SkeletonPose {
                 skeleton,
                 scratch,
                 joint_matrices,
@@ -449,7 +447,7 @@ impl System for AnimationSystem {
                         }
                     }
                 },
-                TargetMode::Graph(g) => crate::gfx::anim_graph::sample_graph_pose_into(
+                TargetMode::Graph(g) => anim_graph::sample_graph_pose_into(
                     &g.graph,
                     &g.cursor,
                     &g.params,

@@ -8,14 +8,39 @@
 //! and side-effect-free: the manifest probe discards the value, and anything
 //! heavy (device acquisition, payload reads) belongs in `System::init`.
 
-use crate::ecs::World;
+use concinnity_core::components::Animation;
+use concinnity_core::components::AnimationGraph;
+use concinnity_core::components::AudioCue;
+use concinnity_core::components::AudioEmitter;
+use concinnity_core::components::Behavior;
+use concinnity_core::components::Camera3D;
+use concinnity_core::components::CameraController;
+use concinnity_core::components::CameraTrack;
+use concinnity_core::components::DebugHud;
+use concinnity_core::components::FpsCounter;
+use concinnity_core::components::FrameReport;
+use concinnity_core::components::GraphicsConfig;
+use concinnity_core::components::HitRegion;
+use concinnity_core::components::KeyBinding;
+use concinnity_core::components::LoadingOverlay;
+use concinnity_core::components::PhysicsConfig;
+use concinnity_core::components::PropBody;
+use concinnity_core::components::RigidBody;
+use concinnity_core::components::Screen;
+use concinnity_core::components::SkyRotation;
+use concinnity_core::components::StatHud;
+use concinnity_core::components::Story;
+use concinnity_core::components::TextInput;
+use concinnity_core::components::TriggerVolume;
+use concinnity_core::ecs::World;
+use concinnity_core::resource::SkinnedMeshTable;
 
 // OverlaySystem: paired with GraphicsSystem (same gate) -- it shapes the
 // overlay draw list graphics submits. Scheduled first so the menu state it
 // publishes gates every later system this same tick.
 pub(crate) fn overlay(world: &World) -> Option<crate::gfx::overlay::OverlaySystem> {
     world
-        .query::<crate::components::GraphicsConfig>()
+        .query::<GraphicsConfig>()
         .next()
         .map(|_| crate::gfx::overlay::OverlaySystem::new())
 }
@@ -26,7 +51,7 @@ pub(crate) fn overlay(world: &World) -> Option<crate::gfx::overlay::OverlaySyste
 // samples read is this tick's.
 pub(crate) fn sky_rotation(world: &World) -> Option<concinnity_core::sky::SkyRotationSystem> {
     world
-        .query::<crate::components::SkyRotation>()
+        .query::<SkyRotation>()
         .next()
         .map(concinnity_core::sky::SkyRotationSystem::new)
 }
@@ -37,7 +62,7 @@ pub(crate) fn sky_rotation(world: &World) -> Option<concinnity_core::sky::SkyRot
 // what this host lends it: the job pool and a file-backed state store.
 pub(crate) fn behavior(world: &World) -> Option<concinnity_core::behavior::BehaviorSystem> {
     world
-        .query::<crate::components::Behavior>()
+        .query::<Behavior>()
         .next()
         .map(|_| crate::behavior::build(crate::ecs::state_tree(world)))
 }
@@ -48,7 +73,7 @@ pub(crate) fn behavior(world: &World) -> Option<concinnity_core::behavior::Behav
 // freed this same frame.
 pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
     world
-        .query::<crate::components::GraphicsConfig>()
+        .query::<GraphicsConfig>()
         .next()
         .map(|_| crate::spawn::SpawnSystem::new())
 }
@@ -59,7 +84,7 @@ pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
 // GraphicsSystem so a change lands for this frame's submit.
 pub(crate) fn settings(world: &World) -> Option<crate::gfx::settings::system::SettingsSystem> {
     world
-        .query::<crate::components::GraphicsConfig>()
+        .query::<GraphicsConfig>()
         .next()
         .map(|_| crate::gfx::settings::system::SettingsSystem::new())
 }
@@ -70,7 +95,7 @@ pub(crate) fn settings(world: &World) -> Option<crate::gfx::settings::system::Se
 // ready for this frame's submit and any texture/mesh upload lands before it.
 pub(crate) fn streaming(world: &World) -> Option<crate::gfx::streaming::system::StreamingSystem> {
     world
-        .query::<crate::components::GraphicsConfig>()
+        .query::<GraphicsConfig>()
         .next()
         .map(|_| crate::gfx::streaming::system::StreamingSystem::new())
 }
@@ -79,7 +104,7 @@ pub(crate) fn streaming(world: &World) -> Option<crate::gfx::streaming::system::
 // (the render marker).
 pub(crate) fn graphics(world: &World) -> Option<crate::gfx::system::GraphicsSystem> {
     world
-        .query::<crate::components::GraphicsConfig>()
+        .query::<GraphicsConfig>()
         .next()
         .map(|_| crate::gfx::system::GraphicsSystem::new(crate::ecs::state_tree(world)))
 }
@@ -90,7 +115,7 @@ pub(crate) fn graphics(world: &World) -> Option<crate::gfx::system::GraphicsSyst
 // draw_frame) and is fresh for every consumer below.
 pub(crate) fn input(world: &World) -> Option<crate::input::system::InputSystem> {
     world
-        .query::<crate::components::GraphicsConfig>()
+        .query::<GraphicsConfig>()
         .next()
         .map(|_| crate::input::system::InputSystem::new())
 }
@@ -99,7 +124,7 @@ pub(crate) fn input(world: &World) -> Option<crate::input::system::InputSystem> 
 // component (the HUD's TextLabel refs).
 pub(crate) fn stat_hud(world: &World) -> Option<crate::hud::stat_hud::StatHudSystem> {
     world
-        .query::<crate::components::StatHud>()
+        .query::<StatHud>()
         .next()
         .cloned()
         .map(crate::hud::stat_hud::StatHudSystem::new)
@@ -115,7 +140,7 @@ pub(crate) fn debug_hud(world: &World) -> Option<crate::hud::debug_hud::DebugHud
         return None;
     }
     world
-        .query::<crate::components::DebugHud>()
+        .query::<DebugHud>()
         .next()
         .cloned()
         .map(crate::hud::debug_hud::DebugHudSystem::new)
@@ -127,7 +152,7 @@ pub(crate) fn loading_overlay(
     world: &World,
 ) -> Option<crate::hud::loading_overlay::LoadingOverlaySystem> {
     world
-        .query::<crate::components::LoadingOverlay>()
+        .query::<LoadingOverlay>()
         .next()
         .cloned()
         .map(crate::hud::loading_overlay::LoadingOverlaySystem::new)
@@ -140,20 +165,20 @@ pub(crate) fn loading_overlay(
 // default.
 pub(crate) fn physics(world: &World) -> Option<concinnity_core::physics::PhysicsSystem> {
     let needs = world
-        .query::<crate::components::PhysicsConfig>()
+        .query::<PhysicsConfig>()
         .next()
         .is_some()
-        || world.query::<crate::components::RigidBody>().next().is_some()
-        || world.query::<crate::components::PropBody>().next().is_some()
+        || world.query::<RigidBody>().next().is_some()
+        || world.query::<PropBody>().next().is_some()
         || world
-            .query::<crate::components::TriggerVolume>()
+            .query::<TriggerVolume>()
             .next()
             .is_some()
         // A skinned mesh with a character capsule needs the rig drive
         // (the CharacterRig itself is published later, by GraphicsSystem
         // init, so gate on the baked resource data).
         || world
-            .resource::<crate::resource::SkinnedMeshTable>()
+            .resource::<SkinnedMeshTable>()
             .is_some_and(|t| t.has_capsule());
     if !needs {
         return None;
@@ -162,7 +187,7 @@ pub(crate) fn physics(world: &World) -> Option<concinnity_core::physics::Physics
     // so the fallback covers worlds built directly (tests, the editor's
     // in-memory path).
     let config = world
-        .query::<crate::components::PhysicsConfig>()
+        .query::<PhysicsConfig>()
         .next()
         .cloned()
         .unwrap_or_default();
@@ -191,17 +216,11 @@ pub(crate) fn third_person(world: &World) -> Option<crate::gfx::third_person::Th
 
 // A declared CameraTrack owns the camera, so neither input controller is
 // built: two systems writing the same pose would fight for it every tick.
-fn controlled_camera(world: &World) -> Option<crate::components::CameraController> {
-    if world
-        .query::<crate::components::CameraTrack>()
-        .next()
-        .is_some()
-    {
+fn controlled_camera(world: &World) -> Option<CameraController> {
+    if world.query::<CameraTrack>().next().is_some() {
         return None;
     }
-    world
-        .query::<crate::components::Camera3D>()
-        .find_map(|c| c.controller.clone())
+    world.query::<Camera3D>().find_map(|c| c.controller.clone())
 }
 
 // CameraTrackSystem: present when a world declares both a `CameraTrack` and the
@@ -210,8 +229,8 @@ fn controlled_camera(world: &World) -> Option<crate::components::CameraControlle
 pub(crate) fn camera_track(
     world: &World,
 ) -> Option<concinnity_core::camera_track::CameraTrackSystem> {
-    let track = world.query::<crate::components::CameraTrack>().next()?;
-    world.query::<crate::components::Camera3D>().next()?;
+    let track = world.query::<CameraTrack>().next()?;
+    world.query::<Camera3D>().next()?;
     Some(concinnity_core::camera_track::CameraTrackSystem::new(track))
 }
 
@@ -221,7 +240,7 @@ pub(crate) fn camera_track(
 // records is complete before it reads it.
 pub(crate) fn frame_report(world: &World) -> Option<crate::frame_report::FrameReportSystem> {
     world
-        .query::<crate::components::FrameReport>()
+        .query::<FrameReport>()
         .next()
         .map(crate::frame_report::FrameReportSystem::new)
 }
@@ -230,7 +249,7 @@ pub(crate) fn frame_report(world: &World) -> Option<crate::frame_report::FrameRe
 // that component (its optional TextLabel ref).
 pub(crate) fn fps_counter(world: &World) -> Option<crate::hud::fps_counter::FpsCounterSystem> {
     world
-        .query::<crate::components::FpsCounter>()
+        .query::<FpsCounter>()
         .next()
         .cloned()
         .map(crate::hud::fps_counter::FpsCounterSystem::new)
@@ -241,14 +260,8 @@ pub(crate) fn fps_counter(world: &World) -> Option<crate::hud::fps_counter::FpsC
 // frame. (A graph without clips is a build error, so the second check
 // only matters for hand-assembled worlds.)
 pub(crate) fn animation(world: &World) -> Option<crate::gfx::animation::AnimationSystem> {
-    let declared = world
-        .query::<crate::components::Animation>()
-        .next()
-        .is_some()
-        || world
-            .query::<crate::components::AnimationGraph>()
-            .next()
-            .is_some();
+    let declared = world.query::<Animation>().next().is_some()
+        || world.query::<AnimationGraph>().next().is_some();
     declared.then(crate::gfx::animation::AnimationSystem::new)
 }
 
@@ -258,7 +271,7 @@ pub(crate) fn animation(world: &World) -> Option<crate::gfx::animation::Animatio
 // producer (its screen commands apply next frame).
 pub(crate) fn story(world: &World) -> Option<crate::story::StorySystem> {
     world
-        .query::<crate::components::Story>()
+        .query::<Story>()
         .next()
         .cloned()
         .map(|story| crate::story::StorySystem::new(story, crate::ecs::state_tree(world)))
@@ -269,29 +282,18 @@ pub(crate) fn story(world: &World) -> Option<crate::story::StorySystem> {
 // (page-triggered sound), or `Behavior` with a sound node. Its init opens
 // an audio device, so a world with none of them stays silent and device-free.
 pub(crate) fn audio(world: &World) -> Option<crate::audio::AudioSystem> {
-    let needs = world
-        .query::<crate::components::AudioEmitter>()
-        .next()
-        .is_some()
-        || world
-            .query::<crate::components::AudioCue>()
-            .next()
-            .is_some()
-        || world
-            .query::<crate::components::Story>()
-            .next()
-            .is_some_and(|s| {
-                s.nodes.iter().any(|n| {
-                    n.choice_music.is_some()
-                        || !n.choice_sounds.is_empty()
-                        || n.pages
-                            .iter()
-                            .any(|p| p.music.is_some() || !p.sounds.is_empty())
-                })
+    let needs = world.query::<AudioEmitter>().next().is_some()
+        || world.query::<AudioCue>().next().is_some()
+        || world.query::<Story>().next().is_some_and(|s| {
+            s.nodes.iter().any(|n| {
+                n.choice_music.is_some()
+                    || !n.choice_sounds.is_empty()
+                    || n.pages
+                        .iter()
+                        .any(|p| p.music.is_some() || !p.sounds.is_empty())
             })
-        || world
-            .query::<crate::components::Behavior>()
-            .any(crate::components::Behavior::plays_sound);
+        })
+        || world.query::<Behavior>().any(Behavior::plays_sound);
     if !needs {
         return None;
     }
@@ -310,15 +312,9 @@ pub(crate) fn audio(world: &World) -> Option<crate::audio::AudioSystem> {
 // UiInputSystem: present whenever the world declares any `HitRegion`, `Screen`,
 // or `KeyBinding`. It drains all three at init.
 pub(crate) fn ui_input(world: &World) -> Option<crate::ui::UiInputSystem> {
-    let needs = world
-        .query::<crate::components::HitRegion>()
-        .next()
-        .is_some()
-        || world.query::<crate::components::Screen>().next().is_some()
-        || world
-            .query::<crate::components::KeyBinding>()
-            .next()
-            .is_some();
+    let needs = world.query::<HitRegion>().next().is_some()
+        || world.query::<Screen>().next().is_some()
+        || world.query::<KeyBinding>().next().is_some();
     needs.then(crate::ui::UiInputSystem::new)
 }
 
@@ -327,15 +323,18 @@ pub(crate) fn ui_input(world: &World) -> Option<crate::ui::UiInputSystem> {
 // caret keys, so it runs after GraphicsSystem deposits `FrameInput`.
 pub(crate) fn text_input(world: &World) -> Option<crate::input::text_system::TextInputSystem> {
     world
-        .query::<crate::components::TextInput>()
+        .query::<TextInput>()
         .next()
         .map(|_| crate::input::text_system::TextInputSystem::new())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::components::{Camera3D, CameraController, PhysicsConfig, RigidBody};
-    use crate::ecs::{SYSTEMS, World};
+    use crate::ecs::SYSTEMS;
+    use concinnity_core::components::{
+        AudioCue, AudioEmitter, Camera3D, CameraController, PhysicsConfig, RigidBody,
+    };
+    use concinnity_core::ecs::World;
 
     fn controlled_camera() -> Camera3D {
         Camera3D {
@@ -398,7 +397,7 @@ mod tests {
     #[test]
     fn audio_emitter_spawns_internal_system() {
         let mut world = World::new();
-        world.add_component(crate::components::AudioEmitter::default());
+        world.add_component(AudioEmitter::default());
         world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -418,7 +417,7 @@ mod tests {
     #[test]
     fn audio_cue_spawns_internal_system() {
         let mut world = World::new();
-        world.add_component(crate::components::AudioCue::default());
+        world.add_component(AudioCue::default());
         world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -431,9 +430,9 @@ mod tests {
     // compiled payload, so the test observes the match counter.
     #[test]
     fn initial_view_fires_its_cue() {
-        use crate::components::{AudioCue, Screen};
-        use crate::ecs::AudioClipHandle;
-        use crate::ecs::asset_id::AssetId;
+        use concinnity_core::components::{AudioCue, Screen};
+        use concinnity_core::ecs::AudioClipHandle;
+        use concinnity_host::thread::asset_id::AssetId;
 
         let mut world = World::new();
         let screen = AssetId(90);

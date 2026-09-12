@@ -8,18 +8,30 @@ mod focus;
 mod screen;
 mod scroll_layout;
 
-use crate::components::{
-    FrameInput, HitRegion, InputKey, KeyBinding, NavDirection, SceneCommand, Screen, ScreenCommand,
-    ScreenShown, ScrollPanel, SettingCommand, SettingOp, Sprite, SpriteFit, StoryCommand,
-    TextLabel,
+use concinnity_core::components::FrameInput;
+use concinnity_core::components::SceneCommand;
+use concinnity_core::components::ScreenCommand;
+use concinnity_core::components::ScreenShown;
+use concinnity_core::components::SettingCommand;
+use concinnity_core::components::Sprite;
+use concinnity_core::components::SpriteFit;
+use concinnity_core::components::StoryCommand;
+use concinnity_core::components::TextInput;
+use concinnity_core::components::TextLabel;
+use concinnity_core::components::{
+    HitRegion, InputKey, KeyBinding, NavDirection, Screen, ScrollPanel, SettingOp,
 };
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
-use crate::gfx::settings;
+use concinnity_core::ecs::{
+    Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, ScreenStack,
+    StepResult, System,
+};
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
+use concinnity_host::thread::asset_id::AssetId;
 use screen::{ScreenMeta, ScreenRegistry};
 use scroll_layout::RowSpec;
 use std::collections::HashMap;
+
+use crate::gfx::settings;
 
 // How many reference-space pixels one unit of scroll-wheel delta moves a panel.
 const WHEEL_SCROLL_SPEED: f32 = 2.0;
@@ -187,7 +199,7 @@ struct OpenDropdownState {
     screen: Option<AssetId>,
     // Font / scale / color copied from the row's value label so the list text
     // matches the row (the un-hovered style, captured at open).
-    font: Option<crate::ecs::FontHandle>,
+    font: Option<FontHandle>,
     scale: f32,
     color: [f32; 3],
 }
@@ -261,7 +273,7 @@ pub(crate) struct UiInputSystem {
     // Cursor into the Events<ScreenCommand> queue. This system both sends (when a
     // `screen:*` action fires) and reads ScreenCommands, so a command fired this
     // frame is applied on the next, the same one-frame lag the old drain had.
-    screen_cmd_cursor: crate::ecs::EventCursor,
+    screen_cmd_cursor: EventCursor,
     // Cached copy of the engine's `DisabledSettingRows`, refreshed only when the
     // published resource changes so the hit-test loop reads an owned set without
     // cloning the resource every frame (SettingsSystem republishes rarely).
@@ -299,7 +311,7 @@ impl UiInputSystem {
             thumb_drag: None,
             capturing: None,
             open_dropdown: None,
-            screen_cmd_cursor: crate::ecs::EventCursor::default(),
+            screen_cmd_cursor: EventCursor::default(),
             disabled_rows_cache: std::collections::HashSet::new(),
             focus: None,
             last_cursor: None,
@@ -311,26 +323,22 @@ impl UiInputSystem {
 }
 
 impl System for UiInputSystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::components::FrameInput])
-            .writes_components(crate::component_mask![
-                crate::components::TextLabel,
-                crate::components::Sprite,
-                crate::components::TextInput,
-            ])
+    fn access(&self) -> Access {
+        Access::new()
+            .reads_components(crate::component_mask![FrameInput])
+            .writes_components(crate::component_mask![TextLabel, Sprite, TextInput])
             .reads_resources(crate::resource_mask![
                 crate::ecs::DisabledSettingRows,
                 crate::ecs::DisplayModes,
             ])
             .writes_resources(crate::resource_mask![
-                crate::ecs::OpenDropdown,
-                crate::ecs::ScreenStack,
-                crate::components::ScreenCommand,
-                crate::components::ScreenShown,
-                crate::components::SettingCommand,
-                crate::components::SceneCommand,
-                crate::components::StoryCommand,
+                OpenDropdown,
+                ScreenStack,
+                ScreenCommand,
+                ScreenShown,
+                SettingCommand,
+                SceneCommand,
+                StoryCommand,
             ])
     }
 
@@ -427,7 +435,7 @@ impl System for UiInputSystem {
                     .push(l.asset_id);
             }
         }
-        for t in ctx.query::<crate::components::TextInput>() {
+        for t in ctx.query::<TextInput>() {
             if let Some(screen_id) = t.screen {
                 self.text_inputs_by_screen
                     .entry(screen_id)
@@ -464,7 +472,7 @@ impl System for UiInputSystem {
         }
         for ids in self.text_inputs_by_screen.values() {
             for &id in ids {
-                for ti in ctx.query_mut::<crate::components::TextInput>() {
+                for ti in ctx.query_mut::<TextInput>() {
                     if ti.asset_id == id {
                         ti.visible = false;
                         break;
@@ -514,9 +522,7 @@ impl System for UiInputSystem {
         // While any visible TextInput has keyboard focus, typed keys belong to
         // the field: ordinary KeyBindings and the focus pulses are suspended
         // so typing cannot fire actions (screen toggles below stay live).
-        let typing = ctx
-            .query::<crate::components::TextInput>()
-            .any(|t| t.visible && t.focused);
+        let typing = ctx.query::<TextInput>().any(|t| t.visible && t.focused);
 
         // The pad's menu pulses engage only while a capturing screen is
         // active; during play the same buttons keep their gameplay meanings.
@@ -1187,9 +1193,7 @@ impl UiInputSystem {
     // opens, so the steady-state frames of an open list refresh the cheap
     // fields without recloning the options.
     fn publish_dropdown(&self, ctx: &mut PipelineContext) {
-        let mut published = ctx
-            .take_resource::<crate::ecs::OpenDropdown>()
-            .unwrap_or_default();
+        let mut published = ctx.take_resource::<OpenDropdown>().unwrap_or_default();
         match &self.open_dropdown {
             None => published.0 = None,
             Some(s) => match published.0.as_mut() {
@@ -1207,7 +1211,7 @@ impl UiInputSystem {
                     view.color = s.color;
                 }
                 None => {
-                    published.0 = Some(crate::ecs::DropdownView {
+                    published.0 = Some(DropdownView {
                         anchor: s.anchor,
                         options: s.options.clone(),
                         selected: s.selected,
@@ -1379,7 +1383,7 @@ impl UiInputSystem {
                 .new_top
                 .and_then(|id| self.screens.meta(id))
                 .and_then(|m| m.focus);
-            for ti in ctx.query_mut::<crate::components::TextInput>() {
+            for ti in ctx.query_mut::<TextInput>() {
                 ti.focused = Some(ti.asset_id) == focus;
             }
         }
@@ -1393,7 +1397,7 @@ impl UiInputSystem {
     // input capture) for the overlay build and InputSystem, which read it a
     // frame later -- the same one-frame lag the visibility flips have.
     fn publish_screen_stack(&self, ctx: &mut PipelineContext) {
-        ctx.insert_resource(crate::ecs::ScreenStack {
+        ctx.insert_resource(ScreenStack {
             layers: self.screens.layers(),
             pauses_world: self.screens.pauses_world(),
             captures_input: self.screens.captures_input(),
@@ -1433,7 +1437,7 @@ impl UiInputSystem {
         }
         if let Some(ids) = self.text_inputs_by_screen.get(&screen_id) {
             for &id in ids {
-                for ti in ctx.query_mut::<crate::components::TextInput>() {
+                for ti in ctx.query_mut::<TextInput>() {
                     if ti.asset_id == id {
                         ti.visible = visible;
                         break;
@@ -1908,9 +1912,12 @@ mod tests {
     // (HitRegion / Screen / KeyBinding) before `world.start(SYSTEMS)`, which constructs
     // the system from them via the build schedule.
     use super::*;
-    use crate::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
     use crate::ecs::SYSTEMS;
-    use crate::ecs::World;
+    use concinnity_core::components::GamepadButton;
+    use concinnity_core::components::TextAlign;
+    use concinnity_core::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
+    use concinnity_core::ecs::World;
+    use concinnity_core::render::display_mode;
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
         FrameInput {
@@ -1925,7 +1932,7 @@ mod tests {
     // the system's own cursor (which applies them a frame later) is untouched.
     // Returns the first if several were sent.
     fn produced_screen_command(world: &World) -> Option<ScreenCommand> {
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         world
             .events::<ScreenCommand>()
             .and_then(|e| e.read(&mut cursor).next().cloned())
@@ -1935,7 +1942,7 @@ mod tests {
     // order). GraphicsSystem applies these, but these tests run UiInputSystem
     // alone, so they inspect the queue directly via .first()/.last()/.is_empty().
     fn produced_setting_commands(world: &World) -> Vec<SettingCommand> {
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         world
             .events::<SettingCommand>()
             .map(|e| e.read(&mut cursor).cloned().collect())
@@ -1953,8 +1960,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -1985,8 +1992,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2007,7 +2014,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2066,8 +2073,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2088,7 +2095,7 @@ mod tests {
             screen: Some(menu),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2140,8 +2147,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2163,7 +2170,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         (world, screen)
@@ -2171,7 +2178,7 @@ mod tests {
 
     fn dropdown_is_open(world: &World) -> bool {
         world
-            .resource::<crate::ecs::OpenDropdown>()
+            .resource::<OpenDropdown>()
             .and_then(|d| d.0.as_ref())
             .is_some()
     }
@@ -2185,7 +2192,7 @@ mod tests {
         world.add_component(make_frame_input(500.0, 120.0, true));
         world.step();
         assert!(produced_setting_commands(&world).is_empty());
-        let open = world.resource::<crate::ecs::OpenDropdown>().unwrap();
+        let open = world.resource::<OpenDropdown>().unwrap();
         let dv = open.0.as_ref().expect("dropdown should be open");
         assert_eq!(dv.options.len(), 3);
         assert_eq!(dv.selected, 0, "current value 'Windowed' is option 0");
@@ -2215,8 +2222,8 @@ mod tests {
         });
         // 20 modes, 1000x100 (0Hz) .. 1000x2000 (0Hz); the row's value label
         // currently shows the 11th (index 10).
-        let modes: Vec<crate::gfx::display_mode::DisplayMode> = (1..=20)
-            .map(|i| crate::gfx::display_mode::DisplayMode {
+        let modes: Vec<display_mode::DisplayMode> = (1..=20)
+            .map(|i| display_mode::DisplayMode {
                 width: 1000,
                 height: i * 100,
                 refresh_hz: 0,
@@ -2231,8 +2238,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 1.0,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2253,7 +2260,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         world.insert_resource(crate::ecs::DisplayModes(modes));
@@ -2270,7 +2277,7 @@ mod tests {
         world.step();
         let center = 10 - dropdown::MAX_VISIBLE / 2;
         {
-            let open = world.resource::<crate::ecs::OpenDropdown>().unwrap();
+            let open = world.resource::<OpenDropdown>().unwrap();
             let dv = open.0.as_ref().expect("dropdown should be open");
             assert_eq!(dv.options.len(), 20);
             assert_eq!(dv.selected, 10);
@@ -2287,7 +2294,7 @@ mod tests {
         });
         world.step();
         {
-            let open = world.resource::<crate::ecs::OpenDropdown>().unwrap();
+            let open = world.resource::<OpenDropdown>().unwrap();
             let dv = open.0.as_ref().expect("scrolling must not dismiss");
             assert_eq!(dv.first, center + 2);
         }
@@ -2322,7 +2329,7 @@ mod tests {
     // resource.
     fn dropdown_first(world: &World) -> usize {
         world
-            .resource::<crate::ecs::OpenDropdown>()
+            .resource::<OpenDropdown>()
             .and_then(|d| d.0.as_ref())
             .map(|dv| dv.first)
             .expect("dropdown should be open")
@@ -2405,7 +2412,7 @@ mod tests {
     // The open list's highlighted option, from the published resource.
     fn dropdown_hovered(world: &World) -> Option<usize> {
         world
-            .resource::<crate::ecs::OpenDropdown>()
+            .resource::<OpenDropdown>()
             .and_then(|d| d.0.as_ref())
             .expect("dropdown should be open")
             .hovered
@@ -2476,8 +2483,8 @@ mod tests {
             color: [0.85, 0.85, 0.85],
             scale: 0.66,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -2499,7 +2506,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2532,7 +2539,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2562,7 +2569,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2594,7 +2601,7 @@ mod tests {
             follow_cursor: false,
             visible: true, // intentionally true to confirm init hides it
             screen: Some(screen_id),
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
             corner_radius: 0.0,
             border_width: 0.0,
             border_color: [0.0, 0.0, 0.0, 1.0],
@@ -2676,7 +2683,7 @@ mod tests {
             screen: Some(screen_id),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         world
@@ -2733,7 +2740,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2770,7 +2777,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2795,7 +2802,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2818,7 +2825,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2846,7 +2853,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -2894,7 +2901,7 @@ mod tests {
             screen: None,
             disabled: true,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2926,7 +2933,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -2960,7 +2967,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -3033,7 +3040,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         // Body click region (a settings action; a content region, so it is
         // bucketed into its row and gated by the collapse).
@@ -3050,7 +3057,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.add_component(ScrollPanel {
             screen: Some(screen),
@@ -3208,7 +3215,7 @@ mod tests {
                 screen: Some(screen),
                 disabled: false,
                 follow_label: false,
-                fit: crate::components::SpriteFit::Fit,
+                fit: SpriteFit::Fit,
             });
         }
         world.add_component(ScrollPanel {
@@ -3339,8 +3346,8 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             scale: 1.0,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
@@ -3361,7 +3368,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
         (world, value)
@@ -3371,7 +3378,7 @@ mod tests {
     // command fires); the next pressed key binds it via a Rebind SettingCommand.
     #[test]
     fn rebind_click_captures_then_binds_next_key() {
-        use crate::components::InputKey;
+        use concinnity_core::components::InputKey;
         let (mut world, value) = rebind_world();
 
         // Click the rebind row: enters capture, value shows the prompt, and no
@@ -3427,7 +3434,7 @@ mod tests {
     // A captured key with no active capture binds nothing.
     #[test]
     fn captured_key_without_capture_is_ignored() {
-        use crate::components::InputKey;
+        use concinnity_core::components::InputKey;
         let (mut world, _value) = rebind_world();
         world.add_component(FrameInput {
             captured_key: Some(InputKey::Q),
@@ -3440,7 +3447,7 @@ mod tests {
     // The ScreenShown announcements the cursor has not yet consumed, read the
     // way a real consumer (AudioCue) does: incrementally, before the queue's
     // two-frame retention retires them.
-    fn shown_views(world: &World, cursor: &mut crate::ecs::EventCursor) -> Vec<AssetId> {
+    fn shown_views(world: &World, cursor: &mut EventCursor) -> Vec<AssetId> {
         world
             .events::<ScreenShown>()
             .map(|e| e.read(cursor).map(|s| s.screen).collect())
@@ -3463,7 +3470,7 @@ mod tests {
             });
         }
         world.start(SYSTEMS).unwrap();
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         assert_eq!(shown_views(&world, &mut cursor), vec![first]);
 
         world
@@ -3511,7 +3518,7 @@ mod tests {
 
     // Every StoryCommand the system sent this step, in send order.
     fn produced_story_commands(world: &World) -> Vec<StoryCommand> {
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         world
             .events::<StoryCommand>()
             .map(|e| e.read(&mut cursor).cloned().collect())
@@ -3600,7 +3607,7 @@ mod tests {
                 follow_cursor: false,
                 visible: false,
                 screen: Some(screen),
-                fit: crate::components::SpriteFit::Fit,
+                fit: SpriteFit::Fit,
                 corner_radius: 0.0,
                 border_width: 0.0,
                 border_color: [0.0, 0.0, 0.0, 1.0],
@@ -3713,7 +3720,7 @@ mod tests {
             focus: Some(AssetId(91)),
             ..Default::default()
         });
-        world.add_component(crate::components::TextInput {
+        world.add_component(TextInput {
             asset_id: AssetId(91),
             visible: true,
             screen: Some(AssetId(90)),
@@ -3721,7 +3728,7 @@ mod tests {
         });
         world.start(SYSTEMS).unwrap();
         let focused = |w: &World| {
-            w.query::<crate::components::TextInput>()
+            w.query::<TextInput>()
                 .find(|t| t.asset_id == AssetId(91))
                 .map(|t| (t.visible, t.focused))
                 .unwrap()
@@ -3757,7 +3764,7 @@ mod tests {
             action: "screen:toggle:100".to_string(),
             ..Default::default()
         });
-        let mut field = crate::components::TextInput {
+        let mut field = TextInput {
             asset_id: AssetId(101),
             visible: true,
             ..Default::default()
@@ -3777,7 +3784,7 @@ mod tests {
         );
 
         // Blur the field: the same key now fires the binding.
-        for ti in world.query_mut::<crate::components::TextInput>() {
+        for ti in world.query_mut::<TextInput>() {
             ti.focused = false;
         }
         world.add_component(FrameInput {
@@ -3829,7 +3836,7 @@ mod tests {
             ..Default::default()
         });
         world.step();
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         let sent: Vec<ScreenCommand> = world
             .events::<ScreenCommand>()
             .map(|e| e.read(&mut cursor).cloned().collect())
@@ -3885,7 +3892,7 @@ mod tests {
         );
         // The stack resource carries both layers, in stack order.
         {
-            let stack = world.resource::<crate::ecs::ScreenStack>().unwrap();
+            let stack = world.resource::<ScreenStack>().unwrap();
             assert_eq!(stack.layers[&AssetId(120)], 1);
             assert_eq!(stack.layers[&AssetId(121)], 2);
             assert!(stack.pauses_world && stack.captures_input);
@@ -4010,7 +4017,7 @@ mod tests {
                 screen: Some(menu),
                 disabled: false,
                 follow_label: false,
-                fit: crate::components::SpriteFit::Fit,
+                fit: SpriteFit::Fit,
             });
         }
         world.start(SYSTEMS).unwrap();
@@ -4133,7 +4140,7 @@ mod tests {
                 screen: Some(screen),
                 disabled: false,
                 follow_label: false,
-                fit: crate::components::SpriteFit::Fit,
+                fit: SpriteFit::Fit,
             });
         }
         world.add_component(HitRegion {
@@ -4149,7 +4156,7 @@ mod tests {
             screen: Some(screen),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -4242,7 +4249,7 @@ mod tests {
         world.step();
         assert!(
             world
-                .resource::<crate::ecs::ScreenStack>()
+                .resource::<ScreenStack>()
                 .is_some_and(|s| s.captures_input),
             "escape toggles the menu open"
         );
@@ -4257,7 +4264,7 @@ mod tests {
         world.step();
         assert!(
             world
-                .resource::<crate::ecs::ScreenStack>()
+                .resource::<ScreenStack>()
                 .is_some_and(|s| !s.captures_input),
             "back closes the open menu"
         );
@@ -4288,7 +4295,7 @@ mod tests {
             screen: Some(stage),
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -4297,7 +4304,7 @@ mod tests {
             ..Default::default()
         });
         world.step();
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         let advanced = world.events::<StoryCommand>().is_some_and(|e| {
             e.read(&mut cursor)
                 .into_iter()
@@ -4327,7 +4334,7 @@ mod tests {
             screen: None,
             disabled: false,
             follow_label: false,
-            fit: crate::components::SpriteFit::Fit,
+            fit: SpriteFit::Fit,
         });
         world.start(SYSTEMS).unwrap();
 
@@ -4337,7 +4344,7 @@ mod tests {
 
         // Press East (which also raises the back pulse): it binds.
         world.add_component(FrameInput {
-            captured_button: Some(crate::components::GamepadButton::East),
+            captured_button: Some(GamepadButton::East),
             back: true,
             ..Default::default()
         });
@@ -4347,7 +4354,7 @@ mod tests {
         assert_eq!(cmds[0].setting, "pad_jump");
         assert!(matches!(
             cmds[0].op,
-            SettingOp::RebindButton(crate::components::GamepadButton::East)
+            SettingOp::RebindButton(GamepadButton::East)
         ));
     }
 }

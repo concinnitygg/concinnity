@@ -7,11 +7,14 @@
 // before UiInputSystem (its screen commands apply the same tick); the elements
 // it writes are drawn by the next overlay build, like every HUD system.
 
-use crate::components::{LoadingOverlay, ScreenCommand, Sprite, TextLabel};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
-use crate::gfx::scene_flow::FadePhase;
-use crate::gfx::scene_residency::SceneLoadState;
+use concinnity_core::components::LoadingOverlay;
+use concinnity_core::components::ScreenCommand;
+use concinnity_core::components::Sprite;
+use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::{Access, PipelineContext, ScreenStack, StepResult, System};
+use concinnity_core::render::scene_flow::FadePhase;
+use concinnity_core::render::scene_residency::SceneLoadState;
+use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 // Seconds the backdrop takes to fade out over the freshly resident scene.
@@ -122,25 +125,22 @@ impl LoadingOverlaySystem {
     // `None` when the screen is not in the stack at all.
     fn screen_on_top(&self, ctx: &PipelineContext) -> Option<bool> {
         let screen = self.screen?;
-        let stack = ctx.resource::<crate::ecs::ScreenStack>()?;
+        let stack = ctx.resource::<ScreenStack>()?;
         let mine = *stack.layers.get(&screen)?;
         Some(stack.layers.values().all(|&layer| layer <= mine))
     }
 }
 
 impl System for LoadingOverlaySystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .writes_components(crate::component_mask![
-                crate::components::Sprite,
-                crate::components::TextLabel,
-            ])
+    fn access(&self) -> Access {
+        Access::new()
+            .writes_components(crate::component_mask![Sprite, TextLabel])
             .reads_resources(crate::resource_mask![
                 crate::ecs::ActiveSceneFlow,
                 crate::ecs::SceneResidencyStatus,
-                crate::ecs::ScreenStack,
+                ScreenStack,
             ])
-            .writes_resources(crate::resource_mask![crate::components::ScreenCommand])
+            .writes_resources(crate::resource_mask![ScreenCommand])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -167,7 +167,7 @@ impl System for LoadingOverlaySystem {
                 // overlay fronts a load only when nothing else covers the
                 // world.
                 let menu_up = ctx
-                    .resource::<crate::ecs::ScreenStack>()
+                    .resource::<ScreenStack>()
                     .is_some_and(|s| s.pauses_world);
                 if loading
                     && !menu_up
@@ -230,10 +230,10 @@ impl System for LoadingOverlaySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::Screen;
     use crate::ecs::SYSTEMS;
-    use crate::ecs::World;
-    use crate::gfx::scene_flow::SceneFlow;
+    use concinnity_core::components::Screen;
+    use concinnity_core::ecs::World;
+    use concinnity_core::render::scene_flow::SceneFlow;
 
     const SCREEN: AssetId = AssetId(1);
     const BACKDROP: AssetId = AssetId(2);
@@ -300,7 +300,7 @@ mod tests {
 
     fn shown(world: &World) -> bool {
         world
-            .resource::<crate::ecs::ScreenStack>()
+            .resource::<ScreenStack>()
             .is_some_and(|s| s.layers.contains_key(&SCREEN))
     }
 

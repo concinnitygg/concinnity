@@ -7,10 +7,10 @@
 // (runtime-only fields), so the renderer and any reader see the edited text in
 // place.
 
-use crate::components::{FrameInput, InputKey, SpriteFit, TextInput};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
+use concinnity_core::components::{FrameInput, InputKey, SpriteFit, TextInput};
+use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
 use concinnity_core::gfx::overlay::OverlayTransform;
+use concinnity_host::thread::asset_id::AssetId;
 
 // One text edit applied at the caret in a single frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -107,10 +107,10 @@ impl TextInputSystem {
 }
 
 impl System for TextInputSystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::components::FrameInput])
-            .writes_components(crate::component_mask![crate::components::TextInput])
+    fn access(&self) -> Access {
+        Access::new()
+            .reads_components(crate::component_mask![FrameInput])
+            .writes_components(crate::component_mask![TextInput])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -277,7 +277,7 @@ mod tests {
         assert!(!cursor_in_field(&ti, 150.0, 100.0, [1280.0, 720.0]));
     }
 
-    use crate::ecs::World;
+    use concinnity_core::ecs::World;
 
     #[test]
     fn focused_field_types_through_the_schedule() {

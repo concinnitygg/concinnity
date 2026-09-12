@@ -25,9 +25,9 @@ pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
                         concinnity_engine::app::run::PipelineMode::Pipelined
                     },
                     schedule: if args.serial_schedule {
-                        concinnity_engine::ecs::ScheduleMode::Serial
+                        concinnity_core::ecs::ScheduleMode::Serial
                     } else {
-                        concinnity_engine::ecs::ScheduleMode::Parallel
+                        concinnity_core::ecs::ScheduleMode::Parallel
                     },
                     screenshot: args.screenshot.clone(),
                     max_frames: args.frames,

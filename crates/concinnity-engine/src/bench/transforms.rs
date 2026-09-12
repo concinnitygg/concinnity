@@ -17,10 +17,11 @@
 // fallback (a whole-column write) and is what a frame with structural churn
 // still costs.
 
+use concinnity_core::components::{GlobalTransform, Parent, Prop, Transform};
+use concinnity_core::ecs::Entity;
+use concinnity_core::gfx::transform_propagation::{TransformCache, propagate_transforms_cached};
+
 use super::{BenchWorld, bench};
-use crate::components::{GlobalTransform, Parent, Prop, Transform};
-use crate::ecs::Entity;
-use crate::gfx::transform_propagation::{TransformCache, propagate_transforms_cached};
 
 const FLAT: usize = 10_000;
 const CHAINS: usize = 1_250;

@@ -8,10 +8,13 @@
 // the top-right of the window by `GraphicsSystem` (it owns the font metrics and
 // live window size needed to right-align and stack them).
 
-use crate::components::{Camera3D, DebugHud, FrameInput, TextLabel};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult, System};
-use crate::gfx::profile::PassTiming;
+use concinnity_core::components::Camera3D;
+use concinnity_core::components::DebugHud;
+use concinnity_core::components::FrameInput;
+use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
+use concinnity_core::gfx::profile::PassTiming;
+use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 // How often the process resident-set-size syscall is resampled while the HUD
@@ -179,12 +182,12 @@ impl DebugHudSystem {
 }
 
 impl System for DebugHudSystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::components::Camera3D])
-            .writes_components(crate::component_mask![crate::components::TextLabel])
+    fn access(&self) -> Access {
+        Access::new()
+            .reads_components(crate::component_mask![Camera3D])
+            .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
-                crate::components::FrameInput,
+                FrameInput,
                 crate::app::budget::ThreadBudget,
                 crate::app::budget::MemoryBudget,
             ])
@@ -270,6 +273,7 @@ impl System for DebugHudSystem {
 mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
+    use concinnity_core::ecs::World;
 
     #[test]
     fn passes_text_blanks_on_all_zero_slots() {
@@ -416,7 +420,7 @@ mod tests {
     // A DebugHud component spawns the internal debug-HUD system.
     #[test]
     fn debug_hud_component_spawns_internal_system() {
-        use crate::ecs::World;
+        use concinnity_core::ecs::World;
 
         let mut world = World::new();
         world.add_component(DebugHud::default());
@@ -427,8 +431,8 @@ mod tests {
 
     // Build a world with a DebugHud wired to four chips, a camera (no
     // controller, so no camera system), and pre-filled chip labels.
-    fn hud_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new();
+    fn hud_world() -> World {
+        let mut world = World::new();
         world.add_component(DebugHud {
             passes_label: Some(AssetId(1)),
             mouse_label: Some(AssetId(2)),
@@ -458,7 +462,7 @@ mod tests {
         world
     }
 
-    fn chip(world: &crate::ecs::World, id: u32) -> String {
+    fn chip(world: &World, id: u32) -> String {
         world
             .query::<TextLabel>()
             .find(|l| l.asset_id == AssetId(id))

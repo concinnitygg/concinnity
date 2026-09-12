@@ -10,9 +10,8 @@
 //! menu pauses playback, so a blocked WS client always gets its reply. Each
 //! command carries a reply channel the drain fulfils synchronously.
 
+use concinnity_host::thread::asset_id::AssetId;
 use std::sync::Mutex;
-
-use crate::ecs::asset_id::AssetId;
 
 /// One queued crossfade request. `target` is the `SkinnedMesh` asset id the
 /// command applies to; `weights` must match the clip count registered for

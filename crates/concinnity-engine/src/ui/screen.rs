@@ -2,8 +2,8 @@
 // one's policies are. Pure bookkeeping -- UiInputSystem owns applying the
 // resulting element-visibility and focus changes to the world.
 
-use crate::components::{Screen, ScreenCommand, ScreenInput};
-use crate::ecs::asset_id::AssetId;
+use concinnity_core::components::{Screen, ScreenCommand, ScreenInput};
+use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 
 // Multiplier that turns a Screen's authored `layer` into a draw-layer band:

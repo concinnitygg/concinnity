@@ -96,7 +96,7 @@ targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 [features]
 default = ["std", "native", "player"]
-std = ["dep:concinnity-engine", "dep:concinnity-toolchain"]
+std = ["dep:concinnity-engine", "dep:concinnity-host", "dep:concinnity-toolchain"]
 player = ["std"]
 editor = ["player", "cook", "dep:concinnity-dev", "dep:clap"]
 cook = ["std", "dep:concinnity-cook"]
@@ -108,6 +108,7 @@ vulkan = ["std", "concinnity-engine/vulkan", "concinnity-dev?/vulkan"]
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-engine = { workspace = true, optional = true }
+concinnity-host = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
 concinnity-dev = { workspace = true, optional = true }
 clap = { version = "4", features = ["derive"], optional = true }

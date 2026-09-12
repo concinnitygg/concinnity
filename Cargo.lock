@@ -532,6 +532,7 @@ dependencies = [
  "concinnity-core",
  "concinnity-dev",
  "concinnity-engine",
+ "concinnity-host",
  "concinnity-testing",
  "concinnity-toolchain",
  "tempfile",

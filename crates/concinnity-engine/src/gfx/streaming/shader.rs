@@ -9,7 +9,7 @@
 // with several shaders spreads its warmup across the loading screen instead of
 // building every pipeline in one frame.
 
-use crate::components::ShaderPrograms;
+use concinnity_core::components::ShaderPrograms;
 
 // Where a deferred bucket's compiled stage container is read from.
 pub(crate) enum ShaderPayloadSource {
@@ -101,6 +101,7 @@ impl ShaderWarmup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::compiled_programs;
     use std::io::Write;
 
     fn payload_bytes() -> Vec<u8> {
@@ -108,7 +109,7 @@ mod tests {
             name: "wall".into(),
             vertex: None,
             fragment: "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }".into(),
-            programs: vec![crate::components::compiled_programs::CompiledProgram {
+            programs: vec![compiled_programs::CompiledProgram {
                 entries: vec!["fragment_main_bindless".into()],
                 source_digest: 1,
                 artifact: vec![4, 5],

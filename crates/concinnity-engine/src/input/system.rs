@@ -15,12 +15,19 @@
 // interact, Start onto escape); the sticks publish as the analog
 // `move_axis` / `look_axis` fields.
 
-use crate::components::{FrameInput, GamepadButton, GamepadMap, NavDirection};
-use crate::ecs::{InputMailbox, PipelineContext, StepResult, System};
-use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
-use crate::input::nav::NavRepeat;
+use concinnity_core::components::{
+    ControlsCommand, FrameInput, GamepadButton, GamepadMap, NavDirection,
+};
+use concinnity_core::ecs::{
+    Access, CursorState, EventCursor, FlyCam, MenuActive, PipelineContext, ScreenStack, StepResult,
+    System,
+};
 use concinnity_core::render::input::RenderInput;
 use std::time::Instant;
+
+use crate::ecs::InputMailbox;
+use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
+use crate::input::nav::NavRepeat;
 
 // Frame dt ceiling for the nav auto-repeat, so a hitch or debugger pause never
 // counts as a long hold.
@@ -37,7 +44,7 @@ pub(crate) struct InputSystem {
     // Previous step's timestamp, for the nav repeat dt.
     last_step: Option<Instant>,
     // Cursor into the Events<ControlsCommand> queue (live settings changes).
-    controls_cursor: crate::ecs::EventCursor,
+    controls_cursor: EventCursor,
 }
 
 impl InputSystem {
@@ -117,19 +124,19 @@ fn compose_frame_input(
 }
 
 impl System for InputSystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .writes_components(crate::component_mask![crate::components::FrameInput])
+    fn access(&self) -> Access {
+        Access::new()
+            .writes_components(crate::component_mask![FrameInput])
             .reads_resources(crate::resource_mask![
-                crate::ecs::MenuActive,
-                crate::ecs::ScreenStack,
-                crate::ecs::FlyCam,
-                crate::components::ControlsCommand,
+                MenuActive,
+                ScreenStack,
+                FlyCam,
+                ControlsCommand,
             ])
             .writes_resources(crate::resource_mask![
                 crate::ecs::InputMailbox,
-                crate::ecs::CursorState,
-                crate::components::FrameInput,
+                CursorState,
+                FrameInput,
             ])
     }
 
@@ -173,14 +180,14 @@ impl System for InputSystem {
         // The cursor position + window-bounds state for next frame's draw
         // list (`follow_cursor` sprites are positioned a frame after the input
         // that moved them; the draw list is built before this poll).
-        ctx.insert_resource(crate::ecs::CursorState {
+        ctx.insert_resource(CursorState {
             pos: (raw.mouse_x, raw.mouse_y),
             outside_window: cursor_outside,
         });
 
         // Live controls changes (a gamepad rebind or deadzone slider) sent by
         // SettingsSystem earlier this tick.
-        if let Some(events) = ctx.events::<crate::components::ControlsCommand>() {
+        if let Some(events) = ctx.events::<ControlsCommand>() {
             for cmd in events.read(&mut self.controls_cursor) {
                 if let Some(map) = cmd.gamepad_map {
                     self.map = map;
@@ -215,17 +222,14 @@ impl System for InputSystem {
         // position, clicks, and Escape. A non-pausing screen that captures
         // input (a live console) also suppresses gameplay keys -- the world
         // keeps simulating, but keystrokes belong to the screen.
-        let menu_active = ctx
-            .resource::<crate::ecs::MenuActive>()
-            .map(|m| m.0)
-            .unwrap_or(false);
+        let menu_active = ctx.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
         let screen_captures = ctx
-            .resource::<crate::ecs::ScreenStack>()
+            .resource::<ScreenStack>()
             .is_some_and(|s| s.captures_input);
         // The editor's fly camera keeps navigation live while its menu
         // override freezes the world (the editor integrates the camera
         // itself); a shipped runtime never publishes FlyCam.
-        let fly = ctx.resource::<crate::ecs::FlyCam>().is_some_and(|f| f.0);
+        let fly = ctx.resource::<FlyCam>().is_some_and(|f| f.0);
         let gameplay = (!menu_active && !screen_captures) || fly;
 
         let frame_input = FrameInput {
@@ -251,6 +255,8 @@ impl System for InputSystem {
 mod tests {
     use super::*;
     use crate::input::gamepad::{PadAxis, PadEvent};
+    use concinnity_core::components::GamepadAction;
+    use concinnity_core::render::input;
 
     fn pad_snapshot(events: &[PadEvent]) -> PadSnapshot {
         let mut state = PadState::default();
@@ -277,15 +283,9 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let state = Arc::new(Mutex::new(crate::gfx::mock_backend::MockState::default()));
         let mut backend = crate::gfx::mock_backend::MockBackend::transplant(state.clone(), None);
-        assert_eq!(
-            crate::gfx::input::InputPacket::sample(&mut backend).top_inset,
-            0.0
-        );
+        assert_eq!(input::InputPacket::sample(&mut backend).top_inset, 0.0);
         state.lock().unwrap().top_inset = 28.0;
-        assert_eq!(
-            crate::gfx::input::InputPacket::sample(&mut backend).top_inset,
-            28.0
-        );
+        assert_eq!(input::InputPacket::sample(&mut backend).top_inset, 28.0);
     }
 
     #[test]
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn rebound_map_routes_buttons_to_their_actions() {
         let mut map = GamepadMap::DEFAULT;
-        map.rebind(crate::components::GamepadAction::Jump, GamepadButton::North);
+        map.rebind(GamepadAction::Jump, GamepadButton::North);
         let pad = pad_snapshot(&[press(GamepadButton::North)]);
         let input = compose_frame_input(&RenderInput::default(), &pad, map, None, true);
         assert!(input.jump, "jump follows the rebound button");
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn nav_confirm_and_back_pass_the_menu_gate() {
         let pad = pad_snapshot(&[press(GamepadButton::South), press(GamepadButton::East)]);
-        let nav = Some(crate::components::NavDirection::Down);
+        let nav = Some(NavDirection::Down);
         let input = compose_frame_input(
             &RenderInput::default(),
             &pad,

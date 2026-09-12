@@ -7,10 +7,11 @@
 // live-lighting seam re-resolves the ones an authoring edit can reach, so an
 // edit applied to a running world shows what relaunching that world would.
 
-use crate::components::{PostProcessConfig, PostProcessResolve, ShadowUpdate};
+use concinnity_core::components::{PostProcessConfig, PostProcessResolve, ShadowUpdate};
+use concinnity_core::gfx::render_types::PostProcessTunables;
+
 use crate::config::GraphicsSettings;
 use crate::gfx::quality_preset::{QualityCeiling, clamp_shadow_update};
-use crate::gfx::render_types::PostProcessTunables;
 use crate::gfx::settings::slider_apply_value;
 use crate::gfx::system::{clamp_quality_cycle, set_quality_toggle};
 
@@ -217,9 +218,9 @@ pub(crate) fn clamp_quality_under_ceiling(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{AaMode, IndirectLighting};
-    use crate::gfx::backend::{GpuProfile, GpuTier};
     use crate::gfx::quality_preset::{QualityPreset, resolve_ceiling};
+    use concinnity_core::components::{AaMode, IndirectLighting};
+    use concinnity_core::render::backend::{GpuProfile, GpuTier};
 
     fn ceiling_for(preset: QualityPreset, tier: GpuTier) -> QualityCeiling {
         resolve_ceiling(

@@ -2,9 +2,10 @@
 // text-input field box/caret. Both are built as plain Sprites + TextLabels and
 // fed through the same shapers as the authored overlay elements.
 
-use crate::components::{Sprite, TextInput, TextLabel};
-use crate::ecs::asset_id::AssetId;
-use crate::gfx::text;
+use concinnity_core::components::{Sprite, SpriteFit, TextAlign, TextInput, TextLabel};
+use concinnity_core::ecs::DropdownView;
+use concinnity_core::render::text;
+use concinnity_host::thread::asset_id::AssetId;
 
 // Persistent buffers for the synthesized elements, kept on the overlay system
 // so a steady-state frame reuses their capacity (including every label's
@@ -43,7 +44,7 @@ impl WidgetScratch {
 // is reference space for a screen-owned row (and window pixels otherwise),
 // matching the input hit-test in `ui`.
 pub(super) fn build_dropdown_overlay(
-    screen: &crate::ecs::DropdownView,
+    screen: &DropdownView,
     loaded_fonts: &text::FontSet,
     out: &mut WidgetScratch,
 ) {
@@ -82,7 +83,7 @@ pub(super) fn build_dropdown_overlay(
         follow_cursor: false,
         visible: true,
         screen: screen.screen,
-        fit: crate::components::SpriteFit::Fit,
+        fit: SpriteFit::Fit,
         corner_radius: 0.0,
         border_width: 0.0,
         border_color: [0.0, 0.0, 0.0, 1.0],
@@ -138,8 +139,8 @@ pub(super) fn build_dropdown_overlay(
             color: screen.color,
             scale: screen.scale,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             // An option longer than the list is cut with an ellipsis rather
@@ -300,7 +301,7 @@ pub(super) fn build_text_input_overlay(
         color,
         scale: ti.scale,
         centered: false,
-        align: crate::components::TextAlign::Left,
+        align: TextAlign::Left,
         fit: ti.fit,
         background: [0.0, 0.0, 0.0, 0.0],
         padding: 0.0,
@@ -343,7 +344,7 @@ pub(super) fn build_text_input_overlay(
                     color: ti.placeholder_color,
                     scale: ti.scale,
                     centered: false,
-                    align: crate::components::TextAlign::Left,
+                    align: TextAlign::Left,
                     fit: ti.fit,
                     background: [0.0, 0.0, 0.0, 0.0],
                     padding: 0.0,
@@ -382,7 +383,8 @@ pub(super) fn build_text_input_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::{DropdownView, FontHandle};
+    use concinnity_core::ecs::{DropdownView, FontHandle};
+    use concinnity_core::gfx::font;
 
     // Tuple-returning shims over the scratch-filling builders, so the tests
     // read the built elements as owned lists.
@@ -425,8 +427,8 @@ mod tests {
 
     const FONT: FontHandle = FontHandle(0);
 
-    fn make_glyph(advance_px: f32) -> crate::gfx::font::GlyphMetrics {
-        crate::gfx::font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> font::GlyphMetrics {
+        font::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,
@@ -441,7 +443,7 @@ mod tests {
     // A fixed-width synthetic font (every glyph 10px in a 16px em) makes the
     // built geometry exact.
     fn loaded_fonts() -> text::FontSet {
-        let metrics: crate::gfx::text::FontMetrics = ('a'..='z')
+        let metrics: text::FontMetrics = ('a'..='z')
             .chain('A'..='Z')
             .chain('0'..='9')
             .chain(['.', ' '])

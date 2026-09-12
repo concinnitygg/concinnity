@@ -7,11 +7,10 @@
 // in Drop: dropping the request sender ends the worker's recv loop, then the
 // thread is joined, so a world rebuild never leaks the thread.
 
+use kira::sound::static_sound::StaticSoundData;
 use std::io::Cursor;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
-
-use kira::sound::static_sound::StaticSoundData;
 
 pub(crate) struct DecodeResult {
     pub key: u64,

@@ -4,8 +4,11 @@
 //! turns mouse/keyboard input into a `Camera3D` orientation and a movement
 //! intent for the player's `RigidBody`.
 
-use crate::components::{Camera3D, CameraController, FrameInput, Interactable, Transform};
-use crate::ecs::{Entity, PipelineContext, StepResult, System};
+use concinnity_core::components::{
+    Camera3D, CameraController, ControlsCommand, FrameInput, InteractEvent, Interactable, Transform,
+};
+use concinnity_core::ecs::{Access, Entity, EventCursor, PipelineContext, StepResult, System};
+use concinnity_core::gfx::camera;
 use std::time::Instant;
 
 // Reach distance for interacting with a Prop, in world units.
@@ -36,7 +39,7 @@ pub struct Camera3DSystem {
     // init so step() rotates only their Transforms on interact.
     interactable_entities: Vec<Entity>,
     // Cursor into the Events<ControlsCommand> queue (live settings changes).
-    controls_cursor: crate::ecs::EventCursor,
+    controls_cursor: EventCursor,
 }
 
 impl Camera3DSystem {
@@ -54,7 +57,7 @@ impl Camera3DSystem {
             last_step: None,
             velocity: [0.0; 3],
             interactable_entities: Vec::new(),
-            controls_cursor: crate::ecs::EventCursor::default(),
+            controls_cursor: EventCursor::default(),
         }
     }
 
@@ -68,18 +71,15 @@ impl Camera3DSystem {
 }
 
 impl System for Camera3DSystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::components::FrameInput])
-            .writes_components(crate::component_mask![
-                crate::components::Camera3D,
-                crate::components::Transform,
-            ])
+    fn access(&self) -> Access {
+        Access::new()
+            .reads_components(crate::component_mask![FrameInput])
+            .writes_components(crate::component_mask![Camera3D, Transform])
             .reads_resources(crate::resource_mask![
-                crate::ecs::decompose::EntityByName,
-                crate::components::ControlsCommand,
+                concinnity_core::ecs::EntityByName,
+                ControlsCommand,
             ])
-            .writes_resources(crate::resource_mask![crate::components::InteractEvent])
+            .writes_resources(crate::resource_mask![InteractEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -249,8 +249,7 @@ impl System for Camera3DSystem {
 
             // write the view matrix as a fallback for worlds with no
             // PhysicsSystem; PhysicsSystem overwrites it once it has moved.
-            camera.view_matrix =
-                crate::gfx::camera::view_matrix(camera.position, camera.yaw, camera.pitch);
+            camera.view_matrix = camera::view_matrix(camera.position, camera.yaw, camera.pitch);
         }
 
         // interactable props: press the interact key while facing one to rotate
@@ -291,15 +290,15 @@ impl System for Camera3DSystem {
                 // sources); an unnamed entity has no addressable identity to
                 // announce.
                 let target = ctx
-                    .resource::<crate::ecs::decompose::EntityByName>()
+                    .resource::<concinnity_core::ecs::EntityByName>()
                     .and_then(|n| {
                         n.0.iter()
                             .find(|(_, e)| **e == entity)
                             .map(|(&name, _)| name)
                     });
                 if let Some(target) = target {
-                    ctx.events_mut::<crate::components::InteractEvent>()
-                        .send(crate::components::InteractEvent { target });
+                    ctx.events_mut::<InteractEvent>()
+                        .send(InteractEvent { target });
                 }
             }
         }
@@ -310,9 +309,9 @@ impl System for Camera3DSystem {
 
 #[cfg(test)]
 mod tests {
-    use crate::components::{Camera3D, CameraController};
     use crate::ecs::SYSTEMS;
-    use crate::ecs::World;
+    use concinnity_core::components::{Camera3D, CameraController};
+    use concinnity_core::ecs::{EventCursor, World};
 
     fn camera(controller: Option<CameraController>) -> Camera3D {
         Camera3D {
@@ -355,7 +354,7 @@ mod tests {
     // This is the settings-menu sensitivity slider applying without a restart.
     #[test]
     fn controls_command_updates_sensitivity_live() {
-        use crate::components::{ControlsCommand, FrameInput};
+        use concinnity_core::components::{ControlsCommand, FrameInput};
 
         let mut world = World::new();
         // Free-fly avoids the PhysicsSystem path; start from a known sensitivity.
@@ -393,7 +392,7 @@ mod tests {
     // slider applying without a restart.
     #[test]
     fn controls_command_updates_fov_live() {
-        use crate::components::{ControlsCommand, FrameInput};
+        use concinnity_core::components::{ControlsCommand, FrameInput};
 
         let mut world = World::new();
         let ctrl = CameraController {
@@ -452,8 +451,8 @@ mod tests {
     // starving the menu, so Escape did nothing over a captured camera.)
     #[test]
     fn camera_and_ui_share_frame_input() {
-        use crate::components::{FrameInput, KeyBinding, Screen, ScreenCommand};
-        use crate::ecs::asset_id::AssetId;
+        use concinnity_core::components::{FrameInput, KeyBinding, Screen, ScreenCommand};
+        use concinnity_host::thread::asset_id::AssetId;
 
         let mut world = World::new();
         world.add_component(camera(Some(CameraController::default())));
@@ -480,7 +479,7 @@ mod tests {
         });
         world.step();
 
-        let mut cursor = crate::ecs::EventCursor::default();
+        let mut cursor = EventCursor::default();
         let cmd = world
             .events::<ScreenCommand>()
             .and_then(|e| e.read(&mut cursor).next().cloned());
@@ -494,8 +493,8 @@ mod tests {
     // two units ahead (within reach and inside the facing cone), and a latched
     // interact input. Shared by the interact decomposition tests.
     fn interact_world() -> World {
-        use crate::components::Prop;
-        use crate::ecs::asset_id::AssetId;
+        use concinnity_core::components::Prop;
+        use concinnity_host::thread::asset_id::AssetId;
 
         let mut world = World::new();
         let ctrl = CameraController {
@@ -517,7 +516,7 @@ mod tests {
     // Transform.
     #[test]
     fn interact_rotates_transform() {
-        use crate::components::{FrameInput, Interactable, Prop, Transform};
+        use concinnity_core::components::{FrameInput, Interactable, Prop, Transform};
 
         let mut world = interact_world();
         world.start(SYSTEMS).unwrap();
@@ -545,8 +544,8 @@ mod tests {
     // of moving itself, driving the FPS-walker basis and commit branch.
     #[test]
     fn fps_walker_clamps_bounds_and_hands_off_movement() {
-        use crate::components::FrameInput;
-        use crate::gfx::camera::view_matrix;
+        use concinnity_core::components::FrameInput;
+        use concinnity_core::gfx::camera::view_matrix;
 
         let mut world = World::new();
         let ctrl = CameraController {

@@ -12,19 +12,11 @@
 //! into are `pub` so it can name their paths, but individual internals stay
 //! `pub(crate)` unless the editor specifically needs them.
 pub mod blob;
-pub mod components;
 pub mod ecs;
 mod heap;
 
 #[cfg(test)]
 mod bench;
-
-// Renderer-free foundation shared with the build/validate pipeline: the result
-// vocabulary, the payload decoders, and the runtime geometry generators, all
-// from concinnity-core. Re-exported under the historical crate::* paths so the
-// rest of the client keeps resolving. world.jsonl I/O lives in concinnity-cook
-// (authoring), which the runtime does not link.
-pub(crate) use concinnity_core::{bake, error, geometry};
 
 // The access-declaration mask builders, reached crate-wide as
 // `crate::component_mask!` / `crate::resource_mask!`.
@@ -87,10 +79,6 @@ pub(crate) mod physics;
 // Declarative logic (Behavior components + the shared world variables
 // store), scheduled before SpawnSystem so its requests apply the same tick.
 pub(crate) mod behavior;
-// The rayon job pool, re-exported under the historical crate::jobs path. `pub`
-// so the editor's hot-reload decoder keeps reaching it through
-// `concinnity_engine::jobs`.
-pub use concinnity_host::thread::jobs;
 /// Runtime resource tables (per-kind, handle-indexed views of the blob's resource
 /// stream). `pub` so the editor's in-memory build path can construct the tables it
 /// inserts into the world, mirroring the shipped-runtime loader.
@@ -101,5 +89,7 @@ pub(crate) mod spawn;
 pub(crate) mod story;
 pub(crate) mod ui;
 
-// Asset API
-pub use components::*;
+// The asset vocabulary a world is authored from. Declared in concinnity-core;
+// re-exported at this crate's root because a host that embeds the runtime
+// names both through one crate.
+pub use concinnity_core::components::*;

@@ -1,13 +1,21 @@
 // src/gfx/animation/tests.rs
 
-use crate::ecs::SYSTEMS;
+use concinnity_core::components::{
+    Animation, AnimationGraph, AnimationParams, CharacterRig, PhysicsConfig, Prop, PropCollider,
+    RootMotionEvent, SkeletonPose,
+};
+use concinnity_core::ecs::EventCursor;
+use concinnity_core::ecs::MenuActive;
+use concinnity_core::ecs::SkinnedMeshHandle;
+use concinnity_core::ecs::World;
+use concinnity_core::gfx::skeleton;
+use concinnity_core::gfx::transform;
+use concinnity_host::thread::asset_id;
+use concinnity_host::thread::asset_id::intern;
 use std::time::{Duration, Instant};
 
 use super::resumed_origin;
-use crate::components::{Animation, AnimationGraph, AnimationParams};
-use crate::ecs::SkinnedMeshHandle;
-use crate::ecs::World;
-use crate::ecs::asset_id::intern;
+use crate::ecs::SYSTEMS;
 
 // Resuming after a pause must leave clip time `t = now - origin` exactly
 // where it was when the pause began, so playback continues from the frozen
@@ -66,7 +74,7 @@ fn anim_graph_component_spawns_internal_system() {
 fn clip(name: &str, duration: f32) -> Animation {
     // Install the name resolver so the `"target":"hero"` reference deserializes.
     // Must not reset the interner: `intern` below accumulates ids across calls.
-    crate::ecs::asset_id::ensure_name_resolver();
+    asset_id::ensure_name_resolver();
     let mut a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero",
         "duration": duration,
@@ -297,9 +305,9 @@ fn root_motion_clip_publishes_displacement_events() {
     world.step();
 
     let events = world
-        .events::<crate::components::RootMotionEvent>()
+        .events::<RootMotionEvent>()
         .expect("RootMotionEvent queue exists");
-    let mut cursor = crate::ecs::EventCursor::default();
+    let mut cursor = EventCursor::default();
     let motions: Vec<_> = events.read(&mut cursor).collect();
     assert!(!motions.is_empty(), "expected displacement events");
     let total: f32 = motions
@@ -346,9 +354,9 @@ fn root_motion_events_emit_in_handle_order() {
     world.step();
 
     let events = world
-        .events::<crate::components::RootMotionEvent>()
+        .events::<RootMotionEvent>()
         .expect("RootMotionEvent queue exists");
-    let mut cursor = crate::ecs::EventCursor::default();
+    let mut cursor = EventCursor::default();
     let order: Vec<_> = events.read(&mut cursor).map(|m| m.target).collect();
     assert_eq!(order.len(), handles.len(), "one event per moving target");
     let mut sorted = order.clone();
@@ -365,7 +373,7 @@ fn root_motion_events_emit_in_handle_order() {
 // clipping through it.
 #[test]
 fn ik_pins_the_foot_to_a_raised_ledge() {
-    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
+    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     let target = SkinnedMeshHandle(intern("hero_ik").0);
     let mut world = World::new();
@@ -385,14 +393,8 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
         joint("knee", Some(0), [0.0, -1.0, 0.0]),
         joint("foot", Some(1), [0.0, -1.0, 0.0]),
     ]);
-    world.add_component(crate::components::SkeletonPose::new(target, 0, skeleton));
-    world.add_component(crate::components::CharacterRig::new(
-        target,
-        0,
-        crate::gfx::transform::IDENTITY,
-        0.5,
-        0.3,
-    ));
+    world.add_component(SkeletonPose::new(target, 0, skeleton));
+    world.add_component(CharacterRig::new(target, 0, transform::IDENTITY, 0.5, 0.3));
 
     // A constant clip (the bind pose) so the graph has something to play.
     let mut stand: Animation = serde_json::from_value(serde_json::json!({
@@ -419,11 +421,11 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
 
     // Flat floor for the capsule; a ledge (top at y = 0.25) under the foot
     // only, clear of the capsule standing at the origin.
-    world.add_component(crate::components::PhysicsConfig::default());
-    world.add_component(crate::components::Prop {
+    world.add_component(PhysicsConfig::default());
+    world.add_component(Prop {
         asset_id: intern("ledge"),
         position: [0.75, 0.1, 0.0],
-        collider: Some(crate::components::PropCollider {
+        collider: Some(PropCollider {
             shape: "cuboid".to_string(),
             half_extents: [0.3, 0.15, 0.3],
             radius: 0.0,
@@ -441,10 +443,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    let pose = world
-        .query::<crate::components::SkeletonPose>()
-        .next()
-        .expect("pose survives");
+    let pose = world.query::<SkeletonPose>().next().expect("pose survives");
     let foot_mesh = {
         let m = pose.joint_matrices[2];
         let b = pose.skeleton.bind_position(2);
@@ -454,11 +453,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
             m[0][2] * b[0] + m[1][2] * b[1] + m[2][2] * b[2] + m[3][2],
         ]
     };
-    let rig_y = world
-        .query::<crate::components::CharacterRig>()
-        .next()
-        .unwrap()
-        .position[1];
+    let rig_y = world.query::<CharacterRig>().next().unwrap().position[1];
     // The ledge top is at world 0.25; the foot's mesh-space height plus the
     // rig's world height must land there (the animated pose kept it at ~0).
     let foot_world_y = foot_mesh[1] + rig_y;
@@ -487,16 +482,10 @@ fn rig_capsule_follows_root_motion() {
     .unwrap();
     a.asset_id = intern("hero_rig_walk");
     world.add_component(a);
-    world.add_component(crate::components::PhysicsConfig::default());
+    world.add_component(PhysicsConfig::default());
     // GraphicsSystem publishes rigs in a rendering world; this headless test
     // seeds one directly before start so PhysicsSystem::init sees it.
-    world.add_component(crate::components::CharacterRig::new(
-        target,
-        0,
-        crate::gfx::transform::IDENTITY,
-        0.5,
-        0.3,
-    ));
+    world.add_component(CharacterRig::new(target, 0, transform::IDENTITY, 0.5, 0.3));
     world.start(SYSTEMS).unwrap();
 
     for _ in 0..4 {
@@ -504,10 +493,7 @@ fn rig_capsule_follows_root_motion() {
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    let rig = world
-        .query::<crate::components::CharacterRig>()
-        .next()
-        .expect("rig survives");
+    let rig = world.query::<CharacterRig>().next().expect("rig survives");
     assert!(
         rig.position[0] > 0.0,
         "capsule advanced along the walk: {:?}",
@@ -531,7 +517,7 @@ fn graph_freezes_while_menu_open() {
     let mut world = graph_world();
     world.step();
 
-    world.insert_resource(crate::ecs::MenuActive(true));
+    world.insert_resource(MenuActive(true));
     for p in world.query_mut::<AnimationParams>() {
         p.set(0, 2.0);
     }
@@ -542,7 +528,7 @@ fn graph_freezes_while_menu_open() {
         "paused step must not take transitions"
     );
 
-    world.insert_resource(crate::ecs::MenuActive(false));
+    world.insert_resource(MenuActive(false));
     world.step();
     let report = with_anim(&mut world, |anim| anim.graph_report(hero()).unwrap());
     assert_eq!(report.state, "run", "resumed step sees the parameter");
@@ -550,8 +536,8 @@ fn graph_freezes_while_menu_open() {
 
 // A bare runtime clip of a given length, no tracks or root motion. Enough to
 // re-seat a bucket slot via `apply_reloaded_clip`.
-fn runtime_clip(duration: f32) -> crate::gfx::skeleton::AnimationClip {
-    crate::gfx::skeleton::AnimationClip {
+fn runtime_clip(duration: f32) -> skeleton::AnimationClip {
+    skeleton::AnimationClip {
         morph_keys: Vec::new(),
         duration,
         looping: true,
@@ -638,14 +624,14 @@ fn debug_impl_summarizes_target_and_reload_counts() {
 }
 
 // A one-joint pose for `target`, used to observe the flat sampling arms.
-fn single_joint_pose(target: SkinnedMeshHandle) -> crate::components::SkeletonPose {
-    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
+fn single_joint_pose(target: SkinnedMeshHandle) -> SkeletonPose {
+    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
     let skeleton = Skeleton::new(vec![Joint {
         name: "root".to_string(),
         parent: None,
         bind: JointPose::default(),
     }]);
-    crate::components::SkeletonPose::new(target, 0, skeleton)
+    SkeletonPose::new(target, 0, skeleton)
 }
 
 // One flat clip drives the single-clip sampling arm: the pose gets one skinning
@@ -660,7 +646,7 @@ fn flat_single_clip_samples_the_pose() {
     world.step();
 
     let matrices = world
-        .query::<crate::components::SkeletonPose>()
+        .query::<SkeletonPose>()
         .next()
         .map(|p| p.joint_matrices.len())
         .unwrap();
@@ -687,7 +673,7 @@ fn flat_fade_in_blends_multiple_clips_into_the_pose() {
     world.step();
 
     let matrices = world
-        .query::<crate::components::SkeletonPose>()
+        .query::<SkeletonPose>()
         .next()
         .map(|p| p.joint_matrices.len())
         .unwrap();
@@ -699,8 +685,8 @@ fn flat_fade_in_blends_multiple_clips_into_the_pose() {
 // morph track leaves the base layer uploaded as-is.
 #[test]
 fn morph_base_layer_composes_with_clip_morph_tracks() {
-    use crate::components::MorphKey;
-    use crate::gfx::proportions::ProportionLayer;
+    use concinnity_core::components::MorphKey;
+    use concinnity_core::gfx::proportions::ProportionLayer;
 
     let target = SkinnedMeshHandle(intern("morph_base_pose").0);
     let mut world = World::new();
@@ -722,7 +708,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
     world.start(SYSTEMS).unwrap();
     world.step();
     let weights = world
-        .query::<crate::components::SkeletonPose>()
+        .query::<SkeletonPose>()
         .next()
         .map(|p| p.morph_weights.clone())
         .unwrap();
@@ -738,10 +724,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
     );
     world.start(SYSTEMS).unwrap();
     world.step();
-    let pose = world
-        .query::<crate::components::SkeletonPose>()
-        .next()
-        .unwrap();
+    let pose = world.query::<SkeletonPose>().next().unwrap();
     assert_eq!(pose.morph_weights, [0.25]);
     assert!(pose.updated);
 }
@@ -750,8 +733,8 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
 // the skinning matrix the clip writes each frame.
 #[test]
 fn proportions_apply_to_the_sampled_pose() {
-    use crate::components::JointProportion;
-    use crate::gfx::proportions::ProportionLayer;
+    use concinnity_core::components::JointProportion;
+    use concinnity_core::gfx::proportions::ProportionLayer;
 
     let target = SkinnedMeshHandle(intern("proportioned_pose").0);
     let mut world = World::new();
@@ -768,9 +751,6 @@ fn proportions_apply_to_the_sampled_pose() {
     world.add_component(pose.with_shape(Vec::new(), layer));
     world.start(SYSTEMS).unwrap();
     world.step();
-    let pose = world
-        .query::<crate::components::SkeletonPose>()
-        .next()
-        .unwrap();
+    let pose = world.query::<SkeletonPose>().next().unwrap();
     assert_eq!(pose.joint_matrices[0][0][0], 3.0);
 }

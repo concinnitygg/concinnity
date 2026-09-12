@@ -14,16 +14,18 @@
 // the sampled input, render stats, op-replay results, and the consumed
 // snapshot for buffer reuse.
 
+use concinnity_core::ecs::StepResult;
+use concinnity_core::render::backend::RenderBackend;
+use concinnity_core::render::feedback::FrameFeedback;
+use concinnity_core::render::input::InputPacket;
+use concinnity_core::render::snapshot::RenderSnapshot;
+use std::sync::mpsc::{Receiver, Sender};
+
 use crate::app::state::App;
-use crate::ecs::{PipelinedFrames, StepResult};
-use crate::gfx::backend::RenderBackend;
-use crate::gfx::feedback::FrameFeedback;
-use crate::gfx::input::InputPacket;
-use crate::gfx::snapshot::RenderSnapshot;
+use crate::ecs::PipelinedFrames;
 use crate::gfx::system::frame_policy::FramePolicy;
 use crate::gfx::system::submit::submit;
 use crate::shutdown::ShutdownToken;
-use std::sync::mpsc::{Receiver, Sender};
 
 // Drive a started App with pipelined frames until it stops. Evicts the
 // backend from the world onto this (main) thread, publishes the channel pair,

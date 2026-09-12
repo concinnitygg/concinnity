@@ -5,10 +5,6 @@
 // the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
 // never opens an audio device.
 
-use std::collections::{HashMap, HashSet};
-
-use super::occlusion::OcclusionSmoother;
-use super::{AudioEngine, AudioVolumes, EmitterId, EmitterParams};
 use concinnity_core::components::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
     BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
@@ -19,6 +15,10 @@ use concinnity_core::ecs::{
     StepResult, System,
 };
 use concinnity_core::resource::AudioClipTable;
+use std::collections::{HashMap, HashSet};
+
+use super::occlusion::OcclusionSmoother;
+use super::{AudioEngine, AudioVolumes, EmitterId, EmitterParams};
 
 // Audio behavior. Constructed internally by `World::start` when the world
 // declares any `AudioEmitter` or `AudioCue`; never a world-declared asset, so

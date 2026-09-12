@@ -6,12 +6,11 @@
 // component, which gameplay systems (or the `anim-param` debug command)
 // write; the graph math itself lives in `concinnity_core::gfx::anim_graph`.
 
+use concinnity_core::components::{AnimationGraph, AnimationParams, GroundProbes, SkeletonPose};
+use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
+use concinnity_core::gfx::anim_graph::{CompiledGraph, GraphCursor};
+use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
-
-use crate::components::{AnimationGraph, AnimationParams};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, SkinnedMeshHandle};
-use crate::gfx::anim_graph::{CompiledGraph, GraphCursor};
 
 use super::{TargetMode, TargetState};
 
@@ -82,7 +81,7 @@ pub(super) fn install_graphs(
                 let chains = if g.ik_chains.is_empty() {
                     Vec::new()
                 } else if let Some(skeleton) = ctx
-                    .query::<crate::components::SkeletonPose>()
+                    .query::<SkeletonPose>()
                     .find(|p| p.mesh_id == target)
                     .map(|p| p.skeleton.clone())
                 {
@@ -97,7 +96,7 @@ pub(super) fn install_graphs(
                     Vec::new()
                 };
                 if !chains.is_empty() {
-                    ctx.push(crate::components::GroundProbes {
+                    ctx.push(GroundProbes {
                         target,
                         probes: Vec::new(),
                     });
@@ -149,10 +148,14 @@ pub(super) fn step_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::BlobData;
-    use crate::ecs::asset_id::intern;
-    use crate::ecs::{ComponentSlot, ComponentStorage, Resources};
-    use crate::gfx::profile::FrameProfile;
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::{ComponentSlot, ComponentStorage, Resources};
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::gfx::skeleton;
+    use concinnity_host::store::blob::BlobData;
+    use concinnity_host::thread::asset_id;
+    use concinnity_host::thread::asset_id::intern;
 
     use super::super::TargetState;
     use super::super::flat::{ClipEntry, FlatState};
@@ -160,7 +163,7 @@ mod tests {
     // A bare clip; installing a graph reads only its duration and loop flag.
     fn clip_entry() -> ClipEntry {
         ClipEntry {
-            clip: crate::gfx::skeleton::AnimationClip {
+            clip: skeleton::AnimationClip {
                 morph_keys: Vec::new(),
                 duration: 1.0,
                 looping: true,
@@ -199,7 +202,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
-        scratch: crate::ecs::Arena,
+        scratch: Arena,
     }
 
     impl TestWorld {
@@ -209,7 +212,7 @@ mod tests {
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -223,7 +226,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
 
@@ -247,7 +250,7 @@ mod tests {
     }
 
     fn parse(v: serde_json::Value) -> AnimationGraph {
-        crate::ecs::asset_id::ensure_name_resolver();
+        asset_id::ensure_name_resolver();
         serde_json::from_value(v).unwrap()
     }
 
@@ -338,11 +341,7 @@ mod tests {
             vec![1.5],
             "seeded from the declared default"
         );
-        assert_eq!(
-            w.count::<crate::components::GroundProbes>(),
-            0,
-            "no chains, no probe exchange"
-        );
+        assert_eq!(w.count::<GroundProbes>(), 0, "no chains, no probe exchange");
     }
 
     // IK chains resolve joint names against the target's skeleton. Without a
@@ -365,7 +364,7 @@ mod tests {
             panic!("graph installed");
         };
         assert!(g.chains.is_empty(), "IK disabled without a skeleton");
-        assert_eq!(w.count::<crate::components::GroundProbes>(), 0);
+        assert_eq!(w.count::<GroundProbes>(), 0);
     }
 
     // A graph bucket parked at its initial state, for driving `step_target`.

@@ -13,13 +13,14 @@
 //! rest of the `GraphicsSystem` init sweep) need a device to reach, so they
 //! stay covered by the flag alone.
 
-use crate::components::{
+use concinnity_core::components::{
     AudioEmitter, Behavior, EngineDefaults, HitRegion, KeyBinding, PhysicsJoint, Prop, PropBody,
     Screen, ScrollPanel, TriggerVolume,
 };
-use crate::ecs::SYSTEMS;
-use crate::ecs::World;
 use concinnity_core::ecs::ComponentTag;
+use concinnity_core::ecs::World;
+
+use crate::ecs::SYSTEMS;
 
 // One of each component under test, added before the world starts. The returned
 // tags are what the census is then checked against.

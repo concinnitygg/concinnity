@@ -14,8 +14,7 @@
 // from sub-ranges of it, so no GPU buffer is created per label per frame.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::TextUniforms;
-use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall};
+use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 

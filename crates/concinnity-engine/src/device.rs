@@ -6,8 +6,8 @@
 //! construction reports failure by yielding no backend, and an unclassified GPU
 //! is what quality auto-config falls back to.
 
-use crate::gfx::backend::{GpuProfile, RenderBackend};
-use crate::gfx::backend_init::BackendInit;
+use concinnity_core::render::backend::{GpuProfile, RenderBackend};
+use concinnity_core::render::backend_init::BackendInit;
 
 /// Whether a rendering backend compiles into this build. False leaves the
 /// headless loop as the only one that can run a world.

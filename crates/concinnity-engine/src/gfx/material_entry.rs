@@ -7,9 +7,9 @@
 // the whole table at load, and the editor's live draw seam bakes one material
 // again when an edit reassigns it.
 
-use crate::components::Material;
-use crate::ecs::{MaterialHandle, TextureHandle};
-use crate::gfx::render_types::{MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT};
+use concinnity_core::components::Material;
+use concinnity_core::ecs::{MaterialHandle, TextureHandle};
+use concinnity_core::gfx::render_types::{MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT};
 
 // One decoded material as build_draw_list consumes it: resolved texture pool
 // slots, the GPU uniforms, and the shader bucket its draws render under.

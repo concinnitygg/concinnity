@@ -6,9 +6,10 @@
 // of the camera and of camera-relative rendering; this is where both are
 // applied.
 
-use crate::ecs::PipelineContext;
-use crate::gfx::lines::{Line, LineCamera, build_vertices_into};
-use crate::gfx::render_types::LineVertex;
+use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::WorldLines;
+use concinnity_core::gfx::lines::{Line, LineCamera, build_vertices_into};
+use concinnity_core::gfx::render_types::LineVertex;
 
 // The camera + space this frame draws with.
 pub(super) struct LineFrame {
@@ -28,7 +29,7 @@ pub(super) struct LineFrame {
 // which is every frame of a shipped runtime.
 pub(super) fn build_into(ctx: &PipelineContext<'_>, frame: LineFrame, out: &mut Vec<LineVertex>) {
     out.clear();
-    let Some(lines) = ctx.resource::<crate::ecs::WorldLines>() else {
+    let Some(lines) = ctx.resource::<WorldLines>() else {
         return;
     };
     if lines.0.is_empty() {
@@ -56,9 +57,12 @@ fn offset(p: [f32; 3], by: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::BlobData;
-    use crate::ecs::{ComponentStorage, PipelineContext, Resources};
-    use crate::gfx::profile::FrameProfile;
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
+    use concinnity_core::gfx::camera;
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_host::store::blob::BlobData;
 
     // Owns the storage a PipelineContext borrows from; the build reads only the
     // WorldLines resource, so the components / blob stay empty.
@@ -67,21 +71,21 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
-        scratch: crate::ecs::Arena,
+        scratch: Arena,
     }
 
     impl TestWorld {
         fn new(lines: Vec<Line>) -> Self {
             let mut resources = Resources::new();
             if !lines.is_empty() {
-                resources.insert(crate::ecs::WorldLines(lines));
+                resources.insert(WorldLines(lines));
             }
             Self {
                 components: ComponentStorage::default(),
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources,
-                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -91,14 +95,14 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
-                frame: crate::ecs::FrameContext::new(&self.scratch),
+                frame: FrameContext::new(&self.scratch),
             }
         }
     }
 
     fn frame(rebase: [f32; 3]) -> LineFrame {
         LineFrame {
-            view: crate::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
+            view: camera::view_matrix([0.0; 3], 0.0, 0.0),
             cam_pos: [0.0; 3],
             rebase,
             fov_y_radians: std::f32::consts::FRAC_PI_2,

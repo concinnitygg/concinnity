@@ -3,12 +3,14 @@
 // path cannot read live world state; everything it consumes arrives through
 // the snapshot and everything it produces leaves through SubmitOutcome.
 
+use concinnity_core::ecs::StepResult;
+use concinnity_core::gfx::profile::RenderStats;
+use concinnity_core::render::backend::{FrameParams, RenderBackend};
+use concinnity_core::render::error;
+use concinnity_core::render::ops::ReplayOutcome;
+use concinnity_core::render::snapshot::{RenderSnapshot, SceneOp};
+
 use super::frame_policy::{FrameAction, FramePolicy};
-use crate::ecs::StepResult;
-use crate::gfx::backend::{FrameParams, RenderBackend};
-use crate::gfx::ops::ReplayOutcome;
-use crate::gfx::profile::RenderStats;
-use crate::gfx::snapshot::{RenderSnapshot, SceneOp};
 
 // What one frame's submission produced, applied to the world by `run_step`
 // after the backend is parked again.
@@ -120,7 +122,7 @@ pub(crate) fn submit(
     }) {
         Ok(()) => policy.frame_succeeded(),
         Err(e) => {
-            memory_pressure = matches!(e, crate::gfx::error::RenderError::OutOfDeviceMemory(_));
+            memory_pressure = matches!(e, error::RenderError::OutOfDeviceMemory(_));
             match policy.on_frame_error(&e) {
                 FrameAction::SkipFrame => {}
                 FrameAction::Shutdown => {
@@ -160,8 +162,8 @@ pub(crate) fn submit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::DirectionalLight;
     use crate::gfx::mock_backend::{Call, recording_backend};
+    use concinnity_core::components::DirectionalLight;
     use concinnity_core::render::lights::DirectionalLightSet;
 
     fn pushed_lights(directional: Option<DirectionalLightSet>) -> Vec<Call> {

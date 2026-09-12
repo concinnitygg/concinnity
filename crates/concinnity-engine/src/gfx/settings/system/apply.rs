@@ -4,11 +4,18 @@
 // and persists the change through the background writer. Moved verbatim from
 // the GraphicsSystem frame step; the state fields keep their names.
 
+use concinnity_core::components::{
+    AudioCommand, AudioTarget, ControlsCommand, GamepadAction, SettingCommand, SettingOp, Sprite,
+    WindowMode,
+};
+use concinnity_core::ecs::FrameRateCap;
+use concinnity_core::ecs::PipelineContext;
+use concinnity_core::render::display_mode;
+use concinnity_core::render::keymap;
+use concinnity_core::render::ops::RenderOps;
+
 use super::SettingsState;
 use super::rows::{set_cached_row_label, set_label_content, set_rows_grayed, set_sprite_x};
-use crate::components::{SettingCommand, SettingOp, WindowMode};
-use crate::ecs::PipelineContext;
-use crate::gfx::ops::RenderOps;
 use crate::gfx::settings;
 use crate::gfx::system as gsys;
 
@@ -55,7 +62,7 @@ impl SettingsState {
                     .find(|s| s.key == cmd.setting)
                     .and_then(|s| {
                         let hx = ctx
-                            .query::<crate::components::Sprite>()
+                            .query::<Sprite>()
                             .find(|sp| sp.asset_id == s.handle_id)
                             .map(|sp| sp.x)?;
                         let travel = (s.track_w - s.handle_w).max(f32::EPSILON);
@@ -76,8 +83,7 @@ impl SettingsState {
             // refresh the affected row label(s). Handled first; the
             // slider + cycle settings below take SetFraction / Next / Prev.
             if let SettingOp::Rebind(key) = cmd.op {
-                let Some(action) = crate::gfx::keymap::Bindable::from_setting_key(&cmd.setting)
-                else {
+                let Some(action) = keymap::Bindable::from_setting_key(&cmd.setting) else {
                     tracing::warn!("GraphicsSystem: unknown rebind '{}'", cmd.setting);
                     continue;
                 };
@@ -110,8 +116,7 @@ impl SettingsState {
             // live map travels to InputSystem as a ControlsCommand instead of
             // a backend push (the gamepad is polled engine-side).
             if let SettingOp::RebindButton(button) = cmd.op {
-                let Some(action) = crate::components::GamepadAction::from_setting_key(&cmd.setting)
-                else {
+                let Some(action) = GamepadAction::from_setting_key(&cmd.setting) else {
                     tracing::warn!("GraphicsSystem: unknown gamepad rebind '{}'", cmd.setting);
                     continue;
                 };
@@ -120,12 +125,10 @@ impl SettingsState {
                     .action_for_button(button)
                     .filter(|&a| a != action);
                 self.gamepad_map.rebind(action, button);
-                ctx.events_mut::<crate::components::ControlsCommand>().send(
-                    crate::components::ControlsCommand {
-                        gamepad_map: Some(self.gamepad_map),
-                        ..Default::default()
-                    },
-                );
+                ctx.events_mut::<ControlsCommand>().send(ControlsCommand {
+                    gamepad_map: Some(self.gamepad_map),
+                    ..Default::default()
+                });
                 cfg.controls.gamepad_map = Some(self.gamepad_map);
                 cfg_dirty = true;
                 for act in [Some(action), victim].into_iter().flatten() {
@@ -210,27 +213,26 @@ impl SettingsState {
                 // ControlsCommand read this same tick (live, no restart).
                 // Each carries only the field it changed.
                 let controls_cmd = match cmd.setting.as_str() {
-                    "mouse_sensitivity" => Some(crate::components::ControlsCommand {
+                    "mouse_sensitivity" => Some(ControlsCommand {
                         mouse_sensitivity: Some(stored),
                         ..Default::default()
                     }),
-                    "fov" => Some(crate::components::ControlsCommand {
+                    "fov" => Some(ControlsCommand {
                         fov_y_degrees: Some(stored),
                         ..Default::default()
                     }),
-                    "gamepad_look_sensitivity" => Some(crate::components::ControlsCommand {
+                    "gamepad_look_sensitivity" => Some(ControlsCommand {
                         gamepad_look_sensitivity: Some(stored),
                         ..Default::default()
                     }),
-                    "gamepad_deadzone" => Some(crate::components::ControlsCommand {
+                    "gamepad_deadzone" => Some(ControlsCommand {
                         gamepad_deadzone: Some(stored),
                         ..Default::default()
                     }),
                     _ => None,
                 };
                 if let Some(controls_cmd) = controls_cmd {
-                    ctx.events_mut::<crate::components::ControlsCommand>()
-                        .send(controls_cmd);
+                    ctx.events_mut::<ControlsCommand>().send(controls_cmd);
                 }
                 // Move the handle to the new fraction.
                 if let Some((handle_id, track_x, track_w, handle_w)) = geom {
@@ -458,14 +460,15 @@ impl SettingsState {
                 // The chosen mode, else the display's own (read inline,
                 // not via effective_resolution, so the borrow stays
                 // field-local alongside the live backend).
-                let effective = self.resolution.or(self.current_mode).unwrap_or(
-                    crate::gfx::display_mode::DisplayMode {
-                        width: self.window_args.width,
-                        height: self.window_args.height,
-                        refresh_hz: 0,
-                    },
-                );
-                let cur = crate::gfx::display_mode::index_of(&self.display_modes, effective);
+                let effective =
+                    self.resolution
+                        .or(self.current_mode)
+                        .unwrap_or(display_mode::DisplayMode {
+                            width: self.window_args.width,
+                            height: self.window_args.height,
+                            refresh_hz: 0,
+                        });
+                let cur = display_mode::index_of(&self.display_modes, effective);
                 let next = settings::cycle(cur, self.display_modes.len(), cmd.op);
                 let mode = self.display_modes[next];
                 self.resolution = Some(mode);
@@ -524,7 +527,7 @@ impl SettingsState {
                     // value change re-bases its running deadline so
                     // changing the cap never leaves one stale long wait.
                     // Independent of the preset (no Custom flip).
-                    ctx.insert_resource(crate::ecs::FrameRateCap(self.fps_cap));
+                    ctx.insert_resource(FrameRateCap(self.fps_cap));
                     cfg.graphics.fps_cap = Some(self.fps_cap);
                     Some(opts[next])
                 }
@@ -595,29 +598,17 @@ impl SettingsState {
                     // with no audio simply has no AudioSystem to drain it;
                     // the persisted value then applies at the next audio init.
                     let (stored, target) = match cmd.setting.as_str() {
-                        "master_volume" => (
-                            &mut cfg.audio.master_volume,
-                            crate::components::AudioTarget::Master,
-                        ),
-                        "music_volume" => (
-                            &mut cfg.audio.music_volume,
-                            crate::components::AudioTarget::Music,
-                        ),
-                        "sfx_volume" => (
-                            &mut cfg.audio.sfx_volume,
-                            crate::components::AudioTarget::Sfx,
-                        ),
-                        _ => (
-                            &mut cfg.audio.voice_volume,
-                            crate::components::AudioTarget::Voice,
-                        ),
+                        "master_volume" => (&mut cfg.audio.master_volume, AudioTarget::Master),
+                        "music_volume" => (&mut cfg.audio.music_volume, AudioTarget::Music),
+                        "sfx_volume" => (&mut cfg.audio.sfx_volume, AudioTarget::Sfx),
+                        _ => (&mut cfg.audio.voice_volume, AudioTarget::Voice),
                     };
                     let cur = settings::volume_index(stored.unwrap_or(settings::DEFAULT_VOLUME));
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     let gain = settings::volume_at(next);
                     *stored = Some(gain);
-                    ctx.events_mut::<crate::components::AudioCommand>()
-                        .send(crate::components::AudioCommand { target, gain });
+                    ctx.events_mut::<AudioCommand>()
+                        .send(AudioCommand { target, gain });
                     Some(opts[next])
                 }
                 // Quality-feature toggles: flip the matching field on the

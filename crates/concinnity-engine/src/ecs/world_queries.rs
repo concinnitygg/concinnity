@@ -5,22 +5,23 @@
 // no streaming pool; each of these reads one of the resources this crate's
 // render band parks there, or the systems it built.
 
+use concinnity_core::components::GraphicsConfig;
+use concinnity_core::ecs::BuiltSystem;
+use concinnity_core::ecs::World;
+use concinnity_core::render::backend::{GpuProfile, RenderBackend};
+use concinnity_host::store::paths::StateTree;
+
 use crate::app::budget::{MemoryBudget, ThreadBudget};
 use crate::app::mem_drift::MemoryDrift;
-use crate::ecs::{ActiveRenderBackend, World};
-use crate::gfx::backend::{GpuProfile, RenderBackend};
+use crate::ecs::ActiveRenderBackend;
 use crate::gfx::streaming::system::{StreamingPressure, StreamingState, StreamingStats};
-use concinnity_host::store::paths::StateTree;
 
 /// Whether the world needs a renderer. True when it declares a
 /// `GraphicsConfig` (pre-`start`) or has a constructed `GraphicsSystem`
 /// (post-`start`, after the config component has been drained), so callers can
 /// decide on the render loop regardless of timing.
 pub fn renders(world: &World) -> bool {
-    world
-        .query::<crate::components::GraphicsConfig>()
-        .next()
-        .is_some()
+    world.query::<GraphicsConfig>().next().is_some()
         || world.systems().iter().any(|s| {
             s.downcast_ref::<crate::gfx::system::GraphicsSystem>()
                 .is_some()
@@ -96,7 +97,7 @@ pub fn take_render_backend(world: &mut World) -> Option<Box<dyn RenderBackend>> 
 pub fn systems_and_render_backend(
     world: &mut World,
 ) -> (
-    &mut [crate::ecs::BuiltSystem],
+    &mut [BuiltSystem],
     Option<&mut (dyn RenderBackend + 'static)>,
 ) {
     let (systems, resources) = world.systems_and_resources();
@@ -118,7 +119,7 @@ mod tests {
     fn graphics_config_makes_world_render() {
         let mut world = World::new();
         assert!(!renders(&world));
-        world.add_component(crate::components::GraphicsConfig::default());
+        world.add_component(GraphicsConfig::default());
         assert!(renders(&world));
     }
 

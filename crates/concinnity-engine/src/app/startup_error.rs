@@ -3,7 +3,7 @@
 //! window. `CnError` is the FFI-facing status enum and carries no context, so
 //! the classification happens here where the paths involved are still known.
 
-use crate::error::CnError;
+use concinnity_core::error::CnError;
 use std::path::PathBuf;
 
 /// Why the runtime could not reach a playable state.

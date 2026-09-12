@@ -6,6 +6,8 @@
 //! out of the library. `init` fills these maps and hands them off as a
 //! `HotReloadSources` bundle through `GraphicsSystem::take_hot_reload_sources`.
 
+use concinnity_core::components::ProceduralMesh;
+use concinnity_core::components::ShaderStage;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -131,7 +133,7 @@ pub struct ProceduralMeshSourceEntry {
     /// Last-applied generator args as the parsed component, so default-filled
     /// fields match what a reload-time parse of `world.jsonl` produces.
     /// Typed equality classifies whether to regenerate.
-    pub args: crate::components::ProceduralMesh,
+    pub args: ProceduralMesh,
     /// Every draw slot that received this mesh's geometry at init.
     pub draw_indices: Vec<usize>,
 }
@@ -180,7 +182,7 @@ pub(crate) fn resolve_runtime_source_path(
 #[derive(Debug, Clone)]
 pub struct ShaderStageSourceEntry {
     /// Which of the Shader's files this is.
-    pub stage: crate::components::ShaderStage,
+    pub stage: ShaderStage,
     /// Resolved on-disk path the build pipeline read at compile time. Stored
     /// resolved (not raw) so the watcher can subscribe to a real parent
     /// directory even when the asset declaration used a bare filename.
@@ -190,7 +192,7 @@ pub struct ShaderStageSourceEntry {
 /// Catalog of the world default Shader's files, which the renderer can
 /// hot-reload. Owned by `GraphicsSystem` under `cn debug` only; consumed by
 /// `reload_shader_stages` when the asset hot-reload watcher fires on one of
-/// them. At most one entry per [`crate::components::ShaderStage`].
+/// them. At most one entry per [`concinnity_core::components::ShaderStage`].
 #[derive(Debug, Clone, Default)]
 pub struct ShaderStageSourceMap {
     /// One entry per reloadable shader stage.
@@ -508,7 +510,7 @@ mod tests {
     // Shader files watch their resolved paths, one entry per stage.
     #[test]
     fn shader_stage_map_watches_resolved_parents() {
-        use crate::components::ShaderStage;
+        use concinnity_core::components::ShaderStage;
 
         let mut map = ShaderStageSourceMap::new();
         assert!(map.is_empty());
@@ -531,7 +533,7 @@ mod tests {
     fn shader_stage_map_skips_an_empty_resolved_path() {
         let mut map = ShaderStageSourceMap::new();
         map.entries.push(ShaderStageSourceEntry {
-            stage: crate::components::ShaderStage::Fragment,
+            stage: ShaderStage::Fragment,
             resolved_path: String::new(),
         });
         assert!(map.watch_dirs().is_empty());

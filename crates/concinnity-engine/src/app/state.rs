@@ -1,11 +1,15 @@
 //! The `App` value: a world plus the loop state that drives it.
 
+use concinnity_core::components::AppConfig;
+use concinnity_core::ecs::{Clock, MenuActive, StepResult, World};
+use concinnity_core::error::CnError;
 use concinnity_host::store::paths::StateTree;
+use concinnity_host::thread::jobs::configure;
+use concinnity_host::thread::jobs::pool;
 
 use crate::app::startup_error::StartupError;
 use crate::blob;
-use crate::ecs::{SYSTEMS, StepResult, World};
-use crate::error::CnError;
+use crate::ecs::SYSTEMS;
 use crate::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,7 +149,7 @@ impl App {
                 by_name.insert(id, entity);
             }
         }
-        world.insert_resource(crate::ecs::decompose::EntityByName(by_name));
+        world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
         world.insert_resource(crate::ecs::BlobSceneGroups(scene_groups));
         world.insert_resource(crate::ecs::BlobMeshBounds(mesh_bounds));
         // Absent for a world with no physics content, which is also a world
@@ -189,7 +193,7 @@ impl App {
         // The world times each system against this; without it the profile's
         // per-system micros read zero.
         self.world
-            .insert_resource(crate::ecs::Clock(crate::app::clock::monotonic_micros));
+            .insert_resource(Clock(crate::app::clock::monotonic_micros));
         self.world.start(SYSTEMS)?;
         self.status = AppStatus::Started;
         Ok(())
@@ -204,7 +208,7 @@ impl App {
     fn install_home(&mut self) {
         let Some(home) = self
             .world
-            .query::<crate::components::AppConfig>()
+            .query::<AppConfig>()
             .next()
             .map(|c| c.home.clone())
             .filter(|h| !h.is_empty())
@@ -255,7 +259,7 @@ impl App {
 
         let config = self
             .world
-            .query::<crate::components::AppConfig>()
+            .query::<AppConfig>()
             .next()
             .cloned()
             .unwrap_or_default();
@@ -264,8 +268,8 @@ impl App {
         let memory =
             budget::MemoryBudget::compute(sysmem::total_physical_bytes(), config.max_memory_mb);
 
-        let sized = crate::jobs::configure(threads.job_threads);
-        let job_workers = crate::jobs::pool().thread_count();
+        let sized = configure(threads.job_threads);
+        let job_workers = pool().thread_count();
         if !sized && job_workers != threads.job_threads {
             tracing::warn!(
                 "job pool already built with {job_workers} worker(s); the requested {} cannot take effect",
@@ -322,10 +326,7 @@ impl App {
     /// pacer's clamp accepts.
     pub fn world_step(&mut self) -> StepResult {
         self.pacer.pace(&self.world);
-        let paused = self
-            .world
-            .resource::<crate::ecs::MenuActive>()
-            .is_some_and(|m| m.0);
+        let paused = self.world.resource::<MenuActive>().is_some_and(|m| m.0);
         let timing = self.clock.advance(std::time::Instant::now(), paused);
         self.world.insert_resource(timing);
         self.world.step()
@@ -370,7 +371,8 @@ fn resolve_home(home: &str, content_root: &std::path::Path) -> Option<std::path:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::AppConfig;
+    use concinnity_core::components::AppConfig;
+    use concinnity_core::ecs::FrameRateCap;
 
     // Starting the app publishes the thread + memory budgets as world resources,
     // honoring an `AppConfig`'s overrides. A world with no GraphicsConfig starts
@@ -576,7 +578,7 @@ mod tests {
         let mut app = App::new();
         app.start().unwrap();
         assert!(
-            app.world().resource::<crate::ecs::FrameRateCap>().is_none(),
+            app.world().resource::<FrameRateCap>().is_none(),
             "no cap is published without a GraphicsConfig"
         );
         assert_eq!(app.world_step(), StepResult::Done);

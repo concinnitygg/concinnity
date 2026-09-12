@@ -11,12 +11,15 @@
 // interleaving-dependent under the atomic counter and must never be treated
 // as world state.
 
-use crate::components::{
+use concinnity_core::components::BehaviorQuery;
+use concinnity_core::components::ContactEvent;
+use concinnity_core::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, BodyDynamics, Collider, PhysicsConfig,
     Prop, PropCollider, Transform,
 };
+use concinnity_core::ecs::{ScheduleMode, StepResult, World};
+
 use crate::ecs::SYSTEMS;
-use crate::ecs::{ScheduleMode, StepResult, World};
 
 fn fnv(hash: &mut u64, bytes: &[u8]) {
     for &b in bytes {
@@ -39,7 +42,7 @@ fn hash_world(world: &World) -> u64 {
         hash_f32s(&mut h, &t.scale);
     }
     fnv(&mut h, &(world.component_count() as u64).to_le_bytes());
-    if let Some(events) = world.events::<crate::components::ContactEvent>() {
+    if let Some(events) = world.events::<ContactEvent>() {
         fnv(&mut h, &(events.len() as u64).to_le_bytes());
     }
     h
@@ -95,7 +98,7 @@ fn build_world() -> World {
                 scale: None,
             },
         ],
-        queries: vec![crate::components::BehaviorQuery {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],

@@ -12,13 +12,16 @@
 //! nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
 //! the command channel lives in the editor crate.
 
-use crate::app::runloop;
-use crate::app::startup_error::StartupError;
-use crate::app::state::App;
-use crate::error::CnError;
+use concinnity_core::components::GraphicsConfig;
+use concinnity_core::ecs::ScheduleMode;
+use concinnity_core::error::CnError;
 use concinnity_host::store::paths::StateTree;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
+
+use crate::app::runloop;
+use crate::app::startup_error::StartupError;
+use crate::app::state::App;
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
 // builds, warn for release builds. A RUST_LOG value always takes precedence.
@@ -72,7 +75,7 @@ pub struct RunOptions {
     /// Whether systems may fan their internal work across the job pool
     /// (default) or keep everything on the stepping thread
     /// (`cn run --serial-schedule`, the determinism oracle).
-    pub schedule: crate::ecs::ScheduleMode,
+    pub schedule: ScheduleMode,
     /// Capture the last presented frame to this path when the run stops, for
     /// headless verification of the runtime path (`cn run --screenshot`).
     pub screenshot: Option<String>,
@@ -198,10 +201,7 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), CnE
     let renders = crate::ecs::renders(app.world());
 
     if let Some(max) = options.max_frames {
-        for config in app
-            .world_mut()
-            .query_mut::<crate::components::GraphicsConfig>()
-        {
+        for config in app.world_mut().query_mut::<GraphicsConfig>() {
             config.max_frames = Some(max);
         }
     }

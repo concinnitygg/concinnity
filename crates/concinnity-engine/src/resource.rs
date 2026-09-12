@@ -2,22 +2,13 @@
 //
 // Engine-side resource-table wiring. The per-kind, handle-indexed tables
 // themselves (an audio clip today; meshes / textures / materials on the Windows
-// follow-up) are renderer-free and live in concinnity-core; this module
-// re-exports them under the historical `crate::resource::*` paths, and adds the
+// follow-up) are renderer-free and live in concinnity-core; what is here is the
 // engine-only glue: `install_resource_tables`, which builds every table from a
 // compiled blob's resource stream and inserts it as a World resource, plus the
 // dev-only source catalogs the hot-reload path captures.
 
 use concinnity_core::ecs::ResourceRecord;
-
-// The per-kind runtime tables + their shared entry type live in concinnity-core
-// so the physics / audio subsystem crates can reach them; re-export them under
-// the historical `crate::resource::*` paths for every reader (the graphics
-// systems, the editor's in-memory build, the examples' `compile_world`).
-pub use concinnity_core::resource::{
-    AudioClipTable, ColorLutTable, EnvironmentMapTable, FontTable, MaterialTable, MeshTable,
-    ResourceEntry, SkinnedMeshTable, TextureTable,
-};
+use concinnity_core::ecs::World;
 
 /// One texture's identity + source file, in `TextureHandle` order. A procedural
 /// texture has an empty `source`. `name_id` is the interned asset name (the same
@@ -111,7 +102,7 @@ pub struct MaterialNames(pub Vec<u32>);
 /// builder MOVES its kind's data bytes out of the records, so the caller's
 /// record vec is spent scaffolding afterwards. Dev-only source catalogs
 /// (hot-reload) stay with the debug path that captures them, not here.
-pub fn install_resource_tables(world: &mut crate::ecs::World, records: &mut [ResourceRecord]) {
+pub fn install_resource_tables(world: &mut World, records: &mut [ResourceRecord]) {
     log_resource_footprint(records);
     concinnity_core::resource::install_tables(world, records);
 }
@@ -140,6 +131,14 @@ fn log_resource_footprint(records: &[ResourceRecord]) {
 mod tests {
     use super::*;
     use concinnity_core::ecs::{PayloadLocator, ResourceKind};
+    use concinnity_core::resource::AudioClipTable;
+    use concinnity_core::resource::ColorLutTable;
+    use concinnity_core::resource::EnvironmentMapTable;
+    use concinnity_core::resource::FontTable;
+    use concinnity_core::resource::MaterialTable;
+    use concinnity_core::resource::MeshTable;
+    use concinnity_core::resource::SkinnedMeshTable;
+    use concinnity_core::resource::TextureTable;
 
     // Each kind gets a distinct record count, so a table that picked up another
     // kind's records shows as a wrong length. Order matches `table_lens`.
@@ -178,7 +177,7 @@ mod tests {
 
     // Every table's length, in `KIND_COUNTS` order. The `expect`s are the
     // assertion that each kind's table was installed at all.
-    fn table_lens(world: &crate::ecs::World) -> [usize; 8] {
+    fn table_lens(world: &World) -> [usize; 8] {
         [
             world.resource::<AudioClipTable>().expect("audio").0.len(),
             world.resource::<TextureTable>().expect("texture").0.len(),
@@ -207,7 +206,7 @@ mod tests {
     // its own kind's records, at their handles.
     #[test]
     fn install_wires_every_kind_table_into_the_world() {
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         install_resource_tables(&mut world, &mut records());
 
         assert_eq!(table_lens(&world), [1, 2, 3, 4, 5, 6, 7, 8]);
@@ -223,7 +222,7 @@ mod tests {
     // one rather than a missing resource.
     #[test]
     fn install_with_no_records_installs_empty_tables() {
-        let mut world = crate::ecs::World::new();
+        let mut world = World::new();
         install_resource_tables(&mut world, &mut []);
         assert_eq!(table_lens(&world), [0; 8]);
     }

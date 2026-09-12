@@ -2,16 +2,21 @@
 // code: chunk conversion, camera-relative chunk placement, draw-object
 // position extraction, streaming payload sources, and backend construction.
 
-use crate::components::BlockType;
-use crate::gfx::mesh_payload::Vertex;
+use concinnity_core::components::BlockType;
+use concinnity_core::ecs::PayloadLocator;
+use concinnity_core::geometry::ChunkBlockType;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types;
+use concinnity_host::store::blob::blob_path;
+use concinnity_host::store::blob::payload_section_start;
 
 // Resolve a `BlockType` asset into the chunk mesher's palette entry. Per-face
 // UV overrides fall back to the uv_min/uv_max rectangle, mirroring the
 // build-time `geometry::resolve_block_type`. Used by every backend's
 // chunk-streaming setup.
-pub(super) fn block_type_to_chunk(bt: &BlockType) -> crate::geometry::ChunkBlockType {
+pub(super) fn block_type_to_chunk(bt: &BlockType) -> ChunkBlockType {
     let default_rect = [bt.uv_min[0], bt.uv_min[1], bt.uv_max[0], bt.uv_max[1]];
-    crate::geometry::ChunkBlockType {
+    ChunkBlockType {
         solid: bt.solid,
         uv_top: bt.uv_top.unwrap_or(default_rect),
         uv_bottom: bt.uv_bottom.unwrap_or(default_rect),
@@ -22,7 +27,7 @@ pub(super) fn block_type_to_chunk(bt: &BlockType) -> crate::geometry::ChunkBlock
 // World-space position used to score a draw object for texture streaming:
 // the AABB center when bounds are finite, otherwise the model-matrix
 // translation (dynamic props carry a non-finite sentinel AABB).
-pub(super) fn draw_object_position(obj: &crate::gfx::render_types::DrawObject) -> [f32; 3] {
+pub(super) fn draw_object_position(obj: &render_types::DrawObject) -> [f32; 3] {
     let finite = obj
         .bb_min
         .iter()
@@ -55,11 +60,11 @@ pub(super) const AUTO_SEED_MAX_TRIANGLES: usize = 200_000;
 // fetch is bounds-checked against the shared vertex buffer (build-time offsets should be
 // in range, but a bad offset is skipped rather than risking an out-of-bounds index).
 pub(super) fn gather_auto_seed_triangles(
-    draw_objects: &[crate::gfx::render_types::DrawObject],
+    draw_objects: &[render_types::DrawObject],
     all_vertices: &[Vertex],
     all_indices: &[u32],
 ) -> Option<Vec<[[f32; 3]; 3]>> {
-    let eligible = |o: &crate::gfx::render_types::DrawObject| o.cullable() && o.index_count >= 3;
+    let eligible = |o: &render_types::DrawObject| o.cullable() && o.index_count >= 3;
     let total_tris: usize = draw_objects
         .iter()
         .filter(|o| eligible(o))
@@ -109,7 +114,7 @@ pub(super) fn gather_auto_seed_triangles(
 // Metal, Vulkan, and DirectX texture-streaming paths.
 pub(super) fn build_texture_payload_source(
     payloads: Vec<Vec<u8>>,
-    locators: &[crate::ecs::PayloadLocator],
+    locators: &[PayloadLocator],
     disk_backed: bool,
 ) -> Result<std::sync::Arc<dyn crate::gfx::streaming::texture::PayloadSource>, String> {
     if !disk_backed {
@@ -120,12 +125,12 @@ pub(super) fn build_texture_payload_source(
     let mut section_starts: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
     let mut disk_locators = Vec::with_capacity(locators.len());
     for loc in locators {
-        let path = crate::blob::blob_path(loc.blob_index)
+        let path = blob_path(loc.blob_index)
             .ok_or_else(|| format!("blob {}: no blob layout installed", loc.blob_index))?;
         let start = match section_starts.get(&loc.blob_index) {
             Some(&s) => s,
             None => {
-                let s = crate::blob::payload_section_start(&path)
+                let s = payload_section_start(&path)
                     .map_err(|e| format!("blob {}: {:?}", loc.blob_index, e))?;
                 section_starts.insert(loc.blob_index, s);
                 s
@@ -145,7 +150,8 @@ pub(super) fn build_texture_payload_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_core::bake::texture;
+    use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
     // A finite-bounds draw object at `model` covering `[index_offset, +count)`
     // of the shared index buffer. Culling stays enabled unless the caller
@@ -309,7 +315,7 @@ mod tests {
     #[test]
     fn build_texture_payload_source_mem_backed_decodes_payload() {
         // 1x1 RGBA tagged payload via the shared serializer.
-        let payload = crate::bake::texture::serialize(&crate::bake::texture::TextureImage::rgba8(
+        let payload = texture::serialize(&texture::TextureImage::rgba8(
             1,
             1,
             vec![0x11, 0x22, 0x33, 0xFF],

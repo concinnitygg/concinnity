@@ -13,13 +13,18 @@
 //! expressions). So editing a row the user has overridden moves the authored
 //! baseline and leaves the picture alone, exactly as relaunching would.
 
-use crate::components::{DirectionalLight, GraphicsConfig, PostProcessConfig, VolumetricFog};
-use crate::ecs::{ActiveRenderQueues, World};
-use crate::gfx::render_config as resolve;
-use crate::gfx::settings::system::{SettingsSlot, SettingsState};
+use concinnity_core::components::{
+    DirectionalLight, GraphicsConfig, PostProcessConfig, VolumetricFog,
+};
+use concinnity_core::ecs::World;
 use concinnity_core::render::lights::DirectionalLightSet;
 use concinnity_core::render::ops::RenderOps;
+use concinnity_core::render::volumetric_fog;
 use concinnity_core::sky::SkyOrientation;
+
+use crate::ecs::ActiveRenderQueues;
+use crate::gfx::render_config as resolve;
+use crate::gfx::settings::system::{SettingsSlot, SettingsState};
 
 /// The `GraphicsConfig` fields this module can apply to a running world. The
 /// rest (shadow map resolution, frames in flight, the sampler's anisotropy)
@@ -101,7 +106,7 @@ pub fn lights_under_sky<'a>(
 /// Enabling fog on a world that started without it is refused: see
 /// [`fog_pass_built`].
 pub fn apply_fog(world: &mut World, fog: Option<&VolumetricFog>) -> bool {
-    let settings = fog.and_then(crate::gfx::volumetric_fog::resolve_asset);
+    let settings = fog.and_then(volumetric_fog::resolve_asset);
     if settings.is_some() && !fog_pass_built(world) {
         return false;
     }
@@ -225,6 +230,7 @@ mod tests {
     use super::*;
     use crate::ecs::RenderQueues;
     use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
+    use concinnity_core::components::AaMode;
     use std::sync::{Arc, Mutex};
 
     struct Fixture {
@@ -459,7 +465,7 @@ mod tests {
         let mut f = Fixture::new();
         let config = PostProcessConfig {
             ssao: !PostProcessConfig::default().ssao,
-            aa_mode: crate::components::AaMode::Fxaa,
+            aa_mode: AaMode::Fxaa,
             ..Default::default()
         };
         apply_post_process_config(&mut f.world, &config);

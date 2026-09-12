@@ -144,7 +144,7 @@ const AUDIO_ROWS: [(&str, &str); 4] = [
 const CONTROLS_SLIDERS: [(&str, &str); 1] = [("mouse_sensitivity", "Sensitivity")];
 // Rebindable gameplay actions shown under the Controls tab: (display label,
 // setting key). Each emits a clickable row that captures a new key; the client
-// (`concinnity_engine::gfx::keymap` + the graphics system) owns the live key map and applies a
+// (`concinnity_core::render::keymap` + the graphics system) owns the live key map and applies a
 // rebind without a restart. The setting keys match `Bindable::setting_key`.
 const CONTROLS_REBINDS: [(&str, &str); 7] = [
     ("Move Forward", "key_forward"),

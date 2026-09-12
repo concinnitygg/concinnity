@@ -5,9 +5,8 @@
 // generic over the decoded payload so the request/complete/apply flow is
 // testable without kira; the engine stores decoded kira sound data in it.
 
-use std::collections::HashMap;
-
 use concinnity_core::components::AudioBus;
+use std::collections::HashMap;
 
 use super::EmitterId;
 

@@ -5,9 +5,10 @@
 // contributed lingers in any pass. Driven by DespawnRequest events SpawnSystem
 // drains each step (see mod.rs), and by the Lifetime expiries it ticks.
 
-use crate::components::{Children, RenderHandle, SkeletonPose};
-use crate::ecs::{Entity, PipelineContext};
-use crate::gfx::ops::RenderOps;
+use concinnity_core::components::{Children, RenderHandle, SkeletonPose};
+use concinnity_core::ecs::{Entity, PipelineContext};
+use concinnity_core::render::ops::RenderOps;
+
 use crate::gfx::render_slots::RenderSlots;
 
 // Collect an entity together with every descendant reachable through Children
@@ -94,10 +95,13 @@ pub(super) fn despawn_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::BlobData;
-    use crate::components::{Parent, Transform};
-    use crate::ecs::{ComponentStorage, Resources};
-    use crate::gfx::profile::FrameProfile;
+    use concinnity_core::components::{Parent, Transform};
+    use concinnity_core::ecs::Arena;
+    use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::SkinnedMeshHandle;
+    use concinnity_core::ecs::{ComponentStorage, Resources};
+    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_host::store::blob::BlobData;
 
     // Build an isolated PipelineContext over fresh storage, like the draw_list
     // tests, so a despawn cascade can be exercised without a backend.
@@ -106,13 +110,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
-        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
+        let scratch = Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
-            frame: crate::ecs::FrameContext::new(&scratch),
+            frame: FrameContext::new(&scratch),
         };
         body(&mut ctx)
     }
@@ -210,19 +214,15 @@ mod tests {
 
     #[test]
     fn despawn_retires_a_skinned_instance_slot() {
-        use crate::components::SkeletonPose;
-        use crate::gfx::skeleton::Skeleton;
+        use concinnity_core::components::SkeletonPose;
+        use concinnity_core::gfx::skeleton::Skeleton;
         run(|ctx| {
             // A skinned entity carries a SkeletonPose (no RenderHandle); its
             // skinned_index is the slot to retire.
             let skinned = ctx.components.spawn();
             ctx.insert(
                 skinned,
-                SkeletonPose::new(
-                    crate::ecs::SkinnedMeshHandle(1),
-                    4,
-                    Skeleton::new(Vec::new()),
-                ),
+                SkeletonPose::new(SkinnedMeshHandle(1), 4, Skeleton::new(Vec::new())),
             );
 
             let mut retired: Vec<RetiredSlot> = Vec::new();

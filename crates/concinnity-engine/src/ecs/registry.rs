@@ -47,7 +47,9 @@
 // Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
 // order-robust thanks to the event store's two-frame retention.
 
-use crate::ecs::{PipelineContext, access_ids, decompose, schedule};
+use concinnity_core::ecs::PipelineContext;
+
+use crate::ecs::{access_ids, decompose, schedule};
 
 // Runs once at world start, after the gates have built the systems and before
 // their `init`. The engine defaults the world is completed with land earlier
@@ -225,17 +227,21 @@ crate::define_systems! {
 #[cfg(test)]
 mod tests {
     use super::SYSTEMS;
-    use crate::ecs::{ComponentAsset, World};
+    use concinnity_core::components::AudioEmitter;
+    use concinnity_core::components::GraphicsConfig;
+    use concinnity_core::components::Story;
+    use concinnity_core::ecs::SystemEntry;
+    use concinnity_core::ecs::{ComponentAsset, World};
 
     // The table's entries, in run order.
-    const ENTRIES: &[crate::ecs::SystemEntry] = SYSTEMS.entries;
+    const ENTRIES: &[SystemEntry] = SYSTEMS.entries;
 
     // The overlay HUD components each gate their internal system and build in
     // the fixed schedule order (StatHud, then DebugHud, then FpsCounter).
     // DebugHud is developer-only but `cfg!(debug_assertions)` holds under test.
     #[test]
     fn hud_components_spawn_in_schedule_order() {
-        use crate::components::{DebugHud, FpsCounter, StatHud};
+        use concinnity_core::components::{DebugHud, FpsCounter, StatHud};
 
         let mut world = World::new();
         world.add_component(FpsCounter::default());
@@ -252,7 +258,7 @@ mod tests {
     // so `start()` opens no device here.
     #[test]
     fn system_manifest_matches_started_systems() {
-        use crate::components::{DebugHud, FpsCounter, StatHud, Story, TextInput};
+        use concinnity_core::components::{DebugHud, FpsCounter, StatHud, Story, TextInput};
 
         let mut world = World::new();
         world.add_component(StatHud::default());
@@ -272,7 +278,7 @@ mod tests {
     // on, and the PhysicsSystem is built either way.
     #[test]
     fn start_completes_the_world_with_its_engine_defaults() {
-        use crate::components::{EngineDefaults, PhysicsConfig, PropBody};
+        use concinnity_core::components::{EngineDefaults, PhysicsConfig, PropBody};
 
         let mut world = World::new();
         world.add_component(PropBody::default());
@@ -290,7 +296,7 @@ mod tests {
     // controller instead.
     #[test]
     fn a_camera_track_replaces_the_camera_controller() {
-        use crate::components::{Camera3D, CameraTrack, PhysicsConfig};
+        use concinnity_core::components::{Camera3D, CameraTrack, PhysicsConfig};
 
         let mut world = World::new();
         world.add_component(Camera3D::bake(Default::default()));
@@ -314,7 +320,7 @@ mod tests {
     // entry (the manifest is a filtered view of `SYSTEMS`, nothing else).
     #[test]
     fn system_manifest_is_a_table_order_subset() {
-        use crate::components::{FpsCounter, StatHud};
+        use concinnity_core::components::{FpsCounter, StatHud};
 
         let mut world = World::new();
         world.add_component(FpsCounter::default());
@@ -338,7 +344,7 @@ mod tests {
     #[test]
     fn streaming_runs_immediately_before_graphics() {
         let mut world = World::new();
-        world.add_component(crate::components::GraphicsConfig::default());
+        world.add_component(GraphicsConfig::default());
         let manifest = world.system_manifest(SYSTEMS);
         let s = manifest
             .iter()
@@ -359,7 +365,7 @@ mod tests {
     // controlled camera's `follow` block picks exactly one of them.
     #[test]
     fn camera_controller_gates_are_exclusive() {
-        use crate::components::{Camera3D, CameraController, FollowController};
+        use concinnity_core::components::{Camera3D, CameraController, FollowController};
 
         let mut fly_cam = Camera3D::bake(Default::default());
         fly_cam.controller = Some(CameraController::default());
@@ -383,7 +389,7 @@ mod tests {
     #[test]
     fn audio_gate_probes_without_a_device() {
         let mut world = World::new();
-        world.add_component(crate::components::AudioEmitter::default());
+        world.add_component(AudioEmitter::default());
         assert_eq!(world.system_manifest(SYSTEMS), ["AudioSystem"]);
     }
 
@@ -392,7 +398,7 @@ mod tests {
     #[test]
     fn story_component_spawns_story_system() {
         let mut world = World::new();
-        world.add_component(crate::components::Story::default());
+        world.add_component(Story::default());
         world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -403,7 +409,7 @@ mod tests {
     // path or the typed one) fills it, and `start()` is what gives it systems.
     #[test]
     fn empty_world_fills_from_components_then_systems() {
-        use crate::components::{FpsCounter, TextLabel};
+        use concinnity_core::components::{FpsCounter, TextLabel};
 
         let mut world = World::new();
         assert!(world.is_empty());
@@ -441,8 +447,8 @@ mod tests {
     // every entry of a later one. Manifest-only, so no device is built.
     #[test]
     fn a_registration_lands_in_the_phase_it_named() {
-        use crate::components::{FpsCounter, SkyRotation};
-        use crate::ecs::{Phase, PipelineContext, StepResult, System};
+        use concinnity_core::components::{FpsCounter, SkyRotation};
+        use concinnity_core::ecs::{Phase, PipelineContext, StepResult, System};
 
         #[derive(Debug)]
         struct Inert;

@@ -2,12 +2,11 @@
 // to morph weights, joint names to a proportion layer, and the capsule
 // dimensions that follow the proportioned skeleton.
 
+use concinnity_core::components::{CharacterCapsule, CharacterShape, SkeletonPose};
+use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
+use concinnity_core::gfx::proportions::ProportionLayer;
+use concinnity_core::gfx::skeleton::Skeleton;
 use std::collections::HashMap;
-
-use crate::components::{CharacterCapsule, CharacterShape, SkeletonPose};
-use crate::ecs::{PipelineContext, SkinnedMeshHandle};
-use crate::gfx::proportions::ProportionLayer;
-use crate::gfx::skeleton::Skeleton;
 
 // The static layers one shape contributes to its mesh's pose.
 pub(crate) struct ShapeLayers {
@@ -112,8 +111,8 @@ pub(crate) fn proportioned_capsule(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{JointProportion, ShapeSlider};
-    use crate::gfx::skeleton::{Joint, JointPose};
+    use concinnity_core::components::{JointProportion, ShapeSlider};
+    use concinnity_core::gfx::skeleton::{Joint, JointPose};
 
     fn chain() -> Skeleton {
         let joint = |name: &str, parent: Option<usize>, y: f32| Joint {

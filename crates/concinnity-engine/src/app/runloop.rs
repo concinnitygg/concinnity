@@ -11,8 +11,9 @@
 //! all other platforms a tight Rust loop is used, which is what the Vulkan /
 //! DirectX renderers expect.
 
+use concinnity_core::ecs::StepResult;
+
 use crate::app::state::App;
-use crate::ecs::StepResult;
 
 /// Install the process CTRL+C handler that cancels the app's shutdown token, so
 /// the render loop exits cleanly. Panics if a handler is already installed; only

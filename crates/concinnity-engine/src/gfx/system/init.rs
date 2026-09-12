@@ -1,28 +1,84 @@
 // GraphicsSystem one-time setup: backend creation, draw-list build, and the
 // shader / texture / streaming wiring performed on the first tick.
 
-use crate::components::{
+use concinnity_core::bake::font;
+use concinnity_core::bake::texture;
+use concinnity_core::components::CharacterCapsule;
+use concinnity_core::components::CharacterRig;
+use concinnity_core::components::DebugHud;
+use concinnity_core::components::GlobalTransform;
+use concinnity_core::components::InstancedProp;
+use concinnity_core::components::KeyBinding;
+use concinnity_core::components::ProceduralMesh;
+use concinnity_core::components::PropInstance;
+use concinnity_core::components::ReflectionProbe;
+use concinnity_core::components::RenderHandle;
+use concinnity_core::components::ShaderPrograms;
+use concinnity_core::components::SkeletonJoint;
+use concinnity_core::components::SkinnedMesh;
+use concinnity_core::components::Sprite;
+use concinnity_core::components::StatHud;
+use concinnity_core::components::Story;
+use concinnity_core::components::SubMeshRef;
+use concinnity_core::components::TextInput;
+use concinnity_core::components::TextLabel;
+use concinnity_core::components::Transform;
+use concinnity_core::components::WindowMode;
+use concinnity_core::components::build_skeleton_from_joint_defs;
+use concinnity_core::components::hdr_sample_count;
+use concinnity_core::components::procedural_mesh;
+use concinnity_core::components::sdf_volume;
+use concinnity_core::components::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
     Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, RectAreaLight,
-    SdfVolume, Shader, ShaderStage, SkinnedMeshGeometry, SpotLight, StreamingConfig, TextLabel,
-    VolumetricFog, VoxelWorld, WaterSurface, Window,
+    SdfVolume, Shader, ShaderStage, SkinnedMeshGeometry, SpotLight, StreamingConfig, VolumetricFog,
+    VoxelWorld, WaterSurface, Window,
 };
-use crate::ecs::PipelineContext;
-use crate::ecs::asset_id::AssetId;
-use crate::gfx::material_entry::MaterialEntry;
-use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::{draw_list, lights, skeleton, text, transform_propagation};
+use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::EventCursor;
+use concinnity_core::ecs::FontHandle;
+use concinnity_core::ecs::FrameRateCap;
+use concinnity_core::ecs::MaterialHandle;
+use concinnity_core::ecs::MenuOverride;
+use concinnity_core::ecs::OverlayImages;
+use concinnity_core::ecs::PayloadLocator;
+use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::SkinnedMeshHandle;
+use concinnity_core::ecs::TextureHandle;
+use concinnity_core::geometry::payload_joints_to_defs;
+use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::{
+    mesh_payload, mesh_seed, render_types, skeleton, transform_propagation,
+};
+use concinnity_core::render::{
+    backend, backend_init, decal, display_mode, lights, particles, reflection_probe, text,
+    volumetric_fog,
+};
+use concinnity_core::resource::AudioClipTable;
+use concinnity_core::resource::ColorLutTable;
+use concinnity_core::resource::EnvironmentMapTable;
+use concinnity_core::resource::FontTable;
+use concinnity_core::resource::MaterialTable;
+use concinnity_core::resource::SkinnedMeshTable;
+use concinnity_core::resource::TextureTable;
+use concinnity_host::store::blob::blob_path;
+use concinnity_host::store::blob::payload_section_start;
+use concinnity_host::thread::asset_id;
+use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 use super::helpers::*;
 use super::*;
+use crate::gfx::draw_list;
+use crate::gfx::material_entry::MaterialEntry;
 
 // The resolved render settings the rest of init consumes after
 // `init_render_settings` has written the remaining values onto the
 // GraphicsSystem: the packed post-processing config handed to the backend ctor,
 // the quality ceiling (planar-reflection budget), and the drained StreamingConfig.
 struct ResolvedRenderConfig {
-    post: crate::gfx::backend_init::PostSettings,
+    post: backend_init::PostSettings,
     quality_ceiling: crate::gfx::quality_preset::QualityCeiling,
     streaming_config: Option<StreamingConfig>,
     // Raw world ambient (PostProcessConfig::ambient_intensity, no user override),
@@ -35,13 +91,13 @@ struct ResolvedRenderConfig {
 // correlation web): its handle, interned name id, the baked mesh, its vertices,
 // LOD0 indices, the bind-pose joint defs, its morph targets, and LOD alternates.
 struct SkinnedGeometry {
-    handle: crate::ecs::SkinnedMeshHandle,
+    handle: SkinnedMeshHandle,
     name_id: AssetId,
-    mesh: crate::components::SkinnedMesh,
-    vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
+    mesh: SkinnedMesh,
+    vertices: Vec<mesh_payload::SkinnedVertex>,
     indices: Vec<u16>,
-    joint_defs: Vec<crate::components::SkeletonJoint>,
-    morphs: crate::gfx::mesh_payload::PayloadMorphs,
+    joint_defs: Vec<SkeletonJoint>,
+    morphs: mesh_payload::PayloadMorphs,
     lod_alternates: Vec<(f32, Vec<u16>)>,
 }
 
@@ -50,15 +106,15 @@ struct SkinnedGeometry {
 // explicitly rather than inferred from position because pre-reserved instance
 // copies interleave the draw-object list (template, copies, template, ...).
 struct SkinnedSkeletonEntry {
-    handle: crate::ecs::SkinnedMeshHandle,
+    handle: SkinnedMeshHandle,
     name_id: AssetId,
     template_index: usize,
     skeleton: skeleton::Skeleton,
     morph_names: Vec<String>,
     model: [[f32; 4]; 4],
-    capsule: Option<crate::components::CharacterCapsule>,
+    capsule: Option<CharacterCapsule>,
     // The authored placement and local bounds, for the editor's pick index.
-    transform: crate::components::Transform,
+    transform: Transform,
     local_bounds: ([f32; 3], [f32; 3]),
 }
 
@@ -68,14 +124,14 @@ struct SkinnedSkeletonEntry {
 // (template, copy) pool reservations, per-slot morph targets, and the hot-reload
 // source map.
 struct SkinnedMeshAssembly {
-    vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
+    vertices: Vec<mesh_payload::SkinnedVertex>,
     // Absolute indices into the shared skinned vertex buffer, so u32 rather
     // than the per-mesh u16 the payload carries.
     indices: Vec<u32>,
-    draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject>,
+    draw_objects: Vec<render_types::SkinnedDrawObject>,
     skeletons: Vec<SkinnedSkeletonEntry>,
     pool_reservations: Vec<(usize, usize)>,
-    morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
     source_map: super::hot_reload_sources::SkinnedMeshSourceMap,
 }
 
@@ -84,7 +140,7 @@ struct SkinnedMeshAssembly {
 // dev-only file-backed source map + name->slot index (cn debug hot-reload / spawn
 // by name), and the pool size.
 struct TextureTableDecode {
-    locators: Vec<crate::ecs::PayloadLocator>,
+    locators: Vec<PayloadLocator>,
     source_map: super::hot_reload_sources::TextureSourceMap,
     name_to_slot: std::collections::HashMap<AssetId, usize>,
     count: usize,
@@ -94,7 +150,7 @@ struct TextureTableDecode {
 // a bucket a non-start scene owns.
 #[derive(Default)]
 struct DecodedShader {
-    programs: Option<crate::components::ShaderPrograms>,
+    programs: Option<ShaderPrograms>,
     // The payload was left undecoded because a scene other than the start scene
     // owns this bucket.
     deferred: bool,
@@ -105,7 +161,7 @@ struct DecodedShader {
 // never stay RAM-resident), else a copy of the in-memory payload.
 fn deferred_shader_source(
     ctx: &mut PipelineContext,
-    locator: &crate::ecs::PayloadLocator,
+    locator: &PayloadLocator,
     blob_disk_backed: bool,
 ) -> Result<crate::gfx::streaming::shader::ShaderPayloadSource, String> {
     use crate::gfx::streaming::shader::ShaderPayloadSource;
@@ -116,9 +172,9 @@ fn deferred_shader_source(
             .to_vec();
         return Ok(ShaderPayloadSource::Bytes(bytes));
     }
-    let path = crate::blob::blob_path(locator.blob_index)
+    let path = blob_path(locator.blob_index)
         .ok_or_else(|| format!("blob {}: no blob layout installed", locator.blob_index))?;
-    let start = crate::blob::payload_section_start(&path).map_err(|e| format!("{e:?}"))?;
+    let start = payload_section_start(&path).map_err(|e| format!("{e:?}"))?;
     Ok(ShaderPayloadSource::Disk {
         path,
         offset: start + locator.offset,
@@ -127,7 +183,7 @@ fn deferred_shader_source(
 }
 
 struct DecodedShaders {
-    locators: Vec<crate::ecs::PayloadLocator>,
+    locators: Vec<PayloadLocator>,
     source_map: super::hot_reload_sources::ShaderStageSourceMap,
     // One entry per world Shader, in drain order == cook handle order, so a
     // baked ShaderHandle value indexes this directly. Entry 0 is the world
@@ -147,11 +203,8 @@ struct TextAtlases {
 // Whether any text in the world names no Font, and so has no face to draw with
 // unless one is registered as the fallback.
 fn font_less_text(ctx: &PipelineContext) -> bool {
-    ctx.query::<crate::components::TextLabel>()
-        .any(|l| l.font.is_none())
-        || ctx
-            .query::<crate::components::TextInput>()
-            .any(|t| t.font.is_none())
+    ctx.query::<TextLabel>().any(|l| l.font.is_none())
+        || ctx.query::<TextInput>().any(|t| t.font.is_none())
 }
 
 // Per-streamed-mesh data from `mesh_stream_data`: the draw-object index of each
@@ -170,7 +223,7 @@ struct MeshStreamData {
 // (`NO_NORMAL_MAP_SLOT` = no normal map, scored by neither). `texture_count`
 // sizes the outer vec so every pool slot has an entry.
 fn texture_stream_centers(
-    draw_objects: &[crate::gfx::render_types::DrawObject],
+    draw_objects: &[render_types::DrawObject],
     texture_count: usize,
 ) -> Vec<Vec<[f32; 3]>> {
     let mut centers = vec![Vec::new(); texture_count];
@@ -179,7 +232,7 @@ fn texture_stream_centers(
         if let Some(slot) = centers.get_mut(obj.texture_slot) {
             slot.push(pos);
         }
-        if obj.normal_map_slot != crate::gfx::render_types::NO_NORMAL_MAP_SLOT
+        if obj.normal_map_slot != render_types::NO_NORMAL_MAP_SLOT
             && let Some(slot) = centers.get_mut(obj.normal_map_slot)
         {
             slot.push(pos);
@@ -196,7 +249,7 @@ fn texture_stream_centers(
 // per-mesh region fits in u16 by the build-time splitter). Draws whose
 // build-time offsets fall out of range are skipped defensively.
 fn mesh_stream_data(
-    draw_objects: &[crate::gfx::render_types::DrawObject],
+    draw_objects: &[render_types::DrawObject],
     all_vertices: &[Vertex],
     all_indices: &[u32],
     deferred_draws: &std::collections::HashSet<usize>,
@@ -303,7 +356,7 @@ impl GraphicsSystem {
         // unshifted. The DebugHud component is queried (not drained) by its
         // system, so it is still present here; absent fields are skipped.
         self.debug_hud_chips = ctx
-            .query::<crate::components::DebugHud>()
+            .query::<DebugHud>()
             .next()
             .map(|d| {
                 [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
@@ -316,7 +369,7 @@ impl GraphicsSystem {
         // the frame step can pack them tight from the top-left. Like DebugHud
         // the component is queried (not drained), so it is still present here.
         self.stat_hud_chips = ctx
-            .query::<crate::components::StatHud>()
+            .query::<StatHud>()
             .next()
             .map(|s| {
                 [
@@ -338,7 +391,7 @@ impl GraphicsSystem {
         // The chosen fullscreen display mode. Fullscreen-only: it never feeds
         // the windowed size, which stays the world's authored `Window` value.
         if let Some([w, h, hz]) = user_graphics.resolution {
-            self.resolution = Some(crate::gfx::display_mode::DisplayMode {
+            self.resolution = Some(display_mode::DisplayMode {
                 width: w,
                 height: h,
                 refresh_hz: hz,
@@ -720,10 +773,9 @@ impl GraphicsSystem {
         // render targets and the planar / probe faces all bake the count, so a
         // live AA toggle keeps the count this launch resolved and the next
         // launch picks up the change.
-        let hdr_samples =
-            crate::components::hdr_sample_count(self.post_config.aa_mode, temporal_upscaling);
+        let hdr_samples = hdr_sample_count(self.post_config.aa_mode, temporal_upscaling);
 
-        let post = crate::gfx::backend_init::PostSettings {
+        let post = backend_init::PostSettings {
             post_process,
             taa_enabled,
             hdr_samples,
@@ -768,32 +820,29 @@ impl GraphicsSystem {
         // payload. The table index IS the mesh's `SkinnedMeshHandle`, which keys
         // the whole animation correlation web.
         let skinned_table = ctx
-            .resource::<crate::resource::SkinnedMeshTable>()
+            .resource::<SkinnedMeshTable>()
             .cloned()
             .unwrap_or_default();
         let mut skinned_geometry: Vec<SkinnedGeometry> = Vec::new();
         let mut skinned_blob_indices: Vec<u32> = Vec::new();
         // Interned name -> handle, published for the debug WS animation
         // commands, which address a mesh by its typed name.
-        let mut skinned_name_index: std::collections::HashMap<
-            AssetId,
-            crate::ecs::SkinnedMeshHandle,
-        > = std::collections::HashMap::new();
+        let mut skinned_name_index: std::collections::HashMap<AssetId, SkinnedMeshHandle> =
+            std::collections::HashMap::new();
         for (handle, entry) in skinned_table.0.iter().enumerate() {
-            let handle = crate::ecs::SkinnedMeshHandle(handle as u32);
-            let (name_id, sm): (u32, crate::components::SkinnedMesh) =
-                match postcard::from_bytes(&entry.data_bytes) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::error!(
-                            "GraphicsSystem: SkinnedMesh handle {} baked data failed to decode: {}",
-                            handle.index(),
-                            e
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                };
+            let handle = SkinnedMeshHandle(handle as u32);
+            let (name_id, sm): (u32, SkinnedMesh) = match postcard::from_bytes(&entry.data_bytes) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!(
+                        "GraphicsSystem: SkinnedMesh handle {} baked data failed to decode: {}",
+                        handle.index(),
+                        e
+                    );
+                    self.failed = true;
+                    return None;
+                }
+            };
             let name_id = AssetId(name_id);
             skinned_name_index.insert(name_id, handle);
             let locator = match &entry.payload {
@@ -820,9 +869,9 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            match crate::gfx::mesh_payload::deserialize_skinned_with_lods(&bytes) {
+            match mesh_payload::deserialize_skinned_with_lods(&bytes) {
                 Ok(p) => {
-                    let joint_defs = crate::geometry::payload_joints_to_defs(p.joints);
+                    let joint_defs = payload_joints_to_defs(p.joints);
                     skinned_geometry.push(SkinnedGeometry {
                         handle,
                         name_id,
@@ -868,12 +917,12 @@ impl GraphicsSystem {
     fn assemble_skinned_meshes(
         &mut self,
         skinned_geometry: &[SkinnedGeometry],
-        material_map: &std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>,
+        material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
         capture_sources: bool,
     ) -> Option<SkinnedMeshAssembly> {
-        let mut skinned_vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex> = Vec::new();
+        let mut skinned_vertices: Vec<mesh_payload::SkinnedVertex> = Vec::new();
         let mut skinned_indices: Vec<u32> = Vec::new();
-        let mut skinned_draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject> = Vec::new();
+        let mut skinned_draw_objects: Vec<render_types::SkinnedDrawObject> = Vec::new();
         // One entry per authored skinned mesh: its handle, interned name id,
         // the skinned index of its (visible) template draw object, and its
         let mut skinned_skeletons: Vec<SkinnedSkeletonEntry> = Vec::new();
@@ -883,9 +932,8 @@ impl GraphicsSystem {
         let mut skinned_pool_reservations: Vec<(usize, usize)> = Vec::new();
         // Morph-target data per skinned draw object; instance copies share
         // their template's data through the Arc.
-        let mut skinned_morphs: Vec<
-            Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>,
-        > = Vec::new();
+        let mut skinned_morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>> =
+            Vec::new();
         // Asset hot-reload (`cn debug` only) needs the per-slot vertex region
         // + joint count so it can reject size + shape changes before pushing
         // to the backend. SkinnedMesh is 1:1 with its draw slot (no Prop
@@ -935,8 +983,8 @@ impl GraphicsSystem {
             let lod_slices =
                 crate::gfx::draw_list::append_lod_slices(&mut skinned_indices, lod_alts, base);
 
-            let skeleton = crate::components::build_skeleton_from_joint_defs(joint_defs);
-            let joint_count = skeleton.len().min(crate::gfx::render_types::MAX_JOINTS);
+            let skeleton = build_skeleton_from_joint_defs(joint_defs);
+            let joint_count = skeleton.len().min(render_types::MAX_JOINTS);
 
             // Bind-pose (object-space) AABB over this mesh's vertices. The
             // GPU-driven skinned fold pads + transforms it per frame for culling.
@@ -957,7 +1005,7 @@ impl GraphicsSystem {
             let mesh_morphs = (!morphs.is_empty()).then(|| std::sync::Arc::new(morphs.clone()));
             let skinned_index = skinned_draw_objects.len();
             skinned_morphs.push(mesh_morphs.clone());
-            skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
+            skinned_draw_objects.push(render_types::SkinnedDrawObject {
                 vertex_base: base,
                 vertex_count: verts.len(),
                 index_offset,
@@ -1004,7 +1052,7 @@ impl GraphicsSystem {
                 );
                 let copy_skinned_index = skinned_draw_objects.len();
                 skinned_morphs.push(mesh_morphs.clone());
-                skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
+                skinned_draw_objects.push(render_types::SkinnedDrawObject {
                     vertex_base: copy_base,
                     vertex_count: verts.len(),
                     index_offset: copy_index_offset,
@@ -1031,7 +1079,7 @@ impl GraphicsSystem {
                 morph_names: morphs.names.clone(),
                 model: sm.model_matrix(),
                 capsule: sm.capsule.clone(),
-                transform: crate::components::Transform {
+                transform: Transform {
                     position: sm.position,
                     rotation_deg: sm.rotation_deg,
                     scale: sm.scale,
@@ -1066,10 +1114,7 @@ impl GraphicsSystem {
         // assigned each texture a dense `TextureHandle` (== its pool slot) and the
         // runtime loaded them into a `TextureTable`. Reading the table by handle
         // replaces draining a `Texture` component column and scanning names.
-        let texture_table = ctx
-            .resource::<crate::resource::TextureTable>()
-            .cloned()
-            .unwrap_or_default();
+        let texture_table = ctx.resource::<TextureTable>().cloned().unwrap_or_default();
         // Dev-only source catalog (present under `cn debug`) so the hot-reload
         // watcher can map a texture handle back to the file that backs it.
         let texture_sources = ctx.resource::<crate::resource::TextureSources>().cloned();
@@ -1122,12 +1167,9 @@ impl GraphicsSystem {
         &mut self,
         ctx: &mut PipelineContext,
         texture_count: usize,
-    ) -> Option<std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>> {
-        let material_table = ctx
-            .resource::<crate::resource::MaterialTable>()
-            .cloned()
-            .unwrap_or_default();
-        let mut material_map: std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry> =
+    ) -> Option<std::collections::HashMap<MaterialHandle, MaterialEntry>> {
+        let material_table = ctx.resource::<MaterialTable>().cloned().unwrap_or_default();
+        let mut material_map: std::collections::HashMap<MaterialHandle, MaterialEntry> =
             std::collections::HashMap::with_capacity(material_table.len());
         for (material_handle, entry) in material_table.0.iter().enumerate() {
             let mat: Material = match postcard::from_bytes(&entry.data_bytes) {
@@ -1144,7 +1186,7 @@ impl GraphicsSystem {
             };
             match crate::gfx::material_entry::of(&mat, texture_count) {
                 Ok(entry) => {
-                    material_map.insert(crate::ecs::MaterialHandle(material_handle as u32), entry);
+                    material_map.insert(MaterialHandle(material_handle as u32), entry);
                 }
                 Err(field) => {
                     tracing::error!(
@@ -1249,7 +1291,7 @@ impl GraphicsSystem {
             // share one blob with the mesh/texture payloads read elsewhere in
             // init.
             let payload = match ctx.read_payload(&locator) {
-                Ok(b) => match crate::components::ShaderPrograms::decode(b) {
+                Ok(b) => match ShaderPrograms::decode(b) {
                     Ok(p) => p,
                     Err(e) => {
                         tracing::error!("GraphicsSystem: shader payload decode: {:?}", e);
@@ -1320,9 +1362,9 @@ impl GraphicsSystem {
         if let Some(backend) = self.backend.as_deref_mut() {
             let raw = backend.display_modes();
             self.display_modes = if raw.is_empty() {
-                crate::gfx::display_mode::fallback_modes()
+                display_mode::fallback_modes()
             } else {
-                crate::gfx::display_mode::normalize(raw)
+                display_mode::normalize(raw)
             };
             self.current_mode = backend.current_display_mode();
             if let Some(mode) = chosen {
@@ -1332,9 +1374,8 @@ impl GraphicsSystem {
         ctx.insert_resource(crate::ecs::DisplayModes(self.display_modes.clone()));
         // The resolved frame-rate cap (world value or persisted override) for
         // the App-level pacer; the settings row's live change republishes it.
-        ctx.insert_resource(crate::ecs::FrameRateCap(self.fps_cap));
-        let idx =
-            crate::gfx::display_mode::index_of(&self.display_modes, self.effective_resolution());
+        ctx.insert_resource(FrameRateCap(self.fps_cap));
+        let idx = display_mode::index_of(&self.display_modes, self.effective_resolution());
         if let Some(m) = self.display_modes.get(idx) {
             set_setting_row_label(ctx, "resolution", &m.label());
         }
@@ -1348,19 +1389,16 @@ impl GraphicsSystem {
         // startup. A Camera3D world that also has UI (a MainMenu's HitRegion /
         // KeyBinding) is "menu mode": capture is driven per-frame in `run_step`.
         // A UI-only world (no camera) stays free-cursor.
-        let has_ui = ctx.query::<HitRegion>().next().is_some()
-            || ctx
-                .query::<crate::components::KeyBinding>()
-                .next()
-                .is_some();
+        let has_ui =
+            ctx.query::<HitRegion>().next().is_some() || ctx.query::<KeyBinding>().next().is_some();
         let has_camera = ctx.query::<Camera3D>().next().is_some();
         self.menu_mode = has_camera && has_ui;
         // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
         // per frame, so the startup auto-grab is skipped: the editor re-runs this
         // init on every live-preview rebuild, and grabbing there would re-hide and
         // decouple the OS cursor each time, desyncing the free-cursor handoff.
-        let menu_driven = ctx.resource::<crate::ecs::MenuOverride>().is_some();
-        let mut device_caps = crate::gfx::backend::DeviceCapabilities::ALL;
+        let menu_driven = ctx.resource::<MenuOverride>().is_some();
+        let mut device_caps = backend::DeviceCapabilities::ALL;
         if let Some(backend) = self.backend.as_deref_mut() {
             // Capability flags drive the settings-menu gating below.
             device_caps = backend.capabilities();
@@ -1455,8 +1493,8 @@ impl GraphicsSystem {
                 fog_built: self.fog_built,
                 settings_cache: None,
                 settings_writer: None,
-                scene_cmd_cursor: crate::ecs::EventCursor::default(),
-                setting_cmd_cursor: crate::ecs::EventCursor::default(),
+                scene_cmd_cursor: EventCursor::default(),
+                setting_cmd_cursor: EventCursor::default(),
                 published_hud_prefs: None,
                 published_disabled_inputs: None,
             },
@@ -1478,7 +1516,7 @@ impl GraphicsSystem {
         Option<super::hot_reload_sources::EnvironmentMapSource>,
     )> {
         let env_map_table = ctx
-            .resource::<crate::resource::EnvironmentMapTable>()
+            .resource::<EnvironmentMapTable>()
             .cloned()
             .unwrap_or_default();
         if env_map_table.len() > 1 {
@@ -1541,10 +1579,7 @@ impl GraphicsSystem {
         Option<Vec<u8>>,
         Option<super::hot_reload_sources::ColorLutSource>,
     )> {
-        let color_lut_table = ctx
-            .resource::<crate::resource::ColorLutTable>()
-            .cloned()
-            .unwrap_or_default();
+        let color_lut_table = ctx.resource::<ColorLutTable>().cloned().unwrap_or_default();
         if color_lut_table.len() > 1 {
             tracing::warn!(
                 "GraphicsSystem: {} ColorLuts declared; only the first is used",
@@ -1591,12 +1626,9 @@ impl GraphicsSystem {
     fn decode_text_atlases(
         &mut self,
         ctx: &mut PipelineContext,
-        texture_locators: &[crate::ecs::PayloadLocator],
+        texture_locators: &[PayloadLocator],
     ) -> Option<TextAtlases> {
-        let font_table = ctx
-            .resource::<crate::resource::FontTable>()
-            .cloned()
-            .unwrap_or_default();
+        let font_table = ctx.resource::<FontTable>().cloned().unwrap_or_default();
         let mut text_atlas_data: Vec<(u32, u32, Vec<u8>)> = Vec::new();
         for (slot, entry) in font_table.0.iter().enumerate() {
             // A face the world baked for itself at start holds its payload
@@ -1624,13 +1656,13 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            match crate::bake::font::deserialize(&bytes) {
+            match font::deserialize(&bytes) {
                 Ok((aw, ah, supersample, size_px, rgba, metrics)) => {
                     let metrics_map: text::FontMetrics =
                         metrics.into_iter().map(|m| (m.char_code, m)).collect();
                     let size_px = size_px as f32;
                     self.loaded_fonts.insert(
-                        crate::ecs::FontHandle(slot as u32),
+                        FontHandle(slot as u32),
                         text::LoadedFont {
                             atlas_slot: slot,
                             cap_px: text::derive_cap_px(&metrics_map, size_px),
@@ -1658,7 +1690,7 @@ impl GraphicsSystem {
         // samples.
         if font_less_text(ctx) {
             let slot = text_atlas_data.len();
-            let handle = crate::ecs::FontHandle(slot as u32);
+            let handle = FontHandle(slot as u32);
             match crate::gfx::builtin_font::load(handle) {
                 Some(builtin) => {
                     text_atlas_data.push(builtin.atlas);
@@ -1679,12 +1711,10 @@ impl GraphicsSystem {
         // though no sprite references them yet. A texture that cannot be
         // resolved demotes its sprite to the solid tint fill, warned rather
         // than fatal.
-        let sprite_texture_ids: Vec<crate::ecs::TextureHandle> = {
-            let mut ids: Vec<crate::ecs::TextureHandle> = ctx
-                .query::<crate::components::Sprite>()
-                .filter_map(|s| s.texture)
-                .collect();
-            for story in ctx.query::<crate::components::Story>() {
+        let sprite_texture_ids: Vec<TextureHandle> = {
+            let mut ids: Vec<TextureHandle> =
+                ctx.query::<Sprite>().filter_map(|s| s.texture).collect();
+            for story in ctx.query::<Story>() {
                 let stages = story.nodes.iter().flat_map(|n| {
                     n.pages
                         .iter()
@@ -1715,8 +1745,7 @@ impl GraphicsSystem {
                 continue;
             };
             match ctx.read_payload(&locator) {
-                Ok(bytes) => match crate::bake::texture::deserialize(bytes)
-                    .and_then(|image| image.into_rgba8())
+                Ok(bytes) => match texture::deserialize(bytes).and_then(|image| image.into_rgba8())
                 {
                     Ok((w, h, rgba)) => {
                         self.sprite_texture_slots
@@ -1737,7 +1766,7 @@ impl GraphicsSystem {
 
         // Tool-provided overlay images (e.g. asset thumbnails) ride the same
         // pool, keyed by the reserved handles the inserting tool chose.
-        if let Some(overlay) = ctx.resource::<crate::ecs::OverlayImages>() {
+        if let Some(overlay) = ctx.resource::<OverlayImages>() {
             for image in &overlay.0 {
                 if image.rgba.len() != (image.width as usize) * (image.height as usize) * 4 {
                     tracing::warn!(
@@ -1789,19 +1818,17 @@ impl GraphicsSystem {
         // empty so the reload pass has nothing to inspect on `cn run`. Names
         // come from the interner so the reload log can read "regenerated
         // 'box_mesh'" instead of an opaque id.
-        let proc_mesh_args_snapshot: std::collections::HashMap<
-            AssetId,
-            (String, crate::components::ProceduralMesh),
-        > = if crate::app::dev_flags::enabled() {
-            ctx.query::<crate::components::ProceduralMesh>()
-                .filter_map(|pm| {
-                    let name = crate::ecs::asset_id::name_of(pm.asset_id)?;
-                    Some((pm.asset_id, (name, pm.clone())))
-                })
-                .collect()
-        } else {
-            std::collections::HashMap::new()
-        };
+        let proc_mesh_args_snapshot: std::collections::HashMap<AssetId, (String, ProceduralMesh)> =
+            if crate::app::dev_flags::enabled() {
+                ctx.query::<ProceduralMesh>()
+                    .filter_map(|pm| {
+                        let name = asset_id::name_of(pm.asset_id)?;
+                        Some((pm.asset_id, (name, pm.clone())))
+                    })
+                    .collect()
+            } else {
+                std::collections::HashMap::new()
+            };
 
         // Mesh sources owned by a scene other than the start scene skip their
         // payload decode: draw records use the blob's baked bounds, and the
@@ -1829,7 +1856,7 @@ impl GraphicsSystem {
 
         // drain Model components into a name-keyed map for Prop lookup
         let models = ctx.drain::<Model>();
-        let model_map: std::collections::HashMap<AssetId, Vec<crate::components::SubMeshRef>> =
+        let model_map: std::collections::HashMap<AssetId, Vec<SubMeshRef>> =
             models.into_iter().map(|m| (m.asset_id, m.meshes)).collect();
 
         // decode Room payloads before shaders/textures are read; all payloads
@@ -1887,7 +1914,7 @@ impl GraphicsSystem {
             None => return,
         };
 
-        let mut texture_data: Vec<crate::bake::texture::TextureImage> = Vec::new();
+        let mut texture_data: Vec<texture::TextureImage> = Vec::new();
         // Raw compiled texture payloads, kept past blob release so the
         // asset-streaming subsystem can re-decode them off the main thread.
         // Left empty when the blobs are disk-backed: the streamer then re-reads
@@ -1904,11 +1931,7 @@ impl GraphicsSystem {
         );
         for (slot, locator) in texture_locators.iter().enumerate() {
             if deferred_slots.contains(&slot) {
-                texture_data.push(crate::bake::texture::TextureImage::rgba8(
-                    1,
-                    1,
-                    vec![0, 0, 0, 255],
-                ));
+                texture_data.push(texture::TextureImage::rgba8(1, 1, vec![0, 0, 0, 255]));
                 if !blob_disk_backed {
                     match ctx.read_payload(locator) {
                         Ok(b) => texture_payloads.push(b.to_vec()),
@@ -1932,7 +1955,7 @@ impl GraphicsSystem {
                     return;
                 }
             };
-            match crate::bake::texture::deserialize(&tex_bytes) {
+            match texture::deserialize(&tex_bytes) {
                 Ok(t) => texture_data.push(t),
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed texture payload: {}", e);
@@ -1994,7 +2017,7 @@ impl GraphicsSystem {
         // from the `AudioClipTable`, so any blob a clip lives in must survive this
         // release sweep.
         let audio_blobs = ctx
-            .resource::<crate::resource::AudioClipTable>()
+            .resource::<AudioClipTable>()
             .map(|table| table.blob_indices())
             .unwrap_or_default();
         // SdfVolume payloads are drained later in this same init pass (see
@@ -2003,11 +2026,11 @@ impl GraphicsSystem {
         // whose SDF shader bytes happen to land alone in a blob shows
         // "failed to read fragment shader payload: FileIo; skipping" at
         // runtime and the SDF surface never draws.
-        let sdf_blobs = crate::components::sdf_volume::sdf_volume_blob_indices(ctx);
+        let sdf_blobs = sdf_volume::sdf_volume_blob_indices(ctx);
         // PhysicsSystem inits after GraphicsSystem and reads the baked
         // heightfield collider grid from a heightfield ProceduralMesh's
         // payload, so those blobs must also survive this sweep.
-        let terrain_blobs = crate::components::procedural_mesh::heightfield_blob_indices(ctx);
+        let terrain_blobs = procedural_mesh::heightfield_blob_indices(ctx);
         let mut released = std::collections::HashSet::new();
         for idx in shader_locators
             .iter()
@@ -2029,7 +2052,7 @@ impl GraphicsSystem {
         // InstancedProp components are drained because every instance becomes a
         // baked DrawObject; there is no per-frame update path yet. Drain before
         // taking Prop references because drain shifts the underlying Vec.
-        let instanced_props = ctx.drain::<crate::components::InstancedProp>();
+        let instanced_props = ctx.drain::<InstancedProp>();
 
         // Entities to render, in Prop-column order, so each gets a RenderHandle +
         // GlobalTransform attached below. Enumerated through the PropInstance
@@ -2037,8 +2060,8 @@ impl GraphicsSystem {
         // column itself was drained by the decomposition pass at load. The
         // Transform column is not the enumeration: a SkyRotation pivot carries
         // one without being anything to draw.
-        let prop_entities: Vec<crate::ecs::Entity> = ctx
-            .query_with_entity::<crate::components::PropInstance>()
+        let prop_entities: Vec<Entity> = ctx
+            .query_with_entity::<PropInstance>()
             .map(|(entity, _)| entity)
             .collect();
 
@@ -2047,8 +2070,8 @@ impl GraphicsSystem {
         // Transform/Parent. `items` / `world_mats` are column-aligned with
         // `prop_entities`.
         let resolved = transform_propagation::resolve_world_matrices(ctx);
-        let entity_name: std::collections::HashMap<crate::ecs::Entity, AssetId> = ctx
-            .resource::<crate::ecs::decompose::EntityByName>()
+        let entity_name: std::collections::HashMap<Entity, AssetId> = ctx
+            .resource::<concinnity_core::ecs::EntityByName>()
             .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())
             .unwrap_or_default();
         let mut items = Vec::with_capacity(prop_entities.len());
@@ -2111,14 +2134,14 @@ impl GraphicsSystem {
         // candidate so the frame step can refresh the index from the live
         // transforms.
         self.pick_candidates.clear();
-        let want_pick = ctx.resource::<crate::ecs::PickIndex>().is_some();
+        let want_pick = ctx.resource::<PickIndex>().is_some();
         for (i, &entity) in prop_entities.iter().enumerate() {
             let draws: concinnity_core::memory::InlineVec<u32> = prop_draw_indices[i]
                 .iter()
                 .map(|&slot| slot as u32)
                 .collect();
-            ctx.insert(entity, crate::components::RenderHandle { draws });
-            ctx.insert(entity, crate::components::GlobalTransform(world_mats[i]));
+            ctx.insert(entity, RenderHandle { draws });
+            ctx.insert(entity, GlobalTransform(world_mats[i]));
             if want_pick {
                 let (local_min, local_max) = prop_local_bounds[i];
                 self.pick_candidates.push(super::PickCandidate {
@@ -2236,9 +2259,7 @@ impl GraphicsSystem {
         let mut all_vertices = all_vertices;
         let mut all_indices = all_indices;
         let mut instanced_clusters = instanced_clusters;
-        let mesh_seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion> = match streaming_config
-            .as_ref()
-        {
+        let mesh_seed_region: Option<mesh_seed::MeshSeedRegion> = match streaming_config.as_ref() {
             Some(cfg) if !mesh_payloads.is_empty() => {
                 // A deferred mesh's payload copy is empty (its decode
                 // was skipped), so its seed contribution comes from
@@ -2273,15 +2294,14 @@ impl GraphicsSystem {
                 // full-set evict path to free; force the compaction
                 // path with a whole-set headroom when the cap alone
                 // would not shrink.
-                let planned = crate::gfx::mesh_seed::plan_seed_bytes(&sizes, cfg.mesh_cap())
-                    .or_else(|| {
-                        (!deferred_mesh_seeds.is_empty()).then(|| {
-                            (
-                                sizes.iter().map(|s| s.0).sum(),
-                                sizes.iter().map(|s| s.1).sum(),
-                            )
-                        })
-                    });
+                let planned = mesh_seed::plan_seed_bytes(&sizes, cfg.mesh_cap()).or_else(|| {
+                    (!deferred_mesh_seeds.is_empty()).then(|| {
+                        (
+                            sizes.iter().map(|s| s.0).sum(),
+                            sizes.iter().map(|s| s.1).sum(),
+                        )
+                    })
+                });
                 match planned {
                     Some((seed_vtx, seed_idx)) => {
                         let mut streamed = vec![false; draw_objects.len()];
@@ -2290,7 +2310,7 @@ impl GraphicsSystem {
                                 *s = true;
                             }
                         }
-                        let region = crate::gfx::mesh_seed::compact_for_streaming(
+                        let region = mesh_seed::compact_for_streaming(
                             &mut all_vertices,
                             &mut all_indices,
                             &mut draw_objects,
@@ -2327,7 +2347,7 @@ impl GraphicsSystem {
         let decal_records = {
             let decals: Vec<Decal> = ctx.drain::<Decal>();
             let refs: Vec<&Decal> = decals.iter().collect();
-            crate::gfx::decal::build_decal_records(&refs, texture_count)
+            decal::build_decal_records(&refs, texture_count)
         };
         let decal_count = decal_records.len();
 
@@ -2338,7 +2358,7 @@ impl GraphicsSystem {
         let particle_records = {
             let emitters: Vec<ParticleEmitter> = ctx.drain::<ParticleEmitter>();
             let refs: Vec<&ParticleEmitter> = emitters.iter().collect();
-            crate::gfx::particles::build_particle_records(&refs, texture_count)
+            particles::build_particle_records(&refs, texture_count)
         };
         let particle_count = particle_records.len();
 
@@ -2364,7 +2384,7 @@ impl GraphicsSystem {
             let mut out = Vec::with_capacity(raw.len());
             for v in raw {
                 let asset_id = v.asset_id;
-                let label = crate::ecs::asset_id::name_of(asset_id)
+                let label = asset_id::name_of(asset_id)
                     .unwrap_or_else(|| format!("sdf_volume_{}", asset_id.0));
                 let locator = match v.locator.as_ref() {
                     Some(l) => l.clone(),
@@ -2404,7 +2424,7 @@ impl GraphicsSystem {
             let fogs: Vec<VolumetricFog> = ctx.drain::<VolumetricFog>();
             fogs.into_iter()
                 .find(|f| f.enabled)
-                .and_then(|f| crate::gfx::volumetric_fog::resolve_asset(&f))
+                .and_then(|f| volumetric_fog::resolve_asset(&f))
         };
         let fog_enabled = fog_settings.is_some();
         self.fog_built = fog_enabled;
@@ -2447,11 +2467,7 @@ impl GraphicsSystem {
         // `probe_set_specular`'s no-coverage fallback picked. Occupancy stays
         // geometry-only -- it answers "is this capture point inside a wall", which a
         // plane does not make true.
-        let auto_seed_geometry_probes = if ctx
-            .query::<crate::components::ReflectionProbe>()
-            .next()
-            .is_some()
-        {
+        let auto_seed_geometry_probes = if ctx.query::<ReflectionProbe>().next().is_some() {
             None
         } else {
             let occupancy: Vec<([f32; 3], [f32; 3])> = draw_objects
@@ -2462,27 +2478,21 @@ impl GraphicsSystem {
             let reflectors = water_surfaces
                 .iter()
                 .map(|w| {
-                    crate::gfx::reflection_probe::reflector_bounds(
-                        w.center,
-                        [w.extent[0], 0.0, w.extent[1]],
-                    )
+                    reflection_probe::reflector_bounds(w.center, [w.extent[0], 0.0, w.extent[1]])
                 })
                 .chain(glass_panels.iter().map(|g| {
                     // A pane is an oriented quad; its longest half-side bounds it on
                     // every axis whatever its normal.
                     let r = g.half_size[0].max(g.half_size[1]);
-                    crate::gfx::reflection_probe::reflector_bounds(g.center, [r, r, r])
+                    reflection_probe::reflector_bounds(g.center, [r, r, r])
                 }));
             let tris = gather_auto_seed_triangles(&draw_objects, &all_vertices, &all_indices)
                 .unwrap_or_default();
-            crate::gfx::reflection_probe::fold_world_bounds(
-                occupancy.iter().copied().chain(reflectors),
+            reflection_probe::fold_world_bounds(occupancy.iter().copied().chain(reflectors)).map(
+                |(mn, mx)| {
+                    reflection_probe::auto_seed_probes_with_geometry(mn, mx, &occupancy, &tris)
+                },
             )
-            .map(|(mn, mx)| {
-                crate::gfx::reflection_probe::auto_seed_probes_with_geometry(
-                    mn, mx, &occupancy, &tris,
-                )
-            })
         };
 
         // Planar reflection plane budget: there is no world-authored value, so the
@@ -2497,7 +2507,7 @@ impl GraphicsSystem {
         // requirements from them (a world with no 3D content drops every
         // scene-scoped feature before any backend resource is sized), and
         // hand the result to the compile-time-selected backend.
-        use crate::gfx::backend_init::{
+        use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, SceneData, ShadowParams, WorldFx, WorldShader,
         };
         let mut backend_init = BackendInit {
@@ -2630,7 +2640,7 @@ impl GraphicsSystem {
         // launches) has to be applied here; otherwise the app would always start
         // windowed regardless of the saved mode. No-op for Windowed and in
         // embedded mode (the backend owns no window there).
-        if self.window_args.mode != crate::components::WindowMode::Windowed
+        if self.window_args.mode != WindowMode::Windowed
             && let Some(backend) = self.backend.as_deref_mut()
         {
             backend.set_window_mode(self.window_args.mode);
@@ -2647,10 +2657,10 @@ impl GraphicsSystem {
         // placements are static once pushed, but the components keep their
         // entities so editor tooling can address the authored probes by name.
         if let Some(backend) = self.backend.as_deref_mut() {
-            let declared: Vec<crate::gfx::reflection_probe::ProbePlacement> = ctx
-                .query::<crate::components::ReflectionProbe>()
+            let declared: Vec<reflection_probe::ProbePlacement> = ctx
+                .query::<ReflectionProbe>()
                 .map(|p| {
-                    crate::gfx::reflection_probe::ProbePlacement::from_center_extents(
+                    reflection_probe::ProbePlacement::from_center_extents(
                         p.position,
                         p.half_extents,
                     )
@@ -2750,7 +2760,7 @@ impl GraphicsSystem {
             }
             let skinned_count = skinned_skeletons.len();
             let shapes = super::character_shape::collect(ctx);
-            let want_pick = ctx.resource::<crate::ecs::PickIndex>().is_some();
+            let want_pick = ctx.resource::<PickIndex>().is_some();
             for SkinnedSkeletonEntry {
                 handle,
                 name_id,
@@ -2782,7 +2792,7 @@ impl GraphicsSystem {
                 // and its bounds join the pick index.
                 if want_pick {
                     ctx.insert(entity, transform);
-                    ctx.insert(entity, crate::components::GlobalTransform(model));
+                    ctx.insert(entity, GlobalTransform(model));
                     self.pick_candidates.push(super::PickCandidate {
                         asset_id: name_id,
                         entity,
@@ -2794,14 +2804,14 @@ impl GraphicsSystem {
                 // SpawnRequest can resolve it to this entity, the same way the
                 // static spawn path resolves a named placement. The spawn then
                 // clones this template's skeleton + pose into a pooled slot.
-                if let Some(by_name) = ctx.resource_mut::<crate::ecs::decompose::EntityByName>() {
+                if let Some(by_name) = ctx.resource_mut::<concinnity_core::ecs::EntityByName>() {
                     by_name.0.insert(name_id, entity);
                 }
                 // A mesh with a capsule gets a character rig: PhysicsSystem
                 // (init runs later this tick) creates the kinematic capsule
                 // from it, and the render transform follows it each frame.
                 if let Some((half_height, radius)) = capsule {
-                    ctx.push(crate::components::CharacterRig::new(
+                    ctx.push(CharacterRig::new(
                         handle,
                         template_index,
                         model,
@@ -2844,14 +2854,14 @@ impl GraphicsSystem {
                 let payload = match &seed.bytes {
                     Some(bytes) => DeferredMeshPayload::Bytes(bytes.clone()),
                     None => {
-                        let Some(path) = crate::blob::blob_path(seed.locator.blob_index) else {
+                        let Some(path) = blob_path(seed.locator.blob_index) else {
                             tracing::warn!(
                                 "GraphicsSystem: deferred mesh blob {} has no layout to read from",
                                 seed.locator.blob_index
                             );
                             continue;
                         };
-                        match crate::blob::payload_section_start(&path) {
+                        match payload_section_start(&path) {
                             Ok(start) => DeferredMeshPayload::Disk {
                                 path,
                                 offset: start + seed.locator.offset,
@@ -3049,7 +3059,7 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: &str, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
     // A draw over `[vertex_offset (bytes), +vertex_count]` / `[index_offset,
     // +index_count]` sampling `texture_slot` (+ `normal_map_slot`). A non-cullable

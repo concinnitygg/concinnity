@@ -3,7 +3,7 @@
 // error can skip frames forever: any successful frame resets the streaks, and
 // an exhausted bound escalates to a controlled stop naming the class.
 
-use crate::gfx::error::RenderError;
+use concinnity_core::render::error::RenderError;
 
 // What the frame loop does with a failed frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +78,7 @@ fn bump(streak: &mut u32, bound: u32, error: &RenderError) -> FrameAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::error::DeviceLostReason;
+    use concinnity_core::render::error::DeviceLostReason;
 
     fn device_lost() -> RenderError {
         RenderError::DeviceLost {

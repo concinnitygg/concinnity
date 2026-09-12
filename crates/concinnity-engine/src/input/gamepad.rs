@@ -6,7 +6,8 @@
 // tests without hardware. One gamepad is active at a time: the most recently
 // used pad wins, and a disconnect zeroes the state so no input sticks.
 
-use crate::components::GamepadButton;
+use concinnity_core::components::GamepadButton;
+
 use crate::input::stick;
 
 // Exponent of the look-stick response curve: squared magnitude gives fine aim

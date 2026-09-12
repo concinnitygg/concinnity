@@ -15,14 +15,15 @@
 // tests finds its quiet frame as the rest of the suite drains -- only a whole
 // deadline with no quiet frame fails.
 
-use super::BenchWorld;
-use crate::components::{
+use concinnity_core::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Collider, GlobalTransform, PhysicsConfig,
     Prop, PropCollider, RenderHandle, Transform,
 };
+use concinnity_core::ecs::World;
+use concinnity_core::render::snapshot::RenderSnapshot;
+
+use super::BenchWorld;
 use crate::ecs::SYSTEMS;
-use crate::ecs::World;
-use crate::gfx::snapshot::RenderSnapshot;
 use crate::gfx::system::GraphicsSystem;
 
 const WARMUP_FRAMES: usize = 64;

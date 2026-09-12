@@ -60,12 +60,11 @@
 //! plumbing them through the public `App` / `run_interpreted` signatures would
 //! touch far more code for the same observable behavior.
 
+pub use concinnity_core::render::rt_geom::RtDynamicMode;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 pub use crate::gfx::quality_preset::QualityPreset;
-pub use concinnity_core::render::rt_geom::RtDynamicMode;
-
 use crate::gfx::quality_preset::{preset_at, preset_index};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);

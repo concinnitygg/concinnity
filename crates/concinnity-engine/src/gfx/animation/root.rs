@@ -46,8 +46,8 @@ pub(super) fn flat_root_delta(clips: &[ClipEntry], weights: &[f32], t0: f32, t1:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::root_motion::{RootKey, RootTrack};
-    use crate::gfx::skeleton::AnimationClip;
+    use concinnity_core::gfx::root_motion::{RootKey, RootTrack};
+    use concinnity_core::gfx::skeleton::AnimationClip;
 
     // A clip whose root travels `per` along +X over its whole duration, linear.
     fn moving_clip(duration: f32, looping: bool, per: f32) -> ClipEntry {

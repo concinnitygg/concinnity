@@ -10,10 +10,9 @@
 // GraphicsSystem from the baked SkinnedMesh data (which carries each mesh's
 // interned name id), translates that id to the handle keying the web.
 
+use concinnity_core::ecs::SkinnedMeshHandle;
+use concinnity_host::thread::asset_id::AssetId;
 use std::collections::HashMap;
-
-use crate::ecs::SkinnedMeshHandle;
-use crate::ecs::asset_id::AssetId;
 
 // Interned-name -> handle index for the skinned meshes, published as a world
 // resource by GraphicsSystem while it loads the SkinnedMesh resource table.

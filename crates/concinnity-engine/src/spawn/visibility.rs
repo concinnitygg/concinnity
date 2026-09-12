@@ -6,9 +6,9 @@
 // visibility snapshot skips tagged entities, so a scene jump never relights
 // a hidden entity.
 
-use crate::components::{Hidden, RenderHandle};
-use crate::ecs::{Entity, PipelineContext};
-use crate::gfx::ops::RenderOps;
+use concinnity_core::components::{Hidden, RenderHandle};
+use concinnity_core::ecs::{Entity, PipelineContext};
+use concinnity_core::render::ops::RenderOps;
 
 pub(super) fn set_subtree_visibility(
     ctx: &mut PipelineContext,

@@ -9,11 +9,12 @@
 
 mod layout;
 
-use crate::components::{InputKey, Window};
-use crate::ecs::FontHandle;
-use crate::gfx::backend::{FrameParams, RenderBackend};
-use crate::gfx::backend_init::BackendInit;
-use crate::gfx::text::{FontSet, build_text_calls};
+use concinnity_core::components::{InputKey, Window};
+use concinnity_core::ecs::FontHandle;
+use concinnity_core::render::backend::{FrameParams, RenderBackend};
+use concinnity_core::render::backend_init::BackendInit;
+use concinnity_core::render::overlay_maps;
+use concinnity_core::render::text::{FontSet, build_text_calls};
 
 // The single atlas slot the embedded face occupies: this screen uploads it
 // alone, with no world fonts beside it.
@@ -83,8 +84,8 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
             fonts,
             win_w,
             win_h,
-            &crate::gfx::overlay_maps::ClipRects::new(),
-            &crate::gfx::overlay_maps::OverlayLayers::new(),
+            &overlay_maps::ClipRects::new(),
+            &overlay_maps::OverlayLayers::new(),
         );
 
         backend.update_view(IDENTITY_VIEW);

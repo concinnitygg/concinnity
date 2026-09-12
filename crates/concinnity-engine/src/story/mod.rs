@@ -8,17 +8,25 @@
 // and portrait sprite textures, shows the choice menu when a node ends in
 // one, and asks the audio system to play page music and one-shots.
 
+use concinnity_core::components::FrameInput;
+use concinnity_core::components::PlayCue;
+use concinnity_core::components::ScreenCommand;
+use concinnity_core::components::ScreenShown;
+use concinnity_core::components::Sprite;
+use concinnity_core::components::StoryCommand;
+use concinnity_core::components::StoryReload;
+use concinnity_core::components::TextLabel;
+use concinnity_core::components::{
+    CueKind, InputKey, Story, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryScaffold,
+    StoryStage,
+};
+use concinnity_core::ecs::{
+    Access, AudioClipHandle, EventCursor, PipelineContext, StepResult, System, TransientSaves,
+};
+use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-
-use crate::components::{
-    CueKind, FrameInput, InputKey, PlayCue, ScreenCommand, ScreenShown, Sprite, Story,
-    StoryCommand, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryReload, StoryScaffold,
-    StoryStage, TextLabel,
-};
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{AudioClipHandle, PipelineContext, StepResult, System};
 
 mod graph;
 mod input;
@@ -265,9 +273,9 @@ pub(crate) struct StorySystem {
     // The screen the settings screen returns to on Back (the pause menu or the
     // title, whichever opened it).
     settings_return: Option<AssetId>,
-    command_cursor: crate::ecs::EventCursor,
-    view_shown_cursor: crate::ecs::EventCursor,
-    reload_cursor: crate::ecs::EventCursor,
+    command_cursor: EventCursor,
+    view_shown_cursor: EventCursor,
+    reload_cursor: EventCursor,
 }
 
 impl std::fmt::Debug for StorySystem {
@@ -309,40 +317,31 @@ impl StorySystem {
             history: Vec::new(),
             active_screen: None,
             settings_return: None,
-            command_cursor: crate::ecs::EventCursor::default(),
-            view_shown_cursor: crate::ecs::EventCursor::default(),
-            reload_cursor: crate::ecs::EventCursor::default(),
+            command_cursor: EventCursor::default(),
+            view_shown_cursor: EventCursor::default(),
+            reload_cursor: EventCursor::default(),
         }
     }
 }
 
 impl System for StorySystem {
-    fn access(&self) -> crate::ecs::Access {
-        crate::ecs::Access::new()
-            .reads_components(crate::component_mask![crate::components::FrameInput])
-            .writes_components(crate::component_mask![
-                crate::components::TextLabel,
-                crate::components::Sprite,
-            ])
+    fn access(&self) -> Access {
+        Access::new()
+            .reads_components(crate::component_mask![FrameInput])
+            .writes_components(crate::component_mask![TextLabel, Sprite])
             .reads_resources(crate::resource_mask![
-                crate::components::StoryReload,
-                crate::components::ScreenShown,
-                crate::components::StoryCommand,
+                StoryReload,
+                ScreenShown,
+                StoryCommand,
             ])
-            .writes_resources(crate::resource_mask![
-                crate::components::PlayCue,
-                crate::components::ScreenCommand,
-            ])
+            .writes_resources(crate::resource_mask![PlayCue, ScreenCommand])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
         // A preview session's saves land in a sandbox wiped here, so the save
         // UI works without touching the user's real files and every session
         // starts fresh.
-        if ctx
-            .resource::<crate::ecs::TransientSaves>()
-            .is_some_and(|t| t.0)
-        {
+        if ctx.resource::<TransientSaves>().is_some_and(|t| t.0) {
             self.save_dir = ctx
                 .resource::<concinnity_host::store::paths::StateTree>()
                 .map(|tree| tree.preview_saves_dir());

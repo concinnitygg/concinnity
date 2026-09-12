@@ -17,10 +17,24 @@
 // Exclusive systems pass everything; structural change and blob access require
 // exclusivity. Debug builds only.
 
+use concinnity_core::components::AudioCommand;
+use concinnity_core::components::ControlsCommand;
+use concinnity_core::components::FrameInput;
+use concinnity_core::components::InteractEvent;
+use concinnity_core::components::PlayCue;
+use concinnity_core::components::RootMotionEvent;
+use concinnity_core::components::SceneCommand;
+use concinnity_core::components::ScreenCommand;
+use concinnity_core::components::ScreenShown;
+use concinnity_core::components::SettingCommand;
+use concinnity_core::components::StoryCommand;
+use concinnity_core::components::StoryReload;
+use concinnity_core::ecs::{
+    Access, ComponentId, CursorState, DesiredCursor, EventStore, FlyCam, HudLayers, HudPrefs,
+    MenuActive, MenuOverride, OpenDropdown, ScheduleMode, ScreenStack, SimTiming,
+};
 use std::any::TypeId;
 use std::sync::OnceLock;
-
-use crate::ecs::{Access, ComponentId, EventStore};
 
 macro_rules! define_access_ids {
     (
@@ -63,24 +77,24 @@ macro_rules! define_access_ids {
 
 define_access_ids! {
     resources: [
-        crate::components::FrameInput,
-        crate::ecs::MenuActive,
-        crate::ecs::SimTiming,
-        crate::ecs::MenuOverride,
-        crate::ecs::DesiredCursor,
-        crate::ecs::HudLayers,
-        crate::ecs::ScreenStack,
-        crate::ecs::FlyCam,
-        crate::ecs::CursorState,
-        crate::ecs::HudPrefs,
-        crate::ecs::OpenDropdown,
+        FrameInput,
+        MenuActive,
+        SimTiming,
+        MenuOverride,
+        DesiredCursor,
+        HudLayers,
+        ScreenStack,
+        FlyCam,
+        CursorState,
+        HudPrefs,
+        OpenDropdown,
         crate::ecs::DisabledSettingRows,
         crate::ecs::DisplayModes,
         crate::ecs::InputMailbox,
-        crate::ecs::ScheduleMode,
+        ScheduleMode,
         crate::ecs::ActiveSceneFlow,
         crate::ecs::SceneResidencyStatus,
-        crate::ecs::decompose::EntityByName,
+        concinnity_core::ecs::EntityByName,
         crate::app::budget::MemoryBudget,
         crate::app::budget::ThreadBudget,
         crate::gfx::overlay::OverlayFrame,
@@ -88,17 +102,17 @@ define_access_ids! {
         crate::gfx::overlay::OverlayRecycle,
     ],
     events: [
-        crate::components::ControlsCommand,
-        crate::components::InteractEvent,
-        crate::components::RootMotionEvent,
-        crate::components::ScreenCommand,
-        crate::components::ScreenShown,
-        crate::components::SettingCommand,
-        crate::components::SceneCommand,
-        crate::components::StoryCommand,
-        crate::components::StoryReload,
-        crate::components::PlayCue,
-        crate::components::AudioCommand,
+        ControlsCommand,
+        InteractEvent,
+        RootMotionEvent,
+        ScreenCommand,
+        ScreenShown,
+        SettingCommand,
+        SceneCommand,
+        StoryCommand,
+        StoryReload,
+        PlayCue,
+        AudioCommand,
     ],
 }
 
@@ -119,7 +133,7 @@ fn resolve(type_id: TypeId) -> Option<ComponentId> {
 // world start, not silently at runtime.
 macro_rules! resource_mask {
     ( $( $ty:ty ),* $(,)? ) => {{
-        let mut m = $crate::ecs::ComponentMask::EMPTY;
+        let mut m = ::concinnity_core::ecs::ComponentMask::EMPTY;
         $( m.insert(
             $crate::ecs::access_ids::id_of::<$ty>()
                 .unwrap_or_else(|| panic!(
@@ -137,7 +151,8 @@ pub(crate) use resource_mask;
 #[cfg(debug_assertions)]
 mod validate {
     use super::{resolve, table};
-    use crate::ecs::Access;
+    use concinnity_core::ecs::Access;
+    use concinnity_core::ecs::ComponentId;
     use concinnity_core::ecs::access_check::{self, Touch};
 
     std::thread_local! {
@@ -169,11 +184,11 @@ mod validate {
         }
         match touch {
             Touch::ComponentRead { id, type_name } => assert!(
-                access.may_read_component(crate::ecs::ComponentId::new(*id)),
+                access.may_read_component(ComponentId::new(*id)),
                 "{system} reads {type_name} without declaring it",
             ),
             Touch::ComponentWrite { id, type_name } => assert!(
-                access.may_write_component(crate::ecs::ComponentId::new(*id)),
+                access.may_write_component(ComponentId::new(*id)),
                 "{system} writes {type_name} without declaring it",
             ),
             Touch::Structural { op } => {
@@ -212,12 +227,14 @@ pub(crate) use validate::install_hook;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::Access;
+
+    use concinnity_core::components::TextLabel;
+    use concinnity_core::ecs::Access;
 
     #[test]
     fn registered_types_resolve_to_distinct_ids() {
-        let a = id_of::<crate::ecs::MenuActive>().unwrap();
-        let b = id_of::<crate::components::ScreenCommand>().unwrap();
+        let a = id_of::<MenuActive>().unwrap();
+        let b = id_of::<ScreenCommand>().unwrap();
         assert_ne!(a, b);
     }
 
@@ -230,26 +247,29 @@ mod tests {
     #[test]
     fn ensure_event_queues_creates_declared_queues_only() {
         let mut store = EventStore::new();
-        let access =
-            Access::new().writes_resources(resource_mask![crate::components::ScreenCommand]);
+        let access = Access::new().writes_resources(resource_mask![ScreenCommand]);
         ensure_event_queues(&mut store, access);
-        assert!(store.get::<crate::components::ScreenCommand>().is_some());
-        assert!(store.get::<crate::components::PlayCue>().is_none());
+        assert!(store.get::<ScreenCommand>().is_some());
+        assert!(store.get::<PlayCue>().is_none());
 
         // Exclusive systems keep lazy creation.
         let mut lazy = EventStore::new();
         ensure_event_queues(&mut lazy, Access::new().exclusive());
-        assert!(lazy.get::<crate::components::ScreenCommand>().is_none());
+        assert!(lazy.get::<ScreenCommand>().is_none());
     }
 
     #[cfg(debug_assertions)]
     mod hook {
         use super::super::*;
-        use crate::blob::BlobData;
-        use crate::ecs::{Access, ComponentStorage, FrameContext, PipelineContext, Resources};
-        use crate::gfx::profile::FrameProfile;
+        use concinnity_core::components::Sprite;
+        use concinnity_core::components::TextLabel;
         use concinnity_core::ecs::Arena;
         use concinnity_core::ecs::access_check::set_active;
+        use concinnity_core::ecs::{
+            Access, ComponentStorage, FrameContext, PipelineContext, Resources,
+        };
+        use concinnity_core::gfx::profile::FrameProfile;
+        use concinnity_host::store::blob::BlobData;
 
         struct Parts {
             components: ComponentStorage,
@@ -284,11 +304,11 @@ mod tests {
         fn undeclared_component_read_panics() {
             install_hook();
             set_active(Some((
-                Access::new().writes_components(component_mask![crate::components::TextLabel]),
+                Access::new().writes_components(component_mask![TextLabel]),
                 "TestSystem",
             )));
             let mut p = parts();
-            let _ = ctx(&mut p).query::<crate::components::Sprite>().count();
+            let _ = ctx(&mut p).query::<Sprite>().count();
         }
 
         #[test]
@@ -297,7 +317,7 @@ mod tests {
             install_hook();
             set_active(Some((Access::new(), "TestSystem")));
             let mut p = parts();
-            ctx(&mut p).push(crate::components::TextLabel::default());
+            ctx(&mut p).push(TextLabel::default());
         }
 
         #[test]
@@ -316,21 +336,21 @@ mod tests {
             let mut p = parts();
             set_active(Some((
                 Access::new()
-                    .writes_components(component_mask![crate::components::TextLabel])
-                    .reads_resources(resource_mask![crate::ecs::MenuActive]),
+                    .writes_components(component_mask![TextLabel])
+                    .reads_resources(resource_mask![MenuActive]),
                 "TestSystem",
             )));
             {
                 let mut c = ctx(&mut p);
-                let _ = c.query::<crate::components::TextLabel>().count();
-                let _ = c.query_mut::<crate::components::TextLabel>().count();
-                let _ = c.resource::<crate::ecs::MenuActive>();
+                let _ = c.query::<TextLabel>().count();
+                let _ = c.query_mut::<TextLabel>().count();
+                let _ = c.resource::<MenuActive>();
             }
             set_active(Some((Access::new().exclusive(), "TestSystem")));
             {
                 let mut c = ctx(&mut p);
-                c.push(crate::components::TextLabel::default());
-                let _ = c.query::<crate::components::Sprite>().count();
+                c.push(TextLabel::default());
+                let _ = c.query::<Sprite>().count();
             }
             set_active(None);
         }
@@ -338,11 +358,11 @@ mod tests {
 
     #[test]
     fn masks_build_from_registered_types() {
-        let m = resource_mask![crate::ecs::MenuActive, crate::ecs::ScreenStack];
-        assert!(m.contains(id_of::<crate::ecs::MenuActive>().unwrap()));
-        assert!(!m.contains(id_of::<crate::ecs::FlyCam>().unwrap()));
+        let m = resource_mask![MenuActive, ScreenStack];
+        assert!(m.contains(id_of::<MenuActive>().unwrap()));
+        assert!(!m.contains(id_of::<FlyCam>().unwrap()));
 
-        let c = component_mask![crate::components::TextLabel];
+        let c = component_mask![TextLabel];
         assert!(!c.is_empty());
     }
 }

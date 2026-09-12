@@ -2,10 +2,9 @@
 // directory. The state's shape and its keying are the system's (see
 // `concinnity_core::behavior::BehaviorState`); what this owns is the file.
 
-use std::path::{Path, PathBuf};
-
 use concinnity_core::behavior::{BehaviorState, BehaviorStore};
 use concinnity_host::store::paths::StateTree;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) struct FileStore {

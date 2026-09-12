@@ -19,20 +19,23 @@
 // list. The world clock (Lifetime + Spawner) freezes while a menu is open
 // (`MenuActive`, published by OverlaySystem earlier this tick).
 
-use crate::components::{
+use concinnity_core::components::SkeletonPose;
+use concinnity_core::components::{
     DespawnRequest, EntityTarget, ReparentRequest, SpawnRequest, VisibilityRequest,
 };
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ActiveRenderQueues, PipelineContext, StepResult, System};
-use crate::gfx::ops::RenderOps;
-use crate::gfx::render_slots::RenderSlots;
-use crate::gfx::transform_propagation;
+use concinnity_core::ecs::{Entity, EventCursor, MenuActive, PipelineContext, StepResult, System};
+use concinnity_core::gfx::transform_propagation;
+use concinnity_core::render::ops::RenderOps;
+use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
+
+use crate::ecs::ActiveRenderQueues;
+use crate::gfx::render_slots::RenderSlots;
 
 // Resolve a request target to a live entity. A named target goes through the
 // world's name index; an entity-addressed one is already what the caller means,
 // including entities that never had a name.
-fn resolve_target(ctx: &PipelineContext, target: EntityTarget) -> Option<crate::ecs::Entity> {
+fn resolve_target(ctx: &PipelineContext, target: EntityTarget) -> Option<Entity> {
     match target {
         EntityTarget::Name(name) => resolve_name(ctx, name),
         EntityTarget::Entity(entity) => Some(entity),
@@ -41,8 +44,8 @@ fn resolve_target(ctx: &PipelineContext, target: EntityTarget) -> Option<crate::
 
 // The entity a decomposed name resolves to. Borrows the name index only for
 // the lookup, so the caller is free to take `&mut ctx` immediately after.
-fn resolve_name(ctx: &PipelineContext, name: AssetId) -> Option<crate::ecs::Entity> {
-    ctx.resource::<crate::ecs::decompose::EntityByName>()?
+fn resolve_name(ctx: &PipelineContext, name: AssetId) -> Option<Entity> {
+    ctx.resource::<concinnity_core::ecs::EntityByName>()?
         .0
         .get(&name)
         .copied()
@@ -64,7 +67,7 @@ fn record_clone_static(
     src: usize,
     model: [[f32; 4]; 4],
 ) -> Option<usize> {
-    use crate::gfx::draw_slot::SlotAlloc;
+    use concinnity_core::render::draw_slot::SlotAlloc;
     let dst = slots.allocate_draw();
     let idx = match dst {
         SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
@@ -96,16 +99,16 @@ fn record_skinned_claim(
 pub(crate) struct SpawnSystem {
     // Cursor into the Events<DespawnRequest> queue (runtime entity despawn:
     // cn debug `despawn`, and gameplay-driven removal once that path exists).
-    despawn_cmd_cursor: crate::ecs::EventCursor,
+    despawn_cmd_cursor: EventCursor,
     // Cursor into the Events<ReparentRequest> queue (runtime re-parenting:
     // cn debug `reparent`, and gameplay-driven moves once that path exists).
-    reparent_cmd_cursor: crate::ecs::EventCursor,
+    reparent_cmd_cursor: EventCursor,
     // Cursor into the Events<SpawnRequest> queue (runtime entity spawn: cn debug
     // `spawn`, and gameplay-driven spawning once that path exists).
-    spawn_cmd_cursor: crate::ecs::EventCursor,
+    spawn_cmd_cursor: EventCursor,
     // Cursor into the Events<VisibilityRequest> queue (runtime show/hide:
     // Behavior show/hide nodes).
-    visibility_cmd_cursor: crate::ecs::EventCursor,
+    visibility_cmd_cursor: EventCursor,
     // Clock base and the cumulative elapsed seconds at the previous step, so
     // each step derives the per-frame dt for the Lifetime / Spawner ticks.
     start_time: Option<Instant>,
@@ -148,10 +151,7 @@ impl SpawnSystem {
         // while the cascades they feed take `ctx` mutably.
         let frame = ctx.frame;
         // The menu state OverlaySystem published earlier this tick.
-        let menu_active = ctx
-            .resource::<crate::ecs::MenuActive>()
-            .map(|m| m.0)
-            .unwrap_or(false);
+        let menu_active = ctx.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
 
         // Timed despawn: decrement every Lifetime by this frame's dt and
         // despawn the entities whose countdown reached zero, through the
@@ -238,10 +238,7 @@ impl SpawnSystem {
             // A skinned template (a SkeletonPose entity) claims a
             // pre-reserved instance slot; a static one clones a draw
             // slot. Dispatch on which the template carries.
-            if ctx
-                .get::<crate::components::SkeletonPose>(template)
-                .is_some()
-            {
+            if ctx.get::<SkeletonPose>(template).is_some() {
                 template::spawn_skinned_from_template(
                     ctx,
                     template,
@@ -278,10 +275,7 @@ impl SpawnSystem {
             let Some(template) = resolve_name(ctx, due.template) else {
                 continue;
             };
-            if ctx
-                .get::<crate::components::SkeletonPose>(template)
-                .is_some()
-            {
+            if ctx.get::<SkeletonPose>(template).is_some() {
                 template::spawn_skinned_from_template(
                     ctx,
                     template,

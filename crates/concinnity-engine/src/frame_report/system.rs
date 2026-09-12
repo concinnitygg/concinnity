@@ -1,12 +1,11 @@
 // The system a declared FrameReport gates in: records one row per frame, and
 // reports what the run cost when it ends.
 
+use concinnity_core::camera_track::CameraTrackStatus;
+use concinnity_core::components::{CameraTrack, FrameReport};
+use concinnity_core::ecs::{PipelineContext, StepResult, System};
 use std::time::Instant;
 
-use concinnity_core::camera_track::CameraTrackStatus;
-
-use crate::components::{CameraTrack, FrameReport};
-use crate::ecs::{PipelineContext, StepResult, System};
 use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::to_text;
 use crate::frame_report::sample::{FrameRun, FrameSample};
@@ -138,10 +137,12 @@ impl Drop for FrameReportSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::cook::{Camera3D as Camera3DArgs, CameraTrack as CameraTrackArgs};
-    use crate::components::{Camera3D, CameraTravel};
-    use crate::ecs::World;
     use concinnity_core::camera_track::CameraTrackSystem;
+    use concinnity_core::components::cook::{
+        Camera3D as Camera3DArgs, CameraTrack as CameraTrackArgs,
+    };
+    use concinnity_core::components::{Camera3D, CameraTravel};
+    use concinnity_core::ecs::World;
 
     fn track(travel: Vec<CameraTravel>) -> CameraTrack {
         CameraTrack::bake(CameraTrackArgs {

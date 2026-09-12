@@ -7,17 +7,19 @@
 // into a mesh-space target for the analytic two-bone solve, applied to the
 // sampled locals just before the skinning matrices.
 
-use std::collections::{BTreeMap, HashMap};
-
-use crate::components::{
+use concinnity_core::components::AnimationParam;
+use concinnity_core::components::SkeletonPose;
+use concinnity_core::components::{
     AnimationIkChain, AnimationParams, CharacterRig, GroundProbe, GroundProbes,
 };
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, SkinnedMeshHandle};
-use crate::gfx::ik::TwoBoneChain;
-use crate::gfx::pose_scratch::PoseScratch;
-use crate::gfx::skeleton::Skeleton;
-use crate::gfx::transform::{Mat4, mat4_affine_inverse};
+use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
+use concinnity_core::gfx::ik;
+use concinnity_core::gfx::ik::TwoBoneChain;
+use concinnity_core::gfx::pose_scratch::PoseScratch;
+use concinnity_core::gfx::skeleton::Skeleton;
+use concinnity_core::gfx::transform::{Mat4, mat4_affine_inverse};
+use concinnity_host::thread::asset_id::AssetId;
+use std::collections::{BTreeMap, HashMap};
 
 // Probe ray extents around the animated foot: the ray starts `PROBE_UP`
 // above it and reaches `PROBE_DOWN` below.
@@ -42,7 +44,7 @@ pub(super) struct IkChainRuntime {
 pub(super) fn resolve_chains(
     graph_id: AssetId,
     authored: &[AnimationIkChain],
-    parameters: &[crate::components::AnimationParam],
+    parameters: &[AnimationParam],
     skeleton: &Skeleton,
 ) -> Vec<IkChainRuntime> {
     let mut chains = Vec::new();
@@ -209,7 +211,7 @@ pub(super) fn apply_chains(
         }
         let target_world = [foot_world[0], pin_y, foot_world[2]];
         let target_mesh = transform_point(&frame.inv_model, target_world);
-        crate::gfx::ik::apply_two_bone_ik(
+        ik::apply_two_bone_ik(
             skeleton,
             &mut scratch.locals,
             &chain.chain,
@@ -245,10 +247,7 @@ pub(super) fn refresh_rays(
             continue;
         };
         {
-            let Some(pose) = ctx
-                .query::<crate::components::SkeletonPose>()
-                .find(|p| p.mesh_id == target)
-            else {
+            let Some(pose) = ctx.query::<SkeletonPose>().find(|p| p.mesh_id == target) else {
                 continue;
             };
             feet_scratch.clear();
@@ -287,8 +286,8 @@ fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::AnimationParam;
-    use crate::gfx::skeleton::{Joint, JointPose, Skeleton};
+    use concinnity_core::components::AnimationParam;
+    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     // A valid hip -> knee -> foot chain (each the direct child of the last),
     // plus an extra unrelated root joint the broken-parentage case names.
