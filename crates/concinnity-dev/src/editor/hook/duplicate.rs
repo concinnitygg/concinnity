@@ -7,7 +7,7 @@
 // batch commits as ONE undo step.
 
 use super::{EditorHook, entry_name, entry_type};
-use crate::editor::panel;
+use crate::editor::panels::panel;
 
 impl EditorHook {
     // Duplicate every eligible selection member; the number of copies made.

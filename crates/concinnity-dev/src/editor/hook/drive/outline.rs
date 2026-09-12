@@ -16,11 +16,11 @@ use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::lines::Line;
 
-use crate::editor::billboards;
-use crate::editor::form;
 use crate::editor::hook::{EditorHook, entry_name, entry_type};
 use crate::editor::outlines;
 use crate::editor::outlines::shapes::{self, Stroke};
+use crate::editor::panels::form;
+use crate::editor::viewport::billboards;
 
 // What one entity's shape generator reads: its live entity, its authored
 // entry and type, the frame's viewport, and the stroke its row draws with.

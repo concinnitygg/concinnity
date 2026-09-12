@@ -14,7 +14,7 @@ use crate::editor::create_menu;
 use crate::editor::hook::drag;
 use crate::editor::hook::{EditorHook, names_of_type};
 use crate::editor::hud;
-use crate::editor::registry::{self, PanelKey};
+use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::widget::{self, point_in};
 
 // An open "Create here" menu.

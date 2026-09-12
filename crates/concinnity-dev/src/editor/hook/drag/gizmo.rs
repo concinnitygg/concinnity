@@ -17,12 +17,12 @@ use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::form;
-use crate::editor::gizmo::{self, GizmoMode};
-use crate::editor::group_transform;
 use crate::editor::hook::pick;
 use crate::editor::hook::{EditorHook, entry_name, entry_type};
-use crate::editor::snap;
+use crate::editor::panels::form;
+use crate::editor::viewport::gizmo::{self, GizmoMode};
+use crate::editor::viewport::group_transform;
+use crate::editor::viewport::snap;
 
 // Committed values are rounded so world.jsonl stays readable: positions and
 // scales to 3 decimals, angles to 1.

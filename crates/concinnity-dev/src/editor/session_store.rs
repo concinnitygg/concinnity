@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::framing::CameraPose;
+use super::viewport::framing::CameraPose;
 
 pub(crate) const BOOKMARK_SLOTS: usize = 9;
 

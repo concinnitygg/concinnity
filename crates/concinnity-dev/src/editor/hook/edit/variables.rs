@@ -23,9 +23,9 @@ use crate::editor::behavior::edit;
 use crate::editor::behavior::palette;
 use crate::editor::behavior::relations;
 use crate::editor::hook::{EditorHook, entry_name, entry_type, scroll_step};
-use crate::editor::registry::{self, PanelKey};
-use crate::editor::variables::{self, Row};
-use crate::editor::variables_panel::{self, VariablesAction, VariablesView};
+use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::panels::variables::{self, Row};
+use crate::editor::panels::variables_panel::{self, VariablesAction, VariablesView};
 use crate::editor::widget;
 
 // Owned per-tick data backing a `VariablesView`.

@@ -10,12 +10,12 @@ use concinnity_core::ecs::World;
 
 use super::bookmarks;
 use super::{Drag, EditorHook, scroll_step};
-use crate::editor::form_panel::{self, FormFocus};
-use crate::editor::gizmo;
 use crate::editor::hud::{self, HudState};
-use crate::editor::registry::{self, PanelKey};
-use crate::editor::resize;
-use crate::editor::template_panel;
+use crate::editor::panels::form_panel::{self, FormFocus};
+use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::panels::template_panel;
+use crate::editor::viewport::gizmo;
+use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
 
 impl EditorHook {

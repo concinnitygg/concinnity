@@ -17,9 +17,9 @@ use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
 
-use crate::editor::framing::CameraPose;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::camera_pose;
+use crate::editor::viewport::framing::CameraPose;
 use crate::editor::worlds;
 use crate::editor::worlds::cinematic::{Cinematic, Framing};
 

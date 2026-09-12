@@ -16,11 +16,11 @@ use concinnity_core::ecs::World;
 use concinnity_engine::gfx::shape_preview::{self, ShapeTarget};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::character_shape::{self, Row, Rows, ShapeValues};
-use crate::editor::character_shape_panel::{self, ShapeAction, ShapeView};
-use crate::editor::form;
 use crate::editor::hook::{EditorHook, entry_name, entry_type, scroll_step, short_status};
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::character_shape::{self, Row, Rows, ShapeValues};
+use crate::editor::panels::character_shape_panel::{self, ShapeAction, ShapeView};
+use crate::editor::panels::form;
+use crate::editor::panels::registry::PanelKey;
 
 // What the panel edits: the selected skinned mesh and the shape entry
 // targeting it, if the world has one.

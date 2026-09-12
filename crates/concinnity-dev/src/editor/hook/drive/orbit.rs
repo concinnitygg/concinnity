@@ -2,7 +2,7 @@
 //
 // EditorHook: the Alt+drag tumble around the selection. The pivot is the
 // selection's bounds center; angles and the camera's orientation offset are
-// captured at press time (math in `editor/orbit.rs`) and stepped from the
+// captured at press time (math in `editor/viewport/orbit.rs`) and stepped from the
 // cursor's own frame-to-frame movement, so the drag needs neither cursor
 // capture nor the gameplay input gate -- the cursor stays visible and the
 // world's camera controller stays frozen.
@@ -11,10 +11,10 @@ use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 
-use crate::editor::framing;
 use crate::editor::hook::EditorHook;
 use crate::editor::hud;
-use crate::editor::orbit;
+use crate::editor::viewport::framing;
+use crate::editor::viewport::orbit;
 
 pub(in crate::editor::hook) struct OrbitDrag {
     pivot: [f32; 3],

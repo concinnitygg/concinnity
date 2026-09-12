@@ -18,7 +18,7 @@ use concinnity_core::gfx::pick::{PickRay, ray_aabb, screen_ray};
 use concinnity_host::thread::asset_id::{self, AssetId};
 
 use super::EditorHook;
-use crate::editor::highlight;
+use crate::editor::viewport::highlight;
 
 // A repeat click within this many pixels of the last one cycles the hit list
 // instead of restarting it.

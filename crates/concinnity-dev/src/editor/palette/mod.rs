@@ -3,12 +3,13 @@
 // The command palette's data model: every actionable thing the editor can
 // reach -- panels, world assets, console commands, display options -- as one
 // ranked list. Pure data and ranking only; the overlay's geometry lives in
-// `editor/palette_panel.rs` and the drive in `hook/edit/palette.rs`.
+// `editor/palette/panel.rs` and the drive in `hook/edit/palette.rs`.
 
+pub(crate) mod panel;
 pub(crate) mod providers;
 
 use super::filter;
-use super::registry::PanelKey;
+use super::panels::registry::PanelKey;
 use super::view_menu;
 
 // What committing a palette row does. Every arm routes through an existing

@@ -52,10 +52,11 @@ use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
 use super::EditorHook;
+use crate::editor::behavior;
+use crate::editor::behavior::chart::CARD_POOL;
 use crate::editor::behavior::graph::Card;
 use crate::editor::behavior::navigate::{self, Dir};
-use crate::editor::behavior_chart::CARD_POOL;
-use crate::editor::behavior_panel::{self, BehaviorAction, ViewMode};
+use crate::editor::behavior::panel::{BehaviorAction, ViewMode};
 
 fn direction(key: InputKey) -> Option<Dir> {
     Some(match key {
@@ -68,7 +69,7 @@ fn direction(key: InputKey) -> Option<Dir> {
 }
 
 // The cards a step can reach: the ones the chart draws, so the keyboard lands
-// only where a click could (`behavior_chart::hit_card`).
+// only where a click could (`behavior::chart::hit_card`).
 fn reachable(cards: &[Card]) -> &[Card] {
     &cards[..cards.len().min(CARD_POOL)]
 }
@@ -145,7 +146,7 @@ impl EditorHook {
                 };
                 self.behavior_pick = at;
                 self.behavior_pick_scroll =
-                    navigate::scroll_to(at, self.behavior_pick_scroll, behavior_panel::PICK_POOL);
+                    navigate::scroll_to(at, self.behavior_pick_scroll, behavior::panel::PICK_POOL);
             }
             _ => {}
         }

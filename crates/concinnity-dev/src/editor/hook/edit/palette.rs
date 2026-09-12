@@ -15,15 +15,15 @@ use concinnity_core::ecs::World;
 
 use crate::editor::behavior::navigate;
 use crate::editor::hook::{EditorHook, entry_name, scroll_step};
+use crate::editor::palette::panel::{PaletteHit, PaletteView};
 use crate::editor::palette::providers;
 use crate::editor::palette::{self, PaletteAction};
-use crate::editor::palette_panel::{self, PaletteHit, PaletteView};
-use crate::editor::registry::{self, PanelKey};
+use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::view_menu;
 use crate::editor::widget::{self, point_in};
 
 // How many result rows a wheel step or arrow keeps in view.
-const WINDOW: usize = palette_panel::ROW_POOL;
+const WINDOW: usize = palette::panel::ROW_POOL;
 
 impl EditorHook {
     // The Ctrl+K / Cmd+K edge: toggle unless play mode owns the keyboard.
@@ -63,7 +63,7 @@ impl EditorHook {
         self.refresh_tree_if_needed();
         self.palette_items = providers::all_items(&self.tree_groups);
         self.palette_query = String::new();
-        widget::seed_field(world, palette_panel::INPUT, "");
+        widget::seed_field(world, palette::panel::INPUT, "");
         self.rerank_palette();
         self.focus_panel(PanelKey::Palette);
     }
@@ -78,7 +78,7 @@ impl EditorHook {
         if !self.palette_open {
             return;
         }
-        let typed = widget::field_text(world, palette_panel::INPUT);
+        let typed = widget::field_text(world, palette::panel::INPUT);
         if typed != self.palette_query {
             self.palette_query = typed;
             self.rerank_palette();
@@ -111,7 +111,7 @@ impl EditorHook {
         let over = point_in(
             input.mouse_x,
             input.mouse_y,
-            widget::outer_rect(o, palette_panel::size()),
+            widget::outer_rect(o, palette::panel::size()),
         );
         if over {
             return false;
@@ -128,7 +128,7 @@ impl EditorHook {
             .take(WINDOW)
             .map(|&at| {
                 let item = &self.palette_items[at];
-                palette_panel::PaletteRow {
+                palette::panel::PaletteRow {
                     caption: &item.label,
                     hint: &item.hint,
                     tag: item.category.tag(),
@@ -237,7 +237,7 @@ impl EditorHook {
             }
             // Stays open: the reseeded query re-ranks on next frame's sample.
             PaletteAction::CommandMode(name) => {
-                widget::focus_field_with(world, palette_panel::INPUT, &format!("/{name} "));
+                widget::focus_field_with(world, palette::panel::INPUT, &format!("/{name} "));
             }
             PaletteAction::RunCommand(line) => {
                 self.close_palette();

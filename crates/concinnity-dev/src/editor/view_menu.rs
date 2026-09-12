@@ -11,7 +11,7 @@ pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_host::thread::asset_id::AssetId;
 
 use super::outlines::{Category, CategorySet};
-use super::registry::ID_BASE;
+use super::panels::registry::ID_BASE;
 use super::theme;
 use super::widget::{self, point_in};
 

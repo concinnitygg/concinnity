@@ -702,6 +702,9 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn update_view(&mut self, _: [[f32; 4]; 4]) {}
         fn update_models(&mut self, _: &[(u32, [[f32; 4]; 4])]) {}
         fn retire_draw_object(&mut self, _: usize) {}
+    }
+
+    impl backend::SkinnedDraws for DummyBackend {
         fn upload_skinned(
             &mut self,
             _: &[mesh_payload::SkinnedVertex],
@@ -711,6 +714,9 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             Ok(())
         }
         fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
+    }
+
+    impl backend::DrawStreaming for DummyBackend {
         fn evict_texture_slot(&mut self, _: usize) -> Result<(), String> {
             Ok(())
         }
@@ -750,6 +756,16 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             Ok(())
         }
     }
+
+    impl backend::WindowControl for DummyBackend {}
+
+    impl backend::RenderTuning for DummyBackend {}
+
+    impl backend::LiveEdit for DummyBackend {}
+
+    impl backend::SceneEffects for DummyBackend {}
+
+    impl backend::BackendProbe for DummyBackend {}
 
     let map = ShaderStageSourceMap::new();
     let mut backend = DummyBackend;
@@ -842,6 +858,9 @@ impl backend::RenderBackend for RecordingBackend {
     fn update_view(&mut self, _: [[f32; 4]; 4]) {}
     fn update_models(&mut self, _: &[(u32, [[f32; 4]; 4])]) {}
     fn retire_draw_object(&mut self, _: usize) {}
+}
+
+impl backend::SkinnedDraws for RecordingBackend {
     fn upload_skinned(
         &mut self,
         _: &[mesh_payload::SkinnedVertex],
@@ -851,6 +870,9 @@ impl backend::RenderBackend for RecordingBackend {
         Ok(())
     }
     fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
+}
+
+impl backend::DrawStreaming for RecordingBackend {
     fn evict_texture_slot(&mut self, _: usize) -> Result<(), String> {
         Ok(())
     }
@@ -894,7 +916,17 @@ impl backend::RenderBackend for RecordingBackend {
     fn set_chunk_model(&mut self, _: usize, _: [[f32; 4]; 4]) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl backend::WindowControl for RecordingBackend {}
+
+impl backend::RenderTuning for RecordingBackend {
+    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
+        self.fog_updates += 1;
+    }
+}
+
+impl backend::LiveEdit for RecordingBackend {
     fn update_color_lut(&mut self, size: u32, _: &[u8]) -> Result<(), String> {
         self.lut_updates.push(size);
         if self.fail_lut_updates {
@@ -983,10 +1015,11 @@ impl backend::RenderBackend for RecordingBackend {
         }
         Ok(())
     }
-    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
-        self.fog_updates += 1;
-    }
 }
+
+impl backend::SceneEffects for RecordingBackend {}
+
+impl backend::BackendProbe for RecordingBackend {}
 
 // A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.
 fn write_tiny_png(path: &std::path::Path) {

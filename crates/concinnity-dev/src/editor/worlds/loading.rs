@@ -15,8 +15,9 @@ use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
-use super::super::registry::ID_BASE;
-use super::super::{theme, widget};
+use crate::editor::panels::registry::ID_BASE;
+use crate::editor::theme;
+use crate::editor::widget;
 
 // Reserved id family: the next free block after the shot fade's (0xD000).
 const BASE: u32 = ID_BASE + 0xE000;

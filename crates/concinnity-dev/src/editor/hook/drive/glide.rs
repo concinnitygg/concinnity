@@ -2,7 +2,7 @@
 //
 // EditorHook: frame-selected and the short eased camera glide it (and a
 // bookmark recall) rides on. F moves the camera so the whole selection fits
-// the view; the pose math lives in `editor/framing.rs`, this drive resolves
+// the view; the pose math lives in `editor/viewport/framing.rs`, this drive resolves
 // the selection's world bounds and steps the interpolation.
 
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
@@ -10,9 +10,9 @@ use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::framing::{self, CameraPose};
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::camera_pose;
+use crate::editor::viewport::framing::{self, CameraPose};
 
 const GLIDE_SECS: f32 = 0.25;
 

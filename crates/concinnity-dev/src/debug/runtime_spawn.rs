@@ -1143,9 +1143,10 @@ mod tests {
     }
 
     // A do-nothing RenderBackend for driving `dispatch_runtime_spawn` without a
-    // GPU. It overrides none of the runtime decal / emitter / screenshot hooks,
-    // so those fall through to the trait's default `Err` bodies -- exactly the
-    // failure arms the dispatch reply surfaces to a WS client.
+    // GPU. It implements the mandatory families only, so the runtime decal /
+    // emitter / screenshot hooks fall through to the empty `SceneEffects` and
+    // `BackendProbe` impls below and report the trait defaults' `Err` --
+    // exactly the failure arms the dispatch reply surfaces to a WS client.
     struct StubBackend;
 
     impl scene_flow::SceneControl for StubBackend {
@@ -1168,6 +1169,9 @@ mod tests {
         fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
         fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
         fn retire_draw_object(&mut self, _draw_idx: usize) {}
+    }
+
+    impl backend::SkinnedDraws for StubBackend {
         fn upload_skinned(
             &mut self,
             _vertices: &[mesh_payload::SkinnedVertex],
@@ -1177,6 +1181,9 @@ mod tests {
             Ok(())
         }
         fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
+    }
+
+    impl backend::DrawStreaming for StubBackend {
         fn evict_texture_slot(&mut self, _slot: usize) -> Result<(), String> {
             Ok(())
         }
@@ -1228,6 +1235,16 @@ mod tests {
             Ok(())
         }
     }
+
+    impl backend::WindowControl for StubBackend {}
+
+    impl backend::RenderTuning for StubBackend {}
+
+    impl backend::LiveEdit for StubBackend {}
+
+    impl backend::SceneEffects for StubBackend {}
+
+    impl backend::BackendProbe for StubBackend {}
 
     // Drive one runtime-spawn command whose reply is `Result<(), String>` (the
     // ECS-side variants) through the backend dispatch and return its reply.

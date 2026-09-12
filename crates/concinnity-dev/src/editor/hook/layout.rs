@@ -9,15 +9,15 @@ use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
 use super::{EditorHook, TOP_BAR_LAYER};
-use crate::editor::asset_list::{self, ListRow};
 use crate::editor::create_menu;
 use crate::editor::hud;
-use crate::editor::list_panel::Row;
 use crate::editor::modal;
-use crate::editor::registry::{self, PanelKey};
-use crate::editor::resize;
+use crate::editor::panels::asset_list::{self, ListRow};
+use crate::editor::panels::list_panel::Row;
+use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::toast_overlay;
 use crate::editor::view_menu;
+use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
 use crate::editor::worlds;
 

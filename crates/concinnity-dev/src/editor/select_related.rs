@@ -5,7 +5,7 @@
 // origin rule reuses the outliner's grouping (`asset_tree::groups_from`), so
 // "same origin" always means exactly what the Assets tree shows.
 
-use super::asset_tree::TreeGroup;
+use super::panels::asset_tree::TreeGroup;
 
 // Every name in the origin group holding `name`, or `None` when no group
 // lists it.
@@ -44,7 +44,7 @@ pub(crate) fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::super::asset_tree::{Badge, TreeAsset};
+    use super::super::panels::asset_tree::{Badge, TreeAsset};
     use super::*;
 
     fn group(label: &str, names: &[&str]) -> TreeGroup {

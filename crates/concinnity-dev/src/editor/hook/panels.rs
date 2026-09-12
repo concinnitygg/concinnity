@@ -11,26 +11,27 @@ use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
 use super::EditorHook;
-use crate::editor::behavior_panel::{self, ViewMode};
-use crate::editor::character_shape_panel;
-use crate::editor::console_panel;
-use crate::editor::content_panel;
-use crate::editor::form;
-use crate::editor::form_panel::{self, FormAction};
-use crate::editor::health_panel;
-use crate::editor::import_panel;
-use crate::editor::lighting;
-use crate::editor::lighting_panel;
-use crate::editor::palette_panel;
-use crate::editor::panel;
-use crate::editor::preview::{self, PreviewAction};
-use crate::editor::registry::{Panel, PanelKey};
-use crate::editor::snap;
-use crate::editor::story_panel;
-use crate::editor::template::{self, TemplatesAction};
-use crate::editor::template_panel;
-use crate::editor::variables_panel;
-use crate::editor::view::{self, ViewAction};
+use crate::editor::behavior;
+use crate::editor::behavior::panel::ViewMode;
+use crate::editor::palette;
+use crate::editor::panels::character_shape_panel;
+use crate::editor::panels::console_panel;
+use crate::editor::panels::content_panel;
+use crate::editor::panels::form;
+use crate::editor::panels::form_panel::{self, FormAction};
+use crate::editor::panels::health_panel;
+use crate::editor::panels::import_panel;
+use crate::editor::panels::lighting;
+use crate::editor::panels::lighting_panel;
+use crate::editor::panels::panel;
+use crate::editor::panels::preview::{self, PreviewAction};
+use crate::editor::panels::registry::{Panel, PanelKey};
+use crate::editor::panels::story_panel;
+use crate::editor::panels::template::{self, TemplatesAction};
+use crate::editor::panels::template_panel;
+use crate::editor::panels::variables_panel;
+use crate::editor::panels::view::{self, ViewAction};
+use crate::editor::viewport::snap;
 use crate::editor::widget;
 use crate::editor::worlds;
 
@@ -1011,7 +1012,7 @@ impl Panel for BehaviorPanel {
     // chart has no such pool, so there it grows to the screen.
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
         match hook.behavior_mode {
-            ViewMode::Outline => behavior_panel::max_size(),
+            ViewMode::Outline => behavior::panel::max_size(),
             _ => [f32::INFINITY, f32::INFINITY],
         }
     }
@@ -1038,31 +1039,31 @@ impl Panel for BehaviorPanel {
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         match hook.behavior_mode {
-            ViewMode::Chart => behavior_panel::chart_size(),
-            ViewMode::Overview => behavior_panel::overview_size(),
-            ViewMode::Outline => behavior_panel::size(),
+            ViewMode::Chart => behavior::panel::chart_size(),
+            ViewMode::Overview => behavior::panel::overview_size(),
+            ViewMode::Outline => behavior::panel::size(),
         }
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        behavior_panel::default_origin(vp[0])
+        behavior::panel::default_origin(vp[0])
     }
     fn sprite_ids(&self) -> Vec<AssetId> {
-        behavior_panel::all_sprite_ids()
+        behavior::panel::all_sprite_ids()
     }
     fn label_ids(&self) -> Vec<AssetId> {
-        behavior_panel::all_label_ids()
+        behavior::panel::all_label_ids()
     }
     fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
         vec![
-            (behavior_panel::VALUE_INPUT, "value"),
-            (behavior_panel::NAME_INPUT, "name"),
-            (behavior_panel::FILTER_INPUT, "filter"),
+            (behavior::panel::VALUE_INPUT, "value"),
+            (behavior::panel::NAME_INPUT, "name"),
+            (behavior::panel::FILTER_INPUT, "filter"),
         ]
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
-        let mut ids = behavior_panel::status_ids();
+        let mut ids = behavior::panel::status_ids();
         if hook.behavior_picking {
-            ids.extend(behavior_panel::palette_ids());
+            ids.extend(behavior::panel::palette_ids());
         }
         ids
     }
@@ -1078,7 +1079,7 @@ impl Panel for BehaviorPanel {
         let action = {
             let data = hook.behavior_data();
             let view = hook.make_behavior_view(&data, [mx, my]);
-            behavior_panel::hit_test(&view, mx, my, o, s)
+            behavior::panel::hit_test(&view, mx, my, o, s)
         };
         match action {
             Some(a) => {
@@ -1090,7 +1091,7 @@ impl Panel for BehaviorPanel {
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Behavior);
-        behavior_panel::cursor_over_body(mx, my, o, s)
+        behavior::panel::cursor_over_body(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_behavior(delta);
@@ -1102,10 +1103,10 @@ impl Panel for BehaviorPanel {
         let s = hook.effective_size(PanelKey::Behavior);
         let data = hook.behavior_data();
         let view = hook.make_behavior_view(&data, mouse);
-        behavior_panel::apply(world, Some(&view), o, s);
+        behavior::panel::apply(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        behavior_panel::apply(world, None, [0.0, 0.0], behavior_panel::size());
+        behavior::panel::apply(world, None, [0.0, 0.0], behavior::panel::size());
     }
 }
 
@@ -1221,19 +1222,19 @@ impl Panel for PalettePanel {
         hook.close_palette();
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
-        palette_panel::size()
+        palette::panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        palette_panel::default_origin(vp)
+        palette::panel::default_origin(vp)
     }
     fn sprite_ids(&self) -> Vec<AssetId> {
-        palette_panel::all_sprite_ids()
+        palette::panel::all_sprite_ids()
     }
     fn label_ids(&self) -> Vec<AssetId> {
-        palette_panel::all_label_ids()
+        palette::panel::all_label_ids()
     }
     fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        palette_panel::all_field_ids()
+        palette::panel::all_field_ids()
             .into_iter()
             .map(|id| (id, "search"))
             .collect()
@@ -1248,7 +1249,7 @@ impl Panel for PalettePanel {
     ) -> bool {
         let action = {
             let view = hook.make_palette_view([mx, my]);
-            palette_panel::hit_test(&view, mx, my, o)
+            palette::panel::hit_test(&view, mx, my, o)
         };
         match action {
             Some(hit) => {
@@ -1266,7 +1267,7 @@ impl Panel for PalettePanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        palette_panel::cursor_over_rows(mx, my, o)
+        palette::panel::cursor_over_rows(mx, my, o)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_palette(delta);
@@ -1276,10 +1277,10 @@ impl Panel for PalettePanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let view = hook.make_palette_view(mouse);
-        palette_panel::apply(world, Some(&view), o);
+        palette::panel::apply(world, Some(&view), o);
     }
     fn hide(&self, world: &mut World) {
-        palette_panel::apply(world, None, [0.0, 0.0]);
+        palette::panel::apply(world, None, [0.0, 0.0]);
     }
 }
 

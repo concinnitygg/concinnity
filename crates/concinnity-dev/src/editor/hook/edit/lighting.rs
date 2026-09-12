@@ -10,11 +10,11 @@
 
 use concinnity_core::ecs::World;
 
-use crate::editor::form::{self, FormField};
 use crate::editor::hook::{EditorHook, LightingData, entry_name, entry_type, short_status};
-use crate::editor::lighting;
-use crate::editor::lighting_panel::{self, LightingAction, LightingView};
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::form::{self, FormField};
+use crate::editor::panels::lighting;
+use crate::editor::panels::lighting_panel::{self, LightingAction, LightingView};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
 impl EditorHook {

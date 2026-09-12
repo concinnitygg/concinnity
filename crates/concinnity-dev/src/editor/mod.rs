@@ -9,75 +9,92 @@
 // debug server so an MCP client can inspect and drive a session.
 //
 // `cn editor -f <world>` opens that world. With no world named the session
-// opens an empty scene under the Worlds panel (`editor/worlds.rs`), which
-// lists the project's worlds and opens, creates, or deletes one.
+// opens an empty scene under the Worlds panel (`editor/worlds/`), which lists
+// the project's worlds and opens, creates, or deletes one.
+//
+// The subsystem splits in one place and splits there all the way down. `hook/`
+// is the editor as a single per-frame drive: it holds every piece of session
+// state, and it is the only module here that reads a frame's input or decides
+// that the world changes. Every module below is what it drives. The panels and
+// the viewport are pure -- geometry, a model, or math over state handed in --
+// which is what lets them be tested without a window; the few that do reach
+// outside (`session_store`, `file_dialog`, `thumbs`, `gltf_export/`, and
+// `live/` writing the running world) say so on their own line.
+//
+// Where a concern lives follows from how big it got. A panel is one or two
+// files under `panels/`; a panel whose model outgrew that keeps its own
+// directory (`behavior/`, `palette/`, `worlds/`). What each module holds is on
+// the line above its declaration.
 
-mod asset_list;
-mod asset_tree;
-mod axes;
+// The Behavior panel's model half: one behavior's authored args as an editable
+// node graph, plus the palette, outline and chart views over it.
 mod behavior;
-mod behavior_chart;
-mod behavior_panel;
-mod billboards;
-mod character_shape;
-mod character_shape_panel;
-mod console;
-mod console_panel;
-mod content_panel;
+// The viewport's right-click "Create here" menu, anchored at the cursor.
 mod create_menu;
-mod cursor;
+// The native file picker behind Import's Browse, and the project-relative
+// rewrite its result needs.
 mod file_dialog;
+// The ranked substring filter every pick list narrows through.
 mod filter;
-mod form;
-mod form_panel;
-mod framing;
-mod gizmo;
+// glTF (.glb) export of a skinned mesh: geometry, skeleton and morph targets.
 mod gltf_export;
-mod group_transform;
-mod health;
-mod health_panel;
-mod highlight;
+// Bounded undo / redo stacks over the authored entry list. Pure data.
 mod history;
+// The editor itself: one per-frame drive holding all of the session state,
+// and the only half here that reads input or writes the world.
 mod hook;
+// The top bar: the full-width strip holding SAVE, the panel chips and the
+// transport.
 mod hud;
-mod import_panel;
+// Runtime injection of the HUD's reserved assets into a compiled world,
+// between the in-memory compile and `App::start`.
 mod inject;
-mod lighting;
-mod lighting_panel;
-mod list_panel;
+// Applying an edit to the running preview world instead of rebuilding it.
 mod live;
-mod marquee;
+// The confirmation dialog: message, optional name field, and its buttons.
 mod modal;
+// The toast queue the editor and its workers push into, and each message's
+// pure lifetime.
 pub(crate) mod notify;
-mod orbit;
+// Extent outlines for assets with spatial reach but no geometry: trigger
+// volumes, light ranges, frusta, probe bounds.
 mod outlines;
+// Per-field override state for a template-derived asset, whose authored line
+// is a sparse patch over what the expansion generated.
 mod overrides;
+// The command palette's model: every actionable thing the editor can reach.
 mod palette;
-mod palette_panel;
-mod panel;
-mod preview;
-mod registry;
-mod resize;
+// Every floating panel: its layout half, its data half, and the registry
+// each panel is one entry in.
+mod panels;
+// Pure resolution for the /select console command.
 mod select_related;
+// The viewport selection, held by name so a preview rebuild cannot stale it.
 mod selection;
+// Per-project session state, persisted as one small CBOR file.
 mod session_store;
+// The Play / Pause / Step / Stop transport over the preview world. Pure
+// state; the hook drives it.
 mod sim;
-mod snap;
-mod story;
-mod story_panel;
-mod template;
-mod template_panel;
+// The chrome's shared palette and metrics, so every surface reads as one.
 mod theme;
+// The editor's view of the thumbnail set a build baked into the cache.
 mod thumbs;
+// The toast stack's card geometry and draw.
 mod toast_overlay;
-mod variables;
-mod variables_panel;
-mod view;
+// The Display menu: the viewport view mode and the per-session show flags.
 mod view_menu;
+// Interaction over the scene rather than over a panel: the gizmo and its
+// snapping, box-select, the highlight, the world-space furniture, the
+// camera math.
+mod viewport;
+// Pure composition of the two hide mechanisms, the manual set and an isolate.
 mod visibility;
+// The shared helpers every injected overlay element is placed through.
 mod widget;
+// A drag slider: track, fill, handle and value label.
 mod widget_slider;
-mod world_files;
+// The Worlds panel and the start screen it becomes with no world open.
 mod worlds;
 
 use concinnity_cook::authoring::world::WORLD_JSONL;
@@ -108,8 +125,8 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     // Instead of the engine's plain `init_logging`: the same stderr formatter
     // plus a layer mirroring this crate's events into the Console panel's log.
     // The sink exists first so even boot-time errors reach the panel.
-    let console_sink = console::ConsoleSink::default();
-    console::install_tracing(console_sink.clone());
+    let console_sink = panels::console::ConsoleSink::default();
+    panels::console::install_tracing(console_sink.clone());
 
     // Resolve the edit target -- the world.jsonl where readable names live and
     // where SAVE writes -- and whether the session opens on the Worlds panel
@@ -192,7 +209,7 @@ fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
 // has a window to show the result in. A project with no worlds preselects
 // nothing, which is what the screen's empty listing already says.
 fn start_screen_pick() -> Option<String> {
-    let world = world_files::newest(
+    let world = worlds::files::newest(
         crate::project::worlds_dir().as_deref(),
         crate::project::content_root().as_deref(),
     )?;

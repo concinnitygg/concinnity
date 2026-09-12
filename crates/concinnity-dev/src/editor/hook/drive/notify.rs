@@ -10,7 +10,7 @@ use concinnity_core::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::notify;
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::toast_overlay;
 
 impl EditorHook {

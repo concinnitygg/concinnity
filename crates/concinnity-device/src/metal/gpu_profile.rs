@@ -4,8 +4,8 @@
 // selection. Every signal is read straight off the device (no extra GPU work):
 // the unified-memory flag, the recommended working-set as the memory budget, and
 // the highest supported Apple GPU family as the generation. The shared
-// classify_tier (gfx/backend.rs) maps these to a tier so every backend
-// classifies the same way.
+// classify_tier (core's render/backend/probe.rs) maps these to a tier so every
+// backend classifies the same way.
 
 use concinnity_core::render::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
 use objc2::runtime::ProtocolObject;

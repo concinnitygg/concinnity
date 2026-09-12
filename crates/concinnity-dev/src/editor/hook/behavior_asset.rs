@@ -15,7 +15,8 @@ use concinnity_core::ecs::World;
 use serde_json::Value;
 
 use super::{EditorHook, entry_name};
-use crate::editor::behavior_panel::{self, Status};
+use crate::editor::behavior;
+use crate::editor::behavior::panel::Status;
 use crate::editor::widget;
 
 impl EditorHook {
@@ -63,7 +64,7 @@ impl EditorHook {
             .and_then(|i| entry_name(&self.entries[i]))
             .unwrap_or("")
             .to_string();
-        widget::seed_field(world, behavior_panel::NAME_INPUT, &name);
+        widget::seed_field(world, behavior::panel::NAME_INPUT, &name);
     }
 
     // Commit the name field onto the open behavior. A blank name is refused
@@ -75,7 +76,7 @@ impl EditorHook {
         let Some(idx) = self.behavior_entry() else {
             return;
         };
-        let typed = widget::field_text(world, behavior_panel::NAME_INPUT);
+        let typed = widget::field_text(world, behavior::panel::NAME_INPUT);
         if typed.trim().is_empty() {
             self.behavior_status = Some(Status::message("a behavior needs a name"));
             self.blur_behavior_name(world);

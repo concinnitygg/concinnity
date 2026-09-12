@@ -21,7 +21,7 @@ use concinnity_core::components::{FrameInput, TextAlign};
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
-use super::registry::ID_BASE;
+use super::panels::registry::ID_BASE;
 use super::sim::SimState;
 use super::theme;
 use super::widget::{self, place_rounded, place_sprite, point_in};

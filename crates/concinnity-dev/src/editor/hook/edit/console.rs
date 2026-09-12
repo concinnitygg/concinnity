@@ -15,12 +15,12 @@ use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 use std::sync::atomic::Ordering;
 
-use crate::editor::console;
-use crate::editor::console_panel::{self, ConsoleAction, ConsoleView};
 use crate::editor::hook::{EditorHook, FormTarget, entry_name, entry_type, scroll_step};
 use crate::editor::notify;
-use crate::editor::registry::PanelKey;
-use crate::editor::snap;
+use crate::editor::panels::console;
+use crate::editor::panels::console_panel::{self, ConsoleAction, ConsoleView};
+use crate::editor::panels::registry::PanelKey;
+use crate::editor::viewport::snap;
 use crate::editor::widget;
 
 impl EditorHook {

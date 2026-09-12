@@ -9,7 +9,7 @@
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
 
-use crate::editor::framing::CameraPose;
+use crate::editor::viewport::framing::CameraPose;
 
 pub(super) fn read(world: &World) -> Option<CameraPose> {
     let cam = world.query::<Camera3D>().next()?;

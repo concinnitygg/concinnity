@@ -22,6 +22,7 @@ use concinnity_core::ecs::World;
 use serde_json::Value;
 use std::sync::OnceLock;
 
+use crate::editor::behavior;
 use crate::editor::behavior::clip;
 use crate::editor::behavior::edit::{self, Pick};
 use crate::editor::behavior::fault;
@@ -30,12 +31,11 @@ use crate::editor::behavior::filter;
 use crate::editor::behavior::graph::{self, CardKind, Chart};
 use crate::editor::behavior::navigate;
 use crate::editor::behavior::outline::{self, Row};
+use crate::editor::behavior::panel::{BehaviorAction, BehaviorView, Status, ViewMode};
 use crate::editor::behavior::pulse;
 use crate::editor::behavior::relations;
-use crate::editor::behavior_chart;
-use crate::editor::behavior_panel::{self, BehaviorAction, BehaviorView, Status, ViewMode};
 use crate::editor::hook::{EditorHook, entry_name, entry_type, scroll_step};
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
 // Owned per-tick data backing a `BehaviorView`: the open behavior's outline and
@@ -314,7 +314,7 @@ impl EditorHook {
             .and_then(|i| self.behavior_rows().get(i).cloned())
             .and_then(|r| edit::text_value(&args, &r))
             .unwrap_or_default();
-        widget::seed_field(world, behavior_panel::VALUE_INPUT, &text);
+        widget::seed_field(world, behavior::panel::VALUE_INPUT, &text);
     }
 
     // Write the edited args back onto the open entry, refresh the checker's
@@ -426,7 +426,7 @@ impl EditorHook {
         self.behavior_filter.clear();
         self.behavior_pick = 0;
         self.behavior_pick_scroll = 0;
-        widget::seed_field(world, behavior_panel::FILTER_INPUT, "");
+        widget::seed_field(world, behavior::panel::FILTER_INPUT, "");
     }
 
     fn choose_behavior_pick(&mut self, i: usize, world: &mut World) {
@@ -495,7 +495,7 @@ impl EditorHook {
         else {
             return;
         };
-        let text = widget::field_text(world, behavior_panel::VALUE_INPUT);
+        let text = widget::field_text(world, behavior::panel::VALUE_INPUT);
         let mut args = self.behavior_args();
         match edit::apply_text(&mut args, &row, &text) {
             Ok(()) => self.commit_behavior(args, world),
@@ -674,7 +674,7 @@ impl EditorHook {
         }
         let want = [anchor[0] - input.mouse_x, anchor[1] - input.mouse_y];
         let chart = self.behavior_shown_chart();
-        self.behavior_pan = behavior_chart::clamp_pan(want, &chart, self.behavior_canvas());
+        self.behavior_pan = behavior::chart::clamp_pan(want, &chart, self.behavior_canvas());
     }
 
     // The chart the panel is drawing: the open behavior's body, or the world's
@@ -688,11 +688,11 @@ impl EditorHook {
     }
 
     fn behavior_canvas(&self) -> [f32; 2] {
-        behavior_panel::chart_canvas(self.effective_size(PanelKey::Behavior), self.behavior_mode)
+        behavior::panel::chart_canvas(self.effective_size(PanelKey::Behavior), self.behavior_mode)
     }
 
     fn behavior_rows_shown(&self) -> usize {
-        behavior_panel::visible_rows(self.effective_size(PanelKey::Behavior)[1])
+        behavior::panel::visible_rows(self.effective_size(PanelKey::Behavior)[1])
     }
 
     // Bring what is selected into view, whichever view is showing it: the
@@ -723,7 +723,7 @@ impl EditorHook {
         else {
             return;
         };
-        self.behavior_pan = behavior_chart::pan_to(
+        self.behavior_pan = behavior::chart::pan_to(
             card,
             self.behavior_canvas(),
             self.behavior_pan,
@@ -745,7 +745,7 @@ impl EditorHook {
             return;
         };
         self.behavior_pan =
-            behavior_chart::pan_to(card, self.behavior_canvas(), self.behavior_pan, &data.chart);
+            behavior::chart::pan_to(card, self.behavior_canvas(), self.behavior_pan, &data.chart);
     }
 
     // The wheel scrolls the open palette while it is up, pans the chart in chart
@@ -753,7 +753,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn scroll_behavior(&mut self, delta: f32) {
         if self.behavior_picking {
             let total = self.behavior_data().matches.len();
-            let max = total.saturating_sub(behavior_panel::PICK_POOL);
+            let max = total.saturating_sub(behavior::panel::PICK_POOL);
             self.behavior_pick_scroll = scroll_step(self.behavior_pick_scroll, delta, max);
             return;
         }
@@ -765,12 +765,12 @@ impl EditorHook {
             // chart that is wide and one row tall scrolls sideways rather than
             // not at all.
             let pan = self.behavior_pan;
-            let want = if behavior_chart::max_pan(&chart, canvas)[1] > 0.0 {
+            let want = if behavior::chart::max_pan(&chart, canvas)[1] > 0.0 {
                 [pan[0], pan[1] + step]
             } else {
                 [pan[0] + step, pan[1]]
             };
-            self.behavior_pan = behavior_chart::clamp_pan(want, &chart, canvas);
+            self.behavior_pan = behavior::chart::clamp_pan(want, &chart, canvas);
             return;
         }
         let max = self

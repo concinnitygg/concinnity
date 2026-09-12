@@ -14,10 +14,10 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
 
-use crate::editor::highlight;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::pick;
-use crate::editor::marquee;
+use crate::editor::viewport::highlight;
+use crate::editor::viewport::marquee;
 
 pub(in crate::editor::hook) struct MarqueeDrag {
     anchor: [f32; 2],

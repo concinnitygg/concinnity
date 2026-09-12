@@ -8,9 +8,9 @@
 
 use concinnity_core::ecs::World;
 
-use crate::editor::content_panel::{self, ContentAction};
 use crate::editor::filter;
 use crate::editor::hook::{EditorHook, scroll_step};
+use crate::editor::panels::content_panel::{self, ContentAction};
 use crate::editor::thumbs;
 use crate::editor::widget;
 

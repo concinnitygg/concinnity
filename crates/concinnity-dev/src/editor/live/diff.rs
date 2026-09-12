@@ -16,7 +16,7 @@
 use serde_json::{Map, Value};
 
 use super::ShadowBaselines;
-use crate::editor::form;
+use crate::editor::panels::form;
 
 /// One entry whose args changed in place.
 pub(crate) struct ArgsChange {

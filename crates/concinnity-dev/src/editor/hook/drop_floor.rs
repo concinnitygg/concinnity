@@ -16,7 +16,7 @@ use concinnity_host::thread::asset_id::{self, AssetId};
 
 use super::EditorHook;
 use super::drag;
-use crate::editor::gizmo::GizmoMode;
+use crate::editor::viewport::gizmo::GizmoMode;
 
 // A member already resting within this distance of the floor is left alone
 // (and a no-op drop records no undo step).

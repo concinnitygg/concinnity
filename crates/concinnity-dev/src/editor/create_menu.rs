@@ -11,9 +11,11 @@
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
-use super::registry::ID_BASE;
+use super::panels::panel;
+use super::panels::registry::ID_BASE;
+use super::theme;
+use super::viewport::billboards;
 use super::widget::{self, point_in};
-use super::{billboards, panel, theme};
 
 // Reserved id family: the next free block after the Content panel's (0x5000).
 const BASE: u32 = ID_BASE + 0x6000;
@@ -80,7 +82,7 @@ pub(crate) fn placeable_types() -> Vec<&'static str> {
 // The authored arg key holding the type's world position ("position", or
 // "center" for the panel lights).
 pub(crate) fn position_key(ty: &str) -> &'static str {
-    if super::form::working_args(ty, None).contains_key("center") {
+    if super::panels::form::working_args(ty, None).contains_key("center") {
         "center"
     } else {
         "position"
@@ -227,7 +229,7 @@ mod tests {
     fn every_placeable_type_has_its_position_key() {
         for ty in placeable_types() {
             let key = position_key(ty);
-            let args = crate::editor::form::working_args(ty, None);
+            let args = crate::editor::panels::form::working_args(ty, None);
             assert!(args.contains_key(key), "{ty} lacks {key}");
         }
     }

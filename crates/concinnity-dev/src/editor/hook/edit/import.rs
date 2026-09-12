@@ -17,9 +17,11 @@ use crate::editor::file_dialog;
 use crate::editor::hook::{
     EditorHook, FormTarget, entry_name, entry_type, scroll_step, short_status,
 };
-use crate::editor::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportView};
 use crate::editor::notify;
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::import_panel::{
+    self, ImportAction, ImportRow, ImportStatus, ImportView,
+};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
 impl EditorHook {

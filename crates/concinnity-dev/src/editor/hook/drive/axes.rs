@@ -1,7 +1,7 @@
 // src/editor/hook/drive/axes.rs
 //
 // EditorHook: the world-origin axes drive. Builds this frame's axis lines
-// (`editor/axes.rs`) sized to the live camera's far plane and hands them to the
+// (`editor/viewport/axes.rs`) sized to the live camera's far plane and hands them to the
 // renderer's line pass. Unlike the overlay furniture the axes are world
 // geometry, so there is nothing to place or hide here: an empty list is the
 // off state, and the renderer drops the pass with it.
@@ -10,8 +10,8 @@ use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::lines::Line;
 
-use crate::editor::axes;
 use crate::editor::hook::EditorHook;
+use crate::editor::viewport::axes;
 
 impl EditorHook {
     // Append this frame's axis lines to the shared line buffer. Nothing while

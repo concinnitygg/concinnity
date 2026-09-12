@@ -22,7 +22,7 @@ use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
 use super::hud;
-use super::registry::{self, PanelKey};
+use super::panels::registry::{self, PanelKey};
 use super::theme;
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
@@ -103,26 +103,26 @@ pub(crate) fn editor_hud(world: &mut World) {
     for id in super::worlds::loading::all_label_ids() {
         world.add_component(row_label(id, "", hidden, font, false));
     }
-    for s in super::billboards::sprites() {
+    for s in super::viewport::billboards::sprites() {
         world.add_component(s);
     }
-    for id in super::billboards::all_label_ids() {
+    for id in super::viewport::billboards::all_label_ids() {
         let mut l = centered_label(id, "", [0.0; 4], font);
         l.visible = false;
         world.add_component(l);
     }
-    for s in super::highlight::outline_sprites() {
+    for s in super::viewport::highlight::outline_sprites() {
         world.add_component(s);
     }
-    world.add_component(super::marquee::rect_sprite());
-    for s in super::gizmo::sprites() {
+    world.add_component(super::viewport::marquee::rect_sprite());
+    for s in super::viewport::gizmo::sprites() {
         world.add_component(s);
     }
     // The editor's in-engine mouse cursor (a follow_cursor sprite): the tick
     // shows it while the editor owns the pointer and drives its resize shape.
-    world.add_component(super::cursor::sprite());
+    world.add_component(super::viewport::cursor::sprite());
     world.add_component(row_label(
-        super::gizmo::MODE_LABEL,
+        super::viewport::gizmo::MODE_LABEL,
         "",
         [0.0, 0.0, 0.0, 0.0],
         font,
@@ -321,7 +321,7 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
 
 #[cfg(test)]
 mod tests {
-    use super::super::{form_panel, panel, preview, template, template_panel, view};
+    use super::super::panels::{form_panel, panel, preview, template, template_panel, view};
     use super::*;
     use concinnity_core::resource::FontTable;
 

@@ -49,7 +49,7 @@ const EXITS: &str = "exit";
 const INTERACTS: &str = "use";
 // What a behavior does to the asset a wire reaches. Every label is kept short
 // enough to sit in the gap between two cards without being clipped, which
-// `behavior_chart::LABEL_CHARS` fixes and the tests below hold it to.
+// `chart::LABEL_CHARS` fixes and the tests below hold it to.
 const JUMPS: &str = "jumps";
 const SHOWS: &str = "shows";
 const PLAYS: &str = "plays";
@@ -751,7 +751,7 @@ mod tests {
     fn every_wire_label_fits_the_gap_it_is_drawn_in() {
         for label in LABELS {
             assert!(
-                label.chars().count() <= crate::editor::behavior_chart::LABEL_CHARS,
+                label.chars().count() <= crate::editor::behavior::chart::LABEL_CHARS,
                 "`{label}` is too wide to draw on a wire",
             );
         }

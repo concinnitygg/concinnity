@@ -16,10 +16,10 @@ use concinnity_core::ecs::World;
 use concinnity_core::gfx::pick::ray_aabb;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::billboards;
-use crate::editor::form;
 use crate::editor::hook::pick;
 use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use crate::editor::panels::form;
+use crate::editor::viewport::billboards;
 
 // One drawable / pickable billboard this frame: the authored entry it stands
 // for, its projected center, and its straight-line camera distance (the

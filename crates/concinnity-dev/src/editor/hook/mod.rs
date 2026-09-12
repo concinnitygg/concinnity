@@ -43,32 +43,33 @@ use concinnity_core::ecs::{
 use concinnity_engine::app::state::App;
 use concinnity_engine::ecs::PendingBackend;
 
-use super::asset_list::ListRow;
-use super::asset_tree::{TreeGroup, TreeRow};
-use super::behavior_panel::{self, Status, ViewMode};
-use super::console::ConsoleSink;
-use super::cursor;
-use super::form::FormField;
-use super::form_panel::FormFocus;
-use super::framing;
-use super::gizmo;
-use super::health::HealthState;
+use super::behavior;
+use super::behavior::panel::{Status, ViewMode};
 use super::history::History;
 use super::hud;
-use super::import_panel::ImportStatus;
-use super::lighting;
 use super::live;
 use super::notify;
 use super::outlines;
 use super::overrides;
 use super::palette;
-use super::registry::{self, PANEL_COUNT, PanelKey};
-use super::resize;
+use super::panels::asset_list::ListRow;
+use super::panels::asset_tree::{TreeGroup, TreeRow};
+use super::panels::console::ConsoleSink;
+use super::panels::form::FormField;
+use super::panels::form_panel::FormFocus;
+use super::panels::health::HealthState;
+use super::panels::import_panel::ImportStatus;
+use super::panels::lighting;
+use super::panels::registry::{self, PANEL_COUNT, PanelKey};
 use super::selection::Selection;
 use super::session_store;
 use super::sim;
-use super::snap;
 use super::view_menu;
+use super::viewport::cursor;
+use super::viewport::framing;
+use super::viewport::gizmo;
+use super::viewport::resize;
+use super::viewport::snap;
 use super::widget;
 use super::worlds::{self, WorldRow};
 use crate::debug_hook::DebugHook;
@@ -615,35 +616,17 @@ mod edits;
 mod fly;
 mod hide;
 mod layout;
-// The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
+// The per-panel `Panel` impls, reachable by the registry (`editor/panels/registry.rs`).
 pub(super) mod panels;
 mod pick;
 mod routing;
 mod sim_control;
 mod worlds_start;
 
-#[cfg(test)]
-mod camera_tests;
-#[cfg(test)]
-mod cinematic_tests;
-#[cfg(test)]
-mod console_tests;
-#[cfg(test)]
-mod modal_tests;
-#[cfg(test)]
-mod override_tests;
-#[cfg(test)]
-mod palette_tests;
-#[cfg(test)]
-mod panel_tests;
-#[cfg(test)]
-mod select_tests;
+// The tests, mirroring the layout above: `tests/edit/console_tests.rs`
+// covers `edit/console.rs`.
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod worlds_start_tests;
-#[cfg(test)]
-mod worlds_tests;
 
 impl EditorHook {
     pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {
@@ -867,7 +850,7 @@ impl EditorHook {
     // the data a press and a draw resolve against is built without world access.
     fn sample_behavior_filter(&mut self, world: &World) {
         let typed = match self.behavior_picking {
-            true => widget::field_text(world, behavior_panel::FILTER_INPUT),
+            true => widget::field_text(world, behavior::panel::FILTER_INPUT),
             false => String::new(),
         };
         if typed != self.behavior_filter {

@@ -18,7 +18,8 @@ use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDr
 use concinnity_core::gfx::view_modes;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{
-    ChunkMesh, DeviceCapabilities, FrameParams, GpuProfile, RenderBackend,
+    BackendProbe, ChunkMesh, DeviceCapabilities, DrawStreaming, FrameParams, GpuProfile, LiveEdit,
+    RenderBackend, RenderTuning, SceneEffects, SkinnedDraws, WindowControl,
 };
 use concinnity_core::render::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
 use concinnity_core::render::display_mode;
@@ -372,23 +373,6 @@ impl RenderBackend for MockBackend {
         self.record(Call::WaitIdle);
     }
 
-    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
-        self.hot_swap
-    }
-
-    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
-        let fail = self.state.lock().unwrap().fail_reload.clone();
-        self.record(Call::ReloadWorld);
-        if let Some(e) = fail {
-            return Err(e.into());
-        }
-        // Record the reloaded world's content into this (transplanted) backend's
-        // state, exactly as the factory would for a fresh build, so a test can
-        // assert the reused backend now carries the new world.
-        record_init(&self.state, init);
-        Ok(())
-    }
-
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
         let mut s = self.state.lock().unwrap();
         s.calls.push(Call::DrawFrame {
@@ -416,15 +400,17 @@ impl RenderBackend for MockBackend {
         }
     }
 
+    fn retire_draw_object(&mut self, draw_idx: usize) {
+        self.record(Call::RetireDrawObject(draw_idx));
+    }
+}
+
+impl SkinnedDraws for MockBackend {
     fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         let mut s = self.state.lock().unwrap();
         for &(index, _model) in updates {
             s.calls.push(Call::UpdateSkinnedModel(index as usize));
         }
-    }
-
-    fn retire_draw_object(&mut self, draw_idx: usize) {
-        self.record(Call::RetireDrawObject(draw_idx));
     }
 
     fn upload_skinned(
@@ -447,7 +433,9 @@ impl RenderBackend for MockBackend {
     fn reveal_skinned_instance(&mut self, instance_index: usize, _model: [[f32; 4]; 4]) {
         self.record(Call::RevealSkinnedInstance(instance_index));
     }
+}
 
+impl DrawStreaming for MockBackend {
     fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         self.record(Call::EvictTextureSlot(slot));
         Ok(())
@@ -524,16 +512,31 @@ impl RenderBackend for MockBackend {
         Ok(())
     }
 
+    fn clone_static_draw_object(
+        &mut self,
+        src_draw_idx: usize,
+        _model: [[f32; 4]; 4],
+        dst: draw_slot::SlotAlloc,
+    ) -> Result<(), String> {
+        use concinnity_core::render::draw_slot::SlotAlloc;
+        let new_idx = match dst {
+            SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
+        };
+        self.record(Call::CloneStaticDrawObject {
+            src: src_draw_idx,
+            new_idx,
+        });
+        Ok(())
+    }
+}
+
+impl WindowControl for MockBackend {
     fn logical_size(&self) -> (f32, f32) {
         self.state.lock().unwrap().logical_size
     }
 
     fn top_content_inset(&self) -> f32 {
         self.state.lock().unwrap().top_inset
-    }
-
-    fn capabilities(&self) -> DeviceCapabilities {
-        self.state.lock().unwrap().caps
     }
 
     fn set_ui_cursor_hidden(&mut self, hidden: bool) {
@@ -546,10 +549,6 @@ impl RenderBackend for MockBackend {
 
     fn set_camera_capture(&mut self, capture: bool) {
         self.record(Call::SetCameraCapture(capture));
-    }
-
-    fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]) {
-        self.record(Call::SetReflectionProbes(probes.len()));
     }
 
     fn set_vsync(&mut self, on: bool) {
@@ -568,6 +567,16 @@ impl RenderBackend for MockBackend {
         self.record(Call::SetDisplayMode(mode));
     }
 
+    fn set_keymap(&mut self, _keymap: &keymap::KeyMap) {
+        self.record(Call::SetKeymap);
+    }
+}
+
+impl RenderTuning for MockBackend {
+    fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]) {
+        self.record(Call::SetReflectionProbes(probes.len()));
+    }
+
     fn set_ambient_intensity(&mut self, value: f32) {
         self.record(Call::SetAmbientIntensity(value));
     }
@@ -583,10 +592,6 @@ impl RenderBackend for MockBackend {
 
     fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
         self.record(Call::UpdateFogSettings(settings));
-    }
-
-    fn set_keymap(&mut self, _keymap: &keymap::KeyMap) {
-        self.record(Call::SetKeymap);
     }
 
     fn set_shadow_update(&mut self, _update: ShadowUpdate) {
@@ -612,21 +617,23 @@ impl RenderBackend for MockBackend {
     fn update_quality_params(&mut self, _settings: backend::QualitySettings) {
         self.record(Call::UpdateQualityParams);
     }
+}
 
-    fn clone_static_draw_object(
-        &mut self,
-        src_draw_idx: usize,
-        _model: [[f32; 4]; 4],
-        dst: draw_slot::SlotAlloc,
-    ) -> Result<(), String> {
-        use concinnity_core::render::draw_slot::SlotAlloc;
-        let new_idx = match dst {
-            SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
-        };
-        self.record(Call::CloneStaticDrawObject {
-            src: src_draw_idx,
-            new_idx,
-        });
+impl LiveEdit for MockBackend {
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        self.hot_swap
+    }
+
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
+        let fail = self.state.lock().unwrap().fail_reload.clone();
+        self.record(Call::ReloadWorld);
+        if let Some(e) = fail {
+            return Err(e.into());
+        }
+        // Record the reloaded world's content into this (transplanted) backend's
+        // state, exactly as the factory would for a fresh build, so a test can
+        // assert the reused backend now carries the new world.
+        record_init(&self.state, init);
         Ok(())
     }
 
@@ -646,5 +653,16 @@ impl RenderBackend for MockBackend {
 
     fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
         self.record(Call::SetDrawCullDistance(draw_idx, cull_distance));
+    }
+}
+
+// Not recorded: the mock keeps the family's defaults, so a test that reaches a
+// decal or an emitter sees the same `Err` a backend without those passes
+// reports.
+impl SceneEffects for MockBackend {}
+
+impl BackendProbe for MockBackend {
+    fn capabilities(&self) -> DeviceCapabilities {
+        self.state.lock().unwrap().caps
     }
 }

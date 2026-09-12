@@ -15,6 +15,7 @@
 
 pub(crate) mod cinematic;
 mod draw;
+pub(crate) mod files;
 mod geometry;
 pub(crate) mod loading;
 
@@ -23,7 +24,7 @@ use concinnity_host::thread::asset_id::AssetId;
 pub(crate) use draw::apply;
 pub(crate) use geometry::{Layout, Mode, hit_test};
 
-use super::registry::{self, PanelKey};
+use super::panels::registry::{self, PanelKey};
 use super::widget;
 
 const BASE: u32 = registry::base(PanelKey::Worlds);

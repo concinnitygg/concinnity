@@ -1,4 +1,4 @@
-// src/editor/overrides.rs
+// src/editor/overrides/
 //
 // Per-field override state for template-derived assets. A generated or
 // injected asset's authored world.jsonl line is a sparse patch over what the

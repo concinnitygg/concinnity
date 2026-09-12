@@ -11,6 +11,10 @@
 
 #[cfg(backend_dx)]
 pub(crate) mod directx;
+// The forwarding macro the three backends write their RenderBackend family
+// impls with.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod forward;
 // The CPU's blocked-on-GPU time, shared by the three backends so
 // `RenderStats::gpu_wait_us` means the same thing on each.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]

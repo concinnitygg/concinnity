@@ -10,12 +10,13 @@
 // complaint to the row it is about, and `trace` / `pulse` turn the runtime's
 // execution reports into the paths and fading highlights live debugging draws.
 // Nothing here touches the world or the HUD: the layout half is
-// `editor/behavior_panel.rs` and the actions live in `hook/edit/behavior.rs`.
+// `editor/behavior/panel.rs` and the actions live in `hook/edit/behavior.rs`.
 //
 // The panel edits the authored JSON directly rather than a typed twin, because
 // that JSON is exactly what `check_with_variables` reads -- so the status line
 // reports on the same value the build will.
 
+pub(crate) mod chart;
 pub(crate) mod clip;
 pub(crate) mod edit;
 pub(crate) mod fault;
@@ -25,6 +26,7 @@ pub(crate) mod graph;
 pub(crate) mod navigate;
 pub(crate) mod outline;
 pub(crate) mod palette;
+pub(crate) mod panel;
 pub(crate) mod path;
 pub(crate) mod pulse;
 pub(crate) mod relations;

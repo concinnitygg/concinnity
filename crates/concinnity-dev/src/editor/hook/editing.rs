@@ -8,10 +8,10 @@ use concinnity_core::ecs::World;
 use super::{
     EditorHook, FormTarget, FormTemplate, entry_name, names_of_type, short_status, visible_slot,
 };
-use crate::editor::form;
-use crate::editor::form_panel::{self, FormAction, FormFocus};
 use crate::editor::overrides;
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::form;
+use crate::editor::panels::form_panel::{self, FormAction, FormFocus};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
 impl EditorHook {

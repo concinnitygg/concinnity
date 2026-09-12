@@ -12,7 +12,7 @@
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
-use super::registry::ID_BASE;
+use super::panels::registry::ID_BASE;
 use super::widget::{self, point_in};
 use super::{hud, theme};
 

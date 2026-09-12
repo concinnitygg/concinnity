@@ -18,7 +18,7 @@ use crate::editor::hook::worlds_start::Adopt;
 use crate::editor::hook::{EditorHook, scroll_step};
 use crate::editor::modal;
 use crate::editor::session_store;
-use crate::editor::world_files;
+use crate::editor::worlds;
 use crate::editor::worlds::{WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
 
 impl EditorHook {
@@ -27,7 +27,7 @@ impl EditorHook {
     // against this rather than reading the directory every frame.
     pub(in crate::editor::hook) fn refresh_worlds(&mut self) {
         let open = Path::new(&self.world_path);
-        self.worlds_rows = world_files::list(
+        self.worlds_rows = worlds::files::list(
             crate::project::worlds_dir().as_deref(),
             crate::project::content_root().as_deref(),
         )
@@ -186,7 +186,7 @@ impl EditorHook {
     // the status line and nothing is retargeted, so the session keeps the world
     // it has.
     fn open_world(&mut self, path: String) {
-        match world_files::read_entries(Path::new(&path)) {
+        match worlds::files::read_entries(Path::new(&path)) {
             Ok(entries) => self.retarget(path, entries, Adopt::No),
             Err(e) => self.worlds_status = Some(e),
         }
@@ -225,7 +225,7 @@ impl EditorHook {
     // prompt comes back carrying the reason.
     pub(in crate::editor::hook) fn name_untitled_world(&mut self, typed: &str) {
         let existing: Vec<String> = self.worlds_rows.iter().map(|r| r.name.clone()).collect();
-        let name = match world_files::validate_name(typed, &existing) {
+        let name = match worlds::files::validate_name(typed, &existing) {
             Ok(name) => name,
             Err(reason) => return self.prompt_world_name(Some(reason)),
         };
@@ -235,7 +235,7 @@ impl EditorHook {
         // Claim the file before writing to it: the listing the name was checked
         // against is only as fresh as the last refresh, and `create` refuses a
         // path something already sits at rather than clobbering it.
-        let path = match world_files::create(&dir, &name) {
+        let path = match worlds::files::create(&dir, &name) {
             Ok(path) => path.to_string_lossy().into_owned(),
             Err(e) => return self.prompt_world_name(Some(format!("Create failed: {e}"))),
         };
@@ -275,7 +275,7 @@ impl EditorHook {
     // keeps its entries, and since nothing of it is on disk any more it reads
     // as unsaved, so a later SAVE writes the file back.
     pub(in crate::editor::hook) fn delete_world(&mut self, path: &str) {
-        if let Err(e) = world_files::delete(Path::new(path)) {
+        if let Err(e) = worlds::files::delete(Path::new(path)) {
             self.worlds_status = Some(format!("Delete failed: {e}"));
             return;
         }

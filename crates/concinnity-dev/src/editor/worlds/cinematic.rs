@@ -15,9 +15,9 @@
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
-use super::super::framing::{CameraPose, bounding_sphere, fit_distance};
-use super::super::registry::ID_BASE;
-use super::super::widget;
+use crate::editor::panels::registry::ID_BASE;
+use crate::editor::viewport::framing::{CameraPose, bounding_sphere, fit_distance};
+use crate::editor::widget;
 
 // Reserved id family: the next free block after the Worlds panel's (0xC000).
 pub(crate) const FADE: AssetId = AssetId(ID_BASE + 0xD000);
@@ -270,8 +270,8 @@ pub(crate) fn hide(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::framing::forward;
     use super::*;
+    use crate::editor::viewport::framing::forward;
 
     const FOV: f32 = std::f32::consts::FRAC_PI_3;
     const ASPECT: f32 = 16.0 / 9.0;

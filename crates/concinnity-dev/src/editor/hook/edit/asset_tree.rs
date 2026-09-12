@@ -12,12 +12,12 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
-use crate::editor::asset_tree::{self, TreeRow};
 use crate::editor::hook::{
     EditorHook, FormTarget, PanelData, entry_name, entry_type, scroll_step, short_status,
 };
-use crate::editor::panel::{self, PanelAction, PanelView};
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::asset_tree::{self, TreeRow};
+use crate::editor::panels::panel::{self, PanelAction, PanelView};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
 impl EditorHook {

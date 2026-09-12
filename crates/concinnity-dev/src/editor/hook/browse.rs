@@ -6,11 +6,11 @@
 use concinnity_core::ecs::World;
 
 use super::{EditorHook, FormOverridesData, PanelData, TemplateDetailData, entry_name};
-use crate::editor::form_panel::{self, FormView};
 use crate::editor::hud::HudAction;
 use crate::editor::overrides;
-use crate::editor::registry::PanelKey;
-use crate::editor::template_panel::{TemplateAction, TemplateView};
+use crate::editor::panels::form_panel::{self, FormView};
+use crate::editor::panels::registry::PanelKey;
+use crate::editor::panels::template_panel::{TemplateAction, TemplateView};
 
 impl EditorHook {
     // Apply every entry of engine-owned template `i`, skipping any whose name

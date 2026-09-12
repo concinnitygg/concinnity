@@ -13,9 +13,8 @@ use std::path::Path;
 
 use super::{EditorHook, short_status};
 use crate::editor::history::History;
-use crate::editor::registry::PanelKey;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::session_store;
-use crate::editor::world_files;
 use crate::editor::worlds;
 
 impl EditorHook {
@@ -138,7 +137,7 @@ impl EditorHook {
     // flag the frame loop consumes once, so a burst of row clicks costs one
     // compile of the world last picked rather than one per click.
     fn preview_world(&mut self, path: &str) {
-        match world_files::read_entries(Path::new(path)) {
+        match worlds::files::read_entries(Path::new(path)) {
             Ok(entries) => {
                 self.worlds_status = None;
                 self.worlds_preview = Some(path.to_string());
@@ -202,7 +201,7 @@ impl EditorHook {
             self.retarget(path, entries, Adopt::Showing);
             return;
         }
-        match world_files::read_entries(Path::new(&path)) {
+        match worlds::files::read_entries(Path::new(&path)) {
             Ok(entries) => {
                 // The world showing gets its own camera back before it goes:
                 // should the compile fail, it is the world the session keeps.

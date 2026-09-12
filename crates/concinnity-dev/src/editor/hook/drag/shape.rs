@@ -11,8 +11,8 @@ use concinnity_core::ecs::World;
 use concinnity_engine::gfx::shape_preview;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::character_shape::{ShapeValues, SliderRow};
 use crate::editor::hook::EditorHook;
+use crate::editor::panels::character_shape::{ShapeValues, SliderRow};
 use crate::editor::widget_slider;
 
 pub(in crate::editor::hook) struct ShapeDrag {

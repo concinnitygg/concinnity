@@ -6,9 +6,9 @@
 // exercised.
 
 use super::{Category, PaletteAction, PaletteItem};
-use crate::editor::asset_tree::TreeGroup;
-use crate::editor::console;
-use crate::editor::registry;
+use crate::editor::panels::asset_tree::TreeGroup;
+use crate::editor::panels::console;
+use crate::editor::panels::registry;
 use crate::editor::view_menu;
 
 // One row per view-toggleable panel (the ones that open on demand).
@@ -108,7 +108,7 @@ pub(crate) fn all_items(groups: &[TreeGroup]) -> Vec<PaletteItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::asset_tree::{Badge, TreeAsset};
+    use crate::editor::panels::asset_tree::{Badge, TreeAsset};
 
     fn groups() -> Vec<TreeGroup> {
         vec![TreeGroup {

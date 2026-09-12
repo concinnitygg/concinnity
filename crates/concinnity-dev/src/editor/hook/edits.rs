@@ -8,13 +8,13 @@ use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
 use super::{EditorHook, FormTarget, entry_name};
-use crate::editor::behavior_panel;
+use crate::editor::behavior;
 use crate::editor::build_renderable;
-use crate::editor::form_panel;
 use crate::editor::live;
 use crate::editor::modal;
 use crate::editor::notify;
-use crate::editor::panel;
+use crate::editor::panels::form_panel;
+use crate::editor::panels::panel;
 use crate::editor::widget;
 
 impl EditorHook {
@@ -241,7 +241,7 @@ impl EditorHook {
         panel::all_field_ids()
             .into_iter()
             .chain(form_panel::all_field_ids())
-            .chain(behavior_panel::all_field_ids())
+            .chain(behavior::panel::all_field_ids())
             .chain(modal::all_field_ids())
             .map(|id| (id, widget::field_text(world, id)))
             .collect()

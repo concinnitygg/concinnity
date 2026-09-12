@@ -13,13 +13,13 @@ use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
 
-use crate::editor::billboards;
-use crate::editor::content_panel;
 use crate::editor::hook::pick;
 use crate::editor::hook::{EditorHook, entry_name, entry_type};
-use crate::editor::registry::PanelKey;
-use crate::editor::snap;
+use crate::editor::panels::content_panel;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::theme;
+use crate::editor::viewport::billboards;
+use crate::editor::viewport::snap;
 use crate::editor::widget;
 
 // Movement below this is a click, not a drag (the marquee's convention).
