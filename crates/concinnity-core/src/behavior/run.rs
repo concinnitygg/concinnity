@@ -6,12 +6,11 @@
 // (an empty query's `first`, an unresolved name, a despawned entity) yields
 // None, and the node holding it is skipped rather than guessing.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::behavior::program::{CExpr, CNode, COp};
 use crate::behavior::value::{Arith, Cmp, Val};
-use crate::components::{PlayCue, StoryPlayback, Transform};
+use crate::components::{PlayCue, SceneTransition, StoryPlayback, Transform};
 use crate::ecs::{Entity, asset_id::AssetId};
 use crate::math::sqrt;
 
@@ -135,7 +134,7 @@ pub enum Effect {
         /// The scene to load.
         scene: AssetId,
         /// The transition to play.
-        transition: String,
+        transition: SceneTransition,
     },
     /// Show a screen.
     Screen(AssetId),
@@ -482,7 +481,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
         })),
         COp::Scene { scene, transition } => out.push(Effect::Scene {
             scene: *scene,
-            transition: transition.clone(),
+            transition: *transition,
         }),
         COp::Screen(screen) => out.push(Effect::Screen(*screen)),
         COp::Story(playback) => out.push(Effect::Story(*playback)),
@@ -1251,7 +1250,7 @@ mod tests {
             }),
             node(COp::Scene {
                 scene: AssetId(1),
-                transition: String::from("fade"),
+                transition: SceneTransition::FadeBlack,
             }),
             node(COp::Screen(AssetId(2))),
             // A node the checker should have rejected asks for nothing rather
@@ -1271,7 +1270,7 @@ mod tests {
             (AudioClipHandle(3), CueKind::Music, 0.5)
         );
         assert_eq!(*scene, AssetId(1));
-        assert_eq!(transition, "fade");
+        assert_eq!(*transition, SceneTransition::FadeBlack);
         assert_eq!(*screen, AssetId(2));
     }
 }

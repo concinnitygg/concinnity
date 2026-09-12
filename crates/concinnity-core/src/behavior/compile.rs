@@ -250,7 +250,7 @@ fn compile_node(
         BehaviorNode::Scene { scene, transition } => match scene {
             Some(scene) => COp::Scene {
                 scene: *scene,
-                transition: transition.clone(),
+                transition: *transition,
             },
             None => COp::Never,
         },
@@ -461,7 +461,7 @@ mod tests {
         assert!(matches!(
             op(BehaviorNode::Scene {
                 scene: None,
-                transition: String::from("Cut"),
+                transition: crate::components::SceneTransition::Cut,
             }),
             COp::Never
         ));
@@ -488,7 +488,7 @@ mod tests {
         assert!(matches!(
             op(BehaviorNode::Scene {
                 scene: Some(AssetId(4)),
-                transition: String::from("FadeBlack"),
+                transition: crate::components::SceneTransition::FadeBlack,
             }),
             COp::Scene {
                 scene: AssetId(4),

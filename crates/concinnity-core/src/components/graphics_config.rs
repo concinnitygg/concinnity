@@ -1,5 +1,7 @@
 // World rendering configuration schema.
 
+use crate::components::vocabulary;
+
 /// How often each cascaded-shadow-map slice is re-rendered. The shadow pass
 /// re-rasterizes all scene geometry into every cascade, so it is one of the
 /// heavier passes; updating distant cascades less often cuts that cost.
@@ -22,6 +24,11 @@ pub enum ShadowUpdate {
     #[default]
     Hybrid,
 }
+
+vocabulary!(ShadowUpdate {
+    EveryFrame => "every_frame",
+    Hybrid => "hybrid",
+});
 
 /// Rendering settings for the world: frame pacing, shadows, and clear color.
 /// One per world. The GPU backend is chosen by the engine for the platform and
@@ -78,6 +85,7 @@ pub struct GraphicsConfig {
     /// Number of shadow cascades, 1 to 4 (`4` is the default and the maximum).
     /// More cascades keep distant shadows sharper by splitting the view range
     /// into finer slices, at the cost of an extra shadow-map render per cascade;
+
     /// fewer is cheaper but blockier far from the camera. The slice count covers
     /// the same `shadow_distance` regardless.
     pub shadow_cascades: u32,

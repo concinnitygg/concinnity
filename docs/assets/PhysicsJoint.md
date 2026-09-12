@@ -24,7 +24,7 @@ velocity is in degrees/sec for revolute, units/sec for prismatic.
 
 ## Parameters
 
-- `kind`: A string. Constraint shape; defaults to "fixed".
+- `kind`: A string (see [PhysicsJointKind](PhysicsJointKind.md)). Constraint shape; defaults to `fixed`. See [PhysicsJointKind](PhysicsJointKind.md).
 - `body_a`: A string. First body: a [Prop](Prop.md) name. Required. Optional.
 - `body_b`: A string. Second body: a [Prop](Prop.md) name. Empty means "world anchor", in which case `anchor_b` is interpreted as a world-space position. Optional.
 - `anchor_a`: An array of 3 floats. Attach point in `body_a`'s local frame. Defaults to `[0.0, 0.0, 0.0]`.

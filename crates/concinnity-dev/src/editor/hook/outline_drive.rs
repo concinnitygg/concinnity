@@ -407,7 +407,7 @@ mod tests {
             TriggerVolume {
                 position: [0.0; 3],
                 collider: PropCollider {
-                    shape: "ball".to_string(),
+                    shape: concinnity_core::components::PropColliderShape::Ball,
                     radius: 2.0,
                     ..Default::default()
                 },
@@ -448,7 +448,7 @@ mod tests {
         let mut world = world_with(
             "crate",
             Collider(PropCollider {
-                shape: "cuboid".to_string(),
+                shape: concinnity_core::components::PropColliderShape::Cuboid,
                 half_extents: [1.0, 1.0, 1.0],
                 ..Default::default()
             }),

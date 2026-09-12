@@ -6,9 +6,9 @@
 
 pub use concinnity_core::components::validate::volumetric_fog;
 pub(crate) use concinnity_core::components::validate::{
-    decal, directional_light, glass_panel, instanced_prop, joint, material, particle_emitter,
-    point_light, prop, rect_area_light, reflection_probe, rigid_body, sdf_volume, sky_rotation,
-    spot_light, voxel_chunk, water_surface,
+    decal, directional_light, glass_panel, instanced_prop, material, particle_emitter, point_light,
+    prop, rect_area_light, reflection_probe, rigid_body, sdf_volume, sky_rotation, spot_light,
+    voxel_chunk, water_surface,
 };
 
 #[cfg(test)]
@@ -144,7 +144,7 @@ mod tests {
         #[test]
         fn deserializes_with_defaults() {
             let j: PhysicsJoint = serde_json::from_str("{}").unwrap();
-            assert_eq!(j.kind, "fixed");
+            assert_eq!(j.kind, PhysicsJointKind::Fixed);
             assert_eq!(j.anchor_a, [0.0, 0.0, 0.0]);
             assert_eq!(j.axis, [0.0, 1.0, 0.0]);
             assert!(!j.limits_enabled);
@@ -167,7 +167,7 @@ mod tests {
                 "motor_max_force":50.0
             }"#;
             let j: PhysicsJoint = serde_json::from_str(json).unwrap();
-            assert_eq!(j.parsed_kind(), PhysicsJointKind::Revolute);
+            assert_eq!(j.kind, PhysicsJointKind::Revolute);
             assert!(j.body_a.is_some());
             assert!(j.body_b.is_some());
             assert!(j.limits_enabled);
@@ -193,21 +193,17 @@ mod tests {
             );
         }
 
+        // The field is typed, so a synonym normalizes on the way in and a typo
+        // never reaches a joint at all.
         #[test]
-        fn from_args_normalizes_kind_string() {
-            let json = r#"{"kind":"HINGE"}"#;
-            let parsed: PhysicsJoint = serde_json::from_str(json).unwrap();
-            let normalized = super::super::joint(parsed);
-            assert_eq!(normalized.kind, "revolute");
-        }
-
-        #[test]
-        fn unknown_kind_falls_back_to_fixed() {
-            let j = PhysicsJoint {
-                kind: "frumpus".to_string(),
-                ..Default::default()
-            };
-            assert_eq!(j.parsed_kind(), PhysicsJointKind::Fixed);
+        fn a_synonym_loads_as_its_canonical_kind_and_a_typo_does_not_load() {
+            let parsed: PhysicsJoint = serde_json::from_str(r#"{"kind":"HINGE"}"#).unwrap();
+            assert_eq!(parsed.kind, PhysicsJointKind::Revolute);
+            assert_eq!(
+                serde_json::to_value(&parsed).unwrap()["kind"],
+                serde_json::json!("revolute")
+            );
+            assert!(serde_json::from_str::<PhysicsJoint>(r#"{"kind":"frumpus"}"#).is_err());
         }
     }
 

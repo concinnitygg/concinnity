@@ -1,5 +1,6 @@
 // Screen-space sprite overlay schema.
 
+use crate::components::vocabulary;
 use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
@@ -105,6 +106,12 @@ pub enum SpriteFit {
     /// letterbox margin.
     Bottom,
 }
+
+vocabulary!(SpriteFit {
+    Fit => "fit",
+    Cover => "cover",
+    Bottom => "bottom",
+});
 
 impl Default for Sprite {
     fn default() -> Self {

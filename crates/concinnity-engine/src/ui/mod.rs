@@ -1804,7 +1804,7 @@ fn fire_action(
             Ok(id) => {
                 ctx.events_mut::<SceneCommand>().send(SceneCommand {
                     scene: AssetId(id),
-                    transition: "FadeBlack".to_string(),
+                    transition: concinnity_core::components::SceneTransition::FadeBlack,
                 });
                 // Dismiss every open screen on a scene change: the user has
                 // chosen a new context, so the whole overlay stack clears.

@@ -1,19 +1,21 @@
 // Scene-object prop schema.
 
+use crate::components::{vocabulary, vocabulary_synonyms};
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 /// The collision volume a [PropCollider](#propcollider)'s `shape` names. The
 /// single accepted vocabulary: the build rejects an authored name this does not
 /// recognize, and the runtime resolves the same name through it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PropColliderShape {
     /// Box sized by `half_extents`. Authored as `aabb` or `cuboid`.
+    #[default]
     Cuboid,
     /// Sphere sized by `radius`. Authored as `ball` or `sphere`.
     Ball,
@@ -21,10 +23,17 @@ pub enum PropColliderShape {
     Capsule,
 }
 
+vocabulary!(PropColliderShape {
+    Cuboid => "cuboid",
+    Ball => "ball",
+    Capsule => "capsule",
+});
+vocabulary_synonyms!(PropColliderShape, "a collider shape index");
+
 impl PropColliderShape {
     /// Every authored name, canonical and alias, this accepts. The build lists
     /// these when it rejects an unknown shape.
-    pub const NAMES: [&'static str; 5] = ["aabb", "cuboid", "ball", "sphere", "capsule"];
+    pub const ACCEPTED: &'static [&'static str] = &["aabb", "cuboid", "ball", "sphere", "capsule"];
 
     /// The shape an authored name selects, case-insensitively and accepting the
     /// aliases. `None` for an unknown name.
@@ -34,15 +43,6 @@ impl PropColliderShape {
             "ball" | "sphere" => Some(Self::Ball),
             "capsule" => Some(Self::Capsule),
             _ => None,
-        }
-    }
-
-    /// The shape's canonical authored name.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Cuboid => "cuboid",
-            Self::Ball => "ball",
-            Self::Capsule => "capsule",
         }
     }
 }
@@ -57,7 +57,7 @@ impl PropColliderShape {
 pub struct PropCollider {
     /// Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or
     /// `capsule`. See [PropColliderShape].
-    pub shape: String,
+    pub shape: PropColliderShape,
     /// Box half-extents in local space [x, y, z]. Used by cuboid shapes.
     pub half_extents: [f32; 3],
     /// Radius in local space. Used by ball and capsule shapes.
@@ -74,7 +74,7 @@ pub struct PropCollider {
 impl Default for PropCollider {
     fn default() -> Self {
         Self {
-            shape: "cuboid".to_string(),
+            shape: PropColliderShape::Cuboid,
             half_extents: [0.5, 0.5, 0.5],
             radius: 0.5,
             half_height: 0.5,
@@ -191,44 +191,41 @@ impl Default for Prop {
 mod tests {
     use super::*;
 
-    // The alias list and the parser are one vocabulary: every listed name
-    // resolves, and every shape's canonical name is listed. A name added to one
-    // and not the other fails here.
+    // The accepted list, the parser and the load are one vocabulary: every
+    // listed name resolves and deserializes, and every shape's canonical name
+    // is listed. A name added to one and not the other fails here.
     #[test]
-    fn every_listed_collider_shape_name_resolves() {
-        for name in PropColliderShape::NAMES {
-            assert!(
-                PropColliderShape::from_str_norm(name).is_some(),
-                "{name} is listed but does not resolve"
+    fn every_accepted_collider_shape_name_resolves_and_loads() {
+        for name in PropColliderShape::ACCEPTED {
+            let resolved = PropColliderShape::from_str_norm(name);
+            assert!(resolved.is_some(), "{name} is listed but does not resolve");
+            assert_eq!(
+                serde_json::from_str::<PropColliderShape>(&alloc::format!(r#""{name}""#)).ok(),
+                resolved,
+                "{name} resolves but does not load"
             );
         }
-        for shape in [
-            PropColliderShape::Cuboid,
-            PropColliderShape::Ball,
-            PropColliderShape::Capsule,
-        ] {
+        for shape in PropColliderShape::ALL {
             assert!(
-                PropColliderShape::NAMES.contains(&shape.as_str()),
+                PropColliderShape::ACCEPTED.contains(&shape.as_str()),
                 "{} is a shape whose own name is unlisted",
                 shape.as_str()
             );
             assert_eq!(
                 PropColliderShape::from_str_norm(shape.as_str()),
-                Some(shape)
+                Some(*shape)
             );
         }
         assert_eq!(PropColliderShape::from_str_norm("wedge"), None);
-    }
-
-    #[test]
-    fn a_blank_collider_names_a_listed_shape() {
-        assert!(PropColliderShape::from_str_norm(&PropCollider::default().shape).is_some());
+        // A typo is a load failure now, not a silent box.
+        serde_json::from_str::<PropCollider>(r#"{"shape":"wedge"}"#)
+            .expect_err("an unknown shape does not deserialize");
     }
 
     #[test]
     fn a_blank_collider_is_a_unit_cuboid() {
         let c = PropCollider::default();
-        assert_eq!(c.shape, "cuboid");
+        assert_eq!(c.shape, PropColliderShape::Cuboid);
         assert_eq!(c.half_extents, [0.5, 0.5, 0.5]);
         assert_eq!(c.radius, 0.5);
         assert_eq!(c.half_height, 0.5);
@@ -275,7 +272,7 @@ mod tests {
                 "interactable":true,"pickup":true,"prefab":"lantern","cull_distance":60}"#,
         );
         let collider = p.collider.as_ref().expect("collider");
-        assert_eq!(collider.shape, "ball");
+        assert_eq!(collider.shape, PropColliderShape::Ball);
         assert_eq!(collider.radius, 0.25);
         // Unmentioned collider dimensions keep the schema defaults.
         assert_eq!(collider.half_height, 0.5);
@@ -285,7 +282,10 @@ mod tests {
         assert_eq!(back.position, [1.0, 2.0, 3.0]);
         assert_eq!(back.rotation_deg, [0.0, 90.0, 0.0]);
         assert_eq!(back.scale, [2.0, 2.0, 2.0]);
-        assert_eq!(back.collider.expect("collider").shape, "ball");
+        assert_eq!(
+            back.collider.expect("collider").shape,
+            PropColliderShape::Ball
+        );
         assert!(back.interactable);
         assert!(back.pickup);
         assert_eq!(back.prefab, "lantern");

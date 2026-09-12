@@ -55,7 +55,7 @@ impl TestWorld {
         self.components.insert_typed(
             entity,
             Collider(PropCollider {
-                shape: "ball".into(),
+                shape: crate::components::PropColliderShape::Ball,
                 half_extents: [0.5; 3],
                 radius: 0.5,
                 half_height: 0.0,

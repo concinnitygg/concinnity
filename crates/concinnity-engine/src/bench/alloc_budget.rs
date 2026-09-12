@@ -90,7 +90,7 @@ fn static_world() -> World {
         world.insert(
             e,
             Collider(PropCollider {
-                shape: "cuboid".into(),
+                shape: concinnity_core::components::PropColliderShape::Cuboid,
                 half_extents: [10.0, 0.5, 10.0],
                 ..Default::default()
             }),

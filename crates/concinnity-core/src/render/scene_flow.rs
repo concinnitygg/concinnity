@@ -156,7 +156,7 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
     visibility: &SceneVisibility,
     elapsed: f32,
     target_scene: AssetId,
-    transition: &str,
+    transition: SceneTransition,
     backend: &mut B,
 ) {
     let flow = match flow_opt {
@@ -174,16 +174,14 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
         return;
     }
 
-    // An unknown name cuts, which is what an authored world that never went
-    // through the build gets.
-    match SceneTransition::from_str_norm(transition) {
-        Some(SceneTransition::FadeBlack) => {
+    match transition {
+        SceneTransition::FadeBlack => {
             flow.fade = FadePhase::ToBlack {
                 started_at: elapsed,
                 next: target_scene,
             };
         }
-        Some(SceneTransition::Cut) | None => {
+        SceneTransition::Cut => {
             flow.current = target_scene;
             flow.fade = FadePhase::None;
             set_scene_visibility(visibility, target_scene, backend);
@@ -372,7 +370,7 @@ mod tests {
             &SceneVisibility::default(),
             0.0,
             AssetId(99),
-            "Cut",
+            SceneTransition::Cut,
             &mut backend,
         );
         assert!(backend.visibility.is_empty());
@@ -387,7 +385,7 @@ mod tests {
             &SceneVisibility::default(),
             0.0,
             AssetId(99),
-            "Cut",
+            SceneTransition::Cut,
             &mut backend,
         );
         assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
@@ -403,7 +401,7 @@ mod tests {
             &SceneVisibility::default(),
             0.0,
             AssetId(0),
-            "Cut",
+            SceneTransition::Cut,
             &mut backend,
         );
         assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
@@ -415,7 +413,14 @@ mod tests {
         let visibility = vis(&[(&[0], Some(AssetId(0))), (&[1], Some(AssetId(1)))]);
         let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
         let mut backend = TestBackend::default();
-        jump_to_scene(&mut opt, &visibility, 1.0, AssetId(1), "Cut", &mut backend);
+        jump_to_scene(
+            &mut opt,
+            &visibility,
+            1.0,
+            AssetId(1),
+            SceneTransition::Cut,
+            &mut backend,
+        );
         assert_eq!(opt.as_ref().unwrap().current, AssetId(1));
         assert!(matches!(opt.as_ref().unwrap().fade, FadePhase::None));
         assert!(backend.visibility.contains(&(1, true)));
@@ -430,7 +435,7 @@ mod tests {
             &SceneVisibility::default(),
             5.0,
             AssetId(1),
-            "FadeBlack",
+            SceneTransition::FadeBlack,
             &mut backend,
         );
         // current not changed yet; scene switches mid-fade

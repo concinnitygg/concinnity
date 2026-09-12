@@ -290,7 +290,7 @@ mod tests {
                 }),
                 Effect::Scene {
                     scene: AssetId(2),
-                    transition: String::from("Cut"),
+                    transition: crate::components::SceneTransition::Cut,
                 },
                 Effect::Screen(AssetId(3)),
                 Effect::Story(StoryPlayback::Start),

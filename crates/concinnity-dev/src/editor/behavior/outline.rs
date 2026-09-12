@@ -63,9 +63,9 @@ pub(crate) enum Kind {
 }
 
 // The fixed word sets a `Choice` row steps through.
-pub(crate) const CUE_KINDS: &[&str] = &concinnity_core::components::CueKind::NAMES;
-pub(crate) const TRANSITIONS: &[&str] = &concinnity_core::components::SceneTransition::NAMES;
-pub(crate) const PLAYBACKS: &[&str] = &concinnity_core::components::StoryPlayback::NAMES;
+pub(crate) const CUE_KINDS: &[&str] = concinnity_core::components::CueKind::NAMES;
+pub(crate) const TRANSITIONS: &[&str] = concinnity_core::components::SceneTransition::NAMES;
+pub(crate) const PLAYBACKS: &[&str] = concinnity_core::components::StoryPlayback::NAMES;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Row {

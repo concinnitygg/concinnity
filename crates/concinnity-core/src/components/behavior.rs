@@ -95,6 +95,13 @@ pub enum BehaviorSource {
     Spawned,
 }
 
+impl crate::components::Vocabulary for BehaviorSource {
+    // Only the sources a bare name selects. The rest carry data (`timer` its
+    // interval, `enter` the volume it watches) and are authored as an object,
+    // which a name picker cannot write.
+    const VARIANTS: &'static [&'static str] = &["start", "tick", "spawned"];
+}
+
 /// A per-entity state slot declared by a [Behavior](#behavior). The declared
 /// value fixes both the slot's type and its starting value.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -413,8 +420,8 @@ pub enum BehaviorNode {
         #[serde(default, deserialize_with = "de_opt_asset_ref")]
         scene: Option<AssetId>,
         /// The transition. See [SceneTransition](crate::components::SceneTransition).
-        #[serde(default = "default_transition")]
-        transition: String,
+        #[serde(default)]
+        transition: crate::components::SceneTransition,
     },
     /// Shows a [Screen](#screen), replacing the top of the screen stack.
     Screen {
@@ -472,10 +479,6 @@ fn unit_scale() -> [f32; 3] {
 
 fn unit_volume() -> f32 {
     1.0
-}
-
-fn default_transition() -> String {
-    String::from(crate::components::SceneTransition::FadeBlack.as_str())
 }
 
 #[cfg(test)]
@@ -716,7 +719,8 @@ mod tests {
             (
                 BehaviorNode::Scene { transition: a, .. },
                 BehaviorNode::Scene { transition: c, .. },
-            ) if a == "FadeBlack" && c == "Cut"
+            ) if *a == crate::components::SceneTransition::FadeBlack
+                && *c == crate::components::SceneTransition::Cut
         ));
     }
 

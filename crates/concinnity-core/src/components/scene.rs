@@ -1,5 +1,6 @@
 // Scene marker schema.
 
+use crate::components::{vocabulary, vocabulary_synonyms};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
 
@@ -16,14 +17,13 @@ pub enum SceneTransition {
     Cut,
 }
 
+vocabulary!(SceneTransition {
+    FadeBlack => "FadeBlack",
+    Cut => "Cut",
+});
+vocabulary_synonyms!(SceneTransition, "a scene transition index");
+
 impl SceneTransition {
-    /// Every transition, in the order an editor picker steps through them.
-    pub const ALL: [SceneTransition; 2] = [SceneTransition::FadeBlack, SceneTransition::Cut];
-
-    /// Every transition's authored name, in [`SceneTransition::ALL`] order. The
-    /// editor's picker list.
-    pub const NAMES: [&'static str; 2] = ["FadeBlack", "Cut"];
-
     /// The transition an authored name selects, case-insensitively. `None` for
     /// an unknown name.
     pub fn from_str_norm(s: &str) -> Option<Self> {
@@ -31,14 +31,6 @@ impl SceneTransition {
             "fadeblack" => Some(Self::FadeBlack),
             "cut" => Some(Self::Cut),
             _ => None,
-        }
-    }
-
-    /// The transition's canonical authored name.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::FadeBlack => "FadeBlack",
-            Self::Cut => "Cut",
         }
     }
 }
@@ -76,10 +68,22 @@ mod tests {
     fn every_transition_name_resolves_back_to_its_transition() {
         assert_eq!(SceneTransition::ALL.len(), SceneTransition::NAMES.len());
         for (transition, name) in SceneTransition::ALL.iter().zip(SceneTransition::NAMES) {
-            assert_eq!(transition.as_str(), name);
+            assert_eq!(transition.as_str(), *name);
             assert_eq!(SceneTransition::from_str_norm(name), Some(*transition));
+            assert_eq!(
+                serde_json::to_string(transition).expect("serializes"),
+                alloc::format!("\"{name}\"")
+            );
         }
         assert_eq!(SceneTransition::from_str_norm("dissolve"), None);
+        // Case-insensitively, so a world that authored the lowercase spelling
+        // still loads.
+        assert_eq!(
+            serde_json::from_str::<SceneTransition>(r#""fadeblack""#).expect("loads"),
+            SceneTransition::FadeBlack
+        );
+        serde_json::from_str::<SceneTransition>(r#""dissolve""#)
+            .expect_err("an unknown transition does not deserialize");
     }
 
     #[test]

@@ -9,8 +9,8 @@
 //! the chains are what its own segment draws.
 
 use concinnity::components::{
-    PhysicsConfig, PhysicsJoint, ProceduralMesh, Prop, PropBody, PropCollider, TriggerFilter,
-    TriggerVolume,
+    PhysicsConfig, PhysicsJoint, PhysicsJointKind, ProceduralMesh, Prop, PropBody, PropCollider,
+    PropColliderShape, TriggerFilter, TriggerVolume,
 };
 use concinnity::cook::WorldBuilder;
 
@@ -93,7 +93,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
                                 center[2] + spread(z, BODIES[2], BODY_SPACING),
                             ],
                             collider: Some(PropCollider {
-                                shape: "ball".to_string(),
+                                shape: PropColliderShape::Ball,
                                 radius: BODY_RADIUS,
                                 ..Default::default()
                             }),
@@ -153,7 +153,7 @@ fn pen(world: &mut WorldBuilder, center: [f32; 3]) {
                     ],
                     rotation_deg: [0.0, turn, 0.0],
                     collider: Some(PropCollider {
-                        shape: "cuboid".to_string(),
+                        shape: PropColliderShape::Cuboid,
                         half_extents,
                         ..Default::default()
                     }),
@@ -183,7 +183,7 @@ fn chains(world: &mut WorldBuilder, center: [f32; 3]) {
                             center[2] + along * 0.4,
                         ],
                         collider: Some(PropCollider {
-                            shape: "cuboid".to_string(),
+                            shape: PropColliderShape::Cuboid,
                             half_extents: [LINK_HALF_EXTENT; 3],
                             ..Default::default()
                         }),
@@ -207,7 +207,7 @@ fn chains(world: &mut WorldBuilder, center: [f32; 3]) {
             let joint = world.add(
                 format!("physics_joint_{index}"),
                 PhysicsJoint {
-                    kind: "spherical".to_string(),
+                    kind: PhysicsJointKind::Spherical,
                     anchor_a: [0.0, LINK_HALF_EXTENT, 0.0],
                     anchor_b: if link == 0 {
                         [
@@ -242,7 +242,7 @@ fn sensors(world: &mut WorldBuilder, center: [f32; 3]) {
                     center[2],
                 ],
                 collider: PropCollider {
-                    shape: "cuboid".to_string(),
+                    shape: PropColliderShape::Cuboid,
                     half_extents: [PEN_HALF_WIDTH * 0.3, 2.5, PEN_HALF_WIDTH],
                     ..Default::default()
                 },

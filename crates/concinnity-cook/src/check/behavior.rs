@@ -14,6 +14,8 @@
 
 use serde_json::Value;
 
+use concinnity_core::components::SceneTransition;
+
 use crate::authoring::registry::{RegisteredType, ScopeResolution};
 use crate::check::fault::{Fault, Locate, Step, field};
 
@@ -424,7 +426,21 @@ fn check_verb<'a>(verb: &str, body: &'a Value, scope: &mut Scope<'a>) -> Result<
                     .at_field("parent")?;
             }
         }
-        "sound" | "scene" | "screen" | "story" | "save" => {}
+        "scene" => {
+            // The node's transition is typed, so the bake would refuse an
+            // unknown name; named here, the world hears which node and what it
+            // could have written instead.
+            if let Some(name) = body.get("transition").and_then(|v| v.as_str())
+                && SceneTransition::from_str_norm(name).is_none()
+            {
+                return Err(Fault::new(format!(
+                    "unknown `scene` transition '{name}' (expected one of {})",
+                    SceneTransition::NAMES.join(" | ")
+                ))
+                .within(field("transition")));
+            }
+        }
+        "sound" | "screen" | "story" | "save" => {}
         other => return Err(Fault::new(format!("unknown node `{other}`"))),
     }
     Ok(())
@@ -718,6 +734,26 @@ mod tests {
     #[test]
     fn empty_behavior_passes() {
         check_json("{}").expect("empty behavior is valid");
+    }
+
+    // A misspelled transition used to bake and then cut at run time; it is a
+    // named complaint now, pointing at the field that holds it.
+    #[test]
+    fn an_unknown_scene_transition_is_rejected_by_name() {
+        expect_err(
+            r#"{"do":[{"scene":{"scene":"hub","transition":"fade"}}]}"#,
+            "unknown `scene` transition 'fade'",
+        );
+        assert_eq!(
+            fault_at(r#"{"do":[{"scene":{"scene":"hub","transition":"fade"}}]}"#),
+            at(&["do", "0", "scene", "transition"])
+        );
+        for name in SceneTransition::NAMES {
+            check_json(&format!(
+                r#"{{"do":[{{"scene":{{"scene":"hub","transition":"{name}"}}}}]}}"#
+            ))
+            .unwrap_or_else(|e| panic!("{name} is a transition the check refuses: {e}"));
+        }
     }
 
     #[test]

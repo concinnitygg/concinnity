@@ -56,7 +56,7 @@ macro_rules! for_each_build_only_type {
                 CameraShot        => $crate::authoring::registry::build_only::CameraShot { },
                 Prefab            => $crate::authoring::registry::build_only::Prefab { },
                 SceneImport       => $crate::authoring::registry::build_only::SceneImport { },
-                MainMenu          => $crate::authoring::registry::build_only::MainMenu { renders },
+                MainMenu          => $crate::authoring::registry::build_only::MainMenu { renders, enums: [("settings_profile", $crate::authoring::registry::build_only::SettingsProfile)] },
                 OptionSelect      => $crate::authoring::registry::build_only::OptionSelect { },
                 Slider            => $crate::authoring::registry::build_only::Slider { },
                 StoryImport       => $crate::authoring::registry::build_only::StoryImport { },

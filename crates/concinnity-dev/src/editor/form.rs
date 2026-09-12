@@ -11,7 +11,7 @@
 // per-type descriptor to maintain. Editable kinds: string / integer / float /
 // bool; a fixed-length numeric array of 2..=4 elements (a vector or a color),
 // edited as comma-separated numbers; a string-enum, cycled through its variants
-// (discovered per field via `RegisteredType::field_enum_variants`); and an
+// (declared per field path by its type, via `RegisteredType::field_enum_variants`); and an
 // asset-reference field (`RegisteredType::ref_fields`), cycled through `(none)` +
 // the world's assets of the target type (the hook fills the options via
 // `set_ref_options`). A plain nested OBJECT is flattened into its leaves, keyed by
@@ -287,8 +287,7 @@ fn collect_fields(
 // Append the field(s) for one value at `path` (its default shape `def`, current
 // value read from `root_seed`): a declared reference; a flattened nested object; a
 // scalar / vector leaf; or an array (an `Array` header row followed by each
-// element's fields, keyed by index). `prefix.is_empty()`-style root detection uses
-// whether `path` contains a `.`.
+// element's fields, keyed by index).
 fn collect_value(
     meta: TypeMeta,
     path: &str,
@@ -298,7 +297,6 @@ fn collect_value(
     depth: usize,
     out: &mut Vec<FormField>,
 ) {
-    let is_root = !path.contains('.');
     let leaf = path.rsplit('.').next().unwrap_or(path);
     // Asset-ref fields default to null (which `kind_of` skips), so detect them first
     // from the type's declared references (matched by full path).
@@ -328,20 +326,19 @@ fn collect_value(
     };
     if let Some(mut kind) = kind {
         let cur = root_seed.and_then(|s| get_at_path(s, path)).unwrap_or(def);
-        // A string field may be a string-enum: promote it to a cycling picker when
-        // the type reports a variant set for it. Only at the root -- the probe names
-        // a top-level arg, so it cannot resolve a nested field's variants.
+        // A string field may name a closed vocabulary: promote it to a cycling
+        // picker when the type declares one for this path, nested paths
+        // included.
         let mut variants = Vec::new();
         let mut variant_idx = 0;
-        if is_root
-            && matches!(kind, FieldKind::Str)
-            && let Some(v) = meta.ct.and_then(|c| c.field_enum_variants(leaf))
+        if matches!(kind, FieldKind::Str)
+            && let Some(v) = meta.ct.and_then(|c| c.field_enum_variants(path))
         {
             variant_idx = cur
                 .as_str()
-                .and_then(|s| v.iter().position(|x| x == s))
+                .and_then(|s| v.iter().position(|x| x == &s))
                 .unwrap_or(0);
-            variants = v;
+            variants = v.iter().map(|s| s.to_string()).collect();
             kind = FieldKind::Enum;
         }
         let boolval = matches!(kind, FieldKind::Bool)
@@ -914,6 +911,42 @@ mod tests {
         assert_eq!(
             hr.iter().find(|f| f.key == "action").unwrap().kind,
             FieldKind::Str
+        );
+    }
+
+    // A vocabulary a nested object owns reaches the form by its dotted path,
+    // which the flat probe this replaced could not resolve at all.
+    #[test]
+    fn fields_for_detects_a_nested_string_enum() {
+        let fields = fields_for("TriggerVolume", None);
+        let shape = fields
+            .iter()
+            .find(|f| f.key == "collider.shape")
+            .expect("a nested shape field");
+        assert_eq!(shape.kind, FieldKind::Enum);
+        assert_eq!(shape.variants, vec!["cuboid", "ball", "capsule"]);
+    }
+
+    // The picked variant survives the round trip through a nested object.
+    #[test]
+    fn a_nested_enum_field_coerces_to_its_selected_variant() {
+        let mut fields = fields_for("TriggerVolume", None);
+        let idx = fields
+            .iter()
+            .position(|f| f.key == "collider.shape")
+            .expect("a nested shape field");
+        let ball = fields[idx]
+            .variants
+            .iter()
+            .position(|v| v == "ball")
+            .expect("a ball variant");
+        fields[idx].variant_idx = ball;
+        let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        let args = assemble("TriggerVolume", None, &fields, &texts);
+        assert_eq!(args["collider"]["shape"], "ball");
+        assert!(
+            validate("TriggerVolume", "probe", &args).is_ok(),
+            "the picked variant cooks"
         );
     }
 

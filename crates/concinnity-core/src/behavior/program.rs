@@ -6,7 +6,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::behavior::value::{Arith, Cmp, Val};
-use crate::components::{Behavior, CueKind, StoryPlayback};
+use crate::components::{Behavior, CueKind, SceneTransition, StoryPlayback};
 use crate::ecs::{AudioClipHandle, TracePath, asset_id::AssetId};
 
 /// A slot-resolved expression.
@@ -197,7 +197,7 @@ pub enum COp {
         /// The scene to load.
         scene: AssetId,
         /// The transition to play.
-        transition: String,
+        transition: SceneTransition,
     },
     /// Request a screen change.
     Screen(AssetId),

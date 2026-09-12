@@ -160,7 +160,7 @@ fn simulating_world() -> (World, Entity, Vec<Entity>) {
             world.insert(
                 ball,
                 Collider(PropCollider {
-                    shape: "ball".to_string(),
+                    shape: crate::components::PropColliderShape::Ball,
                     radius: 0.5,
                     ..Default::default()
                 }),

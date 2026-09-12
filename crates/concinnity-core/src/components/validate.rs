@@ -5,13 +5,11 @@
 //! applies the same function before installing the value. The runtime never runs these on a loaded
 //! world -- a baked record is already validated.
 
-use alloc::string::ToString;
-
 use crate::components::{
     CameraTrackArgs, Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp,
-    MAX_WATER_WAVES, Material, ParticleEmitter, PhysicsJoint, PhysicsJointKind, PointLight, Prop,
-    RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation,
-    SpotLight, SpotLightGeometry, VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
+    MAX_WATER_WAVES, Material, ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe,
+    RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, SpotLightGeometry,
+    VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 use crate::math::sqrt;
 use crate::math::vec3;
@@ -167,15 +165,6 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     }
     if args.waves.is_empty() {
         args.waves.push(WaterWave::default());
-    }
-    args
-}
-
-/// Clamp a `PhysicsJoint`'s authored fields into their valid ranges.
-pub fn joint(mut args: PhysicsJoint) -> PhysicsJoint {
-    // Normalize the kind string so `to_args` round-trips cleanly.
-    if let Some(k) = PhysicsJointKind::from_str_norm(&args.kind) {
-        args.kind = k.as_str().to_string();
     }
     args
 }

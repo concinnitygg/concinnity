@@ -67,13 +67,13 @@ macro_rules! for_each_component {
             // world and survive into a blob; `runtime` entries are only ever
             // minted by a running world.
             stored: {
-                Window            => $crate::components::Window { gen, external, singleton, consumed },
-                GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
+                Window            => $crate::components::Window { gen, external, singleton, consumed, enums: [("mode", $crate::components::WindowMode)] },
+                GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed, enums: [("shadow_update", $crate::components::ShadowUpdate)] },
                 Shader            => $crate::components::Shader { manual, external, compiled, consumed },
                 Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
                 CameraTrack       => $crate::components::CameraTrack { manual, external, singleton, id, args: CameraTrack },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
-                Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, refs: [("model", "Model"), ("material", "Material"), ("scene", "Scene"), ("parent", "Prop"), ("parent", "SkyRotation")], consumed: PropInstance },
+                Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, enums: [("collider.shape", $crate::components::PropColliderShape)], refs: [("model", "Model"), ("material", "Material"), ("scene", "Scene"), ("parent", "Prop"), ("parent", "SkyRotation")], consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
                 PropBody          => $crate::components::PropBody { gen, external, consumed },
                 Room              => $crate::components::Room { manual, external, compiled, useful_blank, args: Room, refs: [("texture", "Texture"), ("wall_texture", "Texture"), ("floor_texture", "Texture"), ("ceiling_texture", "Texture")], consumed },
@@ -84,24 +84,24 @@ macro_rules! for_each_component {
                 ProceduralMesh    => $crate::components::ProceduralMesh { gen, external, compiled, id },
                 Model             => $crate::components::Model { gen, external, id, consumed },
                 Scene             => $crate::components::Scene { gen, external, id, refs: [("camera_shot", "Camera3D")], consumed },
-                TextLabel         => $crate::components::TextLabel { gen, external, id, useful_blank, renders, live, refs: [("font", "Font"), ("screen", "Screen")] },
-                HitRegion         => $crate::components::HitRegion { gen, external, useful_blank, refs: [("label", "TextLabel"), ("screen", "Screen")], consumed },
+                TextLabel         => $crate::components::TextLabel { gen, external, id, useful_blank, renders, live, enums: [("align", $crate::components::TextAlign), ("fit", $crate::components::SpriteFit)], refs: [("font", "Font"), ("screen", "Screen")] },
+                HitRegion         => $crate::components::HitRegion { gen, external, useful_blank, enums: [("fit", $crate::components::SpriteFit)], refs: [("label", "TextLabel"), ("screen", "Screen")], consumed },
                 File              => $crate::components::File { manual, external, compiled, args: File, consumed },
                 BlockType         => $crate::components::BlockType { gen, external, id, useful_blank, consumed },
                 VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk, consumed },
                 InstancedProp     => $crate::components::InstancedProp { gen, external, id, renders, validate: instanced_prop, refs: [("material", "Material")], consumed },
-                PostProcessConfig => $crate::components::PostProcessConfig { manual, external, singleton, consumed },
+                PostProcessConfig => $crate::components::PostProcessConfig { manual, external, singleton, consumed, enums: [("aa_mode", $crate::components::AaMode), ("indirect_lighting", $crate::components::IndirectLighting), ("ssgi_resolution", $crate::components::SsgiResolution), ("reflection_blur_resolution", $crate::components::ReflectionBlurResolution), ("upscale_quality", $crate::components::UpscaleQuality), ("upscale_backend", $crate::components::UpscalerBackend)] },
                 Animation         => $crate::components::Animation { gen, external, id, consumed },
                 SkeletonPose      => $crate::components::SkeletonPose { runtime, build: skeleton_pose },
                 StreamingConfig   => $crate::components::StreamingConfig { gen, external, singleton, consumed },
                 VoxelWorld        => $crate::components::VoxelWorld { gen, external, renders, refs: [("material", "Material")], consumed },
-                AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank, refs: [("clip", "AudioClip"), ("prop", "Prop")] },
-                Sprite            => $crate::components::Sprite { gen, external, id, useful_blank, renders, live, refs: [("texture", "Texture"), ("screen", "Screen")] },
+                AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank, enums: [("rolloff", $crate::components::Rolloff), ("bus", $crate::components::AudioBus)], refs: [("clip", "AudioClip"), ("prop", "Prop")] },
+                Sprite            => $crate::components::Sprite { gen, external, id, useful_blank, renders, live, enums: [("fit", $crate::components::SpriteFit)], refs: [("texture", "Texture"), ("screen", "Screen")] },
                 KeyBinding        => $crate::components::KeyBinding { gen, external, useful_blank, refs: [("screen", "Screen")], consumed },
-                Screen            => $crate::components::Screen { gen, external, id, useful_blank, refs: [("focus", "TextInput")], consumed },
+                Screen            => $crate::components::Screen { gen, external, id, useful_blank, enums: [("input", $crate::components::ScreenInput)], refs: [("focus", "TextInput")], consumed },
                 Decal             => $crate::components::Decal { gen, external, id, useful_blank, validate: decal, refs: [("texture", "Texture")], consumed },
                 VolumetricFog     => $crate::components::VolumetricFog { gen, external, useful_blank, validate: volumetric_fog, consumed },
-                PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, id, validate: joint, refs: [("body_a", "Prop"), ("body_b", "Prop")], consumed },
+                PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, id, enums: [("kind", $crate::components::PhysicsJointKind)], refs: [("body_a", "Prop"), ("body_b", "Prop")], consumed },
                 ParticleEmitter   => $crate::components::ParticleEmitter { gen, external, id, useful_blank, validate: particle_emitter, refs: [("texture", "Texture")], consumed },
                 WaterSurface      => $crate::components::WaterSurface { gen, external, id, useful_blank, renders, validate: water_surface, consumed },
                 SdfVolume         => $crate::components::SdfVolume { manual, external, compiled, renders, validate: sdf_volume, consumed },
@@ -130,7 +130,7 @@ macro_rules! for_each_component {
                 Lifetime          => $crate::components::Lifetime { runtime },
                 Spawner           => $crate::components::Spawner { manual, external, args: Spawner },
                 DebugHud          => $crate::components::DebugHud { gen, external, renders, refs: [("passes_label", "TextLabel"), ("mouse_label", "TextLabel"), ("camera_label", "TextLabel"), ("sys_label", "TextLabel")] },
-                AudioCue          => $crate::components::AudioCue { gen, external, useful_blank, refs: [("clip", "AudioClip"), ("screen", "Screen")] },
+                AudioCue          => $crate::components::AudioCue { gen, external, useful_blank, enums: [("kind", $crate::components::CueKind), ("bus", $crate::components::AudioBus)], refs: [("clip", "AudioClip"), ("screen", "Screen")] },
                 Story             => $crate::components::Story { gen, external, id },
                 AppConfig         => $crate::components::AppConfig { manual, external, singleton, args: AppConfig },
                 AnimationGraph         => $crate::components::AnimationGraph { gen, external, id, consumed },
@@ -138,10 +138,10 @@ macro_rules! for_each_component {
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
                 GroundProbes      => $crate::components::GroundProbes { runtime },
                 CameraProbe       => $crate::components::CameraProbe { runtime },
-                TextInput         => $crate::components::TextInput { gen, external, id, useful_blank, renders, live, refs: [("font", "Font"), ("screen", "Screen")] },
-                Behavior          => $crate::components::Behavior { gen, external, id, useful_blank, live },
+                TextInput         => $crate::components::TextInput { gen, external, id, useful_blank, renders, live, enums: [("fit", $crate::components::SpriteFit)], refs: [("font", "Font"), ("screen", "Screen")] },
+                Behavior          => $crate::components::Behavior { gen, external, id, useful_blank, live, enums: [("on", $crate::components::BehaviorSource)] },
                 Variables         => $crate::components::Variables { gen, external, singleton, live },
-                TriggerVolume     => $crate::components::TriggerVolume { gen, external, id, useful_blank },
+                TriggerVolume     => $crate::components::TriggerVolume { gen, external, id, useful_blank, enums: [("collider.shape", $crate::components::PropColliderShape), ("detects", $crate::components::TriggerFilter)] },
                 Hidden            => $crate::components::Hidden { runtime },
                 LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders, refs: [("screen", "Screen"), ("backdrop", "Sprite"), ("track", "Sprite"), ("fill", "Sprite"), ("label", "TextLabel")] },
                 AudioOcclusionProbe => $crate::components::AudioOcclusionProbe { runtime },
@@ -270,6 +270,9 @@ macro_rules! cn_impl_components {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] , refs: [ $( ($fld:literal, $tgt:literal) ),+ $(,)? ] $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , enums: [ $( ($fld:literal, $vty:path) ),+ $(,)? ] $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] , consumed: $surviving:ident $($rest:tt)*) => {

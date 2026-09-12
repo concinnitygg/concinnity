@@ -1,5 +1,7 @@
 // Audio mix-bus schema shared by the audio asset types.
 
+use crate::components::vocabulary;
+
 /// A mix bus grouping related sounds under one user volume.
 ///
 /// Every sound routes through one of three buses under the master output:
@@ -15,6 +17,12 @@ pub enum AudioBus {
     /// Dialogue and narration.
     Voice,
 }
+
+vocabulary!(AudioBus {
+    Music => "music",
+    Sfx => "sfx",
+    Voice => "voice",
+});
 
 #[cfg(test)]
 mod tests {

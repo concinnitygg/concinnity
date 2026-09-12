@@ -5,6 +5,7 @@
 // trait that resolves the authored tunables into the renderer's clamped `gfx`
 // settings.
 
+use crate::components::vocabulary;
 use crate::ecs::Component;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::math::exp2;
@@ -193,6 +194,13 @@ pub enum UpscaleQuality {
     UltraPerformance,
 }
 
+vocabulary!(UpscaleQuality {
+    Quality => "quality",
+    Balanced => "balanced",
+    Performance => "performance",
+    UltraPerformance => "ultra_performance",
+});
+
 impl UpscaleQuality {
     /// Per-axis input-to-output ratio. The render target's width/height are
     /// `(output_w * scale(), output_h * scale())`.
@@ -227,6 +235,13 @@ pub enum UpscalerBackend {
     Xess,
 }
 
+vocabulary!(UpscalerBackend {
+    Auto => "auto",
+    Fsr3 => "fsr3",
+    Dlss => "dlss",
+    Xess => "xess",
+});
+
 /// Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge
 /// smoothing; `Fxaa` (default) applies the composite's single-frame edge
 /// filter, which is nearly free; `Taa` adds a temporal pass that jitters the
@@ -249,6 +264,12 @@ pub enum AaMode {
     /// Temporal anti-aliasing: jittered projection plus a reprojected history.
     Taa,
 }
+
+vocabulary!(AaMode {
+    Off => "off",
+    Fxaa => "fxaa",
+    Taa => "taa",
+});
 
 impl AaMode {
     /// Whether the temporal anti-aliasing pass runs. Only the `Taa` mode does;
@@ -313,6 +334,11 @@ pub enum IndirectLighting {
     Ssgi,
 }
 
+vocabulary!(IndirectLighting {
+    Ibl => "ibl",
+    Ssgi => "ssgi",
+});
+
 /// Internal render resolution of the SSGI gather pass (only meaningful when
 /// `indirect_lighting` is `ssgi`). The gather is the expensive part (a
 /// hemisphere ray-march per pixel), and its composite is a depth-aware
@@ -332,6 +358,12 @@ pub enum SsgiResolution {
     /// Gather at quarter resolution per axis.
     Quarter,
 }
+
+vocabulary!(SsgiResolution {
+    Full => "full",
+    Half => "half",
+    Quarter => "quarter",
+});
 
 impl SsgiResolution {
     /// Per-axis render-resolution divisor the gather target is scaled by.
@@ -364,6 +396,12 @@ pub enum ReflectionBlurResolution {
     /// Blur at quarter resolution per axis.
     Quarter,
 }
+
+vocabulary!(ReflectionBlurResolution {
+    Full => "full",
+    Half => "half",
+    Quarter => "quarter",
+});
 
 impl ReflectionBlurResolution {
     /// Per-axis render-resolution divisor the reflection blur target is scaled

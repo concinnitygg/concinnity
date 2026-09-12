@@ -1449,7 +1449,7 @@ mod tests {
             position: [0.0, 3.0, 0.0],
             rotation_deg: [0.0; 3],
             collider: PropCollider {
-                shape: "cuboid".to_string(),
+                shape: crate::components::PropColliderShape::Cuboid,
                 half_extents: [1.0, 0.5, 1.0],
                 ..Default::default()
             },
@@ -1487,7 +1487,7 @@ mod tests {
         make_dynamic(&mut world, bob);
         world.components.push_typed(PhysicsJoint {
             asset_id: AssetId(2),
-            kind: "spherical".to_string(),
+            kind: crate::components::PhysicsJointKind::Spherical,
             body_a: Some(bob_id),
             body_b: None,
             // The bob's own center hangs one unit from the anchor point.
@@ -1728,7 +1728,7 @@ mod tests {
             position: [0.0, 3.0, 0.0],
             rotation_deg: [0.0; 3],
             collider: PropCollider {
-                shape: "cuboid".to_string(),
+                shape: crate::components::PropColliderShape::Cuboid,
                 half_extents: [1.0, 0.5, 1.0],
                 ..Default::default()
             },

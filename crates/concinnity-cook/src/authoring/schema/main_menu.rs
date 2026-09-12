@@ -121,6 +121,20 @@ pub enum SettingsProfile {
     Minimal,
 }
 
+impl SettingsProfile {
+    /// This profile's authored name: what serde writes for it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Minimal => "minimal",
+        }
+    }
+}
+
+impl concinnity_core::components::Vocabulary for SettingsProfile {
+    const VARIANTS: &'static [&'static str] = &[Self::Full.as_str(), Self::Minimal.as_str()];
+}
+
 /// One entry in a [MainMenu](#mainmenu).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

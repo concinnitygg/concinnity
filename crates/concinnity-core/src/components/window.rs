@@ -1,5 +1,6 @@
 // Application window schema.
 
+use crate::components::vocabulary;
 use alloc::string::String;
 use alloc::string::ToString;
 
@@ -16,6 +17,12 @@ pub enum WindowMode {
     /// A borderless window filling the display.
     Borderless,
 }
+
+vocabulary!(WindowMode {
+    Windowed => "windowed",
+    Fullscreen => "fullscreen",
+    Borderless => "borderless",
+});
 
 /// Declares the application window.
 ///

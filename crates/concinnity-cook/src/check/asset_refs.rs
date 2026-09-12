@@ -324,7 +324,8 @@ impl CrossReferenced for PhysicsJoint {
         let kind = arg_str("kind");
         if !kind.is_empty() && PhysicsJointKind::from_str_norm(kind).is_none() {
             refs.push(CrossRef::Issue(format!(
-                "PhysicsJoint '{name}': unknown kind '{kind}' (expected one of fixed | revolute | spherical | prismatic)"
+                "PhysicsJoint '{name}': unknown kind '{kind}' (expected one of {})",
+                PhysicsJointKind::ACCEPTED.join(" | ")
             )));
         }
 

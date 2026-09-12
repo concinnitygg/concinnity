@@ -1,6 +1,7 @@
 // Positional audio-emitter schema.
 
 use crate::components::AudioBus;
+use crate::components::vocabulary;
 use crate::ecs::AudioClipHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
@@ -62,6 +63,12 @@ pub enum Rolloff {
     /// No distance falloff: constant volume everywhere (panning still applies).
     None,
 }
+
+vocabulary!(Rolloff {
+    Logarithmic => "logarithmic",
+    Linear => "linear",
+    None => "none",
+});
 
 impl Default for AudioEmitter {
     fn default() -> Self {

@@ -426,7 +426,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
         asset_id: intern("ledge"),
         position: [0.75, 0.1, 0.0],
         collider: Some(PropCollider {
-            shape: "cuboid".to_string(),
+            shape: concinnity_core::components::PropColliderShape::Cuboid,
             half_extents: [0.3, 0.15, 0.3],
             radius: 0.0,
             half_height: 0.0,

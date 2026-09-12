@@ -44,12 +44,12 @@ pub use super::post_process_config::{
     UpscaleQuality, UpscalerBackend,
 };
 pub use super::procedural_mesh::ProceduralMesh;
-pub use super::prop::{Prop, PropCollider};
+pub use super::prop::{Prop, PropCollider, PropColliderShape};
 pub use super::prop_body::PropBody;
 pub use super::rect_area_light::RectAreaLight;
 pub use super::reflection_probe::ReflectionProbe;
 pub use super::rigid_body::RigidBody;
-pub use super::scene::Scene;
+pub use super::scene::{Scene, SceneTransition};
 pub use super::screen::{Screen, ScreenInput};
 pub use super::scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use super::sdf_volume::SdfVolume;

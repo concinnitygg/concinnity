@@ -13,6 +13,11 @@ const MAX_USER_LAYERS: usize = 32 - BUILTIN_LAYERS.len();
 
 // A `collider` object's `shape`, when present, must be a recognized shape
 // name. Shared by the Prop and TriggerVolume checks.
+//
+// Typing the field means the bake rejects an unknown name on its own, but only
+// as one aborted deserialize naming neither the asset nor the aliases. This
+// runs in the batch check instead, so a world hears about every bad shape at
+// once and in the words an author can act on.
 pub(crate) fn check_collider_shape(name: &str, args: &serde_json::Value) -> Result<(), String> {
     let Some(shape) = args
         .get("collider")
@@ -28,7 +33,7 @@ pub(crate) fn check_collider_shape(name: &str, args: &serde_json::Value) -> Resu
         "Asset '{}': unknown collider shape '{}'; expected one of {}",
         name,
         shape,
-        PropColliderShape::NAMES.join(", ")
+        PropColliderShape::ACCEPTED.join(", ")
     ))
 }
 

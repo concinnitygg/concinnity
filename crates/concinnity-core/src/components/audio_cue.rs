@@ -1,6 +1,7 @@
 // Audio-cue schema.
 
 use crate::components::AudioBus;
+use crate::components::vocabulary;
 use crate::ecs::AudioClipHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
@@ -58,22 +59,10 @@ pub enum CueKind {
     Sound,
 }
 
-impl CueKind {
-    /// Every kind, in the order an editor picker steps through them.
-    pub const ALL: [CueKind; 2] = [CueKind::Sound, CueKind::Music];
-
-    /// Every kind's authored name, in [`CueKind::ALL`] order. The editor's
-    /// picker list.
-    pub const NAMES: [&'static str; 2] = ["sound", "music"];
-
-    /// The kind's authored name: what serde writes for it.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            CueKind::Sound => "sound",
-            CueKind::Music => "music",
-        }
-    }
-}
+vocabulary!(CueKind {
+    Sound => "sound",
+    Music => "music",
+});
 
 impl Default for AudioCue {
     fn default() -> Self {
@@ -99,7 +88,7 @@ mod tests {
     fn every_cue_kind_name_is_what_serde_writes() {
         assert_eq!(CueKind::ALL.len(), CueKind::NAMES.len());
         for (kind, name) in CueKind::ALL.iter().zip(CueKind::NAMES) {
-            assert_eq!(kind.as_str(), name);
+            assert_eq!(kind.as_str(), *name);
             assert_eq!(
                 serde_json::to_string(kind).expect("serializes"),
                 alloc::format!("\"{name}\"")

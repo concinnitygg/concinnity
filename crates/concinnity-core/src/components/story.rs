@@ -1,5 +1,6 @@
 // Branching-story graph schema.
 
+use crate::components::vocabulary;
 use crate::ecs::AudioClipHandle;
 use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
@@ -372,22 +373,10 @@ pub enum StoryPlayback {
     Continue,
 }
 
-impl StoryPlayback {
-    /// Every command, in the order an editor picker steps through them.
-    pub const ALL: [StoryPlayback; 2] = [StoryPlayback::Start, StoryPlayback::Continue];
-
-    /// Every command's authored name, in [`StoryPlayback::ALL`] order. The
-    /// editor's picker list.
-    pub const NAMES: [&'static str; 2] = ["start", "continue"];
-
-    /// The command's authored name: what serde writes for it.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            StoryPlayback::Start => "start",
-            StoryPlayback::Continue => "continue",
-        }
-    }
-}
+vocabulary!(StoryPlayback {
+    Start => "start",
+    Continue => "continue",
+});
 
 #[cfg(test)]
 mod tests {
@@ -400,7 +389,7 @@ mod tests {
     fn every_playback_name_is_what_serde_writes() {
         assert_eq!(StoryPlayback::ALL.len(), StoryPlayback::NAMES.len());
         for (cmd, name) in StoryPlayback::ALL.iter().zip(StoryPlayback::NAMES) {
-            assert_eq!(cmd.as_str(), name);
+            assert_eq!(cmd.as_str(), *name);
             assert_eq!(
                 serde_json::to_string(cmd).expect("serializes"),
                 alloc::format!("\"{name}\"")

@@ -1,6 +1,7 @@
 // Trigger-volume schema: a spatial sensor region.
 
 use crate::components::PropCollider;
+use crate::components::vocabulary;
 use crate::ecs::asset_id::AssetId;
 
 /// An invisible sensor region that reports when something enters or leaves it.
@@ -52,6 +53,12 @@ pub enum TriggerFilter {
     Any,
 }
 
+vocabulary!(TriggerFilter {
+    Player => "player",
+    Props => "props",
+    Any => "any",
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,7 +66,10 @@ mod tests {
     #[test]
     fn blank_volume_is_a_unit_cuboid_sensing_the_player() {
         let v: TriggerVolume = serde_json::from_str("{}").unwrap();
-        assert_eq!(v.collider.shape, "cuboid");
+        assert_eq!(
+            v.collider.shape,
+            crate::components::PropColliderShape::Cuboid
+        );
         assert_eq!(v.collider.half_extents, [0.5, 0.5, 0.5]);
         assert_eq!(v.detects, TriggerFilter::Player);
     }
@@ -81,7 +91,10 @@ mod tests {
         let bytes = postcard::to_allocvec(&v).unwrap();
         let back: TriggerVolume = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.position, [4.0, 1.0, -2.0]);
-        assert_eq!(back.collider.shape, "ball");
+        assert_eq!(
+            back.collider.shape,
+            crate::components::PropColliderShape::Ball
+        );
         assert_eq!(back.detects, TriggerFilter::Any);
     }
 }

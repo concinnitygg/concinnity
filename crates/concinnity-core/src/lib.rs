@@ -54,7 +54,7 @@ extern crate std;
 /// Adding or removing a serialized field needs no bump: a blob frame is
 /// length-delimited and `blob::decode_exact` rejects one that does not decode
 /// exactly, so a stale record fails the load on its own.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 mod app;
 pub mod bake;

@@ -1,6 +1,7 @@
 // Screen-space UI text-label schema.
 
 use crate::components::SpriteFit;
+use crate::components::vocabulary;
 use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
@@ -23,6 +24,12 @@ pub enum TextAlign {
     /// `x` is the right edge of the text.
     Right,
 }
+
+vocabulary!(TextAlign {
+    Left => "left",
+    Center => "center",
+    Right => "right",
+});
 
 /// Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 ///

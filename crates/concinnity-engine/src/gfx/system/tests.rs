@@ -835,7 +835,7 @@ fn first_declared_scene_applies_start_visibility() {
         let mut ctx = world.ctx();
         ctx.events_mut::<SceneCommand>().send(SceneCommand {
             scene: scene_b,
-            transition: "Cut".to_string(),
+            transition: concinnity_core::components::SceneTransition::Cut,
         });
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);

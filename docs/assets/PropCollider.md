@@ -10,7 +10,7 @@ uniform scaling).
 
 ## Parameters
 
-- `shape`: A string. Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or `capsule`. See [PropColliderShape]. Defaults to `"cuboid"`.
+- `shape`: A string (see [PropColliderShape](PropColliderShape.md)). Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or `capsule`. See [PropColliderShape](PropColliderShape.md).
 - `half_extents`: An array of 3 floats. Box half-extents in local space [x, y, z]. Used by cuboid shapes. Defaults to `[0.5, 0.5, 0.5]`.
 - `radius`: A float. Radius in local space. Used by ball and capsule shapes. Defaults to `0.5`.
 - `half_height`: A float. Half the cylinder height in local space. Used by capsule shapes. Defaults to `0.5`.

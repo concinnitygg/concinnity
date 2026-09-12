@@ -1,9 +1,9 @@
 //! The authoring metadata registry: `RegisteredType`, the enum of every asset
 //! type paired with its on-disk discriminant, plus the authoring-only operations
-//! over it (name parsing, arg reserialization, enum-field probing, and
-//! reference-field listing). Consumed by the build pipeline and the in-engine
-//! editor; never by the runtime ECS, which loads components straight from their
-//! blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
+//! over it (name parsing, arg reserialization, closed-vocabulary field listing,
+//! and reference-field listing). Consumed by the build pipeline and the
+//! in-engine editor; never by the runtime ECS, which loads components straight
+//! from their blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
 //!
 //! The vocabulary arrives in three groups. The two the runtime can reach -- the
 //! components a world stores and the resources the cook compiles into the blob
@@ -80,26 +80,6 @@ pub enum ScopeResolution {
     Resource,
 }
 
-// Extract the allowed enum variants from a serde "unknown variant" error
-// message, coping with the count-dependent phrasing: "expected one of `a`, `b`,
-// `c`" (3+), "expected `a` or `b`" (2), and "expected `a`" (1). Collects every
-// backtick-quoted token that appears after the `expected` keyword (so the
-// offending value, quoted before it, is skipped). Returns `None` for any other
-// error (a type mismatch, a non-enum field), so callers fall back to treating
-// the field as free text.
-pub(crate) fn parse_expected_variants(msg: &str) -> Option<Vec<String>> {
-    let after = msg.split_once("expected")?.1;
-    let mut out = Vec::new();
-    let mut rest = after;
-    while let Some(open) = rest.find('`') {
-        let tail = &rest[open + 1..];
-        let close = tail.find('`')?;
-        out.push(tail[..close].to_string());
-        rest = &tail[close + 1..];
-    }
-    (!out.is_empty()).then_some(out)
-}
-
 // The empty args schema of a runtime-only component: never authored, so its
 // registration carries an empty default and its reserialize accepts `{}`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -157,6 +137,17 @@ macro_rules! __meta_validate {
         crate::authoring::validate::$f($val)
     };
     ($val:expr; $t:tt $($r:tt)*) => { __meta_validate!($val; $($r)*) };
+}
+
+// The `enums: [ ... ]` closed-vocabulary field list: each entry pairs a field
+// path with the type that owns the names, which reports them itself. Empty when
+// absent.
+macro_rules! __meta_enums {
+    () => { &[] };
+    (enums: [ $( ($fld:literal, $ty:path) ),+ $(,)? ] $($r:tt)*) => {
+        &[ $( ($fld, <$ty as concinnity_core::components::Vocabulary>::VARIANTS) ),+ ]
+    };
+    ($t:tt $($r:tt)*) => { __meta_enums!($($r)*) };
 }
 
 // The `refs: [ ... ]` reference-field list; empty when absent.
@@ -443,39 +434,26 @@ macro_rules! define_registered_type {
                     ),+
                 }
             }
-            /// The allowed values of a string-enum args field (in declaration
-            /// order), or `None` if `field` is a free-form string / absent / not a
-            /// string-enum. Probes the typed args by deserializing the defaults
-            /// with `field` set to a sentinel: a string-enum yields serde's
-            /// "unknown variant ..., expected ..." which `parse_expected_variants`
-            /// reads; a free string accepts the sentinel and yields `None`. Used by
-            /// authoring tools to offer a picker instead of a free text box; it
-            /// degrades to `None` (free text) if serde's phrasing ever changes.
-            pub fn field_enum_variants(self, field: &str) -> Option<Vec<String>> {
-                const SENTINEL: &str = "\u{0}__cn_enum_probe_sentinel__";
+            /// This type's closed-vocabulary args fields, as (field path, the
+            /// names that field accepts), from the entry's `enums:` metadata.
+            ///
+            /// A path is dotted where the field sits inside a nested object
+            /// (`collider.shape`), which is the same key an authoring form
+            /// addresses a flattened leaf by.
+            pub fn enum_fields(self) -> &'static [(&'static str, &'static [&'static str])] {
                 match self {
-                    $(
-                        Self::$variant => {
-                            let mut probe = match serde_json::to_value(
-                                <__meta_args_ty!($ty; $($meta)*) as Default>::default(),
-                            ) {
-                                Ok(serde_json::Value::Object(m)) => m,
-                                _ => return None,
-                            };
-                            probe.get(field)?;
-                            probe.insert(
-                                field.to_string(),
-                                serde_json::Value::String(SENTINEL.to_string()),
-                            );
-                            match serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
-                                serde_json::Value::Object(probe),
-                            ) {
-                                Ok(_) => None,
-                                Err(e) => parse_expected_variants(&e.to_string()),
-                            }
-                        }
-                    ),+
+                    $( Self::$variant => __meta_enums!($($meta)*) ),+
                 }
+            }
+            /// The names an args field accepts, or `None` if it is free text.
+            /// Authoring tools offer a picker for the fields that answer here
+            /// and a text box for the rest. `field` is the dotted path
+            /// [`Self::enum_fields`] lists.
+            pub fn field_enum_variants(self, field: &str) -> Option<&'static [&'static str]> {
+                self.enum_fields()
+                    .iter()
+                    .find(|(name, _)| *name == field)
+                    .map(|(_, variants)| *variants)
             }
             /// The dense per-kind handle space this asset is assigned into, or
             /// `None` if it is not a resource asset. Cook assigns the handle;
@@ -965,33 +943,113 @@ mod tests {
         }
     }
 
-    // `field_enum_variants` returns a string-enum field's allowed values (in
-    // declaration order) and `None` for a free-form string or a non-enum field.
+    // `field_enum_variants` answers with a field's closed vocabulary, and with
+    // `None` for a free-form string or a field nothing declared.
     #[test]
-    fn field_enum_variants_reports_string_enum_values() {
+    fn field_enum_variants_reports_a_declared_vocabulary() {
         assert_eq!(
             RegisteredType::Sprite.field_enum_variants("fit"),
-            Some(vec!["fit".into(), "cover".into(), "bottom".into()])
+            Some(["fit", "cover", "bottom"].as_slice())
         );
         assert_eq!(
             RegisteredType::TextLabel.field_enum_variants("align"),
-            Some(vec!["left".into(), "center".into(), "right".into()])
+            Some(["left", "center", "right"].as_slice())
         );
-        // A two-variant enum uses serde's "expected `a` or `b`" phrasing.
         assert_eq!(
             RegisteredType::AudioCue.field_enum_variants("kind"),
-            Some(vec!["music".into(), "sound".into()])
+            Some(["sound", "music"].as_slice())
         );
-        // A free-form string field is not an enum.
+        // A nested field answers by its dotted path, which the flat probe this
+        // replaced could not reach at all.
+        assert_eq!(
+            RegisteredType::Prop.field_enum_variants("collider.shape"),
+            Some(["cuboid", "ball", "capsule"].as_slice())
+        );
+        // A free-form string field has no vocabulary.
         assert_eq!(
             RegisteredType::HitRegion.field_enum_variants("action"),
             None
         );
         assert_eq!(RegisteredType::KeyBinding.field_enum_variants("key"), None);
-        // An absent field yields None (not a panic).
         assert_eq!(RegisteredType::Sprite.field_enum_variants("nope"), None);
-        // A non-string field (probing it errors on type, not "unknown variant").
         assert_eq!(RegisteredType::Sprite.field_enum_variants("x"), None);
+    }
+
+    // Every declared name has to be one the field's own type accepts and writes
+    // back unchanged: the declaration is what an authoring tool offers, so a
+    // name serde does not know would write an asset that no longer loads.
+    #[test]
+    fn every_declared_enum_name_round_trips_through_its_field() {
+        asset_id::ensure_name_resolver();
+        let mut checked = 0;
+        for &ty in RegisteredType::all() {
+            let Some(defaults) = ty.registration().default_args else {
+                continue;
+            };
+            for (field, variants) in ty.enum_fields() {
+                assert!(
+                    !variants.is_empty(),
+                    "{}: `{field}` declares an empty vocabulary",
+                    ty.as_str()
+                );
+                for name in *variants {
+                    let mut args = defaults.clone();
+                    set_at_path(
+                        &mut args,
+                        field,
+                        serde_json::Value::String(name.to_string()),
+                    );
+                    let back = ty.normalized_args(&args).unwrap_or_else(|e| {
+                        panic!(
+                            "{}: `{field}` rejects its own name {name}: {e}",
+                            ty.as_str()
+                        )
+                    });
+                    assert_eq!(
+                        at_path(&back, field).and_then(|v| v.as_str()),
+                        Some(*name),
+                        "{}: `{field}` does not write {name} back unchanged",
+                        ty.as_str()
+                    );
+                    checked += 1;
+                }
+                // A name outside the vocabulary is refused, so the picker is
+                // the whole of what the field accepts.
+                let mut args = defaults.clone();
+                set_at_path(
+                    &mut args,
+                    field,
+                    serde_json::Value::String("__not_a_variant__".to_string()),
+                );
+                assert!(
+                    ty.normalized_args(&args).is_err(),
+                    "{}: `{field}` accepts a name outside its vocabulary",
+                    ty.as_str()
+                );
+            }
+        }
+        assert!(checked > 20, "only {checked} declared names were reachable");
+    }
+
+    // Read / write a dotted path into an args object, creating the objects a
+    // path walks through (a Prop's `collider` defaults to null).
+    fn at_path<'a>(args: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+        path.split('.').try_fold(args, |v, seg| v.get(seg))
+    }
+
+    fn set_at_path(args: &mut serde_json::Value, path: &str, value: serde_json::Value) {
+        let mut cursor = args;
+        let mut segs = path.split('.').peekable();
+        while let Some(seg) = segs.next() {
+            if segs.peek().is_none() {
+                cursor[seg] = value;
+                return;
+            }
+            if !cursor[seg].is_object() {
+                cursor[seg] = serde_json::json!({});
+            }
+            cursor = &mut cursor[seg];
+        }
     }
 
     // `ref_fields` reports each type's asset-reference fields and their targets;
@@ -1127,27 +1185,6 @@ mod tests {
         // unlike SkinnedMesh it does not by itself render.
         assert!(!type_renders("Mesh"));
         assert!(!type_renders("NotARealType"));
-    }
-
-    #[test]
-    fn parse_expected_variants_handles_serde_phrasings() {
-        assert_eq!(
-            parse_expected_variants("unknown variant `z`, expected one of `a`, `b`, `c`"),
-            Some(vec!["a".into(), "b".into(), "c".into()])
-        );
-        assert_eq!(
-            parse_expected_variants("unknown variant `z`, expected `a` or `b`"),
-            Some(vec!["a".into(), "b".into()])
-        );
-        assert_eq!(
-            parse_expected_variants("unknown variant `z`, expected `only`"),
-            Some(vec!["only".into()])
-        );
-        // A type-mismatch error has no backtick list after `expected`.
-        assert_eq!(
-            parse_expected_variants("invalid type: string \"z\", expected u32"),
-            None
-        );
     }
 
     // The per-instance components an entity is composed from are RuntimeOnly:

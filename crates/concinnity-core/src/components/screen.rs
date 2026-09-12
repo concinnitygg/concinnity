@@ -1,5 +1,6 @@
 // Overlay-screen schema.
 
+use crate::components::vocabulary;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
 use alloc::string::String;
@@ -16,6 +17,11 @@ pub enum ScreenInput {
     /// The screen only draws; input passes through to whatever is beneath it.
     Passthrough,
 }
+
+vocabulary!(ScreenInput {
+    Capture => "capture",
+    Passthrough => "passthrough",
+});
 
 /// A named full-screen layer of UI drawn over the world: a pause menu, a
 /// settings page, a console, a score overlay.

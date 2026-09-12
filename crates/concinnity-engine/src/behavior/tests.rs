@@ -81,7 +81,7 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
         position: [0.0, 5.0, 0.0],
         scale: [1.0; 3],
         collider: Some(PropCollider {
-            shape: "ball".into(),
+            shape: concinnity_core::components::PropColliderShape::Ball,
             radius: 0.5,
             half_extents: [0.5; 3],
             ..Default::default()

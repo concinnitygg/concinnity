@@ -303,7 +303,7 @@ impl SettingsState {
                 &scratch.visibility,
                 elapsed,
                 cmd.scene,
-                &cmd.transition,
+                cmd.transition,
                 &mut recorder,
             );
         }

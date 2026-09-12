@@ -24,7 +24,7 @@ pub(crate) fn joint_spec(joint: &PhysicsJoint) -> JointSpec {
     } else {
         None
     };
-    match joint.parsed_kind() {
+    match joint.kind {
         PhysicsJointKind::Fixed => JointSpec::Fixed,
         PhysicsJointKind::Spherical => JointSpec::Spherical,
         PhysicsJointKind::Revolute => JointSpec::Revolute {
@@ -47,17 +47,15 @@ pub(crate) fn joint_spec(joint: &PhysicsJoint) -> JointSpec {
 // simulation has no separate scale concept).
 pub(crate) fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> ColliderShape {
     let [sx, sy, sz] = [scale[0].abs(), scale[1].abs(), scale[2].abs()];
-    // The build rejects a name `from_str_norm` does not recognize, so an
-    // unrecognized one here is a world that never went through it: box it.
-    match PropColliderShape::from_str_norm(&collider.shape) {
-        Some(PropColliderShape::Ball) => ColliderShape::Ball {
+    match collider.shape {
+        PropColliderShape::Ball => ColliderShape::Ball {
             radius: collider.radius * sx,
         },
-        Some(PropColliderShape::Capsule) => ColliderShape::Capsule {
+        PropColliderShape::Capsule => ColliderShape::Capsule {
             half_height: collider.half_height * sy,
             radius: collider.radius * sx,
         },
-        Some(PropColliderShape::Cuboid) | None => ColliderShape::Cuboid {
+        PropColliderShape::Cuboid => ColliderShape::Cuboid {
             half_extents: [
                 collider.half_extents[0] * sx,
                 collider.half_extents[1] * sy,
@@ -81,12 +79,11 @@ pub(crate) fn dynamic_params(body: &BodyDynamics) -> DynamicParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
 
     #[test]
     fn joint_spec_converts_revolute_units_to_radians() {
         let j = PhysicsJoint {
-            kind: "revolute".to_string(),
+            kind: PhysicsJointKind::Revolute,
             axis: [0.0, 0.0, 1.0],
             limits_enabled: true,
             limits: [-90.0, 90.0],
@@ -115,7 +112,7 @@ mod tests {
     #[test]
     fn joint_spec_prismatic_keeps_units() {
         let j = PhysicsJoint {
-            kind: "prismatic".to_string(),
+            kind: PhysicsJointKind::Prismatic,
             axis: [1.0, 0.0, 0.0],
             limits_enabled: true,
             limits: [-0.5, 0.5],
@@ -138,7 +135,7 @@ mod tests {
     #[test]
     fn joint_motor_inactive_when_max_force_zero() {
         let j = PhysicsJoint {
-            kind: "revolute".to_string(),
+            kind: PhysicsJointKind::Revolute,
             motor_target_velocity: 30.0,
             motor_max_force: 0.0,
             ..Default::default()
