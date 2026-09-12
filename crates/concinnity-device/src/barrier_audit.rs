@@ -168,7 +168,7 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "post/upscale/mod.rs",
                 "cmd_pipeline_barrier",
-                2,
+                1,
                 Reason::Inline,
             ),
             (

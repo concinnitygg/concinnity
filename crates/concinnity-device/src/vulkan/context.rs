@@ -1064,19 +1064,10 @@ pub(crate) struct VkContext {
     // structs.
     pub(super) transient_pool: super::transient_pool::TransientImagePool,
 
-    // Screen-space reflections. `Some` when the world's `PostProcessConfig`
-    // set `ssr: true` *or* selected `indirect_lighting: ssgi` (SSGI reuses the
-    // SSR depth + normal pre-pass G-buffer, so the pre-pass half is built
-    // whenever either is on). When on, the bloom prefilter / composite / TAA
-    // scene input descriptors are re-pointed at `SsrResources::output` only when
-    // `ssr_resolve_active` is true (a SSGI-only build leaves the resolve off).
+    // Screen-space reflections. `Some` whenever SSR, SSGI or RT reflections are on,
+    // since all three share its pre-pass G-buffer; its settings are `Some` only
+    // when SSR itself is authored (`ssr_resolve_active` says whether it runs).
     pub(super) ssr: Option<SsrResources>,
-    // True when the SSR *resolve* (the reflection compositing half) should run
-    // and own the post-stack scene image. False for a SSGI-only build, where
-    // `ssr` exists for the G-buffer but the post stack samples `hdr_resolve`
-    // directly (SSGI has already composited into it). Mirrors DirectX's
-    // `scene_srv_for_post` gating on `s.resolve.as_ref()`.
-    pub(super) ssr_resolve_active: bool,
 
     // Roughness-aware reflection composite. `Some` whenever a reflection path owns
     // the post-stack scene image (the SSR resolve is active OR RT reflections are
@@ -1114,8 +1105,9 @@ pub(crate) struct VkContext {
     // stay `None` and the graph falls back to `SsrResolve`. Like SSGI, RT reuses
     // the SSR depth + normal + roughness pre-pass G-buffer (so `ssr` is built
     // whenever RT is on), and it replaces the SSR *resolve* in the frame graph:
-    // when `rt_reflections_active()` the post stack samples `rt_reflections.output`
-    // (RT takes precedence over SSR, which stays the non-RT-GPU fallback).
+    // when `rt_reflections_active()` the reflection composite blends
+    // `rt_reflections.output` over the scene (RT takes precedence over SSR, which
+    // stays the non-RT-GPU fallback).
     pub(super) rt_reflections: Option<RtReflectionsResources>,
     pub(super) rt_accel: Option<crate::vulkan::raytrace::RtAccelData>,
     // How the TLAS is kept current when props move (the launch's `--rt-dynamic`
@@ -2055,7 +2047,9 @@ impl VkContext {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;
         }
-        if let (Some(live), Some(cur)) = (q.ssr, self.ssr.as_mut().map(|s| &mut s.settings)) {
+        if let (Some(live), Some(cur)) =
+            (q.ssr, self.ssr.as_mut().and_then(|s| s.settings.as_mut()))
+        {
             *cur = live;
         }
         if let (Some(live), Some(cur)) = (q.ssgi, self.ssgi.as_mut().map(|s| &mut s.settings)) {

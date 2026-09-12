@@ -90,21 +90,11 @@ impl VkContext {
             &cmd,
             frame_idx,
             TaaInputs {
-                scene: self.scene_view_for_post(frame_idx),
+                scene: self.post_scene_image(frame_idx).view,
                 velocity,
             },
         ) {
             tracing::error!("TAA resolve: {e}");
-        }
-    }
-
-    // The scene image the post stack treats as pre-TAA: the reflection
-    // composite's output when a reflection path owns the scene, else this frame
-    // slot's raw HDR resolve.
-    pub(in crate::vulkan) fn scene_view_for_post(&self, frame: usize) -> vk::ImageView {
-        match self.reflection_composite.as_ref() {
-            Some(rc) => rc.output.view,
-            None => self.hdr_resolve_images[frame % self.hdr_resolve_images.len()].view,
         }
     }
 

@@ -511,8 +511,8 @@ impl VkContext {
             taa_enabled: self.taa.is_some() && self.upscale.is_none(),
             // The SSR *resolve* (reflection compositing). `self.ssr` may exist
             // for a SSGI-only build (it owns the shared pre-pass G-buffer), so
-            // gate the resolve node on the dedicated flag, not `ssr.is_some()`.
-            ssr_enabled: self.ssr_resolve_active,
+            // gate the resolve node on whether it runs, not `ssr.is_some()`.
+            ssr_enabled: self.ssr_resolve_active(),
             particles_enabled: self.particle.resources.is_some()
                 && self.particle.records.iter().any(|p| p.is_some()),
             // Gated on the resources (built at init when the world declared a
@@ -680,8 +680,7 @@ impl VkContext {
             view: self.view.matrix,
             elapsed,
             // Hand glossy dielectric specular to the SSR / RT resolve when its
-            // composite owns the scene image this frame (the composite is present
-            // iff a resolve is active), else the forward shader keeps it all.
+            // composite owns the scene image, else the forward shader keeps it all.
             reflections_enabled: if self.reflection_composite.is_some() {
                 1.0
             } else {

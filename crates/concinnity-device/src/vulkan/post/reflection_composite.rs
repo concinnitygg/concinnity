@@ -26,6 +26,7 @@ use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use super::gbuffer::GbufferResources;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
@@ -177,15 +178,26 @@ fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, St
         .map_err(|e| format!("reflection composite render pass: {e}"))
 }
 
-// Per-frame G-buffer / scene input view slices feeding the composite's static
-// bindings: the scene HDR resolve, the unified pre-pass normal+depth, and the
-// roughness views. Wired at init / resize; the reflection binding is re-pointed
-// per encode.
-#[derive(Clone, Copy)]
-pub(in crate::vulkan) struct CompositeInputViews<'a> {
-    pub hdr_resolve_views: &'a [vk::ImageView],
-    pub normal_depth_views: &'a [vk::ImageView],
-    pub roughness_views: &'a [vk::ImageView],
+// Per-frame views feeding the composite's static bindings: the scene HDR resolve
+// and the unified pre-pass normal+depth and roughness. Wired at init / resize; the
+// reflection binding is re-pointed per encode.
+pub(in crate::vulkan) struct CompositeInputs {
+    hdr_resolve_views: Vec<vk::ImageView>,
+    normal_depth_views: Vec<vk::ImageView>,
+    roughness_views: Vec<vk::ImageView>,
+}
+
+impl CompositeInputs {
+    pub(in crate::vulkan) fn new(
+        hdr_resolve_images: &[GpuImage],
+        gbuffer: &GbufferResources,
+    ) -> Self {
+        Self {
+            hdr_resolve_views: hdr_resolve_images.iter().map(|img| img.view).collect(),
+            normal_depth_views: gbuffer.normal_depth_views(),
+            roughness_views: gbuffer.roughness_views(),
+        }
+    }
 }
 
 // One full-screen color target pre-transitioned to SHADER_READ_ONLY_OPTIMAL so the
@@ -284,18 +296,15 @@ fn create_composite_pipeline(
 }
 
 impl ReflectionCompositeResources {
-    // Build every composite resource. `views` bundles the per-frame scene
-    // (`hdr_resolve_views`) and the unified G-buffer pre-pass's per-frame
-    // `normal_depth_views` + `roughness_views`; these feed the composite's static
-    // bindings while the reflection binding is re-pointed per encode. `blur_scale`
-    // is the per-axis blur divisor.
+    // Build every composite resource, wiring `inputs` into its static bindings.
+    // `blur_scale` is the per-axis blur divisor.
     pub(in crate::vulkan) fn new(
         ctx: &GpuUploadContext,
         width: u32,
         height: u32,
         frames: usize,
         blur_scale: u32,
-        views: &CompositeInputViews,
+        inputs: &CompositeInputs,
         hot_reload: bool,
     ) -> Result<Self, String> {
         let device = ctx.device;
@@ -394,7 +403,7 @@ impl ReflectionCompositeResources {
             wired_reflection: WireCache::new(frames),
         };
         me.build_targets(ctx, width, height)?;
-        me.wire_sets(device, views);
+        me.wire_sets(device, inputs);
         Ok(me)
     }
 
@@ -440,12 +449,10 @@ impl ReflectionCompositeResources {
     // reflection target) is left at a valid placeholder and re-pointed per encode.
     // Single-entry G-buffer slices are shared across frames (the legacy pre-pass
     // produced one view); per-frame slices index by frame.
-    fn wire_sets(&self, device: &VkDevice, views: &CompositeInputViews) {
-        let &CompositeInputViews {
-            hdr_resolve_views,
-            normal_depth_views,
-            roughness_views,
-        } = views;
+    fn wire_sets(&self, device: &VkDevice, inputs: &CompositeInputs) {
+        let hdr_resolve_views = inputs.hdr_resolve_views.as_slice();
+        let normal_depth_views = inputs.normal_depth_views.as_slice();
+        let roughness_views = inputs.roughness_views.as_slice();
         let img = |view: vk::ImageView| {
             vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -497,11 +504,11 @@ impl ReflectionCompositeResources {
         ctx: &GpuUploadContext,
         width: u32,
         height: u32,
-        views: &CompositeInputViews,
+        inputs: &CompositeInputs,
     ) -> Result<(), String> {
         self.destroy_targets(ctx.device);
         self.build_targets(ctx, width, height)?;
-        self.wire_sets(ctx.device, views);
+        self.wire_sets(ctx.device, inputs);
         // The resolves moved with everything else; drop the memo so the next
         // frame re-points binding 0 unconditionally.
         self.wired_reflection.reset();
@@ -554,7 +561,91 @@ impl ReflectionCompositeResources {
     }
 }
 
+// Which reflection stages exist. RT takes the resolve slot when it is live, the
+// SSR resolve runs only when SSR is authored and RT did not take the slot, and
+// the composite exists exactly when one of the two feeds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::vulkan) struct ReflectionPath {
+    pub(in crate::vulkan) ssr_resolve: bool,
+    pub(in crate::vulkan) composite: bool,
+}
+
+impl ReflectionPath {
+    pub(in crate::vulkan) fn new(ssr_authored: bool, rt_active: bool) -> Self {
+        let ssr_resolve = ssr_authored && !rt_active;
+        Self {
+            ssr_resolve,
+            composite: rt_active || ssr_resolve,
+        }
+    }
+}
+
 impl VkContext {
+    fn reflection_path(&self) -> ReflectionPath {
+        ReflectionPath::new(self.ssr_authored(), self.rt_reflections_active())
+    }
+
+    // Whether the SSR resolve runs: SSR is authored and RT did not take its slot.
+    pub(in crate::vulkan) fn ssr_resolve_active(&self) -> bool {
+        self.reflection_path().ssr_resolve
+    }
+
+    // The pre-TAA scene image for frame slot `frame`: the composite's output when
+    // one exists, which is exactly when a resolve feeds it.
+    pub(in crate::vulkan) fn post_scene_image(&self, frame: usize) -> &GpuImage {
+        match self.reflection_composite.as_ref() {
+            Some(rc) => &rc.output,
+            None => &self.hdr_resolve_images[frame % self.hdr_resolve_images.len()],
+        }
+    }
+
+    // Destroy the composite once no resolve feeds it, reporting whether it went.
+    // The caller rebuilds the swapchain when it did, which re-points every scene
+    // reader at the HDR resolve.
+    pub(in crate::vulkan) fn release_unfed_reflection_composite(&mut self) -> bool {
+        if self.reflection_path().composite {
+            return false;
+        }
+        let Some(mut rc) = self.reflection_composite.take() else {
+            return false;
+        };
+        rc.destroy(&self.device);
+        true
+    }
+
+    // Bring the composite in line with the authored SSR and the live RT state,
+    // building it at `blur_scale` when a resolve feeds it. The caller idles the
+    // device first and rebuilds the swapchain after.
+    pub(in crate::vulkan) fn reconcile_reflection_composite(
+        &mut self,
+        blur_scale: u32,
+    ) -> Result<(), String> {
+        self.release_unfed_reflection_composite();
+        if !self.reflection_path().composite || self.reflection_composite.is_some() {
+            return Ok(());
+        }
+        let gb = self
+            .gbuffer
+            .as_ref()
+            .expect("a reflection path forces the unified G-buffer pre-pass");
+        let rc = ReflectionCompositeResources::new(
+            &GpuUploadContext {
+                alloc: &self.alloc,
+                device: &self.device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
+            self.render_extent.width,
+            self.render_extent.height,
+            self.frames_in_flight,
+            blur_scale,
+            &CompositeInputs::new(&self.hdr_resolve_images, gb),
+            self.hot_reload.enabled,
+        )?;
+        self.reflection_composite = Some(rc);
+        Ok(())
+    }
+
     // Point this frame's composite sets at the resolve target that will feed
     // them: the RT output when the trace is live (RT takes the `SsrResolve`
     // slot), the SSR output otherwise. Reads the same `rt_reflections_active`
@@ -562,6 +653,11 @@ impl VkContext {
     // pass that encodes always agree. Runs on `&mut self` ahead of the parallel
     // recording, and skips the write unless the view actually moved.
     pub(in crate::vulkan) fn prepare_reflection_composite(&mut self, frame_idx: usize) {
+        debug_assert_eq!(
+            self.reflection_composite.is_some(),
+            self.reflection_path().composite,
+            "the reflection composite is out of step with the resolves that feed it"
+        );
         let view = if self.rt_reflections_active() {
             self.rt_reflections.as_ref().map(|rt| rt.output.view)
         } else {
@@ -648,6 +744,37 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
+    use super::ReflectionPath;
+
+    #[test]
+    fn rt_takes_the_resolve_slot_from_authored_ssr() {
+        let path = ReflectionPath::new(true, true);
+        assert!(!path.ssr_resolve);
+        assert!(path.composite);
+    }
+
+    #[test]
+    fn authored_ssr_resolves_without_rt() {
+        let path = ReflectionPath::new(true, false);
+        assert!(path.ssr_resolve);
+        assert!(path.composite);
+    }
+
+    #[test]
+    fn rt_alone_keeps_the_composite() {
+        let path = ReflectionPath::new(false, true);
+        assert!(!path.ssr_resolve);
+        assert!(path.composite);
+    }
+
+    #[test]
+    fn no_resolve_leaves_no_composite() {
+        // RT lost without authored SSR, or a SSGI-only world.
+        let path = ReflectionPath::new(false, false);
+        assert!(!path.ssr_resolve);
+        assert!(!path.composite);
+    }
+
     // The composite vert + blur + composite fragments compile to SPIR-V. Guards the
     // GLSL so a shader error fails a test instead of only an init failure on the GPU
     // host. The composite passes carry no push constant / UBO, so there is no

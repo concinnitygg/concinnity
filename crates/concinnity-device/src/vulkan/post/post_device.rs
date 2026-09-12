@@ -57,11 +57,6 @@ impl PostTarget {
     pub(in crate::vulkan) fn view(&self) -> vk::ImageView {
         self.image.view
     }
-
-    /// The image itself, for a consumer that barriers it.
-    pub(in crate::vulkan) fn image(&self) -> vk::Image {
-        self.image.image
-    }
 }
 
 // A draw's color target: the view a framebuffer binds, the extent it is sized

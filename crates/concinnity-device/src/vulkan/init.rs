@@ -10,7 +10,6 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::profile;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::*;
-use concinnity_core::gfx::ssr;
 use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::csm;
@@ -1554,24 +1553,10 @@ impl VkContext {
 
         //  SSR (screen-space reflections): depth + normal + roughness pre-pass
         //  and a fullscreen ray-march resolve. The pre-pass G-buffer is shared
-        //  with SSGI, so `SsrResources` is built whenever SSR *or* SSGI is on;
-        //  the resolve half only does its work (and owns the post-stack scene
-        //  image) when SSR reflections are actually enabled (`ssr_resolve_on`).
-        //  When the resolve is on, the bloom prefilter + composite + (optional)
-        //  TAA scene input is re-pointed at `SsrResources::output` further down
-        //  so the post stack consumes the HDR scene with reflections composited
-        //  in; a SSGI-only build leaves those pointed at the raw HDR resolve
-        //  (SSGI composites its bounce into it earlier on the RMW chain).
-        // The SSR resolve runs only when SSR is authored AND ray-traced
-        // reflections are not live (RT replaces the resolve in the same graph
-        // slot; resolved below once `rt_wanted` + the AS build are known).
+        //  with SSGI and RT, so `SsrResources` is built whenever any of them is
+        //  on; its settings stay `None` unless SSR itself is authored, and the
+        //  resolve runs only when it is and RT did not take its graph slot.
         let ssr_authored = ssr_settings.is_some();
-        // For the pre-pass build the resolve settings drive the resolve
-        // pipeline's tunables; a SSGI-only / RT-only build has no authored SSR
-        // settings, so fall back to the defaults (the resolve never runs, so the
-        // values are inert, but `SsrResources::new` needs a concrete `SsrSettings`).
-        let ssr_build_settings =
-            ssr_settings.unwrap_or_else(|| ssr::SsrSettings::resolve(0.0, 0.0));
         // RT reflections reuse the SSR depth + normal + roughness pre-pass
         // G-buffer (like SSGI), so the pre-pass half is built whenever SSR, SSGI,
         // *or* RT (and the device supports it) is on. `rt_wanted` is derived up
@@ -1602,7 +1587,7 @@ impl VkContext {
         let ssr_opt = if ssr_settings.is_some() || ssgi_settings.is_some() || rt_wanted {
             Some(super::post::ssr::SsrResources::new(
                 &init_post_device,
-                ssr_build_settings,
+                ssr_settings,
                 render_extent,
             )?)
         } else {
@@ -2233,8 +2218,8 @@ impl VkContext {
         // for textured hit shading. Graceful-fallback throughout: no resident
         // geometry, an AS build error, or a shader compile failure leaves both
         // `None` and the graph keeps `SsrResolve`. RT takes precedence over the
-        // SSR resolve in the shared graph slot, so `ssr_resolve_on` is ANDed with
-        // `!rt_active` once the build outcome is known.
+        // SSR resolve in the shared graph slot, which `ReflectionPath` settles once
+        // the build outcome is known.
         // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
         // arg, which implies `transparent`): see-through only looks right when the
         // space behind the glass is modeled. A material that is `transparent` but
@@ -2354,44 +2339,39 @@ impl VkContext {
             (None, None)
         };
         let rt_active = rt_opt.is_some();
-        // The SSR *resolve* owns the post-stack scene image only when SSR is
-        // authored and RT did not take the slot.
-        let ssr_resolve_on = ssr_authored && !rt_active;
-        // Reflection composite: built whenever a reflection path owns the post-stack
-        // scene image (the SSR resolve is active OR RT reflections are active, which
-        // are mutually exclusive). Both resolves write radiance+weight into their
-        // output target; this blurs by roughness and composites over the scene into
-        // its own output, which then replaces the raw resolve output as the scene
-        // image every downstream pass samples.
-        let composite_opt = if rt_active || ssr_resolve_on {
-            let gb = gbuffer_opt
-                .as_ref()
-                .expect("a reflection path implies the unified G-buffer pre-pass");
-            let hdr_views: Vec<vk::ImageView> =
-                hdr_resolve_images.iter().map(|img| img.view).collect();
-            Some(
-                super::post::reflection_composite::ReflectionCompositeResources::new(
-                    &super::texture::GpuUploadContext {
-                        alloc: &alloc,
-                        device: &device,
-                        command_pool,
-                        queue: graphics_queue,
-                    },
-                    render_extent.width,
-                    render_extent.height,
-                    frames,
-                    reflection_blur_scale,
-                    &super::post::reflection_composite::CompositeInputViews {
-                        hdr_resolve_views: &hdr_views,
-                        normal_depth_views: &gb.normal_depth_views(),
-                        roughness_views: &gb.roughness_views(),
-                    },
-                    hot_reload,
-                )?,
-            )
-        } else {
-            None
-        };
+        // Reflection composite: built whenever a resolve feeds it. Both resolves
+        // write radiance+weight into their output target; this blurs by roughness
+        // and composites over the scene into its own output, which then replaces
+        // the raw resolve output as the scene image every downstream pass samples.
+        let composite_opt =
+            if super::post::reflection_composite::ReflectionPath::new(ssr_authored, rt_active)
+                .composite
+            {
+                let gb = gbuffer_opt
+                    .as_ref()
+                    .expect("a reflection path implies the unified G-buffer pre-pass");
+                Some(
+                    super::post::reflection_composite::ReflectionCompositeResources::new(
+                        &super::texture::GpuUploadContext {
+                            alloc: &alloc,
+                            device: &device,
+                            command_pool,
+                            queue: graphics_queue,
+                        },
+                        render_extent.width,
+                        render_extent.height,
+                        frames,
+                        reflection_blur_scale,
+                        &super::post::reflection_composite::CompositeInputs::new(
+                            &hdr_resolve_images,
+                            gb,
+                        ),
+                        hot_reload,
+                    )?,
+                )
+            } else {
+                None
+            };
 
         // Per-object cull-status buffers (one u32 each), built unconditionally
         // on the bindless cull path: phase-1 cull writes them (binding 3 of the
@@ -3694,7 +3674,6 @@ impl VkContext {
             ssao_white,
             transient_pool,
             ssr: ssr_opt,
-            ssr_resolve_active: ssr_resolve_on,
             reflection_composite: composite_opt,
             ssgi: ssgi_opt,
             gbuffer: gbuffer_opt,

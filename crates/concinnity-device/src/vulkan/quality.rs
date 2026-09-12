@@ -28,7 +28,6 @@
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::rt_reflections;
-use concinnity_core::gfx::ssr;
 use concinnity_core::render::backend::QualitySettings;
 
 use super::context::VkContext;
@@ -143,14 +142,12 @@ impl VkContext {
         }
 
         // SSR resolve + reflection target. Built whenever SSR / SSGI / RT is on;
-        // a SSGI-only or RT-only build has no authored SSR settings, so fall back
-        // to the inert defaults (the resolve never runs, but `new` needs a
-        // concrete `SsrSettings`).
+        // its settings carry whether SSR itself is authored, so a build kept alive
+        // for SSGI or RT takes an SSR toggle through them alone.
         if ssr_needed && self.ssr.is_none() {
-            let settings = q.ssr.unwrap_or_else(|| ssr::SsrSettings::resolve(0.0, 0.0));
             let ssr = super::post::ssr::SsrResources::new(
                 &self.post_device(0),
-                settings,
+                q.ssr,
                 self.render_extent,
             )?;
             self.ssr = Some(ssr);
@@ -159,6 +156,8 @@ impl VkContext {
             // go before it does.
             self.post.cache.forget_views();
             self.ssr = None;
+        } else if let Some(ssr) = self.ssr.as_mut() {
+            ssr.settings = q.ssr;
         }
 
         // SSGI (samples the unified G-buffer's per-frame normal+depth views).
@@ -255,10 +254,9 @@ impl VkContext {
         // structure (one-shot, fence-waited) + the inline-`rayQueryEXT` pass;
         // turning off tears both down. The G-buffer pre-pass RT samples is
         // already built above (`gbuffer_needed` folds in `desired_rt`).
-        // `rebuild_swapchain` below then rebuilds the RT output target + re-points
-        // the bloom prefilter / composite scene input at it (or off it on a
-        // turn-off); the per-frame TLAS / geometry descriptors are wired by the
-        // next `rt_dynamic_update`.
+        // `rebuild_swapchain` below then rebuilds the RT output target; the
+        // per-frame TLAS / geometry descriptors are wired by the next
+        // `rt_dynamic_update`.
         if desired_rt && self.rt_reflections.is_none() {
             self.build_rt_runtime(q.rt_reflections.expect("desired_rt implies settings"))?;
         } else if !desired_rt && self.rt_reflections.is_some() {
@@ -270,48 +268,10 @@ impl VkContext {
             }
         }
 
-        // The SSR *resolve* owns the post-stack scene image only when SSR is
-        // authored and RT did not take the slot. Set from the ACTUAL post-build
-        // RT state: a failed RT enable falls back to the SSR resolve. Mirrors the
-        // init `ssr_resolve_on`.
-        self.ssr_resolve_active = desired_ssr && self.rt_reflections.is_none();
-
-        // Reflection composite: present whenever a reflection path owns the scene
-        // image. Build it on a turn-on, tear it down on a turn-off; `rebuild_swapchain`
-        // below then rebuilds its targets + routes the scene image through its output.
-        let reflection_active = self.rt_reflections.is_some() || self.ssr_resolve_active;
-        if reflection_active && self.reflection_composite.is_none() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|i| i.view).collect();
-            let gb = self
-                .gbuffer
-                .as_ref()
-                .expect("a reflection path forces the unified G-buffer pre-pass");
-            let nd_views = gb.normal_depth_views();
-            let rough_views = gb.roughness_views();
-            let rc = super::post::reflection_composite::ReflectionCompositeResources::new(
-                &super::texture::GpuUploadContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
-                    command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
-                },
-                self.render_extent.width,
-                self.render_extent.height,
-                self.frames_in_flight,
-                q.reflection_blur_scale,
-                &super::post::reflection_composite::CompositeInputViews {
-                    hdr_resolve_views: &hdr_views,
-                    normal_depth_views: &nd_views,
-                    roughness_views: &rough_views,
-                },
-                self.hot_reload.enabled,
-            )?;
-            self.reflection_composite = Some(rc);
-        } else if !reflection_active && self.reflection_composite.is_some() {
-            let mut rc = self.reflection_composite.take().expect("checked is_some");
-            rc.destroy(&self.device);
-        }
+        // The composite follows the ACTUAL post-build RT state, so a failed RT
+        // enable falls back to the SSR resolve. `rebuild_swapchain` below then
+        // routes the scene image through whichever path is left.
+        self.reconcile_reflection_composite(q.reflection_blur_scale)?;
 
         // Rebuild every target + rewire every reader / the composite chain via
         // the resize path. It rebuilds the transient pool + bloom from the
@@ -333,7 +293,8 @@ impl VkContext {
     // Build the RT acceleration structure + reflection pass at runtime (a live
     // toggle-on). Mirrors the init RT block: an empty scene, an AS-build error,
     // or a shader-compile failure leaves both `rt_accel` / `rt_reflections`
-    // `None` and the renderer stays on SSR (a soft failure, returns `Ok`). The
+    // `None` and the renderer falls back to the SSR resolve when authored (a soft
+    // failure, returns `Ok`). The
     // caller has ensured the unified G-buffer pre-pass exists and drained the
     // device (`wait_idle`). `rebuild_swapchain` refreshes the output target after.
     fn build_rt_runtime(

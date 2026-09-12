@@ -25,7 +25,7 @@ use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use super::{UpscaleCamera, UpscaleInputs, VkUpscaleBackend};
+use super::{OutputWrites, UpscaleCamera, UpscaleInputs, VkUpscaleBackend};
 use crate::vulkan::context::HDR_FORMAT;
 use crate::vulkan::owned::VkDevice;
 use crate::vulkan::texture::{GpuImage, create_image, create_image_view, one_shot_submit};
@@ -514,8 +514,8 @@ impl DlssUpscaler {
             device,
             command_pool,
             queue,
-            output_width,
-            output_height,
+            (output_width, output_height),
+            OutputWrites::storage_and_clear(),
         ) {
             Ok(img) => img,
             Err(e) => {
@@ -606,6 +606,10 @@ impl VkUpscaleBackend for DlssUpscaler {
     }
     fn set_output_layout(&self, layout: vk::ImageLayout) {
         self.output_layout.set(layout);
+    }
+    // NGX clears the output inside `EvaluateFeature` before writing it.
+    fn output_writes(&self) -> OutputWrites {
+        OutputWrites::storage_and_clear()
     }
     fn set_jitter(&self, offset: [f32; 2]) {
         self.jitter.set(offset);

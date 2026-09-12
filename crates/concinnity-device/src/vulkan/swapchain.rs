@@ -14,7 +14,7 @@ use super::post::bloom::{
     rebind_bloom_input0,
 };
 use super::post::gbuffer::{GbufferDeviceCtx, GbufferExtent, GbufferQueueCtx};
-use super::post::reflection_composite::CompositeInputViews;
+use super::post::reflection_composite::CompositeInputs;
 use super::post::rt_reflections::RtStaticInputs;
 use super::post::ssao::SsaoDeviceCtx;
 use super::post::upscale::UpscalerGpu;
@@ -352,8 +352,7 @@ impl VkContext {
         // descriptors (the SSR pre-pass G-buffer / roughness + the HDR resolves
         // all moved). The acceleration structure is resolution-independent, so it
         // survives; the per-frame TLAS + geometry-table descriptors are re-pointed
-        // by `rt_dynamic_update` as usual. RT output is a single shared image, so
-        // the bloom prefilter input 0 moves to it (TAA / upscale override below).
+        // by `rt_dynamic_update` as usual.
         if let Some(mut rt) = self.rt_reflections.take() {
             let hdr_views: Vec<vk::ImageView> =
                 self.hdr_resolve_images.iter().map(|img| img.view).collect();
@@ -392,12 +391,10 @@ impl VkContext {
         // binding is re-pointed per encode, so the resolve rebuilds need no extra
         // wiring here.
         if let Some(mut rc) = self.reflection_composite.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            let (nd_views, rough_views) = match self.gbuffer.as_ref() {
-                Some(gb) => (gb.normal_depth_views(), gb.roughness_views()),
-                None => (Vec::new(), Vec::new()),
-            };
+            let gb = self
+                .gbuffer
+                .as_ref()
+                .expect("a reflection path forces the unified G-buffer pre-pass");
             rc.rebuild(
                 &super::texture::GpuUploadContext {
                     alloc: &self.alloc,
@@ -407,11 +404,7 @@ impl VkContext {
                 },
                 render_ext.width,
                 render_ext.height,
-                &CompositeInputViews {
-                    hdr_resolve_views: &hdr_views,
-                    normal_depth_views: &nd_views,
-                    roughness_views: &rough_views,
-                },
+                &CompositeInputs::new(&self.hdr_resolve_images, gb),
             )?;
             for frame_sets in &self.bloom.input_sets {
                 rebind_bloom_input0(
@@ -542,12 +535,9 @@ impl VkContext {
         if let Some(mut transparent) = self.transparent.take() {
             let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..self
                 .frames_in_flight)
-                .map(|i| match self.reflection_composite.as_ref() {
-                    Some(rc) => (rc.output.view, rc.output.image),
-                    None => (
-                        self.hdr_resolve_images[i].view,
-                        self.hdr_resolve_images[i].image,
-                    ),
+                .map(|i| {
+                    let scene = self.post_scene_image(i);
+                    (scene.view, scene.image)
                 })
                 .unzip();
             let depth_views: Vec<vk::ImageView> =
@@ -696,10 +686,8 @@ impl VkContext {
                 up.output_image().view
             } else if let Some(taa) = &self.taa {
                 taa.output_view(i)
-            } else if let Some(rc) = self.reflection_composite.as_ref() {
-                rc.output.view
             } else {
-                self.hdr_resolve_images[i].view
+                self.post_scene_image(i).view
             };
             write_composite_set(
                 &self.device,

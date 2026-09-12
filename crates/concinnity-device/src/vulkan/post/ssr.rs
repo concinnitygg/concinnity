@@ -22,8 +22,9 @@ const TARGET_LABEL: &str = "ssr_reflection";
 // (all three share the G-buffer pre-pass). The resolve only runs when SSR itself
 // is authored.
 pub(in crate::vulkan) struct SsrResources {
-    // Resolved authored tunables; turned into a per-frame `SsrParams` push.
-    pub(in crate::vulkan) settings: ssr::SsrSettings,
+    // Authored tunables, turned into a per-frame `SsrParams` push; `None` when
+    // only SSGI or RT built these resources.
+    pub(in crate::vulkan) settings: Option<ssr::SsrSettings>,
     pass: SsrPass<PostPipeline>,
     // Reflected radiance + composite weight, which the reflection composite
     // blurs by roughness and blends over the scene.
@@ -34,7 +35,7 @@ impl SsrResources {
     // Build the resolve pipeline and the reflection target at `extent`.
     pub(in crate::vulkan) fn new(
         device: &VkPostDevice,
-        settings: ssr::SsrSettings,
+        settings: Option<ssr::SsrSettings>,
         extent: vk::Extent2D,
     ) -> Result<Self, String> {
         Ok(Self {
@@ -63,9 +64,14 @@ impl SsrResources {
 }
 
 impl VkContext {
+    // Whether the world authored SSR, as opposed to building `ssr` for SSGI or RT.
+    pub(in crate::vulkan) fn ssr_authored(&self) -> bool {
+        self.ssr.as_ref().is_some_and(|s| s.settings.is_some())
+    }
+
     // Encode the SSR resolve into `ssr.output`, then blur it by roughness and
     // composite it over the scene into the reflection composite's output, which
-    // the post stack consumes. No-op when SSR is disabled.
+    // the post stack consumes. No-op unless SSR is authored.
     pub(in crate::vulkan) fn encode_ssr_resolve(
         &self,
         cmd: vk::CommandBuffer,
@@ -75,6 +81,9 @@ impl VkContext {
         cam_pos: [f32; 3],
     ) {
         let Some(ssr) = &self.ssr else { return };
+        let Some(settings) = &ssr.settings else {
+            return;
+        };
         let Some(gbuffer) = &self.gbuffer else {
             tracing::error!("SSR resolve enabled but the G-buffer pre-pass is missing");
             return;
@@ -88,7 +97,7 @@ impl VkContext {
             [v[0][2], v[1][2], v[2][2], 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let params = ssr.settings.params(
+        let params = settings.params(
             fov_y_radians,
             aspect,
             inv_view_rot,

@@ -5,8 +5,8 @@
 // normal from the SSR pre-pass G-buffer, traces a reflection ray against the
 // scene's top-level acceleration structure ([`crate::vulkan::raytrace`]) with
 // inline `rayQueryEXT`, shades the hit (sun + IBL split-sum, optionally textured)
-// or the IBL prefilter cube on a miss, and composites the result over the scene
-// with the same Fresnel/gloss weighting SSR uses.
+// or the IBL prefilter cube on a miss, and writes the reflected radiance with the
+// same Fresnel/gloss weight SSR uses for the reflection composite to blend.
 //
 // It occupies the `SsrResolve` slot in the frame graph (reads the HDR scene,
 // writes its own `output` target) and is mutually exclusive with the SSR
@@ -1063,9 +1063,9 @@ impl VkContext {
     }
 
     // Encode the RT-reflection resolve: a fullscreen triangle that traces each
-    // glossy pixel's reflection ray against the scene TLAS and composites the
-    // reflected color into `rt_reflections.output`, which then becomes the scene
-    // the bloom / composite / TAA passes consume. No-op when RT is off (the graph
+    // glossy pixel's reflection ray against the scene TLAS and writes radiance +
+    // weight into `rt_reflections.output`, which the reflection composite then
+    // blends over the scene. No-op when RT is off (the graph
     // only schedules this pass when RT is live, so the guard is defensive).
     pub(in crate::vulkan) fn encode_rt_reflections(
         &self,

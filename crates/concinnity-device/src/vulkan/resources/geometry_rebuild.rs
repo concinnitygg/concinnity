@@ -259,7 +259,7 @@ impl VkContext {
         // with the rebuild, so it is refreshed first.
         self.rt_static_vertex_count = new_vertex_count;
         if self.rt_accel.is_some() {
-            self.rebuild_rt_accel();
+            self.rebuild_rt_accel()?;
         }
         Ok(())
     }

@@ -96,6 +96,8 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
     // by `encode_upscale`.
     fn output_layout(&self) -> vk::ImageLayout;
     fn set_output_layout(&self, layout: vk::ImageLayout);
+    // How `dispatch` writes the output; the output was created with the same.
+    fn output_writes(&self) -> OutputWrites;
     // Sub-pixel jitter for this frame's index, shared with the camera
     // projection so the jittered VP and the upscale agree (render-pixel units).
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2];
@@ -157,17 +159,78 @@ pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
     jitter::offset(frame_index)
 }
 
-// Create the display-res output image a backend writes (RGBA16F,
-// STORAGE | SAMPLED), transitioned UNDEFINED -> GENERAL so the first frame's
-// dispatch finds it in the UNORDERED_ACCESS (GENERAL) state. Shared by all
-// three backends.
+// How a backend's vendor dispatch writes its output image: the stages and
+// accesses the barriers around the dispatch must declare, and the usage those
+// writes need. NGX clears the DLSS output inside `EvaluateFeature`, so that
+// backend writes through a transfer clear as well as a storage write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::vulkan) struct OutputWrites {
+    stage: vk::PipelineStageFlags,
+    access: vk::AccessFlags,
+    usage: vk::ImageUsageFlags,
+}
+
+impl OutputWrites {
+    // Storage writes from the backend's compute dispatch only.
+    pub(super) fn storage() -> Self {
+        Self {
+            stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+            access: vk::AccessFlags::SHADER_WRITE,
+            usage: vk::ImageUsageFlags::STORAGE,
+        }
+    }
+
+    // Storage writes plus a `vkCmdClearColorImage` on the output.
+    #[cfg(any(ngx_sdk_bundled, test))]
+    pub(super) fn storage_and_clear() -> Self {
+        Self {
+            stage: vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER,
+            access: vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::TRANSFER_WRITE,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
+        }
+    }
+
+    // The output's image usage: these writes, plus the sampling bloom + composite do.
+    fn image_usage(self) -> vk::ImageUsageFlags {
+        self.usage | vk::ImageUsageFlags::SAMPLED
+    }
+
+    // Sync for the barrier that hands the output to the dispatch after `src_stage`
+    // last touched it with `src_access`.
+    fn acquire(
+        self,
+        src_stage: vk::PipelineStageFlags,
+        src_access: vk::AccessFlags,
+    ) -> BarrierSync {
+        BarrierSync {
+            src_stage,
+            src_access,
+            dst_stage: self.stage,
+            dst_access: self.access,
+        }
+    }
+
+    // Sync for the barrier that hands the written output to the fragment sampling.
+    fn release_to_sampling(self) -> BarrierSync {
+        BarrierSync {
+            src_stage: self.stage,
+            src_access: self.access,
+            dst_stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            dst_access: vk::AccessFlags::SHADER_READ,
+        }
+    }
+}
+
+// Create the display-res output image a backend writes (RGBA16F, usage from
+// `writes`), transitioned UNDEFINED -> GENERAL so the first frame's dispatch
+// finds it in the UNORDERED_ACCESS (GENERAL) state. Shared by all three backends.
 pub(super) fn create_output_image(
     alloc: &DeviceAllocator,
     device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
-    width: u32,
-    height: u32,
+    (width, height): (u32, u32),
+    writes: OutputWrites,
 ) -> Result<GpuImage, String> {
     let pooled = create_image(
         alloc,
@@ -176,7 +239,7 @@ pub(super) fn create_output_image(
             height: height.max(1),
             format: HDR_FORMAT,
             tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+            usage: writes.image_usage(),
             mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
             samples: vk::SampleCountFlags::TYPE_1,
         },
@@ -184,34 +247,20 @@ pub(super) fn create_output_image(
     let image = pooled.image();
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
     one_shot_submit(device, command_pool, queue, |cmd| {
-        let barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            })
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
+        image_barrier(
+            device,
+            cmd,
+            image,
+            vk::ImageAspectFlags::COLOR,
+            LayoutTransition {
+                from: vk::ImageLayout::UNDEFINED,
+                to: vk::ImageLayout::GENERAL,
+            },
+            writes.acquire(
                 vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&barrier),
-            );
-        }
+                vk::AccessFlags::empty(),
+            ),
+        );
     })?;
     Ok(GpuImage::from_pooled(pooled, view))
 }
@@ -647,21 +696,11 @@ impl VkContext {
             .get(frame)
             .ok_or("upscale: gbuffer depth slot out of range")?;
 
-        // Scene color: SSR resolve output when the SSR resolve is active (HDR +
-        // reflections), else this slot's HDR resolve target (also the SSGI-only
-        // case, where `ssr` exists for the G-buffer but the resolve is off).
-        // Both rest in SHADER_READ_ONLY_OPTIMAL after their writer.
-        let (scene_image, scene_view) = match self.ssr.as_ref().filter(|_| self.ssr_resolve_active)
-        {
-            Some(s) => (s.output.image(), s.output.view()),
-            None => {
-                let hdr = self
-                    .hdr_resolve_images
-                    .get(frame)
-                    .ok_or("upscale: hdr resolve slot out of range")?;
-                (hdr.image, hdr.view)
-            }
-        };
+        // Scene color: the reflection composite's output when a reflection
+        // resolve ran, else this slot's HDR resolve. Either rests in
+        // SHADER_READ_ONLY_OPTIMAL after its last render pass writer.
+        let scene = self.post_scene_image(frame);
+        let (scene_image, scene_view) = (scene.image, scene.view);
 
         let (rw, rh) = upscaler.render_dims();
 
@@ -732,12 +771,10 @@ impl VkContext {
                     from: upscaler.output_layout(),
                     to: vk::ImageLayout::GENERAL,
                 },
-                BarrierSync {
-                    src_stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    src_access: vk::AccessFlags::SHADER_READ,
-                    dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
-                    dst_access: vk::AccessFlags::SHADER_WRITE,
-                },
+                upscaler.output_writes().acquire(
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::AccessFlags::SHADER_READ,
+                ),
             );
             upscaler.set_output_layout(vk::ImageLayout::GENERAL);
         }
@@ -797,12 +834,7 @@ impl VkContext {
                 from: vk::ImageLayout::GENERAL,
                 to: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             },
-            BarrierSync {
-                src_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
-                src_access: vk::AccessFlags::SHADER_WRITE,
-                dst_stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
-                dst_access: vk::AccessFlags::SHADER_READ,
-            },
+            upscaler.output_writes().release_to_sampling(),
         );
         upscaler.set_output_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
@@ -880,6 +912,52 @@ mod tests {
         assert_eq!(resolve_render_dims(800, 600, 0.0), (800, 600, 1.0));
         let (_, _, s2) = resolve_render_dims(900, 900, 0.1);
         assert!((s2 - 1.0 / 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn storage_writes_need_no_transfer_usage() {
+        let writes = OutputWrites::storage();
+        assert_eq!(
+            writes.image_usage(),
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED
+        );
+        let sync = writes.acquire(
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::AccessFlags::SHADER_READ,
+        );
+        assert_eq!(sync.dst_stage, vk::PipelineStageFlags::COMPUTE_SHADER);
+        assert_eq!(sync.dst_access, vk::AccessFlags::SHADER_WRITE);
+    }
+
+    #[test]
+    fn clearing_writes_declare_the_transfer_write() {
+        let writes = OutputWrites::storage_and_clear();
+        assert!(
+            writes
+                .image_usage()
+                .contains(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::STORAGE)
+        );
+        let sync = writes.acquire(
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::AccessFlags::SHADER_READ,
+        );
+        assert!(sync.dst_stage.contains(vk::PipelineStageFlags::TRANSFER));
+        assert!(sync.dst_access.contains(vk::AccessFlags::TRANSFER_WRITE));
+    }
+
+    #[test]
+    fn release_covers_every_write_the_acquire_allowed() {
+        for writes in [OutputWrites::storage(), OutputWrites::storage_and_clear()] {
+            let acquire = writes.acquire(
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::AccessFlags::SHADER_READ,
+            );
+            let release = writes.release_to_sampling();
+            assert_eq!(release.src_stage, acquire.dst_stage);
+            assert_eq!(release.src_access, acquire.dst_access);
+            assert_eq!(release.dst_stage, vk::PipelineStageFlags::FRAGMENT_SHADER);
+            assert_eq!(release.dst_access, vk::AccessFlags::SHADER_READ);
+        }
     }
 
     #[test]

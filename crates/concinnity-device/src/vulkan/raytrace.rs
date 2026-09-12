@@ -2844,8 +2844,8 @@ impl super::context::VkContext {
     // and the RT / glass descriptor sets still name the destroyed buffers.
     //
     // An empty scene or a failed build drops the BVH rather than keeping the
-    // stale one; RT falls back to SSR. The caller has already drained the device.
-    pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) {
+    // stale one, and the RT pass with it. The caller has already drained the device.
+    pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) -> Result<(), String> {
         let fresh = match build_rt_accel(
             RtDeviceCtx {
                 alloc: &self.alloc,
@@ -2877,6 +2877,12 @@ impl super::context::VkContext {
             old.destroy(&self.device);
         }
         self.rt_accel = fresh;
+        // An RT pass with no BVH traces nothing, so it goes with the BVH.
+        if self.rt_accel.is_none()
+            && let Some(mut rt) = self.rt_reflections.take()
+        {
+            rt.destroy(&self.device);
+        }
 
         // The resolve + glass sets bind the shared vertex / index buffers
         // directly (the trace fetches attributes at hit points), so they must
@@ -2892,6 +2898,14 @@ impl super::context::VkContext {
         if let Some(transparent) = self.transparent.as_ref() {
             transparent.wire_rt_geometry(&device, vertex_buffer, index_buffer);
         }
+
+        // Without RT, an authored SSR resolve keeps feeding the composite and every
+        // reader stays wired to it. Otherwise the composite goes, and the scene
+        // readers are wired once, so the swapchain rebuild re-points them.
+        if self.release_unfed_reflection_composite() {
+            self.rebuild_swapchain()?;
+        }
+        Ok(())
     }
 
     // Build the GPU-driven main-pass skinning resources: the `rt_skin` compute

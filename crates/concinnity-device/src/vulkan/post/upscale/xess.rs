@@ -27,7 +27,9 @@ use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use super::{UpscaleCamera, UpscaleImage, UpscaleInputs, VkUpscaleBackend, copy_ext_names};
+use super::{
+    OutputWrites, UpscaleCamera, UpscaleImage, UpscaleInputs, VkUpscaleBackend, copy_ext_names,
+};
 use crate::vulkan::context::HDR_FORMAT;
 use crate::vulkan::owned::VkDevice;
 use crate::vulkan::texture::GpuImage;
@@ -494,8 +496,8 @@ impl XessUpscaler {
             device,
             command_pool,
             queue,
-            output_width,
-            output_height,
+            (output_width, output_height),
+            OutputWrites::storage(),
         ) {
             Ok(img) => img,
             Err(e) => {
@@ -546,6 +548,9 @@ impl VkUpscaleBackend for XessUpscaler {
     }
     fn set_output_layout(&self, layout: vk::ImageLayout) {
         self.output_layout.set(layout);
+    }
+    fn output_writes(&self) -> OutputWrites {
+        OutputWrites::storage()
     }
     fn set_jitter(&self, offset: [f32; 2]) {
         self.jitter.set(offset);
